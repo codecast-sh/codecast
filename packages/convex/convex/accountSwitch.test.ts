@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { insertSwitchCommands, codexResetCreditOffer } from "./accountSwitch";
+import { insertSwitchCommands, codexResetCreditOffer, autoSwitchCheck, throttleContinueCheck } from "./accountSwitch";
 import { makeFakeDb } from "./testDb";
 import {
   isBlockedConversation,
@@ -966,6 +966,91 @@ describe("pickThrottleContinueBatch", () => {
     const pick = pickThrottleContinueBatch([row("l", "limit", 10 * 60_000, 1)], 1);
     expect(pick.batch).toEqual([]);
     expect(pick.nextDueAt).toBeNull();
+  });
+
+  test("a dropped connection rides the same paced continue as a throttle park", () => {
+    // 2026-09-13: a "Connection closed mid-response" park sat in the fleet
+    // banner for hours — the switch loop reads limit/auth only, and nothing
+    // else sent the plain continue the banner promised. Limit and fatal
+    // parks stay out: one is the switch loop's, the other has no safe retry.
+    const now = 9_000_000;
+    const rows = [
+      row("conn", "connection", 5 * 60_000, now),
+      row("thr", "throttle", 3 * 60_000, now),
+      row("limit", "limit", 10 * 60_000, now),
+      row("fatal", "fatal", 10 * 60_000, now),
+      row("connFresh", "connection", 10_000, now),
+    ];
+    const pick = pickThrottleContinueBatch(rows, now);
+    expect(pick.batch.map((r) => r._id)).toEqual(["conn", "thr"]);
+    expect(pick.waiting).toBe(1);
+    expect(pick.nextDueAt).toBe(now - 10_000 + THROTTLE_CONTINUE_DELAY_MS);
+  });
+});
+
+describe("automatic passes dismiss the workers they skip (ct-51132)", () => {
+  // The 2026-09-13 banner: "25 sessions blocked on usage limits — 2 dropped
+  // mid-response · 23 subagent workers skipped". The switch loop had revived
+  // the top-level sessions and returned "nothing_blocked" on every later tick
+  // while the workers stayed flagged, so the banner never cleared without a
+  // click. An automatic pass now makes the button's decision for the rows it
+  // leaves out.
+  const userId = "users_1" as any;
+  const now = Date.now();
+  const device = (recovery: { cc_auto_switch?: boolean; cc_auto_continue?: boolean }) => ({
+    _id: "devices_1",
+    user_id: userId,
+    device_id: "dev-1",
+    last_seen: now,
+    is_remote: false,
+    cc_auto_switch_state: {},
+    ...recovery,
+  });
+  const worker = (id: string, kind: string) => ({
+    _id: id,
+    user_id: userId,
+    agent_type: "claude_code",
+    owner_device_id: "dev-1",
+    parent_conversation_id: "parent",
+    updated_at: now - 10 * 60_000,
+    pending_api_error: true,
+    pending_api_error_kind: kind,
+    pending_api_error_at: now - 10 * 60_000,
+  });
+  const ctx = (db: any) => ({ db, scheduler: { runAt: async () => {}, runAfter: async () => {} } });
+  const stillBlocked = (db: any) => db._tables.conversations.filter((c: any) => c.pending_api_error === true).map((c: any) => c._id);
+
+  test("the switch loop dismisses limit-parked workers it will not revive", async () => {
+    const db = makeFakeDb({
+      devices: [device({ cc_auto_switch: false })], // auto-continue on by default
+      conversations: [worker("w1", "limit"), worker("w2", "limit")],
+      daemon_commands: [],
+    });
+    const result = await (autoSwitchCheck as any)._handler(ctx(db), { user_id: userId });
+    expect(result).toEqual({ acted: "nothing_blocked", dismissed: 2 });
+    expect(stillBlocked(db)).toEqual([]);
+  });
+
+  test("the paced continue dismisses the workers it skips", async () => {
+    const db = makeFakeDb({
+      devices: [device({ cc_auto_switch: true })],
+      conversations: [worker("w1", "connection"), worker("w2", "throttle")],
+      daemon_commands: [],
+    });
+    const result = await (throttleContinueCheck as any)._handler(ctx(db), { user_id: userId });
+    expect(result).toEqual({ acted: "nothing_throttled", dismissed: 2 });
+    expect(stillBlocked(db)).toEqual([]);
+  });
+
+  test("with every automatic recovery off the workers stay for the human's opt-in", async () => {
+    const db = makeFakeDb({
+      devices: [device({ cc_auto_switch: false, cc_auto_continue: false })],
+      conversations: [worker("w1", "connection")],
+      daemon_commands: [],
+    });
+    const result = await (throttleContinueCheck as any)._handler(ctx(db), { user_id: userId });
+    expect(result).toEqual({ acted: "nothing_throttled", dismissed: 0 });
+    expect(stillBlocked(db)).toEqual(["w1"]);
   });
 });
 
