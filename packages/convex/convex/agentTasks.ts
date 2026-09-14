@@ -180,6 +180,22 @@ export async function cancelTasksBoundToConversation(
   return cancelled;
 }
 
+/** Cancel every open task a conversation originated (a retired standing role's
+ *  routines): cancelled, not completed, so nothing re-arms them. Returns the count. */
+export async function cancelTasksOriginatingFrom(ctx: TaskCtx, conversationId: Id<"conversations">, now = Date.now()): Promise<number> {
+  const tasks = await ctx.db
+    .query("agent_tasks")
+    .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", conversationId))
+    .collect();
+  let cancelled = 0;
+  for (const task of tasks) {
+    if (task.status === "cancelled" || task.status === "completed" || task.status === "failed") continue;
+    await patchTask(ctx, task, { status: "cancelled", updated_at: now });
+    cancelled++;
+  }
+  return cancelled;
+}
+
 // The mirror of cancelTasksBoundToConversation: re-arm the schedules a kill
 // canceled, called on the un-kill transition (web restore / undo, cast
 // undismiss). Only tasks stamped canceled_on_kill_at qualify — a schedule that

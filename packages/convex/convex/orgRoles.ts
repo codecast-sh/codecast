@@ -1,4 +1,5 @@
 import { mutation, query } from "./functions";
+import { cancelTasksOriginatingFrom } from "./agentTasks";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -421,13 +422,7 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
   let cancelledTriggers = 0;
   const standing = await standingConversationOf(ctx, role);
   if (standing) {
-    const routines: any[] = await ctx.db.query("agent_tasks")
-      .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id)).collect();
-    for (const t of routines) {
-      if (t.status === "cancelled" || t.status === "completed" || t.status === "failed") continue;
-      await ctx.db.patch(t._id, { status: "cancelled", updated_at: now });
-      cancelledTriggers++;
-    }
+    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now);
     const held: any[] = await ctx.db.query("pending_messages")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "held")).collect();
     for (const p of held) await ctx.db.patch(p._id, { status: "cancelled", cancelled_at: now });
