@@ -294,6 +294,7 @@ class Parser {
     if (attrs.agent) node.agent = String(attrs.agent);
     if (attrs.definition) node.definition = String(attrs.definition);
     if (attrs.isolated !== undefined) node.isolated = attrs.isolated === true || attrs.isolated === "true";
+    if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";
     if (attrs.temperature !== undefined) node.temperature = attrs.temperature as number;
     if (attrs.timeout !== undefined) node.timeout = Number(attrs.timeout);
     if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
