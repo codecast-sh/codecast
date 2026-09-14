@@ -238,7 +238,7 @@ export function PRLineThread({
         {span && (
           <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">{span}</div>
         )}
-        {noteMode && onNoteMode && comments.length === 0 && (
+        {noteMode && onNoteMode && (comments.length === 0 || replying) && (
           <span className="ml-auto"><NoteModePill mode={noteMode} onChange={onNoteMode} pendingCount={pendingCount} /></span>
         )}
       </div>
@@ -250,7 +250,11 @@ export function PRLineThread({
         <PRComposer
           repository={repository}
           threadKey={threadKey}
-          placeholder={comments.length ? "Reply" : noteMode === "review" ? `Note on ${span ?? "this line"} for your review` : `Comment on ${span ?? "this line"}`}
+          placeholder={
+            comments.length
+              ? noteMode === "review" ? "Reply, held for your review" : "Reply"
+              : noteMode === "review" ? `Note on ${span ?? "this line"} for your review` : `Comment on ${span ?? "this line"}`
+          }
           autoFocus
           onSubmit={async (content) => {
             await onReply(content);
