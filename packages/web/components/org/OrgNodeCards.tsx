@@ -14,7 +14,8 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
 import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
-import { ORG_STATE_META } from "./orgMeta";
+import { ORG_STATE_META, standingLineOf } from "./orgMeta";
+import type { OrgStandingState } from "./orgTypes";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
 export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
@@ -130,6 +131,25 @@ function CollapseToggle({ collapsed, hidden, onClick }: { collapsed: boolean; hi
   );
 }
 
+/** One line for a standing agent: a dot and word in its declared colour, then
+ *  its pinned line. The role card, the anchor card and the panels share it. */
+export function StandingLine({ standing, className, size = "sm" }: { standing: OrgStandingState | null | undefined; className?: string; size?: "sm" | "md" }) {
+  const line = standingLineOf(standing);
+  if (!line) return null;
+  return (
+    <div className={cn("flex items-center gap-1.5 min-w-0", size === "sm" ? "text-[10.5px]" : "text-[11.5px]", className)} title={line.text ?? undefined}>
+      <span className="shrink-0 w-[7px] h-[7px] rounded-full" style={{ background: line.color }} aria-hidden />
+      <span className="shrink-0 font-medium" style={{ color: line.color }}>{line.label}</span>
+      {line.text && (
+        <>
+          <span aria-hidden style={{ color: "var(--sol-text-dim)" }}>·</span>
+          <span className="truncate" style={{ color: "var(--sol-text-muted)" }}>{line.text}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- person
 
 export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean; hidden: number; overflow: number };
@@ -214,6 +234,10 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
   ];
   const wholeWorkspace = r.scope.project_ids.length === 0 && r.scope.plan_ids.length === 0;
   const paused = r.status === "paused";
+  // The seat's colour is its standing agent's own declared status when it has
+  // one; the hand tally below stays a proportion, never the seat's colour.
+  const standing = standingLineOf(r.standing);
+  const plate = standing?.color ?? "var(--sol-violet)";
   return (
     <Frame
       selected={data.selected}
@@ -224,7 +248,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       style={{
         // A seat: a double rule at the top, like a name plate on a desk.
         borderTopWidth: 3,
-        borderTopColor: paused ? "color-mix(in srgb, var(--sol-violet) 40%, transparent)" : "var(--sol-violet)",
+        borderTopColor: paused ? `color-mix(in srgb, ${plate} 40%, transparent)` : plate,
         background: "linear-gradient(180deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 42%)",
         opacity: paused ? 0.75 : 1,
       }}
@@ -253,6 +277,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
         </div>
         <CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />
       </div>
+      <StandingLine standing={r.standing} className="mt-1.5" />
       <div className="mt-2 flex items-center gap-1 min-w-0 overflow-hidden">
         {wholeWorkspace ? (
           <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text-dim)" }}>
@@ -317,6 +342,7 @@ export const AnchorCard = memo(function AnchorCard({ data }: NodeProps<Node<Anch
             </>
           )}
         </div>
+        <StandingLine standing={a} className="mt-[3px]" />
       </div>
     </Frame>
   );

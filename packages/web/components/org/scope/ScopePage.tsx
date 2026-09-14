@@ -30,7 +30,7 @@ import { TaskListContent } from "../../../app/tasks/page";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { KeyCap, ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { isMac } from "../../../shortcuts/registry";
-import { queryProblem, roleStanding, scopeQueryRef } from "../../../lib/scopePage";
+import { queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { StateTally } from "../OrgNodeCards";
 import { parentName } from "../orgMeta";
@@ -128,8 +128,9 @@ export function ScopePageInner({ id }: { id: string }) {
     if (!role || !wakeText.trim()) return;
     setWaking(true);
     try {
-      await wakeMutation({ role_id: role._id, message: wakeText.trim() });
-      toast.success(`Woke @${role.handle}`);
+      const res = await wakeMutation({ role_id: role._id, message: wakeText.trim() });
+      if (res?.held) toast.success(`Queued for @${role.handle}; it reads this when you resume`);
+      else toast.success(`Woke @${role.handle}`);
       setWakeOpen(false); setWakeText("");
     } catch (e: any) {
       toast.error(e?.message?.replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] ?? "Wake failed");
@@ -157,6 +158,13 @@ export function ScopePageInner({ id }: { id: string }) {
   const trust: TrustStage = role?.trust ?? "understand";
   const caps = role?.caps ?? DEFAULT_CAPS;
   const counters = role?.counters && role.counters.day === todayUtc() ? role.counters : null;
+  // Tokens come from Claude transcripts only: a role on another backend, or
+  // whose hands all are, reads "uncounted", never 0k.
+  const uncountedTokens = tokensUncounted({
+    tokens: counters?.tokens ?? 0,
+    uncounted: brief?.facts?.usage?.uncounted_sessions ?? 0,
+    sessions: (brief?.facts?.hands?.length ?? 0) + (anchor?.conversation_id ? 1 : 0),
+  });
   const boardLine = briefFirstLine(brief?.narrative);
   const standingStateLine = (standing as any)?.thread_state ? String((standing as any).thread_state).split("\n")[0] : null;
   const stripeLine = boardLine || standingStateLine;
@@ -248,7 +256,9 @@ export function ScopePageInner({ id }: { id: string }) {
                     <span style={{ color: "var(--sol-text-dim)" }}>today</span>
                     <span style={{ color: "var(--sol-text)" }}>{counters?.wakes ?? 0}<span style={{ color: "var(--sol-text-dim)" }}>/{caps.wakes_per_day} wakes</span></span>
                     <span style={{ color: "var(--sol-text)" }}>{counters?.hands ?? 0}<span style={{ color: "var(--sol-text-dim)" }}>/{caps.hands_per_day} hands</span></span>
-                    <span style={{ color: "var(--sol-text)" }}>{Math.round((counters?.tokens ?? 0) / 1000)}k<span style={{ color: "var(--sol-text-dim)" }}>/{Math.round(caps.tokens_per_day / 1000)}k tokens</span></span>
+                    {uncountedTokens
+                      ? <span style={{ color: "var(--sol-text-dim)" }} title="Tokens are counted from Claude transcripts only; this role's sessions run on another backend">tokens uncounted</span>
+                      : <span style={{ color: "var(--sol-text)" }}>{Math.round((counters?.tokens ?? 0) / 1000)}k<span style={{ color: "var(--sol-text-dim)" }}>/{Math.round(caps.tokens_per_day / 1000)}k tokens</span></span>}
                   </span>
                 )}
                 {anchor?.conversation_id && standing && <span style={{ color: "var(--sol-text-dim)" }}>{(() => { const a = compactAge(now - ((standing as any).updated_at ?? now)); return a === "just now" ? "active just now" : `active ${a} ago`; })()}</span>}
@@ -258,7 +268,7 @@ export function ScopePageInner({ id }: { id: string }) {
           {!phone && (
             <div className="shrink-0 flex items-center gap-1.5">
               <ActionButton icon={MessageSquare} label="Talk" primary disabled={noStanding} tip={noStanding ? "No standing session yet. Provision one with cast role provision." : "Open the standing session"} onClick={talk} />
-              {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet." : "Send the role one line; it wakes now"} onClick={() => setWakeOpen(true)} />}
+              {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet." : paused ? "Paused: the line is held until you resume" : "Send the role one line; it wakes now"} onClick={() => setWakeOpen(true)} />}
               {role && canEdit && (
                 <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
               )}
@@ -340,7 +350,7 @@ export function ScopePageInner({ id }: { id: string }) {
       {phone && (
         <div className="shrink-0 border-t px-3 py-2 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: "var(--sol-bg)" }}>
           <ActionButton icon={MessageSquare} label="Talk" primary disabled={noStanding} tip={noStanding ? "No standing session yet" : "Open the standing session"} onClick={talk} grow />
-          {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet" : "Wake the role"} onClick={() => setWakeOpen(true)} grow />}
+          {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet" : paused ? "Paused: held until you resume" : "Wake the role"} onClick={() => setWakeOpen(true)} grow />}
           {role && canEdit && <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip="" onClick={() => update({ status: paused ? "active" : "paused" })} grow />}
         </div>
       )}
@@ -349,7 +359,7 @@ export function ScopePageInner({ id }: { id: string }) {
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle style={{ fontFamily: "var(--font-serif)" }}>Wake @{handle}</DialogTitle>
-            <DialogDescription>One line the role reads first in its next frame. It wakes now, ahead of the coalesce window.</DialogDescription>
+            <DialogDescription>{paused ? "The role is paused: this line waits and is the first thing it reads when you resume it." : "One line the role reads first in its next frame. It wakes now, ahead of the coalesce window."}</DialogDescription>
           </DialogHeader>
           <textarea
             autoFocus

@@ -4,17 +4,27 @@
 // queries read. Kept out of the components so they test without React.
 import type { WorkState } from "@codecast/shared/contracts";
 import { isNonTabRoute } from "./tabRoutes";
+import { ORG_STATE_META } from "../components/org/orgMeta";
 import type { FeedKind } from "../components/org/scope/scopeTypes";
 
 /** A standing agent is never "done": between wakes it stands by. The chip
- *  and the stripe say so in role words; the raw session state stays on the
- *  session rows. */
+ *  and the stripe say so in role words; the colour is the one work state
+ *  table every org surface paints from, so the header stripe matches the
+ *  role's node on the org page. */
 export type RoleStanding = { label: string; color: string; pulse: boolean };
 export function roleStanding(state: WorkState | undefined | null): RoleStanding | null {
   if (!state) return null;
-  if (state === "working") return { label: "awake", color: "var(--sol-green)", pulse: true };
-  if (state === "needs_input") return { label: "needs you", color: "var(--sol-yellow)", pulse: false };
-  return { label: "standing by", color: "var(--sol-text-dim)", pulse: false };
+  const color = (ORG_STATE_META[state] ?? ORG_STATE_META.idle).color;
+  if (state === "working") return { label: "awake", color, pulse: true };
+  if (state === "needs_input") return { label: "needs you", color, pulse: false };
+  return { label: "standing by", color, pulse: false };
+}
+
+/** Tokens are counted from Claude transcripts only (org-roles-standing.md
+ *  T4). When every session the role runs is on another backend, the header
+ *  says "uncounted" rather than a zero that reads as "spent nothing". */
+export function tokensUncounted(input: { tokens: number; uncounted: number; sessions: number }): boolean {
+  return input.tokens === 0 && input.uncounted > 0 && input.uncounted >= input.sessions;
 }
 
 const SESSION_TONE: Record<string, string> = {

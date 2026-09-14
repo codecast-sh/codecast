@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { feedLinkIsServerOwned, feedStateTone, queryProblem, roleStanding, scopeQueryRef } from "../scopePage";
+import { feedLinkIsServerOwned, feedStateTone, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../scopePage";
+import { ORG_STATE_META } from "../../components/org/orgMeta";
 
 describe("scope page rules", () => {
   test("a standing agent is awake, needs you, or standing by; never done", () => {
@@ -8,6 +9,19 @@ describe("scope page rules", () => {
     expect(roleStanding("done")?.label).toBe("standing by");
     expect(roleStanding("dormant")?.label).toBe("standing by");
     expect(roleStanding(undefined)).toBeNull();
+  });
+
+  test("the role's stripe colour is the org node's colour for the same state", () => {
+    for (const state of ["working", "needs_input", "dormant", "done", "idle"] as const) {
+      expect(roleStanding(state)?.color).toBe(ORG_STATE_META[state].color);
+    }
+  });
+
+  test("tokens read uncounted only when every session runs off the Claude backend", () => {
+    expect(tokensUncounted({ tokens: 0, uncounted: 2, sessions: 2 })).toBe(true);
+    expect(tokensUncounted({ tokens: 0, uncounted: 1, sessions: 2 })).toBe(false);
+    expect(tokensUncounted({ tokens: 1200, uncounted: 2, sessions: 2 })).toBe(false);
+    expect(tokensUncounted({ tokens: 0, uncounted: 0, sessions: 1 })).toBe(false);
   });
 
   test("only a blocked session or a pending decision gets the needs input colour", () => {
