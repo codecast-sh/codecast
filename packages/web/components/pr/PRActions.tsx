@@ -14,7 +14,6 @@ import {
   Radio,
   RotateCcw,
   Send,
-  Trash2,
   UserPlus,
   XCircle,
 } from "lucide-react";
@@ -27,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { ConfirmButton } from "../integrations/parts";
+import { useInboxStore } from "../../store/inboxStore";
 import { accentVar } from "../../lib/externalEvents";
 import { mergeStateMeta, notePlace, prStateKey, type CodeCommentRow } from "../../lib/prView";
 
@@ -68,6 +69,8 @@ export function ReviewMenu({
   open,
   onOpenChange,
   sessionChoices = [],
+  openThreads = 0,
+  onWalk,
 }: {
   pr: any;
   notes: CodeCommentRow[];
@@ -78,6 +81,9 @@ export function ReviewMenu({
   onOpenChange: (open: boolean) => void;
   /** Sessions the notes can go to when no shepherd is bound. */
   sessionChoices?: { id: string; title: string }[];
+  /** Open threads on the pull request, and the jump to the first: where a review starts. */
+  openThreads?: number;
+  onWalk?: () => void;
 }) {
   const submit = useAction(api.reviews.submitPending);
   const hand = useMutation(api.reviews.handPendingToSession);
@@ -132,9 +138,21 @@ export function ReviewMenu({
         <div className="px-3.5 pt-3 pb-2 border-b border-sol-border/50">
           <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">Your review</div>
           {count === 0 ? (
-            <p className="mt-1 text-[12px] text-sol-text-muted leading-relaxed">
-              No notes yet. Open Files, choose a line, and write with <em>Add to review</em> on. Or leave a verdict alone.
-            </p>
+            <div className="mt-1 space-y-1.5">
+              <p className="text-[12px] text-sol-text-muted leading-relaxed">
+                No notes yet. Open Files, choose a line, and write with <em>Add to review</em> on. Or leave a verdict alone.
+              </p>
+              {!!openThreads && onWalk && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2.5 py-1 text-[11px] text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
+                  onClick={() => { setOpen(false); onWalk(); }}
+                >
+                  Start with the {openThreads} open {openThreads === 1 ? "thread" : "threads"}
+                  <KeyCap size="xs">n</KeyCap>
+                </button>
+              )}
+            </div>
           ) : (
             <ul className="mt-1.5 max-h-40 overflow-y-auto space-y-1">
               {notes.map((note) => (
@@ -226,16 +244,15 @@ export function ReviewMenu({
               </div>
             )}
             {count > 0 && (
-              <button
-                type="button"
-                className="ml-auto inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors"
-                onClick={async () => {
-                  await discard({ pull_request_id: pr._id });
-                  toast.success("Notes discarded");
-                }}
-              >
-                <Trash2 className="w-3 h-3" /> Discard
-              </button>
+              <span className="ml-auto">
+                <ConfirmButton
+                  label="Discard"
+                  question={`${count} ${count === 1 ? "note is" : "notes are"} thrown away.`}
+                  onConfirm={() => {
+                    void discard({ pull_request_id: pr._id }).then(() => toast.success("Notes discarded"));
+                  }}
+                />
+              </span>
             )}
           </div>
         </div>
@@ -254,8 +271,12 @@ const METHODS: { key: MergeMethod; label: string; hint: string }[] = [
 /** Merge: the method is remembered on this device; the branch goes by default. */
 export function MergeMenu({ pr }: { pr: any }) {
   const merge = useAction(api.prCli.merge);
-  const [method, setMethod] = useState<MergeMethod>(() => (localStorage.getItem("pr.mergeMethod") as MergeMethod) || "squash");
-  const [deleteBranch, setDeleteBranch] = useState(() => localStorage.getItem("pr.deleteBranch") !== "no");
+  // The method and the branch choice follow the person, through the same
+  // synced preference bag as every other reading habit.
+  const method: MergeMethod = useInboxStore((s) => s.clientState.ui?.pr_merge_method) ?? "squash";
+  const deleteBranch = useInboxStore((s) => s.clientState.ui?.pr_delete_branch) ?? true;
+  const setMethod = (next: MergeMethod) => useInboxStore.getState().updateClientUI({ pr_merge_method: next });
+  const setDeleteBranch = (next: boolean) => useInboxStore.getState().updateClientUI({ pr_delete_branch: next });
   const [busy, setBusy] = useState(false);
 
   if (prStateKey(pr) !== "open") return null;
@@ -298,7 +319,7 @@ export function MergeMenu({ pr }: { pr: any }) {
             <DropdownMenuItem
               key={m.key}
               className="flex flex-col items-start gap-0 cursor-pointer"
-              onClick={() => { setMethod(m.key); localStorage.setItem("pr.mergeMethod", m.key); }}
+              onClick={() => setMethod(m.key)}
             >
               <span className="flex items-center gap-2 text-[12px] text-sol-text">
                 {method === m.key ? <Check className="w-3 h-3 text-sol-cyan" /> : <span className="w-3" />}
@@ -310,7 +331,7 @@ export function MergeMenu({ pr }: { pr: any }) {
           <DropdownMenuSeparator className="bg-sol-border" />
           <DropdownMenuItem
             className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text"
-            onClick={() => { const next = !deleteBranch; setDeleteBranch(next); localStorage.setItem("pr.deleteBranch", next ? "yes" : "no"); }}
+            onClick={() => setDeleteBranch(!deleteBranch)}
           >
             {deleteBranch ? <Check className="w-3 h-3 text-sol-cyan" /> : <span className="w-3" />}
             Delete {pr.head_ref ?? "the branch"} after merging

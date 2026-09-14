@@ -3,24 +3,30 @@ import { GitCommitHorizontal } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { relTimeShort } from "../../lib/utils";
 import type { PrCommitRow } from "../../lib/prView";
+import type { PRDetailsRead } from "../../hooks/usePRDetails";
+import { PRDetailsFrame } from "./PRDetailsFrame";
 
 // The Commits tab: the head branch, oldest first, as GitHub lists it. Each row
 // is a commit page away; the sha is monospace because that is what a person
 // copies from here.
 
-export function PRCommits({ repository, commits }: { repository: string; commits: PrCommitRow[] | undefined }) {
+export function PRCommits({ repository, commits, total, read }: { repository: string; commits: PrCommitRow[] | undefined; total?: number; read?: PRDetailsRead }) {
+  return <PRDetailsFrame read={read} hasRows={!!commits?.length} label="Commits"><CommitRows repository={repository} commits={commits} total={total} /></PRDetailsFrame>;
+}
+
+function CommitRows({ repository, commits, total }: { repository: string; commits: PrCommitRow[] | undefined; total?: number }) {
   const rows = commits ?? [];
   if (rows.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 px-8 text-center">
         <GitCommitHorizontal className="w-8 h-8 text-sol-text-dim/40" />
-        <p className="text-[13px] text-sol-text-muted">No commits have been read for this pull request yet</p>
-        <p className="text-[12px] text-sol-text-dim max-w-sm">They arrive with the next push, or with the files when the pull request is next synced.</p>
+        <p className="text-[13px] text-sol-text-muted">{commits ? "No commits on this pull request" : "Commits have not loaded yet"}</p>
       </div>
     );
   }
   return (
     <div className="h-full overflow-y-auto px-5 py-4" data-main-scroll>
+      {total !== undefined && total > rows.length && <p className="mb-3 text-[11px] text-sol-text-dim">Showing {rows.length} of {total} commits</p>}
       <ol className="divide-y divide-sol-border/40 rounded-xl border border-sol-border/50 bg-sol-card">
         {rows.map((commit, index) => {
           const [subject, ...rest] = commit.message.split("\n");

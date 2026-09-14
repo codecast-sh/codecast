@@ -111,6 +111,7 @@ export function PRTimeline({
   onResolve,
   onNavigate,
   onJumpToThread,
+  lastSeenAt,
 }: {
   pr: any;
   items: PrTimelineItem[];
@@ -121,8 +122,13 @@ export function PRTimeline({
   onResolve: (commentId: string, resolved: boolean) => void;
   onNavigate?: (path: string) => void;
   onJumpToThread?: (comment: CodeCommentRow) => void;
+  /** When the reader last had the page open: a line goes before what is new. */
+  lastSeenAt?: number;
 }) {
   let lastDay = "";
+  // The first item newer than the last visit gets the line; none when
+  // nothing is new, or when this is the first visit.
+  const firstNew = lastSeenAt ? items.find((item) => item.at > lastSeenAt)?.key : undefined;
 
   return (
     <div className="h-full flex flex-col">
@@ -142,6 +148,13 @@ export function PRTimeline({
             lastDay = day;
             return (
               <div key={item.key}>
+                {item.key === firstNew && (
+                  <div className="pr-since -mx-1 mb-2 mt-4 flex items-center gap-3 py-1">
+                    <span className="h-px flex-1 bg-sol-cyan/50" />
+                    <span className="text-[10px] uppercase tracking-wider text-sol-cyan">Since you last looked</span>
+                    <span className="h-px flex-1 bg-sol-cyan/50" />
+                  </div>
+                )}
                 {divider && (
                   <div className="pr-day -mx-1 mb-2 mt-4 flex items-center gap-3 bg-sol-bg/80 py-1 first:mt-0">
                     <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">{divider}</span>
