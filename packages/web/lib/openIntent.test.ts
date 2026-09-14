@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
-import { leavesOf } from "@/store/stageSplit";
+import { besideLeafId, leavesOf } from "@/store/stageSplit";
 // The split target is served by the stage, which registers itself on load.
 import "@/lib/stage";
 import {
@@ -115,7 +115,10 @@ describe("divertNavigation", () => {
     expect(tabs).toHaveLength(1); // no new tab: the view split instead
     const leaves = tabs[0].layout ? leavesOf(tabs[0].layout) : [];
     expect(leaves.map((l) => l.path)).toEqual(["/inbox", "/tasks/ct-1"]);
-    expect(tabs[0].focusedLeafId).toBe(leaves[1].id);
+    // The beside pane is the tab's one stable target and opens unfocused: the
+    // page the reader clicked in keeps focus, its path and its URL.
+    expect(leaves[1].id).toBe(besideLeafId("tab_1"));
+    expect(tabs[0].focusedLeafId).toBe(leaves[0].id);
   });
 
   it("a session link splits in as the conversation itself, not an inbox around it", async () => {
