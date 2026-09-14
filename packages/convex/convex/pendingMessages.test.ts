@@ -80,6 +80,7 @@ describe("collectOldLegacyPendingMessages", () => {
       { index: "by_status", status: "injected" },
       { index: "by_status", status: "failed" },
       { index: "by_status", status: "undeliverable" },
+      { index: "by_status", status: "held" },
     ]);
   });
 });
