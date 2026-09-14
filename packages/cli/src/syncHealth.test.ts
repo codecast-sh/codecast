@@ -31,8 +31,11 @@ test('a stuck transcript degrades health even with no network retries, then clea
     const health = queue.getHealth(stuck);
     expect(health).toMatchObject({ ops: 0, pending: 1, messages: 0, conversations: 1 });
     expect(health.oldestPendingMs).toBeGreaterThanOrEqual(STUCK_SYNC_THRESHOLD_MS);
+    // A stuck file counts as no progress since it last advanced, whatever the
+    // (empty, fresh) queue says.
+    expect(health.noProgressMs).toBeGreaterThanOrEqual(86_400_000);
     record.lastSyncedPosition = Buffer.byteLength(content);
-    expect(queue.getHealth(await getStuckSyncs({ records, now }))).toEqual({ ops: 0, pending: 0, messages: 0, conversations: 0, oldestPendingMs: 0 });
+    expect(queue.getHealth(await getStuckSyncs({ records, now }))).toEqual({ ops: 0, pending: 0, messages: 0, conversations: 0, oldestPendingMs: 0, noProgressMs: 0 });
   } finally { queue.stop(); }
 });
 

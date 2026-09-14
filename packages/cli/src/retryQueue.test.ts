@@ -413,7 +413,29 @@ describe("RetryQueue", () => {
       messages: 0,
       conversations: 0,
       oldestPendingMs: 0,
+      noProgressMs: 0,
     });
+  });
+
+  it("reports time without progress apart from the age of the head", async () => {
+    // A long backlog drained in order keeps an old head while ops complete;
+    // that is a drain, not a stall, and noProgressMs is what says so.
+    queue.add("addMessages", { conversationId: "slow", messages: [{ messageUuid: "s1" }] });
+    queue.getPendingOperations()[0].createdAt = Date.now() - 5 * 60 * 1000;
+    const before = queue.getHealth();
+    // Nothing has completed since the queue was built: no progress for as
+    // long as the queue has existed.
+    expect(before.noProgressMs).toBeGreaterThanOrEqual(0);
+    expect(before.noProgressMs).toBeLessThan(5 * 60 * 1000);
+
+    queue.setExecutor(async (op) => op.params.conversationId === "fast");
+    queue.add("addMessages", { conversationId: "fast", messages: [{ messageUuid: "f1" }] });
+    queue.notifyConnectionRestored();
+    await until(() => queue.getQueueSize() === 1);
+
+    const after = queue.getHealth();
+    expect(after.oldestPendingMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
+    expect(after.noProgressMs).toBeLessThan(5_000);
   });
 
   it("reports backlog size and the oldest pending op's age", () => {

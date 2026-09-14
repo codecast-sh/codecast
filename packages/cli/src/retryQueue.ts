@@ -309,6 +309,9 @@ function splitTimedOutAddMessages(
  */
 export class RetryQueue {
   private readonly queue: GenericQueue;
+  /** Floor for noProgressMs before the first success: the queue cannot have
+   *  progressed before it existed. */
+  private readonly startedAt = Date.now();
   /** Per-conversation chunk ceiling, lowered each time a batch times out. */
   private readonly conversationChunkLimits = new Map<string, number>();
   private readonly log: (message: string, level?: LogLevel) => void;
@@ -510,16 +513,27 @@ export class RetryQueue {
   //   - messages:      total messages waiting across all addMessages ops
   //   - conversations: distinct conversations with any queued work
   //   - oldestPendingMs: age of the longest-waiting op = how far behind we are
+  //   - noProgressMs:  how long the sync has gone without completing anything.
+  //                    A long backlog drained in order keeps an old head for
+  //                    minutes while ops complete every few seconds; this is
+  //                    what tells that apart from a queue that is stuck. Time
+  //                    since the last successful op (since boot when none has
+  //                    succeeded yet), or since a stuck file last advanced,
+  //                    whichever is longer: a stuck file is stalled whatever
+  //                    the queue is doing.
   // One pass over the queued ops (not the messages on disk), so it stays cheap
   // enough to call on every heartbeat across 100+ sessions.
-  getHealth(stalled: readonly { conversationId?: string; sessionId: string; pendingSince: number }[] = []): {
+  getHealth(stalled: readonly { conversationId?: string; sessionId: string; pendingSince: number; lastSyncedAt?: number }[] = []): {
     ops: number;
     pending: number;
     messages: number;
     conversations: number;
     oldestPendingMs: number;
+    noProgressMs: number;
   } {
     const now = Date.now();
+    const { lastSuccessAt } = this.queue.getHealth();
+    let noProgressMs = now - (lastSuccessAt || this.startedAt);
     let oldestPendingMs = 0;
     let messages = 0;
     const conversations = new Set<string>();
@@ -544,6 +558,7 @@ export class RetryQueue {
       if (!conversations.has(key)) nonAddMessagesOps++;
       conversations.add(key);
       oldestPendingMs = Math.max(oldestPendingMs, now - file.pendingSince);
+      noProgressMs = Math.max(noProgressMs, now - (file.lastSyncedAt ?? file.pendingSince));
     }
     return {
       ops: ops.length,
@@ -552,6 +567,8 @@ export class RetryQueue {
       messages,
       conversations: conversations.size,
       oldestPendingMs,
+      // Meaningful only while something waits; an empty queue is not stalled.
+      noProgressMs: ops.length > 0 || stalled.length > 0 ? noProgressMs : 0,
     };
   }
 }
