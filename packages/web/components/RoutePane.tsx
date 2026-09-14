@@ -27,6 +27,8 @@ const ConversationDiff = lazyPage("@/app/conversation/[id]/diff/page", () => imp
 const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
 const Feed = lazyPage("@/app/feed/page", () => import("@/app/feed/page"));
 const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
+// A web page as a pane: the address rides the query string (?u= / ?watch=).
+const Browser = lazyPage("@/app/browser/page", () => import("@/app/browser/page"));
 const Org = lazyPage("@/app/org/page", () => import("@/app/org/page"));
 const OrgScope = lazyPage("@/app/org/[id]/page", () => import("@/app/org/[id]/page"));
 const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
@@ -125,6 +127,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
+  { pattern: /^\/browser$/, paramNames: [], component: Browser },
   { pattern: /^\/org$/, paramNames: [], component: Org },
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
   { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
@@ -173,11 +176,15 @@ export function RoutePane({
   path,
   isActive,
   navigate,
+  leafId,
 }: {
   tabId: string;
   path: string;
   isActive: boolean;
   navigate?: (path: string, mode: "push" | "replace") => void;
+  /** Set when this pane is a stage leaf: a page that draws its own header
+   *  hosts the pane's close and expand controls (components/browser). */
+  leafId?: string;
 }) {
   const matched = useMemo(() => matchRoute(path), [path]);
   const ctxValue = useMemo(() => {
@@ -187,8 +194,9 @@ export function RoutePane({
       params: matched?.params ?? {},
       isActive,
       navigate,
+      leafId,
     };
-  }, [tabId, path, matched, isActive, navigate]);
+  }, [tabId, path, matched, isActive, navigate, leafId]);
 
   if (!matched) return null;
   const Component = matched.component;

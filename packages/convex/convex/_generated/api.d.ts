@@ -156,6 +156,7 @@ import type * as orchestrationEvents from "../orchestrationEvents.js";
 import type * as org from "../org.js";
 import type * as orgChannels from "../orgChannels.js";
 import type * as orgEvents from "../orgEvents.js";
+import type * as orgInit from "../orgInit.js";
 import type * as orgRoles from "../orgRoles.js";
 import type * as orgWakes from "../orgWakes.js";
 import type * as patterns from "../patterns.js";
@@ -383,6 +384,7 @@ declare const fullApi: ApiFromModules<{
   org: typeof org;
   orgChannels: typeof orgChannels;
   orgEvents: typeof orgEvents;
+  orgInit: typeof orgInit;
   orgRoles: typeof orgRoles;
   orgWakes: typeof orgWakes;
   patterns: typeof patterns;

@@ -1187,34 +1187,48 @@ export function findEchoedPendingMessage<
 
 // ── Usage rollup (org-roles-standing.md T4) ──
 // Claude's JSONL assistant records carry `message.usage`; the CLI parser
-// forwards it per message and this folds it into conversations.usage_totals.
-// A conversation that is a role's standing session or one of its hands also
-// bumps the role's daily token counter, which is what the caps read.
+// forwards it per record and this folds it into conversations.usage_totals.
+// One assistant turn is several records (one per content block) that share
+// `message.id` and repeat the same usage block, so a turn counts once: rows
+// are grouped by id inside the batch, and the last id counted is kept on the
+// conversation so the next batch does not count the turn again. Only rows
+// this call INSERTED count; a resync that patches existing rows carries the
+// same usage and must not add it twice. A conversation that is a role's
+// standing session or one of its hands also bumps the role's daily token
+// counter, which is what the caps read.
 type UsageIn = { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
+export type UsageRow = { usage: UsageIn; api_message_id?: string; inserted: boolean };
 export async function rollUpUsage(
   ctx: { db: any },
   conversation: any,
-  usages: UsageIn[],
+  rows: UsageRow[],
   convPatch: Record<string, unknown>,
   now: number,
 ): Promise<void> {
-  let input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
-  for (const u of usages) {
-    if (!u) continue;
-    input += u.input_tokens || 0;
-    output += u.output_tokens || 0;
-    cacheRead += u.cache_read_input_tokens || 0;
-    cacheWrite += u.cache_creation_input_tokens || 0;
-  }
-  const total = input + output + cacheRead + cacheWrite;
-  if (total === 0) return;
   const prev = conversation.usage_totals ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, updated_at: 0 };
+  const seen = new Set<string>(prev.last_api_message_id ? [prev.last_api_message_id] : []);
+  let input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+  let lastId: string | undefined = prev.last_api_message_id;
+  for (const r of rows) {
+    if (!r.inserted || !r.usage) continue;
+    if (r.api_message_id) {
+      if (seen.has(r.api_message_id)) continue;
+      seen.add(r.api_message_id);
+      lastId = r.api_message_id;
+    }
+    input += r.usage.input_tokens || 0;
+    output += r.usage.output_tokens || 0;
+    cacheRead += r.usage.cache_read_input_tokens || 0;
+    cacheWrite += r.usage.cache_creation_input_tokens || 0;
+  }
+  if (input + output + cacheRead + cacheWrite === 0) return;
   convPatch.usage_totals = {
     input: prev.input + input,
     output: prev.output + output,
     cache_read: prev.cache_read + cacheRead,
     cache_write: prev.cache_write + cacheWrite,
     updated_at: now,
+    ...(lastId ? { last_api_message_id: lastId } : {}),
   };
   const roleId = conversation.standing_role_id ?? conversation.org_role_id;
   if (roleId) {
@@ -1273,6 +1287,10 @@ export const addMessage = mutation({
       cache_creation_input_tokens: v.optional(v.number()),
       cache_read_input_tokens: v.optional(v.number()),
     })),
+    // Claude's API message id: one assistant turn spans several JSONL records
+    // that share it and repeat the same usage block, so usage counts once
+    // per id (rollUpUsage).
+    api_message_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1451,7 +1469,7 @@ export const addMessage = mutation({
       updated_at: now,
       last_message_role: args.role,
     };
-    await rollUpUsage(ctx, conversation, [args.usage], convPatch, now);
+    await rollUpUsage(ctx, conversation, [{ usage: args.usage, api_message_id: args.api_message_id, inserted: true }], convPatch, now);
     const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, content: contentToStore, timestamp: msgTimestamp }]);
     if (msgModel && msgModel !== conversation.model) {
       convPatch.model = msgModel;
@@ -1669,6 +1687,7 @@ const messageValidator = v.object({
     cache_creation_input_tokens: v.optional(v.number()),
     cache_read_input_tokens: v.optional(v.number()),
   })),
+  api_message_id: v.optional(v.string()),
 });
 
 export type AddMessagesAgentStatusProjection = {
@@ -1785,6 +1804,9 @@ export const addMessages = mutation({
 
     const ids: Id<"messages">[] = [];
     let insertedCount = 0;
+    // Batch positions this call inserted (vs patched an existing uuid), for
+    // the usage rollup: a resync must never count a turn twice.
+    const insertedIndexes = new Set<number>();
     let oldRowEdits = 0;
     let lastUserContentStored: string | undefined;
 
@@ -1803,7 +1825,7 @@ export const addMessages = mutation({
       : [];
     const consumedPendingIds = new Set<Id<"pending_messages">>();
 
-    for (const msg of args.messages) {
+    for (const [batchIndex, msg] of args.messages.entries()) {
       const msgTimestamp = msg.timestamp || Date.now();
 
       const safeContent = msg.content ? redactSecrets(msg.content) : msg.content;
@@ -1972,6 +1994,7 @@ export const addMessages = mutation({
       }
       ids.push(messageId);
       insertedCount++;
+      insertedIndexes.add(batchIndex);
       await scheduleUserSend(ctx, conversation, { role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id }, msgTimestamp);
       await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
       await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
@@ -2020,7 +2043,7 @@ export const addMessages = mutation({
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
-      await rollUpUsage(ctx, conversation, args.messages.map((m: any) => m.usage), convPatch, Date.now());
+      await rollUpUsage(ctx, conversation, args.messages.map((m: any, i: number) => ({ usage: m.usage, api_message_id: m.api_message_id, inserted: insertedIndexes.has(i) })), convPatch, Date.now());
       if (oldRowEdits > 0) {
         convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;
       }

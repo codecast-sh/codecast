@@ -38,6 +38,8 @@ import {
 } from "../lib/entityDisplay";
 import { prState, repoObjectRefOf } from "../lib/repoObjects";
 import { githubLocationHref } from "../lib/repoNavigation";
+import { loopbackLinkUrl } from "../lib/browserPaneLinks";
+import { LoopbackUrlPill } from "./LoopbackUrlPill";
 import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
@@ -610,6 +612,12 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // it navigates in this window, never a new tab.
   if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//")) {
     return <Link href={href} {...props}>{children}</Link>;
+  }
+  // A dev server an agent printed: the one external link people want to LOOK
+  // at rather than leave for, so it opens as a pane (lib/browserPaneLinks).
+  const loopback = loopbackLinkUrl(href);
+  if (loopback) {
+    return <LoopbackUrlPill url={loopback} label={text && text !== href ? text : undefined} />;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }

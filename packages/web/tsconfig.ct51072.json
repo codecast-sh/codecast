@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "**/*.d.ts",
+    "components/browser/BrowserStream.tsx",
+    "components/browser/backends/StreamBackend.tsx",
+    "components/browser/BrowserWatchSplit.tsx",
+    "components/browser/BrowserPane.tsx",
+    "lib/browserWatch.ts",
+    "lib/__tests__/browserWatchStatus.test.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
