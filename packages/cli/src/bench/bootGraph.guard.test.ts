@@ -145,8 +145,12 @@ describe("command groups stay off the boot graph", () => {
     // The bundled skills, the brief lines and the two new contracts
     // (orgProposal, browserPaneOffer) stay off: loaded at their use sites, and
     // the contracts are imported by path, never through the barrel.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(216);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2998);
+    //
+    // 218 after the third 2026-09-15 cut: orgTemplate.ts, the org template
+    // registrar (its verb bodies load inside each action, like orgInit), and the
+    // unattended contract the shared barrel now exports.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(218);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3018);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -173,7 +177,10 @@ describe("command groups stay off the boot graph", () => {
     // shared/files and the three contracts. reopenTab.ts left the graph at the
     // same time: focusHttp.ts loads it on the reopen route only.
     // The daemon reaches render/toolKinds.ts through tmuxSpawns.ts.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(301);
+    // 305 after the third 2026-09-15 cut: escapeInterrupt.ts (the daemon decides
+    // an Escape itself), desktopPaneRegistry.ts and realChrome.ts under the watch
+    // source that feeds desktop panes, and the unattended contract via the barrel.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(305);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
