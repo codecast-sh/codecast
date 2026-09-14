@@ -308,7 +308,11 @@ export function prComments(comments: CodeCommentRow[]): CodeCommentRow[] {
 export function unresolvedThreadCount(comments: CodeCommentRow[]): number {
   let open = 0;
   for (const byLine of groupCommentsByFileLine(comments).values()) {
-    for (const thread of byLine.values()) if (!threadResolved(thread)) open += 1;
+    for (const thread of byLine.values()) {
+      // A thread that is only the reader's unsent notes is not open yet.
+      if (thread.every((c) => c.pending_review)) continue;
+      if (!threadResolved(thread)) open += 1;
+    }
   }
   return open;
 }

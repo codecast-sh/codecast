@@ -5,7 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser, requireUserOrToken } from "./lib/auth";
 import { requireAccessiblePullRequest } from "./lib/access";
 import { githubSentence } from "./prCli";
-import { pendingRowsFor } from "./codeComments";
+import { pendingRowsFor, withoutOthersPending } from "./codeComments";
 import { sendNotesToSession } from "./reviewNotes";
 import { codecastPrUrl } from "@codecast/shared/contracts";
 
@@ -143,7 +143,7 @@ export const getReviewComments = query({
         q.eq("review_id", args.review_id)
       )
       .collect();
-    return comments;
+    return withoutOthersPending(comments, userId);
   },
 });
 
@@ -178,7 +178,7 @@ export const getCommentsForPR = query({
         q.eq("pull_request_id", args.pull_request_id)
       )
       .collect();
-    return comments.sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(comments, userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 
@@ -232,12 +232,12 @@ export const getCommentsForFile = query({
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
-    const allComments = await ctx.db
+    const allComments = withoutOthersPending(await ctx.db
       .query("review_comments")
       .withIndex("by_pull_request", (q) =>
         q.eq("pull_request_id", args.pull_request_id)
       )
-      .collect();
+      .collect(), userId);
 
     return allComments
       .filter((c) => c.file_path === args.file_path)

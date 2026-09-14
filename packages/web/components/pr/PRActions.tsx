@@ -67,6 +67,7 @@ export function ReviewMenu({
   onNavigate,
   open,
   onOpenChange,
+  sessionChoices = [],
 }: {
   pr: any;
   notes: CodeCommentRow[];
@@ -75,6 +76,8 @@ export function ReviewMenu({
   /** Owned by the page, so a key can open it. */
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Sessions the notes can go to when no shepherd is bound. */
+  sessionChoices?: { id: string; title: string }[];
 }) {
   const submit = useAction(api.reviews.submitPending);
   const hand = useMutation(api.reviews.handPendingToSession);
@@ -83,12 +86,14 @@ export function ReviewMenu({
   const [verdict, setVerdict] = useState<Verdict>("COMMENT");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState<"submit" | "hand" | null>(null);
+  const [picking, setPicking] = useState(false);
+  const shepherd = pr.shepherd_conversation_id as string | undefined;
 
   const own = authorLogin && pr.author_github_username?.toLowerCase() === authorLogin.toLowerCase();
   const openPr = pr.state === "open";
   const count = notes.length;
 
-  const run = async (kind: "submit" | "hand") => {
+  const run = async (kind: "submit" | "hand", conversationRef?: string) => {
     setBusy(kind);
     try {
       if (kind === "submit") {
@@ -98,8 +103,9 @@ export function ReviewMenu({
           setOpen(false);
         }
       } else {
-        const result = await hand({ pull_request_id: pr._id });
+        const result = await hand({ pull_request_id: pr._id, conversation_ref: conversationRef });
         toast.success(`${result.sent} ${result.sent === 1 ? "note" : "notes"} sent to the session`);
+        setPicking(false);
         setOpen(false);
       }
     } catch (e: any) {
@@ -181,7 +187,7 @@ export function ReviewMenu({
             placeholder={verdict === "APPROVE" ? "Anything to add? (optional)" : "Summary for the author"}
             className="w-full resize-none rounded-md border border-sol-border/60 bg-sol-bg-alt/40 px-2.5 py-2 text-[13px] text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan focus:outline-none"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               disabled={!openPr || busy !== null}
@@ -192,17 +198,32 @@ export function ReviewMenu({
               <Send className="w-3.5 h-3.5" />
               {busy === "submit" ? "Sending" : "Submit to GitHub"}
             </button>
-            {pr.shepherd_conversation_id && count > 0 && (
+            {count > 0 && (shepherd || sessionChoices.length > 0) && (
               <button
                 type="button"
                 disabled={busy !== null}
-                onClick={() => run("hand")}
+                onClick={() => (shepherd ? run("hand") : setPicking((v) => !v))}
                 className="inline-flex items-center gap-1.5 rounded-md border border-sol-border/60 px-3 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
-                title="The notes go to the shepherd session as one message and stay pending here"
+                title={shepherd ? "The notes go to the shepherd session as one message and stay pending here" : "Pick a linked session to send the notes to"}
               >
                 <Radio className="w-3.5 h-3.5" />
-                {busy === "hand" ? "Sending" : "Send to session"}
+                {busy === "hand" ? "Sending" : shepherd ? "Send to shepherd" : "Send to session"}
               </button>
+            )}
+            {picking && !shepherd && (
+              <div className="basis-full flex flex-wrap gap-1.5">
+                {sessionChoices.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => run("hand", session.id)}
+                    className="rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
+                  >
+                    {session.title}
+                  </button>
+                ))}
+              </div>
             )}
             {count > 0 && (
               <button
