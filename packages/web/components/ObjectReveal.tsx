@@ -15,7 +15,7 @@
 // here IS the page — same component, same in-pane navigation — never a second
 // rendering of the object to keep in step.
 
-import React, { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import { RoutePane } from "./RoutePane";
@@ -26,28 +26,9 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { useTabContext } from "../lib/tabParams";
 import { paneSessionId } from "../lib/stage";
 import { cssZoomOf } from "../lib/cssZoom";
+import { RevealHostCtx, useRevealHost, type RevealTarget } from "../lib/revealHost";
 
-export type RevealTarget = {
-  /** The object's page — the same href the reference links to. */
-  href: string;
-  /** The band's strip title: "Task: Fix the auth race". */
-  title: string;
-  /** The reference's own open handler (a session routes through
-   *  useOpenLinkedSession); the band's open link calls it too. */
-  onOpen?: (e: React.MouseEvent) => void;
-};
-
-type RevealHostValue = {
-  toggle: (target: RevealTarget) => void;
-  isOpen: (href: string) => boolean;
-};
-
-const RevealHostCtx = createContext<RevealHostValue | null>(null);
-
-/** The host a reference toggles itself in — null on a surface without one. */
-function useRevealHost(): RevealHostValue | null {
-  return useContext(RevealHostCtx);
-}
+export type { RevealTarget } from "../lib/revealHost";
 
 // Open reveals by host key, surviving the host's unmount: the transcript
 // virtualizer recycles rows scrolled far away, and a band the reader opened
@@ -142,6 +123,24 @@ function revealBounds(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
+// The band's height is the reader's choice, kept across reveals and reloads;
+// until they drag, it is a share of the scrolling surface.
+const HEIGHT_KEY = "codecast.reveal.height";
+const MIN_HEIGHT = 160;
+function savedHeight(): number | null {
+  try {
+    const n = Number(localStorage.getItem(HEIGHT_KEY));
+    return n >= MIN_HEIGHT ? n : null;
+  } catch {
+    return null;
+  }
+}
+function bandHeight(bounds: HTMLElement): number {
+  const max = Math.round(bounds.clientHeight * 0.95);
+  const saved = savedHeight();
+  return Math.min(max, saved ?? Math.round(bounds.clientHeight * 0.82));
+}
+
 // Full bleed by measurement, not by CSS math: the band sits under an unknown
 // stack of gutters (avatar column, centered prose column, row padding) that
 // differs per host, so it measures its own offset from the bounds and pulls
@@ -165,7 +164,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       const r = el.getBoundingClientRect();
       el.style.marginLeft = `${(b.left - r.left) / zoom + bounds.clientLeft}px`;
       el.style.width = `${bounds.clientWidth}px`;
-      el.style.height = `${Math.round(bounds.clientHeight * 0.82)}px`;
+      el.style.height = `${bandHeight(bounds)}px`;
     };
     apply();
     const ro = new ResizeObserver(() => {
@@ -179,9 +178,46 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
   }, [ref]);
 }
 
+/** Drag the band's bottom edge to resize it; the height persists. */
+function useResizeGrip(ref: React.RefObject<HTMLDivElement | null>) {
+  return useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const el = ref.current;
+      if (!el || e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const grip = e.currentTarget;
+      grip.setPointerCapture(e.pointerId);
+      const zoom = cssZoomOf(el);
+      const startY = e.clientY;
+      const startH = el.getBoundingClientRect().height / zoom;
+      const bounds = revealBounds(el);
+      const max = bounds ? Math.round(bounds.clientHeight * 0.95) : Infinity;
+      let h = startH;
+      const move = (ev: PointerEvent) => {
+        h = Math.max(MIN_HEIGHT, Math.min(max, startH + (ev.clientY - startY) / zoom));
+        el.style.height = `${Math.round(h)}px`;
+      };
+      const up = () => {
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", up);
+        grip.removeEventListener("pointercancel", up);
+        try {
+          localStorage.setItem(HEIGHT_KEY, String(Math.round(h)));
+        } catch {}
+      };
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", up);
+      grip.addEventListener("pointercancel", up);
+    },
+    [ref],
+  );
+}
+
 function RevealBand({ target, onClose }: { target: RevealTarget; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useFullBleed(ref);
+  const onGripDown = useResizeGrip(ref);
   const tab = useTabContext();
   // In-band navigation (a page's own links, its list → detail) stays in the
   // band: the pane-local navigate re-points this band, not the tab.
@@ -216,6 +252,14 @@ function RevealBand({ target, onClose }: { target: RevealTarget; onClose: () => 
           )}
         </ErrorBoundary>
       </div>
+      <div
+        className="object-reveal__grip"
+        onPointerDown={onGripDown}
+        title="Drag to resize"
+        aria-label="Drag to resize"
+        role="separator"
+        aria-orientation="horizontal"
+      />
     </div>
   );
 }
