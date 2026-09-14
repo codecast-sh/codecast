@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "incremental": false },
+  "include": [
+    "lib/browserPaneOffer.ts",
+    "lib/__tests__/browserPaneOffer.test.ts",
+    "components/browser/BrowserPaneOfferChip.tsx",
+    "../shared/contracts/browserPaneOffer.ts"
+  ],
+  "files": []
+}

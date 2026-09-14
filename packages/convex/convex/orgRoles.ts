@@ -11,7 +11,8 @@ import { canAccessPlan, canAccessProject, isTeamMember, workspaceForResource, wo
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { provisionStandingAgent, type RoleBootstrap } from "./anchors";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { enqueueKillAndResume } from "./conversations";
+import { enqueueKillAndResume, performSetThreadState } from "./conversations";
+import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, scheduleFlush, trustOf } from "./orgEvents";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -314,11 +315,11 @@ export async function performUpdateRole(
   // A retired seat is closed: its handle may already belong to a live role
   // and its sessions have fallen back to their owners. Create a new one.
   if (role.status === "retired") throw new Error("That role is retired");
-  // Scope edits are human only (F1): a call carrying the session it runs in
-  // is an agent's, and an agent may not widen or narrow what a role owns.
-  if (args.scope !== undefined && args.from_session) {
-    throw new Error("Scope changes are human only: edit the scope from the scope page or run cast role scope outside an agent session");
-  }
+  // Scope and charter edits are human only (F1, T2): a call carrying the
+  // session it runs in is an agent's, and an agent may not widen or narrow
+  // what a role owns, nor rewrite the statement of its job.
+  if (args.scope !== undefined) refuseFromAgent(args.from_session, "Scope");
+  if (args.charter !== undefined) refuseFromAgent(args.from_session, "Charter");
   // Retiring through update is the retire path: sessions must fall back to
   // their owners, not keep pointing at a hidden seat.
   if (args.status === "retired") return performRetireRole(ctx, userId, { role_id: args.role_id });
@@ -564,6 +565,13 @@ export function reviewBackendConflict(role: { review_backend?: string | null }, 
 
 export const TRUST_STAGES = ["understand", "decide", "direct"] as const;
 
+// The human only gate (T4): trust, caps, scope and the charter are a
+// person's to change. A call that names the session it runs inside is an
+// agent's and is refused; the CLI stamps that session on every such call.
+export function refuseFromAgent(fromSession: string | undefined, what: string): void {
+  if (fromSession) throw new Error(`${what} changes are human only: run this from a plain terminal or the role page`);
+}
+
 async function scopeNamesOf(ctx: Ctx, role: any): Promise<string[]> {
   const names: string[] = [];
   for (const id of role.scope?.project_ids ?? []) { const p = await ctx.db.get(id); if (p) names.push(`project ${p.title}`); }
@@ -683,9 +691,15 @@ async function handsOf(ctx: Ctx, role: any): Promise<any[]> {
 export async function performPauseRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
+  // Idempotent: a second pause changes nothing and interrupts nobody twice.
+  if (role.status === "paused") return { ...role, interrupted: 0 };
   await ctx.db.patch(role._id, { status: "paused", updated_at: Date.now() });
   let interrupted = 0;
   for (const hand of await handsOf(ctx, role)) {
+    // Only a hand whose agent is producing is told to stop; a dormant hand
+    // would be woken for one turn just to be told to rest.
+    const managed = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", hand._id)).first();
+    if (!managed || !ACTIVE_AGENT_STATUSES.has(managed.agent_status ?? "")) continue;
     await enqueuePendingMessage(ctx, hand, userId, {
       content: `<role-paused ${role.short_id}>Your role ${role.name} (@${role.handle}) was paused. Stop at a safe point: finish the step in flight, pin your state with cast state, and end your turn.</role-paused>`,
       client_id: `role-paused:${role._id}:${hand._id}`,
@@ -716,7 +730,7 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
 
 // trust — human only, logged on the charter as a doc entry.
 export async function performSetTrust(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string }): Promise<any> {
-  if (args.from_session) throw new Error("Trust stage changes are a person's act: run this from a plain terminal or the role page");
+  refuseFromAgent(args.from_session, "Trust stage");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const trust = args.trust.trim().toLowerCase();
   if (!(TRUST_STAGES as readonly string[]).includes(trust)) throw new Error(`Unknown trust stage "${args.trust}"; use understand, decide or direct`);
@@ -734,7 +748,8 @@ export async function performSetTrust(ctx: any, userId: Id<"users">, args: { rol
   return { ...(await ctx.db.get(role._id)), previous_trust: previous };
 }
 
-export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number }): Promise<any> {
+export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; from_session?: string }): Promise<any> {
+  refuseFromAgent(args.from_session, "Cap");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const caps = capsFor(role);
   const pos = (n: number | undefined, name: string) => {
@@ -798,19 +813,25 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   } else {
     await ctx.db.patch(briefDocId, { content, updated_at: now });
   }
+  // The first line (plus the Status:/Next:/Blocked: lines) is the standing
+  // session's thread state, written through the one path `cast state` uses.
+  // The status word after "Status:" is read the way `cast state --status`
+  // reads its flag; anything else is "working".
   const conv = await standingConversationOf(ctx, role);
-  const stateLine = content.split("\n")[0].trim().slice(0, 500);
-  if (conv && stateLine) {
-    const statusLine = content.split("\n").find((l) => /^Status:/i.test(l.trim()));
-    const status = /blocked/i.test(statusLine ?? "") ? "blocked" : /done/i.test(statusLine ?? "") ? "done" : "working";
-    await ctx.db.patch(conv._id, {
-      thread_state: content.slice(0, 2000),
-      thread_state_at: now,
-      thread_state_msg_count: conv.message_count ?? 0,
-      thread_state_status: status,
-    });
-  }
-  return { role_id: role._id, brief_doc_id: briefDocId, state: stateLine, mirrored: !!conv };
+  const text = normalizeThreadState(briefStateText(content));
+  const statusLine = content.split("\n").find((l) => /^Status:/i.test(l.trim())) ?? "";
+  const status = parseThreadStateStatus(statusLine.replace(/^Status:\s*/i, "").trim().split(/\s+/)[0] ?? "") ?? "working";
+  if (conv && text) await performSetThreadState(ctx, conv, text, status);
+  return { role_id: role._id, brief_doc_id: briefDocId, state: text.split("\n")[0], status, mirrored: !!(conv && text) };
+}
+
+// The state line of a brief: its first line, then the labelled lines the
+// thread state renders as labels (Status:, Next:, Blocked:).
+export function briefStateText(content: string): string {
+  const lines = content.split("\n").map((l) => l.trim());
+  const first = lines.find((l) => l.length > 0) ?? "";
+  const labelled = lines.filter((l) => /^(Status|Next|Blocked):/i.test(l));
+  return [first, ...labelled].join("\n");
 }
 
 // The role a calling session speaks for, with what the line needs to start:
@@ -854,7 +875,7 @@ export const setTrust = mutation({
   handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), args),
 });
 export const setCaps = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), hands: v.optional(v.number()), wakes: v.optional(v.number()), tokens: v.optional(v.number()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), hands: v.optional(v.number()), wakes: v.optional(v.number()), tokens: v.optional(v.number()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetCaps(ctx, await requireCaller(ctx, api_token), args),
 });
 export const wake = mutation({

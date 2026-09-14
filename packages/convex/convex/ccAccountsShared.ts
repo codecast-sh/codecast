@@ -286,26 +286,32 @@ export const ccAutoSwitchStateValidator = v.object({
   throttle_check_at: v.optional(v.number()),
 });
 
-// Burst-throttle recovery (kind "throttle", see apiErrorBanner.ts). The park
-// is a per-minute cap the fleet tripped by resuming many sessions at once, so
-// the cure is the opposite of a switch: wait a little, then continue a few
-// sessions at a time. Both the wait and the pacing are what keep the retry
-// from being the same burst again.
+// Paced plain-continue recovery. Two park kinds (see apiErrorBanner.ts) are
+// healed by a plain "continue" after a short wait and never by an account
+// switch: "throttle" (the provider's per-minute cap, tripped by many sessions
+// resuming at once — every account trips it under the same burst) and
+// "connection" (the connection itself dropped mid-turn; the account is not
+// spent, the dead turn just needs retrying). Neither is what the account
+// switch loop reads (it acts on limit and auth parks), so without this pass a
+// dropped-connection park sat in the fleet banner until a human clicked
+// Continue. Both the wait and the pacing keep the retry from being the same
+// burst again.
+export const PACED_CONTINUE_KINDS: ReadonlySet<string> = new Set(["throttle", "connection"]);
 export const THROTTLE_CONTINUE_DELAY_MS = 60 * 1000;
 export const THROTTLE_CONTINUE_BATCH = 3;
 export const THROTTLE_CONTINUE_SPACING_MS = 20 * 1000;
 
-/** The throttle-parked sessions to continue on this tick: those parked at
- * least THROTTLE_CONTINUE_DELAY_MS ago, oldest park first, capped at the
- * batch. `waiting` counts the ones still inside the delay — a caller with
- * nothing to send now but some waiting books the next tick for the moment
- * the oldest of them becomes due. */
+/** The paced-continue sessions (PACED_CONTINUE_KINDS) to continue on this
+ * tick: those parked at least THROTTLE_CONTINUE_DELAY_MS ago, oldest park
+ * first, capped at the batch. `waiting` counts the ones still inside the
+ * delay — a caller with nothing to send now but some waiting books the next
+ * tick for the moment the oldest of them becomes due. */
 export function pickThrottleContinueBatch<
   T extends { pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
 >(blocked: T[], now: number): { batch: T[]; remaining: number; waiting: number; nextDueAt: number | null } {
   const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
   const throttled = blocked
-    .filter((c) => c.pending_api_error_kind === "throttle")
+    .filter((c) => PACED_CONTINUE_KINDS.has(c.pending_api_error_kind ?? ""))
     .sort((a, b) => parkedAt(a) - parkedAt(b));
   const due = throttled.filter((c) => now - parkedAt(c) >= THROTTLE_CONTINUE_DELAY_MS);
   const waitingRows = throttled.filter((c) => now - parkedAt(c) < THROTTLE_CONTINUE_DELAY_MS);

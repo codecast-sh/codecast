@@ -9,7 +9,7 @@ import { findConversationBySessionReference, resolveConversationRefRanked, findC
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import type { AgentStatus } from "@codecast/shared/contracts";
+import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
 import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
 import {
   openTasksVouchForWaiting,
@@ -49,6 +49,7 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { normalizePaneUrl } from "@codecast/shared/contracts";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
@@ -8449,6 +8450,9 @@ async function enrichInboxSessionRow(
     // Favorites view (a kept, long-term set) without a second row shape. The
     // favorites query below force-loads these regardless of the recency window.
     is_favorite: !!conv.is_favorite,
+    // The page an agent offered as a pane; the card wears a small glyph while
+    // the offer is unhandled (web lib/browserPaneOffer).
+    browser_pane_offer: conv.browser_pane_offer ?? null,
   };
 
   return { row, subagentChildren, dismissed, stashed, hidden };
@@ -11015,6 +11019,58 @@ export const cliRenameSession = mutation({
 // through the store's generic patchConversation rail instead, so the panel
 // disappears on click without waiting for a round-trip.
 // Access: the runner or the second-party owner — same rule as cliRenameSession.
+// The one write path for a pinned thread state (`cast state`, and the brief
+// edit that mirrors a role's first line, orgRoles.performBriefEdit). `text`
+// is already normalized by the caller.
+export async function performSetThreadState(
+  ctx: MutationCtx,
+  conv: Doc<"conversations">,
+  text: string,
+  status: ThreadStateStatus,
+): Promise<{ at: number; resurfaced: boolean }> {
+  const at = Date.now();
+  const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+  await ctx.db.patch(conv._id, {
+    thread_state: text,
+    thread_state_at: at,
+    thread_state_msg_count: conv.message_count ?? 0,
+    thread_state_status: status,
+  });
+  // A `blocked` declaration from a HIDDEN session is a claim on the user's
+  // eyes — the same claim `cast trigger complete --needs-attention` makes,
+  // cleared the same way (agentTasks.completeTaskRun). If the session is
+  // still stashed when the agent declares blocked, nobody is watching by
+  // definition (a human send un-stashes at enqueue), so the machine woke it
+  // and the human must now be shown. `done` / `dormant` / `working` never
+  // resurface anything: stash fails quiet except for asks. Killed rows are
+  // exempt — kill tore the agent down; a straggling write must not resurrect.
+  let resurfaced = false;
+  if (status === "blocked" && (conv.inbox_stashed_at || conv.inbox_dismissed_at) && !conv.inbox_killed_at) {
+    await ctx.db.patch(conv._id, {
+      inbox_stashed_at: undefined,
+      inbox_dismissed_at: undefined,
+    });
+    resurfaced = true;
+  }
+  // The pin is the strip's title, and a blocked / done declaration can move
+  // the row between Lock Screen statuses: those refresh at once, a reworded
+  // working line rides the next routine push.
+  await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: status !== "working" });
+  // A hand declaring blocked wakes its role now; a hand settling done is a
+  // fact for the role's next frame (org-roles-standing.md T3). The hand is the
+  // SUBJECT of the event, not an actor writing into another role's scope, so
+  // it is passed as no actor on purpose: the loop rule that drops a role's
+  // own writes must not drop its hand's declaration.
+  if (conv.org_role_id && (status === "blocked" || status === "done")) {
+    await enqueueRoleEvent(ctx, conv.org_role_id, {
+      kind: status === "blocked" ? "immediate" : "passive",
+      cause: `hand ${shortId} "${(conv.title ?? "").slice(0, 60)}" declared ${status}: ${text.split("\n")[0].slice(0, 200)}`,
+      ref: { table: "conversations", id: String(conv._id), short_id: shortId },
+    });
+  }
+  return { at, resurfaced };
+}
+
 export const setThreadState = mutation({
   args: {
     session: v.string(),
@@ -11051,44 +11107,8 @@ export const setThreadState = mutation({
       return { ok: true as const, short_id: shortId, cleared: true as const, state: null, previous_state: previous };
     }
 
-    const at = Date.now();
     const status = parseThreadStateStatus(args.status) ?? "working";
-    await ctx.db.patch(conv._id, {
-      thread_state: text,
-      thread_state_at: at,
-      thread_state_msg_count: conv.message_count ?? 0,
-      thread_state_status: status,
-    });
-    // A `blocked` declaration from a HIDDEN session is a claim on the user's
-    // eyes — the same claim `cast trigger complete --needs-attention` makes,
-    // cleared the same way (agentTasks.completeTaskRun). If the session is
-    // still stashed when the agent declares blocked, nobody is watching by
-    // definition (a human send un-stashes at enqueue), so the machine woke it
-    // and the human must now be shown. `done` / `dormant` / `working` never
-    // resurface anything: stash fails quiet except for asks. Killed rows are
-    // exempt — kill tore the agent down; a straggling write must not resurrect.
-    let resurfaced = false;
-    if (status === "blocked" && (conv.inbox_stashed_at || conv.inbox_dismissed_at) && !conv.inbox_killed_at) {
-      await ctx.db.patch(conv._id, {
-        inbox_stashed_at: undefined,
-        inbox_dismissed_at: undefined,
-      });
-      resurfaced = true;
-    }
-    // The pin is the strip's title, and a blocked / done declaration can move
-    // the row between Lock Screen statuses: those refresh at once, a reworded
-    // working line rides the next routine push.
-    await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: status !== "working" });
-    // A hand declaring blocked wakes its role now; a hand settling done is a
-    // fact for the role's next frame (org-roles-standing.md T3).
-    if (conv.org_role_id && (status === "blocked" || status === "done")) {
-      await enqueueRoleEvent(ctx, conv.org_role_id, {
-        kind: status === "blocked" ? "immediate" : "passive",
-        cause: `hand ${shortId} "${(conv.title ?? "").slice(0, 60)}" declared ${status}: ${text.split("\n")[0].slice(0, 200)}`,
-        ref: { table: "conversations", id: String(conv._id), short_id: shortId },
-        actorConversationId: conv._id,
-      });
-    }
+    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status);
     return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced };
   },
 });
@@ -11133,6 +11153,85 @@ export const getThreadState = query({
     };
   },
 });
+
+// ── the browser pane an agent offers ────────────────────────────────────────
+//
+// `cast browser pane <url>` stamps ONE offer on the session; the viewer grows a
+// chip beside the title and the reader opens it beside the conversation. The
+// agent never opens anything: the web app refuses machine-initiated moves of
+// what a reader is looking at (web store/viewNav.ts), and a pane that opened
+// itself would be that same intrusion wearing another hat.
+//
+// The URL is normalized again here rather than trusted from the CLI, because
+// what this field holds ends up in an iframe src: an old or hand-rolled client
+// must not be able to store `javascript:` for the browser to load.
+export const offerBrowserPane = mutation({
+  args: {
+    session: v.string(),
+    url: v.string(),
+    title: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const url = normalizePaneUrl(args.url);
+    if (!url) throw new Error(`"${args.url}" is not a web address a pane can load`);
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only offer a pane in sessions you run or own)`
+      );
+    }
+
+    const title = args.title?.trim().slice(0, 120) || undefined;
+    await ctx.db.patch(conv._id, {
+      browser_pane_offer: { url, offered_at: Date.now(), ...(title ? { title } : {}) },
+    });
+    return {
+      ok: true as const,
+      short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
+      url,
+      ...(title ? { title } : {}),
+    };
+  },
+});
+
+// The reader acted on the chip. Opening and dismissing write the same stamp on
+// purpose: from the offer's point of view both mean "handled", and the only
+// thing the field has to do is keep the chip from coming back here and on every
+// other device.
+//
+// `at` is the client's clock rather than the server's, and that is deliberate:
+// the web writes the same value optimistically, and the local-first field lock
+// retires only when the server's echo matches what the client wrote (see the
+// engine's fieldEchoesPending). A server-chosen timestamp would differ by
+// milliseconds and hold the lock open.
+export async function stampBrowserPaneOfferHandled(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  at: number,
+): Promise<{ changed: boolean }> {
+  const conv = await ctx.db.get(conversationId);
+  if (!conv) throw new Error("Conversation not found");
+  if (!(await canOwnerOrTeamAccess(ctx as any, userId, conv))) {
+    throw new Error("Unauthorized: can only act on conversations you can see");
+  }
+  const offer = conv.browser_pane_offer;
+  // Nothing to do twice: a second click (two windows, a re-render) must not
+  // move the stamp and make a handled offer look freshly handled.
+  if (!offer || offer.opened_at) return { changed: false };
+  await ctx.db.patch(conv._id, { browser_pane_offer: { ...offer, opened_at: at } });
+  return { changed: true };
+}
 
 // Bulk-dismiss the caller's sessions whose last activity (updated_at) is older
 // than `older_than_days` (default 30). Clears the accumulated working set without

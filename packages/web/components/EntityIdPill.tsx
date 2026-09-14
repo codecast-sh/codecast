@@ -34,10 +34,13 @@ import {
   TYPE_LABEL,
   relativeTime,
   taskPeople,
+  taskProject,
   useEntityResolution,
 } from "../lib/entityDisplay";
 import { prState, repoObjectRefOf } from "../lib/repoObjects";
 import { githubLocationHref } from "../lib/repoNavigation";
+import { loopbackLinkUrl } from "../lib/browserPaneLinks";
+import { LoopbackUrlPill } from "./LoopbackUrlPill";
 import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
@@ -50,6 +53,7 @@ import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
+import { TimeAgo } from "./tasks/TaskCommentStream";
 import { RevealButton } from "./ObjectReveal";
 
 export { SessionHoverContent };
@@ -68,13 +72,30 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
 // implementation, so an object reads the same as a pill, a hover card, and a
 // shared-object card.
 
-function PersonRow({ label, person }: { label: string; person: { name?: string; image?: string | null } }) {
+// One labeled line of a hover card's metadata grid: a fixed-width label, then
+// the value. Every task fact (people, project, plan, dates, labels, source)
+// reads the same way, so the eye scans one column of labels.
+function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 min-w-0">
       <span className="text-[10px] text-gray-500 w-14 flex-shrink-0">{label}</span>
-      <AuthorAvatar name={person.name} avatar={person.image} size={12} />
-      <span className="text-[10px] text-gray-400 truncate">{person.name}</span>
+      <span className="flex items-center gap-1.5 min-w-0 text-[10px] text-gray-400">{children}</span>
     </div>
+  );
+}
+
+function PersonRow({ label, person }: { label: string; person: { name?: string; image?: string | null } | null }) {
+  return (
+    <MetaRow label={label}>
+      {person ? (
+        <>
+          <AuthorAvatar name={person.name} avatar={person.image} size={12} />
+          <span className="truncate">{person.name}</span>
+        </>
+      ) : (
+        <span className="text-gray-500">Unassigned</span>
+      )}
+    </MetaRow>
   );
 }
 
@@ -82,6 +103,12 @@ function TaskHoverContent({ task }: { task: any }) {
   const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
   const priority = PRIORITY_CONFIG[task.priority];
   const { creator, assignee } = taskPeople(task);
+  const project = taskProject(task);
+  const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
+  const source = task.source && task.source !== "human" ? task.source : null;
+  const labels: string[] = task.labels ?? [];
+  const commentCount = task.comments?.length ?? 0;
+  const sessionCount = task.conversation_ids?.length ?? 0;
 
   return (
     <div className="space-y-2">
@@ -102,6 +129,12 @@ function TaskHoverContent({ task }: { task: any }) {
                 </span>
               </>
             )}
+            {kind && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-[10px] text-gray-400 capitalize">{kind}</span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -112,23 +145,67 @@ function TaskHoverContent({ task }: { task: any }) {
         </p>
       )}
 
-      {task.plan && (
-        <div className="flex items-center gap-1.5 pl-[22px]">
-          <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
-          <span className="text-[10px] text-sol-cyan truncate">{task.plan.title}</span>
-        </div>
-      )}
+      <div className="space-y-1 pl-[22px]">
+        <PersonRow label="Creator" person={creator} />
+        <PersonRow label="Assignee" person={assignee} />
+        {project && (
+          <MetaRow label="Project">
+            <Folder className="w-2.5 h-2.5 flex-shrink-0" />
+            <span className="truncate">{project.title}</span>
+          </MetaRow>
+        )}
+        {task.plan && (
+          <MetaRow label="Plan">
+            <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
+            <span className="text-sol-cyan truncate">{task.plan.title}</span>
+          </MetaRow>
+        )}
+        {task.created_at && (
+          <MetaRow label="Dates">
+            <DocDates doc={task} variant="full" className="gap-2" />
+          </MetaRow>
+        )}
+        {task.closed_at && (
+          <MetaRow label="Closed">
+            <TimeAgo ts={task.closed_at} />
+          </MetaRow>
+        )}
+        {labels.length > 0 && (
+          <MetaRow label="Labels">
+            <span className="flex flex-wrap gap-1">
+              {labels.map((l) => (
+                <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-[10px] leading-[1.6] text-sol-magenta">
+                  {l}
+                </span>
+              ))}
+            </span>
+          </MetaRow>
+        )}
+        {source && (
+          <MetaRow label="Source">
+            <span className="capitalize">{source.replace(/_/g, " ")}</span>
+          </MetaRow>
+        )}
+      </div>
 
-      {(creator || assignee) && (
-        <div className="space-y-1 pl-[22px]">
-          {creator && <PersonRow label="Creator" person={creator} />}
-          {assignee && <PersonRow label="Assignee" person={assignee} />}
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono">{task.short_id}</span>
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
+        <span className="flex items-center gap-1.5 min-w-0 text-[10px] text-gray-500">
+          <span className="font-mono">{task.short_id}</span>
+          {commentCount > 0 && (
+            <span className="inline-flex items-center gap-0.5">
+              <span className="text-gray-600">·</span>
+              <MessageSquare className="w-2.5 h-2.5" />
+              {commentCount}
+            </span>
+          )}
+          {sessionCount > 0 && (
+            <span>
+              <span className="text-gray-600">· </span>
+              {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
+            </span>
+          )}
+        </span>
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5 flex-shrink-0">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
@@ -610,6 +687,12 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // it navigates in this window, never a new tab.
   if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//")) {
     return <Link href={href} {...props}>{children}</Link>;
+  }
+  // A dev server an agent printed: the one external link people want to LOOK
+  // at rather than leave for, so it opens as a pane (lib/browserPaneLinks).
+  const loopback = loopbackLinkUrl(href);
+  if (loopback) {
+    return <LoopbackUrlPill url={loopback} label={text && text !== href ? text : undefined} />;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }

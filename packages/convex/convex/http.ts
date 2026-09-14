@@ -4089,6 +4089,10 @@ cliRoute("/cli/org/scope-feed", async (ctx, body) => {
 cliRoute("/cli/org/scope-summary", async (ctx, body) => {
   return await ctx.runQuery(api.org.scopeSummary, body);
 });
+// Org init and update (docs/architecture/org-init.md): the analyzer's inputs
+// and the apply path for an answered proposal.
+cliRoute("/cli/org/analysis-inputs", async (ctx, body) => ctx.runQuery(api.org.analysisInputs, body));
+cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as any).orgInit.applyDecision, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the
@@ -4486,6 +4490,9 @@ cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conver
 // line, shown pinned above the composer and on the inbox card. Empty text
 // clears it. body: { api_token, session, text? }.
 cliRoute("/cli/sessions/state/set", async (ctx, body) => ctx.runMutation(api.conversations.setThreadState, body));
+// `cast browser pane <url>` / `cast preview <url>`: the agent offers a page,
+// the reader opens it beside the conversation.
+cliRoute("/cli/browser/pane-offer", async (ctx, body) => ctx.runMutation(api.conversations.offerBrowserPane, body));
 cliRoute("/cli/sessions/state/get", async (ctx, body) => ctx.runQuery(api.conversations.getThreadState, body));
 
 // Pull requests (cast pr): list, read, follow and steer a PR from a shell. Each

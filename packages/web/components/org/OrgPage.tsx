@@ -14,17 +14,15 @@ import { createOrgSlice, orgRoleReparentMakesCycle, type OrgUpdateRoleInput } fr
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useOrgSessionsUnder } from "../../hooks/useOrgSessionsUnder";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
-import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
-import type { PlanItem, ProjectItem } from "../../store/inboxStore";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
 import { SessionMenuItems } from "../menus/ObjectContextMenus";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
-import { SelectBox } from "../ui/select-box";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { cn } from "../../lib/utils";
 import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
 import { OrgScopePanel, type OrgSessionsSource } from "./OrgScopePanel";
+import { HireRoleDialog } from "./HireRoleDialog";
 import { StateTally } from "./OrgNodeCards";
 import { layoutOrgTree, parentNodeId, parentRefOfNodeId, ORG_STACK_VISIBLE, type OrgLayoutNode, type OrgLayoutView } from "./orgLayout";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "./orgFixture";
@@ -405,7 +403,7 @@ export function OrgPageInner() {
 
       {/* add role */}
       {tree && addRoleOpen && (
-        <AddRoleDialog
+        <HireRoleDialog
           key={me?.user_id ?? meId ?? ""}
           open={addRoleOpen}
           onClose={() => setAddRoleOpen(false)}
@@ -508,117 +506,6 @@ function MovePicker({ subject, current, targets, onPick, onClose }: { subject: M
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------- add role dialog
-
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
-}
-
-function AddRoleDialog({ open, onClose, tree, meId, onCreate }: { open: boolean; onClose: () => void; tree: OrgTree; meId: string; onCreate: (input: Parameters<ReturnType<typeof createOrgSlice>["createOrgRole"]>[0]) => void }) {
-  const [name, setName] = useState("");
-  const [handle, setHandle] = useState("");
-  const [handleTouched, setHandleTouched] = useState(false);
-  const [reportsTo, setReportsTo] = useState<string>(meId ? parentNodeId({ kind: "user", user_id: meId }) : "");
-  const [charter, setCharter] = useState("");
-  const [projectIds, setProjectIds] = useState<string[]>([]);
-  const [planIds, setPlanIds] = useState<string[]>([]);
-  const projects = useWorkspaceCollection<ProjectItem>("projects");
-  const plans = useWorkspaceCollection<PlanItem>("plans");
-  const effHandle = handleTouched ? handle : slugify(name);
-  const taken = tree.roles.some((r) => r.handle === effHandle && r.status !== "retired");
-  const valid = name.trim().length > 0 && /^[a-z0-9-]{2,32}$/.test(effHandle) && !taken && !!reportsTo;
-  const submit = () => {
-    if (!valid) return;
-    const ref = parentRefOfNodeId(reportsTo) ?? { kind: "user" as const, user_id: meId };
-    onCreate({
-      name: name.trim(),
-      handle: effHandle,
-      ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}),
-      scope: { project_ids: projectIds, plan_ids: planIds },
-      reports_to: ref,
-      ...(charter.trim() ? { charter: charter.trim() } : {}),
-      host_user_id: meId,
-      client_id: `orgrolestub-${Math.random().toString(36).slice(2)}`,
-    });
-  };
-  const toggle = (list: string[], set: (v: string[]) => void, id: string) => set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-[440px] grid-cols-1" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
-        <DialogHeader>
-          <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>Add a role</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>A seat in the reporting structure. Sessions and other roles can report to it; a scope says what it owns.</DialogDescription>
-        </DialogHeader>
-        <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <Field label="Name">
-            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Head of Growth" className={INPUT} style={INPUT_STYLE} />
-          </Field>
-          <Field label="Handle" hint={taken ? "already used in this workspace" : "letters, digits and dashes"}>
-            <div className="flex items-center gap-1">
-              <span className="text-[13px]" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>@</span>
-              <input value={effHandle} onChange={(e) => { setHandleTouched(true); setHandle(slugify(e.target.value)); }} placeholder="growth" className={INPUT} style={{ ...INPUT_STYLE, fontFamily: "var(--font-mono)", ...(taken ? { borderColor: "var(--sol-red)" } : {}) }} />
-            </div>
-          </Field>
-          <Field label="Reports to">
-            <SelectBox value={reportsTo} onChange={(e) => setReportsTo(e.target.value)} className="text-[13px]">
-              <optgroup label="People">
-                {tree.people.map((p) => <option key={p.user_id} value={parentNodeId({ kind: "user", user_id: p.user_id })}>{p.name}{p.is_me ? " (you)" : ""}</option>)}
-              </optgroup>
-              {tree.roles.filter((r) => r.status !== "retired").length > 0 && (
-                <optgroup label="Roles">
-                  {tree.roles.filter((r) => r.status !== "retired").map((r) => <option key={r._id} value={parentNodeId({ kind: "role", role_id: r._id })}>@{r.handle} · {r.name}</option>)}
-                </optgroup>
-              )}
-            </SelectBox>
-          </Field>
-          <Field label="Scope" hint={projectIds.length + planIds.length === 0 ? "nothing picked = the whole workspace" : `${projectIds.length} project${projectIds.length === 1 ? "" : "s"}, ${planIds.length} plan${planIds.length === 1 ? "" : "s"}`}>
-            <div className="max-h-[132px] overflow-y-auto rounded-lg border p-1" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
-              {projects.length === 0 && plans.length === 0 && <p className="px-2 py-1.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No projects or plans in this workspace yet.</p>}
-              {projects.map((p) => <ScopeOption key={p._id} checked={projectIds.includes(p._id)} onToggle={() => toggle(projectIds, setProjectIds, p._id)} tone="blue" label={p.title} sub="project" />)}
-              {plans.map((p) => <ScopeOption key={p._id} checked={planIds.includes(p._id)} onToggle={() => toggle(planIds, setPlanIds, p._id)} tone="magenta" label={p.title} sub={p.short_id} />)}
-            </div>
-          </Field>
-          <Field label="Charter" hint="optional">
-            <textarea value={charter} onChange={(e) => setCharter(e.target.value)} rows={2} placeholder="What this seat owns." className={INPUT} style={INPUT_STYLE} />
-          </Field>
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button type="button" onClick={onClose} className="h-8 px-3 rounded-lg text-[12.5px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-            <button type="submit" disabled={!valid} className="h-8 px-3.5 rounded-lg text-[12.5px] font-semibold disabled:opacity-50" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Create role</button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-const INPUT = "w-full h-9 px-2.5 rounded-lg border outline-none text-[13px] focus:border-sol-cyan";
-const INPUT_STYLE: React.CSSProperties = { background: "var(--sol-bg-alt)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text)" };
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="flex items-baseline justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
-        {hint && <span className="text-[10.5px]" style={{ color: hint.startsWith("already") ? "var(--sol-red)" : "var(--sol-text-dim)" }}>{hint}</span>}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function ScopeOption({ checked, onToggle, tone, label, sub }: { checked: boolean; onToggle: () => void; tone: "blue" | "magenta"; label: string; sub: string }) {
-  const color = tone === "blue" ? "var(--sol-blue)" : "var(--sol-magenta)";
-  return (
-    <button type="button" onClick={onToggle} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover:bg-sol-bg-highlight/70">
-      <span className="w-3.5 h-3.5 rounded-[4px] border inline-flex items-center justify-center shrink-0" style={{ borderColor: checked ? color : "color-mix(in srgb, var(--sol-border) 60%, transparent)", background: checked ? color : "transparent" }}>
-        {checked && <span className="w-1.5 h-1.5 rounded-[1px]" style={{ background: "var(--sol-bg)" }} />}
-      </span>
-      <span className="flex-1 min-w-0 truncate text-[12.5px]" style={{ color: "var(--sol-text)" }}>{label}</span>
-      <span className="text-[10.5px] shrink-0" style={{ color, fontFamily: tone === "magenta" ? "var(--font-mono)" : undefined }}>{sub}</span>
-    </button>
   );
 }
 
