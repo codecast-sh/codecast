@@ -297,12 +297,9 @@ jobs:
       # above. Every real-client cell self-skips when the binary is absent, so
       # this stays green on a runner with no agents and is meaningful on one
       # that has them.
-      # The detection below diffs the tree, and a job with no checkout has no
-      # repository to diff: `fatal: not a git repository`, exit 128, verify red
-      # with every required check green.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+      # The job's own checkout above (fetch-depth 2) is the repository this
+      # diffs; a second checkout here would clean the workspace and throw away
+      # the installed dependencies the matrix runs against.
       - name: Detect injection-path changes
         id: injection
         # The two-dot diff against the base tip is deliberately generous: a
