@@ -28,7 +28,7 @@ import { api, internal } from "./_generated/api";
 import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
-import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } from "./chatAccess";
+import { canAccessChannel, canReadChannelAnonymously, channelMemberIds, isChannelMember, isCommunity, isRestricted } from "./chatAccess";
 import {
   dmKeyFor,
   isAgentTurnInFlight,
@@ -186,12 +186,16 @@ export async function requireCaller(
   return userId;
 }
 
+// `userId` null is an anonymous visitor: they read a community channel and
+// nothing else. Every write path resolves its caller through requireCaller
+// first, so null never reaches loadChannel.
 export async function readChannel(
   ctx: ReadCtx,
-  userId: Id<"users">,
+  userId: Id<"users"> | null,
   channelId: Id<"chat_channels">,
 ): Promise<Doc<"chat_channels"> | null> {
   const channel = await ctx.db.get(channelId);
+  if (!userId) return canReadChannelAnonymously(channel) ? channel : null;
   if (!(await canAccessChannel(ctx, userId, channel))) return null;
   return channel;
 }
@@ -207,6 +211,42 @@ export async function loadChannel(
   if (!channel) chatFail("NOT_FOUND", "Channel not found");
   return channel;
 }
+
+// Who may rename, retopic or archive a room: its creator or a team admin —
+// except a community room, whose creator is by construction an admin and
+// whose audience is the public, so admin standing in the routing team is the
+// only key. A member of the public reads and posts; they never reshape.
+async function mayManageChannel(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  channel: Doc<"chat_channels">,
+): Promise<boolean> {
+  if (await isTeamAdmin(ctx, userId, channel.team_id)) return true;
+  if (isCommunity(channel)) return false;
+  return channel.created_by.toString() === userId.toString();
+}
+
+// Operator only (run from the Convex dashboard or `convex run`): name the one
+// team whose community channels are the public site's rooms. Clears the flag
+// from any other team so there is never more than one. The team must have
+// chat on, or its admins could open rooms they cannot themselves read.
+export const designateCommunityTeam = internalMutation({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const team = await ctx.db.get(args.team_id);
+    if (!team || team.deleted_at) throw new Error("Team not found");
+    if (!(await teamHasFeature(ctx as any, team._id, "chat"))) {
+      throw new Error("Turn chat on for this team first");
+    }
+    for (const other of await ctx.db.query("teams").collect()) {
+      if (other.community && other._id.toString() !== team._id.toString()) {
+        await ctx.db.patch(other._id, { community: false });
+      }
+    }
+    await ctx.db.patch(team._id, { community: true });
+    return { team_id: team._id, name: team.name };
+  },
+});
 
 // The team a channel-less call operates in. ROUTING only — which team's rooms
 // the call addresses; who may read them is canAccessChannel's business.
@@ -474,112 +514,175 @@ export const listChannels = query({
       (c) => !isRestricted(c) || myRestricted.has(c._id.toString()),
     );
 
-    const allReads = await ctx.db
-      .query("chat_reads")
-      .withIndex("by_user_channel", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const readByChannel = new Map(allReads.map((r) => [r.channel_id.toString(), r]));
-    const reads = allReads.filter((r) =>
-      channels.some((c) => c._id.toString() === r.channel_id.toString()));
-
-    const rail = [];
-    for (const channel of channels) {
-      const read = readByChannel.get(channel._id.toString());
-      const lastReadAt = read?.last_read_at ?? 0;
-
-      const mine = (row: Doc<"chat_messages">) =>
-        row.user_id.toString() === userId.toString();
-      // Newest few, so a tombstone at the head doesn't blank the rail preview.
-      // A DM reads deeper on the same index: the rail also needs the newest
-      // line the OTHER person wrote, and the viewer's own run of sends can push
-      // it well past the head. One read serves both — the first rows are the
-      // same rows the preview would have seen.
-      const newest = await ctx.db
-        .query("chat_messages")
-        .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
-        .order("desc")
-        .take(channel.kind === "dm" ? DM_INBOUND_SCAN : 4);
-      // A burst still being spoken is not yet a line in this room: it has not
-      // notified, so it neither becomes the rail's last message nor bumps the
-      // room's sort. Finalize does both, once.
-      const visible = (m: Doc<"chat_messages">) =>
-        !m.deleted_at && !isSilentAgentRow(m) && !isLiveVoiceRow(m);
-      const lastMessage = newest.find(visible) ?? null;
-      // The newest line from the other side, or null when the viewer has only
-      // ever spoken (or the other side's last word is beyond the scan).
-      const lastInbound = channel.kind === "dm"
-        ? newest.find((m) => visible(m) && !mine(m)) ?? null
-        : null;
-
-      // Read MORE rows than the cap before filtering. Tombstones and the
-      // caller's own lines are dropped after the read, so taking exactly the cap
-      // would let a handful of deleted rows turn "50+" into a small, exact-looking
-      // number and hide a mention that sits behind them.
-      const unreadRows = await ctx.db
-        .query("chat_messages")
-        .withIndex("by_channel_created", (q: any) =>
-          q.eq("channel_id", channel._id).gt("created_at", lastReadAt))
-        .take(UNREAD_CAP * 2 + 1);
-      // Channel-LEVEL rows only. A thread reply does not tick the channel's
-      // number: the reader cannot clear it from the channel view (the reply's
-      // body never appears there), so counting it makes a badge that reading
-      // cannot extinguish. Thread activity reaches its audience as chat_reply
-      // notifications — and a mention anywhere still counts below, because
-      // being named must never be invisible. A BROADCAST reply is the
-      // exception: it does appear in the channel, so reading clears it.
-      const counted = unreadRows.filter(
-        (row) => !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row)
-          && (row.thread_root_id === undefined || row.broadcast === true),
-      );
-      // Two numbers, never one. A single count that includes ordinary chatter
-      // teaches people to ignore counts, and then the one that matters — someone
-      // said your name — is invisible inside the noise. In a DM every line is
-      // addressed to you, so every unread row counts as a mention.
-      const unreadMentions = unreadRows.filter((row) =>
-        !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && (
-          channel.kind === "dm"
-          || row.mention_scope === "here"
-          || mentionUserIds(row.mentions as any).includes(userId.toString())
-        ),
-      ).length;
-
-      rail.push({
-        channel_id: channel._id,
-        // Restricted rooms carry their roster on the DERIVED row (never on the
-        // channel document): the client names a DM from these ids against the
-        // team roster it already holds.
-        member_ids: isRestricted(channel)
-          ? (await channelMemberIds(ctx, channel._id)).map((id) => id.toString())
-          : undefined,
-        last_message: lastMessage
-          ? {
-              _id: lastMessage._id,
-              user_id: lastMessage.user_id,
-              author_kind: lastMessage.author_kind ?? "user",
-              created_at: lastMessage.created_at,
-              preview: plainPreview(lastMessage.content, 120),
-            }
-          : null,
-        // DM rooms only: what the other person last said, so a surface can key
-        // presence and rank to THEIR activity and ignore the viewer's sends.
-        last_inbound: lastInbound
-          ? { _id: lastInbound._id, created_at: lastInbound.created_at }
-          : null,
-        // Sorts the rail by recency without any denormalized field.
-        sort_at: lastMessage?.created_at ?? channel.created_at,
-        unread: Math.min(counted.length, UNREAD_CAP),
-        unread_capped: counted.length > UNREAD_CAP,
-        unread_mentions: unreadMentions,
-        // A missing read row means the member has never opened this channel,
-        // which reads as "mentions only" until they join it for real.
-        notify_level: read?.notify_level ?? "mentions",
-        joined: !!read,
-      });
-    }
-
+    const { reads, rail } = await railFor(ctx, userId, channels);
     return { team_id: teamId, channels, reads, rail };
   },
 });
+
+// The public rail. Every open community channel, for anyone: a visitor gets
+// the rooms and their previews with zero unread; a signed-in caller also gets
+// their own read rows and counts, exactly as listChannels computes them.
+// Keyed on kind, not on a team — the audience has none — and defended by the
+// routing team's `community` flag so a row of that kind in any other team is
+// inert rather than public.
+export const listCommunityChannels = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    const rows = await ctx.db
+      .query("chat_channels")
+      .withIndex("by_kind_name", (q: any) => q.eq("kind", "community"))
+      .take(MAX_CHANNELS_PER_TEAM);
+    const channels: Doc<"chat_channels">[] = [];
+    const teamOk = new Map<string, boolean>();
+    for (const row of rows) {
+      if (row.archived_at) continue;
+      const key = row.team_id.toString();
+      if (!teamOk.has(key)) teamOk.set(key, !!(await ctx.db.get(row.team_id))?.community);
+      if (teamOk.get(key)) channels.push(row);
+    }
+    const { reads, rail } = await railFor(ctx, userId, channels);
+    return { channels, reads, rail };
+  },
+});
+
+// The server half of the client's ChatRailRow (web store/chatSlice.ts): the
+// derived per-channel summary the rail paints before any message is loaded.
+type ChatRailRow = {
+  channel_id: Id<"chat_channels">;
+  member_ids?: string[];
+  last_message: {
+    _id: Id<"chat_messages">;
+    user_id: Id<"users">;
+    author_kind: "user" | "agent";
+    created_at: number;
+    preview: string;
+  } | null;
+  last_inbound: { _id: Id<"chat_messages">; created_at: number } | null;
+  sort_at: number;
+  unread: number;
+  unread_capped: boolean;
+  unread_mentions: number;
+  notify_level: Doc<"chat_reads">["notify_level"];
+  joined: boolean;
+};
+
+// One channel's rail row for one reader: the newest line, the sort key, and
+// the two unread numbers. `userId` null is an anonymous visitor, who has no
+// read rows and nothing unread. Shared by the team rail and the public one so
+// the two can never count differently.
+async function railFor(
+  ctx: ReadCtx,
+  userId: Id<"users"> | null,
+  channels: Doc<"chat_channels">[],
+): Promise<{ reads: Doc<"chat_reads">[]; rail: ChatRailRow[] }> {
+  const allReads = userId
+    ? await ctx.db
+      .query("chat_reads")
+      .withIndex("by_user_channel", (q: any) => q.eq("user_id", userId))
+      .collect()
+    : [];
+  const readByChannel = new Map(allReads.map((r) => [r.channel_id.toString(), r]));
+  const reads = allReads.filter((r) =>
+    channels.some((c) => c._id.toString() === r.channel_id.toString()));
+
+  const rail: ChatRailRow[] = [];
+  for (const channel of channels) {
+    const read = readByChannel.get(channel._id.toString());
+    const lastReadAt = read?.last_read_at ?? 0;
+
+    const mine = (row: Doc<"chat_messages">) =>
+      !!userId && row.user_id.toString() === userId.toString();
+    // Newest few, so a tombstone at the head doesn't blank the rail preview.
+    // A DM reads deeper on the same index: the rail also needs the newest
+    // line the OTHER person wrote, and the viewer's own run of sends can push
+    // it well past the head. One read serves both — the first rows are the
+    // same rows the preview would have seen.
+    const newest = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
+      .order("desc")
+      .take(channel.kind === "dm" ? DM_INBOUND_SCAN : 4);
+    // A burst still being spoken is not yet a line in this room: it has not
+    // notified, so it neither becomes the rail's last message nor bumps the
+    // room's sort. Finalize does both, once.
+    const visible = (m: Doc<"chat_messages">) =>
+      !m.deleted_at && !isSilentAgentRow(m) && !isLiveVoiceRow(m);
+    const lastMessage = newest.find(visible) ?? null;
+    // The newest line from the other side, or null when the viewer has only
+    // ever spoken (or the other side's last word is beyond the scan).
+    const lastInbound = channel.kind === "dm"
+      ? newest.find((m) => visible(m) && !mine(m)) ?? null
+      : null;
+
+    // Read MORE rows than the cap before filtering. Tombstones and the
+    // caller's own lines are dropped after the read, so taking exactly the cap
+    // would let a handful of deleted rows turn "50+" into a small, exact-looking
+    // number and hide a mention that sits behind them.
+    const unreadRows = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) =>
+        q.eq("channel_id", channel._id).gt("created_at", lastReadAt))
+      .take(UNREAD_CAP * 2 + 1);
+    // Channel-LEVEL rows only. A thread reply does not tick the channel's
+    // number: the reader cannot clear it from the channel view (the reply's
+    // body never appears there), so counting it makes a badge that reading
+    // cannot extinguish. Thread activity reaches its audience as chat_reply
+    // notifications — and a mention anywhere still counts below, because
+    // being named must never be invisible. A BROADCAST reply is the
+    // exception: it does appear in the channel, so reading clears it.
+    const counted = unreadRows.filter(
+      (row) => !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row)
+        && (row.thread_root_id === undefined || row.broadcast === true),
+    );
+    // Two numbers, never one. A single count that includes ordinary chatter
+    // teaches people to ignore counts, and then the one that matters — someone
+    // said your name — is invisible inside the noise. In a DM every line is
+    // addressed to you, so every unread row counts as a mention.
+    const unreadMentions = unreadRows.filter((row) =>
+      !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && (
+        channel.kind === "dm"
+        || row.mention_scope === "here"
+        || (!!userId && mentionUserIds(row.mentions as any).includes(userId.toString()))
+      ),
+    ).length;
+
+    rail.push({
+      channel_id: channel._id,
+      // Restricted rooms carry their roster on the DERIVED row (never on the
+      // channel document): the client names a DM from these ids against the
+      // team roster it already holds.
+      member_ids: isRestricted(channel)
+        ? (await channelMemberIds(ctx, channel._id)).map((id) => id.toString())
+        : undefined,
+      last_message: lastMessage
+        ? {
+            _id: lastMessage._id,
+            user_id: lastMessage.user_id,
+            author_kind: lastMessage.author_kind ?? "user",
+            created_at: lastMessage.created_at,
+            preview: plainPreview(lastMessage.content, 120),
+          }
+        : null,
+      // DM rooms only: what the other person last said, so a surface can key
+      // presence and rank to THEIR activity and ignore the viewer's sends.
+      last_inbound: lastInbound
+        ? { _id: lastInbound._id, created_at: lastInbound.created_at }
+        : null,
+      // Sorts the rail by recency without any denormalized field.
+      sort_at: lastMessage?.created_at ?? channel.created_at,
+      unread: Math.min(counted.length, UNREAD_CAP),
+      unread_capped: counted.length > UNREAD_CAP,
+      unread_mentions: unreadMentions,
+      // A missing read row means the member has never opened this channel,
+      // which reads as "mentions only" until they join it for real.
+      notify_level: read?.notify_level ?? "mentions",
+      joined: !!read,
+    });
+  }
+
+  return { reads, rail };
+}
 
 // One page of a channel, newest-first internally and returned oldest-first.
 //
@@ -623,8 +726,9 @@ export const listMessages = query({
       has_more: false,
       next_cursor: null as string | null,
     };
+    // Anonymous is allowed through: readChannel answers only a community room
+    // for a caller with no identity.
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
-    if (!userId) return empty;
     const channel = await readChannel(ctx, userId, args.channel_id);
     if (!channel) return empty;
 
@@ -787,7 +891,6 @@ export const getThread = query({
       next_cursor: null as string | null,
     };
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
-    if (!userId) return empty;
     const root = await ctx.db.get(args.root_id);
     if (!root) return empty;
     const channel = await readChannel(ctx, userId, root.channel_id);
@@ -838,7 +941,6 @@ export const getMessage = query({
   args: { api_token: v.optional(v.string()), message_id: v.id("chat_messages") },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
-    if (!userId) return null;
     const message = await ctx.db.get(args.message_id);
     if (!message) return null;
     const channel = await readChannel(ctx, userId, message.channel_id);
@@ -945,8 +1047,10 @@ export const createChannel = mutation({
     is_default: v.optional(v.boolean()),
     // "private" gates the room on member rows. DMs are never created here —
     // openDm owns that shape (no name, identity = member set). "agents" is a
-    // public room for roles and sessions (agent-channels.md C1).
-    kind: v.optional(v.union(v.literal("private"), v.literal("agents"))),
+    // public room for roles and sessions (agent-channels.md C1). "community"
+    // is a room on the public site: only an admin of the team flagged as the
+    // community may open one.
+    kind: v.optional(v.union(v.literal("private"), v.literal("agents"), v.literal("community"))),
     // Initial roster for a private room, besides the creator. Ignored for
     // public: a public channel's audience is the team.
     member_ids: v.optional(v.array(v.id("users"))),
@@ -974,6 +1078,15 @@ export const createChannel = mutation({
     // see it.
     if (args.is_default && args.kind === "private") {
       chatFail("INVALID", "A private channel can't be the default channel");
+    }
+    // A community room is readable by the whole internet, so opening one is
+    // the community team's admins' call and nobody else's: not another team,
+    // not an ordinary member of this one.
+    if (args.kind === "community") {
+      if (!team?.community) chatFail("FORBIDDEN", "Only the community team can open a community channel");
+      if (!(await isTeamAdmin(ctx, userId, teamId))) {
+        chatFail("FORBIDDEN", "Only a community team admin can open a community channel");
+      }
     }
     // Validate the initial roster BEFORE any write: every member must be a
     // human teammate. (Bots join rooms as anchors, not as members.)
@@ -1048,7 +1161,9 @@ export const createChannel = mutation({
     // own membership; public rooms are the team's. Patched after insert because
     // a restricted key names the row's own id.
     await patchChat(ctx, channelId, {
-      workspace: args.kind === "private" ? `restricted:${channelId}` : `team:${teamId}`,
+      workspace: args.kind === "private"
+        ? `restricted:${channelId}`
+        : args.kind === "community" ? "public" : `team:${teamId}`,
     });
     if (args.kind === "private") {
       await ctx.db.insert("chat_channel_members", {
@@ -1309,8 +1424,7 @@ export const updateChannel = mutation({
     // A DM has no name to change and no topic to set: its identity is who is
     // in it.
     if (channel.kind === "dm") chatFail("INVALID", "A direct message can't be renamed");
-    const mayEdit = channel.created_by.toString() === userId.toString()
-      || (await isTeamAdmin(ctx, userId, channel.team_id));
+    const mayEdit = await mayManageChannel(ctx, userId, channel);
     if (!mayEdit) chatFail("FORBIDDEN", "Only the channel's creator or a team admin can change it");
 
     const patch: Record<string, unknown> = {};
@@ -1343,8 +1457,7 @@ export const archiveChannel = mutation({
     // Archiving a DM would hide a conversation someone else can still write
     // to — the mute level is the tool for a DM you're done with.
     if (channel.kind === "dm") chatFail("INVALID", "A direct message can't be archived — mute it instead");
-    const mayEdit = channel.created_by.toString() === userId.toString()
-      || (await isTeamAdmin(ctx, userId, channel.team_id));
+    const mayEdit = await mayManageChannel(ctx, userId, channel);
     if (!mayEdit) chatFail("FORBIDDEN", "Only the channel's creator or a team admin can archive it");
     await patchChat(ctx, args.channel_id, {
       // null, never field-removal: an absent field is invisible to the delta
