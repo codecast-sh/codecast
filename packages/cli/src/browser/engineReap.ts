@@ -27,7 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import {
-  baseSessionKey, engineHome, engineSession, engineStateDir, findEngine, isRealSession, managedPort, runEngine,
+  baseSessionKey, engineHome, engineSession, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
   type EngineOptions,
 } from "./engine.js";
 import { CdpConnection, type CdpEndpoint } from "./cdp.js";
@@ -264,7 +264,24 @@ export function sessionTargetId(key: string, stateDir = engineStateDir()): strin
  * browser was never set up or is not reachable, so there is nothing to close.
  */
 export async function sessionEndpoint(key: string): Promise<CdpEndpoint | null> {
+  // A pane's view is the human's, in the desktop app: nothing here may close
+  // it by target id, so a pane session has no endpoint to close on.
+  if (isPaneSession(key)) return null;
   return isRealSession(key) ? bridgeEndpointIfConfigured() : managedPort();
+}
+
+/**
+ * Detach one session's engine daemon without touching its tab. `close` on an
+ * attached daemon only disconnects, which is the whole of what a pane session
+ * may do to the view it drove (the human owns the pane), and what a session
+ * whose pane changed needs before it is re-pinned (desktopPane.ts).
+ */
+export function detachSessionDaemon(key: string, binary: string | null = findEngine()): boolean {
+  if (!binary) return false;
+  if (!listEngineSessions().some((session) => session.key === key && session.running)) return false;
+  const env = { ...process.env, AGENT_BROWSER_SESSION: key };
+  const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
+  return res.status === 0;
 }
 
 /** The engine options that reach a session's browser, or null when a real
@@ -305,6 +322,7 @@ export async function closeTargetLater(targetId: string, endpoint: CdpEndpoint |
  * engine, so the tab is closed by target id alone (tests inject that).
  */
 export async function closeSessionTab(key: string, binary: string | null = findEngine()): Promise<boolean> {
+  if (isPaneSession(key)) return detachSessionDaemon(key, binary);
   const target = sessionTargetId(key);
   if (!target) return false;
   const browser = await engineOptionsFor(key);

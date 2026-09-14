@@ -45,6 +45,7 @@ import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, v
 import { defaultShotPath, writeShotFile } from "./shotFile.js";
 import { autoShotsEnabled, cdpAutoShotSource, clearAutoShots, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
+import { DesktopPaneUnavailable, withDesktopPanePage } from "./desktopPane.js";
 import { registerEngineCommands } from "./cliEngine.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { DEFAULT_CLONE, resolveRemote, startLocalBrowser, startManagedBrowser, waitingOnLaunch, type StartOptions } from "./managedBrowser.js";
@@ -58,7 +59,7 @@ import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
+  isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
@@ -218,7 +219,23 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
    * conn speaks CdpClient, which is why one command body serves both.
    */
   const act = <T>(
-    opts: { tab?: string; real?: boolean; clone?: boolean },
+    opts: { tab?: string; real?: boolean; clone?: boolean; pane?: boolean },
+    fn: (page: PageSession, state: InstanceState, conn: CdpClient) => Promise<T>,
+  ) =>
+    isPaneMode(opts, me())
+      ? withDesktopPanePage({}, fn, me()).catch((err) => {
+          // A pane the human closed is said once (desktopPane.ts clears the
+          // memory and the sticky choice), and the verb goes on in the
+          // session's ordinary browser, the same as the engine path (cliEngine
+          // ctx). Anything else about the pane stops here.
+          const unavailable = err instanceof DesktopPaneUnavailable ? err : null;
+          if (!unavailable || unavailable.reason !== "closed") return die((err as Error).message, unavailable?.hint);
+          console.log(`${fmt.warning("!")} ${unavailable.message} — continuing in the session's usual browser`);
+          return actElsewhere({ ...opts, pane: false }, fn);
+        })
+      : actElsewhere(opts, fn);
+  const actElsewhere = <T>(
+    opts: { tab?: string; real?: boolean; clone?: boolean; pane?: boolean },
     fn: (page: PageSession, state: InstanceState, conn: CdpClient) => Promise<T>,
   ) =>
     isRealMode(opts, me())

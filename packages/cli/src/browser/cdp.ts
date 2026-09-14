@@ -234,12 +234,39 @@ export interface CdpTarget {
  *  (bridge/host.ts Client.session). */
 export type CdpEndpoint = number | { port: number; token?: string; session?: string };
 
+export const BRIDGE_HTTP_TIMEOUT_MS = 25_000;
+
+export function cdpHttpTimeout(ep: CdpEndpoint, directMs = 5_000, bridgeMs = BRIDGE_HTTP_TIMEOUT_MS): number {
+  return typeof ep !== "number" && ep.token ? bridgeMs : directMs;
+}
+
 const portOf = (ep: CdpEndpoint): number => (typeof ep === "number" ? ep : ep.port);
 
 export function cdpHttpUrl(ep: CdpEndpoint, path: string): string {
   const url = new URL(`http://127.0.0.1:${portOf(ep)}${path}`);
   if (typeof ep !== "number" && ep.token) url.searchParams.set("token", ep.token);
-  return url.toString();
+  return withSession(url.toString(), ep);
+}
+
+export async function readCdpJson<T>(ep: CdpEndpoint, route: string, timeoutMs = cdpHttpTimeout(ep)): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new CdpTimeout(`CDP ${route}`, timeoutMs);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  try {
+    const read = fetch(cdpHttpUrl(ep, route), { signal: controller.signal }).then(response => {
+      if (!response.ok) throw new Error(`CDP ${route} returned ${response.status}`);
+      return response.json() as Promise<T>;
+    });
+    return await Promise.race([deadline, read]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -250,11 +277,7 @@ export function cdpHttpUrl(ep: CdpEndpoint, path: string): string {
  * as Chrome's own.
  */
 export async function browserSocketUrl(ep: CdpEndpoint, timeoutMs = 10_000): Promise<string> {
-  const res = await fetch(cdpHttpUrl(ep, "/json/version"), {
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) throw new Error(`CDP endpoint on port ${portOf(ep)} returned ${res.status}`);
-  const body = (await res.json()) as { webSocketDebuggerUrl?: string };
+  const body = await readCdpJson<{ webSocketDebuggerUrl?: string }>(ep, "/json/version", timeoutMs);
   if (!body.webSocketDebuggerUrl) throw new Error(`CDP endpoint on port ${portOf(ep)} exposed no browser socket`);
   return withSession(body.webSocketDebuggerUrl, ep);
 }
@@ -279,10 +302,8 @@ export async function listTargetsVia(conn: CdpClient, timeoutMs = 5000): Promise
 }
 
 /** List page targets via the HTTP endpoint (cheaper than attaching). */
-export async function listTargets(ep: CdpEndpoint, timeoutMs = 5000): Promise<CdpTarget[]> {
-  const res = await fetch(cdpHttpUrl(ep, "/json/list"), { signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`CDP /json/list returned ${res.status}`);
-  const raw = (await res.json()) as Array<Record<string, any>>;
+export async function listTargets(ep: CdpEndpoint, timeoutMs = cdpHttpTimeout(ep)): Promise<CdpTarget[]> {
+  const raw = await readCdpJson<Array<Record<string, any>>>(ep, "/json/list", timeoutMs);
   return raw
     .filter((t) => t.type === "page")
     .map((t) => ({ targetId: t.id, type: t.type, title: t.title ?? "", url: t.url ?? "" }));

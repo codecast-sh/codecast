@@ -30,7 +30,13 @@ async function pairFromFragment() {
   // The message is the wake; the worker reconnects and closes this tab.
   if (frag.has("wake")) {
     history.replaceState(null, "", location.pathname);
-    await chrome.runtime.sendMessage({ op: "wake" }).catch(() => {});
+    let timer;
+    await Promise.race([
+      chrome.runtime.sendMessage({ op: "wake" }).catch(() => {}),
+      new Promise((resolve) => { timer = setTimeout(resolve, 3000); }),
+    ]).finally(() => clearTimeout(timer));
+    const tab = await chrome.tabs.getCurrent().catch(() => null);
+    if (tab?.id !== undefined) await chrome.tabs.remove(tab.id).catch(() => {});
     return false;
   }
   const token = (frag.get("token") || "").trim();
