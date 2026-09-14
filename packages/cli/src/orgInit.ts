@@ -9,7 +9,7 @@
 // is the machine-readable block each decision carries, because `apply` has to
 // read it back.
 import * as fs from "fs";
-import { spawn } from "child_process";
+import { spawn } from "./proc.js";
 import type { Command } from "commander";
 import { fmt } from "./colors.js";
 import { ORG_PROPOSAL_FENCE, ORG_PROPOSAL_OPTIONS, orgProposalBlock } from "@codecast/shared/contracts";

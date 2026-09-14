@@ -133,8 +133,15 @@ describe("command groups stay off the boot graph", () => {
     // (agentDefinitions, forkSeed, liveActivity). The command-only modules the
     // sweep added load at their use sites instead: forkFanout.ts inside
     // `cast fork`, orgTarget.ts inside the org verbs that resolve a target.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(214);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(2990);
+    //
+    // 218 after the second 2026-09-14 cut: orgInit.ts (org init and update
+    // register on the org group at boot, so the module is a leaf here), two
+    // contracts the shared barrel gained (browserPaneOffer, orgProposal) and
+    // render/toolKinds.ts, where the tool family classifiers moved. The skill
+    // and orchestration texts the binary embeds load inside the install
+    // functions, and briefLines.ts inside the org verbs that print a brief.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(218);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3020);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -160,7 +167,9 @@ describe("command groups stay off the boot graph", () => {
     // messagePreparationValidation.ts under the ingest client, userFiles.ts,
     // shared/files and the three contracts. reopenTab.ts left the graph at the
     // same time: focusHttp.ts loads it on the reopen route only.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(300);
+    // 303 after the second 2026-09-14 cut: the same two shared contracts and
+    // render/toolKinds.ts, reached through tmuxSpawns.ts.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(303);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
