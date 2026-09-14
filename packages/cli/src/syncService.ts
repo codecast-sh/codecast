@@ -1211,6 +1211,7 @@ export class SyncService {
     subtype?: string;
     model?: string;
     usage?: import("./parser.js").ClaudeUsage;
+    apiMessageId?: string;
   }): Promise<string> {
     await this.throttle();
     await this.rescueLocalImageLinks([params]);
@@ -1280,6 +1281,7 @@ export class SyncService {
           model: params.model,
           timestamp: params.timestamp,
           usage: params.usage,
+          api_message_id: params.apiMessageId,
           api_token: this.apiToken,
         }
       );
@@ -1302,6 +1304,7 @@ export class SyncService {
       subtype?: string;
       model?: string;
     usage?: import("./parser.js").ClaudeUsage;
+    apiMessageId?: string;
     }>;
     reconcileRemoteExisting?: boolean;
   }, options?: { onBatchAccepted?: (inputIndexes: readonly number[]) => void; beforeBatch?: () => void }): Promise<{ inserted: number; ids: string[] }> {
@@ -1380,6 +1383,7 @@ export class SyncService {
         model: msg.model,
         timestamp: msg.timestamp,
         usage: msg.usage,
+        api_message_id: msg.apiMessageId,
       });
       preparedIndexes?.set(preparedMessages[preparedMessages.length - 1], inputIndex);
     }

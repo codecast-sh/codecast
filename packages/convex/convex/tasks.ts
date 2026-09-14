@@ -3,7 +3,6 @@ import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { resolveActor } from "./lib/actor";
-import { markOrgActor } from "./orgEvents";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
@@ -1715,7 +1714,6 @@ export const update = mutation({
     // bot user; a hand keeps its host. The calling conversation is also the
     // actor for the wake rail's loop rules (orgEvents post write hook).
     const actor = await resolveActor(ctx, auth.userId, conv);
-    markOrgActor(ctx, conv);
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {
         task_id: task._id,
@@ -1878,7 +1876,6 @@ export const addComment = mutation({
     // thread lights up. A person running the CLI by hand is the actor. A
     // role's standing session signs as the role (lib/actor).
     const actor = await resolveActor(ctx, auth.userId, conv);
-    markOrgActor(ctx, conv);
     const id = await insertTaskComment(ctx, task._id, {
       author: args.author || (actor.kind === "role" ? actor.name : undefined) || user?.name || "unknown",
       text: args.text,

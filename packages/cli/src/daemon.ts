@@ -8241,7 +8241,7 @@ function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
 
-function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string } {
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string; usage?: ParsedMessage["usage"]; apiMessageId?: string } {
   return {
     messageUuid: msg.uuid,
     role: mapRole(msg.role),
@@ -8254,6 +8254,10 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
     files: msg.files,
     subtype: msg.subtype,
     model: msg.model,
+    // Token usage and the Claude message id ride to the server, which counts
+    // usage once per id (org-roles-standing.md T4).
+    usage: (msg as ParsedMessage).usage,
+    apiMessageId: (msg as ParsedMessage).apiMessageId,
   };
 }
 
