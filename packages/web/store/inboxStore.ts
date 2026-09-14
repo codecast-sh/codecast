@@ -1163,6 +1163,9 @@ export type SessionDecisionItem = {
   // Last `cast decide edit`; created_at is the ask time (queue age).
   updated_at?: number;
   resolved_at?: number;
+  // Who asked, as a snapshot (see schema); the live session row wins at render.
+  session_title?: string;
+  project_path?: string;
 };
 
 // A decision stack (decisionStacks.listStacks row): an ordered set of
@@ -1179,6 +1182,8 @@ export type DecisionStackItem = {
   policy: { auto_default_after_ms?: number; delegate_role_id?: string };
   status: "open" | "done";
   decision_ids: string[];
+  // The optimistic stub's key; the list feed's altKey supersedes onto it.
+  client_key?: string;
   total: number;
   resolved: number;
   pending: number;
@@ -1208,7 +1213,7 @@ export type DecisionDetailItem = {
   ladder: Array<DecisionHop & { role: HandledDecisionItem["role"] }>;
   asked_users: Array<{ _id: string; name: string; avatar_url?: string }>;
   holder_role: HandledDecisionItem["role"];
-  grant_offer: { role_id: string; role_name: string; category: string; scope_key: string; agreements: number; askers: number } | null;
+  grant_offer: { role_id: string; role_name: string; category: string; scope_key: string; agreements: number; askers: number; may_grant: boolean } | null;
   grant: HandledDecisionItem["grant"];
 };
 
@@ -1490,6 +1495,9 @@ export type ClientUI = {
   sticky_headers_disabled?: boolean;
   diff_panel_open?: boolean;
   file_diff_view_mode?: "unified" | "split";
+  // Files the reader has marked viewed on a pull request, by pull request id.
+  // A reading mark, so it follows the person to every device.
+  pr_viewed_files?: Record<string, string[]>;
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
@@ -5104,6 +5112,16 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch.
   answerDecision: (decisionId: string, answer: DecisionAnswerInput) => void;
+  // "Disagree and reopen" (D2): the row goes back to pending held by the
+  // viewer, leaves "Handled without you", and the reopenDecision side effect
+  // does the server write.
+  reopenDecision: (decisionId: string) => void;
+  // Stack verbs (D5): the draft moves first, named side effects follow.
+  reorderStack: (stackId: string, decisionIds: string[]) => void;
+  removeFromStack: (stackId: string, decisionId: string) => void;
+  // "Group into a stack": a stub row keyed by client_key (altKey supersedes
+  // when the server row syncs) and stack_id stamped on the members.
+  createStackWith: (input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) => void;
   // Local marks that a session's open AskUserQuestion / permission ask was
   // handled here (answered, dismissed, or evicted). Ephemeral by design — not
   // persisted, so a reload re-reads server truth. Every question surface reads
@@ -7645,6 +7663,66 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  reopenDecision: action(function (this: Draft, decisionId: string) {
+    const row = this.sessionDecisions[decisionId];
+    const me = String(this.currentUser?._id ?? "");
+    if (row) {
+      if (row.status !== "answered" || row.answered_by?.kind !== "role") return;
+      row.status = "pending";
+      row.answer_index = undefined;
+      row.answer_text = undefined;
+      row.answer_json = undefined;
+      row.resolved_at = undefined;
+      row.answered_by = undefined;
+      row.reopened_from = row.grant_id ? { grant_id: row.grant_id, answer_index: row.answer_index, at: Date.now() } : row.reopened_from;
+      row.grant_id = undefined;
+      row.holder = { kind: "user", id: me };
+      row.holder_key = `user:${me}`;
+      row.updated_at = Date.now();
+    }
+    delete this.handledDecisions[decisionId];
+    const detail = this.decisionDetails[decisionId];
+    if (detail && row) detail.decision = { ...row };
+  }),
+  reorderStack: action(function (this: Draft, stackId: string, decisionIds: string[]) {
+    const stack = this.decisionStacks[stackId];
+    if (!stack) return;
+    stack.decision_ids = decisionIds;
+    stack.updated_at = Date.now();
+  }),
+  removeFromStack: action(function (this: Draft, stackId: string, decisionId: string) {
+    const stack = this.decisionStacks[stackId];
+    if (stack) {
+      stack.decision_ids = stack.decision_ids.filter((id) => id !== decisionId);
+      stack.total = stack.decision_ids.length;
+      stack.pending = Math.max(0, stack.pending - (this.sessionDecisions[decisionId]?.status === "pending" ? 1 : 0));
+      stack.updated_at = Date.now();
+    }
+    const row = this.sessionDecisions[decisionId];
+    if (row && row.stack_id === stackId) row.stack_id = undefined;
+  }),
+  createStackWith: action(function (this: Draft, input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) {
+    const now = Date.now();
+    const me = String(this.currentUser?._id ?? "");
+    const members = input.decision_ids.filter((id) => this.sessionDecisions[id]);
+    this.decisionStacks[input.client_key] = {
+      _id: input.client_key,
+      client_key: input.client_key,
+      title: input.title,
+      team_id: input.team_id,
+      scope_user_id: input.team_id ? undefined : me,
+      owner_user_id: me,
+      policy: {},
+      status: "open",
+      decision_ids: members,
+      total: members.length,
+      resolved: members.filter((id) => this.sessionDecisions[id]?.status !== "pending").length,
+      pending: members.filter((id) => this.sessionDecisions[id]?.status === "pending").length,
+      created_at: now,
+      updated_at: now,
+    };
+    for (const id of members) this.sessionDecisions[id].stack_id = input.client_key;
+  }),
 
   // -- Manual session buckets --
   buckets: {},

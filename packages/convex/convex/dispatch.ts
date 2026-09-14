@@ -1,5 +1,6 @@
 import { mutation, syncAckPositions } from "./functions";
-import { guardClientResolution, personMayResolve, settleClientResolution } from "./sessionDecisions";
+import { guardClientResolution, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
+import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
 import { v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
@@ -597,6 +598,20 @@ async function linkConversationToObject(
 }
 
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
+  // Decisions (docs/architecture/decisions-as-documents.md D2 / D5). The web
+  // patches sessionDecisions and decisionStacks on the draft first; these are
+  // the server writes the optimistic rows reconcile against.
+  reopenDecision: async (ctx, userId, [decisionId]: [string]) => reopenCore(ctx, userId, decisionId as Id<"session_decisions">),
+  reorderStack: async (ctx, userId, [stackId, decisionIds]: [string, string[]]) =>
+    reorderStackCore(ctx, userId, stackId, decisionIds as Id<"session_decisions">[]),
+  removeFromStack: async (ctx, userId, [stackId, decisionId]: [string, string]) => removeFromStackCore(ctx, userId, stackId, decisionId),
+  createStackWith: async (ctx, userId, [input]: [{ title: string; decision_ids: string[]; team_id?: string; client_key?: string }]) =>
+    createStackWithCore(ctx, userId, {
+      title: input.title,
+      decision_ids: input.decision_ids,
+      team_id: input.team_id as Id<"teams"> | undefined,
+      client_key: input.client_key,
+    }),
   // Org roles (docs/architecture/org-roles.md S5/S6). The web patches the
   // `orgTree` store singleton optimistically; that snapshot is not a dispatch
   // table, so these named effects are the only server write. The functions

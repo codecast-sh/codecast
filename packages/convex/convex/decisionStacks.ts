@@ -102,6 +102,7 @@ async function listRow(ctx: Ctx, stack: StackRow) {
     policy: stack.policy,
     status: stack.status,
     decision_ids: stack.decision_ids,
+    client_key: stack.client_key,
     total: members.length,
     resolved,
     pending: members.length - resolved,
@@ -146,7 +147,7 @@ export async function delegateStack(ctx: Ctx, userId: Id<"users">, stack: StackR
 export async function createStackCore(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { title: string; session_id?: string; team_id?: Id<"teams">; policy?: { auto_default_after_ms?: number; delegate_role_id?: Id<"org_roles"> }; delegate?: string },
+  args: { title: string; session_id?: string; team_id?: Id<"teams">; policy?: { auto_default_after_ms?: number; delegate_role_id?: Id<"org_roles"> }; delegate?: string; client_key?: string },
 ) {
   if (!args.title.trim()) return { error: "A stack needs a title" };
   const now = Date.now();
@@ -176,6 +177,7 @@ export async function createStackCore(
     owner_user_id: userId,
     decision_ids: [],
     policy: { auto_default_after_ms: args.policy?.auto_default_after_ms },
+    ...(args.client_key ? { client_key: args.client_key } : {}),
     status: "open",
     created_at: now,
     updated_at: now,
@@ -239,8 +241,8 @@ export async function addToStackCore(ctx: Ctx, userId: Id<"users">, stackRef: st
 // The queue's "group into a stack" (D5): create and add the members in one
 // call, so the web's optimistic stub reconciles to one server row and one
 // round trip instead of N + 1.
-export async function createStackWithCore(ctx: Ctx, userId: Id<"users">, args: { title: string; decision_ids: string[]; team_id?: Id<"teams"> }) {
-  const created = await createStackCore(ctx, userId, { title: args.title, team_id: args.team_id });
+export async function createStackWithCore(ctx: Ctx, userId: Id<"users">, args: { title: string; decision_ids: string[]; team_id?: Id<"teams">; client_key?: string }) {
+  const created = await createStackCore(ctx, userId, { title: args.title, team_id: args.team_id, client_key: args.client_key });
   if ("error" in created && created.error) return created;
   const added: string[] = [];
   for (const ref of args.decision_ids) {
@@ -252,7 +254,7 @@ export async function createStackWithCore(ctx: Ctx, userId: Id<"users">, args: {
 }
 
 export const createStackWith = mutation({
-  args: { title: v.string(), decision_ids: v.array(v.string()), team_id: v.optional(v.id("teams")) },
+  args: { title: v.string(), decision_ids: v.array(v.string()), team_id: v.optional(v.id("teams")), client_key: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Unauthorized" };

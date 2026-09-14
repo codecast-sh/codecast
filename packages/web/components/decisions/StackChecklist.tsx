@@ -2,9 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
+import { decisionAnswerLabel } from "@codecast/shared/contracts";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Layers, X } from "lucide-react";
 import { useInboxStore, useTrackedStore, type DecisionStackItem, type SessionDecisionItem } from "../../store/inboxStore";
 import { stackCursor, advisoryDefaults } from "../../lib/decisionGroups";
@@ -14,14 +13,12 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 
-const api = _api as any;
-
 // A stack as a checklist (D5): the members in the stack's order, one of them
 // current. Keys 1 to 9 answer the current member (its card claims them),
 // n / p move next and previous, and "answer all defaults" resolves every
 // advisory member with its declared default. Reorder and remove are the
 // stack page's controls (`editable`).
-export function StackChecklist({ stack, editable = false }: { stack: DecisionStackItem; editable?: boolean }) {
+export function StackChecklist({ stack, editable = false, keys = false }: { stack: DecisionStackItem; editable?: boolean; keys?: boolean }) {
   const s = useTrackedStore([
     (st) => stack.decision_ids.map((id) => `${id}:${st.sessionDecisions[id]?.status ?? "?"}`).join("|"),
   ]);
@@ -42,6 +39,7 @@ export function StackChecklist({ stack, editable = false }: { stack: DecisionSta
   }, [defaults, answerDecision]);
 
   useWatchEffect(() => {
+    if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
       const t = e.target as HTMLElement | null;
@@ -51,26 +49,21 @@ export function StackChecklist({ stack, editable = false }: { stack: DecisionSta
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [move]);
+  }, [move, keys]);
 
-  const removeFromStack = useMutation(api.decisionStacks.removeFromStack);
-  const reorderStack = useMutation(api.decisionStacks.reorderStack);
-  const syncRecord = useInboxStore((st) => st.syncRecord);
-  const reorder = useCallback(async (from: number, dir: -1 | 1) => {
+  // Reorder and remove are store actions: the draft moves first (localFirst
+  // protects the new order until the server echoes it) and the named side
+  // effects reorderStack / removeFromStack do the server write.
+  const reorderStack = useInboxStore((st) => st.reorderStack);
+  const removeFromStack = useInboxStore((st) => st.removeFromStack);
+  const reorder = useCallback((from: number, dir: -1 | 1) => {
     const ids = [...stack.decision_ids];
     const to = from + dir;
     if (to < 0 || to >= ids.length) return;
     [ids[from], ids[to]] = [ids[to], ids[from]];
-    // Paint the new order now; the list feed echoes the server's copy.
-    syncRecord("decisionStacks", stack._id, { ...stack, decision_ids: ids });
-    const r = await reorderStack({ stack: stack._id, decision_ids: ids });
-    if (r?.error) toast.error(r.error);
-  }, [stack, reorderStack, syncRecord]);
-  const remove = useCallback(async (id: string) => {
-    syncRecord("decisionStacks", stack._id, { ...stack, decision_ids: stack.decision_ids.filter((x) => x !== id), total: stack.total - 1 });
-    const r = await removeFromStack({ stack: stack._id, decision: id });
-    if (r?.error) toast.error(r.error);
-  }, [stack, removeFromStack, syncRecord]);
+    reorderStack(stack._id, ids);
+  }, [stack._id, stack.decision_ids, reorderStack]);
+  const remove = useCallback((id: string) => removeFromStack(stack._id, id), [stack._id, removeFromStack]);
 
   const done = members.filter((m) => m.status !== "pending").length;
 
@@ -120,7 +113,7 @@ export function StackChecklist({ stack, editable = false }: { stack: DecisionSta
                 <span className="font-mono text-[11px] w-5 shrink-0">{i + 1}.</span>
                 {resolved ? <Check className="w-3.5 h-3.5 text-sol-green shrink-0" /> : <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow shrink-0" />}
                 <Link href={decisionHref(d)} onClick={(e) => e.stopPropagation()} className={`min-w-0 flex-1 truncate ${resolved ? "line-through decoration-sol-border" : "hover:text-sol-text"}`}>{d.question}</Link>
-                {resolved && d.status === "answered" && <span className="text-[11px] truncate max-w-[12rem]">{d.answer_text ?? (d.answer_index !== undefined ? d.options[d.answer_index]?.label : "")}</span>}
+                {resolved && d.status === "answered" && <span className="text-[11px] truncate max-w-[12rem]">{decisionAnswerLabel(d, d)}</span>}
                 {editRail}
               </li>
             );
@@ -128,7 +121,7 @@ export function StackChecklist({ stack, editable = false }: { stack: DecisionSta
           return (
             <li key={id} className="relative">
               <div className="absolute -left-3 top-3 hidden sm:block font-mono text-[11px] text-sol-cyan">{i + 1}.</div>
-              <DecisionCompactCard decision={d} keys showTask />
+              <DecisionCompactCard decision={d} keys={keys} showTask />
               {editRail && <div className="mt-1 flex justify-end">{editRail}</div>}
             </li>
           );

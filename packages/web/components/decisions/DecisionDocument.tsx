@@ -54,18 +54,11 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     (st) => st.sessions[decision.conversation_id]?.title,
     (st) => st.sessions[decision.conversation_id]?.project_path,
     (st) => st.currentUser?._id,
-    (st) => {
-      const teamId = st.clientState.ui?.active_team_id;
-      const team = (st.teams || []).find((t: any) => String(t._id) === String(teamId));
-      return team?.role === "admin";
-    },
   ]);
   const session = s.sessions[decision.conversation_id];
   const meId = String(s.currentUser?._id ?? "");
-  const teamId = s.clientState.ui?.active_team_id;
-  const isAdmin = ((s.teams || []).find((t: any) => String(t._id) === String(teamId)) as any)?.role === "admin";
   const answerDecision = useInboxStore((st) => st.answerDecision);
-  const reopen = useMutation(api.sessionDecisions.reopen);
+  const reopenDecision = useInboxStore((st) => st.reopenDecision);
   const grant = useMutation(api.sessionDecisions.grant);
   const now = useCoarseNow(30_000);
   const pending = decision.status === "pending";
@@ -76,19 +69,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
   const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
   const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
-  const [reopening, setReopening] = useState(false);
-  const onReopen = useCallback(async () => {
-    setReopening(true);
-    try {
-      const r = await reopen({ decision_id: decision._id });
-      if (r?.reopened) toast.success("Reopened — it is back in your queue.");
-      else toast.error(r?.reason ?? "Could not reopen");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Could not reopen");
-    } finally {
-      setReopening(false);
-    }
-  }, [reopen, decision._id]);
+  // The store action flips the row on the draft (the page re-renders as
+  // pending at once); the reopenDecision side effect does the server write.
+  const onReopen = useCallback(() => {
+    reopenDecision(decision._id);
+    toast.success("Reopened — it is back in your queue.");
+  }, [reopenDecision, decision._id]);
 
   // Who assigned the category: the server pins a protected one whatever the
   // asker proposed; an open one stands only when the asker proposed it.
@@ -116,7 +102,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         ? `answered by ${detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant`
         : `answered by ${detail.asked_users.find((u) => u._id === answeredBy.id)?.name ?? (answeredBy.id === meId ? "you" : "a person")}`;
 
-  const canReopen = decision.status === "answered" && answeredBy?.kind === "role" && !!decision.grant_id && answerable;
+  // Reopen is the people's (asked_users): gate on the detail's people set, not
+  // on whether the 24 hour queue cache still holds the row.
+  const isPerson = detail.asked_users.some((u) => u._id === meId);
+  const canReopen = decision.status === "answered" && answeredBy?.kind === "role" && !!decision.grant_id && isPerson && answerable;
 
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
@@ -139,8 +128,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           <dl className="mt-4 decision-meta text-[12px]">
             <dt>asked by</dt>
             <dd>
-              <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-blue hover:underline">{session?.title || "the session"}</Link>
-              {session?.project_path && <span className="text-sol-text-dim"> · {getProjectName(session.project_path)}</span>}
+              <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-blue hover:underline">{session?.title || decision.session_title || "the session"}</Link>
+              {(session?.project_path || decision.project_path) && <span className="text-sol-text-dim"> · {getProjectName(session?.project_path || decision.project_path!)}</span>}
             </dd>
             {(detail.task || decision.task_id) && (
               <>
@@ -299,12 +288,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               <DecisionRecordedAnswer decision={decision} />
               {answeredByLine && <div className="mt-2 text-[12px] text-sol-text-dim">{answeredByLine}</div>}
               {canReopen && (
-                <button onClick={onReopen} disabled={reopening} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-sol-orange/40 text-[12px] text-sol-orange hover:bg-sol-orange hover:text-sol-bg transition-colors disabled:opacity-50">
+                <button onClick={onReopen} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-sol-orange/40 text-[12px] text-sol-orange hover:bg-sol-orange hover:text-sol-bg transition-colors disabled:opacity-50">
                   <Undo2 className="w-3.5 h-3.5" />Disagree and reopen
                 </button>
               )}
               {detail.grant_offer && (
-                <GrantOffer offer={detail.grant_offer} decisionId={decision._id} ladder={detail.ladder} meId={meId} isAdmin={isAdmin} grant={grant} />
+                <GrantOffer offer={detail.grant_offer} decisionId={decision._id} ladder={detail.ladder} grant={grant} />
               )}
             </>
           )}
@@ -316,19 +305,18 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
 // "Let this role answer questions like this here" (D2): shown when the
 // person picked what a role recommended and the role earned it (3 agreements
-// from 2 askers, reported by getWithDoc). Only the role's host or a team
-// admin may grant; a role below trust stage "decide" earns the grant but it
+// from 2 askers, reported by getWithDoc). Who may grant is the server's rule
+// (may_grant: the role's host, the personal scope owner, or an admin of the
+// role's team); a role below trust stage "decide" earns the grant but it
 // takes effect only once the role is promoted.
-function GrantOffer({ offer, decisionId, ladder, meId, isAdmin, grant }: {
+function GrantOffer({ offer, decisionId, ladder, grant }: {
   offer: NonNullable<DecisionDetailItem["grant_offer"]>;
   decisionId: string;
   ladder: DecisionDetailItem["ladder"];
-  meId: string;
-  isAdmin: boolean;
   grant: (args: any) => Promise<any>;
 }) {
   const hop = ladder.find((h) => h.role_id === offer.role_id);
-  const mayGrant = isAdmin || hop?.role?.host_user_id === meId;
+  const mayGrant = offer.may_grant;
   const { data: brief } = useQueryNoThrow(api.org.brief, { role_id: offer.role_id });
   const trust: string | undefined = brief?.role?.trust;
   const [busy, setBusy] = useState(false);
