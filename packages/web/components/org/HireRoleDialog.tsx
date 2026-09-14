@@ -17,7 +17,6 @@ import { SelectBox } from "../ui/select-box";
 import { parentNodeId, parentRefOfNodeId } from "./orgLayout";
 import type { OrgTree } from "./orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type TrustStage } from "./scope/scopeTypes";
-import { OrgTemplateHire } from "./orgTemplateHire";
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
@@ -57,7 +56,6 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   projectPath?: string;
   title?: string;
 }) {
-  const [mode, setMode] = useState<"manual" | "template">("manual");
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
   const [handleTouched, setHandleTouched] = useState(false);
@@ -79,7 +77,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   // The scope preview: what the seat will read. A whole-workspace scope reads
   // everything, so the query is skipped and the hint says so.
   const { data: summary } = useScopeSummary(
-    open && mode === "manual" && !wholeWorkspace
+    open && !wholeWorkspace
       ? { scope: { project_ids: projectIds, plan_ids: planIds }, ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}) }
       : "skip",
   );
@@ -97,7 +95,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   // set one, so it is read loosely.
   const cwd: string | undefined = projectPath ?? (picked[0] as { project_path?: string } | undefined)?.project_path ?? undefined;
   const submit = () => {
-    if (mode !== "manual" || !valid) return;
+    if (!valid) return;
     const ref = parentRefOfNodeId(reportsTo) ?? { kind: "user" as const, user_id: meId };
     onCreate({
       name: name.trim(),
@@ -125,17 +123,9 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       <DialogContent className="max-w-[520px] grid-cols-1 max-h-[92vh] overflow-y-auto" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
         <DialogHeader>
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{mode === "manual" ? "A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists." : "Bring a complete job template into one project, with your approval before setup."}</DialogDescription>
+          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists.</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" role="group" aria-label="Role setup">
-          {([["manual", "Write a role"], ["template", "From a folder"]] as const).map(([value, label]) => (
-            <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className="rounded-md px-3 py-2 text-[12px] font-semibold transition-colors focus-visible:outline focus-visible:outline-sol-cyan" style={{ background: mode === value ? "var(--sol-card)" : undefined, color: mode === value ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{label}</button>
-          ))}
-        </div>
-        <div hidden={mode !== "template"}>
-          <OrgTemplateHire projects={projects} workspace={tree.workspace} initialProjectId={initialProjects.length === 1 ? initialProjects[0]._id : undefined} projectPath={initialProjects.length === 1 ? projectPath : undefined} onClose={onClose} />
-        </div>
-        <form className={mode === "manual" ? "flex flex-col gap-3" : "hidden"} onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <div className="grid grid-cols-[1fr_auto] gap-3">
             <Field label="Name">
               <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Head of Growth" className={INPUT} style={INPUT_STYLE} />
