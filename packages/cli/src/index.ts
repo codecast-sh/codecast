@@ -10,7 +10,6 @@ import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
-import { BUNDLED_SKILLS, ORCHESTRATION_BUNDLE } from "./bundledSkills.js";
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
@@ -85,7 +84,6 @@ import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
-import { briefHandLine } from "./briefLines.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
@@ -1717,7 +1715,7 @@ function startDaemon(): void {
 // applies recommended defaults instead of blocking on prompts.
 async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
-  installCodecastSkills();
+  await installCodecastSkills();
   installSessionRegisterHook();
   installStatusHook();
   await installStatusLineHook();
@@ -2295,7 +2293,10 @@ function writeOwnedFile(dest: string, content: string, mode: number, update: boo
 // (bundledSkills.ts), never from a path beside the executable: a compiled
 // cast has no source tree next to it, and resolving one found nothing on
 // every release install.
-function installOrchestration(update = false): { installed: boolean; updated: boolean } {
+async function installOrchestration(update = false): Promise<{ installed: boolean; updated: boolean }> {
+  // The bundle is text compiled into the binary; loaded here, at install, so
+  // every other cast invocation leaves it off the boot graph.
+  const { ORCHESTRATION_BUNDLE } = await import("./bundledSkills.js");
   const claudeDir = path.join(os.homedir(), ".claude");
   let anyChange = false;
 
@@ -2334,7 +2335,8 @@ function installOrchestration(update = false): { installed: boolean; updated: bo
 // hooks: every onboarding, every `cast install` wizard or --all run, and every
 // refresh after an update. A single-slug install (`cast install memory`)
 // leaves them alone, so each snippet's install stays exactly its own files.
-function installCodecastSkills(update = true): { installed: number; updated: number } {
+async function installCodecastSkills(update = true): Promise<{ installed: number; updated: number }> {
+  const { BUNDLED_SKILLS } = await import("./bundledSkills.js");
   let installed = 0;
   let updated = 0;
   for (const skill of BUNDLED_SKILLS) {
@@ -2379,8 +2381,8 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
   else if (config.messaging_enabled) installMessagingSnippet(true);
-  if (config.orch_enabled) installOrchestration(true);
-  installCodecastSkills();
+  if (config.orch_enabled) await installOrchestration(true);
+  await installCodecastSkills();
   installSessionRegisterHook();
   installStatusHook();
   await installStatusLineHook();
@@ -10183,8 +10185,9 @@ program
     }
 
     writeConfig(config);
-    const skills = installCodecastSkills();
+    const skills = await installCodecastSkills();
     if (skills.installed || skills.updated) {
+      const { BUNDLED_SKILLS } = await import("./bundledSkills.js");
       console.log(`  ${icons.check} skills — ${BUNDLED_SKILLS.map((k) => `/${k.name}`).join(", ")} in ~/.claude/skills`);
     }
     if (anyInstalled) {
@@ -12826,6 +12829,7 @@ roleGroup
     console.log(`  ${c.dim}trust ${brief.role.trust}: ${TRUST_HINT[brief.role.trust] ?? ""}${c.reset}`);
     console.log(`  ${c.dim}today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
     console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${brief.role.last_wake_at ? ` · last wake ${formatDateSmart(brief.role.last_wake_at)}` : ""}${c.reset}`);
+    const { briefHandLine } = await import("./briefLines.js");
     for (const h of brief.facts.hands) console.log(briefHandLine(h));
   });
 
@@ -12961,6 +12965,7 @@ const briefCmd = program
     console.log(`  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`);
     if (f.hands.length) {
       console.log(`  hands:`);
+      const { briefHandLine } = await import("./briefLines.js");
       for (const h of f.hands) console.log(briefHandLine(h));
     }
     console.log("");
@@ -19003,7 +19008,7 @@ if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUp
     if (config?.task_enabled) installTaskSnippet(true);
     if (config?.work_enabled) installWorkSnippet(true);
     if (config?.workflow_enabled) installWorkflowSnippet(true);
-    if (config?.orch_enabled) installOrchestration(true);
+    if (config?.orch_enabled) await installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
     await installStatusLineHook();
