@@ -247,6 +247,7 @@ import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getToolPatchInputs, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
+import { appDocumentTitle } from "../lib/browserPane";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
@@ -12885,7 +12886,11 @@ const ConversationViewInner = (
   // The header row sheds chip detail level by level until the title fits
   // (see hooks/useSqueezeToFit and the .cq-sq* tiers in globals.css).
   const squeezeRowRef = useRef<HTMLDivElement>(null);
-  useSqueezeToFit(squeezeRowRef, 6);
+  useSqueezeToFit(squeezeRowRef, 7);
+  // Subagents carry parent_conversation_id; visible children (agent-team
+  // teammates, spawns) carry spawned_by_conversation_id. The header chip and
+  // the overflow menu row both link here, so folding the chip loses nothing.
+  const parentLinkId = conversation?.parent_conversation_id || (conversation as any)?.spawned_by_conversation_id;
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
@@ -14756,7 +14761,7 @@ const ConversationViewInner = (
       const byIndex = new Map(virtualizer.getVirtualItems().map((v) => [v.index, v]));
       if (byIndex.size === 0) return;
       const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
-      let corrected = false;
+      const corrections: { index: number; size: number }[] = [];
       for (const el of container.querySelectorAll<HTMLElement>("[data-index]")) {
         const v = byIndex.get(Number(el.dataset.index));
         if (!v || el.dataset.vkey !== String(v.key)) continue; // mid-commit row — skip
@@ -14768,14 +14773,14 @@ const ConversationViewInner = (
         const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
           if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
-          virtualizer.resizeItem(v.index, real);
-          corrected = true;
+          corrections.push({ index: v.index, size: real });
         }
       }
+      for (const { index, size } of corrections) virtualizer.resizeItem(index, size);
       // A correction while the reader sits at the tail must keep them there
       // (same contract as followOnAppend) — without this, healing the sizes
       // under a bottom-pinned view leaves the last message's tail cut off.
-      if (corrected && nearBottom && !userScrolledRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
+      if (corrections.length > 0 && nearBottom && !userScrolledRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
     };
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
@@ -15842,10 +15847,10 @@ const ConversationViewInner = (
     // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
     if (isDetachedTabWindow()) return;
     if (conversation) {
-      document.title = `codecast | ${truncatedTitle}`;
+      document.title = appDocumentTitle(truncatedTitle);
     }
     return () => {
-      document.title = "codecast";
+      document.title = appDocumentTitle(null);
     };
   }, [truncatedTitle, conversation]);
 
@@ -16561,7 +16566,7 @@ const ConversationViewInner = (
       )}
       <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
-          <div ref={titlebarHeadRef} className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
+          <div ref={titlebarHeadRef} className="cc-panel__head gap-2 min-w-0">
             <div ref={squeezeRowRef} className="cq-squeeze-row flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {isZenMode && (
               <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
@@ -16705,14 +16710,7 @@ const ConversationViewInner = (
               <TooltipProvider delayDuration={300}>
               <div data-cc-conv-actions className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
 
-                {(() => {
-                  // Subagents carry parent_conversation_id; visible children
-                  // (agent-team teammates, spawns) carry spawned_by_conversation_id.
-                  // Same chip, same click-through.
-                  const parentLinkId = conversation.parent_conversation_id
-                    || (conversation as any).spawned_by_conversation_id;
-                  if (!parentLinkId) return null;
-                  return (
+                {parentLinkId && (
                   <Link
                     href={convLink(parentLinkId)}
                     onClick={(e) => {
@@ -16724,7 +16722,7 @@ const ConversationViewInner = (
                       e.preventDefault();
                       navigateToSession(parentLinkId);
                     }}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                    className="cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                     title="View parent conversation"
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -16732,8 +16730,7 @@ const ConversationViewInner = (
                     </svg>
                     <span className="cq-sq2">Parent</span>
                   </Link>
-                  );
-                })()}
+                )}
 
                 {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
                   // Family size from the details payload alone (no store sub):
@@ -16746,7 +16743,7 @@ const ConversationViewInner = (
                     <button
                       ref={treeChipRef}
                       onClick={toggleMap}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border transition-colors ${
+                      className={`cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border transition-colors ${
                         treePopoverOpen
                           ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
                           : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
@@ -17095,9 +17092,9 @@ const ConversationViewInner = (
                         <MenuKeyCaps action="conv.toggleDiff" />
                       </DropdownMenuItem>
                     )}
-                    {conversation.parent_conversation_id && (
+                    {parentLinkId && (
                       <DropdownMenuItem asChild>
-                        <Link href={convLink(conversation.parent_conversation_id)}>
+                        <Link href={convLink(parentLinkId)}>
                           View parent conversation
                         </Link>
                       </DropdownMenuItem>

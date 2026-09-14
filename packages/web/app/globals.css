@@ -93,12 +93,21 @@
    header's overflow menu, where the same items appear while folded. Level 5
    lets the title shrink, down to a floor scaled to the header (cqi = the
    header's width, the query container on [data-sv-convhead]) so it still
-   holds a readable run of words. Level 6 is the last resort: the action
-   cluster wraps under the title instead of being clipped. */
+   holds a readable run of words. Level 6 folds the chips the overflow menu
+   already repeats (the parent link and the branch map). Level 7 drops the
+   title floor: the title gives up its last words to the ellipsis so the
+   controls keep their single row.
+
+   The row NEVER wraps. A header that grows to two lines is a bug, not a
+   fallback: it moves the whole transcript down, and it reads as a broken
+   panel. The title is the part that yields, because a truncated title still
+   says what the session is and the buttons beside it stay where the hand
+   expects them. */
 [data-squeeze~="1"] .cq-sq1,
 [data-squeeze~="2"] .cq-sq2,
 [data-squeeze~="3"] .cq-sq3,
-[data-squeeze~="4"] .cq-sq4 { display: none !important; }
+[data-squeeze~="4"] .cq-sq4,
+[data-squeeze~="6"] .cq-sq6 { display: none !important; }
 [data-squeeze~="2"] .cq-sq2-tight { max-width: 9rem !important; }
 [data-sv-convhead] .cq-squeeze-row .cc-panel__title {
   flex: 1 0 auto;
@@ -108,7 +117,7 @@
   flex-shrink: 1;
   min-width: clamp(6rem, 32cqi, 22rem);
 }
-[data-squeeze~="6"].cq-squeeze-row { flex-wrap: wrap; row-gap: 4px; }
+[data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { min-width: 0; }
 
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
    once the header is too tight to show every pill on one row alongside the
@@ -4137,6 +4146,36 @@ pre[class*="language-"] {
    surface, never a card, a panel head or a highlight. */
 .object-reveal__body .bg-sol-bg {
   background-color: transparent;
+}
+/* The bottom edge is the resize handle: a hit strip straddling the border,
+   with a short bar that shows on hover so the affordance is discoverable
+   without being drawn all the time. */
+.object-reveal__grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 10px;
+  cursor: row-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.object-reveal__grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 44px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sol-text-dim) 45%, transparent);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.object-reveal__grip:hover::after,
+.object-reveal__grip:active::after {
+  opacity: 1;
 }
 @keyframes object-reveal-in {
   from { opacity: 0; transform: translateY(6px); }
