@@ -17,7 +17,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DAEMON_EXIT_STAMP_FILE, EXIT_DO_NOT_RESTART } from "./supervision.js";
+import {
+  DAEMON_EXIT_STAMP_FILE,
+  EXIT_DO_NOT_RESTART,
+  WATCHDOG_WEDGED_STAMP_FILENAME,
+  parseWedgedPassStamp,
+  type WedgedPassStamp,
+} from "./supervision.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
 export const HANG_MARKER_FILENAME = "daemon-hang.json";
@@ -50,6 +56,10 @@ export interface HangMarker {
    * False on a marker that was written and never rewritten: the daemon died
    * inside the stall, which is the case a kill would have been called for. */
   self_recovered: boolean;
+  /** Set by the watchdog when IT ended the stall with a SIGKILL, naming the
+   * rule that fired (supervision.ts WATCHDOG_KILL_RULE_TWO_PASSES). Absent on
+   * a marker the daemon wrote about itself. */
+  watchdog_rule?: string;
 }
 
 export interface DaemonExitStamp {
@@ -115,6 +125,7 @@ export function peekHangMarker(dir: string = codecastDir()): HangMarker | null {
     // A marker the resolve leg never rewrote means the stall never cleared, so
     // a missing flag reads as "did not recover" — the conservative reading.
     self_recovered: parsed.self_recovered === true,
+    ...(typeof parsed.watchdog_rule === "string" && parsed.watchdog_rule ? { watchdog_rule: parsed.watchdog_rule } : {}),
   };
 }
 
@@ -157,7 +168,9 @@ export function describeHangMarker(marker: HangMarker, now: number = Date.now())
   const when = agoMin === 0 ? "just now" : `${agoMin}m ago`;
   const outcome = marker.self_recovered
     ? "loop resumed on its own"
-    : "loop never resumed — the daemon died in it";
+    : marker.watchdog_rule
+      ? `loop never resumed — the watchdog killed it (${marker.watchdog_rule})`
+      : "loop never resumed — the daemon died in it";
   return `${seconds}s of loop silence ${when} (pid ${marker.pid}), ${outcome}` +
     (marker.hot_stacks ? `; hot stacks: ${marker.hot_stacks}` : "");
 }
@@ -207,6 +220,58 @@ export function createHangRecorder(opts: {
       pending = null;
     },
   };
+}
+
+export function wedgedPassStampPath(dir: string = codecastDir()): string {
+  return path.join(dir, WATCHDOG_WEDGED_STAMP_FILENAME);
+}
+
+/** What the previous watchdog pass left behind when it judged the daemon
+ * wedged, or null. A torn file reads as "not armed", which errs toward one more
+ * pass before a kill, never toward one fewer. */
+export function readWedgedPassStamp(dir: string = codecastDir()): WedgedPassStamp | null {
+  try {
+    return parseWedgedPassStamp(fs.readFileSync(wedgedPassStampPath(dir), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+export function writeWedgedPassStamp(stamp: WedgedPassStamp, dir: string = codecastDir()): void {
+  try {
+    fs.writeFileSync(wedgedPassStampPath(dir), JSON.stringify(stamp), { mode: 0o600 });
+  } catch {
+    // An unwritable arm means the next pass sees no arm and arms again: the
+    // kill is delayed, never hastened.
+  }
+}
+
+export function clearWedgedPassStamp(dir: string = codecastDir()): void {
+  removeQuietly(wedgedPassStampPath(dir));
+}
+
+/** The marker the watchdog leaves when it kills: the stall never cleared, and
+ * the rule that ended it is written down so `cast health` names the killer
+ * instead of implying the daemon died on its own. A marker the daemon wrote
+ * about this same stall keeps its sampled stacks; anything else is replaced.
+ * The killed daemon never boots again to consume it, so the NEXT daemon does,
+ * which is exactly how the record reaches the state file. */
+export function writeWatchdogKillMarker(
+  opts: { pid: number; unresponsiveMs: number; rule: string; now: number },
+  dir: string = codecastDir(),
+): HangMarker {
+  const prior = peekHangMarker(dir);
+  const sameStall = prior && prior.pid === opts.pid && !prior.self_recovered;
+  const marker: HangMarker = {
+    detected_at: opts.now,
+    pid: opts.pid,
+    unresponsive_ms: Math.round(opts.unresponsiveMs),
+    hot_stacks: sameStall ? prior.hot_stacks : "",
+    self_recovered: false,
+    watchdog_rule: opts.rule,
+  };
+  writeHangMarker(marker, dir);
+  return marker;
 }
 
 export function writeDaemonExitStamp(reason: string, dir: string = codecastDir()): void {
