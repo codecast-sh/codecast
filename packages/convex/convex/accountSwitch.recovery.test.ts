@@ -106,7 +106,7 @@ describe("auth recovery through the backend handler", () => {
     f.tables.devices.push({ _id: "devices_other", user_id: "users_owner", device_id: "other", last_seen: f.now - 1 });
     f.tables.conversations.push(f.conversation("conversations_other", "auth", { owner_device_id: "other" }),
       f.conversation("conversations_remote", "auth", { owner_device_id: "remote" }));
-    expect(await f.run()).toEqual({ acted: "nothing_blocked" });
+    expect(await f.run()).toEqual({ acted: "nothing_blocked", dismissed: 0 });
     expect(f.tables.daemon_commands).toHaveLength(0);
   });
 
@@ -130,7 +130,7 @@ describe("auth recovery through the backend handler", () => {
       f.conversation("conversations_dismissed", "auth", { inbox_dismissed_at: f.now }),
       f.conversation("conversations_sub", "auth", { is_subagent: true }),
       f.conversation("conversations_codex", "auth", { agent_type: "codex" }));
-    expect(await f.run()).toEqual({ acted: "nothing_blocked" });
+    expect(await f.run()).toEqual({ acted: "nothing_blocked", dismissed: 0 });
     expect(f.tables.daemon_commands).toHaveLength(0);
   });
 

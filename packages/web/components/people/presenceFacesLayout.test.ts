@@ -9,6 +9,7 @@ import { buildWall, type Wall } from "./peopleWallLayout";
 import {
   MAX_OVERLAY_FACES,
   OVERLAY_FACE_PX,
+  OVERLAY_FACE_SIZE,
   overlayFaces,
   overlayWindowSize,
   PRESENCE_CARD,
@@ -50,7 +51,7 @@ describe("overlayFaces", () => {
     expect(overflow).toBe(4);
   });
 
-  it("keeps the wall's own order — presence first, biggest first", () => {
+  it("keeps the wall's own order — presence first, busiest first — at one size", () => {
     const wall = buildWall(
       [{ id: "quiet" }, { id: "busy" }],
       (m) => "active" as const,
@@ -61,8 +62,12 @@ describe("overlayFaces", () => {
     );
     const { shown } = overlayFaces(wall, false);
     expect(shown.map((f) => f.id)).toEqual(["busy", "quiet"]);
-    expect(shown[0].px).toBe(OVERLAY_FACE_PX.loud);
-    expect(shown[1].px).toBe(OVERLAY_FACE_PX.here);
+    expect(shown[0].px).toBe(OVERLAY_FACE_SIZE);
+    expect(shown[1].px).toBe(OVERLAY_FACE_SIZE);
+  });
+
+  it("floats every tier at the one overlay size", () => {
+    expect(new Set(Object.values(OVERLAY_FACE_PX))).toEqual(new Set([OVERLAY_FACE_SIZE]));
   });
 });
 

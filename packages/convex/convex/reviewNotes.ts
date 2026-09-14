@@ -129,38 +129,64 @@ export const send = mutation({
 
     const pending = (await batchRows(ctx, userId, args.git_root)).filter((r) => !r.sent_at);
     if (pending.length === 0) throw new Error("No unsent review notes in this worktree");
-
-    const stale = new Set((args.stale_ids ?? []).map(String));
-    const user = await ctx.db.get(userId);
     const newest = pending[pending.length - 1];
-    const content = buildReviewBatchPrompt({
-      actorName: actorNameOf(user),
+    return await sendNotesToSession(ctx, userId, args.conversation_ref, pending, {
       repository: newest.repository ?? undefined,
       ref: newest.ref ?? undefined,
-      url: args.url ?? null,
-      notes: pending.map((r) => ({
-        file_path: r.file_path ?? "",
-        line_number: r.line_number,
-        line_end: r.line_end,
-        content: r.content,
-        stale: stale.has(String(r._id)),
-      })),
-    });
-
-    const now = Date.now();
-    await enqueuePendingMessage(ctx, conversation, userId, {
-      content,
-      // Idempotency is sent_at, not this key: a retry finds the batch already
-      // stamped and stops. The key only has to be distinct per delivery, so a
-      // second batch to the same session is not mistaken for the first.
-      client_id: `review-batch:${conversation._id}:${pending[0]._id}:${now}`,
-      human: true,
-    });
-    for (const row of pending) await ctx.db.patch(row._id, { sent_at: now });
-
-    return { sent: pending.length, conversation_id: conversation._id, content };
+      url: args.url ?? undefined,
+      stale_ids: args.stale_ids,
+    }, conversation);
   },
 });
+
+/**
+ * Deliver a batch of notes to a session as one message, oldest first, and
+ * stamp each note sent. The worktree batch (`cast review send`) and the pull
+ * request review (reviews.handPendingToSession) both come through here, so a
+ * session reads the same shape whichever surface wrote the notes.
+ */
+export async function sendNotesToSession(
+  ctx: any,
+  userId: Id<"users">,
+  conversationRef: string,
+  rows: Doc<"review_comments">[],
+  opts: { repository?: string; ref?: string; url?: string; stale_ids?: Id<"review_comments">[] },
+  resolved?: Doc<"conversations">,
+): Promise<{ sent: number; conversation_id: Id<"conversations">; content: string }> {
+  const conversation = resolved ?? (await findConversationByAnyRef(ctx, conversationRef, userId));
+  if (!conversation) throw new Error(`No session matches ${conversationRef}`);
+  if (!(await canSendProductMessage(ctx, userId, conversation))) {
+    throw new Error("Forbidden: you cannot send to that session");
+  }
+  const stale = new Set((opts.stale_ids ?? []).map(String));
+  const user = await ctx.db.get(userId);
+  const content = buildReviewBatchPrompt({
+    actorName: actorNameOf(user),
+    repository: opts.repository,
+    ref: opts.ref,
+    url: opts.url ?? null,
+    notes: rows.map((r) => ({
+      file_path: r.file_path ?? "",
+      line_number: r.line_number,
+      line_end: r.line_end,
+      content: r.content,
+      stale: stale.has(String(r._id)),
+    })),
+  });
+
+  const now = Date.now();
+  await enqueuePendingMessage(ctx, conversation, userId, {
+    content,
+    // Idempotency is sent_at, not this key: a retry finds the batch already
+    // stamped and stops. The key only has to be distinct per delivery, so a
+    // second batch to the same session is not mistaken for the first.
+    client_id: `review-batch:${conversation._id}:${rows[0]._id}:${now}`,
+    human: true,
+  });
+  for (const row of rows) await ctx.db.patch(row._id, { sent_at: now });
+
+  return { sent: rows.length, conversation_id: conversation._id, content };
+}
 
 /** One note by id, for `cast review rm` / `edit` to confirm before acting. */
 export const get = query({

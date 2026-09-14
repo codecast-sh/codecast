@@ -5,7 +5,8 @@
 // cannot), proposes a charter from the projects picked, shows the trust ladder
 // with the two higher stages locked, and takes caps. Submit is one store
 // action (createOrgRole with provision) so the graph moves in the same tick.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { Lock } from "lucide-react";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useScopeSummary } from "../../hooks/useScopeQueries";
@@ -17,20 +18,20 @@ import { parentNodeId, parentRefOfNodeId } from "./orgLayout";
 import type { OrgTree } from "./orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type TrustStage } from "./scope/scopeTypes";
 
-export function slugify(s: string): string {
+function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
 }
 
 // Why the two higher stages are locked here: trust changes are a person's
 // later act on the role page, logged on the charter (orgRoles.setTrust).
-export const TRUST_UNLOCK_SENTENCE: Record<Exclude<TrustStage, "understand">, string> = {
+const TRUST_UNLOCK_SENTENCE: Record<Exclude<TrustStage, "understand">, string> = {
   decide: "Locked at creation. Raise it from the role's settings once its recommendations have held; the change is logged on the charter.",
   direct: "Locked at creation. Raise it from the role's settings after decide has held; hands then start within the caps below.",
 };
 
 /** The charter the form proposes from what was picked; editable, and replaced
  *  only while the person has not typed their own. */
-export function proposeCharter(name: string, projects: Array<{ title: string; description?: string }>, summary: { plans: Array<{ title: string }>; tasks: { open: number; total: number }; sessions: { total: number } } | null | undefined): string {
+function proposeCharter(name: string, projects: Array<{ title: string; description?: string }>, summary: { plans: Array<{ title: string }>; tasks: { open: number; total: number }; sessions: { total: number } } | null | undefined): string {
   const who = name.trim() || "This role";
   if (projects.length === 0) return `${who} owns the whole workspace: it keeps its plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`;
   const named = projects.map((p) => (p.description?.trim() ? `${p.title} (${p.description.trim().split(/\.\s|\n/)[0].slice(0, 120)})` : p.title));
@@ -86,7 +87,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
     : 0;
 
   const proposed = useMemo(() => proposeCharter(name, picked, wholeWorkspace ? null : summary), [name, picked, wholeWorkspace, summary]);
-  useEffect(() => { if (!charterTouched) setCharter(proposed); }, [proposed, charterTouched]);
+  useWatchEffect(() => { if (!charterTouched) setCharter(proposed); }, [proposed, charterTouched]);
 
   const me = tree.people.find((p) => p.user_id === meId);
   // The standing session's cwd: the caller's path, else the first picked

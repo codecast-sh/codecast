@@ -99,7 +99,9 @@ export function taskPeople(task: any) {
   const creator = creatorId ? resolveAssigneeInfo(creatorId, task.creator, members, me) : null;
   const assigneeId = task.assignee?.toString?.();
   const assignee = assigneeId ? resolveAssigneeInfo(assigneeId, task.assignee_info, members, me) : null;
-  return { creator, assignee };
+  // One person filed the task for themselves: surfaces name them once.
+  const samePerson = !!creatorId && creatorId === assigneeId;
+  return { creator, assignee, samePerson };
 }
 
 // The project a task is filed under, from the local store (same non-reactive
