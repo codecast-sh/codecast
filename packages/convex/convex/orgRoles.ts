@@ -813,16 +813,53 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   } else {
     await ctx.db.patch(briefDocId, { content, updated_at: now });
   }
-  // The first line (plus the Status:/Next:/Blocked: lines) is the standing
-  // session's thread state, written through the one path `cast state` uses.
-  // The status word after "Status:" is read the way `cast state --status`
-  // reads its flag; anything else is "working".
+  const mirror = await mirrorBriefState(ctx, role, content);
+  return { role_id: role._id, brief_doc_id: briefDocId, ...mirror };
+}
+
+// The first line (plus the Status:/Next:/Blocked: lines) is the standing
+// session's thread state, written through the one path `cast state` uses.
+// The status word after "Status:" is read the way `cast state --status`
+// reads its flag; anything else is "working". One mirror for every path that
+// writes a brief: cast brief edit, docs.update, the collab editor's snapshot.
+export async function mirrorBriefState(ctx: any, role: any, content: string): Promise<{ state: string; status: string; mirrored: boolean }> {
   const conv = await standingConversationOf(ctx, role);
   const text = normalizeThreadState(briefStateText(content));
   const statusLine = content.split("\n").find((l) => /^Status:/i.test(l.trim())) ?? "";
   const status = parseThreadStateStatus(statusLine.replace(/^Status:\s*/i, "").trim().split(/\s+/)[0] ?? "") ?? "working";
   if (conv && text) await performSetThreadState(ctx, conv, text, status);
-  return { role_id: role._id, brief_doc_id: briefDocId, state: text.split("\n")[0], status, mirrored: !!(conv && text) };
+  return { state: text.split("\n")[0], status, mirrored: !!(conv && text) };
+}
+
+// The role a brief or charter doc belongs to: the doc carries no back pointer,
+// so the boundary's roles are scanned for the one naming this doc.
+async function rolesOwningDoc(ctx: Ctx, doc: any, field: "brief_doc_id" | "charter_doc_id"): Promise<any[]> {
+  const rows: any[] = doc.team_id
+    ? await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", doc.team_id)).collect()
+    : await ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", doc.user_id)).collect();
+  return rows.filter((role) => String(role[field] ?? "") === String(doc._id));
+}
+
+// A charter edit wakes its role at once (T3): the rules just changed.
+export async function wakeRolesOfCharter(ctx: Ctx, doc: any): Promise<void> {
+  for (const role of await rolesOwningDoc(ctx, doc, "charter_doc_id")) {
+    await enqueueRoleEvent(ctx, role._id, {
+      kind: "immediate",
+      cause: `your charter changed; re-read it (cast brief) before acting`,
+      ref: { table: "docs", id: String(doc._id) },
+    });
+  }
+}
+
+// After any write to a role document's content, whichever path wrote it: a
+// brief mirrors its first line into the standing session's state (T2); a
+// charter wakes the role (T3). Other doc types are untouched.
+export async function afterRoleDocWrite(ctx: Ctx, doc: any, content: string): Promise<void> {
+  if (doc?.doc_type === "brief") {
+    for (const role of await rolesOwningDoc(ctx, doc, "brief_doc_id")) await mirrorBriefState(ctx, role, content);
+  } else if (doc?.doc_type === "charter") {
+    await wakeRolesOfCharter(ctx, doc);
+  }
 }
 
 // The state line of a brief: its first line, then the labelled lines the
