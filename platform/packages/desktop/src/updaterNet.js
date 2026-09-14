@@ -133,6 +133,11 @@ async function downloadAttempt(url, dest, { onProgress, signal, inactivityMs, re
 
   const headers = start > 0 ? { Range: `bytes=${start}-` } : {};
   let res = await getFollow(url, { headers, timeoutMs: inactivityMs, signal });
+  // Headers are in: from here the body's own inactivity timer below is the one
+  // clock. The request's socket timeout was armed with the same duration, and
+  // when it fires first it destroys the response with a bare "aborted" instead
+  // of the stall error the caller retries on.
+  res.req?.setTimeout?.(0);
   if (signal?.aborted) {
     // Aborted while headers were in flight — a listener added to an
     // already-aborted signal never fires, so check explicitly.
