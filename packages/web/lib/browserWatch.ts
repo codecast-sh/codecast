@@ -155,3 +155,115 @@ export function connectBrowserWatch(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// What the stream is doing, and how to say it
+// ---------------------------------------------------------------------------
+//
+// The status a viewer sees is the same whether the stream is docked over a
+// conversation or open as a pane, so the wording lives here rather than in
+// either host: one sentence per way a stream can end, written once, pinned by
+// tests. The hosts render; this module decides what is true.
+
+export type WatchStatus =
+  /** Dialing: the endpoint, then the socket, then the daemon's first frame. */
+  | { kind: "connecting" }
+  | { kind: "live" }
+  /** Deliberately off: nobody is looking, so the socket went away and the
+   *  last frame stands in for it. A redial is automatic when the view returns. */
+  | { kind: "paused" }
+  | {
+      kind: "failed";
+      message: string;
+      /** A redial could work — the failure is about this attempt, not the setup. */
+      canRetry: boolean;
+      /** It failed for want of a tab, so reopening the page would fix it. */
+      tabGone: boolean;
+      /** The daemon's own time cap, not a fault: resuming is the whole fix. */
+      capped: boolean;
+    };
+
+function failed(
+  message: string,
+  opts?: { canRetry?: boolean; tabGone?: boolean; capped?: boolean },
+): WatchStatus {
+  return {
+    kind: "failed",
+    message,
+    canRetry: opts?.canRetry ?? true,
+    tabGone: opts?.tabGone ?? false,
+    capped: opts?.capped ?? false,
+  };
+}
+
+/** An orderly end the daemon announced (`exit`). */
+export function watchExitStatus(reason: string): WatchStatus {
+  switch (reason) {
+    case "tab-closed":
+      return failed("the agent's browser tab was closed", { tabGone: true });
+    case "browser-closed":
+      return failed("the managed browser is no longer running", { tabGone: true });
+    case "timeout":
+      return failed("stream paused after 30 minutes — resume to keep watching", { capped: true });
+    default:
+      return failed("stream ended");
+  }
+}
+
+/** A terminal failure the daemon named (`error`). */
+export function watchErrorStatus(code: string, message: string): WatchStatus {
+  switch (code) {
+    case "no-browser":
+      return failed("no managed browser is running on the agent's machine", { tabGone: true });
+    case "no-tab":
+      return failed("this session hasn't driven a browser tab yet", { tabGone: true });
+    case "forbidden":
+      return failed("the daemon refused the stream — reload to refresh the endpoint");
+    default:
+      return failed(message || "could not open the stream");
+  }
+}
+
+/**
+ * Nothing to dial: the machine the agent runs on is not one this viewer can
+ * reach. `foreign` is another person's machine — relaying it would mean
+ * driving their browser, so the answer is the machine's name and a full stop.
+ * Otherwise a daemon of ours simply is not answering here.
+ */
+export function watchUnreachableStatus(a: {
+  foreign: boolean;
+  machineName: string | null;
+  /** The lookup named a device, so the browser is on another machine of yours. */
+  hasDevice: boolean;
+}): WatchStatus {
+  if (a.foreign) {
+    return failed(
+      `This agent's browser runs on ${a.machineName ?? "someone else's machine"}, which only its owner can watch.`,
+      { canRetry: false },
+    );
+  }
+  if (a.hasDevice) {
+    return failed(
+      `The browser runs on ${a.machineName ?? "another of your machines"} — watching works from a browser on that machine.`,
+    );
+  }
+  return failed("No local daemon reachable — watching needs cast running on this machine.");
+}
+
+/** The pane's "there is no tab" sentence: whose session, and where it last was. */
+export function missingTabMessage(sessionTitle: string | null, lastUrl: string | null): string {
+  const who = sessionTitle?.trim() || "This session";
+  const where = lastUrl ? ` Its last page was ${lastUrl}.` : "";
+  return `${who} has no browser tab open right now.${where}`;
+}
+
+/** Everything a host needs to draw its own chrome around the stream. */
+export type BrowserStreamReport = {
+  status: WatchStatus;
+  /** The tab being streamed, as last named by the daemon. */
+  tab: WatchTabInfo | null;
+  /** The daemon granted two-way input, so a drive toggle is worth offering. */
+  controlAvailable: boolean;
+  /** A frame has painted; a paused or failed stream still shows it. */
+  hasFrame: boolean;
+};
