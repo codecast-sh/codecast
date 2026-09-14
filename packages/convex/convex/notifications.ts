@@ -798,12 +798,18 @@ export async function performNeedsInputCheck(
   if (conv.org_role_id && state === "needs_input") {
     const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
     const hard = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";
-    if (hard) {
-      await enqueueRoleEvent(ctx, conv.org_role_id, {
+    // One wake per waiting episode: the check is scheduled up to three times
+    // per settle, so the episode is stamped on the row with its own key (the
+    // chime's key is not shared: a stashed hand chimes nobody but still
+    // wakes its role).
+    const episode = `${conv.message_count}:${kind ?? "waiting"}`;
+    if (hard && conv.hand_wake_notified_key !== episode) {
+      const id = await enqueueRoleEvent(ctx, conv.org_role_id, {
         kind: "immediate",
         cause: `hand ${conv.short_id ?? String(conv._id).slice(0, 7)} "${(conv.title ?? "").slice(0, 60)}" needs input (${kind ?? "waiting"})`,
         ref: { table: "conversations", id: String(conv._id), short_id: conv.short_id },
       });
+      if (id) await ctx.db.patch(conv._id, { hand_wake_notified_key: episode });
     }
   }
 

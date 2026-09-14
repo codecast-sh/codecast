@@ -20,6 +20,9 @@ export type PendingMessageInsertFields = {
   clientId?: string;
   origin?: "scheduler";
   createdAt: number;
+  // Park the row as "held" (a standing session's turn, released by the wake
+  // rail's flush) instead of "pending".
+  held?: boolean;
 };
 
 export class PendingMessageWriteError extends Error {
@@ -102,7 +105,7 @@ async function insertPendingMessageRow(
     image_storage_ids: fields.imageStorageIds,
     client_id: fields.clientId,
     origin: fields.origin,
-    status: "pending" as const,
+    status: fields.held ? ("held" as const) : ("pending" as const),
     created_at: fields.createdAt,
     retry_count: 0,
     ...(delivery

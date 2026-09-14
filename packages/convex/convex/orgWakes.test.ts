@@ -255,3 +255,197 @@ describe("trust and caps on hands and answers (T4)", () => {
     expect(tables.session_decisions[0].status).toBe("pending");
   });
 });
+
+// ── Review fixes (W1 review, 16 findings) ────────────────────────────────────
+
+import { performSetThreadState } from "./conversations";
+import { performNeedsInputCheck } from "./notifications";
+import { resolveActor } from "./lib/actor";
+import { performSetCaps, performSetTrust, performUpdateRole, performBriefEdit, briefStateText } from "./orgRoles";
+import { refuseRoleCharterWrite } from "./docs";
+import { rollUpUsage } from "./messages";
+import { enqueuePendingMessage } from "./pendingMessages";
+import { resolveSessionConversation } from "./lib/access";
+import { orgActorOf } from "./orgEvents";
+
+describe("a hand's declaration wakes its role (review: hand is the subject)", () => {
+  test("blocked inserts an immediate row, done a passive row; a stranger's declaration inserts nothing", async () => {
+    const { ctx, tables, scheduled } = world();
+    const hand = tables.conversations[1];
+    await performSetThreadState(ctx, hand, "stuck on a permission prompt", "blocked");
+    expect(tables.role_wake_outbox).toHaveLength(1);
+    expect(tables.role_wake_outbox[0].kind).toBe("immediate");
+    expect(tables.role_wake_outbox[0].cause).toContain("jxhand1");
+    expect(tables.role_wake_outbox[0].cause).toContain("declared blocked");
+    // The flush is armed at once (the live activity refresh is also scheduled).
+    expect(scheduled.some((s) => s.args?.role_id === "role1" && s.delay === 0)).toBe(true);
+    await performSetThreadState(ctx, hand, "shipped it", "done");
+    expect(tables.role_wake_outbox).toHaveLength(2);
+    expect(tables.role_wake_outbox[1].kind).toBe("passive");
+    await performSetThreadState(ctx, tables.conversations[2], "nothing to do with roles", "blocked");
+    expect(tables.role_wake_outbox).toHaveLength(2);
+  });
+});
+
+describe("fold rows that land while another waits (review: pickup)", () => {
+  test("the flush at the first window takes the later fold row too, and nothing is left behind", async () => {
+    const { ctx, tables } = world({ coalesce_ms: 120_000 });
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task a moved" });
+      clock = NOW + 100_000;
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task b moved" });
+      clock = NOW + 120_000;
+      const out = await performFlush(ctx, "role1" as any);
+      expect(out.outcome).toBe("delivered");
+      expect(tables.role_wake_outbox.every((r: any) => r.flushed_at === clock)).toBe(true);
+      expect(tables.pending_messages[0].content).toContain("task a moved");
+      expect(tables.pending_messages[0].content).toContain("task b moved");
+      expect(await performFlush(ctx, "role1" as any)).toEqual({ outcome: "noop", reason: "nothing_due" });
+    } finally { Date.now = realNow; }
+  });
+
+  test("a passive row alone is a noop with a reason", async () => {
+    const { ctx } = world();
+    await enqueueRoleEvent(ctx, "role1" as any, { kind: "passive", cause: "x" });
+    expect(await performFlush(ctx, "role1" as any)).toEqual({ outcome: "noop", reason: "passive_only" });
+  });
+});
+
+describe("stalled hand wake dedupe (review)", () => {
+  const stalled = (extra: Record<string, any> = {}) => world({}, {
+    managed_sessions: [{ _id: "ms1", conversation_id: "hand1", user_id: ME, agent_status: "permission_blocked", agent_status_updated_at: NOW, last_heartbeat: NOW, ...extra }],
+  });
+  test("three checks on one waiting episode insert one outbox row; a new episode inserts another", async () => {
+    const { ctx, tables } = stalled();
+    for (let i = 0; i < 3; i++) await performNeedsInputCheck(ctx, { conversation_id: "hand1" });
+    expect(tables.role_wake_outbox.filter((r: any) => r.cause.includes("needs input"))).toHaveLength(1);
+    expect(tables.conversations[1].hand_wake_notified_key).toBe("1:permission_blocked");
+    tables.conversations[1].message_count = 2;
+    await performNeedsInputCheck(ctx, { conversation_id: "hand1" });
+    expect(tables.role_wake_outbox.filter((r: any) => r.cause.includes("needs input"))).toHaveLength(2);
+  });
+});
+
+describe("identity follows the token (review: actor and charter guard)", () => {
+  test("a teammate naming the standing session's id does not sign as the role; the host does", async () => {
+    const { ctx, tables } = world();
+    const standing = tables.conversations[0];
+    const asHost = await resolveActor(ctx, ME as any, standing);
+    expect(asHost.kind).toBe("role");
+    expect(asHost.user_id).toBe("bot1" as any);
+    const asMate = await resolveActor(ctx, "mate" as any, standing);
+    expect(asMate.kind).toBe("user");
+    expect(asMate.user_id).toBe("mate" as any);
+    expect(asMate.role).toBeNull();
+  });
+
+  test("the charter guard refuses the role's own session on update and patch, and ignores a stranger's id", async () => {
+    const { ctx, tables } = world({}, { docs: [{ _id: "charter1", user_id: ME, team_id: TEAM, title: "Charter", content: "x", doc_type: "charter" }] });
+    tables.session_owners = [];
+    const doc = tables.docs[0];
+    await expect(refuseRoleCharterWrite(ctx, ME as any, doc, "s-standing")).rejects.toThrow(/written by people/);
+    await expect(refuseRoleCharterWrite(ctx, ME as any, doc, "s-hand")).rejects.toThrow(/written by people/);
+    await expect(refuseRoleCharterWrite(ctx, ME as any, doc, "s-other")).resolves.toBeUndefined();
+    await expect(refuseRoleCharterWrite(ctx, ME as any, { ...doc, doc_type: "note" }, "s-standing")).resolves.toBeUndefined();
+    await expect(refuseRoleCharterWrite(ctx, ME as any, doc, undefined)).resolves.toBeUndefined();
+  });
+
+  test("resolveSessionConversation names the actor for the post write hook only when the caller runs it", async () => {
+    const { ctx, tables } = world();
+    tables.session_owners = [];
+    const c1: any = { db: ctx.db };
+    expect((await resolveSessionConversation(c1, ME as any, "s-standing"))?._id).toBe("standing" as any);
+    expect(orgActorOf(c1)?._id).toBe("standing");
+  });
+});
+
+describe("human only gates (review: caps, charter field)", () => {
+  test("caps, trust, scope and the charter field refuse a call that names its session", async () => {
+    const { ctx } = world();
+    await expect(performSetCaps(ctx, ME as any, { role_id: "role1", hands: 99, from_session: "s-standing" })).rejects.toThrow(/human only/);
+    await expect(performSetTrust(ctx, ME as any, { role_id: "role1", trust: "direct", from_session: "s-standing" })).rejects.toThrow(/human only/);
+    await expect(performUpdateRole(ctx, ME as any, { role_id: "role1", charter: "I decide", from_session: "s-standing" })).rejects.toThrow(/human only/);
+    const ok = await performSetCaps(ctx, ME as any, { role_id: "role1", hands: 9 });
+    expect(ok.caps.hands_per_day).toBe(9);
+  });
+});
+
+describe("usage counts once per assistant turn (review)", () => {
+  const usage = { input_tokens: 100, output_tokens: 10 };
+  test("records sharing a message id count once, across batches, and a resync patch counts nothing", async () => {
+    const { ctx, tables, role } = world();
+    const conv: any = tables.conversations[0];
+    const patch1: Record<string, unknown> = {};
+    await rollUpUsage(ctx, conv, [
+      { usage, api_message_id: "msg_a", inserted: true },
+      { usage, api_message_id: "msg_a", inserted: true },
+      { usage, api_message_id: "msg_a", inserted: true },
+    ], patch1, NOW);
+    expect((patch1.usage_totals as any).input).toBe(100);
+    expect((patch1.usage_totals as any).last_api_message_id).toBe("msg_a");
+    expect(countersFor(role, NOW).tokens).toBe(110);
+    Object.assign(conv, patch1);
+    // The same turn's tail lands in the next batch: not counted again.
+    const patch2: Record<string, unknown> = {};
+    await rollUpUsage(ctx, conv, [{ usage, api_message_id: "msg_a", inserted: true }, { usage, api_message_id: "msg_b", inserted: true }], patch2, NOW);
+    expect((patch2.usage_totals as any).input).toBe(200);
+    Object.assign(conv, patch2);
+    // A resync that patched existing rows carries usage but inserted nothing.
+    const patch3: Record<string, unknown> = {};
+    await rollUpUsage(ctx, conv, [{ usage, api_message_id: "msg_c", inserted: false }], patch3, NOW);
+    expect(patch3.usage_totals).toBeUndefined();
+    expect(countersFor(role, NOW).tokens).toBe(220);
+  });
+});
+
+describe("a person's message to a standing session is held until the frame (review)", () => {
+  test("the row is inserted as held, the flush writes the frame into it and releases it as pending", async () => {
+    const { ctx, tables } = world();
+    const standing = tables.conversations[0];
+    const id: any = await enqueuePendingMessage(ctx, standing, ME as any, { content: "hello there", human: true });
+    const row = tables.pending_messages.find((p: any) => p._id === id);
+    expect(row.status).toBe("held");
+    expect(tables.role_wake_outbox[0].pending_message_id).toBe(id);
+    const out = await performFlush(ctx, "role1" as any);
+    expect(out.outcome).toBe("delivered");
+    expect(row.status).toBe("pending");
+    expect(row.content).toContain("hello there");
+    expect(row.content).toContain("## Why you are awake");
+    expect(tables.pending_messages).toHaveLength(1);
+  });
+
+  test("a send the rail cannot wake for (a retired role) is released at once", async () => {
+    const { ctx, tables } = world({ status: "retired" });
+    const id: any = await enqueuePendingMessage(ctx, tables.conversations[0], ME as any, { content: "hi", human: true });
+    expect(tables.pending_messages.find((p: any) => p._id === id).status).toBe("pending");
+    expect(tables.role_wake_outbox).toHaveLength(0);
+  });
+});
+
+describe("brief edit mirrors through the thread state path (review)", () => {
+  test("first line plus labelled lines become the state, Status: word sets the status", async () => {
+    expect(briefStateText("Infra: red build\nStatus: blocked on a key\nsome prose\nNext: rotate it")).toBe("Infra: red build\nStatus: blocked on a key\nNext: rotate it");
+    const { ctx, tables } = world();
+    tables.session_owners = [];
+    const out = await performBriefEdit(ctx, ME as any, { role_id: "role1", content: "Infra: red build\nStatus: blocked on a key\n\nLong story.", from_session: "s-standing" });
+    expect(out.status).toBe("blocked");
+    expect(out.state).toBe("Infra: red build");
+    expect(tables.conversations[0].thread_state).toBe("Infra: red build\nStatus: blocked on a key");
+    expect(tables.conversations[0].thread_state_status).toBe("blocked");
+  });
+});
+
+describe("pause is idempotent and interrupts only live hands (review minor)", () => {
+  test("a second pause sends nothing; a dormant hand is not woken", async () => {
+    const { performPauseRole } = await import("./orgRoles");
+    const { ctx, tables } = world({}, { managed_sessions: [{ _id: "ms-hand", conversation_id: "hand1", user_id: ME, agent_status: "working" }] });
+    tables.session_owners = [];
+    const first = await performPauseRole(ctx, ME as any, { role_id: "role1" });
+    expect(first.interrupted).toBe(1);
+    expect(tables.pending_messages.filter((p: any) => p.conversation_id === "hand1")).toHaveLength(1);
+    const second = await performPauseRole(ctx, ME as any, { role_id: "role1" });
+    expect(second.interrupted).toBe(0);
+    expect(tables.pending_messages.filter((p: any) => p.conversation_id === "hand1")).toHaveLength(1);
+  });
+});

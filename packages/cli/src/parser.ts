@@ -30,6 +30,7 @@ export interface ClaudeSessionEntry {
   message?: string | {
     role: "user" | "assistant";
     content: string | ContentBlock[];
+    id?: string;
     model?: string;
     stop_reason?: string | null;
     usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
@@ -98,6 +99,9 @@ export interface ParsedMessage {
   /** Claude's per turn token usage (assistant records only). Rolled up on
    *  the server into conversations.usage_totals (org-roles-standing.md T4). */
   usage?: ClaudeUsage;
+  /** Claude's API message id (assistant records). One turn spans several
+   *  records that share it; the server counts usage once per id. */
+  apiMessageId?: string;
 }
 
 export interface ClaudeUsage {
@@ -403,6 +407,7 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
         stopReason,
         model,
         usage: role === "assistant" && model ? usageOf(entry.message) : undefined,
+        apiMessageId: role === "assistant" && typeof entry.message === "object" && typeof entry.message.id === "string" ? entry.message.id : undefined,
       });
       onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
       lastEmittedReceiptTimestamp = Math.max(lastEmittedReceiptTimestamp, receiptTimestamp);

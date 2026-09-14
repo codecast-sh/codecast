@@ -14,6 +14,7 @@ export const PENDING_MESSAGE_STATUSES = [
   "failed",
   "undeliverable",
   "cancelled",
+  "held",
 ] as const;
 
 export type PendingMessageStatus = (typeof PENDING_MESSAGE_STATUSES)[number];

@@ -11,6 +11,7 @@ import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl } from "@codecast/shar
 import { canAccessDoc, canAccessPlan, canAccessProject, canAccessTask } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
+import { pendingOnLadder } from "./sessionDecisions";
 import { isWholeWorkspace, type Scope } from "./lib/orgScope";
 import { capsFor, countersFor } from "./orgEvents";
 import { extractPlanTitleForWeb } from "./docs";
@@ -274,7 +275,7 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
   };
 }
 
-async function requireWorkspaceCaller(ctx: any, apiToken: string | undefined, teamId: Id<"teams"> | undefined): Promise<Id<"users"> | null> {
+export async function requireWorkspaceCaller(ctx: any, apiToken: string | undefined, teamId: Id<"teams"> | undefined): Promise<Id<"users"> | null> {
   const userId = await getAuthenticatedUserId(ctx, apiToken);
   if (!userId) return null;
   if (teamId && !(await isTeamMember(ctx, userId, teamId))) return null;
@@ -435,9 +436,10 @@ export async function resolveScope(
 
 // F1's session rule over the org scan: bound to a task or plan in scope, on a
 // scope project's path, or filed under the role.
-export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number): Promise<Array<{ session: OrgSession; raw: any }>> {
+export type OrgScan = Awaited<ReturnType<typeof collectOrgSessions>>;
+export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number, scanIn?: OrgScan): Promise<Array<{ session: OrgSession; raw: any }>> {
   if (isWholeWorkspace(resolved.scope) && !resolved.role) return [];
-  const scan = await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
+  const scan = scanIn ?? await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
   const taskIds = new Set(resolved.tasks.map((t) => t._id.toString()));
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
   const paths = new Set(resolved.projects.map((p) => p.project_path).filter(Boolean));
@@ -718,7 +720,7 @@ export type ScopeSummary = {
   generated_at: number;
 };
 
-export async function computeScopeSummary(ctx: Ctx, resolved: ResolvedScope, now: number): Promise<ScopeSummary> {
+export async function computeScopeSummary(ctx: Ctx, resolved: ResolvedScope, now: number, scan?: OrgScan): Promise<ScopeSummary> {
   const by_status: Record<string, number> = { backlog: 0, open: 0, in_progress: 0, in_review: 0, done: 0, dropped: 0 };
   const by_priority: Record<string, number> = { urgent: 0, high: 0, medium: 0, low: 0, none: 0 };
   let open = 0;
@@ -741,16 +743,21 @@ export async function computeScopeSummary(ctx: Ctx, resolved: ResolvedScope, now
     return { id: p._id.toString(), short_id: p.short_id, title: p.title, status: p.status, updated_at: p.updated_at, progress };
   }).sort((a, b) => b.updated_at - a.updated_at);
 
-  const sessions = await sessionsInScope(ctx, resolved, now);
+  const sessions = await sessionsInScope(ctx, resolved, now, scan);
   const counts = tallyOf(sessions.map((s) => s.session));
 
+  // One definition of "open": decisions on the scope's tasks, plus (for a
+  // role) the ones on its ladder (sessionDecisions.pendingOnLadder), deduped.
   const decisions = { open: 0, answered: 0 };
+  const openIds = new Set<string>();
   for (const t of resolved.tasks) {
     for (const d of await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) {
-      if (d.status === "pending") decisions.open++;
+      if (d.status === "pending") openIds.add(String(d._id));
       else if (d.status === "answered") decisions.answered++;
     }
   }
+  if (resolved.role) for (const d of await pendingOnLadder(ctx, resolved.role._id, now)) openIds.add(String(d._id));
+  decisions.open = openIds.size;
 
   let overlaps: ScopeOverlap[] = [];
   if (resolved.role) {
@@ -824,32 +831,36 @@ async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ tasks: any[];
   return { tasks: tasks.filter((t) => t.status !== "dropped"), plans };
 }
 
-export async function computeBriefFacts(ctx: Ctx, role: any, now: number): Promise<BriefFacts> {
-  const viewer: Id<"users"> = role.host_user_id;
-  let resolved = await resolveScope(ctx, viewer, { role_id: String(role._id) });
+// `viewerId` is whose grants the facts are read with: the caller of
+// org.brief, or the role's host for the wake frame (the host runs the
+// session, so the frame carries what the host may see and nothing more).
+export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: any, now: number): Promise<BriefFacts> {
+  let resolved = await resolveScope(ctx, viewerId, { role_id: String(role._id) });
   const whole = isWholeWorkspace(role.scope ?? { project_ids: [], plan_ids: [] });
   if (!resolved) {
-    resolved = { userId: viewer, role, teamId: role.team_id ?? undefined, scope: role.scope, projects: [], plans: [], tasks: [] };
+    resolved = { userId: viewerId, role, teamId: role.team_id ?? undefined, scope: role.scope, projects: [], plans: [], tasks: [] };
   }
   if (whole) {
     const items = await wholeWorkspaceItems(ctx, role);
     resolved = { ...resolved, tasks: items.tasks, plans: items.plans };
   }
-  const summary = await computeScopeSummary(ctx, resolved, now);
+  // One org scan serves the summary's sessions and the hands: the same
+  // membership (recent, visible, top level) and the same classifier inputs
+  // (subagents rolled up) as the org tree, so a hand reads the same on the
+  // org node, the scope page and the brief.
+  const scan = await collectOrgSessions(ctx, viewerId, role.team_id ?? undefined, now);
+  const summary = await computeScopeSummary(ctx, resolved, now, scan);
 
-  // Hands: every live session filed under the role, with its pinned line and
-  // the task it is bound to.
-  const handRows: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).collect();
-  const live = handRows.filter((c) => c.status === "active" && !c.inbox_killed_at);
-  const states = await classifyWorkStates(ctx, viewer, live, new Map(), now);
   const hands: BriefHand[] = [];
-  for (const c of live) {
+  for (const session of scan.byParent.get(`role:${role._id.toString()}`) ?? []) {
+    const c = scan.sessions.get(session._id.toString())?.raw;
+    if (!c) continue;
     const task = c.active_task_id ? await ctx.db.get(c.active_task_id) : null;
     hands.push({
       _id: c._id,
       short_id: c.short_id ?? String(c._id).slice(0, 7),
       title: c.title ?? "",
-      state: states.get(c._id.toString()) ?? "idle",
+      state: session.state,
       state_line: c.thread_state ? String(c.thread_state).split("\n")[0] : null,
       state_status: c.thread_state_status ?? null,
       state_at: c.thread_state_at ?? null,
@@ -864,25 +875,22 @@ export async function computeBriefFacts(ctx: Ctx, role: any, now: number): Promi
       } : null,
     });
   }
-  hands.sort((a, b) => b.updated_at - a.updated_at);
 
   const changed: BriefChange[] = [
     ...resolved.tasks.map((t): BriefChange => ({ kind: "task", short_id: t.short_id, title: t.title, status: t.status, updated_at: t.updated_at })),
     ...resolved.plans.map((p): BriefChange => ({ kind: "plan", short_id: p.short_id, title: p.title, status: p.status, updated_at: p.updated_at })),
   ].sort((a, b) => b.updated_at - a.updated_at).slice(0, BRIEF_CHANGES_MAX);
 
-  // Decisions on the role's ladder: open now, answered today.
+  // Decisions: the summary's one open count, and the ladder's answers today.
   const dayStart = now - (now % 86_400_000);
-  const decisions = { open: 0, answered_today: 0 };
-  const ladderRows: any[] = await ctx.db.query("session_decisions").withIndex("by_status_created", (q: any) => q.eq("status", "pending")).take(500);
-  for (const d of ladderRows) if ((d.hops ?? []).some((h: any) => String(h.role_id) === String(role._id))) decisions.open++;
+  const decisions = { open: summary.decisions.open, answered_today: 0 };
   const answered: any[] = await ctx.db.query("session_decisions").withIndex("by_status_created", (q: any) => q.eq("status", "answered").gte("created_at", dayStart)).take(500);
   for (const d of answered) if ((d.hops ?? []).some((h: any) => String(h.role_id) === String(role._id))) decisions.answered_today++;
 
   const counters = countersFor(role, now);
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
-  const uncounted = [standing, ...live].filter((c) => c && c.agent_type !== "claude_code").length;
+  const uncounted = [standing, ...hands.map((h) => scan.sessions.get(h._id.toString())?.raw)].filter((c) => c && c.agent_type !== "claude_code").length;
 
   return {
     scope: { projects: summary.projects, plans: resolved.plans.map((p) => ({ id: p._id.toString(), short_id: p.short_id, title: p.title })), whole_workspace: whole },
@@ -906,7 +914,7 @@ export const brief = query({
     const role = await resolveRoleRef(ctx, args.role_id);
     if (!role || !(await userCanAccessRole(ctx, userId, role))) return null;
     const now = Date.now();
-    const facts = await computeBriefFacts(ctx, role, now);
+    const facts = await computeBriefFacts(ctx, userId, role, now);
     // `role` is untyped (resolveRoleRef), so the ids below resolve to the
     // union of every table; the rows are read as plain objects.
     const briefDoc: any = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
@@ -928,3 +936,8 @@ export const brief = query({
     };
   },
 });
+
+// org.analysisInputs (docs/architecture/org-init.md O1): the evidence `cast
+// org init` reads. Lives in orgInit.ts with the apply path; re-exported here
+// so the CLI route and the web read it as org.*.
+export { analysisInputs } from "./orgInit";

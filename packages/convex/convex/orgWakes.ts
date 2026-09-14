@@ -177,7 +177,8 @@ export async function parentNameOf(ctx: Ctx, role: any): Promise<string> {
 
 export async function frameInputsFor(ctx: Ctx, role: any, rows: any[], now: number): Promise<FrameInput> {
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
-  const facts = await computeBriefFacts(ctx, role, now);
+  // The host runs the standing session, so the frame reads with the host's grants.
+  const facts = await computeBriefFacts(ctx, role.host_user_id, role, now);
   const charter = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
   const brief = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
   const channelIds: any[] = role.follow_channel_ids ?? [];
@@ -252,16 +253,21 @@ export async function deliver(
   now: number,
 ): Promise<Extract<FlushOutcome, { outcome: "delivered" }>> {
   const { wake_id, short_id } = await logWake(ctx, role, rows, "delivered", frame.text.length, undefined, now);
-  // A person's message already queued into the session and not yet claimed
-  // by the daemon: the frame rides that row, so the role spends one turn.
+  // A person's message parked as "held" in the session: the frame rides that
+  // row and releases it, so the role spends one turn and the daemon never
+  // delivers the raw message ahead of the frame. Every other held row these
+  // outbox rows point at is released too, folded into this frame's causes.
   let pendingMessageId: Id<"pending_messages"> | undefined;
   for (const r of rows) {
     if (!r.pending_message_id) continue;
     const pending = await ctx.db.get(r.pending_message_id);
-    if (pending && pending.status === "pending" && String(pending.conversation_id) === String(conversation._id)) {
-      await ctx.db.patch(pending._id, { content: frame.text });
+    if (!pending || String(pending.conversation_id) !== String(conversation._id)) continue;
+    if (pending.status !== "held" && pending.status !== "pending") continue;
+    if (!pendingMessageId) {
+      await ctx.db.patch(pending._id, { content: frame.text, status: "pending" });
       pendingMessageId = pending._id;
-      break;
+    } else if (pending.status === "held") {
+      await ctx.db.patch(pending._id, { status: "cancelled", cancelled_at: now });
     }
   }
   if (!pendingMessageId) {
@@ -290,14 +296,16 @@ export async function performFlush(ctx: Ctx, roleId: Id<"org_roles">, attempt = 
   const role = await ctx.db.get(roleId);
   if (!role) return { outcome: "noop", reason: "no_role" };
   const waiting = await unflushedRowsFor(ctx, roleId);
-  const hasImmediate = waiting.some((r: any) => r.kind === "immediate" && r.due_at <= now + FLUSH_SLACK_MS);
-  // An immediate row takes every waiting row with it: a fold row still inside
-  // its coalesce window rides the frame a person just caused rather than
-  // waking the role a second time two minutes later.
-  const rows = hasImmediate ? waiting : waiting.filter((r: any) => r.due_at <= now + FLUSH_SLACK_MS);
-  if (rows.length === 0) return { outcome: "noop", reason: "nothing_due" };
+  const dueBy = now + FLUSH_SLACK_MS;
+  const hasImmediate = waiting.some((r: any) => r.kind === "immediate" && r.due_at <= dueBy);
+  const hasDueFold = waiting.some((r: any) => r.kind === "fold" && r.due_at <= dueBy);
+  // A due immediate or fold row takes every waiting row with it: a fold row
+  // still inside its coalesce window rides the frame that is going out anyway
+  // (one coalesced wake, delivered up to coalesce_ms early) rather than
+  // waiting for a flush nobody armed (enqueue arms one flush per window).
   // Passive rows are facts for the next frame, never a wake on their own.
-  if (!hasImmediate && !rows.some((r: any) => r.kind === "fold")) return { outcome: "noop", reason: "passive_only" };
+  if (!hasImmediate && !hasDueFold) return { outcome: "noop", reason: waiting.length ? "passive_only" : "nothing_due" };
+  const rows = waiting;
 
   // Gate 1: a paused or retired role holds its rows.
   if (role.status === "paused" || role.status === "retired") return { outcome: "held", reason: role.status };

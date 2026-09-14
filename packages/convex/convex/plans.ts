@@ -1,6 +1,5 @@
 import { v } from "convex/values";
 import { resolveActor } from "./lib/actor";
-import { markOrgActor } from "./orgEvents";
 import { mutation, query, internalMutation } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
@@ -535,7 +534,6 @@ export const addComment = mutation({
     // and names itself as the actor for the wake rail's loop rules.
     const callerConv = args.session_id ? await resolveSessionConversation(ctx, auth.userId, args.session_id) : null;
     const actor = await resolveActor(ctx, auth.userId, callerConv);
-    markOrgActor(ctx, callerConv);
     const entries = (plan as any).entries || [];
     const entry: Record<string, any> = {
       type: args.type || "progress",

@@ -186,11 +186,11 @@ one place each event passes through; nothing else inserts outbox rows.
 
 | Source | Emitted from | Kind | Loop rule |
 |---|---|---|---|
-| A person messages the role (`cast role wake`, `cast send @handle`, the composer) | `pendingMessages.enqueuePendingMessage`: a `human` send, a `from_conversation_id` send, or `origin: "scheduler"` on a conversation with `standing_role_id`; the pending row id rides the outbox row so the frame folds into it | immediate | a send from the role's own hand is excluded |
-| A hand needs input or is hard blocked | `notifications.performNeedsInputCheck` (open question, permission prompt, stopped, unresponsive on a conversation with `org_role_id`); `conversations.setThreadState` with `--status blocked` | immediate | the hand is the actor; the rule applies to other roles only |
-| A hand settled done | `conversations.setThreadState` with `--status done` | passive | |
+| A person messages the role (`cast role wake`, `cast send @handle`, the composer) | `pendingMessages.enqueuePendingMessage`: a `human` send, a `from_conversation_id` send, or `origin: "scheduler"` on a conversation with `standing_role_id`. The row is inserted as status `held` (the daemon and the retry cron read `pending` only) and its id rides the outbox row; the flush writes the frame into it and releases it as `pending`, so the daemon never delivers the raw message ahead of the frame. When no outbox row is inserted (retired role, no anchor, the sender is its own hand) the row is released at once | immediate | a send from the role's own hand is excluded |
+| A hand needs input or is hard blocked | `notifications.performNeedsInputCheck` (open question, permission prompt, stopped, unresponsive on a conversation with `org_role_id`, one row per waiting episode via `hand_wake_notified_key`); `conversations.performSetThreadState` with `--status blocked` | immediate | the hand is the SUBJECT of the event and is passed as no actor, so the own-writes rule does not drop it |
+| A hand settled done | `conversations.performSetThreadState` with `--status done` | passive | the hand is the subject, no actor |
 | A decision the hand raised was answered | `sessionDecisions.settleResolution`: every ladder role and the asker's role | passive | |
-| A task or plan in scope changed | `functions.ts` post write hook: every insert or patch to `tasks` or `plans` in a mutation is collected (`orgEvents.makeOrgWriteTrackedDb`) and resolved against `org_roles.by_team` / `by_scope_user` with `rowInScope` after the handler returns (`flushOrgWrites`) | fold | the write path names its calling conversation with `markOrgActor` (tasks.update, tasks.addComment, plans.addComment, docs.update, docs.addComment, projectUpdates.post) |
+| A task or plan in scope changed | `functions.ts` post write hook: every insert or patch to `tasks` or `plans` in a mutation is collected (`orgEvents.makeOrgWriteTrackedDb`) and resolved against `org_roles.by_team` / `by_scope_user` with `rowInScope` after the handler returns (`flushOrgWrites`) | fold | the actor is named once, by `lib/access.resolveSessionConversation` (`markOrgActor`), for every writer that resolves its calling session and RUNS it; projectUpdates.post marks its own resolved row |
 | A decision routed to this role | `sessionDecisions.wakeLadder` (the ask path) | immediate | the asking session is the actor |
 | Another role or session sent instructions | `enqueuePendingMessage` (see row one) | immediate | subordinate to parent excluded |
 | A routine fired | `agentTasks.dispatchCloudTriggers` (cloud) inserts the row with the prompt as cause instead of a pending message; the daemon path goes through `sendMessageToSession` with `origin: "scheduler"` and lands in row one | immediate | |
@@ -201,9 +201,10 @@ one place each event passes through; nothing else inserts outbox rows.
 | A restart | `orgRoles.performRestartRole`, cause prefixed `restart:` so the next frame carries the charter and brief in full | immediate | |
 
 Flush: `orgWakes.performFlush` (an internal mutation, scheduled by
-`orgEvents.scheduleFlush`). An immediate row takes every waiting fold row
-with it, so a person's message never leaves a second wake two minutes
-behind. Gates in order: paused or retired holds; over `wakes_per_day` or
+`orgEvents.scheduleFlush`). A due immediate or fold row takes every waiting
+row with it: enqueue arms one flush per coalesce window, so a fold row that
+landed while an earlier one waited rides the frame that is going out anyway
+(delivered up to `coalesce_ms` early, still one wake). Gates in order: paused or retired holds; over `wakes_per_day` or
 `tokens_per_day` holds system rows (an immediate row still passes) and
 re-arms at the next UTC day; an active agent reschedules in 30s up to 20
 times. A frame with no fact newer than `last_frame_seq` and no immediate row
@@ -217,9 +218,19 @@ and review verdict), `Channels` (when the role follows any), `Charter`
 `computeScopeSummary` (W3) and adds hands, changes since the last frame,
 decisions on the ladder and today's usage against the caps.
 
-Actor: `lib/actor.resolveActor`. Usage: `messages.rollUpUsage` from the CLI
+Actor: `lib/actor.resolveActor`. Identity follows the token: a conversation
+the caller does not run (its `user_id` is another account) is an ordinary
+session, so a teammate naming a standing session's id does not sign as the
+role. The charter guard (`docs.refuseRoleCharterWrite`, on `docs.update` and
+`docs.patch`) applies the same ownership check; the CLI stamps the calling
+session on `cast doc edit`. Trust, caps, scope and the charter field refuse
+any call that names the session it runs inside (`orgRoles.refuseFromAgent`). Usage: `messages.rollUpUsage` from the CLI
 parser's `usageOf` on Claude assistant records, into
-`conversations.usage_totals` and the role's daily token counter.
+`conversations.usage_totals` and the role's daily token counter. One turn
+spans several JSONL records that share `message.id` and repeat the usage
+block, so a turn counts once per id (`api_message_id` on the wire,
+`usage_totals.last_api_message_id` across batches) and only for rows the
+sync inserted, never for a resync that patches existing rows.
 
 Not counted: sessions on backends other than Claude carry no usage; the
 brief reports them as `uncounted_sessions`.

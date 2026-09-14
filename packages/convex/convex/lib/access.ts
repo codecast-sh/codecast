@@ -11,6 +11,7 @@ import { Doc, Id } from "../_generated/dataModel";
 import { findConversationBySessionReference } from "../conversationSessionLookup";
 import { canOwnerOrTeamAccess, isTeamMember, teamVisibleConvTeam } from "../privacy";
 import { forbidden, notFound } from "./auth";
+import { markOrgActor } from "../orgEvents";
 
 // Re-exported so callers that want the membership primitive can reach it through
 // the access layer too (canAccessDoc uses it directly).
@@ -620,7 +621,16 @@ export async function resolveSessionConversation(
     .query("conversations")
     .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionRef))
     .first();
-  if (direct && (await canAccessConversation(ctx, userId, direct))) return direct;
+  // The resolved conversation is the write's actor for the wake rail's loop
+  // rules (orgEvents post write hook): named here, once, so no writer that
+  // resolves its session can forget to. A resolved row the caller does not
+  // RUN is not the caller's own work and names no actor.
+  if (direct && (await canAccessConversation(ctx, userId, direct))) {
+    if (String(direct.user_id) === String(userId)) markOrgActor(ctx, direct);
+    return direct;
+  }
   // Owner-scoped resolution, including the managed_sessions fallback.
-  return await findConversationBySessionReference(ctx, sessionRef, userId);
+  const owned = await findConversationBySessionReference(ctx, sessionRef, userId);
+  if (owned && String(owned.user_id) === String(userId)) markOrgActor(ctx, owned);
+  return owned;
 }

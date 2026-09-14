@@ -47,6 +47,14 @@ export async function resolveActor(
   conversation: any | null | undefined,
 ): Promise<Actor> {
   const caller = await ctx.db.get(callerUserId);
+  // Identity follows the token, not a client supplied id: a conversation the
+  // caller does not RUN (user_id is the account whose daemon hosts it) is an
+  // ordinary session for identity purposes. A standing session runs under
+  // its host's token, so the role's own writes pass; a teammate naming the
+  // standing session's id does not get to sign as the role.
+  if (conversation && String(conversation.user_id) !== String(callerUserId)) {
+    return { user_id: callerUserId, name: displayName(caller), kind: "user", role: null, anchor: null, conversation };
+  }
   if (conversation?.standing_role_id) {
     const role = await ctx.db.get(conversation.standing_role_id);
     const anchor = role?.anchor_id ? await ctx.db.get(role.anchor_id) : null;

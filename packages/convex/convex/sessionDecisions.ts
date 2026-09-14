@@ -1600,6 +1600,27 @@ export const listForUser = query({
 // A role's view: pending decisions it holds, and pending decisions on whose
 // ladder it sits (a recommendation still wanted). Readable by anyone who can
 // access the role.
+// The open decisions a role is on the hook for: rows it holds, plus pending
+// rows whose ladder names it inside the window a role page shows. Shared by
+// the role page list and the brief's open count (org.computeScopeSummary),
+// so the two never disagree.
+export async function pendingOnLadder(ctx: Ctx, roleId: Id<"org_roles">, now: number): Promise<DecisionRow[]> {
+  const out = new Map<string, DecisionRow>();
+  const held: DecisionRow[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_holder_status", (q: any) => q.eq("holder_key", `role:${roleId}`).eq("status", "pending"))
+    .collect();
+  for (const r of held) out.set(String(r._id), r);
+  const recent: DecisionRow[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_status_created", (q: any) => q.eq("status", "pending").gte("created_at", now - HANDLED_WINDOW_MS))
+    .collect();
+  for (const r of recent) {
+    if ((r.hops ?? []).some((h) => String(h.role_id) === String(roleId))) out.set(String(r._id), r);
+  }
+  return Array.from(out.values());
+}
+
 export const listForRole = query({
   args: { role_id: v.id("org_roles") },
   handler: async (ctx, args) => {
@@ -1607,26 +1628,12 @@ export const listForRole = query({
     if (!userId) return [];
     const role = await ctx.db.get(args.role_id);
     if (!role || !(await userCanAccessRole(ctx, userId, role))) return [];
-    const out = new Map<string, DecisionRow>();
-    const held: DecisionRow[] = await ctx.db
-      .query("session_decisions")
-      .withIndex("by_holder_status", (q) => q.eq("holder_key", `role:${args.role_id}`).eq("status", "pending"))
-      .collect();
-    for (const r of held) out.set(String(r._id), r);
-    // Pending rows whose ladder includes the role: bounded by the open queue
-    // (pending only) and the 14 day window a role page shows.
-    const recent: DecisionRow[] = await ctx.db
-      .query("session_decisions")
-      .withIndex("by_status_created", (q) => q.eq("status", "pending").gte("created_at", Date.now() - HANDLED_WINDOW_MS))
-      .collect();
-    for (const r of recent) {
-      if ((r.hops ?? []).some((h) => h.role_id === args.role_id)) out.set(String(r._id), r);
-    }
+    const rows = await pendingOnLadder(ctx, args.role_id, Date.now());
     // Any member may open the role page, but each row still answers to the
     // asking conversation's visibility (userMayRead), so a private session's
     // decisions do not show to the whole team through the role.
     const visible: DecisionRow[] = [];
-    for (const r of out.values()) if (await userMayRead(ctx, userId, r)) visible.push(r);
+    for (const r of rows) if (await userMayRead(ctx, userId, r)) visible.push(r);
     return visible.map((r) => ({ ...r, held_by_role: r.holder_key === `role:${args.role_id}` }));
   },
 });
