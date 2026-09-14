@@ -650,6 +650,19 @@ describe("buildBrowserRowMap", () => {
     const map = buildBrowserRowMap([row("t1", "open", "b.dev/path", "")]);
     expect(map).toEqual({ t1: { url: "https://b.dev/path" } });
   });
+
+  // The row pill's "preview this page in a pane" is only as good as the URL
+  // the map hands it, and a dev server is the page people most want previewed
+  // — so the loopback address has to survive the scheme guessing intact
+  // (http, not https, and the port kept) and carry into the silent rows after.
+  test("keeps a local dev server's address exactly as the agent drove it", () => {
+    const map = buildBrowserRowMap([
+      row("t1", "open", "http://localhost:3000/inbox", "codecast\n  http://localhost:3000/inbox\n  tab 11AA22BB"),
+      row("t2", "shot", "", "  /tmp/x.png (10K)"),
+    ]);
+    expect(map.t1).toEqual({ url: "http://localhost:3000/inbox", tabId: "11AA22BB" });
+    expect(map.t2.url).toBe("http://localhost:3000/inbox");
+  });
 });
 
 describe("cast browser do steps", () => {

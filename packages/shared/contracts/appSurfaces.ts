@@ -33,6 +33,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("feed", "team activity feed"),
   dash("crosstalk", "agents talking to each other across sessions"),
   dash("org", "the org tree: people, roles, anchors and every session, edited by reparenting"),
+  dash("browser", "a web page as a pane: the address rides the query string (?u=<url>)"),
   dash("chat", "human channels and direct messages"),
   dash("search", "search across sessions, docs, tasks and people"),
   dash("notifications", "notification list"),

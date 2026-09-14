@@ -1,5 +1,6 @@
 import type { AppTab } from "../store/inboxStore";
 import { pathLabel, inboxTabSessionId } from "./pathLabel";
+import { isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "./entityLinks";
 import { vaultNoteTitle } from "./vault/noteTitle";
 import { channelDisplayName } from "./chatViews";
@@ -54,6 +55,10 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   // rule). Read lazily so no vault code loads for anyone who never opens one.
   const vaultTitle = vaultNoteTitle(tab.path);
   if (vaultTitle) return vaultTitle;
+  // A browser tab is titled by the page it is on RIGHT NOW: its stored title
+  // was stamped at the address it opened with, and the pane has navigated
+  // since. pathLabel reads the live path (and any title a backend learned).
+  if (isBrowserRoutePath(tab.path)) return pathLabel(tab.path);
   // A stored title with a query string in it is a raw path that leaked in
   // before pathLabel stripped queries — never show it, re-derive instead.
   const stored = tab.title && !tab.title.includes("?") ? tab.title : null;

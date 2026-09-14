@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link, ArrowUpRight, ChevronsUpDown } from "lucide-react";
+import { Link, ArrowUpRight, ChevronsUpDown, Columns2 } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { CONVEX_URL } from "../lib/localAuth";
+import { openBrowserPane } from "../lib/stage";
 
 const api = _api as any;
 
@@ -15,6 +16,36 @@ function pageFrameSrc(slug: string): string {
 
 function pageShareUrl(slug: string): string {
   return `https://codecast.sh/a/${slug}`;
+}
+
+/**
+ * Open the page as a stage pane. The pane frames the SERVING origin, not the
+ * codecast share page: the same source the embed above already uses, so the
+ * page arrives under its own sandbox CSP and the share page's chrome does not
+ * wrap it a second time.
+ */
+function openPageInPane(slug: string) {
+  openBrowserPane({ kind: "url", url: pageFrameSrc(slug) });
+}
+
+/** "Open in a pane", in the two sizes this file needs: a strip button in the
+ *  embed header, and a quiet sibling glyph on the inline pill. */
+function OpenInPaneButton({ slug, className }: { slug: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openPageInPane(slug);
+      }}
+      className={className}
+      title="Open beside your work, as a pane"
+      aria-label="Open in a pane"
+    >
+      <Columns2 className="h-3 w-3" />
+    </button>
+  );
 }
 
 /** Viewer metadata for the header/caption. Enrichment only — the frame renders
@@ -69,6 +100,10 @@ export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: 
         <span className="flex items-center gap-2 border-b border-sol-border bg-sol-bg-alt px-3 py-1.5">
           <PageFavicon className="h-4 w-4" />
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-sol-text">{title}</span>
+          <OpenInPaneButton
+            slug={slug}
+            className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-blue transition-colors"
+          />
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -139,16 +174,24 @@ export function PublishedPagePill({
   const meta = usePageMeta(slug);
   const text = label || meta?.title || "published page";
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group inline-flex max-w-xs items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-px pl-1 pr-2 align-baseline text-[11px] font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:border-sol-violet/50 hover:text-sol-text"
-      title={meta?.title || href}
-    >
-      <PageFavicon />
-      <span className="truncate">{text}</span>
-      <ArrowUpRight className="h-2.5 w-2.5 flex-shrink-0 text-sol-text-dim transition-transform group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-sol-violet" />
-    </a>
+    <span className="group/page inline-flex max-w-xs items-center align-baseline">
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="group inline-flex min-w-0 items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-px pl-1 pr-2 align-baseline text-[11px] font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:border-sol-violet/50 hover:text-sol-text"
+        title={meta?.title || href}
+      >
+        <PageFavicon />
+        <span className="truncate">{text}</span>
+        <ArrowUpRight className="h-2.5 w-2.5 flex-shrink-0 text-sol-text-dim transition-transform group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-sol-violet" />
+      </a>
+      {/* A second verb on an inline pill would crowd the sentence it sits in,
+          so it waits for the pointer (and for a keyboard, for focus). */}
+      <OpenInPaneButton
+        slug={slug}
+        className="ml-0.5 flex-shrink-0 rounded p-0.5 text-sol-text-dim opacity-0 transition-opacity hover:text-sol-violet focus-visible:opacity-100 group-hover/page:opacity-100"
+      />
+    </span>
   );
 }

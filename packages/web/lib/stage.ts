@@ -22,6 +22,8 @@ import { isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { isDetachedTabWindow } from "./desktop";
 import { registerSplitOpener } from "./openIntent";
+import { browserRoutePath, type BrowserSource } from "./browserPane";
+import { rememberBrowserPaneUrl } from "./browserPaneRecents";
 
 // Dynamic on purpose: the tips module drags analytics into any import graph
 // that touches it, and this module sits under TabContent (every tab pays for
@@ -322,6 +324,33 @@ export function openBeside(path: string): boolean {
   syncUrl();
   firstSplitMilestone();
   return true;
+}
+
+/**
+ * Open a web page as a pane: the one entry point every browser-pane gesture
+ * goes through (a URL pill, a preview affordance, an agent's tab).
+ *
+ * Beside by default, because a page is something you look at NEXT TO your
+ * work. Returns what openBeside returns — true when the page opened as a
+ * second pane, false when the stage could not take one (a narrow window, the
+ * four-pane cap) and the tab navigated to it instead, which is the honest
+ * fallback: the page still opens, just not beside.
+ */
+export function openBrowserPane(
+  source: BrowserSource,
+  opts?: { beside?: boolean; native?: boolean },
+): boolean {
+  const path = browserRoutePath(source, { native: opts?.native });
+  // Every gesture funnels through here, so this is the one place that knows
+  // what a person actually opened — which is what a blank pane offers back.
+  if (source.kind === "url") rememberBrowserPaneUrl(source.url);
+  if (opts?.beside === false) {
+    tabNavigate(path, "push");
+    return false;
+  }
+  if (openBeside(path)) return true;
+  tabNavigate(path, "push");
+  return false;
 }
 
 /** True when this window's stage may take another pane at all: wide enough

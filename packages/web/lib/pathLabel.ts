@@ -4,6 +4,8 @@
 // into a circular import (TabBar → shortcuts → next/navigation compat →
 // tabRouting → TabBar) that made vite full-reload every window instead of hot
 // updating whenever anything in that loop changed.
+import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
+
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
   compare: "Compare",
@@ -14,6 +16,10 @@ const REPO_SECTION_LABEL: Record<string, string> = {
 };
 
 export function pathLabel(path: string): string {
+  // A browser pane is named by what it shows — the page's title once a
+  // backend could read one, else the host ("localhost:3000"). "Browser" would
+  // make three open pages three identical tabs.
+  if (isBrowserRoutePath(path)) return browserPathLabel(path);
   // Label by the ROUTE, never the query string. A stamped inbox deep link
   // (/inbox?s=<id>) must label as "Inbox" — before this, the raw
   // "inbox?s=jx7…" leaked into tab titles. The /files branch below still reads
@@ -28,6 +34,10 @@ export function pathLabel(path: string): string {
   if (clean.startsWith("/tasks/")) return "Task";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
+  // A decision's document page and a stack (docs/architecture/decisions-as-
+  // documents.md D4, D5) title by their short id, the handle people quote.
+  if (clean.startsWith("/decisions/stacks/")) return clean.split("/")[3] ? `Stack ${clean.split("/")[3]}` : "Stack";
+  if (clean.startsWith("/decisions/")) return clean.split("/")[2] ? `Decision ${clean.split("/")[2]}` : "Decision";
   // A Files tab is titled by the open file, not the encoded query string.
   // /vault is the permanent pre-rename alias, so both prefixes title the same.
   if (/^\/(files|vault)[?/]/.test(path)) {

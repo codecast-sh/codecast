@@ -2,7 +2,8 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { leavesOf } from "../../store/stageSplit";
-import { performStageDrop } from "../stage";
+import { openBrowserPane, performStageDrop } from "../stage";
+import { parseBrowserRoute } from "../browserPane";
 
 // performStageDrop is the one entry point every drag source funnels into;
 // these pin the branch behaviors that silently corrupt the arrangement when
@@ -179,5 +180,54 @@ describe("performStageDrop — dedupe", () => {
     expect(leavesOf(t.layout!)).toHaveLength(2);
     expect(t.path).toBe("/docs");
     expect(t.focusedLeafId).toBe(leavesOf(t.layout!)[1].id);
+  });
+});
+
+describe("openBrowserPane", () => {
+  const source = { kind: "url", url: "http://localhost:8765/" } as const;
+
+  // This is the one gesture that can fall back to moving the TAB, and
+  // tabNavigate reads the live URL — the shared fake window has none.
+  let restoreLocation: () => void;
+  beforeAll(() => {
+    restoreLocation = replaceGlobals({
+      window: {
+        innerWidth: 1400,
+        location: { pathname: "/tasks", search: "" },
+        history: { pushState: () => {}, replaceState: () => {} },
+      },
+    });
+  });
+  afterAll(() => restoreLocation());
+
+  it("opens the page beside what is already on stage", () => {
+    expect(openBrowserPane(source)).toBe(true);
+    const leaves = leavesOf(activeTab().layout!);
+    expect(leaves.map((l) => l.path.split("?")[0])).toEqual(["/tasks", "/browser"]);
+    // The URL rides the path, which is what makes the pane survive a reload.
+    expect(parseBrowserRoute(leaves[1].path)).toEqual({ kind: "url", url: source.url });
+  });
+
+  it("beside:false navigates the tab to the page instead", () => {
+    expect(openBrowserPane(source, { beside: false })).toBe(false);
+    const t = activeTab();
+    expect(t.layout).toBeUndefined();
+    expect(parseBrowserRoute(t.path)).toEqual({ kind: "url", url: source.url });
+  });
+
+  it("carries the native choice into the path", () => {
+    openBrowserPane(source, { beside: false, native: true });
+    expect(activeTab().path).toContain("native=1");
+  });
+
+  it("at the four-pane cap the tab navigates, and it says it did not open beside", () => {
+    state().stageInsertLeaf("root", "right", "/docs");
+    state().stageInsertLeaf("root", "right", "/plans");
+    state().stageInsertLeaf("root", "right", "/feed");
+    expect(leavesOf(activeTab().layout!)).toHaveLength(4);
+    expect(openBrowserPane(source)).toBe(false);
+    // Still four panes — and the tab moved to the page, so nothing is lost.
+    expect(leavesOf(activeTab().layout!)).toHaveLength(4);
+    expect(parseBrowserRoute(activeTab().path)).toEqual({ kind: "url", url: source.url });
   });
 });

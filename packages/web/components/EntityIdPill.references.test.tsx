@@ -392,6 +392,41 @@ describe("published page links", () => {
     expect(html).not.toContain("<iframe");
     expect(html).toContain('href="https://example.com/a/Ab3xYz9Qw12k"');
   });
+
+  // "Open in a pane" rides next to "open" on both shapes, so a page can sit
+  // beside the conversation instead of in another browser tab.
+  test("both the embed and the pill offer to open the page in a pane", () => {
+    expect(render(PAGE_URL)).toContain('aria-label="Open in a pane"');
+    expect(render(`The numbers are in ${PAGE_URL} if you want detail.`)).toContain('aria-label="Open in a pane"');
+  });
+});
+
+describe("local dev server links", () => {
+  // An agent printing where its dev server runs: the link becomes a pill that
+  // opens a browser pane, reading as the address rather than the raw URL.
+  test("a loopback URL in agent prose renders as a preview pill", () => {
+    const html = render("The app is up at http://localhost:3200/inbox now.");
+    expect(html).toContain('href="http://localhost:3200/inbox"');
+    expect(html).toContain("rounded-full");
+    expect(html).toContain(">localhost:3200/inbox<");
+    expect(html).toContain("Open as a pane beside this conversation");
+    expect(html).toContain("The app is up at");
+  });
+
+  test("127.0.0.1 counts, and the author's own link text is kept", () => {
+    const html = render("Try [the files view](http://127.0.0.1:3200/files).");
+    expect(html).toContain('href="http://127.0.0.1:3200/files"');
+    expect(html).toContain(">the files view<");
+    expect(html).toContain("Open as a pane beside this conversation");
+  });
+
+  test("public and LAN addresses stay ordinary links", () => {
+    for (const url of ["https://example.com/docs", "http://192.168.1.20:3000/"]) {
+      const html = render(`see ${url} for that`);
+      expect(html).toContain(`href="${url}"`);
+      expect(html).not.toContain("Open as a pane beside this conversation");
+    }
+  });
 });
 
 describe("local-first seeding", () => {

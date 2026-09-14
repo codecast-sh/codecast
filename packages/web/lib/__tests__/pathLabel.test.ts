@@ -17,6 +17,8 @@ describe("pathLabel — query strings never leak into labels", () => {
 
   it("labels detail routes with a query by their surface", () => {
     expect(pathLabel("/tasks/ct-123?focus=1")).toBe("Task");
+    expect(pathLabel("/decisions/sd-28")).toBe("Decision sd-28");
+    expect(pathLabel("/decisions/stacks/ds-3")).toBe("Stack ds-3");
     expect(pathLabel("/chat/chan123?x=1")).toBe("Chat");
   });
 

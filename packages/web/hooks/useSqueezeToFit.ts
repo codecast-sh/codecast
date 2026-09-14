@@ -21,8 +21,14 @@ import { useLayoutEffect, type RefObject } from "react";
  * intermediate state paints. Content changes are watched through a
  * MutationObserver; width changes through a ResizeObserver (height-only
  * resizes are ignored, since the top level may wrap the row and grow it).
+ * Content no observer can see (an input's value is a property, not a DOM
+ * mutation) is passed as `contentKey`: a new key fits the row again.
  */
-export function useSqueezeToFit(rowRef: RefObject<HTMLElement | null>, maxLevel: number): void {
+export function useSqueezeToFit(
+  rowRef: RefObject<HTMLElement | null>,
+  maxLevel: number,
+  contentKey?: unknown,
+): void {
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row) return;
@@ -60,5 +66,5 @@ export function useSqueezeToFit(rowRef: RefObject<HTMLElement | null>, maxLevel:
       mo?.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [rowRef, maxLevel]);
+  }, [rowRef, maxLevel, contentKey]);
 }
