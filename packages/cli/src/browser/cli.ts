@@ -55,7 +55,7 @@ import { registerAuditCommand } from "./auditCommand.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint } from "./bridge/host.js";
-import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
+import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
   isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
@@ -68,6 +68,7 @@ import { authorizesTeardown } from "@codecast/shared/contracts";
 import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
 import { commandGroup } from "../commandGroups.js";
+import { registerPaneOfferCommand } from "./paneOffer.js";
 
 // colors.ts exposes semantic helpers, not raw colour names.
 const OK = `${fmt.success(icons.check)}`;
@@ -232,6 +233,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // two mount points, so the documented `cast browser hosts ...` keeps working.
   buildHostsCommand(br);
 
+  // Offering a page to the human is pure network — no Chrome, no tab, nothing
+  // to attach to — so it is registered here, above the engine handover, and
+  // works on a machine with no browser installed at all.
+  registerPaneOfferCommand(br, deps, "pane", "Offer a page to your human as a pane beside this session");
+
   // The agent-browser engine drives everything it covers, which is nearly all
   // of it. Our own CDP driver stays behind it as a fallback for a machine that
   // cannot install the engine — no npm, no network — so `cast browser` keeps
@@ -258,25 +264,32 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const tag = p.lastUsed ? fmt.success(" (last used)") : "";
         console.log(`  ${p.dir.padEnd(12)} ${fmt.highlight(p.name)}${p.email ? fmt.muted(` <${p.email}>`) : ""}${tag}`);
       }
-      console.log(fmt.muted(`\nclone one with: cast browser start --profile "<dir>"`));
+      console.log(fmt.muted("\nThese profiles are only for an explicitly selected separate browser; normal commands use the human's Chrome."));
     });
 
-  br.command("start")
-    .description("Launch the managed browser (clones a Chrome profile so logins carry over)")
+  targetFlags(br.command("start"))
+    .description("Connect to the human's Chrome (separate browser only when explicitly selected)")
+    .addHelpText("after", BROWSER_START_HELP)
     .option("--profile <dir>", "Chrome profile directory to clone (see `cast browser profiles`)")
-    .option("--channel <name>", "chrome | canary | chromium", "chrome")
+    .option("--channel <name>", "Separate browser channel: chrome | canary | chromium")
     .option("--headless", "Run without a visible window")
     .option("--fresh", "Start from an empty profile — no cookies, no logins")
     .option("--resync", "Re-copy the profile even if a clone already exists")
-    .option("--size <WxH>", "Window size", "1440x900")
+    .option("--size <WxH>", "Window size for the separate browser")
     .option("--remote [host]", "Run the browser on a remote Mac, reached over SSH")
-    .action(async (o: { profile?: string; channel: ChromeChannel; headless?: boolean; fresh?: boolean; resync?: boolean; size: string; remote?: string | boolean }) => {
-      await startManagedBrowser(o);
+    .action(async (o: { profile?: string; channel?: ChromeChannel; headless?: boolean; fresh?: boolean; resync?: boolean; size?: string; remote?: string | boolean; real?: boolean; clone?: boolean }) => {
+      if (await prepareRealBrowserStart(o, me()).catch((err) => die((err as Error).message))) return;
+      await startManagedBrowser({ channel: "chrome", size: "1440x900", ...o });
     });
 
-  br.command("status")
-    .description("Is the managed browser running, and on what")
-    .action(async () => {
+  targetFlags(br.command("status"))
+    .description("Check the selected browser (the human's Chrome by default)")
+    .action(async (o: { real?: boolean; clone?: boolean }) => {
+      if (isRealMode(o, me())) {
+        await requireRealBridge().catch((err) => die((err as Error).message));
+        console.log(`${OK} connected to the human's Chrome through the extension`);
+        return;
+      }
       const state = readState();
       if (!state) return console.log(`${fmt.muted(icons.dot)} not started — \`cast browser start\``);
       const live = await probeLiveness(state);

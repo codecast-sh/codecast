@@ -27,6 +27,10 @@ export const TabParamsCtx = createContext<{
    *  pane call this instead of moving the tab — how a page can be hosted in a
    *  workspace slot (the Files pane) and keep its URL-driven state. */
   navigate?: (path: string, mode: "push" | "replace") => void;
+  /** The stage leaf this pane IS, when it is one. A page that draws its own
+   *  header (the browser pane) needs it to host PaneControls: close and expand
+   *  are stage gestures, and they name the leaf. Absent for a plain tab. */
+  leafId?: string;
 } | null>(null);
 
 export function useTabContext() {

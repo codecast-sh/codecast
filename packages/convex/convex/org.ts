@@ -274,7 +274,7 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
   };
 }
 
-async function requireWorkspaceCaller(ctx: any, apiToken: string | undefined, teamId: Id<"teams"> | undefined): Promise<Id<"users"> | null> {
+export async function requireWorkspaceCaller(ctx: any, apiToken: string | undefined, teamId: Id<"teams"> | undefined): Promise<Id<"users"> | null> {
   const userId = await getAuthenticatedUserId(ctx, apiToken);
   if (!userId) return null;
   if (teamId && !(await isTeamMember(ctx, userId, teamId))) return null;
@@ -928,3 +928,8 @@ export const brief = query({
     };
   },
 });
+
+// org.analysisInputs (docs/architecture/org-init.md O1): the evidence `cast
+// org init` reads. Lives in orgInit.ts with the apply path; re-exported here
+// so the CLI route and the web read it as org.*.
+export { analysisInputs } from "./orgInit";

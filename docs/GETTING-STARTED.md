@@ -215,7 +215,7 @@ cast app --desktop doctor           # the same against the desktop app
 
 The loop is doctor, goto, wait-settle, then prove with `cast browser` (snapshot, get text, shot) or `eval`.
 
-The target is this session's tab, in whichever browser `cast browser` would use: your own Chrome through the extension when it is paired (`--real`), the agent browser otherwise (`--clone`). The origin is local dev when vite answers on port 3200 and production otherwise (`--origin <url>` or `CAST_APP_ORIGIN` overrides). `--desktop` drives the desktop app over its debugging port instead: a from-source run opens `127.0.0.1:9333`, a packaged build only with `CODECAST_CDP_PORT` set. Any Electron app can own that port (the mail app takes 9333 when it starts first), so doctor refuses a port whose pages are not codecast; run codecast with `CODECAST_CDP_PORT=<free port>` and pass the same variable to `cast app`.
+The target is this session's tab, in whichever browser `cast browser` would use: your own Chrome through the extension by default, even before pairing. A missing or disconnected extension reports a recovery step; it never starts the separate agent Chrome. That browser is an explicit last resort (`--clone`), requiring the human's permission. The origin is local dev when vite answers on port 3200 and production otherwise (`--origin <url>` or `CAST_APP_ORIGIN` overrides). `--desktop` drives the desktop app over its debugging port instead: a from-source run opens `127.0.0.1:9333`, a packaged build only with `CODECAST_CDP_PORT` set. Any Electron app can own that port (the mail app takes 9333 when it starts first), so doctor refuses a port whose pages are not codecast; run codecast with `CODECAST_CDP_PORT=<free port>` and pass the same variable to `cast app`.
 
 `goto` and `sweep` navigate in-app (pushState, the way a click routes) so surfaces switch in milliseconds and the store stays warm. The tab shell re-asserts its own URL when the destination is outside it (the settings pages, for one), so a bounced navigation falls back to a full document load; `--reload` forces that for every step. On local dev a full load is a vite transform pass and can take 30 seconds or more.
 
@@ -242,6 +242,17 @@ bun run typecheck                   # all packages
 ---
 
 ## Runtime Flags
+
+`cast status` shows the daemon's WebSocket state separately from a live backend check:
+network interfaces, DNS resolution time, an authenticated API request, and its round-trip
+latency (including server processing). Requests taking at least one second are marked slow.
+DNS and API checks run concurrently with a three-second deadline and no retries. Failed
+checks distinguish authentication rejection, server errors, timeouts, and connection failures.
+Saved daemon state older than two minutes is shown as unknown.
+
+Use `cast status --no-network` for local diagnostics without live probes, or
+`cast status --json` for machine-readable output. Neither mode prints the saved auth token.
+`cast doctor` runs the fuller sync self-test.
 
 These aren't in `.env` files — set them in your shell when needed:
 

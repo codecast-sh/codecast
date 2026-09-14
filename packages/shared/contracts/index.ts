@@ -82,5 +82,10 @@ export * from "./prRefs";
 export * from "./triggerEvents";
 export * from "./fence";
 export * from "./triggerPrecheck";
+// Org proposals: the fenced block `cast org init` decisions carry and `cast org apply` reads back.
+export * from "./orgProposal";
+// An agent offering a page as a pane (`cast browser pane <url>`): the stored
+// offer, and the URL normalization the CLI, Convex and the chip must agree on.
+export * from "./browserPaneOffer";
 
 export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "./sessionSnooze";
