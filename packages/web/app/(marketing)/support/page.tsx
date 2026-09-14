@@ -4,11 +4,10 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { copyToClipboard } from "@/lib/utils";
 import { useRouteMeta } from "../pageMeta";
+import { SITE_LINKS } from "@/lib/siteLinks";
 import { SOL, BlogNav, BlogFooter, Terminal, Cmd, Code } from "../blog/blogChrome";
 
-const SUPPORT_EMAIL = "support@codecast.sh";
-const DISCORD_URL = "https://discord.gg/S7V5Wnfq";
-const ISSUES_URL = "https://github.com/codecast-sh/codecast/issues";
+const { supportEmail: SUPPORT_EMAIL, discord: DISCORD_URL, githubIssues: ISSUES_URL } = SITE_LINKS;
 
 /** One shell line that collects everything a bug report needs. */
 const REPORT_COMMAND = "cast --version; cast status; cast doctor --no-e2e; cast logs -n 200";
@@ -147,7 +146,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
       <>
         The Mac app is on the <Link href="/download" className="underline underline-offset-4">download page</Link>, and
         the iOS app is on the{" "}
-        <a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+        <a href={SITE_LINKS.appStore} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
           App Store
         </a>
         . Both sign in with the same account as the web.
@@ -168,7 +167,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     a: (
       <>
         Email{" "}
-        <a href="mailto:security@codecast.sh" className="underline underline-offset-4">security@codecast.sh</a>.
+        <a href={`mailto:${SITE_LINKS.securityEmail}`} className="underline underline-offset-4">{SITE_LINKS.securityEmail}</a>.
         Please do not open a public issue for it.
       </>
     ),
@@ -178,7 +177,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     a: (
       <>
         Email{" "}
-        <a href="mailto:enterprise@codecast.sh" className="underline underline-offset-4">enterprise@codecast.sh</a>.
+        <a href={`mailto:${SITE_LINKS.enterpriseEmail}`} className="underline underline-offset-4">{SITE_LINKS.enterpriseEmail}</a>.
         Plans and prices are on the <Link href="/pricing" className="underline underline-offset-4">pricing page</Link>.
       </>
     ),

@@ -123,7 +123,7 @@ export {
 export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
-import type { BrowserPaneOffer } from "@codecast/shared/contracts";
+import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";

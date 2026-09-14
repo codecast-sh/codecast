@@ -13,6 +13,7 @@
 export type BacklogPatchArgs = {
   pending_sync_messages?: number;
   pending_sync_conversations?: number;
+  sync_no_progress_ms?: number;
 };
 
 // Returns the partial patch for the two backlog fields: a key is present only when
@@ -20,16 +21,21 @@ export type BacklogPatchArgs = {
 export function backlogFieldsPatch(args: BacklogPatchArgs): {
   daemon_pending_sync_messages?: number;
   daemon_pending_sync_conversations?: number;
+  daemon_sync_no_progress_ms?: number;
 } {
   const patch: {
     daemon_pending_sync_messages?: number;
     daemon_pending_sync_conversations?: number;
+    daemon_sync_no_progress_ms?: number;
   } = {};
   if (args.pending_sync_messages !== undefined) {
     patch.daemon_pending_sync_messages = args.pending_sync_messages;
   }
   if (args.pending_sync_conversations !== undefined) {
     patch.daemon_pending_sync_conversations = args.pending_sync_conversations;
+  }
+  if (args.sync_no_progress_ms !== undefined) {
+    patch.daemon_sync_no_progress_ms = args.sync_no_progress_ms;
   }
   return patch;
 }

@@ -35,11 +35,22 @@ export const withAdvancedClone = <T>(run: () => T): T => cloneScope.run(true, ru
 // Per-session state: which real tab is mine, and is real mode sticky
 // ---------------------------------------------------------------------------
 
+/**
+ * Which browser a session's ordinary verbs drive. `real` is the human's
+ * Chrome and the default; `clone` only ever comes from the advanced scope;
+ * `pane` is the desktop app's browser pane opened for this session
+ * (desktopPane.ts), chosen with `cast browser target pane`.
+ */
+export type StickyMode = "real" | "clone" | "pane";
+
 interface RealState {
   /** Real-Chrome target (see protocol.ts targetIdOfTab) each session works in. */
   tabsBySession?: Record<string, string>;
-  /** Sticky `cast browser target real` choices, keyed like tabsBySession. */
-  stickyBySession?: Record<string, "real" | "clone">;
+  /** Sticky `cast browser target <mode>` choices, keyed like tabsBySession. */
+  stickyBySession?: Record<string, StickyMode>;
+  /** The desktop pane (registry paneId) each session last drove, so a pane
+   *  the human closed is reported once as closed rather than as never had. */
+  paneBySession?: Record<string, string>;
 }
 
 function realStatePath(): string {
@@ -64,14 +75,32 @@ function writeRealState(state: RealState): void {
 /** Sessions with no key share one slot, same as the clone's activeTargetId. */
 const keyOf = (sessionKey: string | null): string => sessionKey ?? "global";
 
-export function setStickyTarget(sessionKey: string | null, mode: "real" | "clone"): void {
+export function setStickyTarget(sessionKey: string | null, mode: StickyMode): void {
   const s = readRealState();
   writeRealState({ ...s, stickyBySession: { ...(s.stickyBySession ?? {}), [keyOf(sessionKey)]: mode } });
 }
 
 /** The choice a session made with `cast browser target`, or null when it never did. */
-export function explicitTarget(sessionKey: string | null): "real" | "clone" | null {
+export function explicitTarget(sessionKey: string | null): StickyMode | null {
   return readRealState().stickyBySession?.[keyOf(sessionKey)] ?? null;
+}
+
+export function rememberDesktopPane(sessionKey: string | null, paneId: string): void {
+  const s = readRealState();
+  if (s.paneBySession?.[keyOf(sessionKey)] === paneId) return;
+  writeRealState({ ...s, paneBySession: { ...(s.paneBySession ?? {}), [keyOf(sessionKey)]: paneId } });
+}
+
+export function rememberedDesktopPane(sessionKey: string | null): string | null {
+  return readRealState().paneBySession?.[keyOf(sessionKey)] ?? null;
+}
+
+export function forgetDesktopPane(sessionKey: string | null): void {
+  const s = readRealState();
+  if (!s.paneBySession?.[keyOf(sessionKey)]) return;
+  const panes = { ...s.paneBySession };
+  delete panes[keyOf(sessionKey)];
+  writeRealState({ ...s, paneBySession: panes });
 }
 
 /** Has the extension ever proved itself to this machine's bridge host? */
@@ -92,17 +121,37 @@ export function extensionReady(): boolean {
 
 /**
  * Ordinary commands use the human's Chrome. Clone scope lasts one invocation.
+ * A session that chose its desktop pane keeps it until it chooses again or
+ * the pane is reported closed (desktopPane.ts resolveDesktopPane).
  */
-export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
+export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): StickyMode {
   if (isAdvancedClone()) return "clone";
+  if (explicitTarget(sessionKey) === "pane") return "pane";
   if (opts.settle) setStickyTarget(sessionKey, "real");
   return "real";
 }
 
-export function isRealMode(opts: { real?: boolean; clone?: boolean }, sessionKey: string | null): boolean {
+export interface TargetFlags {
+  real?: boolean;
+  clone?: boolean;
+  pane?: boolean;
+}
+
+export function isRealMode(opts: TargetFlags, sessionKey: string | null): boolean {
   if (opts.clone) throw new Error("The --clone shortcut is no longer supported. Ordinary browser commands use the human's Chrome; a disconnected extension is not permission to launch another browser.");
   if (opts.real) return true;
+  if (opts.pane) return false;
   return stickyTarget(sessionKey, { settle: true }) === "real";
+}
+
+/**
+ * Whether this verb drives the desktop pane: asked for with `--pane`, or the
+ * session's sticky choice. `--real` on the line overrides the sticky pane for
+ * one verb, the same way it overrides everything else.
+ */
+export function isPaneMode(opts: TargetFlags, sessionKey: string | null): boolean {
+  if (opts.real || opts.clone || isAdvancedClone()) return false;
+  return opts.pane === true || explicitTarget(sessionKey) === "pane";
 }
 
 /**
@@ -126,10 +175,11 @@ export function realModeHint(sessionKey: string | null): string | null {
  * accept unknown options and forward them to the engine, so these two must
  * be taken off the line here or the engine would receive them.
  */
-export function splitTargetFlags(args: string[]): { real?: boolean; clone?: boolean; args: string[] } {
+export function splitTargetFlags(args: string[]): TargetFlags & { args: string[] } {
   const real = args.includes("--real") || undefined;
   const clone = args.includes("--clone") || undefined;
-  return { real, clone, args: args.filter((a) => a !== "--real" && a !== "--clone") };
+  const pane = args.includes("--pane") || undefined;
+  return { real, clone, pane, args: args.filter((a) => a !== "--real" && a !== "--clone" && a !== "--pane") };
 }
 
 // ---------------------------------------------------------------------------

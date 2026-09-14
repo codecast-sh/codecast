@@ -33,6 +33,17 @@ describe("session controls use the default optimistic store path", () => {
     await request;
   });
 
+  it("forwards the press time so the daemon can judge it against its own injections", async () => {
+    const dispatched: Array<{ action: string; args: any }> = [];
+    store()._setDispatch(async (action, args) => { dispatched.push({ action, args }); return null; });
+    const pressedAt = Date.now() - 5;
+    await store().convCommand(ID, "sendEscapeToSession", { pressed_at: pressedAt });
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe("convCommand");
+    expect(dispatched[0].args).toEqual([ID, "sendEscapeToSession", { pressed_at: pressedAt }]);
+    expect(store().pendingMessages[ID][0].content).toBe("[Request interrupted by user]");
+  });
+
   it("protects local state from both overlay paths until the daemon echoes it", async () => {
     await store().sendEscape(ID);
     store().applyInboxLivenessPayload("mine", { [ID]: { agent_status: "working", is_idle: false } });

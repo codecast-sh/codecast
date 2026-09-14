@@ -21,15 +21,15 @@ import {
 } from "./orgRoles";
 import { capsFor, countersFor, trustOf, utcDay } from "./orgEvents";
 import { findDecision } from "./sessionDecisions";
+import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import {
-  extractRepoFromRemoteUrl,
   applyProposalChanges,
   extractOrgProposal,
   orgProposalVerdict,
   type OrgProjectChange,
   type OrgProposal,
   type OrgRoleProposal,
-} from "@codecast/shared/contracts";
+} from "@codecast/shared/contracts/orgProposal";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an

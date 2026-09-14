@@ -26,6 +26,7 @@ import {
 } from "./host.js";
 import { BRIDGE_STORE_URL, bridgePairingPage, bridgePairingUrl } from "./protocol.js";
 import { connectRealBridge, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
+import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 
 const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;
@@ -93,7 +94,9 @@ export interface BridgeCommandDeps {
 }
 
 export function targetFlags(cmd: Command): Command {
-  return cmd.option("--real", "Use the human's Chrome through the extension (default)");
+  return cmd
+    .option("--real", "Use the human's Chrome through the extension (default)")
+    .option("--pane", "Use the desktop app's browser pane opened for this session (`target pane` makes it stick)");
 }
 
 export const BROWSER_START_HELP = `
@@ -138,8 +141,24 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
+        if (cur === "pane") {
+          const owned = await ownedDesktopPane(me());
+          console.log(`target: ${fmt.highlight("pane")}${fmt.muted(owned ? ` (the desktop app's pane showing ${owned.pane.url ?? "about:blank"})` : " (the desktop app's pane; none is open for this session right now)")}`);
+          console.log(fmt.muted("  `cast browser target real` returns this session to the human's Chrome"));
+          return;
+        }
         console.log(`target: ${fmt.highlight(cur)}${fmt.muted(cur === "real" ? " (the human's Chrome; connection not checked)" : " (advanced command; this invocation only)")}`);
         console.log(fmt.muted("  `cast browser extension status` checks the live connection"));
+        return;
+      }
+      if (mode === "pane") {
+        // Sticky whether or not a pane is open yet: the human may open the
+        // offer after the agent chose, and the choice should already be made.
+        setStickyTarget(me(), "pane");
+        const owned = await ownedDesktopPane(me());
+        console.log(`${OK} ordinary commands drive the desktop app's pane opened for this session`);
+        if (owned) console.log(fmt.muted(`  showing ${owned.pane.url ?? "about:blank"} on the app's CDP port ${owned.registry.port}`));
+        else console.log(`${WARN} no pane is open for this session yet — ${PANE_HOW_TO}`);
         return;
       }
       if (mode !== "real") die("Ordinary commands cannot select a separate browser. The human's Chrome is always the default.");

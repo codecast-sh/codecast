@@ -28,6 +28,24 @@ import whySkill from "../skills/codecast-why/SKILL.md" with { type: "text" };
 import conflictsSkill from "../skills/codecast-conflicts/SKILL.md" with { type: "text" };
 import secondOpinionSkill from "../skills/codecast-second-opinion/SKILL.md" with { type: "text" };
 import standupSkill from "../skills/codecast-standup/SKILL.md" with { type: "text" };
+import pickupSkill from "../skills/codecast-pickup/SKILL.md" with { type: "text" };
+import handoffSkill from "../skills/codecast-handoff/SKILL.md" with { type: "text" };
+import planSkill from "../skills/codecast-plan/SKILL.md" with { type: "text" };
+import shipSkill from "../skills/codecast-ship/SKILL.md" with { type: "text" };
+import verifySkill from "../skills/codecast-verify/SKILL.md" with { type: "text" };
+import reviewSkill from "../skills/codecast-review/SKILL.md" with { type: "text" };
+import learnSkill from "../skills/codecast-learn/SKILL.md" with { type: "text" };
+import morningSkill from "../skills/codecast-morning/SKILL.md" with { type: "text" };
+import eodSkill from "../skills/codecast-eod/SKILL.md" with { type: "text" };
+import bakeoffSkill from "../skills/codecast-bakeoff/SKILL.md" with { type: "text" };
+import lessonsSkill from "../skills/codecast-lessons/SKILL.md" with { type: "text" };
+import passSkill from "../skills/codecast-pass/SKILL.md" with { type: "text" };
+import askteamSkill from "../skills/codecast-ask-team/SKILL.md" with { type: "text" };
+import triageSkill from "../skills/codecast-triage/SKILL.md" with { type: "text" };
+import fromcallSkill from "../skills/codecast-from-call/SKILL.md" with { type: "text" };
+import loopSkill from "../skills/codecast-loop/SKILL.md" with { type: "text" };
+import worktreeSkill from "../skills/codecast-worktree/SKILL.md" with { type: "text" };
+import rethinkSkill from "../skills/codecast-rethink/SKILL.md" with { type: "text" };
 
 export interface OrchestrationHookEntry {
   matcher?: string;
@@ -62,4 +80,22 @@ export const BUNDLED_SKILLS: readonly BundledSkill[] = [
   { name: "codecast-conflicts", body: conflictsSkill },
   { name: "codecast-second-opinion", body: secondOpinionSkill },
   { name: "codecast-standup", body: standupSkill },
+  { name: "codecast-pickup", body: pickupSkill },
+  { name: "codecast-handoff", body: handoffSkill },
+  { name: "codecast-plan", body: planSkill },
+  { name: "codecast-ship", body: shipSkill },
+  { name: "codecast-verify", body: verifySkill },
+  { name: "codecast-review", body: reviewSkill },
+  { name: "codecast-learn", body: learnSkill },
+  { name: "codecast-morning", body: morningSkill },
+  { name: "codecast-eod", body: eodSkill },
+  { name: "codecast-bakeoff", body: bakeoffSkill },
+  { name: "codecast-lessons", body: lessonsSkill },
+  { name: "codecast-pass", body: passSkill },
+  { name: "codecast-ask-team", body: askteamSkill },
+  { name: "codecast-triage", body: triageSkill },
+  { name: "codecast-from-call", body: fromcallSkill },
+  { name: "codecast-loop", body: loopSkill },
+  { name: "codecast-worktree", body: worktreeSkill },
+  { name: "codecast-rethink", body: rethinkSkill },
 ];
