@@ -39,7 +39,9 @@
 // and the load event is not, so once nothing has answered, the load event may
 // no longer claim the pane is showing a page.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useMountEffect } from "../../../hooks/useMountEffect";
 import { isLoopbackUrl, probeAddress } from "../../../lib/browserPane";
 import type { BackendProps } from "./types";
 
@@ -65,7 +67,7 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
   const [polling, setPolling] = useState(false);
   const [revival, setRevival] = useState(0);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!url) return;
     onTitle(null);
     setPolling(false);
@@ -95,7 +97,7 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
 
   // Ask again every few seconds while the window is visible. A hidden window
   // waits for visibilitychange instead of probing a port nobody is looking at.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!polling || !url) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,7 +125,7 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
     };
   }, [polling, url]);
 
-  useEffect(() => () => titleWatch.current?.disconnect(), []);
+  useMountEffect(() => () => titleWatch.current?.disconnect());
 
   const handleLoad = useCallback(() => {
     titleWatch.current?.disconnect();
