@@ -27,10 +27,16 @@ services:
       - "127.0.0.1:3210:3210"   # cloud origin (api)
       - "127.0.0.1:3211:3211"   # site origin (http actions)
     healthcheck:
-      # /instance_version answers on the cheap path and does not touch Postgres,
-      # so it reports "process alive", NOT "queries working". Real health is the
-      # verification list in the cutover runbook.
-      test: ["CMD", "curl", "-fsS", "http://localhost:3210/instance_version"]
+      # The image is a minimal Ubuntu carrying only the convex binary: it has no
+      # curl, wget, python or aws (verified 2026-09-13). It does have bash, so
+      # the check opens a TCP connection through bash's /dev/tcp rather than
+      # calling a binary that is not there. A curl based check would have failed
+      # every time and marked a healthy backend unhealthy.
+      #
+      # This proves the port accepts connections, NOT that queries work. During
+      # the July saturation those diverged: HTTP answered while every query
+      # timed out. Real verification is the list in the cutover runbook.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3210"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -49,3 +55,24 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "2" }
+
+  caddy:
+    build:
+      context: .
+      dockerfile: caddy.Dockerfile
+    image: codecast/caddy-cloudflare:2
+    restart: unless-stopped
+    # Host networking so Caddy reaches the backend on 127.0.0.1, where the
+    # backend ports are bound, and serves 80 and 443 directly.
+    network_mode: host
+    # CLOUDFLARE_API_TOKEN lives only on the server (mode 600), never in the repo.
+    env_file: [/etc/caddy/cloudflare.env]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account state. Losing this volume forces a fresh
+      # issuance, which Let's Encrypt rate limits.
+      - /srv/caddy/data:/data
+      - /srv/caddy/config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
