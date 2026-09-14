@@ -27,6 +27,7 @@ import {
   type ViewGuardChange,
 } from "@platform/engine";
 import { noteFreshDoc } from "../lib/docSyncCache";
+import { routerNavigate } from "../lib/tabRoutes";
 import type { Patch } from "mutative";
 import {
   CLIENT_SYNC_REGISTRY,
@@ -287,17 +288,7 @@ const RECEIPT_CONTINUATIONS: ReceiptContinuations = {
     // DashboardLayout mirrors the URL into the active tab and React Router
     // re-matches outside the tab shell. Hook-free, so it also works during a
     // boot replay; the pathname then proves completion and the row retires.
-    if (
-      typeof window.history?.pushState === "function" &&
-      typeof window.dispatchEvent === "function"
-    ) {
-      const state = { tabNav: true, tabId: getState()?.activeTabId };
-      window.history.pushState(state, "", href);
-      window.dispatchEvent(
-        typeof PopStateEvent === "function"
-          ? new PopStateEvent("popstate", { state })
-          : new Event("popstate"),
-      );
+    if (routerNavigate(href, "push", { tabNav: true, tabId: getState()?.activeTabId })) {
       return true;
     }
     if (typeof window.location.assign !== "function") {

@@ -21,8 +21,8 @@ import {
 import { tabNavigate } from "../src/compat/tabRouting";
 import { isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
-import { isDetachedTabWindow } from "./desktop";
-import { browserRoutePath, type BrowserSource } from "./browserPane";
+import { borrowsTabShell } from "./desktop";
+import { browserRoutePath, hasPaneHost, postToPaneHost, type BrowserSource } from "./browserPane";
 import { rememberBrowserPaneUrl } from "./browserPaneRecents";
 
 // Dynamic on purpose: the tips module drags analytics into any import graph
@@ -139,7 +139,7 @@ function activeTab(): AppTab | null {
  *  Stands down when the live URL is the tab's content in the other spelling
  *  (the inbox's /conversation canonicalization; see tabNeedsUrlRestore). */
 function syncUrl() {
-  if (typeof window === "undefined" || !window.location || isDetachedTabWindow()) return;
+  if (typeof window === "undefined" || !window.location || borrowsTabShell()) return;
   const tab = activeTab();
   if (!tab) return;
   const live = window.location.pathname + window.location.search;
@@ -270,7 +270,7 @@ export function performStageDrop(zone: DropZone, payload: PaneDragPayload): bool
  * narrow screen, bad path) — the caller navigates normally.
  */
 export function requestStagePlacement(path: string, title?: string): boolean {
-  if (typeof window === "undefined" || window.innerWidth < 900 || isDetachedTabWindow()) return false;
+  if (typeof window === "undefined" || window.innerWidth < 900 || borrowsTabShell()) return false;
   const tab = activeTab();
   if (!tab || !tabStageLayout(tab) || isNonTabRoute(path)) return false;
   useInboxStore.getState().setStagePick({ path, title });
@@ -307,6 +307,7 @@ export function placeStagePick(target: { leafId: string } | "newTab") {
  * instead.
  */
 export function openBeside(path: string): boolean {
+  if (!isNonTabRoute(path) && postToPaneHost({ type: "codecast:open-beside", path })) return true;
   if (!canOpenBeside()) return false;
   const st = useInboxStore.getState();
   const tab = activeTab();
@@ -346,6 +347,14 @@ export function openBrowserPane(
   source: BrowserSource,
   opts?: { beside?: boolean | "only"; native?: boolean },
 ): boolean {
+  // A pane's page has no stage; the window framing it places the pane. Only a
+  // gesture somebody made: that window runs its own unattended offers.
+  if (opts?.beside === "only" && hasPaneHost()) return false;
+  // `native` rides the path, so that gesture goes up as the path below rather
+  // than as a source the message would strip it from.
+  if (opts?.beside !== false && !opts?.native && postToPaneHost({ type: "codecast:open-pane", source })) {
+    return true;
+  }
   const path = browserRoutePath(source, { native: opts?.native });
   // Every gesture funnels through here, so this is the one place that knows
   // what a person actually opened — which is what a blank pane offers back.
@@ -361,10 +370,12 @@ export function openBrowserPane(
 }
 
 /** True when this window's stage may take another pane at all: wide enough
- *  to show two, and a real tab shell (a detached window has none). The pane
- *  cap and the route's eligibility are openBeside's own answer. */
+ *  to show two, and a real tab shell (a detached window has none). A pane's
+ *  page answers yes: its gestures go to the window framing it. The pane cap
+ *  and the route's eligibility are openBeside's own answer. */
 export function canOpenBeside(): boolean {
-  return typeof window !== "undefined" && window.innerWidth >= 900 && !isDetachedTabWindow();
+  if (hasPaneHost()) return true;
+  return typeof window !== "undefined" && window.innerWidth >= 900 && !borrowsTabShell();
 }
 
 /**

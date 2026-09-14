@@ -15,7 +15,19 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useConvex } from "convex/react";
-import { ArrowUpRight, Globe, Laptop, Lock, RotateCw } from "lucide-react";
+import {
+  ArrowUpRight,
+  CircleAlert,
+  CircleHelp,
+  EyeOff,
+  Globe,
+  Laptop,
+  Lock,
+  LockOpen,
+  RotateCw,
+  ShieldOff,
+  Unplug,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   browserRoutePath,
@@ -36,7 +48,8 @@ import { bridge, isDesktop } from "../../lib/desktop";
 import { stageClose, stageExpand } from "../../lib/stage";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import { useSqueezeToFit } from "../../hooks/useSqueezeToFit";
-import { DeviceIcon, deviceDisplayName, useDevices } from "../DeviceBadge";
+import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
+import { useInboxStore } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { PaneControls } from "../stage/PaneControls";
@@ -211,11 +224,15 @@ export function BrowserPane() {
         : FrameBackend;
 
   const loopback = !!url && isLoopbackUrl(url);
+  // One lookup for the badge and the "nothing is listening" card, and only for
+  // an address this machine serves: a github.com pane has no machine to name.
+  const machine = useThisMachine(loopback);
   const secure = shownUrl.startsWith("https://");
   const overlay = paneOverlay({
     state,
     host: url ? displayHost(url) : "",
     loopback,
+    machineName: machine ? deviceDisplayName(machine) : null,
     askedWhy,
     desktop: isDesktop(),
     onReload: () => setReloadToken((n) => n + 1),
@@ -279,7 +296,7 @@ export function BrowserPane() {
             }`}
           />
         )}
-        {loopback && <LoopbackBadge />}
+        {loopback && <LoopbackBadge device={machine} />}
         {source?.kind === "url" && (
           <>
             <button
@@ -303,13 +320,19 @@ export function BrowserPane() {
         {/* Only in the pane you are working in: four panes each nagging about
             a page that may be perfectly fine is noise. */}
         {focused && state.kind === "ready" && state.opaque && graceOver && !askedWhy && (
+          // Folds to its icon with the machine badge, never to a fragment of
+          // the question: "not showing?" alone reads as a stray word.
           <button
             type="button"
             onClick={() => setAskedWhy(true)}
-            className="flex-shrink-0 px-1 text-[10px] text-sol-text-dim/70 underline decoration-dotted decoration-sol-text-dim/40 underline-offset-2 transition-colors hover:text-sol-text-muted hover:decoration-sol-text-muted"
+            className="group flex flex-shrink-0 items-center gap-1 px-1 text-[10px] text-sol-text-dim/70 transition-colors hover:text-sol-text-muted"
             title="If this pane stays blank, the site may refuse to be shown inside another page"
+            aria-label="Page not showing?"
           >
-            <span className="cq-sq1">Page </span>not showing?
+            <CircleHelp className="w-3 h-3" />
+            <span className="cq-sq1 underline decoration-dotted decoration-sol-text-dim/40 underline-offset-2 group-hover:decoration-sol-text-muted">
+              Page not showing?
+            </span>
           </button>
         )}
         {actions.map((action) => (
@@ -373,8 +396,10 @@ function BlankPane({ onPick }: { onPick: (url: string) => void }) {
       headline="No page open"
       detail={
         <>
-          Paste a URL or pick a recent page. <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>{" "}
-          <KeyCap size="xs">L</KeyCap> reaches the address bar.
+          {/* No list, no promise of one. */}
+          {recents.length > 0 ? "Paste a URL or pick a recent page." : "Paste or type a URL."}{" "}
+          <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap> <KeyCap size="xs">L</KeyCap> focuses the
+          address bar.
         </>
       }
       actions={
@@ -399,11 +424,19 @@ function BlankPane({ onPick }: { onPick: (url: string) => void }) {
   );
 }
 
-/** Every state that covers the page, in one place so they cannot drift apart. */
+/**
+ * Every state that covers the page, in one place so they cannot drift apart.
+ *
+ * One shape for all of them (PaneCard): a quiet glyph for what kind of thing
+ * happened, the address, one headline, one sentence, and the actions. The
+ * first action is always the one most likely to get the page on screen, so it
+ * is always the primary one.
+ */
 function paneOverlay(a: {
   state: BrowserPaneState;
   host: string;
   loopback: boolean;
+  machineName: string | null;
   askedWhy: boolean;
   desktop: boolean;
   onReload: () => void;
@@ -411,6 +444,7 @@ function paneOverlay(a: {
   onNative: () => void;
   onDismiss: () => void;
 }) {
+  const glyph = "w-5 h-5";
   const openActions = (
     <>
       <PaneCardButton primary onClick={a.onOpenOutside}>
@@ -419,24 +453,26 @@ function paneOverlay(a: {
       {a.desktop && <PaneCardButton onClick={a.onNative}>Open natively</PaneCardButton>}
     </>
   );
+  const tryAgain = (
+    <PaneCardButton primary onClick={a.onReload}>
+      Try again
+    </PaneCardButton>
+  );
 
   if (a.state.kind === "unreachable") {
     return (
       <PaneCard
+        icon={<Unplug className={glyph} />}
         host={a.host}
         headline={
-          a.state.loopback
-            ? "Nothing is listening on this address on this machine"
-            : "Nothing answered at this address"
+          a.state.loopback ? "Nothing is listening on this machine" : "Nothing answered at this address"
         }
         detail={
-          a.state.loopback ? (
-            <LoopbackDetail />
-          ) : (
-            "The host may be down, or the name may not resolve from here."
-          )
+          a.state.loopback
+            ? `Start the server on ${a.machineName ?? "this machine"}, or open this pane on the machine that runs it.`
+            : "The host may be down, or its name may not resolve from here."
         }
-        actions={<PaneCardButton onClick={a.onReload}>Try again</PaneCardButton>}
+        actions={tryAgain}
       />
     );
   }
@@ -448,6 +484,7 @@ function paneOverlay(a: {
     const app = typeof window === "undefined" ? "this app" : window.location.host;
     return (
       <PaneCard
+        icon={<ShieldOff className={glyph} />}
         host={a.host}
         headline={
           a.loopback
@@ -457,13 +494,11 @@ function paneOverlay(a: {
         detail={
           a.desktop
             ? "Allow local network access for this app, then try again."
-            : "Allow local network access from the icon in the address bar, then try again. Or open the pane from the desktop app."
+            : "Allow local network access from the icon in the address bar, or open this pane in the desktop app."
         }
         actions={
           <>
-            <PaneCardButton primary onClick={a.onReload}>
-              Try again
-            </PaneCardButton>
+            {tryAgain}
             <PaneCardButton onClick={a.onOpenOutside}>Open in browser</PaneCardButton>
           </>
         }
@@ -472,17 +507,19 @@ function paneOverlay(a: {
   }
 
   if (a.state.kind === "blocked") {
+    const insecure = a.state.reason === "insecure";
     return (
       <PaneCard
+        icon={insecure ? <LockOpen className={glyph} /> : <EyeOff className={glyph} />}
         host={a.host}
         headline={
-          a.state.reason === "insecure"
+          insecure
             ? "An http page cannot be shown inside this https app"
             : "This site refuses to be shown in a pane"
         }
         detail={
-          a.state.reason === "insecure"
-            ? "Your browser blocks it. Addresses on this machine are the exception, which is why a local dev server works."
+          insecure
+            ? "Browsers allow it only for addresses on this machine, such as a local dev server."
             : "Its server asks browsers not to embed it."
         }
         actions={openActions}
@@ -493,9 +530,10 @@ function paneOverlay(a: {
   if (a.state.kind === "error") {
     return (
       <PaneCard
+        icon={<CircleAlert className={glyph} />}
         host={a.host}
         headline={a.state.message}
-        actions={<PaneCardButton onClick={a.onReload}>Try again</PaneCardButton>}
+        actions={tryAgain}
       />
     );
   }
@@ -503,9 +541,10 @@ function paneOverlay(a: {
   if (a.askedWhy) {
     return (
       <PaneCard
+        icon={<EyeOff className={glyph} />}
         host={a.host}
         headline="Some sites will not load in a pane"
-        detail="A site can tell browsers not to embed it, and it looks blank from here — nothing in the page can tell that apart from a page that simply has not painted yet."
+        detail="A site can ask not to be embedded, and from here that looks the same as a page still loading."
         actions={
           <>
             {openActions}
@@ -521,8 +560,7 @@ function paneOverlay(a: {
 
 /** Which machine a loopback pane points at. The path persists across machines
  *  and tabs, so "localhost:3000" has to say WHOSE localhost. */
-function LoopbackBadge() {
-  const device = useThisMachine();
+function LoopbackBadge({ device }: { device: ReturnType<typeof useThisMachine> }) {
   const name = device ? deviceDisplayName(device) : null;
   const tip = name
     ? `This address is served by ${name}, the machine this window runs on`
@@ -537,19 +575,21 @@ function LoopbackBadge() {
   );
 }
 
-function useThisMachineName(): string | null {
-  const device = useThisMachine();
-  return device ? deviceDisplayName(device) : null;
-}
-
 /** The machine this window runs on, when we can prove it: the daemon that
  *  answers on loopback is by definition here (the same discovery the
- *  integrated terminal uses). Undefined while unknown — never a guess. */
-function useThisMachine() {
+ *  integrated terminal uses). Undefined while unknown — never a guess.
+ *
+ *  Asked only when `wanted`, since only an address on this machine needs a
+ *  name. Every pane calls it, so it reads ONE roster row rather than
+ *  useDevices: that mounts the roster feeder and subscribes to the whole
+ *  roster, whose rows change with liveness, and a github.com pane would
+ *  re-render on every one of those changes for a name it never shows. The
+ *  shell's own status chip keeps the roster fed. */
+function useThisMachine(wanted: boolean): Device | undefined {
   const convex = useConvex();
-  const { byId } = useDevices();
   const [deviceId, setDeviceId] = useState<string | null>(null);
   useWatchEffect(() => {
+    if (!wanted) return;
     let live = true;
     // Full discovery, not cache-only: without it the badge says "this machine"
     // and never names it. The lookup is cached module-wide, so a pane that
@@ -562,17 +602,11 @@ function useThisMachine() {
     return () => {
       live = false;
     };
-  }, [convex]);
-  return deviceId ? byId.get(deviceId) : undefined;
-}
-
-function LoopbackDetail() {
-  const name = useThisMachineName();
-  return (
-    <>
-      This address only exists on {name ?? "the machine this window runs on"}. Start the server
-      there, or open the pane on the machine that serves it.
-    </>
+  }, [convex, wanted]);
+  return useInboxStore((s) =>
+    wanted && deviceId
+      ? (s.machineRoster as Device[]).find((d) => d.device_id === deviceId)
+      : undefined,
   );
 }
 
