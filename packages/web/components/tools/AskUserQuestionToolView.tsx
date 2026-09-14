@@ -16,6 +16,7 @@ interface QuestionOption {
 interface Question {
   question: string;
   header?: string;
+  detail?: string;
   options: QuestionOption[];
   multiSelect?: boolean;
 }
@@ -67,6 +68,9 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
         )}
       </div>
       <div className="text-sm text-foreground/90">{question.question}</div>
+      {question.detail && (
+        <div className="text-xs text-muted-foreground whitespace-pre-line">{question.detail}</div>
+      )}
       <div className="space-y-1 pl-1">
         {question.options.map((opt, i) => {
           const cleanLabel = opt.label.replace(" (Recommended)", "");
