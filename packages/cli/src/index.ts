@@ -10024,7 +10024,7 @@ program
     // Display fields (name/desc/detail/writesTo) come from the shared catalog
     // so the wizard, `-h`, and the web Settings page never drift. Only the
     // install behavior is wired here, keyed by slug.
-    const SNIPPET_BEHAVIOR: Record<string, { getVersion: () => string; install: (update?: boolean) => { installed: boolean; updated: boolean }; reEnable: string }> = {
+    const SNIPPET_BEHAVIOR: Record<string, { getVersion: () => string; install: (update?: boolean) => { installed: boolean; updated: boolean } | Promise<{ installed: boolean; updated: boolean }>; reEnable: string }> = {
       memory: { getVersion: getMemoryVersion, install: installMemorySnippet, reEnable: "cast memory" },
       messaging: { getVersion: getMessagingVersion, install: installMessagingSnippet, reEnable: "cast messaging install" },
       forks: { getVersion: getForksVersion, install: installForksSnippet, reEnable: "cast install" },
@@ -10079,7 +10079,7 @@ program
         return;
       }
 
-      const result = entry.install(true);
+      const result = await entry.install(true);
       (config as any)[entry.enabledKey] = true;
       (config as any)[entry.versionKey] = entry.getVersion();
       writeConfig(config);
@@ -10146,7 +10146,7 @@ program
       }
 
       if (options.all) {
-        const result = s.install(true);
+        const result = await s.install(true);
         (config as any)[s.enabledKey] = true;
         (config as any)[s.versionKey] = s.getVersion();
         const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
@@ -10167,7 +10167,7 @@ program
       });
 
       if (answer) {
-        const result = s.install(true);
+        const result = await s.install(true);
         (config as any)[s.enabledKey] = true;
         (config as any)[s.versionKey] = s.getVersion();
         const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
