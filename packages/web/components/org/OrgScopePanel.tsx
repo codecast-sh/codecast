@@ -15,7 +15,7 @@ import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { SelectBox } from "../ui/select-box";
 import { cn } from "../../lib/utils";
-import { StateBar, StateTally } from "./OrgNodeCards";
+import { StateBar, StateTally, StandingLine } from "./OrgNodeCards";
 import { ORG_STATE_META, parentName } from "./orgMeta";
 import { OrgButton } from "./OrgButton";
 import type { OrgLayoutNode } from "./orgLayout";
@@ -298,6 +298,7 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
       <div className="mt-2">
         <InlineEdit canEdit={canEdit} value={role.name} onSave={(v) => v && onUpdateRole(role._id, { name: v })} className="text-[20px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }} />
       </div>
+      <StandingLine standing={role.standing} size="md" className="mt-2" />
       <div className="mt-1.5 text-[12px] flex items-center gap-1.5 flex-wrap" style={{ color: "var(--sol-text-muted)" }}>
         <span>reports to</span>
         <button type="button" onClick={() => onSelectNode(parentNodeId(reportsTo))} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, reportsTo)}</button>
@@ -452,6 +453,7 @@ function AnchorPanel({ tree, anchor, onOpenSession }: { tree: OrgTree; anchor: O
           </div>
         </div>
       </div>
+      <StandingLine standing={anchor} size="md" className="mt-3" />
       <SectionLabel>Hosted by</SectionLabel>
       <div className="text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{host?.name ?? "—"}</div>
       {anchor.conversation_id && (

@@ -39,6 +39,19 @@ export type OrgReportsTo =
 
 export type OrgScope = { project_ids: string[]; plan_ids: string[] };
 
+/** A standing session's pinned state as the tree carries it: the first line
+ *  (what it is working on), the declared status (who acts next: the node's
+ *  colour), and when it was written. `state` is the observed work state, absent
+ *  when the row fell outside the tree's recency window. */
+export type OrgStandingState = {
+  state?: WorkState;
+  state_line?: string | null;
+  state_status?: string | null;
+  state_at?: number | null;
+};
+
+export type OrgStanding = OrgStandingState & { conversation_id?: string; short_id?: string };
+
 export type OrgRole = {
   _id: string;
   short_id: string;
@@ -71,13 +84,15 @@ export type OrgRole = {
   counts: StateCounts;
   sessions: OrgSession[];
   total: number;
+  /** The role's standing agent and its pinned state; null when none is provisioned. */
+  standing?: OrgStanding | null;
   scope_names: {
     projects: { id: string; title: string; short_id?: string }[];
     plans: { id: string; title: string; short_id: string }[];
   };
 };
 
-export type OrgAnchor = {
+export type OrgAnchor = OrgStandingState & {
   anchor_id: string;
   name: string;
   bot_user_id: string;
@@ -87,7 +102,6 @@ export type OrgAnchor = {
   scope_user_id?: string;
   conversation_id?: string;
   short_id?: string;
-  state?: WorkState;
   status: string;
 };
 
