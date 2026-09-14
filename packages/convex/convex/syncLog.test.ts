@@ -363,7 +363,7 @@ describe("churn exemption (design D1)", () => {
       const conversation = await db.get(lastId);
       const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
       const patch: Record<string, unknown> = { message_count: 1, updated_at: 100 };
-      await rollUpUsage({ db: tracked }, conversation, [{ input_tokens: 10, output_tokens: 5 }], patch, 100);
+      await rollUpUsage({ db: tracked }, conversation, [{ usage: { input_tokens: 10, output_tokens: 5 }, inserted: true }], patch, 100);
       await tracked.patch(lastId, patch);
       expect((await db.get(lastId)).usage_totals).toEqual({
         input: 10, output: 5, cache_read: 0, cache_write: 0, updated_at: 100,
@@ -375,7 +375,7 @@ describe("churn exemption (design D1)", () => {
 
     const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
     const patch: Record<string, unknown> = { title: "Updated title" };
-    await rollUpUsage({ db: tracked }, await db.get(lastId), [{ input_tokens: 2, output_tokens: 3 }], patch, 200);
+    await rollUpUsage({ db: tracked }, await db.get(lastId), [{ usage: { input_tokens: 2, output_tokens: 3 }, inserted: true }], patch, 200);
     await tracked.patch(lastId, patch);
     expect(head(scope)?.position).toBe(1);
     expect(actions(scope)[0].patch).toEqual({ title: "Updated title" });
