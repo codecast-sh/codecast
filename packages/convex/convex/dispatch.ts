@@ -1131,17 +1131,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     );
   },
 
-  sendEscape: async (ctx, userId, [convId]: [string]) => {
-    const conv = await ctx.db.get(convId as Id<"conversations">);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "escape" as const,
-      args: JSON.stringify({ conversation_id: convId }),
-      created_at: Date.now(),
-    });
-  },
-
   // The reader opened or dismissed an agent's pane offer. One handler for both
   // gestures: the offer only has to know it was handled. `at` is the client's
   // own timestamp, written verbatim, so the optimistic value and the server's

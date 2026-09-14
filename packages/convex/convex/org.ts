@@ -7,7 +7,7 @@ import { classifyWorkStates } from "./conversations";
 import { isOrphanOrSubagent, type WorkState } from "./inboxFilters";
 import { nestParentIdOf } from "./ccAccountsShared";
 import { derivePresenceState } from "./presenceState";
-import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
+import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
 import { canAccessDoc, canAccessPlan, canAccessProject, canAccessTask } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
@@ -193,6 +193,21 @@ function tallyOf(rows: OrgSession[]): StateCounts {
   return counts;
 }
 
+/** The pinned thread state of one conversation row, as the org surfaces show
+ *  it: the first line (what the session is working on), the declared status
+ *  (who acts next, which is the node's colour), and when it was written. One
+ *  derivation for a role's standing agent, the anchor row and a brief's hands,
+ *  so the board line reads the same on every card. */
+export type StandingState = { state_line: string | null; state_status: ThreadStateStatus | null; state_at: number | null };
+export function stateOf(raw: any): StandingState {
+  const line = raw?.thread_state ? threadStateHeadline(String(raw.thread_state)) : "";
+  return {
+    state_line: line || null,
+    state_status: parseThreadStateStatus(raw?.thread_state_status),
+    state_at: raw?.thread_state_at ?? null,
+  };
+}
+
 // Presence for the people row: the surface row plus the daemon heartbeat, two
 // indexed reads per member. active/idle collapse to "online" — the page shows
 // a dot, not a stopwatch.
@@ -225,26 +240,14 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
     };
   }));
 
-  const roles = await Promise.all(scan.roles.map(async (role: any) => {
-    const mine = scan.byParent.get(`role:${role._id.toString()}`) ?? [];
-    const [projects, plans] = await Promise.all([
-      Promise.all(role.scope.project_ids.map((id: any) => ctx.db.get(id))),
-      Promise.all(role.scope.plan_ids.map((id: any) => ctx.db.get(id))),
-    ]);
-    return {
-      ...role,
-      counts: tallyOf(mine),
-      sessions: mine.slice(0, ORG_TOP_N),
-      total: mine.length,
-      scope_names: {
-        projects: projects.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id ?? undefined })),
-        plans: plans.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id })),
-      },
-    };
-  }));
-
-  const anchors = scan.anchors.map((a: any) => {
+  // The standing agents, with each one's pinned state (the anchor's line on
+  // the phone; a role's colour). The scan holds the recent visible rows; a
+  // standing session that has been quiet longer than the window is read
+  // directly, the way `org.brief` reads it.
+  const anchors = await Promise.all(scan.anchors.map(async (a: any) => {
     const session = scan.anchorSessions.get(a._id.toString());
+    const convId = a.conversation_id ? String(a.conversation_id) : null;
+    const raw = convId ? scan.sessions.get(convId)?.raw ?? await ctx.db.get(a.conversation_id) : null;
     return {
       anchor_id: a._id,
       name: a.name,
@@ -257,11 +260,39 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
       // the page can nest it; absent on the workspace anchor.
       org_role_id: a.org_role_id ?? undefined,
       conversation_id: a.conversation_id ?? undefined,
-      short_id: session?.short_id ?? undefined,
+      short_id: session?.short_id ?? raw?.short_id ?? undefined,
       state: session?.state,
       status: a.status,
+      ...stateOf(raw),
     };
-  });
+  }));
+  const anchorByRole = new Map(anchors.filter((a) => a.org_role_id).map((a) => [String(a.org_role_id), a]));
+  const anchorById = new Map(anchors.map((a) => [String(a.anchor_id), a]));
+
+  const roles = await Promise.all(scan.roles.map(async (role: any) => {
+    const mine = scan.byParent.get(`role:${role._id.toString()}`) ?? [];
+    // The role's standing agent (org-roles-standing.md T1), found by the
+    // anchor naming the role or by the role naming the anchor.
+    const standing = anchorByRole.get(String(role._id)) ?? (role.anchor_id ? anchorById.get(String(role.anchor_id)) : undefined);
+    const [projects, plans] = await Promise.all([
+      Promise.all(role.scope.project_ids.map((id: any) => ctx.db.get(id))),
+      Promise.all(role.scope.plan_ids.map((id: any) => ctx.db.get(id))),
+    ]);
+    return {
+      ...role,
+      counts: tallyOf(mine),
+      sessions: mine.slice(0, ORG_TOP_N),
+      total: mine.length,
+      standing: standing
+        ? { conversation_id: standing.conversation_id, short_id: standing.short_id, state: standing.state, state_line: standing.state_line, state_status: standing.state_status, state_at: standing.state_at }
+        : null,
+      scope_names: {
+        projects: projects.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id ?? undefined })),
+        plans: plans.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id })),
+      },
+    };
+  }));
+
 
   return {
     workspace: teamId
@@ -861,9 +892,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
       short_id: c.short_id ?? String(c._id).slice(0, 7),
       title: c.title ?? "",
       state: session.state,
-      state_line: c.thread_state ? String(c.thread_state).split("\n")[0] : null,
-      state_status: c.thread_state_status ?? null,
-      state_at: c.thread_state_at ?? null,
+      ...stateOf(c),
       updated_at: c.updated_at,
       task: task ? {
         short_id: task.short_id,
