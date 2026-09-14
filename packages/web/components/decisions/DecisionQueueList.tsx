@@ -2,9 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
+import { decisionAnswerLabel } from "@codecast/shared/contracts";
 import { ChevronDown, ChevronRight, Layers, ShieldCheck, Undo2, Terminal, ListChecks } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type HandledDecisionItem } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
@@ -19,6 +18,7 @@ import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { StackChecklist } from "./StackChecklist";
 
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 const api = _api as any;
 
 const pendingWhere = (d: SessionDecisionItem) => d.status === "pending";
@@ -43,37 +43,35 @@ export function DecisionQueueList() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const toggle = useCallback((id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
-  const createStack = useMutation(api.decisionStacks.createStack);
-  const addToStack = useMutation(api.decisionStacks.addToStack);
+  // One store action: a stub stack row keyed by client_key paints at once
+  // with the members moved under it; the createStackWith side effect makes
+  // the server row, which supersedes the stub through the feed's altKey.
+  const createStackWith = useInboxStore((s) => s.createStackWith);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id as string | undefined);
   const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
-  const groupIntoStack = useCallback(async () => {
+  const groupIntoStack = useCallback(() => {
     if (!title.trim() || selected.size === 0) return;
-    setBusy(true);
-    try {
-      const r = await createStack({ title: title.trim() });
-      if (r?.error) { toast.error(r.error); return; }
-      for (const id of selected) {
-        const a = await addToStack({ stack: r.id, decision: id });
-        if (a?.error) toast.error(a.error);
-      }
-      toast.success(`Stacked ${selected.size} into ${r.short_id ?? "a stack"}`);
-      setSelected(new Set()); setSelecting(false); setTitle("");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Could not create the stack");
-    } finally {
-      setBusy(false);
-    }
-  }, [title, selected, createStack, addToStack]);
+    const client_key = `ds_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    createStackWith({ title: title.trim(), decision_ids: [...selected], team_id: activeTeamId, client_key });
+    toast.success(`Stacked ${selected.size}`);
+    setSelected(new Set()); setSelecting(false); setTitle("");
+  }, [title, selected, createStackWith, activeTeamId]);
 
   const empty = groups.length === 0 && terminal.length === 0;
+  // "Waiting on you" counts what a person must answer. Rows a lead holds
+  // under a grant stay pending in the inbox (a person may still answer first)
+  // but they are the lead's to clear, so they count on their own group header.
+  const mine = pending.filter((d) => d.holder?.kind !== "role").length;
+  const withLead = pending.length - mine;
+  // Exactly one surface claims the digit keys: the first stack group.
+  const firstStackKey = groups.find((g) => g.kind === "stack")?.key;
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex items-center gap-3 flex-wrap mb-5">
           <h1 className="text-lg text-sol-text">Questions</h1>
-          <span className="text-[12px] text-sol-text-dim">{pending.length} waiting on you{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
+          <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
           <div className="ml-auto flex items-center gap-2 text-[11px]">
             {pending.length > 0 && (
               <Link href="/questions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
@@ -98,7 +96,7 @@ export function DecisionQueueList() {
               className="flex-1 min-w-[10rem] bg-sol-card border border-sol-border rounded px-2 py-1 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-violet/50"
               onKeyDown={(e) => { if (e.key === "Enter") void groupIntoStack(); }}
             />
-            <button onClick={groupIntoStack} disabled={busy || !title.trim() || selected.size === 0} className="px-2.5 py-1 rounded border border-sol-violet/50 text-sol-violet hover:bg-sol-violet hover:text-sol-bg transition-colors disabled:opacity-40">
+            <button onClick={groupIntoStack} disabled={!title.trim() || selected.size === 0} className="px-2.5 py-1 rounded border border-sol-violet/50 text-sol-violet hover:bg-sol-violet hover:text-sol-bg transition-colors disabled:opacity-40">
               create the stack
             </button>
           </div>
@@ -113,7 +111,7 @@ export function DecisionQueueList() {
 
         <div className="space-y-7">
           {groups.map((g) => (
-            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} />
+            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === firstStackKey} />
           ))}
 
           {terminal.length > 0 && (
@@ -159,14 +157,16 @@ function GroupHeader({ icon, title, count, hint, right, onToggle, open }: { icon
   );
 }
 
-function ScopeLabel({ scopeKey }: { scopeKey: string }) {
+function ScopeLabel({ scopeKey, sample }: { scopeKey: string; sample?: SessionDecisionItem }) {
   const [kind, id] = scopeKey.split(":");
   const st = useTrackedStore([
     (s) => kind === "project" ? (s.projects as any)?.[id]?.title : kind === "plan" ? (s.plans as any)?.[id]?.title : kind === "session" ? s.sessions[id]?.title : undefined,
   ]);
   const name: string | undefined = kind === "project" ? (st.projects as any)?.[id]?.title : kind === "plan" ? (st.plans as any)?.[id]?.title : kind === "session" ? st.sessions[id]?.title : undefined;
   if (kind === "role") return <><RoleName roleId={id} />'s scope</>;
-  if (kind === "session") return <>{name || "a session"}</>;
+  // The live session row wins; the decision's snapshot (session_title) covers a
+  // device whose sessions collection does not hold the asking conversation.
+  if (kind === "session") return <>{name || sample?.session_title || "a session"}</>;
   return <>{kind} · {name || id.slice(0, 8)}</>;
 }
 
@@ -177,7 +177,7 @@ function RoleName({ roleId }: { roleId: string }) {
   return <>{data?.role?.name ?? "a lead"}</>;
 }
 
-function QueueGroup({ group, selecting, selected, onToggle }: { group: DecisionGroup; selecting: boolean; selected: Set<string>; onToggle: (id: string) => void }) {
+function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: DecisionGroup; selecting: boolean; selected: Set<string>; onToggle: (id: string) => void; keys: boolean }) {
   const [open, setOpen] = useState(group.kind !== "role");
   if (group.kind === "stack") {
     return (
@@ -189,7 +189,7 @@ function QueueGroup({ group, selecting, selected, onToggle }: { group: DecisionG
           hint={group.stack.policy.auto_default_after_ms ? `defaults apply after ${Math.round(group.stack.policy.auto_default_after_ms / 3_600_000)}h` : group.stack.policy.delegate_role_id ? "delegated to a role" : "a stack"}
           right={<span className="font-mono text-[11px] text-sol-text-dim">{group.stack.short_id}</span>}
         />
-        <StackChecklist stack={group.stack} />
+        <StackChecklist stack={group.stack} keys={keys} />
       </section>
     );
   }
@@ -210,7 +210,7 @@ function QueueGroup({ group, selecting, selected, onToggle }: { group: DecisionG
   }
   return (
     <section>
-      <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} />} count={group.items.length} />
+      <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} sample={group.items[0]} />} count={group.items.length} />
       <div className="space-y-2">
         {group.items.map((d) => <DecisionCompactCard key={d._id} decision={d} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
       </div>
@@ -223,24 +223,21 @@ function QueueGroup({ group, selecting, selected, onToggle }: { group: DecisionG
 // override in a row revokes the grant (scored server side).
 function HandledSection({ rows }: { rows: HandledDecisionItem[] }) {
   const [open, setOpen] = useState(true);
-  const reopen = useMutation(api.sessionDecisions.reopen);
+  // The store action moves the row back to the queue on the draft; the
+  // reopenDecision side effect does the server write.
+  const reopenDecision = useInboxStore((s) => s.reopenDecision);
   const now = useCoarseNow(60_000);
-  const onReopen = useCallback(async (id: string) => {
-    try {
-      const r = await reopen({ decision_id: id });
-      if (r?.reopened) toast.success("Reopened — it is back in your queue.");
-      else toast.error(r?.reason ?? "Could not reopen");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Could not reopen");
-    }
-  }, [reopen]);
+  const onReopen = useCallback((id: string) => {
+    reopenDecision(id);
+    toast.success("Reopened — it is back in your queue.");
+  }, [reopenDecision]);
   return (
     <section>
       <GroupHeader icon={<ShieldCheck className="w-3.5 h-3.5 text-sol-green" />} title="Handled without you" count={rows.length} hint="a role answered under a grant" onToggle={() => setOpen((v) => !v)} open={open} />
       {open && (
         <ul className="space-y-1.5">
           {rows.map((d) => {
-            const answer = d.answer_text ?? (d.answer_index !== undefined ? d.options[d.answer_index]?.label : undefined);
+            const answer = decisionAnswerLabel(d, d);
             return (
               <li key={d._id} className="rounded-lg border border-sol-border/60 bg-sol-card/30 px-4 py-2.5">
                 <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
