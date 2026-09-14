@@ -30,6 +30,13 @@ const mobileModules = path.resolve(projectRoot, 'node_modules');
 const singletonPackages = ['react', 'react-native', 'react-dom'];
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === 'react-native-svg' || moduleName.startsWith('react-native-svg/')) {
+    return context.resolveRequest(
+      { ...context, originModulePath: path.join(projectRoot, 'index.ts') },
+      moduleName,
+      platform,
+    );
+  }
   const isSingleton = singletonPackages.some(
     pkg => moduleName === pkg || moduleName.startsWith(pkg + '/')
   );
