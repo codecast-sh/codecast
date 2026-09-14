@@ -90,7 +90,7 @@ async function requireRepositoryTeam(
 }
 
 /** A pending note is its author's alone; every other row passes through. */
-function withoutOthersPending<T extends { pending_review?: boolean; author_user_id?: any }>(rows: T[], userId: any): T[] {
+export function withoutOthersPending<T extends { pending_review?: boolean; author_user_id?: any }>(rows: T[], userId: any): T[] {
   return rows.filter((r) => !r.pending_review || String(r.author_user_id) === String(userId));
 }
 
@@ -137,7 +137,9 @@ export async function codeThreadRows(
     .withIndex("by_repository_file", (q: any) =>
       q.eq("repository", normalizeRepository(anchor.repository)).eq("file_path", anchor.file_path))
     .collect();
+  // A shared thread has no viewer to be private to: a pending note is out.
   return rows
+    .filter((c) => !c.pending_review)
     .filter((c) => c.ref === anchor.ref && (c.line_number ?? undefined) === (anchor.line_number ?? undefined))
     .sort((a, b) => a.created_at - b.created_at);
 }

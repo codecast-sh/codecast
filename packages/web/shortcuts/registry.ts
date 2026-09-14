@@ -98,6 +98,10 @@ export type ShortcutAction =
   | 'diff.prevChange'
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
+  | 'diff.markViewed'
+  | 'pr.nextThread'
+  | 'pr.prevThread'
+  | 'pr.review'
   | 'list.down'
   | 'list.up'
   | 'list.open'
@@ -332,6 +336,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },
   { key: ']', action: 'diff.nextChange', when: 'diff', description: 'Next change' },
   { key: 'f', action: 'diff.toggleFileTree', when: 'diff', description: 'Toggle file tree' },
+  // The pull request page's own keys. Handled on the page, listed here so the
+  // help panel names them.
+  { key: 'm', action: 'diff.markViewed', when: 'diff', description: 'Mark the file viewed and move on' },
+  { key: 'n', action: 'pr.nextThread', when: 'diff', description: 'Next open thread' },
+  { key: 'p', action: 'pr.prevThread', when: 'diff', description: 'Previous open thread' },
+  { key: 'r', action: 'pr.review', when: 'diff', description: 'Open your review' },
 
   { key: 'j', action: 'list.down', when: 'list', description: 'Move down' },
   { key: 'k', action: 'list.up', when: 'list', description: 'Move up' },

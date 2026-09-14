@@ -302,6 +302,10 @@ function PRContent({
 
   // What the tree shows beside each file: open threads, waiting notes, viewed.
   const threadMarks = useMemo(() => fileThreadMarks(comments), [comments]);
+  const openThreadStops = useMemo(
+    () => threadStops(pr?.files ?? [], comments).filter((s) => s.open && !s.pending),
+    [pr?.files, comments],
+  );
   const fileMarks = useCallback(
     (filename: string) => {
       const marks = threadMarks.get(filename);
@@ -326,7 +330,7 @@ function PRContent({
     if (hit) { setTab(hit.key); return; }
     if (e.key === "r" && isAuthenticated) { e.preventDefault(); setReviewOpen((v) => !v); return; }
     if (e.key === "n" || e.key === "p") {
-      const stops = threadStops(pr?.files ?? [], comments).filter((s) => s.open);
+      const stops = openThreadStops;
       if (stops.length === 0) return;
       e.preventDefault();
       const at = landing ? stops.findIndex((s) => s.file === landing.file && s.key === landing.key) : -1;
@@ -378,6 +382,7 @@ function PRContent({
                 onNavigate={jumpToComment}
                 open={reviewOpen}
                 onOpenChange={setReviewOpen}
+                sessionChoices={sessionChoices}
               />
               <MergeMenu pr={pr} />
               <MoreMenu pr={pr} />
@@ -455,6 +460,38 @@ function PRContent({
                   fileMarks={fileMarks}
                   onToggleViewed={isAuthenticated ? toggleViewed : undefined}
                   focusFile={landing?.file ?? null}
+                  sidebarHeader={
+                    // Where the reader is in the walk: what is left to read,
+                    // what is still open, and the one key that moves them on.
+                    <div className="px-3 py-2 border-b border-sol-border/50 text-[11px] text-sol-text-muted flex items-center gap-2 flex-wrap">
+                      <span>
+                        <span className={viewedSet.size >= files.length ? "text-sol-green" : "text-sol-text"}>{viewedSet.size}</span>
+                        <span className="text-sol-text-dim"> / {files.length} viewed</span>
+                      </span>
+                      {openThreadStops.length > 0 && (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-full bg-sol-cyan/10 px-2 py-0.5 text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
+                          title="Jump to the next open thread (n)"
+                          onClick={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
+                        >
+                          {openThreadStops.length} open
+                          <KeyCap size="xs">n</KeyCap>
+                        </button>
+                      )}
+                      {notes.length > 0 && (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-full border border-dashed border-sol-yellow/60 px-2 py-0.5 text-sol-yellow hover:bg-sol-yellow/10 transition-colors"
+                          title="Open your review (r)"
+                          onClick={() => setReviewOpen(true)}
+                        >
+                          {notes.length} in review
+                          <KeyCap size="xs">r</KeyCap>
+                        </button>
+                      )}
+                    </div>
+                  }
                 />
               ))}
             {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} />}
