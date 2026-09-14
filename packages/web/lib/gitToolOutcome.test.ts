@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { commandLeavesCheckout, gitToolOutcome, madeInTranscript, transcriptGitOutcomes } from "./gitToolOutcome";
 
 describe("gitToolOutcome", () => {
@@ -36,4 +36,59 @@ describe("gitToolOutcome", () => {
     expect(madeInTranscript("1111111" + "a".repeat(33), outcomes.commitShas)).toBe(true);
     expect(madeInTranscript("2222222" + "a".repeat(33), outcomes.commitShas)).toBe(false);
   });
+});
+
+
+test("unchanged string tool inputs are parsed once across transcript updates", () => {
+  const command = { id: "cached-commit", name: "Bash", input: JSON.stringify({ command: "git commit -m cached" }) };
+  const malformed = { id: "bad-input", name: "exec", input: "await tools.exec_command({ cmd: 'git status' })" };
+  const results = [{ tool_use_id: command.id, content: "[main 123abcd] cached" }];
+  const parse = spyOn(JSON, "parse");
+  try {
+    const first = transcriptGitOutcomes([{ tool_calls: [command, malformed] }, { tool_results: results }]);
+    expect([...first.commitShas]).toEqual(["123abcd"]);
+    const count = parse.mock.calls.length;
+    const next = transcriptGitOutcomes([{ tool_calls: [command, malformed] }, { tool_results: results }, {}]);
+    expect(next).toEqual(first);
+    expect(parse.mock.calls.length).toBe(count);
+    command.input = JSON.stringify({ cmd: "gh pr create --fill" });
+    const changed = transcriptGitOutcomes([{ tool_calls: [command] }, { tool_results: [{ tool_use_id: command.id, content: "https://github.com/o/r/pull/17" }] }]);
+    expect([...changed.commitShas]).toEqual([]);
+    expect([...changed.prRefs]).toEqual(["o/r#17"]);
+    expect(parse.mock.calls.length).toBe(count + 1);
+  } finally { parse.mockRestore(); }
+});
+
+test("updated object commands and late or failed results remain live", () => {
+  const input = { command: "git status" };
+  const call = { id: "live-command", name: "Bash", input };
+  const result = { tool_use_id: call.id, content: "[main 765abcd] later", is_error: false };
+  expect(transcriptGitOutcomes([{ tool_calls: [call], tool_results: [result] }]).commitShas.size).toBe(0);
+  input.command = "git commit -m later";
+  expect([...transcriptGitOutcomes([{ tool_calls: [call], tool_results: [result] }]).commitShas]).toEqual(["765abcd"]);
+  result.is_error = true;
+  expect(transcriptGitOutcomes([{ tool_calls: [call], tool_results: [result] }]).commitShas.size).toBe(0);
+  const stringCall = { ...call, input: JSON.stringify(input) };
+  expect(transcriptGitOutcomes([{ tool_calls: [stringCall] }]).commitShas.size).toBe(0);
+  result.is_error = false;
+  expect([...transcriptGitOutcomes([{ tool_calls: [stringCall] }, { tool_results: [result] }]).commitShas]).toEqual(["765abcd"]);
+  stringCall.input = "invalid json";
+  expect(transcriptGitOutcomes([{ tool_calls: [stringCall], tool_results: [result] }]).commitShas.size).toBe(0);
+});
+
+test("a reused call reads string replacements, mutable objects and repeated ids", () => {
+  const call: { id: string; name: string; input: unknown } = { id: "same", name: "Bash", input: '{"command":"git commit -m first"}' };
+  const result = { tool_use_id: "same", content: "[main 123abcd] first" };
+  const read = () => transcriptGitOutcomes([{ tool_calls: [call], tool_results: [result] }]);
+  expect([...read().commitShas]).toEqual(["123abcd"]);
+  const objectInput = { command: "git status" };
+  call.input = objectInput;
+  expect(read().commitShas.size).toBe(0);
+  objectInput.command = "git commit -m first";
+  expect([...read().commitShas]).toEqual(["123abcd"]);
+  call.input = '{"command":"gh pr create"}';
+  result.content = "https://github.com/o/r/pull/29";
+  expect([...read().prRefs]).toEqual(["o/r#29"]);
+  const replacement = { ...call, input: '{"command":"git status"}' };
+  expect(transcriptGitOutcomes([{ tool_calls: [replacement], tool_results: [result] }]).prRefs.size).toBe(0);
 });
