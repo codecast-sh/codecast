@@ -48,6 +48,19 @@ already there (`githubApp.backfillInstallationPulls`) through the quiet upsert
 opened on a pull request the backfill did not reach asks GitHub for it once
 (`githubApp.fetchPull`).
 
+Opening Commits or Checks also calls `prDetails.refresh`, including for rows
+already cached and for closed or merged pull requests. The action verifies PR
+access before resolving a credential, reads the requested details, and stores
+them through `prDetails.apply`. The normal PR feeder carries the result into
+the local store. The page keeps cached rows visible while loading and shows a
+retry on failure. An empty list is shown only after a successful read.
+
+Checks include check runs and commit statuses on the head commit. A changed
+head rejects an in-flight result, and check webhooks newer than the read are
+preserved. The PR detail subscription observes commit and check contents, so
+updates with unchanged counts still repaint. Commit reads paginate up to
+GitHub's 250-commit PR endpoint limit; a larger known count is retained.
+
 ## S3. Outbound: codecast to GitHub
 
 Every change made here reaches GitHub, through the App's installation token
