@@ -531,6 +531,7 @@ interface DaemonState {
   pendingSyncMessages?: number;
   pendingSyncConversations?: number;
   pendingSyncOldestMs?: number;
+  pendingSyncNoProgressMs?: number;
   authExpired?: boolean;
   lastHeartbeatTick?: number;
   lastWatchdogCheck?: number;
@@ -1243,6 +1244,10 @@ function formatRelativeTime(timestamp: string | number): string {
 // Compact "how far behind" duration for the sync-backlog status line, e.g.
 // "2.7m" / "45s" / "1.2h". Tighter than formatRelativeTime's prose so the
 // Queue line stays a single scannable row.
+// Mirrors SYNC_STALL_AFTER_MS in the web's useDaemonHealth: a queue that has
+// completed nothing for this long is stalled, not draining.
+const SYNC_NO_PROGRESS_STALL_MS = 2 * 60_000;
+
 function formatBehind(ms: number): string {
   if (ms < 1000) return "0s";
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
@@ -1345,6 +1350,7 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
         pendingOperations: state?.pendingQueueSize ?? 0,
         pendingConversations: state?.pendingSyncConversations ?? 0,
         oldestPendingMs: state?.pendingSyncOldestMs ?? 0,
+        noProgressMs: state?.pendingSyncNoProgressMs ?? 0,
         stuck: await stuckSyncs,
         mode: config?.sync_mode ?? "all",
         projects: config?.sync_projects ?? [],
@@ -1393,6 +1399,7 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
     const queueMessages = state?.pendingSyncMessages ?? 0;
     const queueConversations = state?.pendingSyncConversations ?? 0;
     const queueOldestMs = state?.pendingSyncOldestMs ?? 0;
+    const queueNoProgressMs = state?.pendingSyncNoProgressMs ?? 0;
     const queueSize = state?.pendingQueueSize ?? 0;
     const hasBacklog = queueMessages > 0 || queueSize > 0;
 
@@ -1420,6 +1427,15 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
       }
       if (queueOldestMs > 0) {
         parts.push(fmt.muted("oldest") + " " + fmt.warning(formatBehind(queueOldestMs)) + fmt.muted(" behind"));
+      }
+      // An old head alone does not mean stuck: a long backlog drains in order.
+      // Say which it is from how long the queue has gone without a success.
+      if (queueNoProgressMs > 0) {
+        parts.push(
+          queueNoProgressMs >= SYNC_NO_PROGRESS_STALL_MS
+            ? fmt.warning("no progress for " + formatBehind(queueNoProgressMs))
+            : fmt.success("draining"),
+        );
       }
       row("Queue", parts.join(fmt.muted(", ")));
     } else {
@@ -12968,7 +12984,10 @@ const briefCmd = program
       const { briefHandLine } = await import("./briefLines.js");
       for (const h of f.hands) console.log(briefHandLine(h));
     }
+    const { briefCharterLines } = await import("./briefLines.js");
+    for (const line of briefCharterLines(String(brief.charter ?? ""))) console.log(line);
     console.log("");
+    console.log(`  ${c.bold}## Brief${c.reset}`);
     for (const line of String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n")) console.log(`  ${line}`);
   });
 
@@ -15228,7 +15247,7 @@ work
   .argument("<short_id>", "Task short ID")
   .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
-  .option("-a, --author <name>", "Override comment author (default: auto-detect)")
+  .option("-a, --author <name>", "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts")
   .action(async (shortId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
@@ -15976,7 +15995,7 @@ doc
   .argument("<id>", "Document ID")
   .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", "note")
-  .option("-a, --author <name>", "Override comment author")
+  .option("-a, --author <name>", "Ignored: the author is the identity behind your token; kept for older scripts")
   .action(async (id: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { id, content: text, type: options.type };
@@ -16422,7 +16441,7 @@ plan
   .option("-f, --finding", "Shorthand for --type discovery")
   .option("--ref <path_or_url>", "Add a reference pointer (sets type to reference)")
   .option("-r, --rationale <why>", stdinText("Rationale (for decisions)"))
-  .option("-a, --author <name>", "Override comment author")
+  .option("-a, --author <name>", "Ignored: the author is the identity behind your token; kept for older scripts")
   .action(async (planId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     let type = options.type;

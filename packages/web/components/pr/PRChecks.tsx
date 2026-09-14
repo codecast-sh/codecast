@@ -2,6 +2,8 @@ import { CheckCircle2, CircleSlash, ExternalLink, Loader2, ShieldCheck, XCircle 
 import { accentSoft, accentVar } from "../../lib/externalEvents";
 import { relTimeShort } from "../../lib/utils";
 import { checkLabel } from "@codecast/shared/contracts";
+import type { PRDetailsRead } from "../../hooks/usePRDetails";
+import { PRDetailsFrame } from "./PRDetailsFrame";
 import {
   CHECK_OUTCOME_ACCENT,
   checkOutcome,
@@ -21,7 +23,11 @@ const OUTCOME_ICON: Record<CheckOutcome, typeof CheckCircle2> = {
   skipped: CircleSlash,
 };
 
-export function PRChecks({ checks }: { checks: PrCheck[] | undefined }) {
+export function PRChecks({ checks, read }: { checks: PrCheck[] | undefined; read?: PRDetailsRead }) {
+  return <PRDetailsFrame read={read} hasRows={!!checks?.length} label="Checks"><CheckRows checks={checks} /></PRDetailsFrame>;
+}
+
+function CheckRows({ checks }: { checks: PrCheck[] | undefined }) {
   const rows = [...(checks ?? [])].sort(compareChecks);
   const fold = foldChecks(checks);
 
@@ -29,11 +35,7 @@ export function PRChecks({ checks }: { checks: PrCheck[] | undefined }) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 px-8 text-center">
         <ShieldCheck className="w-8 h-8 text-sol-text-dim/40" />
-        <p className="text-[13px] text-sol-text-muted">No checks on this pull request</p>
-        <p className="text-[12px] text-sol-text-dim max-w-sm">
-          Check runs appear once the codecast GitHub app has permission to read them. Grant it in
-          the repository settings and the next push fills this in.
-        </p>
+        <p className="text-[13px] text-sol-text-muted">{checks ? "No checks on this pull request" : "Checks have not loaded yet"}</p>
       </div>
     );
   }
@@ -71,7 +73,7 @@ export function PRChecks({ checks }: { checks: PrCheck[] | undefined }) {
           const style = { borderColor: accentSoft(accent, 25), background: accentSoft(accent, 5) };
           return check.url ? (
             <a
-              key={checkLabel(check)}
+              key={check.external_id ?? `${checkLabel(check)}:${check.suite_id ?? ""}`}
               href={check.url}
               target="_blank"
               rel="noopener noreferrer"
@@ -81,7 +83,7 @@ export function PRChecks({ checks }: { checks: PrCheck[] | undefined }) {
               {body}
             </a>
           ) : (
-            <div key={checkLabel(check)} className={className} style={style}>
+            <div key={check.external_id ?? `${checkLabel(check)}:${check.suite_id ?? ""}`} className={className} style={style}>
               {body}
             </div>
           );

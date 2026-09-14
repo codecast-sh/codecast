@@ -284,8 +284,8 @@ describe("stageRenderLayout", () => {
     expect(plain).toEqual({ type: "leaf", id: seedLeafId("t1"), path: "/tasks" });
     state().stageInsertLeaf("root", "right", "/docs", { focus: false });
     const split = stageRenderLayout(activeTab(), false);
-    expect(leavesOf(split).map((l) => l.id)).toEqual([seedLeafId("t1"), besideLeafId("t1") === "x" ? "" : leavesOf(split)[1].id]);
     expect(leavesOf(split)[0]).toEqual(plain);
+    expect(leavesOf(split)[1].path).toBe("/docs");
   });
 
   it("a narrow stage renders the focused leaf alone, under its own id", () => {

@@ -35,6 +35,7 @@ import {
   type ChatReadRow,
   type ChatRailRow,
   type ChatRailChannel,
+  type ChatRailScope,
 } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { mentionKey, mentionUserIds } from "@codecast/shared/chat";
@@ -215,7 +216,7 @@ export function useChatChannelsSync(): { error?: Error } {
         if (!data) return;
         syncTable("chatChannels", data.channels ?? []);
         syncTable("chatReads", data.reads ?? []);
-        syncTable("chatRail", data.rail ?? []);
+        syncChatRail(syncTable, data.rail ?? [], "team");
         // This rail came from the server, not from IndexedDB. Only now is a
         // change in it evidence that something ARRIVED — see lib/chatLive.
         markChatRailLive();
@@ -228,6 +229,54 @@ export function useChatChannelsSync(): { error?: Error } {
   // rows (that is the whole point of useQueryNoThrow here), but a caller that
   // wants to say so has the fact.
   return { error };
+}
+
+// The rail meta is ONE list (registry kind "list": a push replaces it), and
+// two feeders write it: the workspace's rail above and the community rail
+// below. Each push therefore keeps the other scope's rows — a community
+// page open beside the team's chat must not blank the team's badges, and the
+// team feeder's next tick must not erase the public rooms' previews. The two
+// scopes are told apart by the channel row's kind, which both feeders have
+// synced before they write the rail. (A team whose active workspace IS the
+// community team lists its community rooms in both; the fresher push wins,
+// and the rows agree because railFor computes them.)
+function syncChatRail(
+  syncTable: (field: any, rows: any) => void,
+  incoming: ChatRailRow[],
+  scope: ChatRailScope,
+): void {
+  const s = useInboxStore.getState() as any;
+  const isCommunity = (row: ChatRailRow) => s.chatChannels?.[String(row.channel_id)]?.kind === "community";
+  const incomingIds = new Set(incoming.map((r) => String(r.channel_id)));
+  const kept = ((s.chatRail ?? []) as ChatRailRow[]).filter((row) =>
+    !incomingIds.has(String(row.channel_id))
+    && (scope === "community" ? !isCommunity(row) : isCommunity(row)));
+  syncTable("chatRail", [...kept, ...incoming]);
+}
+
+/**
+ * The public rail: every community channel, for a visitor or a member alike
+ * (chat.listCommunityChannels needs no identity). A per-view feeder — the
+ * community page mounts it, nothing else does — so it runs in follower
+ * windows too and never gates on the sync host.
+ */
+export function useCommunityChannelsSync(): { error?: Error; loading: boolean } {
+  const syncTable = useInboxStore((s) => s.syncTable);
+  const { data: result, error } = useQueryNoThrow(api.chat.listCommunityChannels, {});
+  useConvexSync(
+    result,
+    useCallback(
+      (data: any) => {
+        if (!data) return;
+        syncTable("chatChannels", data.channels ?? []);
+        syncTable("chatReads", data.reads ?? []);
+        syncChatRail(syncTable, data.rail ?? [], "community");
+        markChatRailLive();
+      },
+      [syncTable],
+    ),
+  );
+  return { error, loading: result === undefined && !error };
 }
 
 // ── One channel's messages ──────────────────────────────────────────────────
@@ -489,7 +538,7 @@ export function useOpenChatPath(): (path: string) => void {
 }
 
 /** The channel rail, already sorted and counted. */
-export function useChatRail(): ChatRailChannel[] {
+export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
   const s = useTrackedStore([
     (s: any) => channelsSig(s.chatChannels),
     (s: any) => readsSig(s.chatReads),
@@ -502,7 +551,7 @@ export function useChatRail(): ChatRailChannel[] {
   // No currentUser fallback: undefined MEANS the personal workspace, and
   // falling back to a team would resurrect team rooms the user left.
   const teamId = s.clientState?.ui?.active_team_id;
-  return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined);
+  return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined, scope);
 }
 
 export function useMessageViews(

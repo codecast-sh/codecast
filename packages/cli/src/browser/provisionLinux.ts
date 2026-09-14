@@ -31,6 +31,7 @@ import { copyCredentialToRemote, ensureRemoteClaudeReady } from "../remote/sessi
 import { remoteExec, scpTo } from "./remote.js";
 import { decryptToken } from "../tokenEncryption.js";
 import { defaultConfigDir } from "../config/configDir.js";
+import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
 
 /** The Xvfb display everything on the box shares. */
 export const SCREEN_DISPLAY = ":99";
@@ -160,6 +161,11 @@ UNIT
 
 echo "[5/6] idle watchdog (${idleStopMinutes}m)"
 echo "${idleStopMinutes}" | sudo tee /etc/cast-idle-minutes >/dev/null
+sudo mkdir -p /usr/local/lib/codecast
+sudo tee /usr/local/lib/codecast/idle-probe.py >/dev/null <<'IDLE_PROBE'
+${cloudIdleProbeScript}
+IDLE_PROBE
+sudo chmod 644 /usr/local/lib/codecast/idle-probe.py
 sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 #!/bin/bash
 # Power off after N idle minutes. EC2 turns an OS shutdown into a stopped
@@ -183,6 +189,9 @@ STAMP=/home/ubuntu/.codecast/host-active
 active=0
 [ "$(ss -Htn state established '( sport = :22 )' | wc -l)" -gt 0 ] && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
+if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
+  active=1
+fi
 if [ -f "$STAMP" ]; then
   [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 180 ] && active=1
 else

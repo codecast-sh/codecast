@@ -123,7 +123,7 @@ export {
 export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
-import type { BrowserPaneOffer } from "@codecast/shared/contracts";
+import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -236,6 +236,7 @@ export type {
   ChatReactionRow,
   ChatRailRow,
   ChatRailChannel,
+  ChatRailScope,
   ChatNotifyLevel,
   ChatSendOptions,
 } from "./chatSlice";
@@ -8689,10 +8690,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   convCommand: asyncAction(function (this: Draft, convId: string, command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
-    if (command === "sendEscapeToSession" && this.sessions[convId]) {
-      this.sessions[convId].agent_status = "idle";
-      this.sessions[convId].is_idle = true;
-      appendOptimisticMessage(this, convId, this.sessions[convId].agent_type === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+    if (command === "sendEscapeToSession") {
+      // The interruption line paints off whichever row the view holds. The
+      // sessions row is the inbox's windowed copy and is absent for a subagent
+      // or stashed conversation the user is looking at; the conversations row
+      // is seeded by the view itself. A press with no line was the bug
+      // (2026-09-14), so the line never waits on the sessions row.
+      const session = this.sessions[convId];
+      const agentType = session?.agent_type ?? this.conversations[convId]?.agent_type;
+      if (session) {
+        session.agent_status = "idle";
+        session.is_idle = true;
+      }
+      if (session || this.conversations[convId]) {
+        appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
+      }
     }
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),

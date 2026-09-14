@@ -197,6 +197,7 @@ export interface BridgeRequest {
   id: number;
   op: BridgeOp;
   tabId?: number;
+  owned?: boolean;
   url?: string;
   /** tabs.create: open without activating the tab (default false). */
   background?: boolean;

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { ANALYSIS_CAPS, computeAnalysisInputs, performApplyDecision } from "./orgInit";
-import { orgProposalBlock } from "@codecast/shared/contracts";
+import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
 // bounded and access checked, and applying an answered proposal is idempotent.
@@ -168,7 +168,9 @@ function proposalDecision(id: string, short: string, proposal: any, answer: { st
     question: `Create ${proposal.name ?? proposal.handle ?? "projects"}?`,
     context_md: `Why: evidence.\n\n${orgProposalBlock(proposal)}`,
     options: [{ label: "Create as proposed" }, { label: "Create with changes" }, { label: "Skip" }],
-    blocking: true, stack_id: STACK, created_at: NOW - H, ...answer,
+    blocking: true, stack_id: STACK, created_at: NOW - H,
+    ...(answer.status === "answered" ? { answered_by: { kind: "user", id: ME } } : {}),
+    ...answer,
   };
 }
 
@@ -207,6 +209,46 @@ describe("cast org apply", () => {
     expect(roles.map((r: any) => r.handle).sort()).toEqual(["growth", "landing"]);
   });
 
+  test("a handle the person already gave a role by hand is refused, never adopted", async () => {
+    const db = fixtures({
+      org_roles: [
+        { _id: "org_roles_hand", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth (mine)", handle: "growth", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words.", status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+      ],
+      session_decisions: [
+        proposalDecision("sd_a", "sd-40", { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, charter: "Owns growth.", caps: { wakes_per_day: 12 } }, { status: "answered", answer_index: 0 }),
+      ],
+    });
+    const ctx = ctxOf(db);
+    const r = await performApplyDecision(ctx, ME as any, "sd-40", { provision: false });
+    // Read the message once: bun's toMatchObject with an asymmetric matcher
+    // writes the matcher back into the received object.
+    const message = r.status === "error" ? r.error : "";
+    expect(r.status).toBe("error");
+    expect(message).toContain("@growth is already or-3 (Growth (mine))");
+    expect(message).toContain("pick another handle, or skip");
+    // The hand made role is untouched: scope, parent, charter and caps.
+    const hand = await db.get("org_roles_hand" as any);
+    expect(hand).toMatchObject({ scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words." });
+    expect(hand.caps).toBeUndefined();
+    // Not stamped: answering with a new handle makes the same decision apply.
+    expect((await db.get("sd_a" as any)).applied_at).toBeUndefined();
+    const roles = await db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", TEAM)).collect();
+    expect(roles.length).toBe(1);
+  });
+
+  test("an answer that is not a person's (a delegated role, a policy default) does not apply", async () => {
+    const db = fixtures({
+      session_decisions: [
+        { ...proposalDecision("sd_r", "sd-50", { kind: "role", name: "X", handle: "xx" }, { status: "answered", answer_index: 0 }), answered_by: { kind: "role", id: "org_roles_9" } },
+        { ...proposalDecision("sd_p", "sd-51", { kind: "role", name: "Y", handle: "yy" }, { status: "answered", answer_index: 0 }), answered_by: { kind: "policy", id: "stack:x" } },
+      ],
+    });
+    const ctx = ctxOf(db);
+    expect(await performApplyDecision(ctx, ME as any, "sd-50", { provision: false })).toMatchObject({ status: "error", error: expect.stringContaining("only when a person answered it (answered by role)") });
+    expect(await performApplyDecision(ctx, ME as any, "sd-51", { provision: false })).toMatchObject({ status: "error", error: expect.stringContaining("answered by policy") });
+    expect(await db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", TEAM)).collect()).toEqual([]);
+  });
+
   test("a decision without a proposal block, or applied by a plain member, is refused as a value", async () => {
     const db = fixtures({
       session_decisions: [
@@ -236,7 +278,7 @@ describe("cast org apply", () => {
     expect(await performApplyDecision(ctx, ME as any, "sd-30")).toMatchObject({ status: "applied", note: expect.stringContaining('created project "Platform"') });
     const platform = (await db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", WS)).collect()).find((p: any) => p.title === "Platform");
     expect(platform).toMatchObject({ team_id: TEAM, workspace: WS, status: "active", project_path: "/repo/platform" });
-    // Re-applying after the stamp is a skip; a fresh identical create is adopted, not twinned.
+    // Re-applying after the stamp is a skip; an unstamped identical create finds the project and does not twin it.
     await db.patch("sd_a" as any, { applied_at: undefined, applied_note: undefined });
     expect(await performApplyDecision(ctx, ME as any, "sd-30")).toMatchObject({ status: "applied", note: expect.stringContaining("already exists") });
 

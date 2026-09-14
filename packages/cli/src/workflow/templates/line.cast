@@ -28,7 +28,7 @@ digraph line {
     timeout=1800,
     script="cd \"$(cast ws path $worktree)\" && cast ws check"]
 
-  review [label="Review", backend=session, agent=claude,
+  review [label="Review", backend=session, agent=claude, reviewer=true,
     prompt="You are the independent reviewer for task $task_id: $task_title\n\nBranch: $branch (check it out, or read `git diff $default_branch...$branch`).\n\nAcceptance criteria:\n- $acceptance_criteria\n\nYou receive only the branch, the title and the criteria. Check each criterion against the diff and by running what you can. Do not fix the code yourself.\n\nEnd your turn with one verdict and the unmet criteria in the note:\n\n  cast task verdict $task_id approve|changes|reject --note -\n\napprove closes the task; changes sends it back to the implementer; reject reopens it as blocked for a person to decide."]
 
   start -> analyze
