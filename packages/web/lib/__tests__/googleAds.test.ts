@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { replaceGlobals } from "../../test-helpers/globals";
 
 // Under bun, import.meta.env IS process.env, so the module under test reads
 // whatever these tests set. googleAds.ts reads the variable on each call rather
@@ -13,15 +14,26 @@ const SEND_TO = "AW-11465219128/2RGKCO7uqvMcELi4hdsq";
 let scripts: Array<{ src: string; async: boolean }>;
 let gtagCalls: unknown[][];
 
+// bun runs every test file in one process, so a fake left on globalThis is
+// the document every later file sees: put back whatever was there after each test.
+let restoreGlobals: (() => void) | null = null;
+afterEach(() => {
+  restoreGlobals?.();
+  restoreGlobals = null;
+});
+
 function installBrowser(opts: { doNotTrack?: string } = {}) {
   scripts = [];
   gtagCalls = [];
-  (globalThis as any).navigator = { doNotTrack: opts.doNotTrack ?? null };
-  (globalThis as any).document = {
-    createElement: () => ({ src: "", async: false }),
-    head: { appendChild: (el: any) => scripts.push(el) },
-  };
-  (globalThis as any).window = {};
+  restoreGlobals?.();
+  restoreGlobals = replaceGlobals({
+    navigator: { doNotTrack: opts.doNotTrack ?? null },
+    document: {
+      createElement: () => ({ src: "", async: false }),
+      head: { appendChild: (el: any) => scripts.push(el) },
+    },
+    window: {},
+  });
 }
 
 // Recording gtag replaces the real queue so a test can read the arguments.
