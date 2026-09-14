@@ -236,6 +236,30 @@ export async function addToStackCore(ctx: Ctx, userId: Id<"users">, stackRef: st
   return { stack: { id: stack._id, short_id: stack.short_id }, decision: { id: row._id, short_id: row.short_id } };
 }
 
+// The queue's "group into a stack" (D5): create and add the members in one
+// call, so the web's optimistic stub reconciles to one server row and one
+// round trip instead of N + 1.
+export async function createStackWithCore(ctx: Ctx, userId: Id<"users">, args: { title: string; decision_ids: string[]; team_id?: Id<"teams"> }) {
+  const created = await createStackCore(ctx, userId, { title: args.title, team_id: args.team_id });
+  if ("error" in created && created.error) return created;
+  const added: string[] = [];
+  for (const ref of args.decision_ids) {
+    const r = await addToStackCore(ctx, userId, String(created.id), ref);
+    if ("error" in r) return { ...created, error: r.error, added };
+    added.push(ref);
+  }
+  return { ...created, added };
+}
+
+export const createStackWith = mutation({
+  args: { title: v.string(), decision_ids: v.array(v.string()), team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Unauthorized" };
+    return createStackWithCore(ctx, userId, args);
+  },
+});
+
 export const addToStack = mutation({
   args: { api_token: v.optional(v.string()), stack: v.string(), decision: v.string() },
   handler: async (ctx, args) => {
@@ -271,20 +295,24 @@ export const removeFromStack = mutation({
 });
 
 // The new order must be a permutation of the current members.
+export async function reorderStackCore(ctx: Ctx, userId: Id<"users">, stackRef: string, decisionIds: Id<"session_decisions">[]) {
+  const found = await accessibleStack(ctx, userId, stackRef, true);
+  if ("error" in found) return found;
+  const before = [...found.stack.decision_ids].map(String).sort();
+  const after = [...decisionIds].map(String).sort();
+  if (before.length !== after.length || before.some((id, i) => id !== after[i])) {
+    return { error: "decision_ids must be a permutation of the stack's members" };
+  }
+  await ctx.db.patch(found.stack._id, { decision_ids: decisionIds, updated_at: Date.now() });
+  return { reordered: true };
+}
+
 export const reorderStack = mutation({
   args: { api_token: v.optional(v.string()), stack: v.string(), decision_ids: v.array(v.id("session_decisions")) },
   handler: async (ctx, args) => {
     const userId = await authUser(ctx, args.api_token);
     if (!userId) return { error: "Unauthorized" };
-    const found = await accessibleStack(ctx, userId, args.stack, true);
-    if ("error" in found) return found;
-    const current = new Set(found.stack.decision_ids.map(String));
-    const next = args.decision_ids.map(String);
-    if (next.length !== current.size || !next.every((id) => current.has(id)) || new Set(next).size !== next.length) {
-      return { error: "decision_ids must be a permutation of the stack's members" };
-    }
-    await ctx.db.patch(found.stack._id, { decision_ids: args.decision_ids, updated_at: Date.now() });
-    return { reordered: true };
+    return reorderStackCore(ctx, userId, args.stack, args.decision_ids);
   },
 });
 
