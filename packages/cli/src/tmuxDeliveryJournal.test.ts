@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prepareTmuxDelivery, TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 
 const dirs: string[] = [];
 const stores: TmuxDeliveryJournal[] = [];
@@ -80,4 +80,56 @@ test("a confirmed exited agent permits retry only in a replacement terminal", as
   expect(resolved.prior).toBeNull();
   expect(store.begin(identity, resolved.generation, "continue").fresh).toBe(true);
   expect(store.get(identity.messageId)?.terminalExited).toBe(0);
+});
+
+test("a submit into a pane that is definitively gone replays once the echo window passes with no acknowledgment", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  store.advance(identity.messageId, "submit");
+  // The tmux server restarted on the same socket: every pane of the old one is gone.
+  const restarted = async () => ({ stdout: "101|/socket|%2|201|301" });
+  const early = await prepareTmuxDelivery("new", identity, restarted, async () => false, store);
+  expect(() => store.begin(identity, early.generation, "continue")).toThrow("not been reconciled");
+  const settled = await prepareTmuxDelivery("new", identity, restarted, async () => false, store, { settleMs: 0 });
+  expect(settled.prior).toBeNull();
+  expect(store.begin(identity, settled.generation, "continue").fresh).toBe(true);
+});
+
+test("a message that can never be delivered again stops guarding its pane", async () => {
+  const lookup = (answer: string | Error) => ({ getPendingMessageStatus: async () => { if (answer instanceof Error) throw answer; return answer; } });
+  expect(await pendingMessageFinished(lookup("delivered"), "m")).toBe(true);
+  expect(await pendingMessageFinished(lookup("cancelled"), "m")).toBe(true);
+  expect(await pendingMessageFinished(lookup(new Error("Uncaught Error: Message not found")), "m")).toBe(true);
+  expect(await pendingMessageFinished(lookup("pending"), "m")).toBe(false);
+  expect(await pendingMessageFinished(lookup("undeliverable"), "m")).toBe(false);
+  await expect(pendingMessageFinished(lookup(new Error("offline")), "m")).rejects.toThrow("offline");
+});
+
+test("a settled paste whose message stopped retrying frees the pane for the next message", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  const next = { ...identity, messageId: "message-b" };
+  await expect(prepareTmuxDelivery("target", next, query, async () => false, store)).rejects.toThrow("earlier message");
+  await prepareTmuxDelivery("target", next, query, async () => false, store, { settleMs: 0 });
+  expect(store.get(identity.messageId)).toBeNull();
+  expect(store.begin(next, generation, "next").fresh).toBe(true);
+});
+
+test("a settled submit keeps the pane even when its message is unacknowledged", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  store.advance(identity.messageId, "submit");
+  const next = { ...identity, messageId: "message-b" };
+  await expect(prepareTmuxDelivery("target", next, query, async () => false, store, { settleMs: 0 })).rejects.toThrow("earlier message");
+});
+
+test("a verification the server never acknowledged is reported once the receipt settles", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  store.advance(identity.messageId, "verified");
+  expect((await prepareTmuxDelivery("target", identity, query, async () => false, store)).unacknowledged).toBe(false);
+  expect((await prepareTmuxDelivery("target", identity, query, async () => true, store, { settleMs: 0 })).unacknowledged).toBe(false);
+  const settled = await prepareTmuxDelivery("target", identity, query, async () => false, store, { settleMs: 0 });
+  expect(settled.unacknowledged).toBe(true);
+  expect(settled.prior?.phase).toBe("verified");
 });

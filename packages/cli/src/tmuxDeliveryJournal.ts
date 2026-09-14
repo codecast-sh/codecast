@@ -70,8 +70,20 @@ export class TmuxDeliveryJournal {
   }
 
   abandonUnsubmitted(messageId: string): void {
+    this.abandonWhere(messageId, "phase = 'paste' OR messageId IN (SELECT messageId FROM tmux_paste_failures)");
+  }
+
+  // The receipt settled and its payload provably never reached the agent: not
+  // at the prompt, and no echo acknowledged it. Whatever phase it recorded,
+  // including a verification the server never confirmed, a new write cannot
+  // double it.
+  release(messageId: string): void {
+    this.abandonWhere(messageId, "1 = 1");
+  }
+
+  private abandonWhere(messageId: string, clause: string): void {
     this.db.transaction(() => {
-      const result = this.db.query("DELETE FROM tmux_pastes WHERE messageId = ? AND (phase = 'paste' OR messageId IN (SELECT messageId FROM tmux_paste_failures))").run(messageId);
+      const result = this.db.query(`DELETE FROM tmux_pastes WHERE messageId = ? AND (${clause})`).run(messageId);
       if (result.changes) this.db.query("DELETE FROM tmux_paste_failures WHERE messageId = ?").run(messageId);
     }).immediate();
   }
@@ -90,6 +102,41 @@ export function tmuxDeliveryJournal(): TmuxDeliveryJournal {
 
 type TmuxQuery = (args: string[]) => Promise<{ stdout: string }>;
 
+export type TmuxDeliveryPreparation = {
+  journal: TmuxDeliveryJournal;
+  generation: string;
+  prior: TmuxPasteReceipt | null;
+  // A verified receipt the server never acknowledged within the settle window.
+  unacknowledged: boolean;
+};
+
+// How long a receipt waits for its message's transcript echo before the
+// absence of that echo counts as evidence. A submitted message is acknowledged
+// within seconds of reaching the agent; two minutes covers a loaded machine.
+// Without this bound a paste lost to the terminal held its pane forever.
+export const TMUX_RECEIPT_SETTLE_MS = 120_000;
+
+export function receiptSettled(receipt: TmuxPasteReceipt, settleMs = TMUX_RECEIPT_SETTLE_MS, now = Date.now()): boolean {
+  return now - receipt.pasteAt >= settleMs;
+}
+
+// A receipt stops guarding its pane once nobody will ever deliver its message
+// again: delivered, cancelled by a person, or deleted along with its session.
+// A cancelled owner never retries, so treating only delivery as final left
+// every later message refused the pane.
+export async function pendingMessageFinished(
+  lookup: { getPendingMessageStatus(messageId: string): Promise<string> },
+  messageId: string,
+): Promise<boolean> {
+  try {
+    const status = await lookup.getPendingMessageStatus(messageId);
+    return status === "delivered" || status === "cancelled";
+  } catch (error) {
+    if (/Message not found/.test(String(error))) return true;
+    throw error;
+  }
+}
+
 async function generationFor(target: string, exec: TmuxQuery): Promise<string> {
   const { stdout } = await exec(["display-message", "-p", "-t", target, "#{pid}|#{socket_path}|#{pane_id}|#{pane_pid}|#{session_created}"]);
   const parts = stdout.trim().split("|");
@@ -105,9 +152,10 @@ export async function prepareTmuxDelivery(
   exec: TmuxQuery,
   isDelivered: (messageId: string) => Promise<boolean>,
   journal?: TmuxDeliveryJournal,
-): Promise<{ journal: TmuxDeliveryJournal; generation: string; prior: TmuxPasteReceipt | null }> {
+  opts?: { settleMs?: number },
+): Promise<TmuxDeliveryPreparation> {
   try {
-    return await prepareDelivery(target, identity, exec, isDelivered, journal ?? tmuxDeliveryJournal());
+    return await prepareDelivery(target, identity, exec, isDelivered, journal ?? tmuxDeliveryJournal(), opts?.settleMs);
   } catch (error) {
     if (error instanceof TmuxDeliveryUncertainError) throw error;
     throw new TmuxDeliveryUncertainError(`receipt reconciliation failed: ${String(error)}`);
@@ -120,19 +168,33 @@ async function prepareDelivery(
   exec: TmuxQuery,
   isDelivered: (messageId: string) => Promise<boolean>,
   journal: TmuxDeliveryJournal,
-): Promise<{ journal: TmuxDeliveryJournal; generation: string; prior: TmuxPasteReceipt | null }> {
+  settleMs?: number,
+): Promise<TmuxDeliveryPreparation> {
   const generation = await generationFor(target, exec);
   const pending = journal.pending(generation);
   if (pending && pending.messageId !== identity.messageId) {
     if (await isDelivered(pending.messageId)) journal.advance(pending.messageId, "verified");
+    // A paste that settled unacknowledged never had Enter pressed on it, so
+    // nothing of it can still submit. Its own message may have stopped
+    // retrying, and holding the pane for it refused every later message
+    // (2026-09-14). The next write drains whatever residue it left.
+    else if (pending.phase === "paste" && receiptSettled(pending, settleMs)) journal.release(pending.messageId);
     else throw new TmuxDeliveryUncertainError("an earlier message still owns the terminal input");
   }
   let prior = journal.get(identity.messageId);
+  let unacknowledged = false;
   if (prior && prior.phase !== "verified" && await isDelivered(identity.messageId)) {
     journal.advance(identity.messageId, "verified");
     prior = journal.get(identity.messageId);
+  } else if (prior?.phase === "verified" && receiptSettled(prior, settleMs)) {
+    // The local verifier saw evidence of a turn, but an agent that took the
+    // message would have echoed it by now. The caller decides from the pane.
+    unacknowledged = !(await isDelivered(identity.messageId));
   }
-  if (prior && prior.generation !== generation && (prior.phase === "paste" || prior.terminalExited)) {
+  // A submit into a pane that is gone replays only after the echo window: the
+  // agent that took it would have written it to its transcript by then.
+  const settled = !!prior && receiptSettled(prior, settleMs);
+  if (prior && prior.generation !== generation && (prior.phase === "paste" || prior.terminalExited || settled)) {
     const oldParts: string[] = JSON.parse(prior.generation);
     const newParts: string[] = JSON.parse(generation);
     let oldPaneGone = !!prior.terminalExited || (oldParts[1] === newParts[1] && oldParts[0] !== newParts[0]);
@@ -143,9 +205,10 @@ async function prepareDelivery(
       oldPaneGone = !panes.includes(oldParts[2]) || await generationFor(oldParts[2], exec) !== prior.generation;
     }
     if (oldPaneGone) {
-      journal.abandonUnsubmitted(identity.messageId);
+      if (settled) journal.release(identity.messageId);
+      else journal.abandonUnsubmitted(identity.messageId);
       prior = null;
     }
   }
-  return { journal, generation, prior };
+  return { journal, generation, prior, unacknowledged };
 }
