@@ -1,11 +1,18 @@
-import { parseEntityUrl } from "./entityLinks";
+import { parseEntityUrl, CONTEXTUAL_PR_REF_PREFIX } from "./entityLinks";
 
 const CARD_PREFIX = "card:";
 
-/** Payloads that never become cards: date pills and doc transclusions. */
+/** Payloads that never become cards: date pills, doc transclusions, and a
+ *  pull request named by number alone (`pr:#N|…`), which only the surrounding
+ *  conversation can complete to an object and so stays an inline pill. */
 function cardEligible(payload: string): boolean {
-  return !/^date:/i.test(payload) && !payload.startsWith("embed:");
+  return !/^date:/i.test(payload) && !payload.startsWith("embed:") && !payload.startsWith(CONTEXTUAL_PR_REF_PREFIX);
 }
+
+/** Set on a link that named a pull request or commit by URL: the reference
+ *  is beyond doubt, so the card path keeps it a reference even when codecast
+ *  holds no row for it (see EntityIdPill `certain`). */
+export const REF_CERTAIN_ATTR = "data-ref-certain";
 
 function mdastText(node: any): string {
   if (!node) return "";
@@ -35,6 +42,9 @@ function normalizeEntityLinks(node: any) {
       const payload = ref.type === "doc" ? `doc:${ref.id}` : ref.id;
       child.url = `entity://${payload}`;
       child.children = [{ type: "text", value: payload }];
+      if (ref.type === "pr" || ref.type === "commit") {
+        child.data = { ...child.data, hProperties: { ...child.data?.hProperties, [REF_CERTAIN_ATTR]: "1" } };
+      }
     } else {
       normalizeEntityLinks(child);
     }

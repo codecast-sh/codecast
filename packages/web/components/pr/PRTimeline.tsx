@@ -1,4 +1,4 @@
-import { CheckCircle, MessageSquare, XCircle, Clock } from "lucide-react";
+import { CheckCircle, MessageSquare, XCircle, Clock, Ban } from "lucide-react";
 import { ExternalEventRow } from "../feed/ExternalEventRow";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { CommentMarkdown } from "../comments/CommentMarkdown";
@@ -10,7 +10,10 @@ import { relTimeShort } from "../../lib/utils";
 import {
   REVIEW_STATE_ACCENT,
   dayLabel,
+  notePlace,
+  reviewLineComments,
   threadResolved,
+  type CodeCommentRow,
   type PrTimelineItem,
   type PrReviewRow,
 } from "../../lib/prView";
@@ -25,12 +28,31 @@ const REVIEW_ICON: Record<string, typeof CheckCircle> = {
   changes_requested: XCircle,
   commented: MessageSquare,
   pending: Clock,
+  dismissed: Ban,
 };
 
-function ReviewItem({ review }: { review: PrReviewRow }) {
+const REVIEW_VERB: Record<string, string> = {
+  approved: "approved",
+  changes_requested: "requested changes",
+  commented: "commented",
+  pending: "is reviewing",
+  dismissed: "review dismissed",
+};
+
+/** A review, with the line notes that went out inside it, each a jump to its thread. */
+function ReviewItem({
+  review,
+  comments,
+  onJump,
+}: {
+  review: PrReviewRow;
+  comments: CodeCommentRow[];
+  onJump?: (comment: CodeCommentRow) => void;
+}) {
   const accent = REVIEW_STATE_ACCENT[review.state] ?? "muted";
   const Icon = REVIEW_ICON[review.state] ?? MessageSquare;
-  const verb = review.state.replace(/_/g, " ");
+  const verb = REVIEW_VERB[review.state] ?? review.state.replace(/_/g, " ");
+  const notes = reviewLineComments(review, comments);
   return (
     <div
       className="rounded-lg border px-3 py-2"
@@ -58,6 +80,24 @@ function ReviewItem({ review }: { review: PrReviewRow }) {
           <CommentMarkdown content={review.body} />
         </div>
       )}
+      {notes.length > 0 && (
+        <ul className="mt-2 pl-6 space-y-1">
+          {notes.map((note) => (
+            <li key={note._id}>
+              <button
+                type="button"
+                className={`w-full text-left flex items-baseline gap-2 rounded px-1 py-0.5 hover:bg-sol-bg-alt/60 ${note.resolved ? "opacity-60" : ""}`}
+                onClick={() => onJump?.(note)}
+                title="Open this thread in Files"
+              >
+                <span className="font-mono text-[11px] text-sol-cyan shrink-0">{notePlace(note)}</span>
+                <span className="text-[12px] text-sol-text-muted truncate">{note.content}</span>
+                {note.resolved && <span className="ml-auto shrink-0 text-[10px] text-sol-green">resolved</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -65,17 +105,22 @@ function ReviewItem({ review }: { review: PrReviewRow }) {
 export function PRTimeline({
   pr,
   items,
+  comments,
   authed,
   onPostComment,
   onResolve,
   onNavigate,
+  onJumpToThread,
 }: {
   pr: any;
   items: PrTimelineItem[];
+  /** Every comment on the pull request, for the notes under each review. */
+  comments: CodeCommentRow[];
   authed: boolean;
   onPostComment: (content: string) => void | Promise<void>;
   onResolve: (commentId: string, resolved: boolean) => void;
   onNavigate?: (path: string) => void;
+  onJumpToThread?: (comment: CodeCommentRow) => void;
 }) {
   let lastDay = "";
 
@@ -112,7 +157,7 @@ export function PRTimeline({
                     onNavigate={onNavigate}
                   />
                 )}
-                {item.kind === "review" && <ReviewItem review={item.review} />}
+                {item.kind === "review" && <ReviewItem review={item.review} comments={comments} onJump={onJumpToThread} />}
                 {item.kind === "comment" && (
                   <div
                     className={`rounded-lg border px-3 py-2 space-y-2 ${

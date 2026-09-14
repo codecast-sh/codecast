@@ -40,7 +40,7 @@ export function useSyncFileCodeComments(repository: string | undefined, filePath
 }
 
 const codeCommentSig = (c: CodeCommentRow) =>
-  `${c.content}|${c.resolved ?? ""}|${c.resolved_at ?? ""}|${c.line_number ?? ""}|${c.file_path ?? ""}`;
+  `${c.content}|${c.resolved ?? ""}|${c.resolved_at ?? ""}|${c.line_number ?? ""}|${c.file_path ?? ""}|${c.pending_review ? 1 : 0}|${c.github_review_id ?? ""}|${c.html_url ?? ""}`;
 
 const byCreatedAsc = (a: CodeCommentRow, b: CodeCommentRow) => a.created_at - b.created_at;
 

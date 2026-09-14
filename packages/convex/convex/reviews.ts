@@ -344,6 +344,24 @@ export const submitPending = action({
   handler: async (ctx, args): Promise<any> => {
     const userId = await ctx.runQuery(internal.reviews.callerId, { api_token: args.api_token });
     if (!userId) return { error: "Unauthorized" };
+    return await submitReviewWithNotes(ctx, userId, args.pull_request_id, args.event, args.body);
+  },
+});
+
+/**
+ * The one review submission: the verdict, the summary, and every pending
+ * note the reviewer holds on the pull request, as one GitHub review under
+ * their own account. The page and `cast pr review` both come through here.
+ */
+export async function submitReviewWithNotes(
+  ctx: any,
+  userId: any,
+  pullRequestId: any,
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
+  body: string | undefined,
+): Promise<any> {
+  {
+    const args = { pull_request_id: pullRequestId, event, body };
     const reviewer: any = await ctx.runQuery(internal.reviews.reviewerFor, { user_id: userId, pull_request_id: args.pull_request_id });
     if (!reviewer) return { error: "Pull request not found" };
     if (!reviewer.github_token) {
@@ -410,8 +428,8 @@ export const submitPending = action({
     } catch (error) {
       return { error: githubSentence(error) };
     }
-  },
-});
+  }
+}
 
 export const callerId = internalQuery({
   args: { api_token: v.optional(v.string()) },

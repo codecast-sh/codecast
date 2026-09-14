@@ -2,17 +2,20 @@ import { useCallback, useMemo, useRef, useState, type RefCallback } from "react"
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { codeThreadRootKey } from "@codecast/shared/comments";
+import { repoObjectGitHubUrl } from "@codecast/shared/entities";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { GitPullRequest, FileDiff, ListChecks, MessagesSquare } from "lucide-react";
+import { GitPullRequest, FileDiff, GitCommitHorizontal, ListChecks, MessagesSquare } from "lucide-react";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
 import { KeyCap } from "../../../../../components/KeyboardShortcutsHelp";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { Button } from "../../../../../components/ui/button";
 import { PRChecks } from "../../../../../components/pr/PRChecks";
+import { PRCommits } from "../../../../../components/pr/PRCommits";
 import { PRHeader } from "../../../../../components/pr/PRHeader";
-import { PRLineThread } from "../../../../../components/pr/PRThread";
+import { MergeMenu, MoreMenu, ReviewMenu } from "../../../../../components/pr/PRActions";
+import { PRLineThread, type NoteMode } from "../../../../../components/pr/PRThread";
 import { PRRail } from "../../../../../components/pr/PRRail";
 import { PRTimeline } from "../../../../../components/pr/PRTimeline";
 import { useCurrentUser } from "../../../../../hooks/useCurrentUser";
@@ -28,12 +31,16 @@ import { useInboxStore } from "../../../../../store/inboxStore";
 import {
   PR_STATE_META,
   buildPrTimeline,
+  commentAnchor,
+  fileThreadMarks,
   groupCommentsByFileLine,
   isOptimisticComment,
   newCommentClientId,
+  pendingNotes,
   prStateKey,
   serverCommentId,
   threadSide,
+  threadStops,
   unresolvedThreadCount,
   type CodeCommentRow,
 } from "../../../../../lib/prView";
@@ -47,13 +54,16 @@ import "../../../../../components/pr/pr.css";
 // before its backend half is deployed.
 const api = _api as any;
 
-type Tab = "conversation" | "files" | "checks";
+type Tab = "conversation" | "files" | "commits" | "checks";
 
 const TABS: { key: Tab; label: string; icon: typeof GitPullRequest; digit: string }[] = [
   { key: "conversation", label: "Conversation", icon: MessagesSquare, digit: "1" },
   { key: "files", label: "Files", icon: FileDiff, digit: "2" },
-  { key: "checks", label: "Checks", icon: ListChecks, digit: "3" },
+  { key: "commits", label: "Commits", icon: GitCommitHorizontal, digit: "3" },
+  { key: "checks", label: "Checks", icon: ListChecks, digit: "4" },
 ];
+
+const NOTE_MODE_KEY = "pr.noteMode";
 
 function PRNotFound({ repository, number }: { repository: string; number: number }) {
   return (
@@ -73,7 +83,7 @@ function PRNotFound({ repository, number }: { repository: string; number: number
         to install it there, or to add this repository to an install that exists.
       </p>
       <a
-        href={`https://github.com/${repository}/pull/${number}`}
+        href={repoObjectGitHubUrl({ type: "pr", repository, number })}
         target="_blank"
         rel="noopener noreferrer"
       >
@@ -131,6 +141,51 @@ function PRContent({
   const [tab, setTab] = useState<Tab>("conversation");
   const [composing, setComposing] = useState<{ file: string; anchor: DiffLineAnchor } | null>(null);
 
+  // The review: where a new note goes (held, or out at once), remembered on
+  // this device; the notes waiting; and the menu that sends them.
+  const [noteMode, setNoteModeState] = useState<NoteMode>(() =>
+    (typeof localStorage !== "undefined" && (localStorage.getItem(NOTE_MODE_KEY) as NoteMode)) || "review");
+  const setNoteMode = useCallback((mode: NoteMode) => {
+    setNoteModeState(mode);
+    localStorage.setItem(NOTE_MODE_KEY, mode);
+  }, []);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const notes = useMemo(() => pendingNotes(comments), [comments]);
+
+  // Viewed files: the reader's own mark, synced with the rest of their prefs.
+  const viewedFiles = useInboxStore((s) => (prId ? s.clientState.ui?.pr_viewed_files?.[prId] : undefined));
+  const viewedSet = useMemo(() => new Set(viewedFiles ?? []), [viewedFiles]);
+  const toggleViewed = useCallback((filename: string) => {
+    if (!prId) return;
+    const all = useInboxStore.getState().clientState.ui?.pr_viewed_files ?? {};
+    const current = new Set(all[prId] ?? []);
+    if (current.has(filename)) current.delete(filename);
+    else current.add(filename);
+    useInboxStore.getState().updateClientUI({ pr_viewed_files: { ...all, [prId]: [...current] } });
+  }, [prId]);
+
+  // Walking the threads: n and p move through the open ones in file order;
+  // a jump from the timeline or the review menu lands on one directly.
+  const [landing, setLanding] = useState<{ file: string; key: string; nonce: number } | null>(null);
+  const jumpTo = useCallback((file: string, key: string) => {
+    setTab("files");
+    setLanding({ file, key, nonce: Date.now() });
+  }, []);
+  const jumpToComment = useCallback((comment: CodeCommentRow) => {
+    if (!comment.file_path || comment.line_number === undefined) return;
+    jumpTo(comment.file_path, diffLineKey(commentAnchor(comment)));
+  }, [jumpTo]);
+  useWatchEffect(() => {
+    if (!landing) return;
+    let tries = 0;
+    const find = () => {
+      const el = document.querySelector<HTMLElement>(`[data-pr-thread="${CSS.escape(`${landing.file}|${landing.key}`)}"]`);
+      if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+      else if (tries++ < 20) requestAnimationFrame(find);
+    };
+    requestAnimationFrame(find);
+  }, [landing]);
+
   const sessions = useLinkedSessions(pr?.linked_session_ids ?? []);
   const sessionChoices = useMemo(
     () => sessions.map((s: any) => ({ id: s._id as string, title: (s.title as string) || "Untitled session" })),
@@ -159,6 +214,9 @@ function PRContent({
     async (fields: Record<string, unknown>) => {
       if (!pr) return;
       const clientId = newCommentClientId();
+      // A fresh note on a line joins the review when the reader has asked for
+      // that; a reply, or a comment on the conversation, is said at once.
+      const pending = noteMode === "review" && !!fields.file_path && !fields.parent_id;
       // Render it now; the server row carrying this client_id supersedes the
       // stub when listForPR echoes it back (the collection's altKey).
       useInboxStore.getState().syncRecord("codeComments", clientId, {
@@ -171,6 +229,7 @@ function PRContent({
         created_at: Date.now(),
         author_user_id: user?._id,
         author_kind: "user",
+        pending_review: pending || undefined,
         ...fields,
       });
       await createComment({
@@ -178,11 +237,12 @@ function PRContent({
         ref: pr.head_sha,
         pull_request_id: pr._id,
         client_id: clientId,
-        mirror: true,
+        mirror: !pending,
+        pending,
         ...fields,
       });
     },
-    [createComment, pr, repository, user?._id],
+    [createComment, noteMode, pr, repository, user?._id],
   );
 
   const setThreadResolved = useCallback(
@@ -199,6 +259,7 @@ function PRContent({
     () => ({
       threadsFor: (filename) => threadsByFile.get(filename),
       render: (filename, anchor, items) => (
+        <div data-pr-thread={`${filename}|${diffLineKey(anchor)}`}>
         <PRLineThread
           repository={repository}
           threadKey={codeThreadRootKey(repository, pr?.head_sha ?? "", { file_path: filename, line_number: anchor.lineNumber })}
@@ -206,6 +267,10 @@ function PRContent({
           authed={isAuthenticated}
           lineNumber={anchor.lineNumber}
           lineEnd={anchor.lineEnd}
+          noteMode={noteMode}
+          onNoteMode={setNoteMode}
+          pendingCount={notes.length}
+          landed={!!landing && landing.file === filename && landing.key === diffLineKey(anchor)}
           onReply={(content) =>
             post({
               file_path: filename,
@@ -226,12 +291,25 @@ function PRContent({
           onResolve={(resolved) => setThreadResolved(items as CodeCommentRow[], resolved)}
           onClose={() => setComposing(null)}
         />
+        </div>
       ),
       onComment: (filename, anchor) => {
         if (anchor) setComposing({ file: filename, anchor });
       },
     }),
-    [threadsByFile, isAuthenticated, post, setThreadResolved, repository, pr?.head_sha],
+    [threadsByFile, isAuthenticated, post, setThreadResolved, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing],
+  );
+
+  // What the tree shows beside each file: open threads, waiting notes, viewed.
+  const threadMarks = useMemo(() => fileThreadMarks(comments), [comments]);
+  const fileMarks = useCallback(
+    (filename: string) => {
+      const marks = threadMarks.get(filename);
+      const viewed = viewedSet.has(filename);
+      if (!marks && !viewed) return undefined;
+      return { open: marks?.open, pending: marks?.pending, viewed };
+    },
+    [threadMarks, viewedSet],
   );
 
   // Tab shortcuts. Ignored while typing, so a comment can contain a digit, and
@@ -245,7 +323,18 @@ function PRContent({
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
     const hit = TABS.find((t) => t.digit === e.key);
-    if (hit) setTab(hit.key);
+    if (hit) { setTab(hit.key); return; }
+    if (e.key === "r" && isAuthenticated) { e.preventDefault(); setReviewOpen((v) => !v); return; }
+    if (e.key === "n" || e.key === "p") {
+      const stops = threadStops(pr?.files ?? [], comments).filter((s) => s.open);
+      if (stops.length === 0) return;
+      e.preventDefault();
+      const at = landing ? stops.findIndex((s) => s.file === landing.file && s.key === landing.key) : -1;
+      const next = e.key === "n"
+        ? stops[(at + 1) % stops.length]
+        : stops[(at - 1 + stops.length) % stops.length];
+      jumpTo(next.file, next.key);
+    }
   });
 
   if (!pr) {
@@ -280,6 +369,20 @@ function PRContent({
           onSetShepherd={(conversationId, enabled) =>
             void setShepherd({ pr_id: pr._id, conversation_id: conversationId, enabled })
           }
+          actions={isAuthenticated && (
+            <>
+              <ReviewMenu
+                pr={pr}
+                notes={notes}
+                authorLogin={user?.github_username}
+                onNavigate={jumpToComment}
+                open={reviewOpen}
+                onOpenChange={setReviewOpen}
+              />
+              <MergeMenu pr={pr} />
+              <MoreMenu pr={pr} />
+            </>
+          )}
         />
       </div>
 
@@ -309,6 +412,14 @@ function PRContent({
                 {key === "files" && files.length > 0 && (
                   <span className="text-[11px] text-sol-text-dim">{files.length}</span>
                 )}
+                {key === "files" && notes.length > 0 && (
+                  <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Notes in your review">
+                    {notes.length}
+                  </span>
+                )}
+                {key === "commits" && (pr.commits?.length ?? 0) > 0 && (
+                  <span className="text-[11px] text-sol-text-dim">{pr.commits.length}</span>
+                )}
                 <span className="opacity-0 group-hover:opacity-100 transition-opacity">
                   <KeyCap size="xs">{digit}</KeyCap>
                 </span>
@@ -321,6 +432,8 @@ function PRContent({
               <PRTimeline
                 pr={pr}
                 items={timeline}
+                comments={comments}
+                onJumpToThread={jumpToComment}
                 authed={isAuthenticated}
                 onPostComment={(content) => post({ content })}
                 onResolve={(commentId, resolved) => {
@@ -336,8 +449,15 @@ function PRContent({
                   No file changes have been synced for this pull request yet.
                 </div>
               ) : (
-                <FileDiffLayout files={files} lineThreads={lineThreads} />
+                <FileDiffLayout
+                  files={files}
+                  lineThreads={lineThreads}
+                  fileMarks={fileMarks}
+                  onToggleViewed={isAuthenticated ? toggleViewed : undefined}
+                  focusFile={landing?.file ?? null}
+                />
               ))}
+            {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} />}
             {tab === "checks" && <PRChecks checks={pr.checks} />}
           </div>
         </div>
