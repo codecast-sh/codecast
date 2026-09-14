@@ -175,6 +175,7 @@ import {
   countLeaves,
   findLeaf as findStageLeaf,
   insertLeaf as insertStageLeaf,
+  seedLeafId as stageSeedLeafId,
   moveLeaf as moveStageLeaf,
   leavesOf as stageLeavesOf,
   removeLeaf as removeStageLeaf,
@@ -1727,6 +1728,11 @@ export type AppTab = {
   layout?: StageNode;
   focusedLeafId?: string;
 };
+
+/** How a leaf joins the stage: under a named id (a pane the shell keeps
+ *  re-pointing), and whether it takes focus (default) or leaves the focused
+ *  pane, `tab.path` and the URL untouched. */
+export type StageInsertOpts = { id?: string; focus?: boolean };
 
 /** `path` and the focused leaf must say the same thing; every path write goes
  *  through here so they cannot drift. */
@@ -5013,7 +5019,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   //    visible stage; background tabs keep their layout frozen) --
   /** Insert `path` as a pane beside `target` (or along a stage edge). Returns
    *  the new leaf id, or null (cap reached / target gone). */
-  stageInsertLeaf: (target: SplitTarget, edge: SplitEdge, path: string) => string | null;
+  stageInsertLeaf: (target: SplitTarget, edge: SplitEdge, path: string, opts?: StageInsertOpts) => string | null;
   /** Point an existing pane at a different route (pane-local navigation). */
   stageSetLeafPath: (leafId: string, path: string) => void;
   stageFocusLeaf: (leafId: string) => void;
@@ -11609,19 +11615,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // `tab.path` mirrors the focused leaf's path; the URL side (replaceState)
   // belongs to lib/stage.ts, which wraps these for components.
 
-  stageInsertLeaf: action(function (this: Draft, target: SplitTarget, edge: SplitEdge, path: string): string | null {
+  stageInsertLeaf: action(function (this: Draft, target: SplitTarget, edge: SplitEdge, path: string, opts?: StageInsertOpts): string | null {
     const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
     if (!tab || isNonTabRoute(path)) return null;
     // A plain tab grows a layout on first split: its current path becomes the
-    // first leaf, so the split preserves what was on screen.
-    const firstLeafId = tab.layout ? null : `sl_seed_${tab.id}`;
+    // first leaf, under the id the solo stage already renders it as, so the
+    // split preserves what was on screen — the same cell, not a remount.
+    const firstLeafId = tab.layout ? null : stageSeedLeafId(tab.id);
     const root: StageNode = tab.layout ?? { type: "leaf", id: firstLeafId!, path: tab.path };
     if (countLeaves(root) >= MAX_STAGE_LEAVES) return null;
     const resolvedTarget = target === "root" ? "root" : tab.layout ? target : { leafId: firstLeafId! };
-    const res = insertStageLeaf(root, resolvedTarget, edge, path);
+    const res = insertStageLeaf(root, resolvedTarget, edge, path, opts?.id);
     if (!res) return null;
+    // `focus: false` leaves what was on stage exactly as it was: the focused
+    // leaf (the seed, for a plain tab) and so `tab.path` and the URL stand.
+    const focus = opts?.focus !== false;
+    const focusedLeafId = focus ? res.leafId : (tab.focusedLeafId ?? firstLeafId!);
     this.tabs = this.tabs.map((t: AppTab) =>
-      t.id === tab.id ? { ...t, layout: res.root, focusedLeafId: res.leafId, path } : t,
+      t.id === tab.id ? { ...t, layout: res.root, focusedLeafId, path: focus ? path : t.path } : t,
     );
     return res.leafId;
   }),

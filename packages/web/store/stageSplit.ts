@@ -36,6 +36,21 @@ export function newLeafId(): string {
   return `sl_${Date.now().toString(36)}_${(idCounter++).toString(36)}`;
 }
 
+/** The leaf a plain tab's content becomes when the tab first splits. The
+ *  solo stage renders the plain tab under this same id (lib/stage
+ *  stageRenderLayout), so the first split keeps the cell — and the page in
+ *  it — instead of remounting it into a new one. */
+export function seedLeafId(tabId: string): string {
+  return `sl_seed_${tabId}`;
+}
+
+/** The one pane a "beside" gesture (Option-click, the link menu's open beside)
+ *  keeps re-pointing: one stable target per tab rather than a new pane per
+ *  click. Named, not generated, so a persisted layout still knows it. */
+export function besideLeafId(tabId: string): string {
+  return `sl_beside_${tabId}`;
+}
+
 export function leafNode(path: string, id?: string): StageLeaf {
   return { type: "leaf", id: id ?? newLeafId(), path };
 }
@@ -127,8 +142,9 @@ export function insertLeaf(
   target: SplitTarget,
   edge: SplitEdge,
   path: string,
+  id?: string,
 ): { root: StageNode; leafId: string } | null {
-  return insertNode(root, target, edge, leafNode(path));
+  return insertNode(root, target, edge, leafNode(path, id));
 }
 
 /**
