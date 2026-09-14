@@ -16,6 +16,13 @@ import { AGENT_ENV_UNSET_SH } from "./agentEnv.js";
 
 export const WATCHDOG_HEARTBEAT_FILENAME = "watchdog.heartbeat";
 
+// Where every watchdog form writes what it decided. Never daemon.log: the busy
+// grace reads daemon.log's mtime as proof the DAEMON is running JS, and the
+// compiled pass used to append its own "tick stale" lines there, so after one
+// deferral the next pass read the watchdog's own line as the daemon being busy
+// and could not kill until the tick was ten minutes stale.
+export const WATCHDOG_LOG_FILENAME = "watchdog-shell.log";
+
 // sysexits' EX_CONFIG. The daemon exits with it when the thing that stopped it
 // is a configuration fact no restart can change (no HOME, an unusable
 // ~/.codecast) — as opposed to a crash, where restarting is exactly right.
@@ -112,6 +119,98 @@ export function daemonTickStale(
   if (gapMs >= awakeGapMs) return false;
   if (tickAgeMs <= Math.max(thresholdMs, DAEMON_HEARTBEAT_BUSY_GRACE_MS) && logAgeMs !== null && logAgeMs >= 0 && logAgeMs <= thresholdMs) return false;
   return true;
+}
+
+// A wedged event loop is judged over TWO consecutive awake passes, not one. The
+// hang marker (daemonMarkers.ts) is the reason: three days in a row on one
+// machine (2026-09-11 to 09-13) the loop went silent for 50 to 138 seconds and
+// came back on its own, and a single-pass rule would have SIGKILLed a daemon
+// that was about to recover, throwing away every in-flight delivery with it.
+// So the first wedged pass only ARMS: it stamps which daemon (pid) and which
+// heartbeat value (tick) it saw. The next pass kills only when the same daemon
+// still shows the same unmoved tick AND the marker does not claim the loop
+// resumed in between. The marker is the evidence, not the clock: a daemon that
+// ticked normally for HANG_SELF_RECOVERED_AFTER_MS rewrites its marker as
+// self_recovered, and that rewrite is JS the loop ran, which a truly wedged loop
+// cannot do. A pass the sleep guard defers (daemonTickStale false) is not a
+// pass at all and clears the arm, so a wake from sleep never counts toward two.
+export const WATCHDOG_WEDGED_STAMP_FILENAME = "watchdog.wedged";
+
+// An arm older than this is forgotten: the watchdog itself was down (or the
+// machine slept through several intervals) between the two passes, so the pair
+// is not consecutive and the count restarts.
+export const WATCHDOG_WEDGED_ARM_TTL_MS = 10 * 60 * 1000;
+
+// Mirrors daemonMarkers' HANG_SELF_RECOVERED_AFTER_MS without importing it
+// (daemonMarkers imports this module). The marker's detected_at is the END of
+// the silence; the self_recovered rewrite lands this much later.
+const HANG_RECOVERY_LAG_MS = 5_000;
+
+export const WATCHDOG_KILL_RULE_TWO_PASSES = "two consecutive wedged passes, no self recovery in between";
+
+export interface WedgedPassStamp {
+  pid: number;
+  tick: number;
+  at: number;
+}
+
+/** The slice of a hang marker the verdict reads. Structural so the rule needs
+ * no import from daemonMarkers. */
+export interface HangEvidence {
+  pid: number;
+  detected_at: number;
+  self_recovered: boolean;
+}
+
+export type WatchdogKillVerdict =
+  | { action: "spare"; reason: string }
+  | { action: "arm"; reason: string; stamp: WedgedPassStamp }
+  | { action: "kill"; rule: string; reason: string };
+
+export function parseWedgedPassStamp(content: string | null): WedgedPassStamp | null {
+  if (content == null) return null;
+  try {
+    const parsed = JSON.parse(content) as Partial<WedgedPassStamp>;
+    if (typeof parsed.pid !== "number" || typeof parsed.tick !== "number" || typeof parsed.at !== "number") return null;
+    return { pid: parsed.pid, tick: parsed.tick, at: parsed.at };
+  } catch {
+    return null;
+  }
+}
+
+/** True when the marker says the loop resumed on its own AFTER the arming pass
+ * saw it wedged. A marker from an earlier stall, or one never rewritten as
+ * recovered, is no evidence of recovery between the two passes. */
+export function markerRecoveredSince(marker: HangEvidence | null, pid: number, armedAt: number): boolean {
+  if (!marker || marker.pid !== pid || !marker.self_recovered) return false;
+  return marker.detected_at + HANG_RECOVERY_LAG_MS >= armedAt;
+}
+
+/** The kill decision for one watchdog pass. `wedged` is daemonTickStale's
+ * answer for this pass; everything else is what the previous pass left behind
+ * and what the daemon wrote about itself. Pure, so both watchdog forms and the
+ * tests share one rule. */
+export function watchdogKillVerdict(input: {
+  wedged: boolean;
+  pid: number;
+  tick: number;
+  now: number;
+  armed: WedgedPassStamp | null;
+  marker: HangEvidence | null;
+  armTtlMs?: number;
+}): WatchdogKillVerdict {
+  const { wedged, pid, tick, now, armed, marker } = input;
+  const armTtlMs = input.armTtlMs ?? WATCHDOG_WEDGED_ARM_TTL_MS;
+  if (!wedged) return { action: "spare", reason: "tick fresh, busy, or the pass followed a sleep" };
+  const stamp: WedgedPassStamp = { pid, tick, at: now };
+  const consecutive = armed !== null && armed.pid === pid && armed.tick === tick && now - armed.at >= 0 && now - armed.at <= armTtlMs;
+  if (!consecutive) {
+    return { action: "arm", reason: "first wedged pass for this stall; killing only if the next pass agrees", stamp };
+  }
+  if (markerRecoveredSince(marker, pid, armed!.at)) {
+    return { action: "arm", reason: "hang marker says the loop resumed on its own after the first wedged pass; counting again from this pass", stamp };
+  }
+  return { action: "kill", rule: WATCHDOG_KILL_RULE_TWO_PASSES, reason: `tick unmoved since the pass ${Math.round((now - armed!.at) / 1000)}s ago and no recovery marker since` };
 }
 
 export function buildDaemonPlistXml(opts: { scriptPath: string; configDir: string }): string {
@@ -235,7 +334,7 @@ export function buildWatchdogShellScript(opts: { isBinary: boolean; watchdogComm
 # A watchdog bootstrapped from inside a Claude Code session would hand that
 # session's markers to every daemon it revives (agentEnv.ts).
 ${AGENT_ENV_UNSET_SH}
-LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
+LOGFILE="\${HOME}/.codecast/${WATCHDOG_LOG_FILENAME}"
 HEARTBEAT="\${HOME}/.codecast/${WATCHDOG_HEARTBEAT_FILENAME}"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
 
@@ -285,6 +384,9 @@ check_once() {
   # alive but stops self-healing. Detect that via lastHeartbeatTick, which a healthy
   # daemon rewrites every ~30s, and force a restart when it goes stale.
   STALE=0
+  ARMED=0
+  WEDGED_FILE="\${HOME}/.codecast/${WATCHDOG_WEDGED_STAMP_FILENAME}"
+  MARKER_FILE="\${HOME}/.codecast/daemon-hang.json"
   STATE_FILE="\${HOME}/.codecast/daemon.state"
   if [ "\$RUNNING" -eq 1 ] && [ -f "\$STATE_FILE" ]; then
     TICK=\$(sed -n 's/.*"lastHeartbeatTick"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
@@ -301,8 +403,40 @@ check_once() {
           if [ "\$AGE" -le ${DAEMON_HEARTBEAT_BUSY_GRACE_MS} ] && [ "\$LOG_MTIME" -gt 0 ] && [ "\$LOG_AGE" -le ${DAEMON_HEARTBEAT_STALE_MS} ]; then
             log "Daemon tick stale (\${AGE}ms) but daemon.log written \${LOG_AGE}ms ago - busy, not wedged"
           else
-            STALE=1
-            log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
+            # Wedged on this pass. The kill needs the PREVIOUS pass to have seen
+            # the same daemon with the same unmoved tick, and the hang marker to
+            # show no self recovery since (watchdogKillVerdict in supervision.ts).
+            DAEMON_PID=\$(tr -cd '0-9' < "\${HOME}/.codecast/daemon.pid" 2>/dev/null)
+            DAEMON_PID=\${DAEMON_PID:-0}
+            ARMED_PID=\$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$WEDGED_FILE" 2>/dev/null)
+            ARMED_TICK=\$(sed -n 's/.*"tick"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$WEDGED_FILE" 2>/dev/null)
+            ARMED_AT=\$(sed -n 's/.*"at"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$WEDGED_FILE" 2>/dev/null)
+            CONSECUTIVE=0
+            if [ -n "\$ARMED_AT" ] && [ "\$ARMED_PID" = "\$DAEMON_PID" ] && [ "\$ARMED_TICK" = "\$TICK" ]; then
+              ARM_AGE=\$(( NOW_MS - ARMED_AT ))
+              [ "\$ARM_AGE" -ge 0 ] && [ "\$ARM_AGE" -le ${WATCHDOG_WEDGED_ARM_TTL_MS} ] && CONSECUTIVE=1
+            fi
+            RECOVERED=0
+            if [ "\$CONSECUTIVE" -eq 1 ] && grep -q '"self_recovered"[[:space:]]*:[[:space:]]*true' "\$MARKER_FILE" 2>/dev/null; then
+              M_PID=\$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$MARKER_FILE")
+              M_AT=\$(sed -n 's/.*"detected_at"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$MARKER_FILE")
+              [ "\$M_PID" = "\$DAEMON_PID" ] && [ -n "\$M_AT" ] && [ \$(( M_AT + ${HANG_RECOVERY_LAG_MS} )) -ge "\$ARMED_AT" ] && RECOVERED=1
+            fi
+            if [ "\$CONSECUTIVE" -eq 1 ] && [ "\$RECOVERED" -eq 0 ]; then
+              STALE=1
+              rm -f "\$WEDGED_FILE"
+              printf '{"detected_at":%s,"pid":%s,"unresponsive_ms":%s,"hot_stacks":"","self_recovered":false,"watchdog_rule":"%s"}' \\
+                "\$NOW_MS" "\$DAEMON_PID" "\$AGE" "${WATCHDOG_KILL_RULE_TWO_PASSES}" > "\$MARKER_FILE" 2>/dev/null
+              log "Daemon alive but heartbeat stale (\${AGE}ms) on two consecutive passes and no recovery marker since - ${WATCHDOG_KILL_RULE_TWO_PASSES}, forcing restart"
+            else
+              ARMED=1
+              printf '{"pid":%s,"tick":%s,"at":%s}' "\$DAEMON_PID" "\$TICK" "\$NOW_MS" > "\$WEDGED_FILE" 2>/dev/null
+              if [ "\$RECOVERED" -eq 1 ]; then
+                log "Daemon heartbeat stale (\${AGE}ms) but the hang marker says the loop resumed after the first wedged pass - counting again from this pass"
+              else
+                log "Daemon heartbeat stale (\${AGE}ms) - first wedged pass, killing only if the next pass agrees"
+              fi
+            fi
           fi
         else
           log "Daemon heartbeat stale (\${AGE}ms) but watchdog loop gap (\${LOOP_GAP}ms) implies system sleep - deferring one cycle"
@@ -310,6 +444,10 @@ check_once() {
       fi
     fi
   fi
+
+  # Any pass that did not arm clears the arm: a fresh tick, a busy daemon, a
+  # sleep wake, or a dead process all restart the count.
+  [ "\$ARMED" -eq 0 ] && rm -f "\$WEDGED_FILE" 2>/dev/null
 
   [ "\$RUNNING" -eq 1 ] && [ "\$STALE" -eq 0 ] && return 0
 
@@ -356,7 +494,7 @@ done
 # A watchdog bootstrapped from inside a Claude Code session would hand that
 # session's markers to every daemon it revives (agentEnv.ts).
 ${AGENT_ENV_UNSET_SH}
-LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
+LOGFILE="\${HOME}/.codecast/${WATCHDOG_LOG_FILENAME}"
 HEARTBEAT="\${HOME}/.codecast/${WATCHDOG_HEARTBEAT_FILENAME}"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
 WATCHDOG_INTERVAL=${WATCHDOG_INTERVAL_SECONDS}
