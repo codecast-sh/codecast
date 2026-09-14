@@ -9,6 +9,7 @@ import type { ConversationData } from "../../ConversationView";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/", pretendToBeVisual: true });
 const sizes = new WeakMap<Element, number>();
+let onHeightRead: ((el: HTMLElement) => void) | undefined;
 const offsets = new WeakMap<Element, number>();
 const observers = new Set<TestResizeObserver>();
 const height = (el: Element) => sizes.get(el) ?? (el.hasAttribute("data-sv-feed") ? 500 : 50);
@@ -29,7 +30,7 @@ Object.defineProperties(dom.window.HTMLElement.prototype, {
       queueMicrotask(() => { if (this.isConnected) this.dispatchEvent(new dom.window.Event("scroll")); });
     },
   },
-  offsetHeight: { get() { return height(this); } },
+  offsetHeight: { get() { onHeightRead?.(this); return height(this); } },
   offsetWidth: { get() { return 700; } },
   clientHeight: { get() { return height(this); } },
   clientWidth: { get() { return 700; } },
@@ -86,3 +87,41 @@ for (const messageCount of [80, 800]) test(`a measured row resize keeps geometry
     }
   } finally { await act(() => root.unmount()); host.remove(); errors.mockRestore(); }
 });
+
+test("size repair reads all row heights before changing geometry", async () => {
+  const interval = globalThis.setInterval;
+  const ticks: (() => void)[] = [];
+  const timer = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay: number, ...args: unknown[]) => {
+    if (delay === 1000) ticks.push(callback);
+    return interval(callback, delay === 1000 ? 60_000 : delay, ...args);
+  }) as typeof setInterval);
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => { root.render(<ConvexProvider client={client}><MemoryRouter><ConversationView conversation={{ ...conversation, _id: "repair-fixture" as any }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></MemoryRouter></ConvexProvider>); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
+    const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
+    await act(async () => {
+      feed.dispatchEvent(new dom.window.WheelEvent("wheel", { deltaY: -800, bubbles: true }));
+      feed.scrollTop -= 800;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    const rows = [...host.querySelectorAll<HTMLElement>("[data-vkey]")];
+    expect(rows.length).toBeGreaterThan(2);
+    const container = rows[0].parentElement!;
+    const tracked = new Set(rows);
+    const parentHeights: string[] = [];
+    for (const row of rows) sizes.set(row, height(row) + 8);
+    onHeightRead = el => { if (tracked.has(el)) parentHeights.push(container.style.height); };
+    await act(async () => {
+      for (const tick of ticks) tick();
+      onHeightRead = undefined;
+    });
+    expect(parentHeights.length).toBe(rows.length);
+    expect(new Set(parentHeights).size).toBe(1);
+    expect(container.style.height).not.toBe(parentHeights[0]);
+  } finally {
+    onHeightRead = undefined;
+    await act(() => root.unmount()); host.remove(); timer.mockRestore();
+  }
+}, 30_000);

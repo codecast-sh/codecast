@@ -41,7 +41,7 @@ export function ConversationPlaceholder({ id }: { id?: string }) {
   return (
     <div className="cc-panel h-full">
       <header className="cq-container shrink-0">
-        <div className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
+        <div className="cc-panel__head gap-2 min-w-0">
           <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {title ? (
               <h1 className="cc-panel__title truncate flex-1 min-w-0 cursor-default">

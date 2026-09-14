@@ -20,10 +20,24 @@ import { useLayoutEffect, type RefObject } from "react";
  * level that fits and never drifts. The trials happen inside one task, so no
  * intermediate state paints. Content changes are watched through a
  * MutationObserver; width changes through a ResizeObserver (height-only
- * resizes are ignored, since the top level may wrap the row and grow it).
+ * resizes are ignored: only the row's width can change what fits).
  * Content no observer can see (an input's value is a property, not a DOM
  * mutation) is passed as `contentKey`: a new key fits the row again.
  */
+/**
+ * One measured pass: the smallest level whose content fits, applied to the row.
+ * Exported so a harness (and a test) can drive the real logic, not a copy.
+ */
+export function applySqueeze(row: HTMLElement, maxLevel: number): number {
+  for (let level = 0; level <= maxLevel; level++) {
+    const tokens = Array.from({ length: level }, (_, i) => String(i + 1)).join(" ");
+    if (tokens) row.setAttribute("data-squeeze", tokens);
+    else row.removeAttribute("data-squeeze");
+    if (row.scrollWidth <= row.clientWidth + 1) return level;
+  }
+  return maxLevel;
+}
+
 export function useSqueezeToFit(
   rowRef: RefObject<HTMLElement | null>,
   maxLevel: number,
@@ -37,12 +51,7 @@ export function useSqueezeToFit(
 
     const fit = () => {
       raf = 0;
-      for (let level = 0; level <= maxLevel; level++) {
-        const tokens = Array.from({ length: level }, (_, i) => String(i + 1)).join(" ");
-        if (tokens) row.setAttribute("data-squeeze", tokens);
-        else row.removeAttribute("data-squeeze");
-        if (row.scrollWidth <= row.clientWidth + 1) break;
-      }
+      applySqueeze(row, maxLevel);
     };
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(fit);
