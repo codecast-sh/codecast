@@ -100,11 +100,21 @@ async function emitForkDaemonCommand(ctx: ForkCopyCtx, fork: ForkConvRow): Promi
   // copy-chain ctx, which can't query devices) — lift it onto the command row.
   const targetDeviceId = typeof parsed._target_device_id === "string" ? parsed._target_device_id : undefined;
   delete parsed._target_device_id;
+  const now = Date.now();
+  if (parsed.switch_agent === true) {
+    await ctx.db.insertDaemonCommand({
+      user_id: fork.user_id,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: fork._id, session_id: parsed.session_id }),
+      created_at: now,
+      target_device_id: targetDeviceId,
+    });
+  }
   await ctx.db.insertDaemonCommand({
     user_id: fork.user_id,
     command: "resume_session",
     args: JSON.stringify(parsed),
-    created_at: Date.now(),
+    created_at: now + (parsed.switch_agent === true ? 1 : 0),
     target_device_id: targetDeviceId,
   });
   await ctx.db.patchConv(fork._id, { fork_daemon_args: undefined });

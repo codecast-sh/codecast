@@ -65,6 +65,7 @@
 importScripts("status.js");
 
 const PROTOCOL = 4;
+const DEFAULT_CAST_GROUP = { title: "Cast", color: "red" };
 
 let ws = null;
 let status = { state: "no-config", detail: "not paired yet" };
@@ -393,9 +394,10 @@ async function handle(m) {
 
     case "tabs.create": {
       await groupsLoaded;
+      const group = m.group || DEFAULT_CAST_GROUP;
       // Into the window that already holds this group, so cast tabs stay
       // together instead of a second group appearing per window.
-      const windowId = m.group ? windowOfOwnedGroup(m.group.title) : undefined;
+      const windowId = windowOfOwnedGroup(group.title);
       // onCreated fires before create() resolves; a tab made here is owned from
       // its first event, so the host never mistakes it for the human's.
       creating++;
@@ -407,7 +409,7 @@ async function handle(m) {
       }
       ownedTabs.add(t.id);
       persistOwned();
-      if (m.group) await placeInGroup(t, m.group);
+      await placeInGroup(t, group);
       return { tabId: t.id };
     }
 
@@ -516,8 +518,10 @@ async function boundedCdp(tabId, method, params) {
 }
 
 async function attachTab(tabId) {
+  await groupsLoaded;
+  const t = await chrome.tabs.get(tabId).catch(() => null);
+  if (ownedTabs.has(tabId) && t?.groupId === NO_GROUP) await placeInGroup(t, DEFAULT_CAST_GROUP);
   if (!attached.has(tabId)) {
-    const t = await chrome.tabs.get(tabId).catch(() => null);
     if (t && t.discarded) throw new Error("this tab was discarded by Chrome's memory saver; activate it once to wake it");
     try {
       await bounded(chrome.debugger.attach({ tabId }, "1.3"), "debugger.attach");
@@ -547,10 +551,12 @@ async function attachTab(tabId) {
 
 async function detachTab(tabId) {
   if (attached.has(tabId)) {
-    attached.delete(tabId);
     markDriven(tabId, false);
-    await removeBorder(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {});
+    try {
+      await bounded(removeBorder(tabId), "overlay removal").catch(() => {});
+    } finally {
+      await bounded(chrome.debugger.detach({ tabId }), "debugger.detach").catch(() => {}).finally(() => attached.delete(tabId));
+    }
   }
 }
 

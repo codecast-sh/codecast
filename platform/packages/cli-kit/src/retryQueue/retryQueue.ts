@@ -128,6 +128,11 @@ export interface RetryQueueHealth {
   ops: number;
   keys: number;
   oldestPendingMs: number;
+  /** When an operation last succeeded, 0 if none has since this process
+   *  started. With `oldestPendingMs` this tells a queue that is draining a
+   *  long backlog (old head, recent success) from one that is stuck (old
+   *  head, no success). */
+  lastSuccessAt: number;
 }
 
 export class RetryQueue<P = Record<string, unknown>> {
@@ -138,6 +143,7 @@ export class RetryQueue<P = Record<string, unknown>> {
   private exitFlushRegistered = false;
   private processing = false;
   private rateLimitedUntil = 0;
+  private lastSuccessAt = 0;
   private activeKeys = new Set<string>();
   private activeOpIds = new Set<string>();
   private readonly cfg: typeof DEFAULTS & RetryQueueConfig<P>;
@@ -382,6 +388,7 @@ export class RetryQueue<P = Record<string, unknown>> {
       const success = await this.executor!(op);
       if (success) {
         this.queue.delete(op.id);
+        this.lastSuccessAt = this.now();
         this.log(`Retry succeeded for ${op.type} (id: ${op.id})`);
         this.collapseBackoffOnRecovery(this.keyOf(op));
       } else {
@@ -565,7 +572,7 @@ export class RetryQueue<P = Record<string, unknown>> {
       oldestPendingMs = Math.max(oldestPendingMs, now - op.createdAt);
       keys.add(this.keyOf(op));
     }
-    return { ops: this.queue.size, keys: keys.size, oldestPendingMs };
+    return { ops: this.queue.size, keys: keys.size, oldestPendingMs, lastSuccessAt: this.lastSuccessAt };
   }
 
   async waitForCompletion(timeoutMs = 10000): Promise<boolean> {

@@ -223,8 +223,17 @@ the caller does not run (its `user_id` is another account) is an ordinary
 session, so a teammate naming a standing session's id does not sign as the
 role. The charter guard (`docs.refuseRoleCharterWrite`, on `docs.update` and
 `docs.patch`) applies the same ownership check; the CLI stamps the calling
-session on `cast doc edit`. Trust, caps, scope and the charter field refuse
-any call that names the session it runs inside (`orgRoles.refuseFromAgent`). Usage: `messages.rollUpUsage` from the CLI
+session on `cast doc edit`. Trust, caps, scope and the charter field are
+human only on the server's own evidence (`orgRoles.refuseUnlessHuman`): the
+call must carry a browser auth identity and no api token, so a hand that
+strips its session variables and calls with its host's token is still
+refused; the web role page is the one door. Retire (`performRetireRole`)
+tears the seat down: live hands get one interrupt, the standing session's
+routines are cancelled, its held turns dropped, its anchor decommissioned
+(kill command, bot off the roster), and its unflushed outbox rows deleted.
+A hand's first turn opens with the unattended mandate and a briefing that
+names `cast task handoff`, `cast task verdict` and `cast decide --task`
+(`spawn.handBriefing`, written where the hand pointer is written). Usage: `messages.rollUpUsage` from the CLI
 parser's `usageOf` on Claude assistant records, into
 `conversations.usage_totals` and the role's daily token counter. One turn
 spans several JSONL records that share `message.id` and repeat the usage
