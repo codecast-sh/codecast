@@ -251,6 +251,7 @@ function RoleDoc({ docId, editable, backHref }: { docId: string; editable: boole
         markdownContent={listItem?.content || doc.content || ""}
         editable={editable}
         defaultEditing={false}
+        embedded
         titleInBody
         backHref={backHref}
         linkedObjectId={doc._id}
