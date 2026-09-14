@@ -53,6 +53,9 @@ import {
   Megaphone,
 } from "lucide-react";
 import { DocDates } from "../../../components/DocDates";
+import { HireRoleDialog } from "../../../components/org/HireRoleDialog";
+import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
+import { Briefcase } from "lucide-react";
 
 const api = _api as any;
 
@@ -256,6 +259,16 @@ function ProjectDetailContent() {
   const [titleDraft, setTitleDraft] = useState("");
   const updateProject = useInboxStore((s) => s.updateProject);
 
+  // "Add a lead" (org-init.md O3): the hire form with this project preselected.
+  // The org tree feeds the store per view, the way the org page mounts it.
+  const { tree: orgTree } = useSyncOrgTree();
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  const createOrgRole = useInboxStore((s) => s.createOrgRole);
+  const [hireOpen, setHireOpen] = useState(false);
+  // A role lives in one workspace and its scope must sit inside it: the button
+  // shows only when the org tree on screen is the project's own workspace.
+  const canHire = !!orgTree && !!meId && !!project && (orgTree.workspace.kind === "team" ? project.team_id === orgTree.workspace.id : !project.team_id);
+
   // Plans in this project
   const projectPlans = useMemo(() =>
     wsPlans.filter((p: any) => p.project_id === projectId)
@@ -407,7 +420,32 @@ function ProjectDetailContent() {
           )}
         </div>
 
-        <RepositoryLinks projectId={project._id} />
+        <div className="flex items-center gap-3 flex-wrap">
+          <RepositoryLinks projectId={project._id} />
+          {canHire && (
+            <button
+              type="button"
+              onClick={() => setHireOpen(true)}
+              title="A standing role that owns this project: it reads the project's plans, tasks and sessions and reports to you"
+              className="h-7 inline-flex items-center gap-1.5 px-2.5 rounded-md text-[12px] font-medium border transition-colors hover:bg-sol-bg-highlight/60"
+              style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-violet)" }}
+            >
+              <Briefcase className="w-3.5 h-3.5" /> Add a lead
+            </button>
+          )}
+        </div>
+        {canHire && hireOpen && (
+          <HireRoleDialog
+            open={hireOpen}
+            onClose={() => setHireOpen(false)}
+            tree={orgTree}
+            meId={meId}
+            title={`Add a lead for ${project.title}`}
+            initialProjects={[project]}
+            projectPath={project.project_path ?? undefined}
+            onCreate={(input) => { createOrgRole(input); setHireOpen(false); toast.success(`@${input.handle} is being created and started`); }}
+          />
+        )}
 
         <div className="flex items-center gap-4 ml-5">
           {/* Status dropdown */}

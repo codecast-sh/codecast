@@ -31,6 +31,11 @@ export type OrgCreateRoleInput = {
   scope?: OrgScope;
   reports_to?: OrgParentRef;
   charter?: string;
+  /** The hire form (org-init.md O3): provision the standing session in the
+   *  same gesture, in this cwd, and start with these caps. */
+  provision?: boolean;
+  project_path?: string;
+  caps?: OrgRole["caps"];
   /** The caller, for the optimistic row (host and default reports_to). */
   host_user_id: string;
   /** Stub id: the row is re-keyed when org.tree echoes the real one. */
@@ -172,6 +177,8 @@ export function createOrgSlice(): OrgSliceState {
         reports_to: input.reports_to ?? { kind: "user", user_id: input.host_user_id },
         status: "active",
         ...(input.charter ? { charter: input.charter } : {}),
+        ...(input.caps ? { caps: { ...input.caps } } : {}),
+        trust: "understand",
         created_by: input.host_user_id,
         created_at: now,
         updated_at: now,
