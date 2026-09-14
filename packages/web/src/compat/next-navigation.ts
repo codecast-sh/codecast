@@ -7,7 +7,7 @@ import {
 } from "react-router";
 import { useTabContext } from "@/lib/tabParams";
 import { useInboxStore } from "@/store/inboxStore";
-import { isDetachedTabWindow } from "@/lib/desktop";
+import { borrowsTabShell } from "@/lib/desktop";
 import { interceptSettingsNav, shouldUseTabRouting, tabNavigate } from "./tabRouting";
 import { divertNavigation } from "@/lib/openIntent";
 
@@ -28,10 +28,10 @@ export function usePathname(): string {
   const routerPath = useLocation().pathname;
 
   if (tabCtx) return tabCtx.pathname;
-  // A detached tab window hydrates the SHARED tabs but renders no tab shell —
-  // the active tab there belongs to the main window and says nothing about
-  // what this window shows. Its truth is the real URL.
-  if (tabPath && !isDetachedTabWindow()) return tabPath;
+  // A detached tab window or a browser pane's page hydrates the SHARED tabs
+  // but renders no tab shell — the active tab there belongs to another window
+  // and says nothing about what this document shows. Its truth is the real URL.
+  if (tabPath && !borrowsTabShell()) return tabPath;
   return routerPath;
 }
 

@@ -132,6 +132,24 @@ describe("tabNavigate", () => {
     expect(tab?.path).toBe("/tasks/ct-1");
   });
 
+  // A document that borrows the tab shell (a detached window; a browser pane's
+  // page is the same predicate, borrowsTabShell) hydrates the SHARED tabs. A
+  // pane gesture whose stage could not take the page falls back to tabNavigate
+  // directly, and that used to rewrite the tab another window owns while this
+  // document showed nothing new. It navigates for real instead.
+  it("in a document that borrows the tab shell, navigates for real and leaves the tabs alone", () => {
+    const popped: string[] = [];
+    Object.assign((globalThis as any).window, {
+      __CODECAST_ELECTRON__: { isTabWindow: true },
+      dispatchEvent: (e: Event) => popped.push(e.type),
+    });
+    tabNavigate("/tasks/ct-1", "push");
+    expect(useInboxStore.getState().tabs.find((t) => t.id === "tab_1")?.path).toBe("/inbox");
+    expect(calls).toEqual([{ op: "push", url: "/tasks/ct-1", state: null }]);
+    expect(popped).toEqual(["popstate"]);
+    expect(shouldUseTabRouting("/tasks", "/inbox")).toBe(false);
+  });
+
   // A hidden background pane (a Cmd-click prewarm tab) canonicalizing its own
   // deep link must move only ITS tab — never the browser URL or the tab the
   // user is looking at. Regression: /files?path=… resolved in a background tab

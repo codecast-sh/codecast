@@ -19,12 +19,11 @@
 // render; the pane says the true thing once you open it ("nothing is
 // listening on this address on this machine").
 
-import { Columns2, Copy, ExternalLink, Globe, PanelTop } from "lucide-react";
-import { toast } from "sonner";
-import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
+import { Globe } from "lucide-react";
+import { ContextMenu, useContextMenu } from "./ui/context-menu";
+import { browserPaneMenuItems } from "../lib/browserPaneMenuItems";
 import { pageAddressLabel } from "../lib/browserPaneLinks";
 import { openBrowserPane } from "../lib/stage";
-import { copyToClipboard } from "../lib/utils";
 
 const PILL =
   "group inline-flex max-w-xs items-center gap-1 rounded-full border border-sol-border bg-sol-bg-alt " +
@@ -56,34 +55,7 @@ export function LoopbackUrlPill({ url, label }: { url: string; label?: string })
         <Globe className="h-3 w-3 flex-shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-cyan" />
         <span className="truncate">{text}</span>
       </a>
-      <ContextMenu state={menu}>
-        {(target) => (
-          <>
-            <CtxItem icon={Columns2} onSelect={() => openBrowserPane({ kind: "url", url: target })}>
-              Open in a pane
-            </CtxItem>
-            <CtxItem
-              icon={PanelTop}
-              onSelect={() => openBrowserPane({ kind: "url", url: target }, { beside: false })}
-            >
-              Open in a pane, full width
-            </CtxItem>
-            <CtxItem
-              icon={ExternalLink}
-              onSelect={() => window.open(target, "_blank", "noopener,noreferrer")}
-            >
-              Open in a browser tab
-            </CtxItem>
-            <CtxSeparator />
-            <CtxItem
-              icon={Copy}
-              onSelect={() => void copyToClipboard(target).then(() => toast.success("Address copied"))}
-            >
-              Copy address
-            </CtxItem>
-          </>
-        )}
-      </ContextMenu>
+      <ContextMenu state={menu}>{(target) => browserPaneMenuItems(target)}</ContextMenu>
     </>
   );
 }

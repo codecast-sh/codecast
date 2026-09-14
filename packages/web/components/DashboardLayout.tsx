@@ -7,6 +7,7 @@ import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
+import { PANE_EMBED } from "../lib/browserPane";
 import { withApplyingViewHistory, sameFilterExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation } from "convex/react";
@@ -57,7 +58,7 @@ import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow, borrowsTabShell } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { FilePathMenuHost } from "./FilePathMenuHost";
 import { LinkMenuHost } from "./LinkMenuHost";
@@ -285,12 +286,24 @@ function DashboardSyncEffects() {
   // window happened to be promoted.
   useEnsureDispatch();
   const isSyncHost = useIsSyncHost();
-  useChatToasts();
-  useChatTitleBadge();
   return <>
-    <Suspense fallback={null}><CallSyncEffects /></Suspense>
+    {/* A browser pane's page shows a route; it is not a window. Toasts, the
+        title badge and the call surfaces belong to the window AROUND it, and a
+        second copy inside a pane doubles all three — the badge worst of all,
+        since it rewrites the document title the pane reads for its strip.
+        A component boundary rather than a conditional hook: PANE_EMBED cannot
+        change while the document lives, but the rule stays visible. */}
+    {PANE_EMBED ? null : <WindowOnlyEffects />}
     {isSyncHost ? <HostFeeders /> : null}
   </>;
+}
+
+/** What belongs to a window rather than to a route: unread toasts, the title
+ *  badge, the call surfaces. */
+function WindowOnlyEffects() {
+  useChatToasts();
+  useChatTitleBadge();
+  return <Suspense fallback={null}><CallSyncEffects /></Suspense>;
 }
 
 // Unread mentions in the browser tab title.
@@ -779,10 +792,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         });
       }
       if (isNonTabRoute(window.location.pathname)) return;
-      // A detached tab window navigates via React Router only — the shared
-      // tabs its store hydrates belong to the main window, so mirroring this
-      // window's URL into the "active tab" would rewrite someone else's tab.
-      if (isDetachedTabWindow()) return;
+      // A detached tab window or a browser pane's page navigates via React
+      // Router only — the shared tabs its store hydrates belong to another
+      // window, so mirroring this window's URL into the "active tab" would
+      // rewrite someone else's tab.
+      if (borrowsTabShell()) return;
       const store = useInboxStore.getState();
       const tab = store.tabs.find((t) => t.id === store.activeTabId);
       if (!tab) return;
@@ -958,9 +972,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     );
   }
 
-  // A detached tab window shows exactly its URL via React Router — no tab
-  // shell, even though the shared tabs hydrate into its store too.
-  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname) && !isDetachedTabWindow();
+  // A detached tab window or a browser pane's page shows exactly its URL via
+  // React Router — no tab shell, even though the shared tabs hydrate into its
+  // store too.
+  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname) && !borrowsTabShell();
   const content = hasTabs ? <TabContent /> : children;
 
   // The trail sits above whatever surface is open — one bar for every page, so
@@ -970,6 +985,22 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   ) : (
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
+  // Framed as a browser pane's page: the route, and nothing the outer window
+  // is already drawing around it. Every hook above has run, so the shell's
+  // listeners and shortcuts are installed as usual; what this skips is chrome —
+  // the header, the tab bar, both rails, the breadcrumb and the triage bar.
+  // The sync effects stay: an embedded document still feeds its own store.
+  if (PANE_EMBED) {
+    return (
+      <div data-cc-shell data-cc-embed className={`bg-sol-bg overflow-hidden${s.clientState.ui?.simple_view ? " simple-view" : ""}`} style={{ height: zoomHeight }}>
+        <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
+          <DashboardSyncEffects />
+        </ErrorBoundary>
+        {pageBody}
+      </div>
+    );
+  }
+
   // THE STAGE: the page, full width. Splitting it is the tab's own layout
   // (components/stage, rendered inside TabContent), never a shell slot — the
   // stage's element structure is identical on every surface, so a tab switch

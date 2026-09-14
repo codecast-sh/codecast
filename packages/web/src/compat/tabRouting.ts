@@ -1,8 +1,8 @@
 import { useInboxStore } from "../../store/inboxStore";
 import { inboxTabSessionId, pathLabel } from "../../lib/pathLabel";
-import { isDetachedTabWindow } from "../../lib/desktop";
+import { borrowsTabShell } from "../../lib/desktop";
 import { settingsSectionForPath } from "../../lib/settingsSections";
-import { isNonTabRoute } from "../../lib/tabRoutes";
+import { isNonTabRoute, routerNavigate } from "../../lib/tabRoutes";
 
 // Re-exported so callers of the routing layer keep one import; the rule itself
 // lives in lib/tabRoutes (pure, no store import) so the store can apply it too.
@@ -55,10 +55,10 @@ export function shouldUseTabRouting(
   currentPath: string = typeof window !== "undefined" ? window.location.pathname : "/",
 ): boolean {
   if (isExternal(targetPath)) return false;
-  // A detached tab window has no tab shell of its own — its store still
-  // hydrates the SHARED tabs, so routing "within the active tab" here would
-  // silently rewrite a tab owned by the main window. Navigate for real.
-  if (isDetachedTabWindow()) return false;
+  // A detached tab window or a browser pane's page has no tab shell of its own
+  // — its store still hydrates the SHARED tabs, so routing "within the active
+  // tab" here would silently rewrite a tab another window owns. Navigate for real.
+  if (borrowsTabShell()) return false;
   if (isNonTabRoute(targetPath)) return false;
   if (isNonTabRoute(currentPath)) return false;
   const { tabs, activeTabId } = useInboxStore.getState();
@@ -76,6 +76,13 @@ export function shouldUseTabRouting(
  * tab navigation apart from an inbox session selection (`{ inboxId }`).
  */
 export function tabNavigate(path: string, mode: "push" | "replace" = "push", fromTabId?: string) {
+  // No tab here is this document's to move (borrowsTabShell). Callers that
+  // reach this directly — a pane gesture whose stage could not take the page —
+  // still mean "go there", so it goes there for real.
+  if (borrowsTabShell()) {
+    routerNavigate(path, mode);
+    return;
+  }
   const store = useInboxStore.getState();
   const tabId = fromTabId ?? store.activeTabId;
   if (tabId) store.updateTab(tabId, { path, title: pathLabel(path) });

@@ -42,7 +42,16 @@
 import { useCallback, useRef, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useMountEffect } from "../../../hooks/useMountEffect";
-import { isLoopbackUrl, probeAddress } from "../../../lib/browserPane";
+import { useEventListener } from "../../../hooks/useEventListener";
+import {
+  isLoopbackUrl,
+  paneSrc,
+  probeAddress,
+  readPaneMessage,
+  withoutEmbedFlag,
+} from "../../../lib/browserPane";
+import { openBrowserPane } from "../../../lib/stage";
+import { openIn } from "../../../lib/openIntent";
 import type { BackendProps } from "./types";
 
 /** How often a pane with nothing behind it asks again. A dev server that is
@@ -66,9 +75,17 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
   // finds a server: it remounts the frame exactly as a reload would.
   const [polling, setPolling] = useState(false);
   const [revival, setRevival] = useState(0);
+  // The pane's callbacks, read when they are called rather than listed as
+  // dependencies. The probe is keyed on the ADDRESS: keyed on the callbacks
+  // too, it would depend on every parent memoizing them, and one that did not
+  // would loop — the probe reports, the parent re-renders with fresh callbacks,
+  // the probe runs again, one network request per render.
+  const report = useRef({ onTitle, onUrl, onState });
+  report.current = { onTitle, onUrl, onState };
 
   useWatchEffect(() => {
     if (!url) return;
+    const { onTitle, onState } = report.current;
     onTitle(null);
     setPolling(false);
     if (blockedAsMixedContent(url)) {
@@ -84,16 +101,16 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
       if (!live || verdict === "answered") return;
       nothingAnswered.current = true;
       if (verdict === "local-network-blocked") {
-        onState({ kind: "blocked", reason: "local-network" });
+        report.current.onState({ kind: "blocked", reason: "local-network" });
       } else {
-        onState({ kind: "unreachable", loopback: isLoopbackUrl(url) });
+        report.current.onState({ kind: "unreachable", loopback: isLoopbackUrl(url) });
         setPolling(true);
       }
     });
     return () => {
       live = false;
     };
-  }, [url, reloadToken, revival, onTitle, onState]);
+  }, [url, reloadToken, revival]);
 
   // Ask again every few seconds while the window is visible. A hidden window
   // waits for visibilitychange instead of probing a port nobody is looking at.
@@ -127,7 +144,17 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
 
   useMountEffect(() => () => titleWatch.current?.disconnect());
 
+  // A codecast page in this frame has no stage, so its pane gestures arrive
+  // here and land on this window's stage (postToPaneHost in lib/browserPane).
+  useEventListener("message", (event) => {
+    const message = readPaneMessage(event, frameRef.current?.contentWindow);
+    if (!message) return;
+    if (message.type === "codecast:open-pane") openBrowserPane(message.source);
+    else openIn("split", message.path);
+  });
+
   const handleLoad = useCallback(() => {
+    const { onTitle, onUrl, onState } = report.current;
     titleWatch.current?.disconnect();
     titleWatch.current = null;
     if (nothingAnswered.current) return;
@@ -151,7 +178,7 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
     const watch = new MutationObserver(() => {
       if (readable.title === title) return;
       title = readable.title;
-      onTitle(title || null);
+      report.current.onTitle(title || null);
     });
     // The head when there is one, since that is where the title lives; the
     // document itself otherwise, so a head that arrives later is still seen.
@@ -163,13 +190,15 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
     titleWatch.current = watch;
     frame?.contentWindow?.addEventListener("pagehide", () => watch.disconnect(), { once: true });
     try {
+      // Without the flag: it is how the pane asked this page to render, not
+      // part of the address the reader is looking at.
       const href = frame?.contentWindow?.location.href;
-      if (href && href !== "about:blank") onUrl(href);
+      if (href && href !== "about:blank") onUrl(withoutEmbedFlag(href));
     } catch {
       // Navigated away to another origin between the read and here.
     }
     onState({ kind: "ready", opaque: false });
-  }, [onTitle, onUrl, onState]);
+  }, []);
 
   if (!url || blockedAsMixedContent(url)) return null;
 
@@ -178,7 +207,9 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
       // The key is what makes a reload a reload: same src, new element.
       key={`${url}#${reloadToken}#${revival}`}
       ref={frameRef}
-      src={url}
+      // Not `url`: a codecast route is asked to render as a pane's page
+      // rather than as the whole app (paneSrc in lib/browserPane).
+      src={paneSrc(url)}
       onLoad={handleLoad}
       title={url}
       referrerPolicy="no-referrer"
