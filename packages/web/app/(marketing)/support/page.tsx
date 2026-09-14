@@ -4,11 +4,10 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { copyToClipboard } from "@/lib/utils";
 import { useRouteMeta } from "../pageMeta";
+import { SITE_LINKS } from "@/lib/siteLinks";
 import { SOL, BlogNav, BlogFooter, Terminal, Cmd, Code } from "../blog/blogChrome";
 
-const SUPPORT_EMAIL = "support@codecast.sh";
-const DISCORD_URL = "https://discord.gg/S7V5Wnfq";
-const ISSUES_URL = "https://github.com/codecast-sh/codecast/issues";
+const { supportEmail: SUPPORT_EMAIL, community: COMMUNITY_URL, githubIssues: ISSUES_URL } = SITE_LINKS;
 
 /** One shell line that collects everything a bug report needs. */
 const REPORT_COMMAND = "cast --version; cast status; cast doctor --no-e2e; cast logs -n 200";
@@ -22,10 +21,10 @@ const CHANNELS = [
     accent: SOL.orange,
   },
   {
-    label: "Discord",
-    value: "Community server",
-    note: "Fastest for quick questions.",
-    href: DISCORD_URL,
+    label: "Community",
+    value: "codecast.sh/community",
+    note: "Fastest for quick questions. Read without an account.",
+    href: COMMUNITY_URL,
     accent: SOL.violet,
   },
   {
@@ -147,7 +146,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
       <>
         The Mac app is on the <Link href="/download" className="underline underline-offset-4">download page</Link>, and
         the iOS app is on the{" "}
-        <a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+        <a href={SITE_LINKS.appStore} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
           App Store
         </a>
         . Both sign in with the same account as the web.
@@ -168,7 +167,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     a: (
       <>
         Email{" "}
-        <a href="mailto:security@codecast.sh" className="underline underline-offset-4">security@codecast.sh</a>.
+        <a href={`mailto:${SITE_LINKS.securityEmail}`} className="underline underline-offset-4">{SITE_LINKS.securityEmail}</a>.
         Please do not open a public issue for it.
       </>
     ),
@@ -178,7 +177,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     a: (
       <>
         Email{" "}
-        <a href="mailto:enterprise@codecast.sh" className="underline underline-offset-4">enterprise@codecast.sh</a>.
+        <a href={`mailto:${SITE_LINKS.enterpriseEmail}`} className="underline underline-offset-4">{SITE_LINKS.enterpriseEmail}</a>.
         Plans and prices are on the <Link href="/pricing" className="underline underline-offset-4">pricing page</Link>.
       </>
     ),
@@ -413,13 +412,11 @@ export default function SupportPage() {
               Email support
             </a>
             <a
-              href={DISCORD_URL}
-              target="_blank"
-              rel="noopener noreferrer"
+              href={COMMUNITY_URL}
               className="font-medium text-sm px-5 py-2.5 rounded-lg transition-colors hover:bg-[#094959]"
               style={{ border: `1px solid ${SOL.base01}`, color: SOL.base1 }}
             >
-              Join Discord
+              Join the community
             </a>
           </div>
         </div>

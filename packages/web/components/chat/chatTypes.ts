@@ -112,7 +112,7 @@ export type ChatChannelView = {
   /** Absent = public. Shapes the icon, the naming, and what the menu offers.
    *  "agents": a public room roles and sessions post in — a bot icon, and a
    *  header line naming the roles listening. */
-  kind?: "public" | "private" | "dm" | "agents";
+  kind?: "public" | "private" | "dm" | "agents" | "community";
   /** The OTHER parties of a DM (viewer excluded) — the naming source. */
   dmMemberIds?: string[];
   /** Roster of a restricted room, viewer included (the members panel). */
