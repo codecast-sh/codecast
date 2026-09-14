@@ -123,6 +123,7 @@ export {
 export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
+import type { BrowserPaneOffer } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -665,6 +666,10 @@ export type InboxSession = {
   // so a card can show its state without reading pull_requests. `state` is the
   // shepherd state (review_pending, ci_red, behind, approved, merged, ...).
   pr_status?: PrStatus | null;
+  // The page an agent offered as a pane (`cast browser pane <url>`). The card
+  // wears a small glyph while the offer is unhandled; opening or dismissing it
+  // stamps opened_at. See lib/browserPaneOffer.
+  browser_pane_offer?: BrowserPaneOffer | null;
   // Harness /loop state (server-folded from ScheduleWakeup / wakeup-fire
   // messages; see convex/loopState.ts). An armed loop rows this session into
   // the inbox trigger set like an armed trigger. Never "stopped" here — the
@@ -1635,6 +1640,11 @@ export type ClientUI = {
   // secondary badges, counts and meta rows drop away. A per-user preference
   // ("my reading style follows me") → stamped LWW.
   simple_view?: boolean;
+  // Open an agent's pane offer (`cast browser pane <url>`) without a click,
+  // while the offered session is the one being read and the stage has room.
+  // Off by default — an agent may ask for a pane, never take one. Per-user
+  // ("my reading style follows me") → stamped LWW.
+  auto_open_browser_panes?: boolean;
   // Show a small thumbnail on inbox session rows when the session contains
   // images (session.image_preview_url). Independent of simple_view — applies
   // in both. Off by default; per-user preference → stamped LWW.
@@ -2578,6 +2588,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // change of state must wake the card. The rest of pr_status cannot change
     // without it (a new PR carries a new number and a new state).
     s.pr_status ? `${s.pr_status.number}:${s.pr_status.state}` : "",
+    // An agent's pane offer paints the card's globe glyph. Written once by
+    // `cast browser pane` and once more when the reader acts on it — never on
+    // heartbeats.
+    s.browser_pane_offer ? `${s.browser_pane_offer.offered_at}:${s.browser_pane_offer.opened_at ?? 0}` : "",
     s.git_remote_url || "",
     s.git_branch || "",
     s.worktree_branch || "",
@@ -4721,6 +4735,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   applyUndoPatches: (patches: Record<string, Record<string, Record<string, any>>>) => void;
   toggleFavorite: (id: string) => void;
   setPrivacy: (id: string, isPrivate: boolean) => void;
+  dismissBrowserPaneOffer: (id: string, at: number) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
@@ -5747,6 +5762,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
+  "auto_open_browser_panes",
   "walkie_hold_seen", "call_camera_on", "call_mic_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
@@ -8414,6 +8430,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const idx = list.findIndex((f) => f._id === id);
     if (next && idx === -1) list.push({ ...(this.conversations[id] as any) });
     else if (!next && idx !== -1) list.splice(idx, 1);
+  }),
+
+  // The reader opened or dismissed an agent's pane offer. Same split as
+  // setPrivacy: the field is immutable in the server's generic patch gate (it
+  // is retired by anyone who can SEE the session, not only its owner), so the
+  // authoritative write is the dismissBrowserPaneOffer side effect and this
+  // patches local state. `at` is passed in rather than read here so the value
+  // the server stores is the one the draft already holds — the field lock
+  // retires on an exact echo.
+  dismissBrowserPaneOffer: action(function (this: Draft, id: string, at: number) {
+    const apply = (c: any) => {
+      if (!c?.browser_pane_offer || c.browser_pane_offer.opened_at) return;
+      c.browser_pane_offer = { ...c.browser_pane_offer, opened_at: at };
+    };
+    apply(this.sessions[id]);
+    apply(this.conversations[id]);
   }),
 
   // Privacy/visibility live in the server's immutable applyPatches set because
