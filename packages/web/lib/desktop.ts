@@ -182,6 +182,14 @@ declare global {
       // Call window only: the ring window answered, accept the invite here —
       // this is the renderer that will hold the media.
       onCallRingAccept?: (cb: (payload: { inviteId: string; roomKey: string }) => void) => void;
+      // App-defined IPC (@platform/desktop's bridge, the generic half): invoke
+      // a handler main registered as "app:<name>", or subscribe to what main
+      // pushes on that name. This is how a web feature grows a shell half
+      // without a new preload surface — the browser pane's native view is the
+      // first one. Absent on older builds; a name main never registered
+      // rejects, which is the answer a capability probe wants.
+      call?: <T = unknown>(name: string, ...args: unknown[]) => Promise<T>;
+      subscribe?: (name: string, cb: (payload: unknown) => void) => () => void;
       platform: string;
     };
   }
@@ -1470,4 +1478,106 @@ export function installIdleAnimationPause(): void {
   window.addEventListener("blur", update);
   document.addEventListener("visibilitychange", update);
   update();
+}
+
+// ---------------------------------------------------------------------------
+// The browser pane's native view (packages/electron/browserPanes.js).
+//
+// A pane on the stage can show a page in an iframe anywhere, but a site that
+// refuses to be framed needs a real browser view, and only the desktop shell
+// has one. Everything below is the typed end of ONE app-defined IPC name:
+// commands go out through `call("browser-pane", cmd, payload)`, pane events
+// come back through `subscribe("browser-pane", cb)`.
+// ---------------------------------------------------------------------------
+
+export type BrowserPaneCommand =
+  | "create"
+  | "navigate"
+  | "bounds"
+  | "show"
+  | "hide"
+  | "reload"
+  | "back"
+  | "forward"
+  | "devtools"
+  | "focus"
+  | "destroy"
+  | "destroyAll"
+  /** Read-only: what the shell's views are doing right now. The only way to
+   *  observe a native view from outside the shell, since it is in no DOM and
+   *  in no screenshot the renderer can take. */
+  | "state";
+
+/** What main says about one pane. `paneId` is the renderer's own id for it —
+ *  the shell keys views by (window, paneId) and never invents one. */
+export type BrowserPaneEvent = {
+  paneId: string;
+  event: "title" | "url" | "loading" | "favicon" | "fail" | "focus" | "blur" | "chord";
+  title?: string;
+  url?: string;
+  inPage?: boolean;
+  loading?: boolean;
+  favicon?: string | null;
+  errorCode?: number;
+  errorDescription?: string;
+  /** A key the page was not allowed to keep, because the app owns it
+   *  (the palette, the address strip, reload). */
+  key?: string;
+  shift?: boolean;
+};
+
+export type BrowserPaneBridge = {
+  send: (cmd: BrowserPaneCommand, payload?: Record<string, unknown>) => Promise<unknown>;
+  on: (cb: (event: BrowserPaneEvent) => void) => () => void;
+};
+
+/** The pane bridge, or null in a browser and on a desktop build too old to
+ *  carry app-defined IPC at all. */
+export function browserPaneBridge(): BrowserPaneBridge | null {
+  if (!isElectron()) return null;
+  const call = bridge("call");
+  const subscribe = bridge("subscribe");
+  if (!call || !subscribe) return null;
+  return {
+    send: (cmd, payload) => call("browser-pane", cmd, payload ?? {}),
+    on: (cb) => subscribe("browser-pane", (payload) => cb(payload as BrowserPaneEvent)),
+  };
+}
+
+// Whether this shell actually has the view. The bridge existing is not the
+// answer — every desktop build has `call`, and one from before the native pane
+// shipped rejects the name. So the truth is what the capabilities handler
+// says, asked once per renderer and remembered.
+let paneCapabilities: { available: boolean; commands: string[] } | null = null;
+let paneProbe: Promise<boolean> | null = null;
+const paneWatchers = new Set<() => void>();
+
+export function nativeBrowserPaneAvailable(): boolean {
+  if (paneCapabilities === null) void probeNativeBrowserPane();
+  return paneCapabilities?.available === true;
+}
+
+export function probeNativeBrowserPane(): Promise<boolean> {
+  if (paneCapabilities) return Promise.resolve(paneCapabilities.available);
+  if (paneProbe) return paneProbe;
+  const call = isElectron() ? bridge("call") : undefined;
+  if (!call) {
+    paneCapabilities = { available: false, commands: [] };
+    return Promise.resolve(false);
+  }
+  paneProbe = call<{ available?: boolean; commands?: string[] }>("browser-pane-capabilities")
+    .then((caps) => ({ available: caps?.available === true, commands: caps?.commands ?? [] }))
+    .catch(() => ({ available: false, commands: [] }))
+    .then((caps) => {
+      paneCapabilities = caps;
+      for (const fn of paneWatchers) fn();
+      return caps.available;
+    });
+  return paneProbe;
+}
+
+/** Re-render when the probe answers (useSyncExternalStore). */
+export function subscribeNativeBrowserPane(fn: () => void): () => void {
+  paneWatchers.add(fn);
+  return () => paneWatchers.delete(fn);
 }
