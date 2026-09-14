@@ -13,6 +13,9 @@
 // frontmatter `name` equals the directory name (the agentskills.io identity
 // rule the capability inventory enforces), one import here, and the name in
 // CODECAST_SKILL_NAMES (codecastOwned.ts) so the home mirror never prunes it.
+//
+// The set installs as ONE snippet, `skills`, so the Settings page, the wizard
+// and `cast install skills` all toggle it the way they toggle memory or tasks.
 
 import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES } from "./codecastOwned.js";
 
@@ -24,10 +27,28 @@ import agentCompleteScript from "../orchestration/scripts/agent-complete.sh" wit
 import regroundScript from "../orchestration/scripts/reground.sh" with { type: "text" };
 import orchestrationHooks from "../orchestration/hooks.json";
 
-import whySkill from "../skills/codecast-why/SKILL.md" with { type: "text" };
-import conflictsSkill from "../skills/codecast-conflicts/SKILL.md" with { type: "text" };
-import secondOpinionSkill from "../skills/codecast-second-opinion/SKILL.md" with { type: "text" };
-import standupSkill from "../skills/codecast-standup/SKILL.md" with { type: "text" };
+import whySkill from "../skills/cast-why/SKILL.md" with { type: "text" };
+import conflictsSkill from "../skills/cast-conflicts/SKILL.md" with { type: "text" };
+import secondOpinionSkill from "../skills/cast-second-opinion/SKILL.md" with { type: "text" };
+import standupSkill from "../skills/cast-standup/SKILL.md" with { type: "text" };
+import pickupSkill from "../skills/cast-pickup/SKILL.md" with { type: "text" };
+import handoffSkill from "../skills/cast-handoff/SKILL.md" with { type: "text" };
+import planSkill from "../skills/cast-plan/SKILL.md" with { type: "text" };
+import shipSkill from "../skills/cast-ship/SKILL.md" with { type: "text" };
+import verifySkill from "../skills/cast-verify/SKILL.md" with { type: "text" };
+import reviewSkill from "../skills/cast-review/SKILL.md" with { type: "text" };
+import learnSkill from "../skills/cast-learn/SKILL.md" with { type: "text" };
+import morningSkill from "../skills/cast-morning/SKILL.md" with { type: "text" };
+import eodSkill from "../skills/cast-eod/SKILL.md" with { type: "text" };
+import bakeoffSkill from "../skills/cast-bakeoff/SKILL.md" with { type: "text" };
+import lessonsSkill from "../skills/cast-lessons/SKILL.md" with { type: "text" };
+import passSkill from "../skills/cast-pass/SKILL.md" with { type: "text" };
+import askteamSkill from "../skills/cast-ask-team/SKILL.md" with { type: "text" };
+import triageSkill from "../skills/cast-triage/SKILL.md" with { type: "text" };
+import fromcallSkill from "../skills/cast-from-call/SKILL.md" with { type: "text" };
+import loopSkill from "../skills/cast-loop/SKILL.md" with { type: "text" };
+import worktreeSkill from "../skills/cast-worktree/SKILL.md" with { type: "text" };
+import rethinkSkill from "../skills/cast-rethink/SKILL.md" with { type: "text" };
 
 export interface OrchestrationHookEntry {
   matcher?: string;
@@ -58,8 +79,27 @@ export interface BundledSkill {
 
 /** The codecast skills: slash commands over the team's shared state. */
 export const BUNDLED_SKILLS: readonly BundledSkill[] = [
-  { name: "codecast-why", body: whySkill },
-  { name: "codecast-conflicts", body: conflictsSkill },
-  { name: "codecast-second-opinion", body: secondOpinionSkill },
-  { name: "codecast-standup", body: standupSkill },
+  { name: "cast-why", body: whySkill },
+  { name: "cast-conflicts", body: conflictsSkill },
+  { name: "cast-second-opinion", body: secondOpinionSkill },
+  { name: "cast-standup", body: standupSkill },
+  { name: "cast-pickup", body: pickupSkill },
+  { name: "cast-handoff", body: handoffSkill },
+  { name: "cast-plan", body: planSkill },
+  { name: "cast-ship", body: shipSkill },
+  { name: "cast-verify", body: verifySkill },
+  { name: "cast-review", body: reviewSkill },
+  { name: "cast-learn", body: learnSkill },
+  { name: "cast-morning", body: morningSkill },
+  { name: "cast-eod", body: eodSkill },
+  { name: "cast-bakeoff", body: bakeoffSkill },
+  { name: "cast-lessons", body: lessonsSkill },
+  { name: "cast-pass", body: passSkill },
+  { name: "cast-ask-team", body: askteamSkill },
+  { name: "cast-triage", body: triageSkill },
+  { name: "cast-from-call", body: fromcallSkill },
+  { name: "cast-loop", body: loopSkill },
+  { name: "cast-worktree", body: worktreeSkill },
+  { name: "cast-rethink", body: rethinkSkill },
 ];
+

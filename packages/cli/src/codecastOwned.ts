@@ -35,10 +35,28 @@ export const ORCH_MARKER = "/.codecast/orchestration/";
 export const ORCH_SKILL_REL = ".claude/skills/codecast-orchestrate";
 
 export const CODECAST_SKILL_NAMES = [
-  "codecast-why",
-  "codecast-conflicts",
-  "codecast-second-opinion",
-  "codecast-standup",
+  "cast-why",
+  "cast-conflicts",
+  "cast-second-opinion",
+  "cast-standup",
+  "cast-pickup",
+  "cast-handoff",
+  "cast-plan",
+  "cast-ship",
+  "cast-verify",
+  "cast-review",
+  "cast-learn",
+  "cast-morning",
+  "cast-eod",
+  "cast-bakeoff",
+  "cast-lessons",
+  "cast-pass",
+  "cast-ask-team",
+  "cast-triage",
+  "cast-from-call",
+  "cast-loop",
+  "cast-worktree",
+  "cast-rethink",
 ] as const;
 
 /** The agent definitions the orchestration snippet installs under ~/.claude/agents/. */

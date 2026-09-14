@@ -63,7 +63,7 @@
  *   2. The scratch HOME path is replaced with @HOME@ inside the side files
  *      before hashing (mkdtemp gives a fresh path each run).
  *   3. A slug that writes no CLAUDE.md at all — `orchestration` writes skills,
- *      agents, and hooks instead — goldens the sentinel @ABSENT@ rather than a
+ *      agents, and hooks; `skills` writes SKILL.md files — goldens the sentinel @ABSENT@ rather than a
  *      missing file, so "wrote nothing" is asserted rather than skipped.
  *   4. Every install stamps the running cast version above the section's end
  *      marker (ct-49544). That one token is replaced with @VERSION@, so the
@@ -126,7 +126,7 @@ const BODY_CHANGED_WITHOUT_VERSION_BUMP: string[] = [];
  *
  * Also a record of a live bug, not permission for it.
  */
-const STDOUT_NAMES_A_FILE_IT_DID_NOT_WRITE = ["orchestration"];
+const STDOUT_NAMES_A_FILE_IT_DID_NOT_WRITE: string[] = [];
 
 const scratchHomes: string[] = [];
 

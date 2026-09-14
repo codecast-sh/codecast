@@ -1,5 +1,5 @@
 ---
-name: codecast-second-opinion
+name: cast-second-opinion
 description: Get an independent review of the current change from a different model in a fresh context, then verify its findings and fold the real ones in. Use before shipping, after a long debugging session, or when asked for another model's view.
 argument-hint: "[codex|grok|gemini|claude] [focus]"
 ---

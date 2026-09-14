@@ -79,7 +79,7 @@ describe("every catalog snippet is wired into the CLI", () => {
 
     // And the catalog really does carry a section for everything that has one.
     const missing = SNIPPET_CATALOG
-      .filter((d) => d.slug !== "orchestration" && !d.section)
+      .filter((d) => d.slug !== "orchestration" && d.slug !== "skills" && !d.section)
       .map((d) => d.slug);
     expect(`snippets with no installable section: ${missing.join(", ") || "none"}`).toBe(
       "snippets with no installable section: none",

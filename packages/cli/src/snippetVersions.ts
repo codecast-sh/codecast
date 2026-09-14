@@ -25,6 +25,7 @@ const DECIDE_VERSION = "2"; // v2: age + messages-since on ls, stale-ask sweepin
 const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
 const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
+const SKILLS_VERSION = "1"; // first release: the cast-* skills as one snippet
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
 
 export function getMemoryVersion(): string {
@@ -89,4 +90,10 @@ export function getLimitsVersion(): string {
 
 export function getComputerVersion(): string {
   return COMPUTER_VERSION;
+}
+
+/** Display only: the skills installer byte-compares each file, so an edited
+ *  body lands without a bump. Bump when a skill is added or removed. */
+export function getSkillsVersion(): string {
+  return SKILLS_VERSION;
 }
