@@ -228,6 +228,20 @@ export function mergeOrgTree(incoming: OrgTree, intents: OrgIntent[], now = Date
   return { tree, intents: open };
 }
 
+/**
+ * The dispatch rail refused an org action (useEnsureDispatch's error handler):
+ * drop the intent for that subject so the tree stops showing the edit. Args
+ * are the action's own arguments, so the subject is read from them.
+ */
+export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgIntent: (id: string) => void }, action: string, args: unknown): void {
+  if (!Array.isArray(args)) return;
+  const hit = state.orgIntents.find((i) =>
+    (action === "reparentOrgSession" && i.kind === "moveSession" && i.conversation_id === args[0]) ||
+    (action === "reparentOrgRole" && i.kind === "moveRole" && i.role_id === args[0]) ||
+    (action === "followOrgChannel" && i.kind === "follow" && i.role_short_id === args[0] && i.channel_id === args[1]));
+  if (hit) state.dropOrgIntent(hit.id);
+}
+
 let intentSeq = 0;
 function intentId(): string {
   intentSeq += 1;
@@ -285,6 +299,9 @@ export function createOrgSlice(): OrgSliceState {
     reparentOrgSession: action(function (this: OrgDraft, conversationId: string, target: OrgParentRef, row?: OrgSession | null) {
       const tree = this.orgTree;
       if (!tree || !parentBucket(tree, target)) return;
+      // Nothing to move: the row is in no bucket and the page did not hand it
+      // over. Recording an intent would replay a no-op until its TTL.
+      if (!row && !orgSessionParent(tree, conversationId)) return;
       const intent: OrgIntent = { kind: "moveSession", id: intentId(), conversation_id: conversationId, target, at: Date.now() };
       applyOrgIntent(tree, intent, row);
       pushIntent(this, intent);

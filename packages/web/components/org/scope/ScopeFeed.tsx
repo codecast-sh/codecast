@@ -15,6 +15,7 @@ import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from "./scopeTypes";
+import { FEED_NEUTRAL_TONE, feedLinkIsServerOwned, feedStateTone, queryProblem } from "../../../lib/scopePage";
 
 const PAGE = 40;
 
@@ -30,12 +31,13 @@ const KIND_ICON: Record<FeedKind, any> = {
 };
 
 /** One page of the feed: fires the query for its cursor, reports once, stays mounted so the row stays live. */
-function FeedPageLoader({ scope, cursor, kinds, onPage }: { scope: ScopeRef; cursor?: string; kinds: FeedKind[]; onPage: (cursor: string | undefined, rows: FeedRow[], next?: string) => void }) {
-  const { data } = useScopeFeedPage({ ...scope, ...(cursor ? { cursor } : {}), limit: PAGE, ...(kinds.length ? { kinds } : {}) });
+function FeedPageLoader({ scope, cursor, kinds, onPage, onProblem }: { scope: ScopeRef; cursor?: string; kinds: FeedKind[]; onPage: (cursor: string | undefined, rows: FeedRow[], next?: string) => void; onProblem: (message: string) => void }) {
+  const { data, error, missing } = useScopeFeedPage({ ...scope, ...(cursor ? { cursor } : {}), limit: PAGE, ...(kinds.length ? { kinds } : {}) });
   useWatchEffect(() => {
-    if (!data) return;
-    onPage(cursor, data.rows ?? [], data.next_cursor ?? undefined);
-  }, [data, cursor, onPage]);
+    if (data) { onPage(cursor, data.rows ?? [], data.next_cursor ?? undefined); return; }
+    const problem = queryProblem(error, missing, "The feed");
+    if (problem) onProblem(problem);
+  }, [data, error, missing, cursor, onPage, onProblem]);
   return null;
 }
 
@@ -51,29 +53,37 @@ export type ScopeFeedProps = {
 export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps) {
   const [pickedKinds, setKinds] = useState<FeedKind[]>([]);
   const kinds = lockKinds ?? pickedKinds;
-  // Pages keyed by the cursor that produced them; the first page's key is "".
-  const [pages, setPages] = useState<Record<string, { rows: FeedRow[]; next?: string }>>({});
-  const [requested, setRequested] = useState<string[]>([""]);
   const scopeKey = JSON.stringify(scope);
+  // One stream per scope and kind set. Pages are keyed by the cursor that
+  // produced them (the first page's key is ""). The stream carries its own
+  // key, so a scope or kind change starts over in the same render: the old
+  // cursors are never fired against the new filter, not even for one commit.
+  const streamKey = `${scopeKey}|${kinds.join(",")}`;
+  type Stream = { key: string; pages: Record<string, { rows: FeedRow[]; next?: string }>; requested: string[]; problem: string | null };
+  const fresh = (key: string): Stream => ({ key, pages: {}, requested: [""], problem: null });
+  const [streamState, setStream] = useState<Stream>(() => fresh(streamKey));
+  const stream = streamState.key === streamKey ? streamState : fresh(streamKey);
+  const { pages, requested, problem } = stream;
+  // Every setter starts from the current key's stream, never a stale one.
+  const patchStream = useCallback((key: string, fn: (s: Stream) => Stream) => {
+    setStream((prev) => fn(prev.key === key ? prev : fresh(key)));
+  }, []);
   const now = useCoarseNow(30_000);
   const openLinked = useOpenLinkedSession();
   const sentinel = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
 
-  // A new scope or a new kind set starts the stream over.
-  useWatchEffect(() => {
-    setPages({});
-    setRequested([""]);
-  }, [scopeKey, kinds.join(",")]);
-
   const onPage = useCallback((cursor: string | undefined, rows: FeedRow[], next?: string) => {
-    setPages((prev) => {
+    patchStream(streamKey, (prev) => {
       const key = cursor ?? "";
-      const cur = prev[key];
+      const cur = prev.pages[key];
       if (cur && cur.next === next && cur.rows.length === rows.length && cur.rows.every((r, i) => r.id === rows[i].id && r.updated_at === rows[i].updated_at)) return prev;
-      return { ...prev, [key]: { rows, next } };
+      return { ...prev, pages: { ...prev.pages, [key]: { rows, next } }, problem: null };
     });
-  }, []);
+  }, [patchStream, streamKey]);
+  const onProblem = useCallback((message: string) => {
+    patchStream(streamKey, (prev) => (prev.problem === message ? prev : { ...prev, problem: message }));
+  }, [patchStream, streamKey]);
 
   const ordered = useMemo(() => {
     // Walk the chain from the first page so a page that re-fired stays in place.
@@ -92,12 +102,12 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
     return { rows: out, next: last?.next, loaded: !!pages[""] };
   }, [pages]);
 
-  const pending = requested.some((c) => !pages[c]);
+  const pending = requested.some((c) => !pages[c]) && !problem;
   const loadMore = useCallback(() => {
     const next = ordered.next;
     if (!next || pending) return;
-    setRequested((r) => (r.includes(next) ? r : [...r, next]));
-  }, [ordered.next, pending]);
+    patchStream(streamKey, (prev) => (prev.requested.includes(next) ? prev : { ...prev, requested: [...prev.requested, next] }));
+  }, [ordered.next, pending, patchStream, streamKey]);
 
   // Infinite scroll: the sentinel under the last row asks for the next page.
   useWatchEffect(() => {
@@ -113,7 +123,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
 
   const body = (
     <>
-      {requested.map((c) => <FeedPageLoader key={`${scopeKey}|${kinds.join(",")}|${c}`} scope={scope} cursor={c || undefined} kinds={kinds} onPage={onPage} />)}
+      {requested.map((c) => <FeedPageLoader key={`${streamKey}|${c}`} scope={scope} cursor={c || undefined} kinds={kinds} onPage={onPage} onProblem={onProblem} />)}
       {!lockKinds && <div className="flex items-center gap-1.5 flex-wrap px-1 pb-3">
         <button
           type="button"
@@ -126,6 +136,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
         {FEED_KINDS.map((k) => {
           const on = kinds.includes(k);
           const m = FEED_KIND_META[k];
+          const KindIcon = KIND_ICON[k];
           return (
             <button
               key={k}
@@ -134,23 +145,26 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
               aria-pressed={on}
               className={cn("inline-flex items-center gap-1.5 h-[24px] px-2.5 rounded-full text-[11px] font-medium border transition-colors", !on && "hover:bg-sol-bg-highlight/70")}
               style={on
-                ? { background: `color-mix(in srgb, ${m.color} 16%, transparent)`, borderColor: `color-mix(in srgb, ${m.color} 50%, transparent)`, color: m.color }
+                ? { background: "var(--sol-bg-highlight)", borderColor: "color-mix(in srgb, var(--sol-text) 35%, transparent)", color: "var(--sol-text)" }
                 : { borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}
             >
-              <span className="w-[6px] h-[6px] rounded-full" style={{ background: m.color, opacity: on ? 1 : 0.5 }} />
+              <KindIcon className="w-3 h-3" />
               {m.plural}
             </button>
           );
         })}
       </div>}
 
+      {ordered.rows.length === 0 && !ordered.loaded && problem && (
+        <p className="py-10 text-center text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>{problem}</p>
+      )}
       {ordered.rows.length === 0 && ordered.loaded && (
         <div className="py-14 text-center">
           <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>Nothing in this scope yet{kinds.length ? " for those kinds" : ""}.</p>
           <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Sessions, tasks, plans, pages, artifacts, decisions, updates and commits appear here as they move.</p>
         </div>
       )}
-      {ordered.rows.length === 0 && !ordered.loaded && (
+      {ordered.rows.length === 0 && !ordered.loaded && !problem && (
         <div className="space-y-2 px-1" aria-busy>
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-[52px] rounded-xl animate-pulse" style={{ background: "color-mix(in srgb, var(--sol-border) 14%, transparent)", animationDelay: `${i * 80}ms` }} />
@@ -158,10 +172,10 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
         </div>
       )}
       <ol className="space-y-1">
-        {ordered.rows.map((r, i) => <FeedRowView key={`${r.kind}:${r.id}`} row={r} now={now} index={i} onOpenSession={(row) => openLinked({ _id: row.id, short_id: row.short_id, title: row.title, agent_type: "claude_code" })} />)}
+        {ordered.rows.map((r, i) => <FeedRowView key={`${r.kind}:${r.id}`} row={r} now={now} index={i} onOpenSession={(row) => openLinked({ _id: row.id, short_id: row.short_id, title: row.title })} />)}
       </ol>
       <div ref={sentinel} className="h-8 flex items-center justify-center text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
-        {ordered.next ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : ordered.rows.length > 0 ? "That is everything in scope." : null}
+        {problem && ordered.rows.length > 0 ? problem : ordered.next ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : ordered.rows.length > 0 ? "That is everything in scope." : null}
       </div>
     </>
   );
@@ -174,30 +188,14 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
 
 // ---------------------------------------------------------------- one row
 
-const stateTone = (kind: FeedKind, state?: string): string | undefined => {
-  if (!state) return undefined;
-  const s = state.toLowerCase();
-  if (kind === "session") {
-    if (s === "needs_input" || s === "blocked") return "var(--sol-yellow)";
-    if (s === "working") return "var(--sol-green)";
-    if (s === "done") return "var(--sol-cyan)";
-    if (s === "dormant") return "var(--sol-blue)";
-    return "var(--sol-text-dim)";
-  }
-  if (s === "done" || s === "answered" || s === "completed" || s === "merged") return "var(--sol-cyan)";
-  if (s === "in_progress" || s === "active" || s === "working") return "var(--sol-green)";
-  if (s === "pending" || s === "open" || s === "in_review") return "var(--sol-yellow)";
-  if (s === "dropped" || s === "dismissed" || s === "withdrawn") return "var(--sol-red)";
-  return "var(--sol-text-dim)";
-};
-
 function FeedRowView({ row, now, index, onOpenSession }: { row: FeedRow; now: number; index: number; onOpenSession: (row: FeedRow) => void }) {
   const m = FEED_KIND_META[row.kind];
   const Icon = KIND_ICON[row.kind];
-  const tone = stateTone(row.kind, row.state);
+  const tone = feedStateTone(row.kind, row.state);
+  const stateColor = tone === FEED_NEUTRAL_TONE ? "var(--sol-text-muted)" : tone;
   const inner = (
     <>
-      <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: tone ?? `color-mix(in srgb, ${m.color} 55%, transparent)` }} aria-hidden />
+      <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: tone }} aria-hidden />
       {row.image_url ? (
         <span className="relative shrink-0 w-[72px] h-[48px] rounded-lg overflow-hidden border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)", background: "var(--sol-bg-alt)" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -212,7 +210,7 @@ function FeedRowView({ row, now, index, onOpenSession }: { row: FeedRow; now: nu
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5 min-w-0">
           <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{row.title || "Untitled"}</span>
-          {row.state && <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{row.state.replace(/_/g, " ")}</span>}
+          {row.state && <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${stateColor} 45%, transparent)`, color: stateColor }}>{row.state.replace(/_/g, " ")}</span>}
         </span>
         <span className="mt-[2px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
           <span style={{ fontFamily: "var(--font-mono)" }}>{row.short_id ?? m.label}</span>
@@ -239,6 +237,9 @@ function FeedRowView({ row, now, index, onOpenSession }: { row: FeedRow; now: nu
     <li>
       {row.kind === "session" ? (
         <button type="button" onClick={() => onOpenSession(row)} className={cls} style={style}>{inner}</button>
+      ) : feedLinkIsServerOwned(row.href) ? (
+        // A published page is served outside the SPA: a full load, same tab.
+        <a href={row.href} className={cls} style={style}>{inner}</a>
       ) : (
         <Link href={row.href} className={cls} style={style}>{inner}</Link>
       )}
