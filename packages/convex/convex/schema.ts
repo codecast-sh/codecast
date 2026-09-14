@@ -548,11 +548,27 @@ export default defineSchema({
     // with the text. Drives the status chip on the panel and the row tint on
     // the inbox card; absent on rows written before it existed.
     thread_state_status: v.optional(v.string()),
+    // The page an agent offered as a pane (`cast browser pane <url>`). One
+    // latest offer, never a list: an agent that started three dev servers is
+    // telling the reader about the newest, and a queue of dead addresses reads
+    // worse than the freshest answer. `opened_at` is set the moment the reader
+    // opens or dismisses the chip, which is what keeps a handled offer handled
+    // on every other device.
+    browser_pane_offer: v.optional(v.object({
+      url: v.string(),
+      title: v.optional(v.string()),
+      offered_at: v.number(),
+      opened_at: v.optional(v.number()),
+    })),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
     // once but each new turn can push again.
     needs_input_notified_key: v.optional(v.string()),
+    // The waiting episode (message_count:kind) that last woke this hand's
+    // role (org-roles-standing.md T3), so the three checks a settle schedules
+    // insert one outbox row, not three.
+    hand_wake_notified_key: v.optional(v.string()),
     // Absolute flag: a truthy value means dismissed until a user action clears
     // it. Never compare against `updated_at` — dozens of mutations bump that
     // field and a relative check re-opens the session. Set by:
@@ -798,6 +814,9 @@ export default defineSchema({
       cache_read: v.number(),
       cache_write: v.number(),
       updated_at: v.number(),
+      // The Claude message id last counted, so a turn split across two sync
+      // batches counts once (messages.rollUpUsage).
+      last_api_message_id: v.optional(v.string()),
     })),
     // Durable execution fencing is opt-in during the mixed-version rollout.
     // Absence means the conversation is still served by the legacy daemon rail.
@@ -1649,7 +1668,13 @@ export default defineSchema({
       v.literal("undeliverable"),
       // User-initiated terminal state. The only way to stop the always-on retry loop short of
       // delivery — the daemon's getPendingMessages never returns it and the healer never revives it.
-      v.literal("cancelled")
+      v.literal("cancelled"),
+      // A person's message into a role's standing session, parked until the
+      // wake rail's flush folds it into one frame and releases it as
+      // "pending" (org-roles-standing.md T3). The daemon polls and the retry
+      // cron read "pending" only, so a held row waits for free; cancel and
+      // kill still terminalize it.
+      v.literal("held")
     ),
     created_at: v.number(),
     delivered_at: v.optional(v.number()),
@@ -3170,6 +3195,10 @@ export default defineSchema({
     scope_keys: v.optional(v.array(v.string())),
     // A person reopened a granted answer: the grant and the answer it gave, so
     // the person's own answer can be scored as an agreement or an override.
+    // Set by `cast org apply` (orgInit.performApplyDecision) once an org
+    // proposal's answer was acted on, so a second run skips the row.
+    applied_at: v.optional(v.number()),
+    applied_note: v.optional(v.string()),
     reopened_from: v.optional(
       v.object({ grant_id: v.id("decision_grants"), answer_index: v.optional(v.number()), at: v.number() })
     ),
