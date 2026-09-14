@@ -11,9 +11,9 @@ test("a repainting empty composer waits for the original buffered paste", async 
     prePaste: pane(),
     rePaste: async () => { rePastes++; },
     exec: async (args) => {
-      if (args[0] === "capture-pane") return { stdout: pane(++polls >= 6 ? "continue" : "", polls) };
+      if (args[0] === "capture-pane") return { stdout: pane(++polls >= 6 ? "continue" : "", polls), stderr: "" };
       if (args[0] === "send-keys") keys.push(args.at(-1)!);
-      return { stdout: "" };
+      return { stdout: "", stderr: "" };
     },
   });
   expect(result).toBe("matched");

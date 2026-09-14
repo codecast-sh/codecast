@@ -52,7 +52,7 @@ test.skipIf(!Bun.which("tmux"))("a buffered continue survives footer repaints an
   const coldKeys: string[] = [];
   const exec = async (args: string[]) => {
     if (!existsSync(releasePath) && args[0] === "send-keys") coldKeys.push(args.at(-1)!);
-    return { stdout: tmuxRun(args).stdout };
+    return { stdout: tmuxRun(args).stdout, stderr: "" };
   };
   let wake: ReturnType<typeof setTimeout> | undefined;
   try {
