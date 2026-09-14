@@ -120,6 +120,7 @@ const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
+const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
@@ -151,6 +152,7 @@ const Triggers = lazy(() => import("@/app/triggers/page"));
 const TriggerDetail = lazy(() => import("@/app/triggers/[id]/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
+const SlackConnect = lazy(() => import("@/app/slack/connect/page"));
 // One component serves the index and every section
 // so section switches reconcile in place instead of remounting.
 const Team = lazy(() => import("@/app/team/page"));
@@ -274,6 +276,10 @@ export const ROUTES: RouteEntry[] = [
   // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.
   { path: "chat", component: cast(Chat), layout: "dashboardShell", tab: "/chat" },
   { path: "chat/:channelId", component: cast(Chat), layout: "dashboardShell", tab: "/chat/:channelId" },
+  // The public rooms (chat in community scope): a visitor reads them in the
+  // guest shell, like a shared conversation. Full-bleed via FULL_WIDTH_PATTERNS.
+  { path: "community", component: cast(Community), layout: "dashboardShell", tab: "/community", guestOk: true, guestKind: "shell" },
+  { path: "community/:channelId", component: cast(Community), layout: "dashboardShell", tab: "/community/:channelId", guestOk: true, guestKind: "shell" },
   { path: "search", component: cast(Search), layout: "dashboardShell", tab: "/search" },
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
@@ -309,6 +315,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "sessions", component: cast(Sessions), layout: "dashboardShell", tab: "/sessions" },
   // Full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions), not an isOnXPage flag.
   { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
+  // Slack's OAuth return leg. Completes the install and bounces to return_to.
+  { path: "slack/connect", component: cast(SlackConnect), layout: "dashboardShell", tab: "/slack/connect" },
   { path: "team", component: cast(Team), layout: "dashboardShell", tab: "/team" },
   { path: "team/activity", component: cast(TeamActivity), layout: "dashboardShell", tab: "/team/activity" },
   { path: "team/charts", component: cast(TeamCharts), layout: "dashboardShell", tab: "/team/charts" },

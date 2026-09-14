@@ -4020,7 +4020,8 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
+    [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -13153,6 +13154,42 @@ function normalizePromptText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+// Claude Code draws its prompt suggestion in an idle composer as faint text
+// (SGR 2). A plain capture drops the attribute, so a suggested "❯ continue"
+// reads exactly like a typed one, and delivery pressed Enter on it for 15 s at
+// a time (ct-51376). Every capture that asks what the composer holds is taken
+// with -e and read through this, which drops faint runs and every other escape.
+export function stripTmuxFaintText(pane: string): string {
+  let faint = false;
+  let out = "";
+  let last = 0;
+  const re = /\x1b\[([0-9;:]*)([A-Za-z])|\x1b[^[]/g;
+  for (let m = re.exec(pane); m; m = re.exec(pane)) {
+    if (!faint) out += pane.slice(last, m.index);
+    last = re.lastIndex;
+    if (m[2] !== "m") continue;
+    const params = (m[1] || "0").split(/[;:]/);
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      // 38/48/58 carry a colour: 5;N or 2;R;G;B. Their arguments are not
+      // attributes, and a truecolor "2" read as faint dropped opencode's and
+      // grok's typed text.
+      if (p === "38" || p === "48" || p === "58") {
+        i += params[i + 1] === "5" ? 2 : params[i + 1] === "2" ? 4 : 0;
+        continue;
+      }
+      if (p === "2") faint = true;
+      else if (p === "" || p === "0" || p === "22") faint = false;
+    }
+  }
+  return faint ? out : out + pane.slice(last);
+}
+
+export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: string, lines: number): Promise<string> {
+  const { stdout } = await exec(["capture-pane", "-p", "-e", "-J", "-t", target, "-S", `-${lines}`]);
+  return stripTmuxFaintText(stdout);
+}
+
 function tmuxComposerRegion(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
@@ -15628,7 +15665,7 @@ export async function drainTmuxComposer(
     if (cycle % 3 !== 0) continue;
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       break; // capture problems are diagnosed by the Enter gate
     }
@@ -15650,7 +15687,7 @@ export async function tmuxComposerDraft(
 ): Promise<string | null> {
   let pane: string;
   try {
-    ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    pane = await captureTmuxComposerPane(exec, target, 40);
   } catch {
     return null;
   }
@@ -15782,7 +15819,7 @@ export async function awaitTmuxComposerPayload(
   while (Date.now() < deadline) {
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       return "unwatchable"; // capture problems are diagnosed by the post-submit verifier
     }
@@ -15976,7 +16013,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let alreadyAtPrompt = false;
   let liveState: TmuxLiveState = "unknown";
   try {
-    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    const stdout = await captureTmuxComposerPane(exec, target, captureLines);
     alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
     liveState = classifyTmuxLiveState(extractTmuxLiveRegion(stdout));
   } catch {}
@@ -16054,8 +16091,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
 
     try {
-      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      prePaste = stdout;
+      prePaste = await captureTmuxComposerPane(exec, target, captureLines);
     } catch {}
 
     // Paste once
@@ -16092,7 +16128,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     for (let attempt = 0; attempt < 4; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
-        const { stdout: postPaste } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        const postPaste = await captureTmuxComposerPane(exec, target, captureLines);
         if (postPaste !== prePaste) {
           pasteConfirmed = true;
           break;
@@ -16130,8 +16166,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   };
   const verify = await verifyTmuxSubmitAfterPaste(
     {
-      capture: async () =>
-        (await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
+      capture: () => captureTmuxComposerPane(exec, target, captureLines),
       sendEnter,
       rePaste: async () => {
         if (delivery) throw new TmuxDeliveryUncertainError("a submitted paste cannot be repeated");

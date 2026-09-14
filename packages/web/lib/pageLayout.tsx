@@ -24,6 +24,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/decisions(\/|$)/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
+  // The public rooms are the same three column surface.
+  /^\/community(\/|$)/,
   // The Threads inbox: its own header and scroll region, chat-style.
   /^\/threads(\/|$)/,
   // Calls too: list · transcript · chat rail, each its own scroll region.

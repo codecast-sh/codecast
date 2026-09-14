@@ -166,6 +166,15 @@ crons.interval(
   {}
 );
 
+// Slack mirror job ledger (slackSync): drop processed rows, requeue anything
+// whose action was lost.
+crons.interval(
+  "sweep slack sync events",
+  { hours: 1 },
+  internal.slackSync.sweepSyncEvents,
+  {}
+);
+
 crons.interval(
   // Capability rows for machines silent 90+ days: the daemon cannot clean up a
   // laptop that was wiped, so the server notices the silence instead.

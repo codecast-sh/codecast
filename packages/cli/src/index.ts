@@ -56,6 +56,7 @@ import {
   fenceForeignText,
   FOREIGN_TEXT_CAPS,
 } from "@codecast/shared/contracts";
+import type { SessionPresence } from "./formatter.js";
 import {
   buildTaskTree,
   referenceGuidance,
@@ -11932,9 +11933,11 @@ Question: ${query}`,
       }
 
       const topSessions = conversations.slice(0, limit);
-      const sessionDetails: Array<{
+      const { pickSessionPresence, formatSessionPresence } = await import("./formatter.js");
+      const sessionDetails: Array<SessionPresence & {
         id: string;
         title: string;
+        updated_at: string;
         messages: Array<{ line: number; role: string; content: string }>;
       }> = [];
 
@@ -11960,6 +11963,8 @@ Question: ${query}`,
           sessionDetails.push({
             id: conv.id,
             title: conv.title,
+            updated_at: conv.updated_at,
+            ...pickSessionPresence(conv),
             messages: readResult.messages,
           });
         }
@@ -12022,7 +12027,7 @@ Answer the question based on the context above. Include specific details like va
       console.log(answer);
       console.log("\nSources:");
       for (const session of sessionDetails) {
-        console.log(`- [${session.id.slice(0, 7)}] ${session.title}`);
+        console.log(`- [${session.id.slice(0, 7)}] ${formatSessionPresence(session)} - ${session.title}`);
       }
       console.log("</ANSWER>");
     } catch (error) {
@@ -12117,7 +12122,8 @@ program
     }
 
     try {
-      const sessions: Map<string, {
+      const { pickSessionPresence } = await import("./formatter.js");
+      const sessions: Map<string, SessionPresence & {
         id: string;
         title: string;
         project_path: string | null;
@@ -12166,6 +12172,7 @@ program
               project_path: conv.project_path,
               updated_at: conv.updated_at,
               message_count: conv.message_count,
+              ...pickSessionPresence(conv),
               preview,
               match_type: conv.title_match ? "title" : "text",
               match_detail: searchQuery,
@@ -12196,6 +12203,7 @@ program
                 project_path: sess.project_path,
                 updated_at: sess.updated_at,
                 message_count: sess.message_count,
+                ...pickSessionPresence(sess),
                 match_type: "file",
                 match_detail: filePath,
               });
@@ -12246,7 +12254,12 @@ program
       const { formatContextResults } = await import("./formatter.js");
       console.log(formatContextResults({
         query: searchQuery,
-        sessions: Array.from(sessions.values()).slice(0, limit),
+        // Stable: search relevance, then file matches, with killed and
+        // long-quiet sessions moved below recent ones (still listed). The
+        // server ranks each row (recency_rank) from its wake cost.
+        sessions: Array.from(sessions.values())
+          .sort((a, b) => (a.recency_rank ?? 0) - (b.recency_rank ?? 0))
+          .slice(0, limit),
         related_files: Array.from(relatedFiles.entries())
           .sort((a, b) => b[1] - a[1])
           .slice(0, 10)
@@ -13272,6 +13285,7 @@ chat
   .argument("<name>", "Channel name (normalized to a slug)")
   .option("--team <name|id>", "Team to create it in (default: your active team)")
   .option("--topic <text>", stdinText("Channel topic"))
+  .option("--community", "A public room on codecast.sh/community: anyone reads, every signed in user posts. Admins of the community team only")
   .action(async (name: string, options: any) => {
     // A WRITE resolves its workspace here and sends it explicitly. Letting the
     // server fall back to users.active_team_id is how `cast chat new` once put
@@ -13279,6 +13293,7 @@ chat
     const ws = await writeWorkspace(options.team, { teamRequired: true });
     const result = await cliPost("/cli/chat/create-channel", {
       ...workspaceArgs(ws), name, topic: options.topic,
+      ...(options.community ? { kind: "community" } : {}),
     });
     // The landing team is PRINTED: a write must say where it went, even when
     // it went where you expected.
@@ -13539,6 +13554,236 @@ chat
     console.log(
       `${c.green}✓${c.reset} marked read ${c.dim}(${result.notifications_cleared} cleared, ` +
       `${result.pushes_cancelled} pushes dropped)${c.reset}`,
+    );
+  });
+
+// ── Slack mirror ─────────────────────────────────────────────────────────────
+// A chat channel mirrored with a Slack channel, both ways or one way. The
+// server owns every rule (membership, who may manage the channel, the echo
+// stop); these verbs resolve names to ids and print where a write landed.
+const chatSlack = chat
+  .command("slack")
+  .description("Mirror channels with Slack: connection, mirrored pairs, link and unlink")
+  .showHelpAfterError(true);
+
+const SLACK_DIRECTION_FLAG: Record<string, string> = {
+  both: "both", "from-slack": "slack_to_codecast", "to-slack": "codecast_to_slack",
+};
+const SLACK_DIRECTION_ARROW: Record<string, string> = {
+  both: "⇄", slack_to_codecast: "←", codecast_to_slack: "→",
+};
+
+// Slack is a team feature: every verb here, read or write, names a real team.
+async function slackWorkspace(options: any): Promise<Workspace> {
+  const ws = await writeWorkspace(options.team, { teamRequired: true });
+  await requireWorkspaceFeature(ws, "chat");
+  return ws;
+}
+
+async function slackStatus(ws: Workspace): Promise<any> {
+  const status = await cliPost("/cli/chat/slack/status", workspaceArgs(ws));
+  if (!status) {
+    console.error(`You are not a member of team ${workspaceLabel(ws)}.`);
+    process.exit(1);
+  }
+  return status;
+}
+
+// The mirror row for one chat channel (by #name or id), or exit naming the fix.
+async function slackLinkFor(chatRef: string, ws: Workspace): Promise<{ link: any; status: any }> {
+  const chatChannelId = await resolveChatChannelId(chatRef, workspaceArgs(ws).team_id);
+  const status = await slackStatus(ws);
+  const link = (status.links ?? []).find((l: any) => String(l.chat_channel_id) === chatChannelId);
+  if (!link) {
+    console.error(`${chatRef} does not mirror a Slack channel. See: cast chat slack ls`);
+    process.exit(1);
+  }
+  return { link, status };
+}
+
+// A Slack channel by "#name" / name, or a raw channel id (C… / G…).
+async function resolveSlackChannelId(ref: string, ws: Workspace): Promise<string> {
+  if (!ref.startsWith("#") && /^[CG][A-Z0-9]{8,}$/.test(ref)) return ref;
+  const name = ref.replace(/^#/, "").trim().toLowerCase();
+  const result = await cliPost("/cli/chat/slack/channels", workspaceArgs(ws));
+  const match = (result.channels ?? []).find((ch: any) => String(ch.name).toLowerCase() === name);
+  if (!match) {
+    console.error(`No Slack channel named #${name} that the app can see. See: cast chat slack channels`);
+    process.exit(1);
+  }
+  return String(match.id);
+}
+
+function slackPairLabel(chatName: string, link: any): string {
+  return `${c.bold}#${chatName}${c.reset} ${SLACK_DIRECTION_ARROW[link.direction] ?? "?"} ` +
+    `${c.cyan}#${link.slack_channel_name ?? link.slack_channel_id}${c.reset}`;
+}
+
+chatSlack
+  .command("ls", { isDefault: true })
+  .description("The team's Slack connection and every mirrored channel pair")
+  .option("--team <name|id>", "Team to show (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await slackWorkspace(options);
+    const status = await slackStatus(ws);
+    if (options.json) {
+      console.log(JSON.stringify(status, null, 2));
+      return;
+    }
+    const install = status.installation;
+    console.log(
+      install
+        ? `  ${c.dim}Slack${c.reset} ${c.bold}${install.workspace_name ?? install.workspace_id}${c.reset}` +
+          ` ${c.dim}· team ${workspaceLabel(ws)}${c.reset}`
+        : `  ${c.dim}Slack${c.reset} not connected ${c.dim}· a team admin connects it under Settings → Integrations, or from any channel’s Slack pill in Chat${c.reset}`,
+    );
+    if (!status.links?.length) {
+      if (install) console.log(`${c.dim}  No mirrored channels yet. Link one: cast chat slack link <chat-channel> <slack-channel>${c.reset}`);
+      return;
+    }
+    const names = new Map<string, string>(
+      (await listChatChannels(workspaceArgs(ws).team_id)).map((ch: any) => [String(ch._id), String(ch.name)]),
+    );
+    const width = Math.max(...status.links.map((l: any) => (names.get(String(l.chat_channel_id)) ?? "?").length + 1));
+    for (const link of status.links) {
+      const chatName = names.get(String(link.chat_channel_id)) ?? String(link.chat_channel_id).slice(0, 10);
+      const state = link.paused ? `${c.yellow}paused${c.reset}` : `${c.green}live${c.reset}`;
+      const counts = `${c.dim}↓${link.inbound_count ?? 0} ↑${link.outbound_count ?? 0}${c.reset}`;
+      const error = link.last_error
+        ? ` ${c.red}${link.last_error}${c.reset}${link.last_error_at ? ` ${c.dim}${formatAge(Date.now() - link.last_error_at)}${c.reset}` : ""}`
+        : "";
+      const pad = " ".repeat(Math.max(0, width - chatName.length - 1));
+      console.log(`  ${slackPairLabel(chatName, link)}${pad} ${state} ${counts}${error}`);
+    }
+    if (status.pending_jobs) console.log(`${c.dim}  ${status.pending_jobs} event${status.pending_jobs === 1 ? "" : "s"} queued${c.reset}`);
+  });
+
+chatSlack
+  .command("channels")
+  .description("Slack channels the app can see, and which ones are already mirrored")
+  .option("--team <name|id>", "Team whose Slack to list (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await slackWorkspace(options);
+    const result = await cliPost("/cli/chat/slack/channels", workspaceArgs(ws));
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (!result.channels?.length) {
+      console.log(`${c.dim}The app sees no Slack channels. Invite it to one in Slack: /invite @Codecast${c.reset}`);
+      return;
+    }
+    for (const ch of result.channels) {
+      const priv = ch.is_private ? ` ${c.dim}(private)${c.reset}` : "";
+      const members = ch.num_members !== null ? ` ${c.dim}· ${ch.num_members} member${ch.num_members === 1 ? "" : "s"}${c.reset}` : "";
+      const mirrors = ch.linked_chat_channel_name ? ` ${c.cyan}mirrors #${ch.linked_chat_channel_name}${c.reset}` : "";
+      console.log(`  ${c.bold}#${ch.name}${c.reset}${priv}${members}${mirrors} ${c.dim}${ch.id}${c.reset}`);
+    }
+  });
+
+chatSlack
+  .command("link")
+  .description("Mirror a chat channel with a Slack channel")
+  .argument("<chat-channel>", "Codecast channel: #name or id")
+  .argument("<slack-channel>", "Slack channel: #name or id (C…)")
+  .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
+  .option("--direction <dir>", "both, from-slack, or to-slack", "both")
+  .option("--backfill <window>", "Pull recent Slack history in: none, 1d, 7d, 30d", "none")
+  .option("--no-threads", "Roots only, no thread replies")
+  .option("--no-reactions", "Do not mirror reactions")
+  .option("--no-edits", "Do not mirror edits and deletes")
+  .option("--no-files", "Do not mirror attachments")
+  .option("--bot-messages", "Mirror lines other Slack apps and bots post")
+  .option("--system-messages", "Mirror joins, leaves, topic and pin notices")
+  .option("--no-agent-lines", "Keep codecast agent and session lines out of Slack")
+  .option("--no-email-match", "Do not treat a Slack person with a teammate's email as that teammate")
+  .option("--json", "Machine-readable output")
+  .action(async (chatRef: string, slackRef: string, options: any) => {
+    const direction = SLACK_DIRECTION_FLAG[options.direction];
+    if (!direction) {
+      console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
+      process.exit(1);
+    }
+    if (!["none", "1d", "7d", "30d"].includes(options.backfill)) {
+      console.error(`--backfill wants none, 1d, 7d or 30d (got ${options.backfill})`);
+      process.exit(1);
+    }
+    const ws = await slackWorkspace(options);
+    const chatChannelId = await resolveChatChannelId(chatRef, workspaceArgs(ws).team_id);
+    const slackChannelId = await resolveSlackChannelId(slackRef, ws);
+    const result = await cliPost("/cli/chat/slack/link", {
+      chat_channel_id: chatChannelId,
+      slack_channel_id: slackChannelId,
+      direction,
+      backfill: options.backfill,
+      options: {
+        threads: options.threads,
+        reactions: options.reactions,
+        edits: options.edits,
+        files: options.files,
+        bot_messages: !!options.botMessages,
+        system_messages: !!options.systemMessages,
+        agent_lines: options.agentLines,
+        match_people_by_email: options.emailMatch,
+      },
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    // The landing team is PRINTED: a write must say where it went.
+    const slackName = slackChannelId === slackRef ? slackRef : slackRef.replace(/^#/, "");
+    console.log(
+      `${c.green}✓${c.reset} ${slackPairLabel(chatRef.replace(/^#/, ""), { direction, slack_channel_name: slackName })}` +
+      ` ${c.dim}in team${c.reset} ${c.bold}${workspaceLabel(ws)}${c.reset} ${c.dim}${result.link_id}${c.reset}`,
+    );
+    if (options.backfill !== "none") console.log(`${c.dim}  backfilling the last ${options.backfill} of Slack history${c.reset}`);
+  });
+
+async function slackPauseAction(chatRef: string, options: any, paused: boolean) {
+  const ws = await slackWorkspace(options);
+  const { link } = await slackLinkFor(chatRef, ws);
+  await cliPost("/cli/chat/slack/update", { link_id: link._id, paused });
+  console.log(
+    `${c.green}✓${c.reset} ${paused ? "paused" : "resumed"} ${slackPairLabel(chatRef.replace(/^#/, ""), link)}` +
+    ` ${c.dim}in team${c.reset} ${c.bold}${workspaceLabel(ws)}${c.reset}`,
+  );
+}
+
+chatSlack
+  .command("pause")
+  .description("Stop mirroring a channel pair without removing the link")
+  .argument("<chat-channel>", "Codecast channel: #name or id")
+  .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
+  .action(async (chatRef: string, options: any) => {
+    await slackPauseAction(chatRef, options, true);
+  });
+
+chatSlack
+  .command("resume")
+  .description("Resume a paused channel pair (also clears its last error)")
+  .argument("<chat-channel>", "Codecast channel: #name or id")
+  .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
+  .action(async (chatRef: string, options: any) => {
+    await slackPauseAction(chatRef, options, false);
+  });
+
+chatSlack
+  .command("unlink")
+  .description("Remove a channel's Slack mirror")
+  .argument("<chat-channel>", "Codecast channel: #name or id")
+  .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
+  .action(async (chatRef: string, options: any) => {
+    const ws = await slackWorkspace(options);
+    const { link } = await slackLinkFor(chatRef, ws);
+    const result = await cliPost("/cli/chat/slack/unlink", { link_id: link._id });
+    console.log(
+      result.removed
+        ? `${c.green}✓${c.reset} unlinked ${slackPairLabel(chatRef.replace(/^#/, ""), link)}` +
+          ` ${c.dim}in team${c.reset} ${c.bold}${workspaceLabel(ws)}${c.reset}`
+        : `${c.dim}already unlinked${c.reset}`,
     );
   });
 
@@ -14390,11 +14635,15 @@ async function writeWorkspace(
 
 // A codecast chat channel by id or "#name" (name lookup goes through the
 // caller's channel list, in the named team or their active one).
+async function listChatChannels(teamId?: string): Promise<any[]> {
+  const result = await cliPost("/cli/chat/channels", { team_id: teamId });
+  return result?.channels ?? [];
+}
+
 async function resolveChatChannelId(ref: string, teamId?: string): Promise<string> {
   const name = ref.replace(/^#/, "").trim().toLowerCase();
   if (!ref.startsWith("#") && /^[a-z0-9]{20,}$/i.test(ref)) return ref;
-  const result = await cliPost("/cli/chat/channels", { team_id: teamId });
-  const match = (result?.channels ?? []).find((ch: any) => String(ch.name).toLowerCase() === name);
+  const match = (await listChatChannels(teamId)).find((ch: any) => String(ch.name).toLowerCase() === name);
   if (!match) {
     console.error(`No channel named #${name}. See: cast chat channels`);
     process.exit(1);

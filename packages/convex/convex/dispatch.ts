@@ -1834,13 +1834,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       string,
       string,
       string,
-      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent" }?,
+      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent"; syncLocalOnly?: boolean }?,
     ],
   ) => {
     if (!isServerId(channelId)) return;
     return await ctx.runMutation!(api.chat.sendMessage, {
       channel_id: channelId as Id<"chat_channels">,
       content,
+      ...(opts?.syncLocalOnly ? { sync_local_only: true } : {}),
       // The dedupe key: a re-driven delivery returns the existing row instead of
       // inserting a twin, and does not wake the anchor a second time.
       client_id: clientId,
@@ -1976,6 +1977,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(fields?.name !== undefined ? { name: fields.name } : {}),
       ...(fields?.topic !== undefined ? { topic: fields.topic } : {}),
     });
+  },
+  // Slack mirror controls (slackSync). The link row is server-owned; the
+  // store patches its copy and this carries the same patch.
+  updateChatSlackLink: async (
+    ctx,
+    _userId,
+    [linkId, patch]: [string, { direction?: any; options?: Record<string, boolean>; paused?: boolean }],
+  ) => {
+    if (!isServerId(linkId)) return;
+    return await ctx.runMutation!(api.slackSync.updateLink, {
+      link_id: linkId as Id<"slack_channel_links">,
+      ...(patch?.direction ? { direction: patch.direction } : {}),
+      ...(patch?.options ? { options: patch.options } : {}),
+      ...(typeof patch?.paused === "boolean" ? { paused: patch.paused } : {}),
+    });
+  },
+  unlinkChatSlack: async (ctx, _userId, [linkId]: [string]) => {
+    if (!isServerId(linkId)) return;
+    return await ctx.runMutation!(api.slackSync.unlinkChannel, { link_id: linkId as Id<"slack_channel_links"> });
+  },
+  shareChatMessageToSlack: async (ctx, _userId, [messageId]: [string]) => {
+    if (!isServerId(messageId)) return;
+    return await ctx.runMutation!(api.slackSync.shareMessageToSlack, { message_id: messageId as Id<"chat_messages"> });
   },
   archiveChatChannel: async (
     ctx,

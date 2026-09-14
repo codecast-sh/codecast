@@ -1,3 +1,4 @@
+import { formatIdle, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
@@ -706,7 +707,7 @@ export async function conversationHasLiveSession(
 export async function performSessionSend(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -773,9 +774,11 @@ export async function performSessionSend(
   // an unresolvable/missing sender still delivers, just without a clickable pill.
   let fromShortId = "unknown";
   let fromConversationId: Id<"conversations"> | undefined;
+  let senderConversation: any = null;
   const fromRef = args.from?.trim();
   if (fromRef) {
     const sender = await findConversationByAnyRef(ctx, fromRef, authUserId);
+    senderConversation = sender;
     if (sender) {
       fromShortId = sender.short_id ?? sender._id.toString().slice(0, 7);
       fromConversationId = sender._id;
@@ -789,6 +792,23 @@ export async function performSessionSend(
       // relay. Only a send with NO sender at all (browser, system relays,
       // `direct`) takes the unattributed path.
       throw new Error(`Sender session "${fromRef}" not found — pass --from <your session short id>`);
+    }
+  }
+
+  // Waking a stale session is the expensive send: past the prompt cache
+  // lifetime the recipient rebuilds its whole context before it reads a word,
+  // and a killed one is restarted for it. A session to session send says so
+  // and stops, unless the sender chose to wake it. Two recipients expect a wake
+  // however long they waited: the session that started the sender (a worker
+  // reporting back) and one that declared itself dormant. Only callers that
+  // ask for the check get it (wake: false); older CLIs and relays send as before.
+  if (args.wake === false && senderConversation && !args.raw && !args.direct && !roleTarget) {
+    const cost = wakeCost({ ...target, ...wakeFieldsOf(target) }, Date.now());
+    const reportingBack = [senderConversation.spawned_by_conversation_id, senderConversation.parent_conversation_id]
+      .some((id) => id != null && String(id) === String(target._id));
+    const expectsWake = reportingBack || target.thread_state_status === "dormant";
+    if (cost.killed || (cost.cacheCold && !expectsWake)) {
+      throw new Error(staleSendMessage(target.short_id ?? String(target._id).slice(0, 7), cost));
     }
   }
 
@@ -829,6 +849,14 @@ export async function performSessionSend(
   };
 }
 
+export function staleSendMessage(shortId: string, cost: ReturnType<typeof wakeCost>): string {
+  const size = cost.contextTokens ? ` (about ${formatTokens(cost.contextTokens)} tokens)` : "";
+  const why = cost.killed
+    ? `${shortId} was killed. Sending would restart it and load its whole context${size} before it reads your message.`
+    : `${shortId} has not run for ${formatIdle(cost.idleMs)}, so its prompt cache has expired. Your message would make it rebuild its whole context${size} before it reads a word, and sessions idle this long rarely have anything to add.`;
+  return `Not sent. ${why} To learn what it did, read it instead: cast read ${shortId}, cast diff ${shortId}. If it has to act on this and nobody else can, send again with --wake.`;
+}
+
 // "@handle" → the standing session of the live role with that handle in the
 // caller's personal space or any of their teams; null for any other ref.
 async function standingSessionForHandle(ctx: { db: any }, userId: Id<"users">, ref: string): Promise<any | null> {
@@ -857,6 +885,9 @@ export const sendSessionMessage = mutation({
     api_token: v.optional(v.string()),
     raw: v.optional(v.boolean()),
     direct: v.optional(v.boolean()),
+    // false = hold the send when the target is killed or idle past the prompt
+    // cache lifetime (the CLI's default); true or absent = deliver regardless.
+    wake: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);

@@ -31,7 +31,8 @@ import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { formatIdle, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { rankByHeadroom, isStashHidden, USER_RESTS, type UserRest } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
@@ -69,8 +70,8 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
 };
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
-import { FilterOptionList } from "./FilterDropdown";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
+import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
@@ -593,6 +594,10 @@ function BlockedSessionsBanner({
   // into now (the default — no switch, no restart unless a session needs one).
   const [onAccount, setOnAccount] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // Which sessions the continue restarts. null = the default pick: parks inside
+  // the auto-continue window, since an older park already sat through a reset
+  // nobody came back for. The first tick or untick makes it an explicit set.
+  const [picked, setPicked] = useState<Set<string> | null>(null);
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
   // The X is a durable, cross-device snooze (24h) — a banner that resurrects
@@ -646,6 +651,13 @@ function BlockedSessionsBanner({
   // that answers "which sessions?" most usefully: fresh casualties on top).
   const blockedSorted = [...blocked].sort((a, b) => blockAt(b) - blockAt(a));
 
+  const togglePick = (id: string) => {
+    const next = new Set(chosenIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setPicked(next);
+  };
+
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
   // one whose keychain holds the login and whose browser the OAuth flow opens
   // in. Remotes run a pushed credential copy and can never sign in themselves.
@@ -697,6 +709,21 @@ function BlockedSessionsBanner({
     .map((p) => p.usage)
     .find((u) => !!u);
   const selectedAccount = rankedAccounts.find((t) => t.key === onAccount);
+  // What the restart costs before any new work: each session that comes back
+  // on another account or a cold cache reads its whole context again, at
+  // twice the input price. A partial pick is a scoped revive: the server acts
+  // on exactly these and dismisses nothing, so the unticked rows stay blocked.
+  const reloads = (sess: InboxSession) =>
+    restartReloadsContext(sess, now, { switchingAccount: !!selectedAccount, activeSince: executorFor(sess)?.active_since });
+  const { chosenIds, chosen, scoped, reloadTokens, leftUnticked: olderUnticked } = restartPlan(acted, {
+    now,
+    windowMs: AUTO_CONTINUE_WINDOW_MS,
+    parkedAt: blockAt,
+    picked,
+    switchingAccount: !!selectedAccount,
+    rowFor: (sess) => sess,
+    activeSinceFor: (sess) => executorFor(sess)?.active_since,
+  });
   const switchTarget = (opt: AccountOption) => (opt.email ? { email: opt.email } : { profile: opt.name });
   // "82% used" / "at limit" — enough to steer the pick, nothing more.
   const usageNote = (usage?: CcUsage): string => {
@@ -741,7 +768,7 @@ function BlockedSessionsBanner({
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
   const runRevive = async (target: { email?: string; profile?: string } | undefined) => {
-    const ids = acted.map((sess) => sess._id);
+    const ids = chosen.map((sess) => sess._id);
     const store = useInboxStore.getState();
     const nonce = Math.random().toString(36).slice(2, 10);
     const clientIds: Record<string, string> = {};
@@ -754,7 +781,7 @@ function BlockedSessionsBanner({
     // acted sessions turn WORKING; the mutation persists the same clear. If it
     // fails, the next server sync re-flags whatever didn't persist (the same
     // reconciliation the dismiss button relies on).
-    const skippedIds = skippedWorkers.map((sess) => sess._id);
+    const skippedIds = scoped ? [] : skippedWorkers.map((sess) => sess._id);
     if (skippedIds.length > 0) store.markBlockedAcknowledged(skippedIds);
     closeBanner();
     const targetLabel = target?.email ?? target?.profile;
@@ -764,13 +791,14 @@ function BlockedSessionsBanner({
         ...target,
         include_subagents: includeSubs,
         continue_client_ids: clientIds,
+        ...(scoped ? { conversation_ids: ids as any } : {}),
       });
       // Sessions on a machine that lacks the account got no command: their
       // painted "continue" and revive stamp must not stand.
       const unswitchable = (res as { unswitchable?: number; unswitchable_devices?: string[] }).unswitchable ?? 0;
       const unswitchableDevices = (res as { unswitchable_devices?: string[] }).unswitchable_devices ?? [];
       if (unswitchable > 0) {
-        const stranded = acted
+        const stranded = chosen
           .filter((sess) => unswitchableDevices.includes(executorFor(sess)?.label ?? ""))
           .map((sess) => sess._id);
         for (const id of stranded) store.removeOptimisticMessage(id, clientIds[id]);
@@ -811,11 +839,13 @@ function BlockedSessionsBanner({
   // are skipped the button says what happens to BOTH halves — the skipped
   // workers are dismissed by the same click, and a button that only said
   // "Continue 1" would hide that the other 37 rows are about to go.
-  const dismissLabel = skippedWorkers.length > 0 ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
-  const countLabel = skippedWorkers.length > 0
+  const dismissLabel = skippedWorkers.length > 0 && !scoped ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
+  const countLabel = scoped
+    ? `${chosen.length} of ${acted.length}`
+    : skippedWorkers.length > 0
     ? `${acted.length}${dismissLabel}`
     : acted.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
-  const dismissTitle = skippedWorkers.length > 0
+  const dismissTitle = skippedWorkers.length > 0 && !scoped
     ? `; the ${skippedWorkers.length} skipped worker${skippedWorkers.length === 1 ? " is" : "s are"} dismissed from the blocked set, not continued (tick the box above to continue them instead)`
     : "";
   const continueTitle = (selectedAccount
@@ -873,6 +903,25 @@ function BlockedSessionsBanner({
               .filter(Boolean)
               .join(" · ")}
           </div>
+          {acted.length > 0 && (
+            <div
+              className="mt-0.5 text-[11px] leading-snug text-sol-text-muted"
+              title="A session that comes back on another account, or after its prompt cache expired (one hour), reads its whole context again before it does new work. Untick the ones nobody is waiting for."
+            >
+              {chosen.length === 0
+                ? "nothing ticked to restart"
+                : reloadTokens > 0
+                  ? `restarting ${chosen.length} reloads about ${formatTokens(reloadTokens)} tokens of context`
+                  : `restarting ${chosen.length}`}
+              {olderUnticked > 0 && ` · ${olderUnticked} parked over ${formatIdle(AUTO_CONTINUE_WINDOW_MS)} ago left unticked`}
+              {" "}
+              {!expanded && acted.length > 1 && (
+                <button onClick={() => setExpanded(true)} className="ml-1.5 underline decoration-dotted hover:text-sol-text">
+                  choose
+                </button>
+              )}
+            </div>
+          )}
           {subagents.length > 0 && (
             <label
               className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text"
@@ -922,6 +971,15 @@ function BlockedSessionsBanner({
               key={sess._id}
               className="group flex w-full items-center gap-2 px-2 py-1.5 hover:bg-amber-500/10 transition-colors"
             >
+              <input
+                type="checkbox"
+                checked={chosenIds.has(sess._id) && acted.includes(sess)}
+                disabled={!acted.includes(sess) || busy !== null}
+                onChange={() => togglePick(sess._id)}
+                className="h-3 w-3 shrink-0 accent-amber-500 disabled:opacity-40"
+                title={acted.includes(sess) ? "Restart this session with the continue below" : "Not restartable from here (a skipped worker or a safety stop)"}
+                aria-label="Include this session in the restart"
+              />
               <button
                 onClick={() => onOpen?.(sess)}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -937,6 +995,16 @@ function BlockedSessionsBanner({
                   </span>
                 )}
                 <span className="shrink-0 text-[10px] text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
+                {sess.context_tokens ? (
+                  <span
+                    className={`shrink-0 text-[10px] tabular-nums ${reloads(sess) ? "text-amber-600 dark:text-amber-500" : "text-sol-text-dim"}`}
+                    title={reloads(sess)
+                      ? `${formatTokens(sess.context_tokens)} tokens of context, reloaded in full on restart`
+                      : `${formatTokens(sess.context_tokens)} tokens of context; its cache is still warm, so a restart reads it cheaply`}
+                  >
+                    {formatTokens(sess.context_tokens)}
+                  </span>
+                ) : null}
                 <span
                   className="shrink-0 text-[10px] tabular-nums text-sol-text-dim"
                   title={`Blocked ${new Date(blockAt(sess)).toLocaleString()}`}
@@ -968,7 +1036,7 @@ function BlockedSessionsBanner({
         {acted.length > 0 && <>
         <button
           onClick={handleContinue}
-          disabled={busy !== null || acted.length === 0}
+          disabled={busy !== null || chosen.length === 0}
           title={acted.length === 0 ? "Only subagent workers are blocked — tick the box above to include them" : continueTitle}
           className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
@@ -4131,17 +4199,6 @@ function SessionListPanelImpl({
     [sortedSessions],
   );
 
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
-  useWatchEffect(() => {
-    if (!viewMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) setViewMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [viewMenuOpen]);
-
   // "By label" view: every active non-pinned top-level session grouped by its
   // manual label; unlabeled sessions group by PROJECT — projects are a specific
   // kind of label, auto-derived from the directory. Pinned stays its own top
@@ -4881,43 +4938,13 @@ function SessionListPanelImpl({
               {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
             </button>
           </ShortcutTooltip>
-          {(() => {
-            const viewModeOptions = [
-              { key: "grouped", label: "By status", icon: List },
-              { key: "recent", label: "By updated", icon: Activity },
-              { key: "time", label: "By created", icon: Clock },
-              ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
-              ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
-              ...(scheduleRowsView.length > 0 ? [{ key: "trigger", label: "By trigger", icon: Zap }] : []),
-            ];
-            const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
-            const CurrentIcon = current.icon;
-            return (
-              <div ref={viewMenuRef} className="relative">
-                <ShortcutTooltip label={current.label} action="inbox.toggleFlatView" hint="cycles" side="bottom">
-                  <button
-                    onClick={() => setViewMenuOpen((o) => !o)}
-                    className={`flex items-center px-1 py-[3px] rounded-[5px] transition-colors ${
-                      viewMenuOpen ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim/70 hover:text-sol-text"
-                    }`}
-                  >
-                    <CurrentIcon className="w-3 h-3" />
-                    <ChevronDown className="w-2 h-2 opacity-60" />
-                  </button>
-                </ShortcutTooltip>
-                {viewMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
-                    <FilterOptionList
-                      options={viewModeOptions}
-                      value={viewMode}
-                      onChange={(mode) => s.setInboxViewMode(mode as InboxViewMode)}
-                      onPicked={() => setViewMenuOpen(false)}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+          <InboxViewMenu
+            value={viewMode}
+            onChange={s.setInboxViewMode}
+            hasLabels={visibleBuckets.length > 0}
+            hasPlans={hasPlanSessions}
+            hasTriggers={scheduleRowsView.length > 0}
+          />
           {totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}

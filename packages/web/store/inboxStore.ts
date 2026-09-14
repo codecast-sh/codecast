@@ -234,6 +234,7 @@ export type {
   ChatMessageRow,
   ChatReadRow,
   ChatReactionRow,
+  ChatSlackLinkRow,
   ChatRailRow,
   ChatRailChannel,
   ChatRailScope,
@@ -625,6 +626,8 @@ export type InboxSession = {
   // When the block landed (the newest banner message's timestamp) — renders
   // the ticking "Xm ago" on the blocked-sessions banner and its rows.
   pending_api_error_at?: number | null;
+  context_tokens?: number | null;
+  last_model_call_at?: number | null;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;

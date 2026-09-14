@@ -50,6 +50,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { deliverToAnchor, userCanAccessAnchor } from "./anchors";
 import { actorIsExcluded, enqueueRoleEvent } from "./orgEvents";
 import { resolveActor } from "./lib/actor";
+import { queueSlackOutbound } from "./lib/slackOutbound";
 import { isDesktopActivePresence } from "./pushRouter";
 import {
   HERE_PRESENCE_MS,
@@ -96,7 +97,7 @@ type ChatErrorCode =
   | "CONFLICT"
   | "RATE_LIMITED";
 
-function chatFail(code: ChatErrorCode, message: string): never {
+export function chatFail(code: ChatErrorCode, message: string): never {
   throw new ConvexError({
     code,
     message,
@@ -216,7 +217,7 @@ export async function loadChannel(
 // except a community room, whose creator is by construction an admin and
 // whose audience is the public, so admin standing in the routing team is the
 // only key. A member of the public reads and posts; they never reshape.
-async function mayManageChannel(
+export async function mayManageChannel(
   ctx: ReadCtx,
   userId: Id<"users">,
   channel: Doc<"chat_channels">,
@@ -515,7 +516,17 @@ export const listChannels = query({
     );
 
     const { reads, rail } = await railFor(ctx, userId, channels);
-    return { team_id: teamId, channels, reads, rail };
+    // Slack mirrors for the channels on this page (slackSync). Rides the same
+    // subscription so the rail and header can show the mirror mark from the
+    // store without a second feed.
+    const visibleIds = new Set(channels.map((c) => c._id.toString()));
+    const slack_links = (
+      await ctx.db
+        .query("slack_channel_links")
+        .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+        .collect()
+    ).filter((l) => visibleIds.has(l.chat_channel_id.toString()));
+    return { team_id: teamId, channels, reads, rail, slack_links };
   },
 });
 
@@ -1923,7 +1934,7 @@ const attachmentValidator = v.object({
   height: v.optional(v.number()),
 });
 
-async function findByClientId(
+export async function findByClientId(
   ctx: ReadCtx,
   channelId: Id<"chat_channels">,
   clientId: string,
@@ -2021,6 +2032,9 @@ export const sendMessage = mutation({
     // it may do. Ignored without `origin`, and the title/agent snapshot is only
     // taken when the caller owns the session — see postChatMessage.
     origin_session_id: v.optional(v.string()),
+    // Keep this one line out of the channel's Slack mirror (slackSync). Only
+    // ever narrows what happens, so it is safe to accept from any caller.
+    sync_local_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
@@ -2093,6 +2107,7 @@ export const sendMessage = mutation({
       origin: args.origin,
       originSessionId: args.origin ? args.origin_session_id : undefined,
       broadcast: args.broadcast,
+      syncLocalOnly: args.sync_local_only,
     });
 
     // The wake is a SIDE EFFECT of the send, and it is the only part of this
@@ -2208,7 +2223,7 @@ async function nextChatStamp(
 // per-channel monotonic stamp, mention resolution, the read mark, and the
 // notification fan-out (mentions, thread participants, @here, DM members) — so
 // the anchor's own posts reach people by exactly the rules a teammate's do.
-async function postChatMessage(
+export async function postChatMessage(
   ctx: MutationCtx,
   opts: {
     channel: Doc<"chat_channels">;
@@ -2227,6 +2242,15 @@ async function postChatMessage(
     agent?: { anchorId: Id<"anchors"> };
     // A huddle digest names the transcript it summarizes (schema `call`).
     call?: { transcript_id: Id<"transcripts"> };
+    // Slack provenance for a line mirrored in from Slack (slackSync). A row
+    // carrying `external` is never pushed back out.
+    external?: Doc<"chat_messages">["external"];
+    externalAuthor?: Doc<"chat_messages">["external_author"];
+    // The author kept this line out of the channel's Slack mirror.
+    syncLocalOnly?: boolean;
+    // A backfilled Slack line keeps its original time so history reads in
+    // order. Live lines take the channel's monotonic stamp like any other.
+    createdAt?: number;
   },
 ): Promise<{
   messageId: Id<"chat_messages">;
@@ -2238,7 +2262,7 @@ async function postChatMessage(
   createdAt: number;
 }> {
   const { channel, root, authorId, content, attachments } = opts;
-  const now = await nextChatStamp(ctx, channel._id);
+  const now = opts.createdAt ?? await nextChatStamp(ctx, channel._id);
   const resolved = await resolveChatMentions(ctx, channel.team_id, content, authorId);
   const mentions = resolved.users;
   const here = mentionsHere(content);
@@ -2295,9 +2319,18 @@ async function postChatMessage(
     origin_session_id: originSession?.id,
     origin_session_title: originSession?.title,
     origin_agent_type: originSession?.agent_type,
+    external: opts.external,
+    external_author: opts.externalAuthor,
+    sync_local_only: opts.syncLocalOnly ? true : undefined,
     created_at: now,
     updated_at: now,
   });
+
+  // Slack mirror, when the channel has one and the link's controls allow this
+  // line. Decided here so every writer (a person, the anchor, a call digest)
+  // gets the same answer.
+  const inserted = await ctx.db.get(messageId);
+  if (inserted) await queueSlackOutbound(ctx, { op: "message", message: inserted });
 
   const { hereCount, actorName } = await announceChatMessage(ctx, {
     channel,
@@ -3180,6 +3213,8 @@ export const editMessage = mutation({
       mention_scope: mentionsHere(args.content) ? "here" : undefined,
       edited_at: Date.now(),
     });
+    const edited = await ctx.db.get(message._id);
+    if (edited) await queueSlackOutbound(ctx, { op: "edit", message: edited });
     return { message_id: message._id };
   },
 });
@@ -3210,6 +3245,7 @@ export const deleteMessage = mutation({
       .withIndex("by_message", (q: any) => q.eq("message_id", message._id))
       .collect();
     for (const reaction of reactions) await ctx.db.delete(reaction._id);
+    await queueSlackOutbound(ctx, { op: "delete", message });
     return { message_id: message._id, deleted: true };
   },
 });
@@ -3239,6 +3275,15 @@ export const toggleReaction = mutation({
       .first();
     if (existing) {
       await ctx.db.delete(existing._id);
+      // Slack holds ONE reaction per emoji for the whole codecast side, so it
+      // comes off only when the last teammate holding that emoji lets go.
+      const still = await ctx.db
+        .query("chat_reactions")
+        .withIndex("by_message", (q: any) => q.eq("message_id", args.message_id))
+        .collect();
+      if (!still.some((r) => r.emoji === args.emoji)) {
+        await queueSlackOutbound(ctx, { op: "reaction", message, emoji: args.emoji, add: false });
+      }
       return { message_id: args.message_id, emoji: args.emoji, reacted: false };
     }
 
@@ -3258,6 +3303,7 @@ export const toggleReaction = mutation({
       emoji: args.emoji,
       created_at: Date.now(),
     });
+    await queueSlackOutbound(ctx, { op: "reaction", message, emoji: args.emoji, add: true });
     return { message_id: args.message_id, emoji: args.emoji, reacted: true };
   },
 });
@@ -3297,7 +3343,7 @@ export const toggleReaction = mutation({
 // The placeholder it writes carries a deadline (`expireAnchorReply`): a turn that
 // never lands leaves an error in the thread, not a spinner that runs forever.
 
-async function resolveChannelAnchor(
+export async function resolveChannelAnchor(
   ctx: ReadCtx,
   channel: Doc<"chat_channels">,
 ): Promise<Doc<"anchors"> | null> {
@@ -3738,7 +3784,7 @@ type RelayResult = {
   conversation_id: string | null;
 };
 
-async function maybeWakeAnchor(
+export async function maybeWakeAnchor(
   ctx: MutationCtx,
   opts: {
     channel: Doc<"chat_channels">;
@@ -4017,7 +4063,7 @@ type MentionWakeResult = { roles: number; sessions: number; folded: number; skip
 // the chat message, capped per sender and per target per hour; over a cap the
 // mention FOLDS — the row is stamped mention_folded and the party reads the line
 // on its next wake instead of being woken for it.
-async function wakeMentionedParties(
+export async function wakeMentionedParties(
   ctx: MutationCtx,
   opts: {
     channel: Doc<"chat_channels">;
@@ -4500,6 +4546,12 @@ export const replyAsAnchor = mutation({
       : { users: [], roles: [], sessions: [], refs: [] };
     if (resolved.refs.length > 0) patch.mentions = resolved.refs;
     await patchChat(ctx, message._id, patch);
+    // The placeholder was empty when it was inserted, so the Slack mirror is
+    // decided now that the answer is on the row.
+    if (status === "done") {
+      const landed = await ctx.db.get(message._id);
+      if (landed) await queueSlackOutbound(ctx, { op: "message", message: landed });
+    }
 
     // The answer landing is a thread reply like any other, so the people in that
     // thread hear about it — including the person who asked. An inline DM

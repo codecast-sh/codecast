@@ -31,6 +31,7 @@ export function pathLabel(path: string): string {
   // A chat tab is titled by the surface, not the channel id — the id is opaque,
   // and the channel's own name is only knowable from the store.
   if (clean.startsWith("/chat/")) return "Chat";
+  if (clean.startsWith("/community/")) return "Community";
   if (clean.startsWith("/tasks/")) return "Task";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
@@ -93,6 +94,7 @@ export function pathLabel(path: string): string {
     "/crosstalk": "Crosstalk",
     "/org": "Org",
     "/chat": "Chat",
+    "/community": "Community",
     "/threads": "Threads",
     "/settings": "Settings",
     "/team/activity": "Activity",

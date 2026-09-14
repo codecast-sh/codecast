@@ -3777,11 +3777,23 @@ http.route({
       // Ignore the bot's own posts on both paths, so an anchor reply that happens
       // to @mention the app can't wake it in a loop (each loop has a new event_id,
       // so dedup wouldn't catch it).
+      // Channel mirroring first (slackSync): a linked channel takes every event
+      // for it, including the mention (the mirrored line's @mention wakes the
+      // anchor through chat). "no_link" leaves the event for the anchor path.
+      let mirrored = false;
+      if (eventId && payload.team_id) {
+        const routed = await ctx.runMutation(internal.slackSync.ingestEvent, {
+          event_id: eventId,
+          workspace: String(payload.team_id),
+          event,
+        });
+        mirrored = routed.status !== "no_link";
+      }
       const isMention =
         event.type === "app_mention" && !event.bot_id && !event.subtype;
       const isDM =
         event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
-      if ((isMention || isDM) && eventId && event.channel) {
+      if (!mirrored && (isMention || isDM) && eventId && event.channel) {
         // One atomic mutation: dedup + resolve channel→anchor + wake. If the wake
         // throws it returns 500 and Slack retries — the dedup row rolls back with
         // it, so a transient failure never silently drops the mention.
@@ -4157,6 +4169,24 @@ cliRoute("/cli/chat/archive", async (ctx, body) => {
 // wake frame and `cast chat read --since`). body: { channel_ids, since, limit? }.
 cliRoute("/cli/chat/lines-since", async (ctx, body) => {
   return await ctx.runQuery(api.chat.linesSince, body);
+});
+// The Slack mirror (`cast chat slack …`): the team's installation and every
+// mirrored pair, the Slack channels the app can see, and link / update /
+// unlink. Each function checks membership and channel management inside.
+cliRoute("/cli/chat/slack/status", async (ctx, body) => {
+  return await ctx.runQuery(api.slackSync.getTeamSlack, body);
+});
+cliRoute("/cli/chat/slack/channels", async (ctx, body) => {
+  return await ctx.runAction(api.slackSync.listSlackChannels, body);
+});
+cliRoute("/cli/chat/slack/link", async (ctx, body) => {
+  return await ctx.runAction(api.slackSync.linkChannel, body);
+});
+cliRoute("/cli/chat/slack/update", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.updateLink, body);
+});
+cliRoute("/cli/chat/slack/unlink", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.unlinkChannel, body);
 });
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }
