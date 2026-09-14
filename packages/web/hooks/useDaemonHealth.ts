@@ -109,6 +109,9 @@ export interface DaemonHealthInput {
   daemon_oldest_pending_ms?: number | null;
   daemon_pending_sync_messages?: number | null;
   daemon_pending_sync_conversations?: number | null;
+  /** How long the daemon's sync has completed nothing. Absent from daemons
+   *  that predate it; those keep the verdict the head's age alone gives. */
+  daemon_sync_no_progress_ms?: number | null;
   daemon_started_at?: number | null;
   daemon_loop_freeze_ms?: number | null;
   daemon_loop_freeze_1h_ms?: number | null;
@@ -137,14 +140,18 @@ export type DaemonHealth =
   | { kind: "overloaded"; freezeMs: number; hourMs?: number; maxMs?: number; topCause?: string }
   // `pending` is the logical op count; `messages`/`conversations` are the honest
   // backlog depth so the chip can say "syncing N messages across M convos".
-  | { kind: "sync_stalled"; pending: number; messages: number; conversations: number; stalledMs: number };
+  | { kind: "sync_stalled"; pending: number; messages: number; conversations: number; stalledMs: number }
+  // The same backlog, but ops are completing: the daemon is draining it in
+  // order and the old head is how far behind it is, not a symptom. `behindMs`
+  // is the head's age, `noProgressMs` how long since the last success.
+  | { kind: "syncing"; pending: number; messages: number; conversations: number; behindMs: number; noProgressMs: number };
 
 // Every state in which a pending message may be late because of the DAEMON
 // rather than the session. The per-message delivery note reads this to stop
 // blaming the session (and offering a kill & restart that goes through the
 // very daemon that is struggling).
 export const isDegradedDaemonHealth = (h: DaemonHealth): boolean =>
-  h.kind === "offline" || h.kind === "quiet" || h.kind === "restarting" || h.kind === "overloaded" || h.kind === "sync_stalled";
+  h.kind === "offline" || h.kind === "quiet" || h.kind === "restarting" || h.kind === "overloaded" || h.kind === "sync_stalled" || h.kind === "syncing";
 
 // Narrower than degraded: the states in which a message is late RIGHT NOW.
 // The hour tier reports an SLO, not a live symptom — a machine that froze for
@@ -157,7 +164,9 @@ export const blocksDelivery = (h: DaemonHealth): boolean =>
 
 // Severity order for picking the machine worth talking about when several
 // daemons report: an unreachable daemon outranks a busy one, which outranks
-// one that is merely fresh from a restart or behind on sync.
+// one that is merely fresh from a restart or behind on sync. A backlog that is
+// draining sits under a stuck one and above the hour record: it is live, but
+// it is resolving itself.
 //
 // "overloaded" splits by liveness, the same rule computeDaemonHealth applies
 // within one machine. A loop blocked in the last minute is the loudest thing
@@ -172,6 +181,7 @@ export function daemonHealthSeverity(h: DaemonHealth): number {
     case "overloaded": return h.freezeMs >= OVERLOADED_FREEZE_MS ? 3 : 0.5;
     case "restarting": return 2;
     case "sync_stalled": return 1;
+    case "syncing": return 0.75;
     default: return 0;
   }
 }
@@ -191,6 +201,7 @@ export interface DaemonDeviceRow {
   oldest_pending_ms?: number | null;
   pending_sync_messages?: number | null;
   pending_sync_conversations?: number | null;
+  sync_no_progress_ms?: number | null;
   // A cloud host (`cast browser --remote`, a remote Mac) rather than a machine
   // the user sits at.
   is_remote?: boolean | null;
@@ -224,6 +235,7 @@ export function deviceHealthInput(d: DaemonDeviceRow): DaemonHealthInput {
     daemon_oldest_pending_ms: d.oldest_pending_ms,
     daemon_pending_sync_messages: d.pending_sync_messages,
     daemon_pending_sync_conversations: d.pending_sync_conversations,
+    daemon_sync_no_progress_ms: d.sync_no_progress_ms,
   };
 }
 
@@ -320,13 +332,21 @@ export function computeDaemonHealth(
   const pending = user?.daemon_pending_sync_count ?? 0;
   const oldest = user?.daemon_oldest_pending_ms ?? 0;
   if (pending > 0 && oldest >= SYNC_STALL_AFTER_MS) {
-    return {
-      kind: "sync_stalled",
+    const backlog = {
       pending,
       messages: user?.daemon_pending_sync_messages ?? 0,
       conversations: user?.daemon_pending_sync_conversations ?? 0,
-      stalledMs: oldest,
     };
+    // The head's age alone cannot tell a stall from a long backlog drained in
+    // order: both keep an old head for minutes. The daemon also reports how
+    // long it has completed nothing; a success inside the stall window means
+    // the queue is moving. A daemon that predates the field reports nothing
+    // and keeps the stall verdict.
+    const noProgress = user?.daemon_sync_no_progress_ms;
+    if (noProgress !== undefined && noProgress !== null && noProgress < SYNC_STALL_AFTER_MS) {
+      return { kind: "syncing", ...backlog, behindMs: oldest, noProgressMs: noProgress };
+    }
+    return { kind: "sync_stalled", ...backlog, stalledMs: oldest };
   }
 
   // Nothing is late right now, but the hour missed its SLO. This colours the
@@ -411,6 +431,7 @@ const ROSTER_SIG_FIELDS: Array<keyof DaemonDeviceRow> = [
   // Appended at the END on purpose: the decode below reads by index, so a new
   // field inserted anywhere else silently shifts every other one.
   "loop_freeze_1h_ms", "loop_freeze_max_ms", "loop_freeze_top",
+  "sync_no_progress_ms",
 ];
 
 // One cell of the roster signature: never empty of meaning, never carrying a
@@ -448,6 +469,7 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
         is_remote: v[9] === "1",
         loop_freeze_1h_ms: num(10), loop_freeze_max_ms: num(11),
         loop_freeze_top: v[12] || undefined,
+        sync_no_progress_ms: num(13),
       };
     });
   }, [rosterSig]);
@@ -462,16 +484,17 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
     return [
       u.daemon_last_seen, u.last_heartbeat, u.daemon_pending_sync_count, u.daemon_oldest_pending_ms,
       u.daemon_pending_sync_messages, u.daemon_pending_sync_conversations,
-      u.daemon_started_at, u.daemon_loop_freeze_ms,
+      u.daemon_started_at, u.daemon_loop_freeze_ms, u.daemon_sync_no_progress_ms,
     ].map((v) => v ?? "").join("|");
   });
   const user = useMemo<DaemonHealthInput | null>(() => {
     if (!healthSig) return null;
-    const [a, b, c, d, e, f, g, h] = healthSig.split("|").map((v) => (v === "" ? null : Number(v)));
+    const [a, b, c, d, e, f, g, h, i] = healthSig.split("|").map((v) => (v === "" ? null : Number(v)));
     return {
       daemon_last_seen: a, last_heartbeat: b, daemon_pending_sync_count: c,
       daemon_oldest_pending_ms: d, daemon_pending_sync_messages: e,
       daemon_pending_sync_conversations: f, daemon_started_at: g, daemon_loop_freeze_ms: h,
+      daemon_sync_no_progress_ms: i,
     };
   }, [healthSig]);
   const { now, wokeAt } = useSyncExternalStore(subscribeClock, getClock, getServerClock);

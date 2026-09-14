@@ -37,6 +37,13 @@ try {
   });
   assert.equal(label(), 'Sync status: sync stalled · 27 conversations');
   assert.ok(document.querySelector('[style*="--sol-yellow"]'));
+  await act(async () => {
+    const draining: MachineCandidate & DaemonDeviceRow = { ...row, pending_sync_count: 12,
+      pending_sync_messages: 904, pending_sync_conversations: 12, oldest_pending_ms: 540000, sync_no_progress_ms: 20000 };
+    useInboxStore.getState().setMachineRoster([draining]);
+  });
+  assert.equal(label(), 'Sync status: syncing · 904 messages');
+  assert.ok(document.querySelector('[style*="--sol-blue"]'));
   await act(async () => { useInboxStore.getState().setMachineRoster([row]); });
   assert.equal(label(), 'Sync status: Up to date');
   assert.ok(document.querySelector('[style*="--sol-green"]'));
