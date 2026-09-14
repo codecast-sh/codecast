@@ -110,6 +110,22 @@ export const postPRComment = action({
   },
 });
 
+/** One line comment inside a review, in GitHub's own shape. */
+const reviewCommentValidator = v.object({
+  path: v.string(),
+  body: v.string(),
+  line: v.number(),
+  side: v.optional(v.string()),
+  start_line: v.optional(v.number()),
+  start_side: v.optional(v.string()),
+});
+
+/**
+ * Submit a review: a verdict, a summary, and any number of line comments, all
+ * in one GitHub review. The comments arrive on GitHub as one batch under the
+ * review, which is how a reviewer expects to read them, rather than as a
+ * trickle of separate comments.
+ */
 export const submitPRReview = action({
   args: {
     repository: v.string(),
@@ -120,42 +136,143 @@ export const submitPRReview = action({
       v.literal("COMMENT")
     ),
     body: v.optional(v.string()),
+    commit_id: v.optional(v.string()),
+    comments: v.optional(v.array(reviewCommentValidator)),
     github_access_token: v.string(),
   },
-  handler: async (ctx, args) => {
-    const [owner, repo] = args.repository.split("/");
-
-    if (!owner || !repo) {
-      throw new Error(`Invalid repository format: ${args.repository}. Expected: owner/repo`);
-    }
-
-    const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/reviews`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${args.github_access_token}`,
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
+  handler: async (_ctx, args) => {
+    const [owner, repo] = splitRepository(args.repository);
+    const data = await githubFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/reviews`,
+      args.github_access_token,
+      {
+        method: "POST",
+        body: {
+          event: args.event,
+          body: args.body,
+          ...(args.commit_id ? { commit_id: args.commit_id } : {}),
+          ...(args.comments?.length ? { comments: args.comments } : {}),
+        },
       },
-      body: JSON.stringify({
-        event: args.event,
-        body: args.body,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(githubErrorMessage(response.status, await response.text()));
-    }
-
-    const data = await response.json();
+    );
     return {
       success: true,
-      review_id: data.id,
-      review_url: data.html_url,
-      state: data.state,
+      review_id: data.id as number,
+      review_url: data.html_url as string,
+      state: data.state as string,
     };
+  },
+});
+
+/** The line comments GitHub attached to one review, with the ids it gave them. */
+export const listReviewComments = internalAction({
+  args: { repository: v.string(), pr_number: v.number(), review_id: v.number(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<Array<{ id: number; path: string; line?: number; start_line?: number; body: string; html_url?: string }>> => {
+    const [owner, repo] = splitRepository(args.repository);
+    const data = await githubFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/reviews/${args.review_id}/comments?per_page=100`,
+      args.github_access_token,
+      { method: "GET" },
+    );
+    return (data ?? []).map((c: any) => ({
+      id: c.id as number,
+      path: c.path as string,
+      line: (c.line ?? c.original_line ?? undefined) as number | undefined,
+      start_line: (c.start_line ?? c.original_start_line ?? undefined) as number | undefined,
+      body: c.body as string,
+      html_url: c.html_url as string | undefined,
+    }));
+  },
+});
+
+/** Reopen a closed pull request. GitHub refuses when the branch is gone. */
+export const reopenPullRequest = internalAction({
+  args: { repository: v.string(), pr_number: v.number(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<{ state: string }> => {
+    const [owner, repo] = splitRepository(args.repository);
+    const data = await githubFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}`,
+      args.github_access_token,
+      { method: "PATCH", body: { state: "open" } },
+    );
+    return { state: data.state };
+  },
+});
+
+/** Change the title or the description of a pull request. */
+export const updatePullRequest = internalAction({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    title: v.optional(v.string()),
+    body: v.optional(v.string()),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{ title: string; body: string }> => {
+    const [owner, repo] = splitRepository(args.repository);
+    const data = await githubFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}`,
+      args.github_access_token,
+      {
+        method: "PATCH",
+        body: {
+          ...(args.title !== undefined ? { title: args.title } : {}),
+          ...(args.body !== undefined ? { body: args.body } : {}),
+        },
+      },
+    );
+    return { title: data.title, body: data.body ?? "" };
+  },
+});
+
+/**
+ * Mark a pull request ready for review, or send it back to draft. GitHub
+ * exposes both only through GraphQL, keyed by the pull request's node id.
+ */
+export const setPullRequestDraft = internalAction({
+  args: { repository: v.string(), pr_number: v.number(), draft: v.boolean(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<{ draft: boolean }> => {
+    const [owner, name] = splitRepository(args.repository);
+    const { data } = await ghGraphQL(
+      `query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) { pullRequest(number: $number) { id isDraft } }
+      }`,
+      { owner, name, number: args.pr_number },
+      args.github_access_token,
+    );
+    const pull = data?.repository?.pullRequest;
+    if (!pull?.id) throw new Error(`Pull request ${args.repository}#${args.pr_number} not found`);
+    if (!!pull.isDraft === args.draft) return { draft: args.draft };
+    const field = args.draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
+    const result = await ghGraphQL(
+      `mutation($id: ID!) { ${field}(input: { pullRequestId: $id }) { pullRequest { isDraft } } }`,
+      { id: pull.id },
+      args.github_access_token,
+    );
+    return { draft: !!result.data?.[field]?.pullRequest?.isDraft };
+  },
+});
+
+/** Ask people for a review, or withdraw the ask. */
+export const setRequestedReviewers = internalAction({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    add: v.optional(v.array(v.string())),
+    remove: v.optional(v.array(v.string())),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{ requested_reviewers: string[] }> => {
+    const [owner, repo] = splitRepository(args.repository);
+    const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/requested_reviewers`;
+    let data: any = null;
+    if (args.remove?.length) {
+      data = await githubFetch(url, args.github_access_token, { method: "DELETE", body: { reviewers: args.remove } });
+    }
+    if (args.add?.length) {
+      data = await githubFetch(url, args.github_access_token, { method: "POST", body: { reviewers: args.add } });
+    }
+    return { requested_reviewers: (data?.requested_reviewers ?? []).map((r: any) => r.login as string) };
   },
 });
 
@@ -615,6 +732,84 @@ async function ghGraphQL(
   }
   return { data: body.data, errors: body.errors };
 }
+
+/**
+ * Resolve or unresolve the review thread that holds one review comment.
+ *
+ * GitHub exposes resolution only through GraphQL, keyed by the thread's node
+ * id, which the REST comment never carries. The thread is found by walking the
+ * pull request's threads for the comment's database id; the id comes back so
+ * the caller can cache it and skip the walk next time. A thread already in the
+ * asked state is left alone, so several comments of one thread resolved
+ * together cost one mutation.
+ */
+export const setReviewThreadResolved = internalAction({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    github_comment_id: v.optional(v.number()),
+    thread_id: v.optional(v.string()),
+    resolved: v.boolean(),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{ thread_id: string | null; changed: boolean }> => {
+    const [owner, name] = repoParts(args.repository);
+    let threadId = args.thread_id ?? null;
+    let isResolved: boolean | null = null;
+
+    if (threadId) {
+      const { data } = await ghGraphQL(
+        `query($id: ID!) { node(id: $id) { ... on PullRequestReviewThread { id isResolved } } }`,
+        { id: threadId },
+        args.github_access_token,
+        true,
+      );
+      if (data?.node?.id) isResolved = !!data.node.isResolved;
+      else threadId = null;
+    }
+
+    if (!threadId && args.github_comment_id != null) {
+      let after: string | null = null;
+      for (let page = 0; page < 10 && !threadId; page++) {
+        const { data } = await ghGraphQL(
+          `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+            repository(owner: $owner, name: $name) {
+              pullRequest(number: $number) {
+                reviewThreads(first: 100, after: $after) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes { id isResolved comments(first: 100) { nodes { databaseId } } }
+                }
+              }
+            }
+          }`,
+          { owner, name, number: args.pr_number, after },
+          args.github_access_token,
+        );
+        const threads = data?.repository?.pullRequest?.reviewThreads;
+        for (const thread of threads?.nodes ?? []) {
+          if ((thread.comments?.nodes ?? []).some((c: any) => c.databaseId === args.github_comment_id)) {
+            threadId = thread.id;
+            isResolved = !!thread.isResolved;
+            break;
+          }
+        }
+        if (!threads?.pageInfo?.hasNextPage) break;
+        after = threads.pageInfo.endCursor;
+      }
+    }
+
+    if (!threadId) return { thread_id: null, changed: false };
+    if (isResolved === args.resolved) return { thread_id: threadId, changed: false };
+
+    const field = args.resolved ? "resolveReviewThread" : "unresolveReviewThread";
+    await ghGraphQL(
+      `mutation($id: ID!) { ${field}(input: { threadId: $id }) { thread { id isResolved } } }`,
+      { id: threadId },
+      args.github_access_token,
+    );
+    return { thread_id: threadId, changed: true };
+  },
+});
 
 /** A path as a GraphQL string literal. GraphQL string syntax is JSON's. */
 function gqlString(value: string): string {
@@ -1262,9 +1457,41 @@ export function mapPull(pull: any) {
       name: label.name as string,
       color: label.color as string,
     })),
+    assignees: (pull.assignees ?? []).map((a: any) => a.login as string),
     html_url: pull.html_url as string,
   };
 }
+
+/** The commits on a pull request's head branch, oldest first, as GitHub lists them. */
+export const listPRCommits = internalAction({
+  args: { repository: v.string(), pr_number: v.number(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<PRCommit[]> => {
+    const [owner, repo] = repoParts(args.repository);
+    const data = await ghFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/commits?per_page=100`,
+      args.github_access_token,
+    );
+    return (data ?? []).map((c: any) => ({
+      sha: c.sha as string,
+      message: (c.commit?.message ?? "") as string,
+      author_login: (c.author?.login ?? undefined) as string | undefined,
+      author_name: (c.commit?.author?.name ?? undefined) as string | undefined,
+      author_avatar_url: (c.author?.avatar_url ?? undefined) as string | undefined,
+      committed_at: c.commit?.committer?.date ? new Date(c.commit.committer.date).getTime() : undefined,
+      url: (c.html_url ?? undefined) as string | undefined,
+    }));
+  },
+});
+
+export type PRCommit = {
+  sha: string;
+  message: string;
+  author_login?: string;
+  author_name?: string;
+  author_avatar_url?: string;
+  committed_at?: number;
+  url?: string;
+};
 
 export type MappedPull = ReturnType<typeof mapPull>;
 

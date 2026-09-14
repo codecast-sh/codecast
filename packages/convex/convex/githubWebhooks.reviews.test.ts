@@ -150,7 +150,7 @@ describe("pull_request_review", () => {
       ],
     });
     await (processReviewEvent as any)._handler(ctx, { event_id: "event_1" });
-    expect(ctx.db._tables.reviews[0].state).toBe("commented");
+    expect(ctx.db._tables.reviews[0].state).toBe("dismissed");
     expect(ctx.db._tables.pull_requests[0].review_decision).toBe("none");
     expect(ctx.db._tables.agent_tasks[0].prompt).toBe("old");
   });
@@ -202,6 +202,20 @@ describe("pull_request_review_comment", () => {
     expect(event.comment_id).toBe(comment._id);
 
     expect(ctx.db._tables.agent_tasks[0].prompt).toContain("samvit on src/foo.ts:42");
+  });
+
+  test("the echo of a note codecast submitted in a review is adopted, not stored twice", async () => {
+    const ctx = context(commentPayload(), "created", "pull_request_review_comment", {
+      review_comments: [
+        { _id: "rc_pending", pull_request_id: PR, file_path: "src/foo.ts", line_number: 42, content: "this leaks",
+          resolved: false, created_at: 1, codecast_origin: true, pending_review: true, author_user_id: "u1" },
+      ],
+    });
+    await (processReviewCommentEvent as any)._handler(ctx, { event_id: "event_1" });
+    expect(ctx.db._tables.review_comments).toHaveLength(1);
+    const patch = ctx.db._patched.find((p: any) => p._id === "rc_pending")!.patch;
+    expect(patch).toMatchObject({ github_comment_id: 4242, github_review_id: 77, html_url: "https://github.com/c/4242", pending_review: undefined });
+    expect(ctx.db._tables.external_events).toHaveLength(0);
   });
 
   test("a comment codecast posted comes back and is skipped", async () => {

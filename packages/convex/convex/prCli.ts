@@ -1,4 +1,6 @@
-// The server behind `cast pr`.
+// The server behind `cast pr` and behind the pull request page: every verb
+// here takes a CLI token or a signed in session, so both surfaces act through
+// the same code.
 //
 // One resolver decides which pull request a caller meant, and every read and
 // write here goes through it. That is the point of the file: the CLI can send
@@ -18,6 +20,7 @@ import { v } from "convex/values";
 import { action, internalQuery, mutation, query } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { bindShepherd } from "./prShepherd";
@@ -47,10 +50,20 @@ type Locator = {
 
 type PR = Doc<"pull_requests">;
 
-async function requireCaller(ctx: any, apiToken: string): Promise<Id<"users">> {
-  const auth = await verifyApiToken(ctx, apiToken);
-  if (!auth) throw new Error("Unauthorized");
-  return auth.userId as Id<"users">;
+/**
+ * The caller: a signed in web session, or a CLI token. One check serves both
+ * surfaces, which is what lets the web page and `cast pr` share every verb
+ * below instead of each carrying its own copy.
+ */
+async function requireCaller(ctx: any, apiToken?: string): Promise<Id<"users">> {
+  if (apiToken) {
+    const auth = await verifyApiToken(ctx, apiToken);
+    if (!auth) throw new Error("Unauthorized");
+    return auth.userId as Id<"users">;
+  }
+  const userId = ctx.auth ? await getAuthUserId(ctx) : null;
+  if (!userId) throw new Error("Unauthorized");
+  return userId;
 }
 
 /** The teams the caller belongs to. A pull request is readable in exactly these. */
@@ -275,7 +288,7 @@ async function eventsFor(ctx: any, pr: PR, limit: number) {
 
 export const ls = query({
   args: {
-    api_token: v.string(),
+    api_token: v.optional(v.string()),
     repository: v.optional(v.string()),
     state: v.optional(v.string()),
     mine: v.optional(v.boolean()),
@@ -305,7 +318,7 @@ export const ls = query({
 });
 
 export const resolve = query({
-  args: { api_token: v.string(), ...locatorArgs },
+  args: { api_token: v.optional(v.string()), ...locatorArgs },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const pr = await resolvePullRequest(ctx, userId, args);
@@ -314,7 +327,7 @@ export const resolve = query({
 });
 
 export const show = query({
-  args: { api_token: v.string(), ...locatorArgs },
+  args: { api_token: v.optional(v.string()), ...locatorArgs },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const pr = await resolvePullRequest(ctx, userId, args);
@@ -385,7 +398,7 @@ export const show = query({
 });
 
 export const events = query({
-  args: { api_token: v.string(), ...locatorArgs, limit: v.optional(v.number()) },
+  args: { api_token: v.optional(v.string()), ...locatorArgs, limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const pr = await resolvePullRequest(ctx, userId, args);
@@ -404,7 +417,7 @@ export const events = query({
  */
 export const watchPRs = query({
   args: {
-    api_token: v.string(),
+    api_token: v.optional(v.string()),
     repository: v.optional(v.string()),
     pr_ids: v.optional(v.array(v.string())),
   },
@@ -430,7 +443,7 @@ export const watchPRs = query({
 
 export const shepherd = mutation({
   args: {
-    api_token: v.string(),
+    api_token: v.optional(v.string()),
     ...locatorArgs,
     action: v.union(v.literal("on"), v.literal("off"), v.literal("status")),
     // The session to bind. A caller may point only their own agent at a pull
@@ -511,7 +524,7 @@ async function threadRow(ctx: any, comment: any) {
 }
 
 export const threads = query({
-  args: { api_token: v.string(), ...locatorArgs, all: v.optional(v.boolean()) },
+  args: { api_token: v.optional(v.string()), ...locatorArgs, all: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const pr = await resolvePullRequest(ctx, userId, args);
@@ -549,7 +562,7 @@ export function parseCommentLocation(selector: string): { file: string; line?: n
  * settled one and a genuine tie comes back for the caller to break.
  */
 export const findComment = query({
-  args: { api_token: v.string(), ...locatorArgs, selector: v.string() },
+  args: { api_token: v.optional(v.string()), ...locatorArgs, selector: v.string() },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const pr = await resolvePullRequest(ctx, userId, args);
@@ -609,7 +622,7 @@ export const findComment = query({
 
 /** The caller, the pull request they named, and the token to act with. */
 export const actorFor = internalQuery({
-  args: { api_token: v.string(), ...locatorArgs },
+  args: { api_token: v.optional(v.string()), ...locatorArgs },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const pr = await resolvePullRequest(ctx, userId, args);
@@ -659,7 +672,7 @@ const failureText = githubSentence;
 
 export const review = action({
   args: {
-    api_token: v.string(),
+    api_token: v.optional(v.string()),
     ...locatorArgs,
     event: v.union(v.literal("APPROVE"), v.literal("REQUEST_CHANGES"), v.literal("COMMENT")),
     body: v.optional(v.string()),
@@ -723,7 +736,7 @@ const NO_TOKEN =
 
 export const merge = action({
   args: {
-    api_token: v.string(),
+    api_token: v.optional(v.string()),
     ...locatorArgs,
     method: v.optional(v.union(v.literal("merge"), v.literal("squash"), v.literal("rebase"))),
     delete_branch: v.optional(v.boolean()),
@@ -769,8 +782,104 @@ export const merge = action({
   },
 });
 
+/**
+ * The shared shape of a verb that changes a pull request on GitHub: resolve
+ * the caller and the pull request, pick a token, run one GitHub call, and
+ * answer with GitHub's words when it refuses. Nothing here writes our own
+ * tables: the webhook that follows is the one writer.
+ */
+async function pullRequestVerb(
+  ctx: any,
+  args: Locator & { api_token?: string },
+  options: { requireState?: "open" | "closed" },
+  run: (actor: any, acting: { token: string; as: string }) => Promise<Record<string, unknown>>,
+): Promise<any> {
+  const actor: any = await ctx.runQuery(internal.prCli.actorFor, {
+    api_token: args.api_token,
+    ref: args.ref,
+    repository: args.repository,
+    number: args.number,
+    session: args.session,
+    branch: args.branch,
+  });
+  if (!actor) return { error: NO_MATCH };
+  if (options.requireState && actor.pr.state !== options.requireState) {
+    return { error: `${actor.pr.repository}#${actor.pr.number} is ${actor.pr.state}, not ${options.requireState}.` };
+  }
+  const acting = await operationToken(ctx, actor);
+  if (!acting) return { error: NO_TOKEN };
+  try {
+    const result = await run(actor, acting);
+    return { repository: actor.pr.repository, number: actor.pr.number, as: acting.as, ...result };
+  } catch (error) {
+    return { error: failureText(error) };
+  }
+}
+
+export const reopen = action({
+  args: { api_token: v.optional(v.string()), ...locatorArgs },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "closed" }, async (actor, acting) => {
+      const result: any = await ctx.runAction(internal.githubApi.reopenPullRequest, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        github_access_token: acting.token,
+      });
+      return { state: result.state };
+    }),
+});
+
+export const draft = action({
+  args: { api_token: v.optional(v.string()), ...locatorArgs, draft: v.boolean() },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
+      const result: any = await ctx.runAction(internal.githubApi.setPullRequestDraft, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        draft: args.draft,
+        github_access_token: acting.token,
+      });
+      return { draft: result.draft };
+    }),
+});
+
+export const reviewers = action({
+  args: {
+    api_token: v.optional(v.string()),
+    ...locatorArgs,
+    add: v.optional(v.array(v.string())),
+    remove: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
+      const result: any = await ctx.runAction(internal.githubApi.setRequestedReviewers, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        add: args.add,
+        remove: args.remove,
+        github_access_token: acting.token,
+      });
+      return { requested_reviewers: result.requested_reviewers };
+    }),
+});
+
+export const edit = action({
+  args: { api_token: v.optional(v.string()), ...locatorArgs, title: v.optional(v.string()), body: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, {}, async (actor, acting) => {
+      const result: any = await ctx.runAction(internal.githubApi.updatePullRequest, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        title: args.title,
+        body: args.body,
+        github_access_token: acting.token,
+      });
+      return { title: result.title, body: result.body };
+    }),
+});
+
 export const close = action({
-  args: { api_token: v.string(), ...locatorArgs },
+  args: { api_token: v.optional(v.string()), ...locatorArgs },
   handler: async (ctx, args): Promise<any> => {
     const actor: any = await ctx.runQuery(internal.prCli.actorFor, {
       api_token: args.api_token,

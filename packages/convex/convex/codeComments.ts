@@ -50,6 +50,8 @@ export async function canAccessComment(
   comment: Doc<"review_comments">,
 ): Promise<boolean> {
   if (comment.author_user_id && String(comment.author_user_id) === String(userId)) return true;
+  // A note in an unsubmitted review is the author's alone, as it is on GitHub.
+  if (comment.pending_review) return false;
 
   // A row carrying a workspace key is decided by it ALONE (ct-49560). Review
   // notes are the only rows that carry one, and the repository branch below
@@ -85,6 +87,11 @@ async function requireRepositoryTeam(
   if (!teamId) throw new Error(`No GitHub App installation covers ${repository}`);
   if (!(await isTeamMember(ctx, userId, teamId))) throw new Error("Forbidden: team membership required");
   return teamId;
+}
+
+/** A pending note is its author's alone; every other row passes through. */
+function withoutOthersPending<T extends { pending_review?: boolean; author_user_id?: any }>(rows: T[], userId: any): T[] {
+  return rows.filter((r) => !r.pending_review || String(r.author_user_id) === String(userId));
 }
 
 async function filterAccessible(
@@ -339,6 +346,9 @@ export const create = mutation({
     client_id: v.optional(v.string()),
     author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
     mirror: v.optional(v.boolean()),
+    // A note in a review not yet submitted: private to the author, not
+    // announced, not mirrored. reviews.submitPending sends the batch.
+    pending: v.optional(v.boolean()),
   },
   handler: async (ctx, rawArgs) => {
     // The row is keyed by the canonical spelling whatever the caller typed.
@@ -368,6 +378,7 @@ export const create = mutation({
       const pr = await ctx.db.get(pullRequestId);
       if (!pr || !(await canAccessPullRequest(ctx, userId, pr))) throw new Error("Pull request not found");
     }
+    if (args.pending && !pullRequestId) throw new Error("A pending review note needs a pull request");
 
     const now = Date.now();
     const commentId = await ctx.db.insert("review_comments", {
@@ -391,7 +402,11 @@ export const create = mutation({
       updated_at: now,
       client_id: args.client_id,
       codecast_origin: true,
+      pending_review: args.pending ? true : undefined,
     });
+
+    // A pending note says nothing to anyone until the review goes out.
+    if (args.pending) return { comment_id: commentId };
 
     const inserted = await ctx.db.get(commentId);
     if (inserted) await fanOutCodeComment(ctx, inserted, { teamId, actorId: userId, parent });
@@ -450,6 +465,8 @@ export const mirrorToGitHub = internalAction({
   args: {
     comment_id: v.id("review_comments"),
     pr_id: v.id("pull_requests"),
+    // How many times a reply has waited for its parent to reach GitHub.
+    attempt: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
     const comment = await ctx.runQuery(internal.codeComments.getComment, { comment_id: args.comment_id });
@@ -457,38 +474,58 @@ export const mirrorToGitHub = internalAction({
     if (!comment || !pr) return { ok: false, reason: "not_found" };
     if (comment.github_comment_id) return { ok: false, reason: "already_mirrored" };
 
+    // A reply goes under its parent on GitHub, which needs the parent's GitHub
+    // id. A parent still on its way there makes the reply wait a moment rather
+    // than land as a stranger at the top of the file; after a few tries it goes
+    // out unthreaded, because a reply nobody can see is worse than one out of
+    // place.
+    const parent = comment.parent_id
+      ? await ctx.runQuery(internal.codeComments.getComment, { comment_id: comment.parent_id })
+      : null;
+    const attempt = args.attempt ?? 0;
+    if (parent && !parent.github_comment_id && attempt < REPLY_MIRROR_ATTEMPTS) {
+      await ctx.scheduler.runAfter(REPLY_MIRROR_WAIT_MS * (attempt + 1), internal.codeComments.mirrorToGitHub, {
+        comment_id: args.comment_id,
+        pr_id: args.pr_id,
+        attempt: attempt + 1,
+      });
+      return { ok: false, reason: "parent_pending" };
+    }
+
     const token: string | null = await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: args.pr_id });
     if (!token) return { ok: false, reason: "no_token" };
 
     const [owner, repo] = pr.repository.split("/");
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-    };
+    const headers = githubHeaders(token);
 
     // A line comment needs a commit to anchor to; without a line there is
     // nothing to anchor and the comment goes on the conversation instead.
     const anchored = !!(comment.file_path && comment.line_number && pr.head_sha);
-    const url = anchored
-      ? `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}/comments`
-      : `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/${pr.number}/comments`;
+    // GitHub threads review comments only; a reply on the conversation is
+    // another conversation comment.
+    const threaded = !!(parent?.github_comment_id && parent.file_path);
+    const url = threaded
+      ? `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}/comments/${parent!.github_comment_id}/replies`
+      : anchored
+        ? `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}/comments`
+        : `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/${pr.number}/comments`;
     // GitHub anchors a multi line comment with start_line..line, so a range has
     // to be sent as both ends or it lands on one line and loses what it was
     // pointing at. Stored rows always read line_number = start, line_end = end.
     const side = comment.side ?? "RIGHT";
     const isRange = comment.line_end != null && comment.line_end !== comment.line_number;
-    const body = anchored
-      ? {
-          body: comment.content,
-          commit_id: pr.head_sha,
-          path: comment.file_path,
-          line: isRange ? comment.line_end : comment.line_number,
-          side,
-          ...(isRange ? { start_line: comment.line_number, start_side: side } : {}),
-        }
-      : { body: comment.content };
+    const body = threaded
+      ? { body: comment.content }
+      : anchored
+        ? {
+            body: comment.content,
+            commit_id: pr.head_sha,
+            path: comment.file_path,
+            line: isRange ? comment.line_end : comment.line_number,
+            side,
+            ...(isRange ? { start_line: comment.line_number, start_side: side } : {}),
+          }
+        : { body: comment.content };
 
     const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     if (!response.ok) {
@@ -503,7 +540,128 @@ export const mirrorToGitHub = internalAction({
       github_comment_id: data.id,
       html_url: data.html_url,
       pr_id: args.pr_id,
+      github_in_reply_to_id: threaded ? parent!.github_comment_id : undefined,
+      // A reply shares its parent's thread.
+      github_thread_id: threaded ? parent!.github_thread_id : undefined,
     });
+    return { ok: true };
+  },
+});
+
+const REPLY_MIRROR_ATTEMPTS = 5;
+const REPLY_MIRROR_WAIT_MS = 2000;
+
+function githubHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+  };
+}
+
+/**
+ * Where GitHub keeps one mirrored comment. A comment on a line is a review
+ * comment; one on the conversation is an issue comment. The two live under
+ * different paths for edit and delete.
+ */
+function githubCommentUrl(repository: string, comment: { file_path?: string; github_comment_id: number }): string {
+  const [owner, repo] = repository.split("/");
+  return comment.file_path
+    ? `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/comments/${comment.github_comment_id}`
+    : `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/comments/${comment.github_comment_id}`;
+}
+
+/** An edit made here reaches the mirrored copy, so the two never say different things. */
+export const mirrorEditToGitHub = internalAction({
+  args: { comment_id: v.id("review_comments") },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+    const comment = await ctx.runQuery(internal.codeComments.getComment, { comment_id: args.comment_id });
+    if (!comment?.github_comment_id || !comment.pull_request_id) return { ok: false, reason: "not_mirrored" };
+    const pr = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: comment.pull_request_id });
+    if (!pr) return { ok: false, reason: "not_found" };
+    const token: string | null = await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id });
+    if (!token) return { ok: false, reason: "no_token" };
+
+    const response = await fetch(githubCommentUrl(pr.repository, comment as any), {
+      method: "PATCH",
+      headers: githubHeaders(token),
+      body: JSON.stringify({ body: comment.content }),
+    });
+    if (!response.ok) {
+      console.error(`[codeComments] edit mirror failed: ${response.status} ${await response.text()}`);
+      return { ok: false, reason: `github ${response.status}` };
+    }
+    return { ok: true };
+  },
+});
+
+/**
+ * A comment deleted here is deleted there. The row is already gone when this
+ * runs, so it carries everything it needs.
+ */
+export const mirrorDeleteToGitHub = internalAction({
+  args: {
+    pr_id: v.id("pull_requests"),
+    github_comment_id: v.number(),
+    file_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+    const pr = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: args.pr_id });
+    if (!pr) return { ok: false, reason: "not_found" };
+    const token: string | null = await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id });
+    if (!token) return { ok: false, reason: "no_token" };
+
+    const response = await fetch(githubCommentUrl(pr.repository, args), {
+      method: "DELETE",
+      headers: githubHeaders(token),
+    });
+    // Already gone on GitHub is the outcome we wanted.
+    if (!response.ok && response.status !== 404) {
+      console.error(`[codeComments] delete mirror failed: ${response.status} ${await response.text()}`);
+      return { ok: false, reason: `github ${response.status}` };
+    }
+    return { ok: true };
+  },
+});
+
+/**
+ * Resolve or unresolve on GitHub the thread this comment belongs to.
+ *
+ * Only review comments have threads there; a conversation comment cannot be
+ * resolved on GitHub and is left as is. The thread id is learned once and
+ * cached on every comment of the thread.
+ */
+export const mirrorThreadResolution = internalAction({
+  args: { comment_id: v.id("review_comments"), resolved: v.boolean() },
+  handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+    const comment = await ctx.runQuery(internal.codeComments.getComment, { comment_id: args.comment_id });
+    if (!comment?.github_comment_id || !comment.pull_request_id || !comment.file_path) {
+      return { ok: false, reason: "not_a_review_thread" };
+    }
+    const pr = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: comment.pull_request_id });
+    if (!pr) return { ok: false, reason: "not_found" };
+    const token: string | null = await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id });
+    if (!token) return { ok: false, reason: "no_token" };
+
+    const result: { thread_id: string | null; changed: boolean } = await ctx.runAction(
+      internal.githubApi.setReviewThreadResolved,
+      {
+        repository: pr.repository,
+        pr_number: pr.number,
+        github_comment_id: comment.github_comment_id,
+        thread_id: comment.github_thread_id,
+        resolved: args.resolved,
+        github_access_token: token,
+      },
+    );
+    if (!result.thread_id) return { ok: false, reason: "thread_not_found" };
+    if (result.thread_id !== comment.github_thread_id) {
+      await ctx.runMutation(internal.codeComments.recordThreadId, {
+        comment_id: args.comment_id,
+        github_thread_id: result.thread_id,
+      });
+    }
     return { ok: true };
   },
 });
@@ -519,14 +677,174 @@ export const recordMirror = internalMutation({
     github_comment_id: v.number(),
     html_url: v.optional(v.string()),
     pr_id: v.optional(v.id("pull_requests")),
+    github_in_reply_to_id: v.optional(v.number()),
+    github_thread_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.comment_id, {
       github_comment_id: args.github_comment_id,
       html_url: args.html_url,
       pull_request_id: args.pr_id,
+      github_in_reply_to_id: args.github_in_reply_to_id,
+      github_thread_id: args.github_thread_id,
       updated_at: Date.now(),
     });
+  },
+});
+
+/** Cache a thread id on the comment and on every comment sharing its thread. */
+export const recordThreadId = internalMutation({
+  args: { comment_id: v.id("review_comments"), github_thread_id: v.string() },
+  handler: async (ctx, args) => {
+    const comment = await ctx.db.get(args.comment_id);
+    if (!comment) return;
+    for (const row of await threadRows(ctx, comment)) {
+      if (row.github_thread_id !== args.github_thread_id) {
+        await ctx.db.patch(row._id, { github_thread_id: args.github_thread_id });
+      }
+    }
+  },
+});
+
+/**
+ * Every comment of the thread `comment` sits in: its root, and the root's
+ * replies. A thread is one file and line on one pull request, which is how
+ * both codecast (parent_id) and GitHub (in_reply_to) chain them.
+ */
+async function threadRows(ctx: Ctx, comment: Doc<"review_comments">): Promise<Doc<"review_comments">[]> {
+  const root = comment.parent_id ? ((await ctx.db.get(comment.parent_id)) ?? comment) : comment;
+  const replies: Doc<"review_comments">[] = await ctx.db
+    .query("review_comments")
+    .withIndex("by_parent", (q: any) => q.eq("parent_id", root._id))
+    .collect();
+  const rows = [root, ...replies];
+  if (comment.pull_request_id && comment.file_path && comment.line_number != null) {
+    const siblings: Doc<"review_comments">[] = await ctx.db
+      .query("review_comments")
+      .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", comment.pull_request_id))
+      .collect();
+    for (const row of siblings) {
+      if (row.file_path === comment.file_path && row.line_number === comment.line_number && !rows.some((r) => r._id === row._id)) {
+        rows.push(row);
+      }
+    }
+  }
+  return rows;
+}
+
+/**
+ * Queue the GitHub side of a change made here. Nothing is queued for a row
+ * GitHub does not hold, and the scheduler is optional so tests and plain reads
+ * can call the mutations without one.
+ */
+async function queueMirror(ctx: Ctx, reference: any, args: Record<string, unknown>): Promise<void> {
+  if (ctx.scheduler) await ctx.scheduler.runAfter(0, reference, args);
+}
+
+// ── The pending review ──
+
+/** The caller's unsubmitted notes on one pull request, oldest first. */
+export async function pendingRowsFor(
+  ctx: Ctx,
+  userId: Id<"users">,
+  pullRequestId: Id<"pull_requests">,
+): Promise<Doc<"review_comments">[]> {
+  const rows: Doc<"review_comments">[] = await ctx.db
+    .query("review_comments")
+    .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pullRequestId))
+    .collect();
+  return rows
+    .filter((r) => r.pending_review && String(r.author_user_id) === String(userId))
+    .sort((a, b) => a.created_at - b.created_at);
+}
+
+export const pendingReview = query({
+  args: { api_token: v.optional(v.string()), pull_request_id: v.id("pull_requests") },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    return await pendingRowsFor(ctx, userId, args.pull_request_id);
+  },
+});
+
+/** Throw the caller's pending notes on a pull request away. */
+export const discardPendingReview = mutation({
+  args: { api_token: v.optional(v.string()), pull_request_id: v.id("pull_requests") },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const rows = await pendingRowsFor(ctx, userId, args.pull_request_id);
+    for (const row of rows) await ctx.db.delete(row._id);
+    return { discarded: rows.length };
+  },
+});
+
+export const pendingRowsInternal = internalQuery({
+  args: { user_id: v.id("users"), pull_request_id: v.id("pull_requests") },
+  handler: async (ctx, args) => await pendingRowsFor(ctx, args.user_id, args.pull_request_id),
+});
+
+/**
+ * The batch went out as one GitHub review: stamp each note with the id GitHub
+ * gave it, so the webhook echo recognises it, and record the review itself so
+ * the page shows the verdict before the webhook lands.
+ */
+export const recordSubmittedReview = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    pull_request_id: v.id("pull_requests"),
+    github_review_id: v.number(),
+    review_url: v.optional(v.string()),
+    state: v.union(v.literal("approved"), v.literal("changes_requested"), v.literal("commented")),
+    body: v.optional(v.string()),
+    commit_sha: v.optional(v.string()),
+    // GitHub's comments of that review, to match against the pending rows.
+    comments: v.array(v.object({
+      id: v.number(),
+      path: v.string(),
+      line: v.optional(v.number()),
+      start_line: v.optional(v.number()),
+      body: v.string(),
+      html_url: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const rows = await pendingRowsFor(ctx, args.user_id, args.pull_request_id);
+    const unmatched = [...args.comments];
+    const now = Date.now();
+    for (const row of rows) {
+      const start = row.line_number;
+      const end = row.line_end ?? row.line_number;
+      const at = unmatched.findIndex((c) =>
+        c.path === row.file_path && c.body === row.content
+        && (c.start_line ?? c.line) === start && (c.line ?? c.start_line) === end);
+      const hit = at >= 0 ? unmatched.splice(at, 1)[0] : undefined;
+      await ctx.db.patch(row._id, {
+        pending_review: undefined,
+        github_review_id: args.github_review_id,
+        github_comment_id: hit?.id,
+        html_url: hit?.html_url,
+        updated_at: now,
+      });
+    }
+
+    const user = await ctx.db.get(args.user_id);
+    const existing = await ctx.db
+      .query("reviews")
+      .withIndex("by_github_review_id", (q: any) => q.eq("github_review_id", args.github_review_id))
+      .first();
+    const fields = {
+      pull_request_id: args.pull_request_id,
+      reviewer_user_id: args.user_id,
+      author_github_username: (user as any)?.github_username ?? undefined,
+      github_review_id: args.github_review_id,
+      commit_sha: args.commit_sha,
+      html_url: args.review_url,
+      state: args.state,
+      body: args.body,
+      submitted_at: now,
+    };
+    if (existing) await ctx.db.patch(existing._id, fields);
+    else await ctx.db.insert("reviews", fields);
+    return { stamped: rows.length, unmatched: unmatched.length };
   },
 });
 
@@ -580,7 +898,7 @@ export const listForPR = query({
       .query("review_comments")
       .withIndex("by_pull_request", (q) => q.eq("pull_request_id", args.pull_request_id))
       .collect();
-    return rows.sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(rows, userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 
@@ -597,7 +915,7 @@ export const listForConversation = query({
       .query("review_comments")
       .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
-    return rows.sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(rows, userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 
@@ -626,6 +944,9 @@ export const update = mutation({
     // An edited note has not been sent: clearing sent_at puts it back in the
     // batch so `cast review send` delivers the words the author now means.
     await ctx.db.patch(args.comment_id, { content: args.content, updated_at: Date.now(), sent_at: undefined });
+    if (comment.github_comment_id) {
+      await queueMirror(ctx, internal.codeComments.mirrorEditToGitHub, { comment_id: args.comment_id });
+    }
     return { ok: true };
   },
 });
@@ -641,10 +962,45 @@ export const remove = mutation({
     if (comment.author_user_id && String(comment.author_user_id) !== String(userId)) {
       throw new Error("Forbidden: only the author may delete a comment");
     }
+    if (comment.author_kind === "github") throw new Error("Forbidden: delete this comment on GitHub");
     await ctx.db.delete(args.comment_id);
+    if (comment.github_comment_id && comment.pull_request_id) {
+      await queueMirror(ctx, internal.codeComments.mirrorDeleteToGitHub, {
+        pr_id: comment.pull_request_id,
+        github_comment_id: comment.github_comment_id,
+        file_path: comment.file_path,
+      });
+    }
     return { ok: true };
   },
 });
+
+/**
+ * Resolution is a property of the THREAD, as it is on GitHub: settling one
+ * comment settles its root and every reply, so a thread never reads half
+ * open. The GitHub side follows once, from the comment the caller named.
+ */
+async function setThreadResolved(
+  ctx: Ctx,
+  userId: Id<"users">,
+  commentId: Id<"review_comments">,
+  resolved: boolean,
+): Promise<void> {
+  const comment = await requireOwnComment(ctx, userId, commentId);
+  const now = Date.now();
+  for (const row of await threadRows(ctx, comment)) {
+    if (row.resolved === resolved) continue;
+    await ctx.db.patch(row._id, {
+      resolved,
+      resolved_at: resolved ? now : undefined,
+      resolved_by: resolved ? userId : undefined,
+      updated_at: now,
+    });
+  }
+  if (comment.github_comment_id && comment.file_path) {
+    await queueMirror(ctx, internal.codeComments.mirrorThreadResolution, { comment_id: commentId, resolved });
+  }
+}
 
 export const resolve = mutation({
   args: {
@@ -653,13 +1009,7 @@ export const resolve = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    await requireOwnComment(ctx, userId, args.comment_id);
-    await ctx.db.patch(args.comment_id, {
-      resolved: true,
-      resolved_at: Date.now(),
-      resolved_by: userId,
-      updated_at: Date.now(),
-    });
+    await setThreadResolved(ctx, userId, args.comment_id, true);
     return { ok: true };
   },
 });
@@ -671,13 +1021,7 @@ export const unresolve = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    await requireOwnComment(ctx, userId, args.comment_id);
-    await ctx.db.patch(args.comment_id, {
-      resolved: false,
-      resolved_at: undefined,
-      resolved_by: undefined,
-      updated_at: Date.now(),
-    });
+    await setThreadResolved(ctx, userId, args.comment_id, false);
     return { ok: true };
   },
 });

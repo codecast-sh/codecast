@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { create, listForFile, mirrorToGitHub, resolve, update } from "./codeComments";
+import { create, listForFile, mirrorToGitHub, remove, resolve, unresolve, update } from "./codeComments";
 
 const USER = "user_1" as any;
 const OTHER = "user_2" as any;
@@ -435,5 +435,136 @@ describe("codeComments.create fan-out", () => {
     expect(prompt).toContain("Ashot mentioned you in a code comment on codecast-sh/codecast@abcdef1, at src/foo.ts:42-44.");
     expect(prompt).toContain("> does this leak?\n> see the catch");
     expect(prompt).toContain("The thread: https://codecast.sh/commit/");
+  });
+});
+
+
+// ── The GitHub side of a change made here ──
+//
+// A comment that reached GitHub keeps matching it: a reply threads under its
+// parent, an edit and a delete follow, and settling a thread settles it there.
+
+function mirroredRow(overrides: Record<string, any> = {}) {
+  return {
+    _id: "rc_1", pull_request_id: PR, repository: "codecast-sh/codecast", ref: HEAD,
+    file_path: "src/foo.ts", line_number: 42, side: "RIGHT", content: "first",
+    author_user_id: USER, author_kind: "user", codecast_origin: true,
+    github_comment_id: 501, resolved: false, created_at: 1, updated_at: 1,
+    ...overrides,
+  };
+}
+
+describe("mirroring what changes here", () => {
+  test("an edit of a mirrored comment queues the edit mirror", async () => {
+    const ctx = context(USER, { review_comments: [mirroredRow()] });
+    await (update as any)._handler(ctx, { comment_id: "rc_1", content: "second" });
+    expect(ctx._scheduled.map((s: any) => s.args)).toEqual([{ comment_id: "rc_1" }]);
+  });
+
+  test("an edit of a comment GitHub never saw queues nothing", async () => {
+    const ctx = context(USER, { review_comments: [mirroredRow({ github_comment_id: undefined })] });
+    await (update as any)._handler(ctx, { comment_id: "rc_1", content: "second" });
+    expect(ctx._scheduled).toEqual([]);
+  });
+
+  test("a delete queues the delete mirror with everything the action needs", async () => {
+    const ctx = context(USER, { review_comments: [mirroredRow()] });
+    await (remove as any)._handler(ctx, { comment_id: "rc_1" });
+    expect(ctx.db._deleted).toEqual(["rc_1"]);
+    expect(ctx._scheduled[0].args).toEqual({ pr_id: PR, github_comment_id: 501, file_path: "src/foo.ts" });
+  });
+
+  test("a comment written on GitHub is deleted on GitHub, not here", async () => {
+    const ctx = context(USER, { review_comments: [mirroredRow({ author_kind: "github", author_user_id: undefined, author_github_username: "sam" })] });
+    await expect((remove as any)._handler(ctx, { comment_id: "rc_1" })).rejects.toThrow(/on GitHub/);
+    expect(ctx.db._deleted).toEqual([]);
+  });
+
+  test("resolving one comment settles its whole thread here and queues one thread mirror", async () => {
+    const ctx = context(USER, {
+      review_comments: [
+        mirroredRow(),
+        mirroredRow({ _id: "rc_2", parent_id: "rc_1", github_comment_id: 502, content: "reply" }),
+        mirroredRow({ _id: "rc_3", line_number: 99, github_comment_id: 503, content: "elsewhere" }),
+      ],
+    });
+    await (resolve as any)._handler(ctx, { comment_id: "rc_2" });
+    const resolvedIds = ctx.db._patched.filter((p: any) => p.patch.resolved === true).map((p: any) => p._id).sort();
+    expect(resolvedIds).toEqual(["rc_1", "rc_2"]);
+    expect(ctx._scheduled.map((s: any) => s.args)).toEqual([{ comment_id: "rc_2", resolved: true }]);
+  });
+
+  test("unresolving reopens the thread and mirrors that too", async () => {
+    const ctx = context(USER, { review_comments: [mirroredRow({ resolved: true, resolved_at: 5 })] });
+    await (unresolve as any)._handler(ctx, { comment_id: "rc_1" });
+    expect(ctx.db._patched[0].patch).toMatchObject({ resolved: false, resolved_at: undefined });
+    expect(ctx._scheduled[0].args).toEqual({ comment_id: "rc_1", resolved: false });
+  });
+
+  test("a conversation comment resolves here only, since GitHub has no thread for it", async () => {
+    const ctx = context(USER, { review_comments: [mirroredRow({ file_path: undefined, line_number: undefined })] });
+    await (resolve as any)._handler(ctx, { comment_id: "rc_1" });
+    expect(ctx.db._patched[0].patch.resolved).toBe(true);
+    expect(ctx._scheduled).toEqual([]);
+  });
+});
+
+describe("mirroring a reply", () => {
+  function replyContext(parent: Record<string, any> | null) {
+    const sent: any[] = [];
+    const recorded: any[] = [];
+    const scheduled: any[] = [];
+    const ctx = {
+      async runQuery(_ref: any, args: any) {
+        if (args.comment_id === "rc_2") {
+          return { _id: "rc_2", parent_id: "rc_1", content: "agreed", file_path: "src/foo.ts", line_number: 42, side: "RIGHT" };
+        }
+        if (args.comment_id === "rc_1") return parent;
+        return { _id: PR, repository: "codecast-sh/codecast", number: 12, head_sha: HEAD };
+      },
+      async runAction() { return "tok_123"; },
+      async runMutation(_ref: any, args: any) { recorded.push(args); },
+      scheduler: { async runAfter(delay: number, _ref: any, args: any) { scheduled.push({ delay, args }); } },
+    } as any;
+    return { ctx, sent, recorded, scheduled };
+  }
+
+  test("a reply to a mirrored review comment threads under it on GitHub", async () => {
+    const { ctx, sent, recorded } = replyContext({ _id: "rc_1", github_comment_id: 501, file_path: "src/foo.ts", github_thread_id: "T_1" });
+    const out = await withStubbedFetch<{ ok: boolean }>(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_2", pr_id: PR }),
+    );
+    expect(out.ok).toBe(true);
+    expect(sent[0].url).toContain("/pulls/12/comments/501/replies");
+    expect(sent[0].body).toEqual({ body: "agreed" });
+    expect(recorded[0]).toMatchObject({ github_in_reply_to_id: 501, github_thread_id: "T_1" });
+  });
+
+  test("a reply whose parent has not reached GitHub waits, then goes out on its own", async () => {
+    const { ctx, sent, scheduled } = replyContext({ _id: "rc_1", file_path: "src/foo.ts" });
+    const waited = await withStubbedFetch<{ ok: boolean; reason?: string }>(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_2", pr_id: PR }),
+    );
+    expect(waited).toEqual({ ok: false, reason: "parent_pending" });
+    expect(scheduled[0].args).toEqual({ comment_id: "rc_2", pr_id: PR, attempt: 1 });
+    expect(sent).toEqual([]);
+
+    const gaveUp = await withStubbedFetch<{ ok: boolean }>(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_2", pr_id: PR, attempt: 5 }),
+    );
+    expect(gaveUp.ok).toBe(true);
+    expect(sent[0].url).toContain("/pulls/12/comments");
+    expect(sent[0].url).not.toContain("/replies");
+  });
+
+  test("a reply on the conversation is another conversation comment", async () => {
+    const { ctx, sent } = replyContext({ _id: "rc_1", github_comment_id: 700 });
+    ctx.runQuery = async (_ref: any, args: any) => {
+      if (args.comment_id === "rc_2") return { _id: "rc_2", parent_id: "rc_1", content: "agreed" };
+      if (args.comment_id === "rc_1") return { _id: "rc_1", github_comment_id: 700 };
+      return { _id: PR, repository: "codecast-sh/codecast", number: 12, head_sha: HEAD };
+    };
+    await withStubbedFetch(sent, () => (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_2", pr_id: PR }));
+    expect(sent[0].url).toContain("/issues/12/comments");
   });
 });
