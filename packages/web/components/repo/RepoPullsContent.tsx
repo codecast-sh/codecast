@@ -113,6 +113,16 @@ export function RepoPullsContent({ repository, family }: { repository: string; f
             {pull.author_login && <span>{pull.author_login}</span>}
             {pull.head_ref && <Link className="hover:text-sol-text" href={repoTreeHref(repository, pull.head_ref, undefined, family)}>{pull.head_ref}</Link>}
             {!!pull.updated_at && <time title={new Date(pull.updated_at).toLocaleString()}>updated {relTimeShort(pull.updated_at)}</time>}
+            {pull.checks_state && pull.checks_state !== "none" && (
+              <span className={pull.checks_state === "success" ? "text-sol-green" : pull.checks_state === "failure" ? "text-sol-red" : "text-sol-yellow"}>
+                checks {pull.checks_state === "success" ? "green" : pull.checks_state === "failure" ? "failing" : "running"}
+              </span>
+            )}
+            {pull.review_decision && pull.review_decision !== "none" && (
+              <span className={pull.review_decision === "approved" ? "text-sol-green" : pull.review_decision === "changes_requested" ? "text-sol-red" : "text-sol-text-muted"}>
+                {pull.review_decision === "approved" ? "approved" : pull.review_decision === "changes_requested" ? "changes requested" : "review needed"}
+              </span>
+            )}
             {isShepherded(pull) && <span className="text-sol-cyan">shepherded</span>}
           </div>
         </div>

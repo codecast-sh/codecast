@@ -52,8 +52,22 @@ export type FileLineThreads = {
   onComment?: (filename: string, anchor: DiffLineAnchor | undefined, code: string) => void;
 };
 
+/** What a surface knows about one file beyond its diff, for the tree and header. */
+export type FileMarks = {
+  /** Open (unresolved) threads on the file. */
+  open?: number;
+  /** The reader's own notes on it in a review not yet submitted. */
+  pending?: number;
+  /** The reader has marked it viewed. */
+  viewed?: boolean;
+};
+
 export interface FileDiffLayoutProps {
   files: DiffFile[];
+  /** Marks for one file, by its ORIGINAL path. Absent means nothing to mark. */
+  fileMarks?: (filename: string) => FileMarks | undefined;
+  /** The viewed toggle, by ORIGINAL path. Omit to hide the control. */
+  onToggleViewed?: (filename: string) => void;
   title?: string;
   subtitle?: React.ReactNode;
   headerExtra?: React.ReactNode;
@@ -280,6 +294,7 @@ function FileTreeItem({
   expandedDirs,
   onToggleDir,
   selectedFileRef,
+  fileMarks,
 }: {
   node: FileTreeNode;
   selectedFile: string | null;
@@ -288,10 +303,12 @@ function FileTreeItem({
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
   selectedFileRef?: React.RefObject<HTMLButtonElement | null>;
+  fileMarks?: FileDiffLayoutProps["fileMarks"];
 }) {
   const isExpanded = expandedDirs.has(node.path);
   const isSelected = selectedFile === node.path;
   const status = node.file ? getFileStatus(node.file.status) : null;
+  const marks = node.file ? fileMarks?.(node.file.originalFilename ?? node.file.filename) : undefined;
 
   if (node.isDirectory) {
     return (
@@ -319,6 +336,7 @@ function FileTreeItem({
               expandedDirs={expandedDirs}
               onToggleDir={onToggleDir}
               selectedFileRef={selectedFileRef}
+              fileMarks={fileMarks}
             />
           ))}
       </div>
@@ -333,7 +351,8 @@ function FileTreeItem({
         "w-full flex items-center gap-2 py-1.5 px-2 text-sm transition-colors",
         isSelected
           ? "bg-sol-violet/20 text-sol-text border-l-2 border-sol-violet"
-          : "hover:bg-sol-bg-alt/50 text-sol-text-muted"
+          : "hover:bg-sol-bg-alt/50 text-sol-text-muted",
+        marks?.viewed && !isSelected && "opacity-50",
       )}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
     >
@@ -348,12 +367,25 @@ function FileTreeItem({
           {status.label}
         </span>
       )}
-      <span className="truncate">{node.name}</span>
+      <span className={cn("truncate", marks?.viewed && "line-through decoration-sol-text-dim/60")}>{node.name}</span>
       {node.file && (
-        <span className="ml-auto text-[10px] text-sol-text-dim shrink-0">
-          <span className="text-sol-green">+{node.file.additions}</span>
-          <span className="mx-0.5">/</span>
-          <span className="text-sol-red">-{node.file.deletions}</span>
+        <span className="ml-auto flex items-center gap-1.5 text-[10px] text-sol-text-dim shrink-0">
+          {!!marks?.pending && (
+            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1 text-sol-yellow" title={`${marks.pending} in your review`}>
+              {marks.pending}
+            </span>
+          )}
+          {!!marks?.open && (
+            <span className="rounded-full bg-sol-cyan/15 px-1 text-sol-cyan" title={`${marks.open} open ${marks.open === 1 ? "thread" : "threads"}`}>
+              {marks.open}
+            </span>
+          )}
+          {marks?.viewed && <Check className="w-3 h-3 text-sol-green" />}
+          <span>
+            <span className="text-sol-green">+{node.file.additions}</span>
+            <span className="mx-0.5">/</span>
+            <span className="text-sol-red">-{node.file.deletions}</span>
+          </span>
         </span>
       )}
     </button>
@@ -367,6 +399,7 @@ function FileSidebar({
   header,
   selectedFileRef,
   commonPrefix,
+  fileMarks,
 }: {
   files: DiffFile[];
   selectedFile: string | null;
@@ -374,6 +407,7 @@ function FileSidebar({
   header?: React.ReactNode;
   selectedFileRef?: React.RefObject<HTMLButtonElement | null>;
   commonPrefix?: string;
+  fileMarks?: FileDiffLayoutProps["fileMarks"];
 }) {
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -421,6 +455,9 @@ function FileSidebar({
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
+  const viewedCount = fileMarks
+    ? files.filter((f) => fileMarks(f.originalFilename ?? f.filename)?.viewed).length
+    : 0;
 
   return (
     <div className="h-full flex flex-col bg-sol-bg border-r border-sol-border">
@@ -432,6 +469,9 @@ function FileSidebar({
               {filteredFiles.length === files.length
                 ? `${files.length} ${files.length === 1 ? "file" : "files"} changed`
                 : `${filteredFiles.length} of ${files.length} files`}
+              {viewedCount > 0 && (
+                <span className="ml-1.5 text-sol-green">{viewedCount} viewed</span>
+              )}
             </div>
             <div className="text-xs mt-0.5">
               <span className="text-sol-green font-medium">+{totalAdditions}</span>
@@ -485,6 +525,7 @@ function FileSidebar({
       <div className="flex-1 overflow-y-auto py-1">
         {fileTree.map((node) => (
           <FileTreeItem
+            fileMarks={fileMarks}
             key={node.path}
             node={node}
             selectedFile={selectedFile}
@@ -577,6 +618,8 @@ function FileDiffContent({
   lineThreads,
   fileHref,
   onOpenFile,
+  fileMarks,
+  onToggleViewed,
 }: {
   file: DiffFile | null;
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -589,6 +632,8 @@ function FileDiffContent({
   lineThreads?: FileLineThreads;
   fileHref?: FileDiffLayoutProps["fileHref"];
   onOpenFile?: FileDiffLayoutProps["onOpenFile"];
+  fileMarks?: FileDiffLayoutProps["fileMarks"];
+  onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
 }) {
   if (!file) {
     return (
@@ -696,6 +741,7 @@ function FileDiffContent({
               {fileIndex + 1}/{totalFiles}
             </span>
           )}
+          <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={onToggleViewed} />
         </div>
       </div>
       <FilePatchDiff
@@ -730,6 +776,53 @@ function lineThreadProps(lineThreads: FileLineThreads | undefined, file: DiffFil
   };
 }
 
+/**
+ * "Viewed": the reader's own mark that a file is done. It reads as a checkbox
+ * because that is the gesture every reviewer already has, and a viewed file
+ * dims in the tree so the eye goes to what is left.
+ */
+function ViewedToggle({
+  file,
+  fileMarks,
+  onToggleViewed,
+  className,
+}: {
+  file: DiffFile;
+  fileMarks?: FileDiffLayoutProps["fileMarks"];
+  onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
+  className?: string;
+}) {
+  if (!onToggleViewed) return null;
+  const path = file.originalFilename ?? file.filename;
+  const viewed = !!fileMarks?.(path)?.viewed;
+  return (
+    <label
+      className={cn(
+        "inline-flex items-center gap-1.5 cursor-pointer select-none text-[11px] transition-colors",
+        viewed ? "text-sol-green" : "text-sol-text-dim hover:text-sol-text-muted",
+        className,
+      )}
+      title="Mark this file viewed (m)"
+    >
+      <input
+        type="checkbox"
+        className="sr-only"
+        checked={viewed}
+        onChange={() => onToggleViewed(path)}
+      />
+      <span
+        className={cn(
+          "flex h-3.5 w-3.5 items-center justify-center rounded border transition-colors",
+          viewed ? "border-sol-green bg-sol-green/20" : "border-sol-border",
+        )}
+      >
+        {viewed && <Check className="w-2.5 h-2.5" />}
+      </span>
+      Viewed
+    </label>
+  );
+}
+
 function UnifiedDiffView({
   files,
   onComment,
@@ -738,6 +831,8 @@ function UnifiedDiffView({
   lineThreads,
   fileHref,
   onOpenFile,
+  fileMarks,
+  onToggleViewed,
 }: {
   files: DiffFile[];
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -746,6 +841,8 @@ function UnifiedDiffView({
   lineThreads?: FileLineThreads;
   fileHref?: FileDiffLayoutProps["fileHref"];
   onOpenFile?: FileDiffLayoutProps["onOpenFile"];
+  fileMarks?: FileDiffLayoutProps["fileMarks"];
+  onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
 }) {
   // Files sit a little apart, so the eye finds where one ends and the next
   // begins without reading the headers; each header stays pinned while its
@@ -765,10 +862,13 @@ function UnifiedDiffView({
                 </span>
                 <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} />
               </div>
-              <span className="text-[11px] text-sol-text-dim shrink-0">
-                <span className="text-sol-green">+{file.additions}</span>
-                <span className="mx-0.5 text-sol-text-dim/30">/</span>
-                <span className="text-sol-red">-{file.deletions}</span>
+              <span className="flex items-center gap-2 text-[11px] text-sol-text-dim shrink-0">
+                <span>
+                  <span className="text-sol-green">+{file.additions}</span>
+                  <span className="mx-0.5 text-sol-text-dim/30">/</span>
+                  <span className="text-sol-red">-{file.deletions}</span>
+                </span>
+                <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={onToggleViewed} />
               </span>
             </div>
             {file.patch ? (
@@ -814,6 +914,8 @@ export function FileDiffLayout({
   focusFile,
   fileHref,
   onOpenFile,
+  fileMarks,
+  onToggleViewed,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
   const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
@@ -913,6 +1015,22 @@ export function FileDiffLayout({
         e.preventDefault();
         setSidebarOpen((prev) => !prev);
         break;
+      case "m": {
+        // Mark the file in hand viewed and move on to the next one: the
+        // reading gesture is "done with this, what is next".
+        if (!onToggleViewed) break;
+        e.preventDefault();
+        const current = strippedFiles[currentFileIndex];
+        if (!current) break;
+        const path = current.originalFilename ?? current.filename;
+        onToggleViewed(path);
+        if (!fileMarks?.(path)?.viewed && currentFileIndex < strippedFiles.length - 1) {
+          const nextFile = strippedFiles[currentFileIndex + 1];
+          setSelectedFile(nextFile.filename);
+          setCurrentFileIndex(currentFileIndex + 1);
+        }
+        break;
+      }
       case "v":
         e.preventDefault();
         toggleViewMode();
@@ -970,6 +1088,8 @@ export function FileDiffLayout({
     lineThreads,
     fileHref,
     onOpenFile,
+    fileMarks,
+    onToggleViewed,
   };
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
@@ -1046,6 +1166,8 @@ export function FileDiffLayout({
             lineThreads={lineThreads}
             fileHref={fileHref}
             onOpenFile={onOpenFile}
+            fileMarks={fileMarks}
+            onToggleViewed={onToggleViewed}
           />
         </div>
       </div>
@@ -1125,6 +1247,7 @@ export function FileDiffLayout({
                 header={sidebarHeader}
                 selectedFileRef={selectedFileRef}
                 commonPrefix={commonPrefix}
+                fileMarks={fileMarks}
               />
             </div>
           )}
@@ -1163,6 +1286,7 @@ export function FileDiffLayout({
               header={sidebarHeader}
               selectedFileRef={selectedFileRef}
               commonPrefix={commonPrefix}
+              fileMarks={fileMarks}
             />
           </Panel>
 

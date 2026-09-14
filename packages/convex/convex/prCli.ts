@@ -24,6 +24,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { bindShepherd } from "./prShepherd";
+import { submitReviewWithNotes } from "./reviews";
 import { foldShepherdState, normalizeRepository, prUrl, PASSING_CONCLUSIONS, type CheckEntry } from "./lib/gitRefs";
 import { parsePrRef, codecastPrUrl } from "@codecast/shared/contracts";
 
@@ -688,34 +689,9 @@ export const review = action({
     });
     if (!actor) return { error: NO_MATCH };
 
-    if (!actor.github_token) {
-      return {
-        error:
-          "A review goes out under your own GitHub account, and this one has no GitHub token. " +
-          "Connect GitHub in codecast, or review on github.com.",
-      };
-    }
-
-    try {
-      const result: any = await ctx.runAction(api.githubApi.submitPRReview, {
-        repository: actor.pr.repository,
-        pr_number: actor.pr.number,
-        event: args.event,
-        body: args.body,
-        github_access_token: actor.github_token,
-      });
-      return {
-        repository: actor.pr.repository,
-        number: actor.pr.number,
-        state: result.state,
-        url: result.review_url,
-        as: actor.github_username,
-      };
-    } catch (error) {
-      // GitHub refuses some reviews by rule, approving your own being the one
-      // people meet first. Its sentence says exactly what happened.
-      return { error: failureText(error) };
-    }
+    // The same submission the page makes: the verdict, the summary, and every
+    // note the caller holds pending on this pull request, as one review.
+    return await submitReviewWithNotes(ctx, actor.user_id, actor.pr.id, args.event, args.body);
   },
 });
 

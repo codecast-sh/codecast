@@ -183,6 +183,13 @@ export function repoObjectId(ref: RepoObjectRef): string {
   return ref.type === "pr" ? `${repository}#${ref.number}` : `${repository}@${ref.sha.toLowerCase()}`;
 }
 
+/** The GitHub page for a repository object, where codecast holds no row of its own. */
+export function repoObjectGitHubUrl(ref: RepoObjectRef): string {
+  return ref.type === "pr"
+    ? `https://github.com/${ref.repository}/pull/${ref.number}`
+    : `https://github.com/${ref.repository}/commit/${ref.sha}`;
+}
+
 /**
  * The in-app page for a repository object reference. A raw Convex id names
  * the row but not its repository, so it cannot be routed from here — the

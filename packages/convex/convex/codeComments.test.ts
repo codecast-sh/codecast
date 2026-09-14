@@ -491,14 +491,14 @@ describe("mirroring what changes here", () => {
     await (resolve as any)._handler(ctx, { comment_id: "rc_2" });
     const resolvedIds = ctx.db._patched.filter((p: any) => p.patch.resolved === true).map((p: any) => p._id).sort();
     expect(resolvedIds).toEqual(["rc_1", "rc_2"]);
-    expect(ctx._scheduled.map((s: any) => s.args)).toEqual([{ comment_id: "rc_2", resolved: true }]);
+    expect(ctx._scheduled.map((s: any) => s.args)).toEqual([{ comment_id: "rc_2", resolved: true, user_id: USER }]);
   });
 
   test("unresolving reopens the thread and mirrors that too", async () => {
     const ctx = context(USER, { review_comments: [mirroredRow({ resolved: true, resolved_at: 5 })] });
     await (unresolve as any)._handler(ctx, { comment_id: "rc_1" });
     expect(ctx.db._patched[0].patch).toMatchObject({ resolved: false, resolved_at: undefined });
-    expect(ctx._scheduled[0].args).toEqual({ comment_id: "rc_1", resolved: false });
+    expect(ctx._scheduled[0].args).toEqual({ comment_id: "rc_1", resolved: false, user_id: USER });
   });
 
   test("a conversation comment resolves here only, since GitHub has no thread for it", async () => {

@@ -3283,6 +3283,9 @@ export default defineSchema({
       delegate_role_id: v.optional(v.id("org_roles")),
     }),
     status: v.union(v.literal("open"), v.literal("done")),
+    // The web's optimistic stub key: "group into a stack" paints a row under
+    // this before the server answers, and the list feed's altKey supersedes it.
+    client_key: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })

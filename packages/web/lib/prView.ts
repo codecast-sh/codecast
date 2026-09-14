@@ -163,7 +163,70 @@ export type CodeCommentRow = {
   author_github_username?: string;
   author_user_id?: string;
   author_avatar_url?: string;
+  /** A note in a review the author has not submitted yet: theirs alone. */
+  pending_review?: boolean;
+  /** The GitHub review this comment was submitted in, when it was. */
+  github_review_id?: number;
+  updated_at?: number;
 };
+
+/** The reader's own notes waiting in an unsubmitted review. */
+export function pendingNotes(comments: CodeCommentRow[]): CodeCommentRow[] {
+  return comments.filter((c) => c.pending_review).sort(byCreatedAsc);
+}
+
+/** `file:12` or `file:12-15`, the way a reviewer names a spot. */
+export function notePlace(note: Pick<CodeCommentRow, "file_path" | "line_number" | "line_end">): string {
+  if (!note.file_path) return "the pull request";
+  const name = note.file_path.split("/").pop() ?? note.file_path;
+  if (note.line_number === undefined) return name;
+  const end = note.line_end !== undefined && note.line_end !== note.line_number ? `-${note.line_end}` : "";
+  return `${name}:${note.line_number}${end}`;
+}
+
+/** One stop in the reader's walk through the threads: a file and an anchor. */
+export type ThreadStop = { file: string; anchor: DiffLineAnchor; key: string; open: boolean; pending: boolean };
+
+/**
+ * Every thread in the order the files are listed, then by line, so `n` and `p`
+ * walk the review the way the eye does. A pending note is a stop too: it is
+ * where the reader last spoke.
+ */
+export function threadStops(files: { filename: string }[], comments: CodeCommentRow[]): ThreadStop[] {
+  const byFile = groupCommentsByFileLine(comments);
+  const order = new Map(files.map((f, i) => [f.filename, i]));
+  const stops: ThreadStop[] = [];
+  for (const [file, byLine] of byFile) {
+    for (const [key, thread] of byLine) {
+      stops.push({
+        file,
+        key,
+        anchor: commentAnchor(thread[0]),
+        open: !threadResolved(thread),
+        pending: thread.some((c) => c.pending_review),
+      });
+    }
+  }
+  return stops.sort((a, b) =>
+    (order.get(a.file) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.file) ?? Number.MAX_SAFE_INTEGER)
+    || a.file.localeCompare(b.file)
+    || a.anchor.lineNumber - b.anchor.lineNumber);
+}
+
+/** Open threads and pending notes per file, for the tree's marks. */
+export function fileThreadMarks(comments: CodeCommentRow[]): Map<string, { open: number; pending: number }> {
+  const marks = new Map<string, { open: number; pending: number }>();
+  for (const [file, byLine] of groupCommentsByFileLine(comments)) {
+    let open = 0;
+    let pending = 0;
+    for (const thread of byLine.values()) {
+      if (!threadResolved(thread)) open += 1;
+      pending += thread.filter((c) => c.pending_review).length;
+    }
+    marks.set(file, { open, pending });
+  }
+  return marks;
+}
 
 // A comment posted here renders from a stub keyed by its own client_id until
 // the server row arrives and the collection's altKey swaps it in. The stub id
@@ -259,6 +322,26 @@ export type PrReviewRow = {
   submitted_at: number;
   html_url?: string;
   author_github_username?: string;
+  github_review_id?: number;
+  reviewer_user_id?: string;
+};
+
+/** The line comments submitted inside one review, oldest first. */
+export function reviewLineComments(review: PrReviewRow, comments: CodeCommentRow[]): CodeCommentRow[] {
+  if (review.github_review_id === undefined) return [];
+  return comments
+    .filter((c) => c.github_review_id === review.github_review_id && !!c.file_path && !c.parent_id)
+    .sort(byCreatedAsc);
+}
+
+export type PrCommitRow = {
+  sha: string;
+  message: string;
+  author_login?: string;
+  author_name?: string;
+  author_avatar_url?: string;
+  committed_at?: number;
+  url?: string;
 };
 
 export type PrEventRow = { _id: string; created_at: number };
@@ -291,13 +374,18 @@ export function buildPrTimeline(input: {
       kind: "event",
       event,
     })),
-    ...input.reviews.map<PrTimelineItem>((review) => ({
+    // GitHub wraps a lone reply or a mirrored line comment in a "commented"
+    // review with no words of its own. That review is scaffolding, not a
+    // thing the reviewer said, so it stays out of the list.
+    ...input.reviews.filter((review) =>
+      review.state !== "commented" || !!review.body?.trim() || reviewLineComments(review, input.comments).length > 0,
+    ).map<PrTimelineItem>((review) => ({
       key: `r:${review._id}`,
       at: review.submitted_at,
       kind: "review",
       review,
     })),
-    ...prComments(input.comments).map<PrTimelineItem>((comment) => ({
+    ...prComments(input.comments).filter((c) => !c.pending_review).map<PrTimelineItem>((comment) => ({
       key: `c:${comment._id}`,
       at: comment.created_at,
       kind: "comment",

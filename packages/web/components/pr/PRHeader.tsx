@@ -1,5 +1,8 @@
 import { useState } from "react";
 import Link from "next/link";
+import { useAction } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { toast } from "sonner";
 import {
   Check,
   CircleDot,
@@ -9,7 +12,10 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Pencil,
   Radio,
+  Tag,
+  UserRound,
 } from "lucide-react";
 import { RepoWindowControl } from "../repo/RepoWindowControl";
 import { CommentAvatar } from "../comments/CommentAvatar";
@@ -31,7 +37,83 @@ import {
 } from "../../lib/prView";
 
 // The header band: who, what, where it is going, and whether it can land.
-// Everything here is one line of reading, the detail lives in the tabs.
+// Everything here is one line of reading, the detail lives in the tabs. The
+// verbs (review, merge, the rest) sit on the title row, where the eye goes
+// after reading the title, and come in through `actions`.
+
+const api = _api as any;
+
+/** The title, editable in place by anyone who may edit the pull request. */
+function EditableTitle({ pr }: { pr: any }) {
+  const edit = useAction(api.prCli.edit);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>(pr.title);
+  if (!editing) {
+    return (
+      <h1 className="group/title font-serif text-[26px] leading-tight text-sol-text min-w-0 flex-1">
+        {pr.title}
+        <button
+          type="button"
+          className="ml-2 inline-flex align-middle text-sol-text-dim opacity-0 group-hover/title:opacity-100 hover:text-sol-text transition-opacity"
+          title="Edit the title"
+          onClick={() => { setDraft(pr.title); setEditing(true); }}
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      </h1>
+    );
+  }
+  return (
+    <form
+      className="min-w-0 flex-1 flex items-center gap-2"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const title = draft.trim();
+        setEditing(false);
+        if (!title || title === pr.title) return;
+        const result = await edit({ repository: pr.repository, number: pr.number, title });
+        if (result?.error) toast.error(result.error);
+        else toast.success("Title changed");
+      }}
+    >
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape") setEditing(false); }}
+        className="w-full bg-transparent font-serif text-[26px] leading-tight text-sol-text border-b border-sol-cyan/60 focus:outline-none"
+      />
+      <button type="submit" className="cc-comment-btn">Save</button>
+    </form>
+  );
+}
+
+/** GitHub's labels, in their own colours, and who the pull request is assigned to. */
+function MetaChips({ pr }: { pr: any }) {
+  const labels: { name: string; color?: string }[] = pr.labels ?? [];
+  const assignees: string[] = pr.assignees ?? [];
+  if (labels.length === 0 && assignees.length === 0) return null;
+  return (
+    <>
+      {labels.map((label) => (
+        <span
+          key={label.name}
+          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+          style={label.color ? { borderColor: `#${label.color}80`, color: `#${label.color}`, background: `#${label.color}14` } : undefined}
+        >
+          <Tag className="w-3 h-3 opacity-70" />
+          {label.name}
+        </span>
+      ))}
+      {assignees.map((login) => (
+        <span key={login} className="inline-flex items-center gap-1 rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted" title="Assigned">
+          <UserRound className="w-3 h-3 opacity-70" />
+          {login}
+        </span>
+      ))}
+    </>
+  );
+}
 
 const STATE_ICON: Record<PrStateKey, typeof GitPullRequest> = {
   open: GitPullRequest,
@@ -196,6 +278,7 @@ export function PRHeader({
   openComments,
   sessionChoices,
   onSetShepherd,
+  actions,
 }: {
   pr: any;
   repository: string;
@@ -203,6 +286,8 @@ export function PRHeader({
   openComments: number;
   sessionChoices: { id: string; title: string }[];
   onSetShepherd: (conversationId: string | undefined, enabled: boolean) => void;
+  /** The verbs: review, merge, and the rest. */
+  actions?: React.ReactNode;
 }) {
   const stateKey = prStateKey(pr);
   const state = PR_STATE_META[stateKey];
@@ -234,9 +319,7 @@ export function PRHeader({
       </div>
 
       <div className="pr-rise mt-1.5 flex items-start gap-3 flex-wrap" style={{ ["--d" as string]: "60ms" }}>
-        <h1 className="font-serif text-[26px] leading-tight text-sol-text min-w-0 flex-1">
-          {pr.title}
-        </h1>
+        <EditableTitle pr={pr} />
         <div className="flex items-center gap-2 shrink-0 pt-1">
           <Chip accent={state.accent}>
             <StateIcon className="w-3.5 h-3.5" />
@@ -244,6 +327,7 @@ export function PRHeader({
           </Chip>
           {merge && <Chip accent={merge.accent}>{merge.label}</Chip>}
           {decision && <Chip accent={decision.accent}>{decision.label}</Chip>}
+          {actions && <span className="ml-1 flex items-center gap-1.5">{actions}</span>}
         </div>
       </div>
 
@@ -257,6 +341,7 @@ export function PRHeader({
           {pr.author_github_username}
         </span>
         {pr.head_ref && pr.base_ref && <CopyRef text={`${pr.head_ref} -> ${pr.base_ref}`} />}
+        <MetaChips pr={pr} />
         <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
       </div>
 

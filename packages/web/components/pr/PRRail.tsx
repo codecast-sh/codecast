@@ -1,4 +1,4 @@
-import { CheckCircle, Clock, MessageSquare, Radio, XCircle } from "lucide-react";
+import { Ban, CheckCircle, Clock, MessageSquare, Radio, XCircle } from "lucide-react";
 import { FeedCard } from "../ActivityFeed";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommentAvatar } from "../comments/CommentAvatar";
@@ -24,6 +24,7 @@ const REVIEW_ICON: Record<string, typeof CheckCircle> = {
   changes_requested: XCircle,
   commented: MessageSquare,
   pending: Clock,
+  dismissed: Ban,
 };
 
 function Reviewer({

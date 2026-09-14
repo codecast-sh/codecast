@@ -45,6 +45,7 @@ const prDetailSig = (p: any) =>
     (p.task_ids ?? []).join(","), (p.files ?? []).length,
     p.shepherd_state ?? "", p.shepherd_enabled ?? "", p.shepherd_conversation_id ?? "",
     p.shepherd_last_wake_at ?? "", p.shepherd_wake_count ?? "",
+    (p.labels ?? []).map((l: any) => l.name).join(","), (p.assignees ?? []).join(","), (p.commits ?? []).length,
   ].join("|");
 
 export function usePullRequest(repository: string, number: number): any | undefined {

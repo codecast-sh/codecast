@@ -89,6 +89,9 @@ const ROWS: Record<string, any[]> = {
   "conversations:webGet": [FAKE_SESSION],
   "agentTasks:webGet": [FAKE_TRIGGER],
   "projects:webGet": [FAKE_PROJECT],
+  // Codecast holds no pull requests at all in this suite: every lookup answers
+  // null, which is what a repository outside the GitHub App looks like.
+  "pull_requests:webGet": [],
 };
 
 function fakeQuery(fn: unknown, args: any) {
@@ -351,5 +354,31 @@ describe("shared conversation messages", () => {
   test("an unknown token is not available, not a broken card", () => {
     const html = render("https://codecast.sh/share/message/no-such-token-here");
     expect(html).toContain("Not available to you.");
+  });
+});
+
+
+describe("pull request references in chat", () => {
+  test("a pull request named by number alone stays inline text, never a card or a payload", () => {
+    // Chat has no repository to complete `#3263` from, and the card path must
+    // not leak the `pr:` carrier the plugin wrote for the conversation view.
+    const html = render("- #3263\n- PR 3262");
+    expect(html).not.toContain("pr:#");
+    expect(html).not.toContain("entity-card");
+    expect(html).toContain("#3263");
+    expect(html).toContain("PR 3262");
+  });
+
+  test("a GitHub pull request link alone on its line, unknown to codecast, is the certain pill", () => {
+    const html = render("https://github.com/Union-AI/union-mobile/pull/3263");
+    expect(html).toContain('class="not-prose entity-ref');
+    expect(html).toContain('href="/pr/union-ai/union-mobile/3263"');
+    expect(html).not.toContain("not available");
+  });
+
+  test("a bare owner/repo#N alone on its line, unknown to codecast, is the text it was", () => {
+    const html = render("union-ai/union-mobile#3263");
+    expect(html).not.toContain("entity-ref");
+    expect(html).toContain("union-ai/union-mobile#3263");
   });
 });

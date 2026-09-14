@@ -684,7 +684,10 @@ export const processPRMetaEvent = internalMutation({
       : action === "review_requested" || action === "review_request_removed" ? "pr_review_requested"
       : "pr_edited";
 
-    const requestedLogin = prPayload.requested_reviewer?.login ?? prPayload.requested_team?.name;
+    // GitHub names who was asked at the top of the delivery, not on the pull
+    // request object.
+    const requestedLogin = payload.requested_reviewer?.login ?? payload.requested_team?.name
+      ?? prPayload.requested_reviewer?.login ?? prPayload.requested_team?.name;
     const labelName = payload.label?.name;
     const assigneeLogin = payload.assignee?.login;
     const title =

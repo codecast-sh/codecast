@@ -22,7 +22,9 @@ import {
   MESSAGE_REF_PREFIX,
   CONTEXTUAL_PR_REF_PREFIX,
   parseContextualPrRef,
+  parseRepoObjectId,
   repoObjectId,
+  repoObjectGitHubUrl,
   type EntityType,
 } from "../lib/entityLinks";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
@@ -33,7 +35,6 @@ import {
   STATUS_LABEL,
   TYPE_LABEL,
   relativeTime,
-  taskPeople,
   taskProject,
   useEntityResolution,
 } from "../lib/entityDisplay";
@@ -49,12 +50,13 @@ import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/file
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
+import { REF_CERTAIN_ATTR } from "../lib/remarkEntityCards";
 import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
-import { RevealButton } from "./ObjectReveal";
+import { useRevealHost } from "../lib/revealHost";
 
 export { SessionHoverContent };
 
@@ -75,7 +77,6 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
 function TaskHoverContent({ task }: { task: any }) {
   const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
   const priority = PRIORITY_CONFIG[task.priority];
-  const { creator, assignee } = taskPeople(task);
   const project = taskProject(task);
   const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
   const source = task.source && task.source !== "human" ? task.source : null;
@@ -166,7 +167,7 @@ function TaskHoverContent({ task }: { task: any }) {
       </div>
 
       <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
-        <span className="flex items-center gap-1.5 min-w-0 text-[10px] text-gray-500">
+        <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap text-[10px] text-gray-500">
           <span className="font-mono">{task.short_id}</span>
           {commentCount > 0 && (
             <span className="inline-flex items-center gap-0.5">
@@ -351,6 +352,26 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
         </p>
       )}
 
+      {/* Where the review stands, in the three words a reader wants before
+          opening it: the verdict, the checks, and what is still open. */}
+      {(pr.review_decision || pr.checks_state || pr.unresolved_review_count) && (
+        <div className="flex items-center gap-2 pl-[22px] text-[10px] min-w-0 flex-wrap">
+          {pr.review_decision && pr.review_decision !== "none" && (
+            <span className={pr.review_decision === "approved" ? "text-sol-green" : pr.review_decision === "changes_requested" ? "text-sol-red" : "text-sol-yellow"}>
+              {pr.review_decision === "approved" ? "approved" : pr.review_decision === "changes_requested" ? "changes requested" : "review needed"}
+            </span>
+          )}
+          {pr.checks_state && pr.checks_state !== "none" && (
+            <span className={pr.checks_state === "success" ? "text-sol-green" : pr.checks_state === "failure" ? "text-sol-red" : "text-sol-yellow"}>
+              checks {pr.checks_state === "success" ? "green" : pr.checks_state === "failure" ? "failing" : "running"}
+            </span>
+          )}
+          {!!pr.unresolved_review_count && (
+            <span className="text-sol-cyan">{pr.unresolved_review_count} open {pr.unresolved_review_count === 1 ? "thread" : "threads"}</span>
+          )}
+        </div>
+      )}
+
       {(pr.head_ref || pr.additions != null || pr.changed_files != null) && (
         <div className="flex items-center gap-2 pl-[22px] text-[10px] font-mono text-gray-500 min-w-0">
           {pr.head_ref && (
@@ -374,6 +395,33 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
+    </div>
+  );
+}
+
+// A pull request or commit codecast holds no row for: the reference itself
+// (number or sha, repository), whether the lookup is still running or came
+// back empty, and why it can be empty. The band below the content offers
+// GitHub, which always has the object.
+function RepoObjectUnknownHoverContent({ rawId, served }: { rawId: string; served: boolean }) {
+  const ref = parseRepoObjectId(rawId);
+  const Icon = ref?.type === "commit" ? GitCommitHorizontal : GitPullRequest;
+  const name = ref ? (ref.type === "pr" ? `#${ref.number}` : ref.sha.slice(0, 7)) : rawId;
+  const what = ref?.type === "commit" ? "commit" : "pull request";
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{name}</div>
+          {ref && <div className="mt-1 text-[10px] font-mono text-gray-400 truncate">{ref.repository}</div>}
+        </div>
+      </div>
+      <p className="text-[11px] text-gray-400 leading-relaxed pl-[22px]">
+        {served
+          ? `Not in codecast. This ${what} is in a repository the GitHub App is not installed on, or it has not synced yet.`
+          : `Looking this ${what} up…`}
+      </p>
     </div>
   );
 }
@@ -554,7 +602,17 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       // A conversation message is its own reference kind (see entityLinks:
       // MESSAGE_REF_PREFIX) — no entity table, so it has its own card.
       if (cardMatch[2].startsWith(MESSAGE_REF_PREFIX)) return <SharedMessageCard refId={cardMatch[2]} count={count} />;
-      return <EntityObjectCard refId={cardMatch[2]} count={count} />;
+      // A pull request or commit named by URL (stamped by remarkEntityCards)
+      // stays a reference when codecast holds no row: the certain pill, whose
+      // hover says where the object lives.
+      const certainRef = (props as any)[REF_CERTAIN_ATTR] ? parseRepoObjectId(cardMatch[2]) : null;
+      return (
+        <EntityObjectCard
+          refId={cardMatch[2]}
+          count={count}
+          unresolved={certainRef ? <EntityIdPill type={certainRef.type} id={cardMatch[2]} certain /> : undefined}
+        />
+      );
     }
     // A publish URL alone on its own line, hoisted by remarkEntityIds into
     // "embed:artifact:<slug>|<caption>" — the page renders inline.
@@ -781,7 +839,7 @@ export function EntityIdPill({
   // local-first store seed, label and route — is the shared hook.
   const rawRef = (idProp ?? shortId ?? "").trim();
   const resolution = useEntityResolution(rawRef, typeProp);
-  const { rawId, type, entity, status, href } = resolution;
+  const { rawId, type, entity, status, href, served } = resolution;
   const fullLabel = !entity && labelProp ? labelProp : resolution.label;
   const shortLabel = !entity && labelProp ? labelProp : resolution.shortLabel;
   // A reader needs the title once. A repeat mention in the same message — or
@@ -801,6 +859,8 @@ export function EntityIdPill({
   const isTrigger = type === "trigger";
   const isPr = type === "pr";
   const isCommit = type === "commit";
+  const repoRef = isPr || isCommit ? parseRepoObjectId(rawId) : null;
+  const githubHref = repoRef ? repoObjectGitHubUrl(repoRef) : null;
 
   const [hoverOpen, setHoverOpen] = useState(false);
   const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -879,7 +939,7 @@ export function EntityIdPill({
   // the inbox it becomes the current selection. Plain left-click only — modified
   // clicks and unresolved entities keep the href's full-page navigation.
   const openLinkedSession = useOpenLinkedSession();
-  const handleClick = useCallback(
+  const handleOpen = useCallback(
     (e: React.MouseEvent) => {
       closeNow();
       if (!isSession || !entity?._id) return;
@@ -889,6 +949,24 @@ export function EntityIdPill({
     },
     [closeNow, isSession, entity, openLinkedSession],
   );
+  // A plain click on the pill opens the object's full page right here (the
+  // reveal band after the message) and clicks it closed again; the hover
+  // card's own link, and any modified click, still go to the page. Without
+  // a reveal host the pill is the link it always was.
+  const revealHost = useRevealHost();
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!revealHost || !entity || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+        handleOpen(e);
+        return;
+      }
+      e.preventDefault();
+      closeNow();
+      revealHost.toggle({ href, title: `${TYPE_LABEL[type!]}: ${fullLabel}`, onOpen: handleOpen });
+    },
+    [revealHost, entity, handleOpen, closeNow, href, type, fullLabel],
+  );
+  const revealOpen = !!revealHost?.isOpen(href);
 
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
   useEffect(() => cancelHover, [cancelHover]);
@@ -920,7 +998,8 @@ export function EntityIdPill({
           onClick={handleClick}
           onMouseEnter={openSoon}
           onMouseLeave={closeSoon}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none no-underline ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          aria-pressed={revealHost ? revealOpen : undefined}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={compact && fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
@@ -952,7 +1031,7 @@ export function EntityIdPill({
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
         <Link
           href={href}
-          onClick={handleClick}
+          onClick={handleOpen}
           className="block p-3 no-underline cursor-pointer"
         >
           {entity ? (
@@ -964,19 +1043,24 @@ export function EntityIdPill({
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />
+          ) : (isPr || isCommit) ? (
+            <RepoObjectUnknownHoverContent rawId={rawId} served={served} />
           ) : (
             <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
         </Link>
-        {/* The full page, inline: opens a band after the message body (RevealHost)
-            instead of leaving. Capture-phase close: the button stops propagation. */}
-        {entity && (
-          <div className="border-t border-sol-border/60 px-3 py-1.5" onClickCapture={closeNow}>
-            <RevealButton
-              target={{ href, title: `${TYPE_LABEL[type]}: ${fullLabel}`, onOpen: handleClick }}
-              withLabel
-              className="text-[10px] text-sol-text-muted hover:text-sol-text"
-            />
+        {/* A repository object codecast holds no row for lives on GitHub; the
+            band offers that instead of an inline page with nothing to show. */}
+        {!entity && (isPr || isCommit) && githubHref && (
+          <div className="border-t border-sol-border/60 px-3 py-1.5">
+            <a
+              href={githubHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] text-sol-text-muted hover:text-sol-text no-underline"
+            >
+              Open on GitHub <ArrowUpRight className="w-2.5 h-2.5" />
+            </a>
           </div>
         )}
       </PopoverContent>
