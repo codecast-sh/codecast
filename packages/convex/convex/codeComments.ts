@@ -364,7 +364,9 @@ export const create = mutation({
 
     if (args.task_id) await requireAccessibleTask(ctx, userId, args.task_id);
 
-    // A reply belongs where its parent does, whatever the caller said.
+    // A reply belongs where its parent does, whatever the caller said: the
+    // same pull request, commit, file, lines and side, so it lands in the
+    // parent's thread here and under the parent on GitHub.
     let pullRequestId = args.pull_request_id;
     let parentRef: string | undefined;
     let parent: Doc<"review_comments"> | null = null;
@@ -373,6 +375,10 @@ export const create = mutation({
       if (!parent || !(await canAccessComment(ctx, userId, parent))) throw new Error("Parent comment not found");
       pullRequestId = pullRequestId ?? parent.pull_request_id;
       parentRef = parent.ref;
+      args.file_path = args.file_path ?? parent.file_path;
+      args.line_number = args.line_number ?? parent.line_number;
+      args.line_end = args.line_end ?? parent.line_end;
+      args.side = args.side ?? parent.side;
     }
     if (pullRequestId) {
       const pr = await ctx.db.get(pullRequestId);
@@ -633,7 +639,14 @@ export const mirrorDeleteToGitHub = internalAction({
  * cached on every comment of the thread.
  */
 export const mirrorThreadResolution = internalAction({
-  args: { comment_id: v.id("review_comments"), resolved: v.boolean() },
+  args: {
+    comment_id: v.id("review_comments"),
+    resolved: v.boolean(),
+    // Who settled it. GitHub lets a person resolve a thread but refuses the
+    // App's installation token ("Resource not accessible by integration"), so
+    // the person's own token goes first and the App's is the fallback.
+    user_id: v.optional(v.id("users")),
+  },
   handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
     const comment = await ctx.runQuery(internal.codeComments.getComment, { comment_id: args.comment_id });
     if (!comment?.github_comment_id || !comment.pull_request_id || !comment.file_path) {
@@ -641,7 +654,11 @@ export const mirrorThreadResolution = internalAction({
     }
     const pr = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: comment.pull_request_id });
     if (!pr) return { ok: false, reason: "not_found" };
-    const token: string | null = await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id });
+    const person: any = args.user_id
+      ? await ctx.runQuery(internal.reviews.reviewerFor, { user_id: args.user_id, pull_request_id: pr._id })
+      : null;
+    const token: string | null = person?.github_token
+      ?? (await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id }));
     if (!token) return { ok: false, reason: "no_token" };
 
     const result: { thread_id: string | null; changed: boolean } = await ctx.runAction(
@@ -998,7 +1015,7 @@ async function setThreadResolved(
     });
   }
   if (comment.github_comment_id && comment.file_path) {
-    await queueMirror(ctx, internal.codeComments.mirrorThreadResolution, { comment_id: commentId, resolved });
+    await queueMirror(ctx, internal.codeComments.mirrorThreadResolution, { comment_id: commentId, resolved, user_id: userId });
   }
 }
 

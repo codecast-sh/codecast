@@ -99,3 +99,34 @@
     transition: none;
   }
 }
+
+/* A note in a review not yet submitted: drawn as a draft, dashed and warm, so
+ * the reader never mistakes what they have said for what they are about to. */
+.pr-pending {
+  border-left-style: dashed;
+  border-left-color: color-mix(in srgb, var(--sol-yellow) 60%, transparent);
+  background: color-mix(in srgb, var(--sol-yellow) 5%, transparent);
+}
+
+/* The action bar's primary verb wears the page's weather. */
+.pr-verb {
+  background: color-mix(in srgb, var(--pr-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pr-accent) 40%, transparent);
+  color: var(--pr-accent);
+}
+.pr-verb:hover {
+  background: color-mix(in srgb, var(--pr-accent) 22%, transparent);
+}
+.pr-verb:disabled {
+  opacity: 0.5;
+}
+
+/* The thread the reader jumped to, lit for a moment so the eye lands on it. */
+@keyframes pr-land {
+  from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-cyan) 45%, transparent); }
+  to { box-shadow: 0 0 0 0 transparent; }
+}
+.pr-thread-landed {
+  animation: pr-land 1.2s ease-out both;
+  border-radius: 6px;
+}

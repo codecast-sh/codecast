@@ -4541,24 +4541,55 @@ for (const verb of ["resolve", "unresolve"] as const) {
 cliRoute("/cli/pr/review", async (ctx, body) => ctx.runAction((api as any).prCli.review, body));
 cliRoute("/cli/pr/merge", async (ctx, body) => ctx.runAction((api as any).prCli.merge, body));
 cliRoute("/cli/pr/close", async (ctx, body) => ctx.runAction((api as any).prCli.close, body));
+cliRoute("/cli/pr/reopen", async (ctx, body) => ctx.runAction((api as any).prCli.reopen, body));
+cliRoute("/cli/pr/draft", async (ctx, body) => ctx.runAction((api as any).prCli.draft, body));
+cliRoute("/cli/pr/reviewers", async (ctx, body) => ctx.runAction((api as any).prCli.reviewers, body));
+cliRoute("/cli/pr/edit", async (ctx, body) => ctx.runAction((api as any).prCli.edit, body));
 
 cliRoute("/cli/pr/comment", async (ctx, body) => {
-  const { content, file_path, line_number, session, ...locator } = body;
+  const { content, file_path, line_number, session, hold, reply_to, ...locator } = body;
   const resolved = await ctx.runQuery((api as any).prCli.resolve, locator);
   const pr = resolved?.pull_request;
   if (!pr) return { error: "No pull request matched that reference" };
+
+  // A reply names the thread it answers the way `cast pr resolve` does, by
+  // short id or file:line, and takes that thread's place in the diff.
+  let parent: any = null;
+  if (reply_to) {
+    const found = await ctx.runQuery((api as any).prCli.findComment, { ...locator, selector: reply_to });
+    if (!found?.pull_request) return { error: "No pull request matched that reference" };
+    if (!found.comment_id) {
+      const where = (found.matches ?? []).map((m: any) => `${m.short_id} ${m.file_path ?? "conversation"}:${m.line_number ?? ""}`).join(", ");
+      return { error: found.matches?.length ? `"${reply_to}" matches several threads. Name one: ${where}` : `No thread matches "${reply_to}"` };
+    }
+    parent = { id: found.comment_id };
+  }
+
   const created = await ctx.runMutation((api as any).codeComments.create, {
     api_token: body.api_token,
     repository: pr.repository,
     pull_request_id: pr.id,
     ref: pr.head_sha ?? undefined,
-    file_path,
-    line_number,
+    // A reply takes its anchor from the parent (codeComments.create inherits it).
+    file_path: parent ? undefined : file_path,
+    line_number: parent ? undefined : line_number,
+    parent_id: parent ? parent.id : undefined,
     content,
     conversation_ref: session,
     author_kind: "agent",
+    // A held note waits in the caller's review until `cast pr review` sends it.
+    pending: !!hold,
+    mirror: !hold,
   });
-  return { repository: pr.repository, number: pr.number, url: pr.url, comment_id: created?.comment_id };
+  return { repository: pr.repository, number: pr.number, url: pr.url, comment_id: created?.comment_id, held: !!hold, reply: !!parent };
+});
+
+cliRoute("/cli/pr/notes", async (ctx, body) => {
+  const resolved = await ctx.runQuery((api as any).prCli.resolve, body);
+  const pr = resolved?.pull_request;
+  if (!pr) return { error: "No pull request matched that reference" };
+  const notes = await ctx.runQuery((api as any).codeComments.pendingReview, { api_token: body.api_token, pull_request_id: pr.id });
+  return { repository: pr.repository, number: pr.number, notes };
 });
 
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));

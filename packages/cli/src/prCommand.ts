@@ -759,11 +759,15 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .option("--repo <owner/name>", "Repository to resolve the reference in")
     .option("--file <path>", "Anchor the comment to a file in the diff")
     .option("--line <n>", "Anchor the comment to a line of that file")
+    .option("--hold", "Keep it in your review instead of posting it now; `cast pr review` sends the batch")
+    .option("--reply <thread>", "Answer a thread, named by the short id `cast pr threads` prints or by file:line")
     .option("--json", "Machine-readable output")
     .action(async (ref: string | undefined, text: string | undefined, options) => {
       const { ref: refArg, body } = splitCommentArgs(ref, text);
       if (!body || !body.trim()) fail("Nothing to say. Pass the comment text, or `-` to read stdin.");
       if (options.line && !options.file) fail("--line needs --file. A line number alone anchors nothing.");
+      if (options.hold && !options.file) fail("--hold keeps a note on a line. Pass --file and --line.");
+      if (options.reply && (options.file || options.hold)) fail("--reply takes its place from the thread it answers; drop --file, --line and --hold.");
 
       const locator = await locate(deps, refArg, options).catch((error: Error) => fail(error.message));
       const result = await apiPost(deps, "/cli/pr/comment", {
@@ -772,15 +776,51 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
         file_path: options.file,
         line_number: options.line ? Number(options.line) : undefined,
         session: deps.detectCurrentSessionId() ?? undefined,
+        hold: !!options.hold,
+        reply_to: options.reply,
       });
+      if (result.error) fail(result.error);
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
       console.log(
-        `${c.green}ok${c.reset} commented on ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
-        fmt.muted(`${result.url ?? ""} (mirrored to GitHub in a moment)`),
+        result.reply
+          ? `${c.green}ok${c.reset} replied on ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+            fmt.muted("(threaded under it on GitHub in a moment)")
+          : result.held
+          ? `${c.green}ok${c.reset} held for your review of ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+            fmt.muted("(`cast pr notes` lists it, `cast pr review` sends the batch)")
+          : `${c.green}ok${c.reset} commented on ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+            fmt.muted(`${result.url ?? ""} (mirrored to GitHub in a moment)`),
       );
+    });
+
+  // ── notes ──
+  pr.command("notes")
+    .argument("[ref]", "PR reference")
+    .description("The notes held in your review of a pull request, not yet sent")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/notes", locator);
+      if (result.error) fail(result.error);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const notes: any[] = result.notes ?? [];
+      if (notes.length === 0) {
+        console.log(fmt.muted(`No held notes on ${result.repository}#${result.number}. \`cast pr comment --hold --file f --line n "..."\` adds one.`));
+        return;
+      }
+      console.log(`${c.cyan}${result.repository}#${result.number}${c.reset} ${notes.length} held ${notes.length === 1 ? "note" : "notes"}`);
+      for (const note of notes) {
+        const where = note.file_path ? `${note.file_path}:${note.line_number ?? ""}` : "conversation";
+        console.log(`  ${fmt.muted(String(note._id).slice(-8))}  ${where}  ${String(note.content).split("\n")[0]}`);
+      }
+      console.log(fmt.muted("`cast pr review --approve|--request-changes|--comment` sends them as one review."));
     });
   // ── threads ──
   pr.command("threads")
@@ -873,12 +913,59 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       const verdict =
         chosen[0] === "APPROVE" ? fmt.success("approved") :
         chosen[0] === "REQUEST_CHANGES" ? fmt.warning("requested changes on") : "commented on";
+      if (result.error) fail(result.error);
       console.log(
         `${c.green}ok${c.reset} ${verdict} ${c.cyan}${result.repository}#${result.number}${c.reset}` +
+        (result.notes ? ` ${fmt.muted(`with ${result.notes} ${result.notes === 1 ? "note" : "notes"}`)}` : "") +
         (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : "") +
         (result.url ? ` ${fmt.muted(result.url)}` : ""),
       );
     });
+
+  // ── the other verbs: reopen, draft, reviewers, edit ──
+  const verb = (name: string, route: string, text: string, extra?: (cmd: any) => any, body?: (options: any) => Record<string, unknown>, done?: (result: any, options: any) => string) => {
+    const cmd = pr.command(name)
+      .argument("[ref]", "PR reference")
+      .description(text)
+      .option("--repo <owner/name>", "Repository to resolve the reference in")
+      .option("--json", "Machine-readable output");
+    extra?.(cmd);
+    cmd.action(async (ref: string | undefined, options: any) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, route, { ...locator, ...(body?.(options) ?? {}) });
+      if (result.error) fail(result.error);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        `${c.green}ok${c.reset} ${done ? done(result, options) : name} ${c.cyan}${result.repository}#${result.number}${c.reset}` +
+        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : ""),
+      );
+    });
+  };
+  verb("reopen", "/cli/pr/reopen", "Reopen a closed pull request on GitHub", undefined, undefined, () => "reopened");
+  verb(
+    "draft", "/cli/pr/draft",
+    "Send a pull request back to draft, or mark it ready with --ready",
+    (cmd) => cmd.option("--ready", "Mark it ready for review instead"),
+    (options) => ({ draft: !options.ready }),
+    (_result, options) => (options.ready ? "ready for review:" : "back to draft:"),
+  );
+  verb(
+    "reviewers", "/cli/pr/reviewers",
+    "Ask people for a review, or withdraw the ask\n\n  cast pr reviewers 123 --add sam --add ada --remove old",
+    (cmd) => cmd.option("--add <login...>", "GitHub logins to ask").option("--remove <login...>", "Logins to withdraw"),
+    (options) => ({ add: options.add, remove: options.remove }),
+    (result) => `reviewers now ${(result.requested_reviewers ?? []).join(", ") || "nobody"} on`,
+  );
+  verb(
+    "edit", "/cli/pr/edit",
+    "Change the title or the description",
+    (cmd) => cmd.option("-t, --title <text>", "The new title").option("-b, --body <text>", stdinText("The new description")),
+    (options) => ({ title: options.title, body: options.body }),
+    () => "edited",
+  );
 
   // ── merge ──
   pr.command("merge")
