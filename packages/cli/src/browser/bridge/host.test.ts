@@ -85,7 +85,7 @@ test("concurrent tab discovery shares one pending query and refreshes after it s
     await Bun.sleep(30);
     const count = held.length;
     extension.ws.removeAllListeners("message");
-    extension.ws.on("message", dispatch);
+    extension.ws.on("message", raw => dispatch.call(extension.ws, raw));
     for (const raw of held) dispatch.call(extension.ws, raw);
     await Promise.all(requests);
     expect(count).toBe(1);

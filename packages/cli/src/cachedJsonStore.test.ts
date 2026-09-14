@@ -19,6 +19,19 @@ afterEach(() => {
 const read = (): Record<string, unknown> | null =>
   fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : null;
 
+// A debounced flush is a timer plus an async write, so any fixed sleep races it
+// on a loaded machine. Poll for the file instead and let the ceiling be generous:
+// a real regression still fails, only the flake goes away.
+const readFlushed = async (timeoutMs = 2000): Promise<Record<string, unknown>> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const disk = read();
+    if (disk) return disk;
+    if (Date.now() > deadline) throw new Error(`store never flushed to ${file}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
 describe("CachedJsonStore", () => {
   it("reads back values written in-memory without touching disk first", () => {
     const store = new CachedJsonStore<number>({ filePath: file, flushDelayMs: 10_000 });
@@ -37,8 +50,7 @@ describe("CachedJsonStore", () => {
     for (let i = 0; i < 100; i++) store.set(`k${i}`, i);
     // Still nothing on disk synchronously — the whole burst coalesces into one flush.
     expect(read()).toBeNull();
-    await new Promise((r) => setTimeout(r, 30));
-    const disk = read()!;
+    const disk = await readFlushed();
     expect(Object.keys(disk).length).toBe(100);
     expect(disk.k42).toBe(42);
   });
