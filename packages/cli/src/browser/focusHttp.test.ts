@@ -137,19 +137,32 @@ describe("focusBrowserTab", () => {
     expect(result).toEqual({ ok: false, reason: "tab-not-found" });
   });
 
-  test("engines are listed at once, and order still decides who wins", async () => {
+  test("the first engine to report the tab wins; slower engines are not waited for", async () => {
     const calls: string[] = [];
     const slow = (name: string, ms: number, tabs: FocusTab[]): FocusEngine =>
       engine(name, { calls, listTabs: () => new Promise((r) => setTimeout(() => r(tabs), ms)) });
     const started = Date.now();
     const result = await focusBrowserTab("2be86883", {
-      engines: [slow("builtin", 80, []), slow("local-chrome", 80, [tab(T1, { port: 1111 })]), slow("bridge", 80, [tab(T1, { port: 2222 })])],
+      engines: [slow("builtin", 20, []), slow("local-chrome", 400, [tab(T1, { port: 1111 })]), slow("bridge", 60, [tab(T1, { port: 2222 })])],
       raiseApp: () => {},
     });
     expect(result).toEqual({ ok: true });
-    expect(calls).toEqual([`local-chrome:activate:${T1}@1111`]);
-    // Three 80ms listings in sequence would be 240ms; in parallel they are one.
-    expect(Date.now() - started).toBeLessThan(200);
+    // The bridge answered at 60ms with the tab; the 400ms process scan did
+    // not hold the click.
+    expect(calls).toEqual([`bridge:activate:${T1}@2222`]);
+    expect(Date.now() - started).toBeLessThan(300);
+  });
+
+  test("a slow engine that has the tab still wins when the fast ones lack it", async () => {
+    const calls: string[] = [];
+    const slow = (name: string, ms: number, tabs: FocusTab[] | Error): FocusEngine =>
+      engine(name, { calls, listTabs: () => new Promise((r, j) => setTimeout(() => (tabs instanceof Error ? j(tabs) : r(tabs)), ms)) });
+    const result = await focusBrowserTab("2be86883", {
+      engines: [slow("builtin", 10, [tab(T2)]), slow("local-chrome", 20, new Error("gone")), slow("bridge", 120, [tab(T1)])],
+      raiseApp: () => {},
+    });
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual([`bridge:activate:${T1}@9333`]);
   });
 
   test("a tab with no known pid still activates, without a raise", async () => {
