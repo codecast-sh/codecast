@@ -17,6 +17,7 @@ const { pickWindow, chooseLeader, RecentKeys, createNotificationRouter } = requi
 const { fetchText, downloadResumable } = require("./updaterNet");
 const { cmpVersions, feedUrlFor, parseFeed, mustApplyNow, swapScript } = require("./updaterLogic");
 const { createWebCache, createProtocolHandler } = require("./webCache");
+const notificationStatus = require("./notificationStatus");
 
 function createDesktopApp(userConfig, electron = require("electron")) {
   const cfg = resolveDesktopConfig(userConfig);
@@ -39,6 +40,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   // of page JS; only Chromium's OS sandbox around the renderer is given up.
   const PRELOAD_PREFS = { preload: PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: false };
   const BRIDGE_ARG = `--bridge-global=${cfg.bridgeGlobal}`;
+  // The preload reads this and refuses to expose the bridge anywhere else, so
+  // a page that somehow reaches a window cannot reach the shell through it.
+  const ORIGINS_ARG = `--bridge-origins=${cfg.appOrigins.join(",")}`;
   const HTML_CLASS_JS = `document.documentElement.classList.add(${JSON.stringify(cfg.events.htmlClass)})`;
   const navigateJs = (detail) =>
     `window.dispatchEvent(new CustomEvent(${JSON.stringify(cfg.events.navigate)}, { detail: ${JSON.stringify(detail)} }))`;
@@ -78,6 +82,65 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     notif.on("close", () => { notificationRefs = notificationRefs.filter(n => n !== notif); });
     notificationRefs.push(notif);
     notif.show();
+    notePostedNotification();
+  }
+
+  // ── Does the OS actually show our notifications? ─────────────────────────
+  //
+  // Nothing in Electron can answer this, and the renderer's
+  // Notification.permission answers "granted" either way — so an app that
+  // trusts it reports notifications as working while macOS drops every one.
+  // We post, then read back macOS's own verdict (notificationStatus.js) and
+  // keep the answer. Learned passively from banners the app posts anyway, so
+  // the settings panel is right without anyone pressing anything.
+  const NOTIFY_SUPPORTED = process.platform === "darwin";
+  const PASSIVE_RECHECK_MS = 10 * 60 * 1000;
+  let notifyState = { status: "unknown", verdict: null, checkedAt: 0 };
+  let notifyProbe = null;
+
+  function readNotifyVerdict(seconds) {
+    if (!NOTIFY_SUPPORTED) return Promise.resolve(notifyState);
+    if (notifyProbe) return notifyProbe;
+    notifyProbe = notificationStatus
+      .readVerdict(cfg.appId, { seconds })
+      .then((verdict) => {
+        // No verdict at all leaves the previous answer alone: the log window
+        // can simply hold nothing, which is not evidence either way.
+        if (verdict) notifyState = { status: notificationStatus.statusFor(verdict), verdict, checkedAt: Date.now() };
+        return notifyState;
+      })
+      .catch(() => notifyState)
+      .finally(() => { notifyProbe = null; });
+    return notifyProbe;
+  }
+
+  // After a banner goes out, check what macOS did with it — rarely, and never
+  // while an answer is fresh, since each check spawns a log query.
+  function notePostedNotification() {
+    if (!NOTIFY_SUPPORTED || !app.isPackaged) return;
+    if (Date.now() - notifyState.checkedAt < PASSIVE_RECHECK_MS) return;
+    setTimeout(() => { readNotifyVerdict(30); }, 1500);
+  }
+
+  /** Post one notification and report what macOS did with it. */
+  async function testNotification(opts = {}) {
+    if (!Notification.isSupported()) return { status: "unsupported", verdict: null };
+    showNativeNotification(
+      opts.title || `${PRODUCT} notifications are on`,
+      opts.body || "This is what one looks like.",
+      null,
+      { silent: opts.silent === true },
+    );
+    // Give usernoted a moment to decide before asking what it decided.
+    await new Promise((r) => setTimeout(r, 1800));
+    notifyState = { ...notifyState, checkedAt: 0 };
+    return readNotifyVerdict(20);
+  }
+
+  function openNotificationSettings() {
+    if (!NOTIFY_SUPPORTED) return false;
+    shell.openExternal(notificationStatus.settingsUrl(cfg.appId));
+    return true;
   }
 
   const PROD_URL = cfg.urls.prod;
@@ -264,6 +327,38 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     return 1.0;
   }
 
+  // A window shows the app, and nothing else. Mail, chat and documents are
+  // full of other people's links; a click on one must open the browser, not
+  // replace the app with a page that then sits inside a window carrying the
+  // preload bridge. Downloads the app names are fetched in place instead.
+  function isAppUrlAllowed(url) {
+    try {
+      return cfg.appOrigins.includes(new URL(url).origin);
+    } catch {
+      return false;
+    }
+  }
+
+  function leaveApp(win, url) {
+    if (cfg.downloadUrls && cfg.downloadUrls(url)) win?.webContents.downloadURL(url);
+    else if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  }
+
+  function guardNavigation(win) {
+    win.webContents.on("will-navigate", (e, url) => {
+      if (isAppUrlAllowed(url)) return;
+      e.preventDefault();
+      leaveApp(win, url);
+    });
+    // A page can also try to move a window it does not own by redirecting a
+    // frame or handing off to a new document; treat that the same way.
+    win.webContents.on("will-redirect", (e, url) => {
+      if (isAppUrlAllowed(url)) return;
+      e.preventDefault();
+      leaveApp(win, url);
+    });
+  }
+
   function windowIcon() {
     return cfg.assets.icon ? { icon: cfg.assets.icon } : {};
   }
@@ -304,7 +399,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       resizable: opts.resizable !== false,
       titleBarStyle: opts.titleBarStyle || "hiddenInset",
       trafficLightPosition: cfg.window.trafficLightPosition,
-      webPreferences: { ...PRELOAD_PREFS, additionalArguments: [BRIDGE_ARG, ...(opts.args || [])] },
+      webPreferences: { ...PRELOAD_PREFS, additionalArguments: [BRIDGE_ARG, ORIGINS_ARG, ...(opts.args || [])] },
       ...windowIcon(),
       show: false,
       backgroundColor: opts.backgroundColor || cfg.window.backgroundColor,
@@ -329,7 +424,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       webPreferences: {
         ...PRELOAD_PREFS,
         zoomFactor: zoom,
-        additionalArguments: [`--zoom-factor=${zoom}`, BRIDGE_ARG],
+        additionalArguments: [`--zoom-factor=${zoom}`, BRIDGE_ARG, ORIGINS_ARG],
         // Keep the live-query WebSocket alive when the window is
         // hidden or unfocused. Default-on throttling can pause subscription
         // delivery in the renderer, leaving the inbox stale until refocus.
@@ -426,10 +521,10 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     // single window that navigates in place, so a same-origin link here (e.g. a
     // published artifact) still means "open outside the app".
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (cfg.downloadUrls && cfg.downloadUrls(url)) mainWindow.webContents.downloadURL(url);
-      else if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      leaveApp(mainWindow, url);
       return { action: "deny" };
     });
+    guardNavigation(mainWindow);
 
     mainWindow.on("closed", () => {
       clearTimeout(stallTimer);
@@ -473,7 +568,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       webPreferences: {
         ...PRELOAD_PREFS,
         zoomFactor: zoom,
-        additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window", BRIDGE_ARG],
+        additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window", BRIDGE_ARG, ORIGINS_ARG],
         // Same as the main window: keep live-query WebSockets delivering while
         // the window sits unfocused behind others.
         backgroundThrottling: false,
@@ -491,11 +586,13 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       win.webContents.setZoomFactor(getAutoZoomFactor());
       win.webContents.executeJavaScript(HTML_CLASS_JS);
     });
-    // Same rule as every window: new-window links open in the default browser.
+    // Same rule as every window: other people's links open in the browser,
+    // and nothing navigates this window off the app.
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      leaveApp(win, url);
       return { action: "deny" };
     });
+    guardNavigation(win);
     win.on("closed", () => {
       tabWindows.delete(win);
       broadcastWindowRole();
@@ -665,13 +762,14 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       hasShadow: false,
       webPreferences: {
         ...PRELOAD_PREFS,
-        additionalArguments: [BRIDGE_ARG],
+        additionalArguments: [BRIDGE_ARG, ORIGINS_ARG],
       },
     });
 
     const win = paletteWindow;
 
     win.loadURL(`${currentBaseUrl}${cfg.palette.path}`);
+    guardNavigation(win);
 
     // Same rule as the main window: new-window links open in the default browser.
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -1217,6 +1315,17 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   // which holds whenever this handler runs: renderers exist only post-ready.
   ipcMain.handle("get-system-idle-seconds", () => powerMonitor.getSystemIdleTime());
   ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
+  // The OS notification surface: what macOS is doing with our banners, a test
+  // that reports what actually happened, and the way to its settings pane.
+  ipcMain.handle("notification-status", async (_e, opts) => {
+    if (!NOTIFY_SUPPORTED || !Notification.isSupported()) {
+      return { status: "unsupported", verdict: null, checkedAt: Date.now(), canOpenSettings: false };
+    }
+    if (opts?.refresh) await readNotifyVerdict(120);
+    return { ...notifyState, canOpenSettings: true };
+  });
+  ipcMain.handle("notification-test", (_e, opts) => testNotification(opts || {}));
+  ipcMain.handle("open-notification-settings", () => openNotificationSettings());
   ipcMain.handle("get-web-release", () => webCache?.current() ?? null);
   ipcMain.handle("refresh-web", () => refreshWeb());
   ipcMain.handle("set-default-client", (_e, scheme) => claimDefaultClient(String(scheme)));
@@ -1548,6 +1657,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     toggleEnvironment,
     refreshWeb,
     webRelease: () => webCache?.current() ?? null,
+    notificationStatus: () => ({ ...notifyState }),
+    testNotification,
+    openNotificationSettings,
     claimDefaultClient,
     // Push an app defined event (config.ipc.events) to every window.
     emit,

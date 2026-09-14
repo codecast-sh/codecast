@@ -149,6 +149,9 @@ export interface DesktopAppApi {
   webRelease(): WebRelease | null;
   /** Ask the OS to make this app the handler for one of `extraProtocols`; true when it is afterwards. */
   claimDefaultClient(scheme: string): boolean;
+  notificationStatus(): OsNotificationStatus;
+  testNotification(opts?: { title?: string; body?: string; silent?: boolean }): Promise<OsNotificationStatus>;
+  openNotificationSettings(): boolean;
   /** Push one of `ipc.events` to every window. */
   emit(name: string, payload?: unknown): void;
   /** A window on the shell's preload for the app's own page (a file or a URL). Returns the BrowserWindow. */
@@ -164,6 +167,16 @@ export function createDesktopApp(config: DesktopConfigInput, electron?: unknown)
 // ── Renderer bridge ────────────────────────────────────────────────────────
 
 export type UpdateStatus = { status: "available" | "downloading" | "ready" | "error" | string; version?: string; percent?: number };
+export type OsNotificationStatus = {
+  /** `showing`: the OS drew it. `silenced`: accepted and drawn nowhere —
+   *  "Allow Notifications" off and alert style "None" both look like this.
+   *  `unknown`: not established yet. `unsupported`: no OS notifications. */
+  status: "showing" | "silenced" | "unknown" | "unsupported";
+  verdict: "banner" | "alert" | "none" | "unknown" | null;
+  checkedAt?: number;
+  canOpenSettings?: boolean;
+};
+
 export type NotifyNativeData = {
   conversationId?: string; route?: string; key?: string; kind?: string;
   /** Post the banner without a sound. */
@@ -190,6 +203,12 @@ export interface DesktopBridge {
   getWebRelease(): Promise<WebRelease | null>;
   refreshWeb(): Promise<WebRefreshResult | null>;
   setAsDefaultClient(scheme: string): Promise<boolean>;
+  /** What the OS did with the app's most recent notification. */
+  getNotificationStatus(opts?: { refresh?: boolean }): Promise<OsNotificationStatus>;
+  /** Post one notification and report how the OS presented it. */
+  testNotification(opts?: { title?: string; body?: string; silent?: boolean }): Promise<OsNotificationStatus>;
+  /** Open the OS notification settings pane for this app. */
+  openNotificationSettings(): Promise<boolean>;
   isDefaultClient(scheme: string): Promise<boolean>;
   showNotification(title: string, body: string, data?: NotifyNativeData): Promise<{ shown: boolean; reason?: string }>;
   reportWindowState(state: DesktopWindowState): void;

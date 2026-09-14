@@ -11,11 +11,13 @@ import { install, type InstallReport } from "../src/install";
 import { nodeFs } from "../src/fs";
 import type { SnippetDefinition, SnippetFs } from "../src/types";
 import { LOCAL_FIRST_STORE } from "./localFirstStore";
+import { EVALS_LOOP } from "./evalsLoop";
 
 export { LOCAL_FIRST_STORE, LOCAL_FIRST_STORE_BODY, LOCAL_FIRST_STORE_END } from "./localFirstStore";
+export { EVALS_LOOP, EVALS_LOOP_BODY, EVALS_LOOP_END } from "./evalsLoop";
 
 /** Every doctrine section the platform ships, in stamp order. */
-export const DOCTRINE: SnippetDefinition[] = [LOCAL_FIRST_STORE];
+export const DOCTRINE: SnippetDefinition[] = [LOCAL_FIRST_STORE, EVALS_LOOP];
 
 /**
  * Stamp doctrine sections into one instruction file, usually a repo's

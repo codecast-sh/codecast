@@ -64,9 +64,10 @@ describe("stampDoctrine", () => {
   test("a re-stamp with unchanged doctrine writes nothing", () => {
     const fsi = memoryFs({ [FILE]: "# myapp\n" });
     stampDoctrine({ filePath: FILE, fs: fsi });
+    const after = fsi.writes.get(FILE);
     const again = stampDoctrine({ filePath: FILE, fs: fsi });
     expect(again.unchanged).toBe(true);
-    expect(fsi.writes.get(FILE)).toBe(1);
+    expect(fsi.writes.get(FILE)).toBe(after);
   });
 
   test("a revised doctrine body refreshes the section in place", () => {

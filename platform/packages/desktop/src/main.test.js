@@ -428,3 +428,61 @@ test("app defined ipc handlers, events, menu items and windows", async () => {
   expect(win.webContents.sent).toContainEqual(["app:permissions-changed", { fda: "granted" }]);
   expect(() => api.emit("not-listed", 1)).toThrow(/ipc.events/);
 });
+
+test("the OS notification surface: cached status, the settings pane, and no false 'granted'", async () => {
+  const el = fakeElectron();
+  const api = createDesktopApp({ ...WHISK, web: { cache: false } }, el);
+  el.app._fireReady();
+  await new Promise((r) => setTimeout(r, 10));
+
+  // Before anything is established the answer is "unknown" — never a cheerful
+  // default, because that is exactly the lie the renderer's
+  // Notification.permission tells.
+  const status = await el.handlers.get("notification-status")({}, null);
+  expect(status).toMatchObject({ status: "unknown", verdict: null, canOpenSettings: true });
+  expect(api.notificationStatus().status).toBe("unknown");
+
+  // The settings link goes to this app's own pane, by bundle id.
+  expect(await el.handlers.get("open-notification-settings")()).toBe(true);
+  expect(el.opened.at(-1)).toBe(
+    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=email.whisk.desktop",
+  );
+});
+
+test("a window cannot be navigated off the app, and the bridge is scoped to its origins", async () => {
+  const el = fakeElectron();
+  createDesktopApp({ ...WHISK, web: { cache: false }, urls: { prod: "https://whisk.email" } }, el);
+  el.app._fireReady();
+  await new Promise((r) => setTimeout(r, 10));
+  const main = el.windows[0];
+
+  // Every window tells its preload which origins may hold the bridge.
+  expect(main.opts.webPreferences.additionalArguments).toContain("--bridge-origins=https://whisk.email");
+
+  // A link in someone's mail navigates the browser, never the app window —
+  // otherwise a third-party page ends up inside a window that carries the
+  // preload bridge.
+  const nav = main.webContents.listeners.get("will-navigate");
+  let prevented = false;
+  nav({ preventDefault: () => { prevented = true; } }, "https://shelved.sh/api/auth/verify?token=x");
+  expect(prevented).toBe(true);
+  expect(el.opened.at(-1)).toBe("https://shelved.sh/api/auth/verify?token=x");
+
+  // The app's own pages navigate normally.
+  prevented = false;
+  nav({ preventDefault: () => { prevented = true; } }, "https://whisk.email/#inbox");
+  expect(prevented).toBe(false);
+
+  // A redirect is the same story.
+  const red = main.webContents.listeners.get("will-redirect");
+  prevented = false;
+  red({ preventDefault: () => { prevented = true; } }, "https://evil.example/");
+  expect(prevented).toBe(true);
+
+  // A download the app names is fetched in place rather than handed over.
+  main.webContents.downloadURL = (u) => { main.webContents.downloaded = u; };
+  prevented = false;
+  nav({ preventDefault: () => { prevented = true; } }, "https://x.convex.site/gmail/attachment?id=1");
+  expect(prevented).toBe(true);
+  expect(main.webContents.downloaded).toBe("https://x.convex.site/gmail/attachment?id=1");
+});

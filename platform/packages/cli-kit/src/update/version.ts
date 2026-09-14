@@ -72,7 +72,7 @@ export function resolveChannel(
   if (channels.length === 0) return STABLE_CHANNEL;
   const byName = (name: string | null | undefined) =>
     name ? channels.find((c) => c.name === name) : undefined;
-  return byName(requested) ?? byName(persisted) ?? channels[0];
+  return byName(requested) ?? byName(persisted) ?? channels[0] ?? STABLE_CHANNEL;
 }
 
 export function manifestUrl(releaseBaseUrl: string, channel: ChannelSpec): string {

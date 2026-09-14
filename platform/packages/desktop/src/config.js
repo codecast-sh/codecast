@@ -21,6 +21,14 @@ function isHttpsUrl(u) {
   }
 }
 
+function originOf(u) {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return null;
+  }
+}
+
 function hostOf(u) {
   try {
     return new URL(u).hostname;
@@ -197,6 +205,10 @@ function resolveDesktopConfig(input) {
       claimProtocol: `${envPrefix}_CLAIM_PROTOCOL`,
     },
     urls: { prod: urls.prod, local: urls.local || null },
+    // The only origins an app window may navigate to, and the only ones the
+    // preload hands its bridge to. Anything else is the web, and the web
+    // belongs in the browser.
+    appOrigins: [...new Set([originOf(urls.prod), urls.local ? originOf(urls.local) : null].filter(Boolean))],
     localDevHost: localHost,
     trustedHosts: [...trustedHosts],
     bridgeGlobal: c.bridgeGlobal || `__${upperSlug(slug)}_ELECTRON__`,

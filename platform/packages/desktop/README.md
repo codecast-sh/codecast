@@ -238,6 +238,38 @@ check.
 The local dev URL is never cached: its files change under the app and Vite
 serves them.
 
+## A window shows the app, and nothing else
+
+`urls.prod` and `urls.local` are the only origins a window may hold. A click on
+somebody else's link — and a mail or chat app is full of them — opens the
+default browser through `will-navigate` and `will-redirect` rather than
+replacing the app with that page. `downloadUrls` names the URLs that are files
+rather than pages; those are fetched in place instead.
+
+The preload enforces the same boundary independently: every window is passed
+`--bridge-origins`, and the bridge is exposed only when the document's origin
+is one of them. The main process should never let a foreign page into a window
+in the first place, but a preload runs again on every document, so it is the
+one place that can be sure what it is attached to — and the bridge opens the
+notification surface, the badge, downloads and `openExternal`, which no
+third-party page should ever reach.
+
+## The OS and your notifications
+
+Neither a browser nor Electron can tell an app whether the system will
+actually draw a notification: `Notification.permission` answers "granted"
+either way. `notificationStatus.js` closes that gap on macOS by reading back
+what the OS did — usernoted records how it presented each notification, so the
+shell posts one and reads the verdict. `banner` and `alert` mean it appeared;
+`none` means the system accepted it and drew nothing, which is what both
+"Allow Notifications" off and an alert style of None look like from outside.
+
+The renderer gets `getNotificationStatus()` (cached, `{ refresh: true }` to
+re-read), `testNotification()` (posts one and reports what became of it) and
+`openNotificationSettings()` (that app's own pane in System Settings). The
+shell also learns the answer passively, at most once every ten minutes, from
+banners the app posts anyway.
+
 ## Notarization
 
 Signing is electron-builder's (`mac.identity`, hardened runtime, the

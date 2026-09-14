@@ -8,16 +8,18 @@ const expoRequire = createRequire(require.resolve('expo/metro-config'));
 const metroRequire = createRequire(expoRequire.resolve('@expo/metro-config'));
 const { resolve } = metroRequire('metro-resolver');
 
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-svg-peer-'));
-const peer = path.join(fixture, 'node_modules/react-native-svg');
-fs.mkdirSync(path.join(peer, 'src/fabric'), { recursive: true });
-fs.writeFileSync(path.join(peer, 'package.json'), JSON.stringify({
-  name: 'react-native-svg',
-  version: '15.12.1',
-  'react-native': 'src/index.ts',
-}));
-fs.writeFileSync(path.join(peer, 'src/index.ts'), 'export {};');
-fs.writeFileSync(path.join(peer, 'src/fabric/CircleNativeComponent.ts'), 'export {};');
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-native-peer-'));
+const packages = [
+  { name: 'react-native-svg', entry: 'src/index.ts', component: 'src/fabric/CircleNativeComponent' },
+  { name: 'react-native-safe-area-context', entry: 'src/index.tsx', component: 'src/specs/NativeSafeAreaProvider' },
+];
+for (const { name, entry, component } of packages) {
+  const peer = path.join(fixture, 'node_modules', name);
+  fs.mkdirSync(path.join(peer, path.dirname(component)), { recursive: true });
+  fs.writeFileSync(path.join(peer, 'package.json'), JSON.stringify({ name, 'react-native': entry }));
+  fs.writeFileSync(path.join(peer, entry), 'export {};');
+  fs.writeFileSync(path.join(peer, component + '.ts'), 'export {};');
+}
 afterAll(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
 function getPackage(file) {
@@ -57,15 +59,17 @@ function context(originModulePath) {
 }
 
 for (const platform of ['ios', 'android']) {
-  for (const name of ['react-native-svg', 'react-native-svg/src/fabric/CircleNativeComponent']) {
-    test(`${platform}: app and nested SDK share ${name}`, () => {
-      const app = context(path.join(__dirname, 'index.ts'));
-      const sdk = context(path.join(fixture, 'index.js'));
-      const expected = resolve(app, name, platform);
-      expect(expected.filePath).toContain('/react-native-svg/src/');
-      expect(resolve(sdk, name, platform).filePath).not.toBe(expected.filePath);
-      expect(config.resolver.resolveRequest(sdk, name, platform)).toEqual(expected);
-      expect(config.resolver.resolveRequest(app, name, platform)).toEqual(expected);
-    });
+  for (const pkg of packages) {
+    for (const name of [pkg.name, `${pkg.name}/${pkg.component}`]) {
+      test(`${platform}: app and nested SDK share ${name}`, () => {
+        const app = context(path.join(__dirname, 'index.ts'));
+        const sdk = context(path.join(fixture, 'index.js'));
+        const expected = resolve(app, name, platform);
+        expect(expected.filePath).toContain(`/${pkg.name}/src/`);
+        expect(resolve(sdk, name, platform).filePath).not.toBe(expected.filePath);
+        expect(config.resolver.resolveRequest(sdk, name, platform)).toEqual(expected);
+        expect(config.resolver.resolveRequest(app, name, platform)).toEqual(expected);
+      });
+    }
   }
 }

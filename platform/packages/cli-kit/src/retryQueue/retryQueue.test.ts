@@ -229,11 +229,30 @@ describe("RetryQueue", () => {
     queue.add("x", { c: "one" });
     queue.add("x", { c: "two" });
     const h = queue.getHealth();
-    expect(h).toEqual({ ops: 3, keys: 2, oldestPendingMs: 0 });
+    expect(h).toEqual({ ops: 3, keys: 2, oldestPendingMs: 0, lastSuccessAt: 0 });
     expect(queue.hasPending((op) => op.params.c === "two")).toBe(true);
     expect(queue.getPendingOperations()).toHaveLength(3);
     queue.clear();
     expect(queue.getQueueSize()).toBe(0);
+  });
+
+  it("health stamps the last success so a draining backlog reads apart from a stuck one", async () => {
+    // Two serial keys: one op fails forever, the other succeeds. The head of the
+    // queue stays old, but lastSuccessAt moves, which is the difference the
+    // caller needs.
+    let clock = 10_000;
+    queue = new RetryQueue<{ c: string }>({ serialKey: (op) => op.params.c, initialDelayMs: 1, maxDelayMs: 1, maxAttempts: 1000, now: () => clock });
+    queue.setExecutor(async (op) => op.params.c === "good");
+    queue.add("x", { c: "bad" });
+    expect(queue.getHealth().lastSuccessAt).toBe(0);
+    clock = 20_000;
+    queue.add("x", { c: "good" });
+    // A frozen clock never reaches a backoff stamp; pull both ops to now.
+    queue.notifyConnectionRestored();
+    await until(() => queue.getQueueSize() === 1);
+    const h = queue.getHealth();
+    expect(h.lastSuccessAt).toBe(20_000);
+    expect(h.oldestPendingMs).toBe(10_000);
   });
 
   it("dropped log: count without a full parse, retention, and cap", async () => {

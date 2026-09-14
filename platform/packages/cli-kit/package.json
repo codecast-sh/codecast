@@ -10,7 +10,9 @@
     "./doctor": "./src/doctor/index.ts",
     "./retryQueue": "./src/retryQueue/index.ts",
     "./colors": "./src/colors.ts",
-    "./text": "./src/text.ts"
+    "./text": "./src/text.ts",
+    "./render": "./src/render.ts",
+    "./format": "./src/format.ts"
   },
   "files": [
     "src",

@@ -376,6 +376,26 @@ describe("outbox", () => {
     await waitFor(() => h.outbox.size === 0);
   });
 
+  it("never re-dispatches a row whose direct send is still in flight", async () => {
+    const h = makeHarness();
+    let release: (() => void) | undefined;
+    h.wireDispatch((_a, _args, _patches, result: any) => new Promise<unknown>((resolve) => {
+      release = () => resolve({ commandId: result.commandId, status: "acknowledged", result: { _id: SERVER_ID } });
+    }));
+    // A receipt action: the row is parked before the send and settles only on
+    // the ack. A drain fired mid-flight (a reconnect tick, the send's own
+    // connection-state change) used to deliver the same command twice.
+    const pending = h.wrapped.createThing("stub_1");
+    await waitFor(() => h.dispatched.length === 1 && h.outbox.size === 1);
+    h.wrapped._drainOutbox();
+    await sleep(20);
+    expect(h.dispatched.length).toBe(1);
+    release!();
+    await pending;
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.dispatched.length).toBe(1);
+  });
+
   it("never counts an attempt on an opportunistic re-drive", async () => {
     const h = makeHarness();
     h.outbox.set("e1", {
