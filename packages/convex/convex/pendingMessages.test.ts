@@ -774,4 +774,25 @@ describe("getConversationPendingMessage", () => {
     expect(result?.message_id).toBe("pm_1");
     expect(result?.status).toBe("pending");
   });
+
+  test("keeps showing the oldest queued message while delivery attempts flip its status", async () => {
+    const { getConversationPendingMessage } = await import("./pendingMessages");
+    const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };
+    const rows = (oldestStatus: string) => ({
+      auth,
+      db: makeFakeDb({
+        conversations: [{ _id: "conv_1", user_id: "u_owner" }],
+        pending_messages: [
+          { _id: "pm_new", conversation_id: "conv_1", from_user_id: "u_owner", status: "pending", created_at: 9, retry_count: 0, content: "second" },
+          { _id: "pm_old", conversation_id: "conv_1", from_user_id: "u_owner", status: oldestStatus, created_at: 5, retry_count: 0, content: "first" },
+          { _id: "pm_done", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 1, retry_count: 0, content: "done" },
+        ],
+      }),
+    } as any);
+    for (const status of ["pending", "injected", "pending"]) {
+      const result = await (getConversationPendingMessage as any)._handler(rows(status), { conversation_id: "conv_1" });
+      expect(result?.message_id).toBe("pm_old");
+      expect(result?.status).toBe(status);
+    }
+  });
 });
