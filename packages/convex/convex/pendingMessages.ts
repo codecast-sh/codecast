@@ -111,7 +111,7 @@ export function isControlMessage(content: string): boolean {
   }
 }
 
-type PendingStatus = "pending" | "injected" | "delivered" | "failed" | "undeliverable" | "cancelled";
+type PendingStatus = "pending" | "injected" | "delivered" | "failed" | "undeliverable" | "cancelled" | "held";
 const TERMINAL_STATUSES = new Set<PendingStatus>(["delivered", "cancelled"]);
 
 export function isTerminalPendingStatus(status: string): boolean {
@@ -414,6 +414,14 @@ export async function enqueuePendingMessage(
   // server sequence/epoch here, and use that same id as delivery_id end-to-end.
   const fenced = await allocateFencedDeliveryMetadata(ctx, conversation, fields.client_id);
 
+  // A person's message, another session's send, or a routine firing into a
+  // role's standing session is a wake (org-roles-standing.md T3): the row is
+  // parked as "held" so the daemon cannot deliver it raw on its own clock,
+  // and the flush folds the frame into it and releases it. The rail's own
+  // frame (role_wake) is never held.
+  const roleWake = !!conversation.standing_role_id && !fields.role_wake &&
+    (fields.human === true || !!fields.from_conversation_id || fields.origin === "scheduler");
+
   const messageId = await insertEnqueuedPendingMessage(ctx, {
     conversationId: conversation._id,
     fromUserId,
@@ -427,6 +435,7 @@ export async function enqueuePendingMessage(
     origin: fields.origin,
     createdAt: Date.now(),
     delivery: fenced ?? undefined,
+    held: roleWake,
   });
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
@@ -468,10 +477,7 @@ export async function enqueuePendingMessage(
   // A standing role's session (org-roles-standing.md T3): a person's message,
   // another session's send, or a routine firing is an immediate wake. The row
   // stays queued as written; the flush folds its frame into it.
-  if (
-    conversation.standing_role_id && !fields.role_wake &&
-    (fields.human === true || fields.from_conversation_id || fields.origin === "scheduler")
-  ) {
+  if (roleWake) {
     const sender = await ctx.db.get(fromUserId);
     const who = sender?.name || sender?.github_username || sender?.email?.split("@")[0] || "someone";
     const from = fields.from_conversation_id ? await ctx.db.get(fields.from_conversation_id) : null;
@@ -480,13 +486,17 @@ export async function enqueuePendingMessage(
       : from
         ? `session ${from.short_id ?? String(from._id).slice(0, 7)} (${who}) sent instructions`
         : `${who} wrote`;
-    await enqueueRoleEvent(ctx, conversation.standing_role_id, {
+    const rowId = await enqueueRoleEvent(ctx, conversation.standing_role_id, {
       kind: "immediate",
       cause: `${label}:\n${fields.content}`,
       ref: { table: "pending_messages", id: String(messageId) },
       actorConversationId: fields.from_conversation_id ?? null,
       pendingMessageId: messageId,
     });
+    // No outbox row (the role is retired, has no anchor, or the sender is
+    // one of its own hands): nothing will release the held row, so it goes
+    // out on the normal rail as written.
+    if (!rowId) await ctx.db.patch(messageId, { status: "pending" });
   }
 
   return messageId;
@@ -1758,6 +1768,7 @@ const NON_TERMINAL_PENDING_STATUSES = [
   "injected",
   "failed",
   "undeliverable",
+  "held",
 ] as const;
 
 /**

@@ -575,17 +575,20 @@ export const dispatchCloudTriggers = internalMutation({
       // A routine on a role's standing session rides the wake rail: an
       // immediate outbox row with the prompt as cause, so the frame carries
       // it alongside everything else the role owes a look (T3).
-      const pendingMessageId = conversation.standing_role_id
+      // The rail returns null when the role cannot be woken (retired, no
+      // anchor); the prompt then rides the plain rail rather than being lost.
+      const outboxRowId = conversation.standing_role_id
         ? await enqueueRoleEvent(ctx, conversation.standing_role_id, {
           kind: "immediate",
           cause: `routine "${task.title}" (${task.short_id ?? task._id}) fired:\n${task.prompt}`,
           ref: { table: "agent_tasks", id: String(task._id), short_id: task.short_id ?? undefined },
         })
-        : await enqueuePendingMessage(ctx, conversation, task.user_id, {
-          content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`,
-          origin: "scheduler",
-          client_id: clientId,
-        });
+        : null;
+      const pendingMessageId = outboxRowId ?? await enqueuePendingMessage(ctx, conversation, task.user_id, {
+        content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`,
+        origin: "scheduler",
+        client_id: clientId,
+      });
       await patchTask(ctx, task, updates);
       dispatched++;
       console.info("cloud_trigger_dispatched", {
