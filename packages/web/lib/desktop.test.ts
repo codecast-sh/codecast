@@ -6,6 +6,8 @@ import {
   shouldAttemptHandoff,
   extractDeepLinkIntent,
   shouldApplyAutoDeepLink,
+  planDeepLinkArrival,
+  shareTokenInPath,
   shouldAttemptPreBootHandoff,
   conversationIdFromPath,
   isDesktopShell,
@@ -241,6 +243,55 @@ describe("auto-handoff deep-link intent", () => {
     const now = 1_000_000;
     expect(shouldApplyAutoDeepLink(now, now - 5_000)).toBe(false);  // user mid-work
     expect(shouldApplyAutoDeepLink(now, now - 60_000)).toBe(true);  // idle desktop
+  });
+});
+
+describe("planDeepLinkArrival", () => {
+  const now = 1_000_000;
+  const busy = now - 5_000;
+  const idle = now - 60_000;
+  const share = "/conversation/abc?share=tok";
+
+  test("a clicked link navigates even while the user is mid-work", () => {
+    const url = buildDesktopDeepLink("/conversation/abc");
+    expect(planDeepLinkArrival(url, null, now, busy)).toEqual({ kind: "navigate", path: "/conversation/abc" });
+  });
+
+  test("an auto handoff navigates once the desktop has been quiet", () => {
+    const url = buildDesktopDeepLink(share, { auto: true });
+    expect(planDeepLinkArrival(url, null, now, idle)).toEqual({ kind: "navigate", path: share });
+  });
+
+  test("an auto handoff into a busy desktop is offered, with the share token intact", () => {
+    const url = buildDesktopDeepLink(share, { auto: true });
+    expect(planDeepLinkArrival(url, "other", now, busy)).toEqual({ kind: "offer", path: share });
+  });
+
+  test("an auto handoff to the conversation already on screen is ignored", () => {
+    const url = buildDesktopDeepLink(share, { auto: true });
+    expect(planDeepLinkArrival(url, "abc", now, busy)).toEqual({ kind: "ignore" });
+  });
+
+  test("a non-conversation page is offered while busy, never ignored", () => {
+    const url = buildDesktopDeepLink("/tasks", { auto: true });
+    expect(planDeepLinkArrival(url, "abc", now, busy)).toEqual({ kind: "offer", path: "/tasks" });
+  });
+
+  test("a link with nothing navigable is ignored", () => {
+    expect(planDeepLinkArrival("codecast://open/", null, now, idle)).toEqual({ kind: "ignore" });
+    expect(planDeepLinkArrival("not a url", null, now, idle)).toEqual({ kind: "ignore" });
+  });
+});
+
+describe("shareTokenInPath", () => {
+  test("reads the token a share link carries", () => {
+    expect(shareTokenInPath("/conversation/abc?share=tok")).toBe("tok");
+    expect(shareTokenInPath("/conversation/abc?m=5&share=tok")).toBe("tok");
+  });
+
+  test("a plain session link carries none", () => {
+    expect(shareTokenInPath("/conversation/abc")).toBeNull();
+    expect(shareTokenInPath("/conversation/abc?m=5")).toBeNull();
   });
 });
 

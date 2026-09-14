@@ -26,6 +26,7 @@ import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { useSyncPRExternalEvents, useExternalEvents } from "../../../../../hooks/useSyncExternalEvents";
 import { useCodeComments, useSyncPRCodeComments } from "../../../../../hooks/useSyncCodeComments";
 import { useSyncPullRequest, usePullRequest } from "../../../../../hooks/useSyncTimeline";
+import { usePRDetails } from "../../../../../hooks/usePRDetails";
 import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import {
@@ -63,7 +64,6 @@ const TABS: { key: Tab; label: string; icon: typeof GitPullRequest; digit: strin
   { key: "checks", label: "Checks", icon: ListChecks, digit: "4" },
 ];
 
-const NOTE_MODE_KEY = "pr.noteMode";
 
 function PRNotFound({ repository, number }: { repository: string; number: number }) {
   return (
@@ -139,18 +139,29 @@ function PRContent({
   const setShepherd = useMutation(api.prShepherd.setShepherd);
 
   const [tab, setTab] = useState<Tab>("conversation");
+  const details = usePRDetails(prId, pr?.head_sha, isAuthenticated && (tab === "commits" || tab === "checks") ? tab : null);
   const [composing, setComposing] = useState<{ file: string; anchor: DiffLineAnchor } | null>(null);
 
-  // The review: where a new note goes (held, or out at once), remembered on
-  // this device; the notes waiting; and the menu that sends them.
-  const [noteMode, setNoteModeState] = useState<NoteMode>(() =>
-    (typeof localStorage !== "undefined" && (localStorage.getItem(NOTE_MODE_KEY) as NoteMode)) || "review");
+  // The review: where a new note goes (held, or out at once), a preference
+  // that follows the person; the notes waiting; and the menu that sends them.
+  const noteMode: NoteMode = useInboxStore((s) => s.clientState.ui?.pr_note_mode) ?? "review";
   const setNoteMode = useCallback((mode: NoteMode) => {
-    setNoteModeState(mode);
-    localStorage.setItem(NOTE_MODE_KEY, mode);
+    useInboxStore.getState().updateClientUI({ pr_note_mode: mode });
   }, []);
   const [reviewOpen, setReviewOpen] = useState(false);
   const notes = useMemo(() => pendingNotes(comments), [comments]);
+
+  // When the reader last had this pull request open. Read once, so the line
+  // the timeline draws does not move while they read; written on the way out.
+  const [lastSeenAt] = useState<number | undefined>(() =>
+    prId ? useInboxStore.getState().clientState.ui?.pr_last_seen?.[prId] : undefined);
+  useWatchEffect(() => {
+    if (!prId || !isAuthenticated) return;
+    return () => {
+      const all = useInboxStore.getState().clientState.ui?.pr_last_seen ?? {};
+      useInboxStore.getState().updateClientUI({ pr_last_seen: { ...all, [prId]: Date.now() } });
+    };
+  }, [prId, isAuthenticated]);
 
   // Viewed files: the reader's own mark, synced with the rest of their prefs.
   const viewedFiles = useInboxStore((s) => (prId ? s.clientState.ui?.pr_viewed_files?.[prId] : undefined));
@@ -214,9 +225,9 @@ function PRContent({
     async (fields: Record<string, unknown>) => {
       if (!pr) return;
       const clientId = newCommentClientId();
-      // A fresh note on a line joins the review when the reader has asked for
-      // that; a reply, or a comment on the conversation, is said at once.
-      const pending = noteMode === "review" && !!fields.file_path && !fields.parent_id;
+      // A note on a line, a fresh one or a reply, joins the review when the
+      // reader has asked for that; a comment on the conversation is said at once.
+      const pending = noteMode === "review" && !!fields.file_path;
       // Render it now; the server row carrying this client_id supersedes the
       // stub when listForPR echoes it back (the collection's altKey).
       useInboxStore.getState().syncRecord("codeComments", clientId, {
@@ -330,14 +341,18 @@ function PRContent({
     if (hit) { setTab(hit.key); return; }
     if (e.key === "r" && isAuthenticated) { e.preventDefault(); setReviewOpen((v) => !v); return; }
     if (e.key === "n" || e.key === "p") {
-      const stops = openThreadStops;
-      if (stops.length === 0) return;
+      if (openThreadStops.length === 0) return;
       e.preventDefault();
-      const at = landing ? stops.findIndex((s) => s.file === landing.file && s.key === landing.key) : -1;
-      const next = e.key === "n"
-        ? stops[(at + 1) % stops.length]
-        : stops[(at - 1 + stops.length) % stops.length];
-      jumpTo(next.file, next.key);
+      // Where the reader stands is any thread they landed on, open or not; the
+      // walk continues from there to the next open one.
+      const all = threadStops(pr?.files ?? [], comments);
+      const at = landing ? all.findIndex((s) => s.file === landing.file && s.key === landing.key) : -1;
+      const forward = e.key === "n";
+      for (let step = 1; step <= all.length; step++) {
+        const index = forward ? (at + step) % all.length : (at - step + all.length * 2) % all.length;
+        const stop = all[index];
+        if (stop.open && !stop.pending) { jumpTo(stop.file, stop.key); return; }
+      }
     }
   });
 
@@ -383,6 +398,8 @@ function PRContent({
                 open={reviewOpen}
                 onOpenChange={setReviewOpen}
                 sessionChoices={sessionChoices}
+                openThreads={openThreadStops.length}
+                onWalk={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
               />
               <MergeMenu pr={pr} />
               <MoreMenu pr={pr} />
@@ -422,8 +439,11 @@ function PRContent({
                     {notes.length}
                   </span>
                 )}
-                {key === "commits" && (pr.commits?.length ?? 0) > 0 && (
-                  <span className="text-[11px] text-sol-text-dim">{pr.commits.length}</span>
+                {key === "commits" && (pr.commits_count ?? pr.commits?.length ?? 0) > 0 && (
+                  <span className="text-[11px] text-sol-text-dim">{pr.commits_count ?? pr.commits.length}</span>
+                )}
+                {key === "checks" && (pr.checks?.length ?? 0) > 0 && (
+                  <span className="text-[11px] text-sol-text-dim">{pr.checks.length}</span>
                 )}
                 <span className="opacity-0 group-hover:opacity-100 transition-opacity">
                   <KeyCap size="xs">{digit}</KeyCap>
@@ -439,6 +459,7 @@ function PRContent({
                 items={timeline}
                 comments={comments}
                 onJumpToThread={jumpToComment}
+                lastSeenAt={lastSeenAt}
                 authed={isAuthenticated}
                 onPostComment={(content) => post({ content })}
                 onResolve={(commentId, resolved) => {
@@ -494,8 +515,8 @@ function PRContent({
                   }
                 />
               ))}
-            {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} />}
-            {tab === "checks" && <PRChecks checks={pr.checks} />}
+            {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} total={pr.commits_count} read={details} />}
+            {tab === "checks" && <PRChecks checks={pr.checks} read={details} />}
           </div>
         </div>
 

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { SITE_LINKS } from "@/lib/siteLinks";
 import { useState, type CSSProperties } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
@@ -454,7 +455,7 @@ export default function ChangelogPage() {
               <ul className="space-y-2 text-sm" style={{ color: SOL.base00 }}>
                 <li><a href="https://github.com/codecast-sh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
                 <li><a href="https://x.com/codecastsh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Twitter</a></li>
-                <li><a href="https://discord.gg/S7V5Wnfq" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Discord</a></li>
+                <li><a href={SITE_LINKS.community} className="hover:text-[#073642]">Community</a></li>
               </ul>
             </div>
           </div>

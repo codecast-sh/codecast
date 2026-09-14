@@ -12,7 +12,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPri
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, isStashHidden } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -1314,6 +1314,8 @@ export const claimPendingMessageForDelivery = mutation({
   },
 });
 
+const SHOWN_PENDING_STATUSES = new Set<string>(["pending", "injected", "failed", "undeliverable"]);
+
 export const getConversationPendingMessage = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -1340,11 +1342,13 @@ export const getConversationPendingMessage = query({
     const visible = msgs.filter(
       (m) => isOwner || m.from_user_id.toString() === authUserId.toString()
     );
-    const msg = visible.find((m) => m.status === "pending")
-      ?? visible.find((m) => m.status === "injected")
-      ?? visible.find((m) => m.status === "failed")
-      ?? visible.find((m) => m.status === "undeliverable")
-      ?? null;
+    // The oldest undelivered message, whatever its current status. Every
+    // delivery attempt flips a row to "injected" and a hold flips it back, so
+    // preferring "pending" hopped the card between queued messages on each
+    // retry (2026-09-14). Queue order is the order the session will take them.
+    const msg = visible
+      .filter((m) => SHOWN_PENDING_STATUSES.has(m.status))
+      .sort((a, b) => a.created_at - b.created_at)[0] ?? null;
     if (!msg) return null;
     return { message_id: msg._id, client_id: msg.client_id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content, hold_reason: msg.delivery_disposition_reason };
   },
@@ -1442,7 +1446,7 @@ export function planStuckMessageHeal(
 
 const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
-// The cron only revives a stranded message when its session is live AND idle — i.e. ready to
+// The cron only revives a stranded message when its session is live AND settled — i.e. ready to
 // receive it right now. A user message is NEVER dropped: if the session is busy, blocked, stopped,
 // resuming, or gone, the message is left untouched and revived on a later tick once the session
 // recovers (becomes idle). This readiness gate is what keeps a backlog from stampeding the daemon
@@ -1465,7 +1469,7 @@ async function liveAndReadyConversationIds(
   for (const s of sessions) {
     if (!s.conversation_id) continue;
     live.add(s.conversation_id.toString());
-    if (s.agent_status === "idle") ready.add(s.conversation_id.toString());
+    if (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status)) ready.add(s.conversation_id.toString());
   }
   return { ready, live };
 }
@@ -1727,7 +1731,7 @@ export const diagnoseStuckMessages = internalQuery({
         live: now - s.last_heartbeat < HEARTBEAT_ALIVE_MS,
         pid: s.pid,
       }));
-      const ready = sess.some((s) => s.live && s.agent_status === "idle");
+      const ready = sess.some((s) => s.live && (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status)));
       out.push({
         msg_id: m._id,
         status: m.status,

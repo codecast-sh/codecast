@@ -27,3 +27,34 @@ export function armChunkReloadGuardReset(delayMs = 15_000): void {
     }
   }, delayMs);
 }
+
+// Narrowly-scoped: errors that mean "the JS the browser has is incompatible
+// with what the server is serving" — a stale tab whose chunk hashes no longer
+// exist after a deploy, or a Vite dev-server module that was served from a
+// half-written file. Generic TypeErrors ("is not a function", "Cannot read
+// properties of undefined") are NOT included: they are ordinary code bugs, and
+// auto-reloading on them hides the real failure and produces the "needs
+// multiple reloads to load" symptom (the throttle then suppresses subsequent
+// reloads, leaving a blank app).
+//
+// The "export named" family is the link-time shape of the same staleness: an
+// importer fetched fine but the module it names lacks the binding. In dev that
+// is Vite serving a file mid-edit (2026-09-13, EntityIdPill.tsx lost
+// EntityAwareCode for a moment). React.lazy memoizes the rejected import, so
+// no re-render can heal it; only a reload refetches the module graph.
+const CHUNK_LOAD_ERROR_PATTERNS = [
+  "Failed to fetch dynamically imported module",
+  "Importing a module script failed",
+  "error loading dynamically imported module",
+  "ChunkLoadError",
+  "Loading chunk",
+  "Loading CSS chunk",
+  // Chrome / Firefox / Safari wordings of a missing named export at link time.
+  "does not provide an export named",
+  "doesn't provide an export named",
+  "Importing binding name",
+];
+
+export function isChunkLoadError(msg: string): boolean {
+  return !!msg && CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
+}

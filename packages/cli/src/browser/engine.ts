@@ -179,18 +179,40 @@ const SESSION_KEY_MAX = 60;
  */
 const REAL_SESSION_SUFFIX = "-real";
 
+/**
+ * The desktop pane is a third browser under the same rule: the codecast
+ * desktop app's own Chromium, reached over the CDP port it already opens
+ * (desktopPane.ts). Its engine session carries this suffix so the daemon that
+ * drives a pane never shares a key, a tab or a launch config with the one
+ * driving the human's Chrome or the clone.
+ */
+const PANE_SESSION_SUFFIX = "-pane";
+
 export function realSessionKey(session: string): string {
   if (isRealSession(session)) return session;
-  return `${session.slice(0, SESSION_KEY_MAX - REAL_SESSION_SUFFIX.length)}${REAL_SESSION_SUFFIX}`;
+  const base = baseSessionKey(session);
+  return `${base.slice(0, SESSION_KEY_MAX - REAL_SESSION_SUFFIX.length)}${REAL_SESSION_SUFFIX}`;
 }
 
 export function isRealSession(session: string): boolean {
   return session.endsWith(REAL_SESSION_SUFFIX);
 }
 
-/** The inverse of realSessionKey: the key with no mode on it. */
+export function paneSessionKey(session: string): string {
+  if (isPaneSession(session)) return session;
+  const base = baseSessionKey(session);
+  return `${base.slice(0, SESSION_KEY_MAX - PANE_SESSION_SUFFIX.length)}${PANE_SESSION_SUFFIX}`;
+}
+
+export function isPaneSession(session: string): boolean {
+  return session.endsWith(PANE_SESSION_SUFFIX);
+}
+
+/** The inverse of realSessionKey and paneSessionKey: the key with no mode on it. */
 export function baseSessionKey(session: string): string {
-  return isRealSession(session) ? session.slice(0, -REAL_SESSION_SUFFIX.length) : session;
+  if (isRealSession(session)) return session.slice(0, -REAL_SESSION_SUFFIX.length);
+  if (isPaneSession(session)) return session.slice(0, -PANE_SESSION_SUFFIX.length);
+  return session;
 }
 
 // ---------------------------------------------------------------------------
