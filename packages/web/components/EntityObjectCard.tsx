@@ -721,7 +721,14 @@ export function ObjectCardFrame({
 }
 
 /** One shared entity (task, plan, session, doc, trigger, project), rendered as a browsable card. */
-export function EntityObjectCard({ refId, count }: { refId: string; count: number }) {
+export function EntityObjectCard({ refId, count, unresolved }: {
+  refId: string;
+  count: number;
+  /** What a pull request or commit reference renders as when codecast holds
+   *  no row for it. Unset, it degrades to the text as written; a reference
+   *  named by URL passes the certain pill, whose hover says where it lives. */
+  unresolved?: React.ReactNode;
+}) {
   const { rawId, type, entity, served, label, href } = useEntityResolution(refId);
   const openLinkedSession = useOpenLinkedSession();
 
@@ -740,8 +747,12 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
   if (!type) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
   const isRepoObject = type === "pr" || type === "commit";
   // Same rule as the pill: a repository reference that names nothing codecast
-  // knows is the text it was written as, not a "not available" card.
-  if (isRepoObject && served && !entity) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+  // knows is the text it was written as, not a "not available" card. One
+  // named by URL is certain, so it keeps the pill and the pill's hover says
+  // where the object lives.
+  if (isRepoObject && served && !entity) {
+    return unresolved !== undefined ? <>{unresolved}</> : <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+  }
 
   const isSession = type === "session";
   const Icon = TYPE_ICON[type];
