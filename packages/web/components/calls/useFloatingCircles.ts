@@ -103,8 +103,21 @@ export function useFloatingCircles(opts: {
   const hide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = null;
+    // Never mid-drag. The window follows the cursor a tick behind it, so a
+    // quick pull puts the pointer outside the glass for a moment and the
+    // document fires mouseleave. Hiding then collapses the card the grip is
+    // in and resizes the window under a held mouse button, and macOS ends the
+    // drag's mouse tracking with it: the release never reaches the renderer,
+    // and the window follows the cursor until the shell's own expiry. The
+    // drag holds the chrome open the way it holds interactivity; the release
+    // below arms the hide again.
+    if (dragging.current) return;
     setHovered(false);
   }, []);
+  const hideLater = useCallback(() => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(hide, hideDelayMs);
+  }, [hide, hideDelayMs]);
 
   useEventListener("mousemove", (e: MouseEvent) => {
     // Mid-drag the window is following the cursor, so the pointer never really
@@ -123,7 +136,8 @@ export function useFloatingCircles(opts: {
     // Over a circle, the chrome stays. Anywhere else in the window it is on its
     // way out — including when the pointer leaves through the transparent
     // margin, which is the last event this window ever sees of that gesture.
-    hideTimer.current = hit ? null : setTimeout(hide, hideDelayMs);
+    if (hit) hideTimer.current = null;
+    else hideLater();
   });
   useEventListener("mouseleave", hide, document);
 
@@ -131,17 +145,35 @@ export function useFloatingCircles(opts: {
   const startDrag = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
     dragging.current = true;
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = null;
     e.currentTarget.setPointerCapture(e.pointerId);
     bridge.setDragging(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the bridge is a per-window constant
   }, []);
-  const endDrag = useCallback((e: React.PointerEvent) => {
+  // The drag ends on the release, wherever it lands. The grip's own handler
+  // is the usual path; the document-level backstop below covers a release
+  // the grip never hears — pointer capture lost to a re-render, or a release
+  // delivered elsewhere — because a drag nobody ends is a window that
+  // follows the cursor for thirty seconds. Ending it twice is harmless.
+  const finishDrag = useCallback(() => {
     if (!dragging.current) return;
     dragging.current = false;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     bridge.setDragging(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the bridge is a per-window constant
-  }, []);
+    // The pointer may be off the glass by now, and no mousemove will come to
+    // say so: the chrome goes on its way out the same as after any hover.
+    hideLater();
+  }, [hideLater]);
+  const endDrag = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      finishDrag();
+    },
+    [finishDrag],
+  );
+  useEventListener("pointerup", finishDrag, document);
+  useEventListener("pointercancel", finishDrag, document);
+  useEventListener("lostpointercapture", finishDrag, document);
 
   return { rootRef, hovered, startDrag, endDrag };
 }

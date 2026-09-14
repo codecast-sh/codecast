@@ -94,3 +94,20 @@ test("call and subscribe use the app: prefix and unsubscribe cleanly", async () 
   expect(BRIDGE_METHODS).toContain("call");
   expect(BRIDGE_METHODS).toContain("subscribe");
 });
+
+test("the preload hands the bridge only to the app's own origins", () => {
+  const { argValue } = require("./bridge");
+  // The preload's decision, in the form it makes it (see preload.js).
+  const decide = (argv, origin) => {
+    const allowed = (argValue(argv, "bridge-origins") || "").split(",").filter(Boolean);
+    return allowed.length === 0 || allowed.includes(origin);
+  };
+  const argv = ["--bridge-origins=https://whisk.email,https://local.whisk.email"];
+  expect(decide(argv, "https://whisk.email")).toBe(true);
+  expect(decide(argv, "https://local.whisk.email")).toBe(true);
+  expect(decide(argv, "https://shelved.sh")).toBe(false);
+  expect(decide(argv, "https://whisk.email.evil.com")).toBe(false);
+  expect(decide(argv, "")).toBe(false);
+  // An older shell that passes no origins keeps its previous behavior.
+  expect(decide([], "https://anything")).toBe(true);
+});

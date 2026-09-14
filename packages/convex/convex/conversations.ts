@@ -49,7 +49,7 @@ import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR 
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
-import { normalizePaneUrl } from "@codecast/shared/contracts";
+import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
@@ -11589,8 +11589,8 @@ export const switchSessionAgent = mutation({
     // rebuilt — otherwise agent_type names an agent the daemon then fails to
     // launch, and every capability gate downstream (fork, model rail) reads
     // the lie while the old agent quietly resumes.
-    const blank = (conv.message_count ?? 0) === 0;
-    if (agentChanged && !canSessionBecomeAgent(args.agent_type, conv.message_count)) {
+    const blank = (conv.message_count ?? 0) === 0 && conv.fork_status !== "copying";
+    if (agentChanged && !canSessionBecomeAgent(args.agent_type, blank ? 0 : Math.max(1, conv.message_count ?? 0))) {
       const label = AGENT_CLIENTS[fromConvexAgentType(args.agent_type)].displayName;
       throw new Error(`${label} cannot take over an existing session's history; start a new ${label} session instead`);
     }
@@ -12289,9 +12289,16 @@ export const backfillDenormalizedFields = internalMutation({
 // and tests that reach it through this module.
 export { requireSessionCommandTarget };
 
+// Escape pressed in an empty composer. The client forwards every press and
+// paints the interruption line at once; the daemon decides whether there is a
+// turn to interrupt (cli/src/escapeInterrupt.ts). `pressed_at` is the client's
+// clock at the press: the daemon skips a press that predates a message it
+// delivered afterwards, so an Escape aimed at the previous turn cannot cancel
+// the one a queued message just started.
 export const sendEscapeToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    pressed_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -12302,7 +12309,10 @@ export const sendEscapeToSession = mutation({
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
       command: "escape",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        ...(args.pressed_at !== undefined ? { pressed_at: args.pressed_at } : {}),
+      }),
       created_at: Date.now(),
     });
   },
@@ -12541,17 +12551,40 @@ export async function resolveRestartTarget(
 export async function enqueueKillAndResume(
   ctx: MutationCtx,
   userId: Id<"users">,
-  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string },
+  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string; fork_status?: string; fork_daemon_args?: string },
   opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string } = {},
 ) {
   const now = Date.now();
+  const resumeArgs = {
+    session_id: conv.session_id,
+    conversation_id: conv._id,
+    project_path: conv.project_path ?? conv.git_root,
+    agent_type: fromConvexAgentType(conv.agent_type),
+    ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
+    ...(opts.switchAgent ? { switch_agent: true, force_reconstitute: true } : {}),
+    ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
+  };
+  if (opts.switchAgent && conv.fork_status === "copying") {
+    const deferred = JSON.parse(conv.fork_daemon_args || "{}");
+    await ctx.db.patch(conv._id, {
+      fork_daemon_args: JSON.stringify({ ...resumeArgs, fork: true, _target_device_id: deferred._target_device_id }),
+    });
+    return { deduplicated: false, deferred: true };
+  }
   const pendingCommands = await ctx.db
     .query("daemon_commands")
     .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
     .collect();
 
   const changesModel = opts.model !== undefined || opts.effort !== undefined;
-  const candidates = changesModel ? pendingCommands.filter(command => !command.claimed_by) : pendingCommands;
+  const candidates = pendingCommands.filter(command => {
+    if ((changesModel || opts.switchAgent) && command.claimed_by) return false;
+    if (!opts.switchAgent) return true;
+    if (extractDaemonCommandConversationId(command.args) !== conv._id.toString()) return false;
+    const args = JSON.parse(command.args || "{}");
+    return args.switch_agent === true && args.agent_type === resumeArgs.agent_type;
+  });
   if (hasRecentPendingDaemonCommand(candidates as any, {
     conversationId: conv._id.toString(),
     command: "resume_session",
@@ -12585,16 +12618,7 @@ export async function enqueueKillAndResume(
   await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "resume_session",
-    args: JSON.stringify({
-      session_id: conv.session_id,
-      conversation_id: conv._id,
-      project_path: conv.project_path ?? conv.git_root,
-      agent_type: fromConvexAgentType(conv.agent_type),
-      ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
-      ...(opts.switchAgent ? { switch_agent: true, force_reconstitute: true } : {}),
-      ...(opts.model !== undefined ? { model: opts.model } : {}),
-      ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
-    }),
+    args: JSON.stringify(resumeArgs),
     created_at: now + 1,
   });
 

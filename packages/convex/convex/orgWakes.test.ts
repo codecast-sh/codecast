@@ -361,13 +361,15 @@ describe("identity follows the token (review: actor and charter guard)", () => {
 });
 
 describe("human only gates (review: caps, charter field)", () => {
-  test("caps, trust, scope and the charter field refuse a call that names its session", async () => {
-    const { ctx } = world();
+  test("caps, trust, scope and the charter field refuse a call that names its session; a browser call passes", async () => {
+    const { ctx, tables } = world();
     await expect(performSetCaps(ctx, ME as any, { role_id: "role1", hands: 99, from_session: "s-standing" })).rejects.toThrow(/human only/);
     await expect(performSetTrust(ctx, ME as any, { role_id: "role1", trust: "direct", from_session: "s-standing" })).rejects.toThrow(/human only/);
     await expect(performUpdateRole(ctx, ME as any, { role_id: "role1", charter: "I decide", from_session: "s-standing" })).rejects.toThrow(/human only/);
-    const ok = await performSetCaps(ctx, ME as any, { role_id: "role1", hands: 9 });
+    const web = { db: ctx.db, auth: { getUserIdentity: async () => ({ subject: ME }) } } as any;
+    const ok = await performSetCaps(web, ME as any, { role_id: "role1", hands: 9 });
     expect(ok.caps.hands_per_day).toBe(9);
+    expect(tables.org_roles[0].caps.hands_per_day).toBe(9);
   });
 });
 
@@ -447,5 +449,95 @@ describe("pause is idempotent and interrupts only live hands (review minor)", ()
     const second = await performPauseRole(ctx, ME as any, { role_id: "role1" });
     expect(second.interrupted).toBe(0);
     expect(tables.pending_messages.filter((p: any) => p.conversation_id === "hand1")).toHaveLength(1);
+  });
+});
+
+// ── Final product review (6 findings) ───────────────────────────────────────
+
+import { performRetireRole, refuseUnlessHuman } from "./orgRoles";
+import { handBriefing } from "./spawn";
+import { bootstrapMessage } from "./anchors";
+
+const humanCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: ME }) } }) as any;
+const tokenCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => null } }) as any;
+
+describe("human only writes key on the browser identity (review: identity)", () => {
+  test("an api token call is refused even with no from_session; a browser call passes", async () => {
+    const { tables } = world();
+    await expect(refuseUnlessHuman(tokenCtx(makeFakeDb(tables)), { api_token: "tok" }, "Trust stage")).rejects.toThrow(/human only/);
+    await expect(refuseUnlessHuman(tokenCtx(makeFakeDb(tables)), {}, "Trust stage")).rejects.toThrow(/human only/);
+    await expect(refuseUnlessHuman(humanCtx(makeFakeDb(tables)), {}, "Trust stage")).resolves.toBeUndefined();
+    await expect(refuseUnlessHuman(humanCtx(makeFakeDb(tables)), { from_session: "s-standing" }, "Trust stage")).rejects.toThrow(/agent session/);
+  });
+
+  test("a hand stripping its env still cannot raise its own trust or caps through the token path", async () => {
+    const { tables } = world();
+    const ctx = tokenCtx(makeFakeDb(tables));
+    await expect(performSetTrust(ctx, ME as any, { role_id: "role1", trust: "direct", api_token: "tok" })).rejects.toThrow(/human only/);
+    await expect(performSetCaps(ctx, ME as any, { role_id: "role1", hands: 99, api_token: "tok" })).rejects.toThrow(/human only/);
+    await expect(performUpdateRole(ctx, ME as any, { role_id: "role1", charter: "mine", api_token: "tok" })).rejects.toThrow(/human only/);
+    const web = humanCtx(makeFakeDb(tables));
+    expect((await performSetTrust(web, ME as any, { role_id: "role1", trust: "direct" })).trust).toBe("direct");
+  });
+});
+
+describe("brief edit needs the session the caller runs (review: identity)", () => {
+  test("a plain member naming the standing session's id is refused; the host's own session passes", async () => {
+    const { ctx, tables } = world();
+    tables.users.push({ _id: "mate", name: "Mate" });
+    tables.team_memberships.push({ _id: "m2", user_id: "mate", team_id: TEAM, role: "member", joined_at: 1 });
+    tables.session_owners = [];
+    await expect(performBriefEdit(ctx, "mate" as any, { role_id: "role1", content: "hijacked", from_session: "s-standing" })).rejects.toThrow(/own session or an admin/);
+    const ok = await performBriefEdit(ctx, ME as any, { role_id: "role1", content: "Infra: fine\nStatus: working", from_session: "s-standing" });
+    expect(ok.mirrored).toBe(true);
+    expect(tables.conversations[0].thread_state).toContain("Infra: fine");
+  });
+});
+
+describe("retire tears the seat down (review: founder first week)", () => {
+  test("live hands are told, routines cancelled, held turns dropped, the anchor decommissioned, and it is idempotent", async () => {
+    const { ctx, tables } = world({}, {
+      managed_sessions: [{ _id: "ms-hand", conversation_id: "hand1", user_id: ME, agent_status: "working" }],
+      agent_tasks: [{ _id: "tr1", short_id: "tr-1", user_id: ME, originating_conversation_id: "standing", status: "scheduled", title: "digest", prompt: "post", run_at: NOW, run_count: 0 }],
+      anchor_channels: [],
+      daemon_commands: [],
+    });
+    tables.session_owners = [];
+    tables.pending_messages.push({ _id: "pm-held", conversation_id: "standing", from_user_id: ME, owner_user_id: ME, content: "hi", status: "held", created_at: 1, retry_count: 0 });
+    tables.role_wake_outbox.push({ _id: "ob1", role_id: "role1", kind: "fold", cause: "x", created_at: 1, due_at: 1 });
+    const out = await performRetireRole(ctx, ME as any, { role_id: "role1" });
+    expect(out.status).toBe("retired");
+    expect(out.interrupted).toBe(1);
+    expect(out.cancelled_triggers).toBe(1);
+    expect(tables.pending_messages.some((p: any) => p.conversation_id === "hand1" && p.content.includes("role-retired"))).toBe(true);
+    expect(tables.agent_tasks[0].status).toBe("cancelled");
+    expect(tables.pending_messages.find((p: any) => p._id === "pm-held").status).toBe("cancelled");
+    expect(tables.anchors[0].status).toBe("decommissioned");
+    expect(tables.conversations[0].status).toBe("completed");
+    expect(tables.role_wake_outbox).toHaveLength(0);
+    expect(tables.conversations[1].org_role_id).toBeUndefined();
+    const again = await performRetireRole(ctx, ME as any, { role_id: "role1" });
+    expect(again.interrupted).toBe(0);
+  });
+});
+
+describe("a hand's briefing and the anchor's roles section (review: coherence, day scenario)", () => {
+  test("handBriefing opens with the mandate and names handoff, verdict and decide --task", () => {
+    const text = handBriefing({ name: "Infra lead", handle: "infra-lead" }, "Fix the deploy", "ct-5");
+    expect(text.startsWith("This is an UNATTENDED run")).toBe(true);
+    expect(text).toContain("hand of Infra lead (@infra-lead)");
+    expect(text).toContain("cast task handoff ct-5 --status done|blocked|needs_context");
+    expect(text).toContain("cast task verdict ct-5");
+    expect(text).toContain("cast decide --task ct-5");
+    expect(text.endsWith("Fix the deploy")).toBe(true);
+  });
+
+  test("the team anchor's bootstrap tells it to read role briefs and never wake a role for status", () => {
+    const text = bootstrapMessage({ name: "Anchor", scopeType: "team", scopeLabel: "the Acme workspace", teamName: "Acme" });
+    expect(text).toContain("## Roles that report into this workspace");
+    expect(text).toContain("cast brief @handle");
+    expect(text).toContain("Never wake");
+    const roleText = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: [], parentName: "Me", trust: "understand" } });
+    expect(roleText).not.toContain("## Roles that report into this workspace");
   });
 });

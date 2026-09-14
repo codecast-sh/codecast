@@ -264,7 +264,7 @@ import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, buildMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
-import { pendingBannerState, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 
@@ -7438,21 +7438,13 @@ function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCall; resu
   );
 }
 
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; recipientActive?: boolean; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
-  // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
-  // recipient's transcript yet (queued — typically because the recipient is mid-turn).
-  // pendingReason is the daemon's own word for a hold (the terminal is waiting for a
-  // human answer), which beats the guess from the recipient's status.
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, recipientConversationId, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
+  const s = useTrackedStore([
+    st => pendingStatus && recipientConversationId ? st.sessions[recipientConversationId]?.agent_status : undefined,
+  ]);
+  const recipientStatus = recipientConversationId ? s.sessions[recipientConversationId]?.agent_status : undefined;
   const isPending = !!pendingStatus;
-  const queueLabel = !isPending
-    ? null
-    : pendingStatus === "failed" || pendingStatus === "undeliverable"
-    ? "queued · retrying"
-    : pendingReason
-    ? `queued · ${pendingReason}`
-    : recipientActive === false
-    ? "queued · recipient offline"
-    : "queued · recipient busy";
+  const queueLabel = sessionMessageQueueLabel(pendingStatus, pendingReason, recipientStatus);
   // The SAME card renders an inter-agent teammate broadcast and a subagent's report to the
   // session that launched it — only slightly distinct: a Users icon + "From teammate" + the
   // sender's own color, or a Bot icon + "Report from" + violet, vs. cast send's
@@ -13860,17 +13852,18 @@ const ConversationViewInner = (
   const cachedUserMessages = useInboxStore(
     (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
   );
-  // Escape in an empty composer interrupts the agent. Only forward it while the
-  // agent is provably mid-turn: an idle session has nothing to interrupt, and a
-  // message still pending delivery is the dangerous case. On 2026-08-28 an
-  // Escape pressed seconds after send reached the daemon 400ms after it had
-  // injected that message and cancelled the turn the message had just started.
+  // Escape in an empty composer interrupts the agent. Every press on an owned,
+  // active conversation is forwarded and paints the "user interrupted" line at
+  // once (convCommand's optimistic branch). The web does NOT judge whether the
+  // agent is mid-turn: its live status is a windowed overlay that goes stale,
+  // and a press dropped on a stale "idle" never reached the agent at all. The
+  // daemon holds the facts and decides (cli/src/escapeInterrupt.ts); the press
+  // time rides along so an Escape aimed at the previous turn cannot cancel the
+  // one a queued message started after the press (the 2026-08-28 race).
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    const liveAgentStatus = useInboxStore.getState().sessions[convexConvId]?.agent_status as LiveAgentStatus | undefined;
-    if (!isActiveAgentStatus(liveAgentStatus)) return;
     setUserScrolled(false);
-    void convCommand(convexConvId, "sendEscapeToSession").catch((err) => {
+    void convCommand(convexConvId, "sendEscapeToSession", { pressed_at: Date.now() }).catch((err) => {
         if (isParkedDispatchError(err)) {
           toast.info("Escape queued — it will send when the connection recovers");
           return;
@@ -16327,7 +16320,7 @@ const ConversationViewInner = (
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
-          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} recipientActive={conversation?.status === "active"} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} />;
+          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} recipientConversationId={conversation?._id} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} />;
         case 'huddle_summary':
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':

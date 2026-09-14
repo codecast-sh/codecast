@@ -101,3 +101,21 @@ describe("task comment session authors", () => {
     await expect((restoreSessionAuthor as any)._handler(ctx, args)).rejects.toThrow("different author");
   });
 });
+
+// Final product review (identity safety): the author is the server resolved
+// identity, never the request's free text. A hand cannot sign as a person
+// or as its role; a role's standing session signs as the role.
+describe("task comment author is the resolved actor", () => {
+  test("a free text author is ignored; the token's owner signs", async () => {
+    const { tables } = await fixture();
+    expect(tables.task_comments[0].author).toBe("Owner");
+  });
+
+  test("a hand of a role signs as the host, not the role, whatever it claims", async () => {
+    const { ctx, tables } = await fixture();
+    (tables as Record<string, any[]>).org_roles = [{ _id: "org_roles_r", name: "Infra lead", handle: "infra", status: "active" }];
+    (tables.conversations[0] as any).org_role_id = "org_roles_r";
+    await (addComment as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1", text: "done", author: "Infra lead", conversation_id: "codex-thread" });
+    expect(tables.task_comments[1].author).toBe("Owner");
+  });
+});

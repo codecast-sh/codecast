@@ -11,21 +11,18 @@
  * with the engine installed.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { Command } from "commander";
 import { fmt, icons } from "../../colors.js";
-import { spawn } from "../../proc.js";
-import { findChromeBinary, keychainArgs } from "../../workspace/chrome.js";
-import { browserHome } from "../profile.js";
+import { realChromePid } from "../localChrome.js";
 import type { StartOptions } from "../managedBrowser.js";
 import {
   bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
   reloadExtension, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
-import { BRIDGE_STORE_URL, bridgePairingPage, bridgePairingUrl } from "./protocol.js";
+import { BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
 import { connectRealBridge, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
+import { discardPairingPage, openInRealChrome } from "./realChrome.js";
+import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 
 const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;
@@ -37,63 +34,15 @@ function die(msg: string, hint?: string): never {
   process.exit(1);
 }
 
-/** The forwarding page `setup` leaves for Chrome to open; removed once pairing settles. */
-export function pairingPagePath(): string {
-  return path.join(browserHome(), "pair.html");
-}
-
-/**
- * Hand the pairing URL to the human's own Chrome, the instance on the default
- * profile, without waiting for it and without the token touching any
- * process's arguments.
- *
- * Apple events cannot pick that instance. `tell application "Google Chrome"`
- * addresses a bundle id, and the agent browser is the same bundle on another
- * profile, so with both running the URL lands in whichever one Launch Services
- * answers for: in practice the clone, which has no extension and shows
- * ERR_BLOCKED_BY_CLIENT. JXA's `Application(pid)` resolves the same way and
- * ignores the pid. Chrome's own process singleton is exact: a Chrome started
- * without `--user-data-dir` hands its command line to the instance holding the
- * default profile and exits, or becomes that instance when none is running.
- *
- * The command line is readable by every user on the machine, so it carries
- * the path of a 0600 file whose script forwards to the options page, never
- * the URL itself. Nothing here can see whether Chrome showed the options page
- * or an error, which is why the caller always prints the fallback.
- */
-export function openInRealChrome(url: string): boolean {
-  const bin = findChromeBinary();
-  if (!bin) return false;
-  const page = pairingPagePath();
-  try {
-    fs.mkdirSync(path.dirname(page), { recursive: true, mode: 0o700 });
-    fs.rmSync(page, { force: true });
-    fs.writeFileSync(page, bridgePairingPage(url), { mode: 0o600 });
-    const child = spawn(bin, [...keychainArgs(), pathToFileURL(page).href], { stdio: "ignore", detached: true });
-    child.on("error", () => {});
-    child.unref();
-    return !!child.pid;
-  } catch {
-    return false;
-  }
-}
-
-/** Drop the forwarding page; Chrome has read it by the time pairing settled either way. */
-export function discardPairingPage(): void {
-  try {
-    fs.rmSync(pairingPagePath(), { force: true });
-  } catch {
-    /* already gone */
-  }
-}
-
 export interface BridgeCommandDeps {
   /** The calling codecast session's owner key; sticky targets are per session. */
   me: () => string | null;
 }
 
 export function targetFlags(cmd: Command): Command {
-  return cmd.option("--real", "Use the human's Chrome through the extension (default)");
+  return cmd
+    .option("--real", "Use the human's Chrome through the extension (default)")
+    .option("--pane", "Use the desktop app's browser pane opened for this session (`target pane` makes it stick)");
 }
 
 export const BROWSER_START_HELP = `
@@ -138,8 +87,24 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
+        if (cur === "pane") {
+          const owned = await ownedDesktopPane(me());
+          console.log(`target: ${fmt.highlight("pane")}${fmt.muted(owned ? ` (the desktop app's pane showing ${owned.pane.url ?? "about:blank"})` : " (the desktop app's pane; none is open for this session right now)")}`);
+          console.log(fmt.muted("  `cast browser target real` returns this session to the human's Chrome"));
+          return;
+        }
         console.log(`target: ${fmt.highlight(cur)}${fmt.muted(cur === "real" ? " (the human's Chrome; connection not checked)" : " (advanced command; this invocation only)")}`);
         console.log(fmt.muted("  `cast browser extension status` checks the live connection"));
+        return;
+      }
+      if (mode === "pane") {
+        // Sticky whether or not a pane is open yet: the human may open the
+        // offer after the agent chose, and the choice should already be made.
+        setStickyTarget(me(), "pane");
+        const owned = await ownedDesktopPane(me());
+        console.log(`${OK} ordinary commands drive the desktop app's pane opened for this session`);
+        if (owned) console.log(fmt.muted(`  showing ${owned.pane.url ?? "about:blank"} on the app's CDP port ${owned.registry.port}`));
+        else console.log(`${WARN} no pane is open for this session yet — ${PANE_HOW_TO}`);
         return;
       }
       if (mode !== "real") die("Ordinary commands cannot select a separate browser. The human's Chrome is always the default.");
@@ -239,14 +204,19 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       // is not running is started and given a moment to be found, the same as
       // for a verb (real.ts connectRealBridge): "host not running" would be a
       // fact about this process, not an answer about the extension.
+      // Reports only: a status call never starts Chrome or opens a wake tab.
+      // Sessions poll this, and a repair that opens a tab per poll is a
+      // regression the human sees; the verbs repair, on their own schedule.
       let bridge;
       let s;
       try {
-        ({ bridge, status: s } = await connectRealBridge());
+        ({ bridge, status: s } = await connectRealBridge(undefined, { repair: false }));
       } catch (err) {
         die((err as Error).message);
       }
       console.log(`${OK} host up on 127.0.0.1:${state.port}${bridge.started ? " (started just now; its log is " + bridgeHostLogPath() + ")" : ""}`);
+      const chrome = realChromePid();
+      console.log(chrome ? `${OK} Chrome running (pid ${chrome})` : `${WARN} Chrome is not running on the default profile`);
       if (s.extensionConnected) {
         console.log(connectedLine(s));
       } else if (state.extensionSeenAt) {

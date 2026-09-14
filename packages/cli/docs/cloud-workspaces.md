@@ -25,6 +25,20 @@ Cloud Bun installs use a per-workspace cache with the global store disabled. Nat
 
 Kill/dismiss cleanup preserves dirty trees, unpublished commits, and worktrees still used by another session. Unknown ownership fails closed. Temporary account and agent restarts must not collect workspaces. Manifest teardown commands are responsible for stopping separately launched development services; killing a session does not promise to find arbitrary detached servers.
 
+## Idle protection
+
+A settled parent does not necessarily mean its background work has finished. The daemon renews host activity for waiting work, open app-server turns, and recent subagent activity. Before allowing idle shutdown, a separate bounded Linux check also looks for live task descendants, detached tmux work, headless workers, and CPU activity in otherwise quiet agents or shells. It follows descendants across elevated commands. Missing or unreadable process evidence keeps the host awake rather than risking a running task.
+
+A dormant agent, idle prompt, or recognized persistent MCP/browser service is not work by itself. An unknown live helper or detached development server can keep the host awake until it exits; stop services you no longer need. The check reads process identity, not another copy of the transcript/workflow parser.
+
+For a deliberately quiet operation, run this on the cloud host before starting it:
+
+```sh
+cast hosts keepalive 30
+```
+
+Each call creates an independent lease for 1–1440 whole minutes. Leases use the installed host's `/home/ubuntu/.codecast/host-keepalive` directory, not a session's `HOME` or `CODECAST_DIR`. A shorter later lease cannot cancel another caller's longer one. Expiry removes that lease's veto; the ordinary idle grace still applies. The command does not wake, provision, or restart a host.
+
 ## Verified on the existing AWS host
 
 The existing 12GiB volume was expanded to 32GiB, without creating an instance. One three-prompt invocation created these real Codecast installations:
