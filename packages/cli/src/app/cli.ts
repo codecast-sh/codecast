@@ -845,8 +845,8 @@ wait-settle, then prove with cast browser (snapshot, get text, shot) or eval.
   cast app as-user demo@example.com    a known identity for the run (--restore puts yours back)
   cast app --desktop doctor            the same against the desktop app (from-source run, port 9333)
 
-The web target is this session's tab: your own Chrome through the extension when
-it is paired (--real), the agent browser otherwise (--clone), the same choice
+The web target is this session's tab in your own Chrome through the extension.
+A missing or disconnected extension never falls back to another browser; this is the same choice
 \`cast browser\` makes. as-user only ever re-signs the agent browser or the desktop app.
 `);
 

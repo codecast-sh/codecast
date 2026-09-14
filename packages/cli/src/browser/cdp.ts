@@ -279,8 +279,8 @@ export async function listTargetsVia(conn: CdpClient, timeoutMs = 5000): Promise
 }
 
 /** List page targets via the HTTP endpoint (cheaper than attaching). */
-export async function listTargets(ep: CdpEndpoint): Promise<CdpTarget[]> {
-  const res = await fetch(cdpHttpUrl(ep, "/json/list"), { signal: AbortSignal.timeout(5000) });
+export async function listTargets(ep: CdpEndpoint, timeoutMs = 5000): Promise<CdpTarget[]> {
+  const res = await fetch(cdpHttpUrl(ep, "/json/list"), { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`CDP /json/list returned ${res.status}`);
   const raw = (await res.json()) as Array<Record<string, any>>;
   return raw

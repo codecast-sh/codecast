@@ -1,6 +1,6 @@
 import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
-import { enqueueRoleEvent, markOrgActor } from "./orgEvents";
+import { enqueueRoleEvent } from "./orgEvents";
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { Id, type Doc } from "./_generated/dataModel";
@@ -628,6 +628,20 @@ export const get = query({
   },
 });
 
+// A charter belongs to the humans (org-roles-standing.md T2): no session
+// carrying a standing or hand pointer may write one. Keyed on the STORED doc
+// type, so retyping the doc in the same call cannot slip past it, and on a
+// session the caller RUNS (resolveSessionConversation resolves only rows the
+// caller can see; the ownership check keeps a teammate's id from mattering).
+export async function refuseRoleCharterWrite(ctx: any, userId: Id<"users">, doc: any, sessionRef: string | undefined): Promise<void> {
+  if (doc.doc_type !== "charter" || !sessionRef) return;
+  const caller = await resolveSessionConversation(ctx, userId, sessionRef);
+  if (!caller || String(caller.user_id) !== String(userId)) return;
+  if (caller.standing_role_id || caller.org_role_id) {
+    throw new Error("A charter is written by people: a role's session or a hand may read it but not change it");
+  }
+}
+
 export const update = mutation({
   args: {
     api_token: v.string(),
@@ -647,15 +661,7 @@ export const update = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
-    // A charter belongs to the humans (org-roles-standing.md T2): no session
-    // carrying a standing or hand pointer may write one. Keyed on the STORED
-    // type, so retyping the doc in the same call cannot slip past it.
-    if (doc.doc_type === "charter" && args.session_id) {
-      const caller = await resolveSessionConversation(ctx, auth.userId, args.session_id);
-      if (caller?.standing_role_id || caller?.org_role_id) {
-        throw new Error("A charter is written by people: a role's session or a hand may read it but not change it");
-      }
-    }
+    await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
     const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
     const updates: any = { updated_at: Date.now(), ...text };
@@ -723,7 +729,6 @@ export const addComment = mutation({
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
     const callerConv = args.session_id ? await resolveSessionConversation(ctx, auth.userId, args.session_id) : null;
     const actor = await resolveActor(ctx, auth.userId, callerConv);
-    markOrgActor(ctx, callerConv);
 
     const entries = (doc as any).entries || [];
     const entry: Record<string, any> = {
@@ -794,12 +799,15 @@ export const patch = mutation({
     id: v.id("docs"),
     old_string: v.string(),
     new_string: v.string(),
+    // The session the CLI runs inside, when any (the charter guard reads it).
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
+    await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
     const content = doc.content || "";
     const idx = content.indexOf(args.old_string);

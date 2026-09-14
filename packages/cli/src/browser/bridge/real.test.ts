@@ -47,18 +47,18 @@ describe("target id minting", () => {
 });
 
 describe("sticky target", () => {
-  test("defaults to clone before an extension has paired", () => {
-    expect(stickyTarget("session:a")).toBe("clone");
-    expect(isRealMode({}, "session:a")).toBe(false);
+  test("defaults to the human Chrome even before an extension has paired", () => {
+    expect(stickyTarget("session:a")).toBe("real");
+    expect(isRealMode({}, "session:a")).toBe(true);
     writeBridgeState({ port: 41999, token: TEST_TOKEN });
-    expect(isRealMode({}, "session:a")).toBe(false);
-    expect(explicitTarget("session:a")).toBeNull();
+    expect(isRealMode({}, "session:a")).toBe(true);
+    expect(explicitTarget("session:a")).toBe("real");
   });
 
   test("is per session, and a flag beats it in both directions", () => {
     setStickyTarget("session:a", "real");
     expect(isRealMode({}, "session:a")).toBe(true);
-    expect(isRealMode({}, "session:b")).toBe(false);
+    expect(isRealMode({}, "session:b")).toBe(true);
     expect(isRealMode({ clone: true }, "session:a")).toBe(false);
     expect(isRealMode({ real: true }, "session:b")).toBe(true);
   });
@@ -66,7 +66,7 @@ describe("sticky target", () => {
   test("a keyless caller gets its own shared slot", () => {
     setStickyTarget(null, "real");
     expect(isRealMode({}, null)).toBe(true);
-    expect(isRealMode({}, "session:a")).toBe(false);
+    expect(isRealMode({}, "session:a")).toBe(true);
   });
 
   test("the human's Chrome is the default while the extension is connected, and the choice settles per session", () => {
@@ -105,7 +105,10 @@ describe("sticky target", () => {
   });
 
   test("the sign-in hint names the step that fits the bridge's state", () => {
+    expect(realModeHint("session:a")).toBeNull();
+    setStickyTarget("session:a", "clone");
     expect(realModeHint("session:a")).toContain("cast browser extension setup");
+    setStickyTarget("session:a", "real");
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: false, extensionSeenAt: Date.now() });
     expect(realModeHint("session:a")).toBeNull();
     setStickyTarget("session:a", "clone");
