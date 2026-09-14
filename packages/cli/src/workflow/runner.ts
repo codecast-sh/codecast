@@ -389,7 +389,13 @@ async function executeSessionNode(
     // its worktree from here, and a hand placed elsewhere by device fallback
     // would leave verify checking nothing.
     ...(worktreeName ? { isolated: true, worktree_name: worktreeName, device: deviceId() } : {}),
-    ...(options.spawnerSession ? { spawner_session: options.spawnerSession } : {}),
+    // The review station is the task's reviewer, not the running role's hand
+    // (the-line.md L3): no spawner, so the server files it under no role, and
+    // review_for_task so it counts against the role's caps and its approve is
+    // the outside verdict the independence rule accepts.
+    ...(node.reviewer && context["task_id"]
+      ? { review_for_task: context["task_id"] }
+      : options.spawnerSession ? { spawner_session: options.spawnerSession } : {}),
   });
   if (!spawned?.conversation_id) {
     console.log(`  ${c.red}✗ spawn failed${c.reset}`);

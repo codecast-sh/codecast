@@ -17,3 +17,10 @@ export function briefHandLine(h: BriefHandRow): string {
     : "";
   return `    ${c.dim}${h.short_id}${c.reset} ${h.title} ${c.dim}· ${h.state}${task}${c.reset}`;
 }
+
+// The charter block of `cast brief`: the humans' statement of the job, which
+// every frame tells the role to read here. Absent charter says so.
+export function briefCharterLines(charter: string): string[] {
+  const body = charter.trim() ? charter.split("\n").map((l) => `  ${l}`) : ["  (no charter yet: a person writes it on the role page)"];
+  return ["", `  ${c.bold}## Charter${c.reset}`, ...body];
+}

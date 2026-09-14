@@ -119,6 +119,9 @@ export interface Config {
   visual_version?: string;
   orch_enabled?: boolean;
   orch_version?: string;
+  /** The cast-* skills snippet (`cast install skills`). */
+  skills_enabled?: boolean;
+  skills_version?: string;
   publish_enabled?: boolean;
   publish_version?: string;
   state_enabled?: boolean;

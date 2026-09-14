@@ -56,6 +56,8 @@ describe("line.cast template", () => {
     expect(graph.nodes.get("verify")?.timeout).toBe(1800);
     expect(graph.nodes.get("verify")?.script).not.toContain("|| pwd");
     expect(graph.nodes.get("review")?.prompt).toContain("$default_branch...$branch");
+    expect(graph.nodes.get("review")?.reviewer).toBe(true);
+    expect(graph.nodes.get("implement")?.reviewer).toBeUndefined();
     expect(from("review")).toEqual(["exit:review_verdict = approve", "implement:review_verdict = changes", "exit:review_verdict = reject"]);
   });
 
@@ -122,7 +124,7 @@ describe("line.cast offline run through the session path", () => {
   test("three hands run in order, implement gets the line worktree, review reads the criteria, approve exits", async () => {
     const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
     graph.nodes.get("verify")!.script = "true";
-    const outcome = await runWorkflow(graph, { cwd: tmpDir, taskId: "ct-7", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 });
+    const outcome = await runWorkflow(graph, { cwd: tmpDir, taskId: "ct-7", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, spawnerSession: "owner-sess" });
     expect(outcome).toBe("completed");
     const spawns = calls.filter((c) => c.route === "/cli/spawn").map((c) => c.body);
     expect(spawns).toHaveLength(3);
@@ -134,6 +136,12 @@ describe("line.cast offline run through the session path", () => {
     expect(spawns[1].device.length).toBeGreaterThan(0);
     expect(spawns[2].isolated).toBeUndefined();
     expect(spawns[2].device).toBeUndefined();
+    // The review station is the task's reviewer, never the running role's
+    // hand: review_for_task instead of spawner_session (the-line.md L3).
+    expect(spawns[2].review_for_task).toBe("ct-7");
+    expect(spawns[2].spawner_session).toBeUndefined();
+    expect(spawns[1].spawner_session).toBe("owner-sess");
+    expect(spawns[1].review_for_task).toBeUndefined();
     expect(spawns[2].prompt).toContain("Branch: codecast/line-ct-7");
     expect(spawns[2].prompt).toContain("- A works\n- B works");
     expect(spawns[2].prompt).toContain("Add the thing");

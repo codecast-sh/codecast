@@ -66,6 +66,7 @@ import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@c
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import type { OrgTarget } from "./orgTarget.js";
 import { registerOrgInitCommands } from "./orgInit.js";
+import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -85,7 +86,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getSkillsVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
@@ -531,6 +532,7 @@ interface DaemonState {
   pendingSyncMessages?: number;
   pendingSyncConversations?: number;
   pendingSyncOldestMs?: number;
+  pendingSyncNoProgressMs?: number;
   authExpired?: boolean;
   lastHeartbeatTick?: number;
   lastWatchdogCheck?: number;
@@ -1243,6 +1245,10 @@ function formatRelativeTime(timestamp: string | number): string {
 // Compact "how far behind" duration for the sync-backlog status line, e.g.
 // "2.7m" / "45s" / "1.2h". Tighter than formatRelativeTime's prose so the
 // Queue line stays a single scannable row.
+// Mirrors SYNC_STALL_AFTER_MS in the web's useDaemonHealth: a queue that has
+// completed nothing for this long is stalled, not draining.
+const SYNC_NO_PROGRESS_STALL_MS = 2 * 60_000;
+
 function formatBehind(ms: number): string {
   if (ms < 1000) return "0s";
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
@@ -1345,6 +1351,7 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
         pendingOperations: state?.pendingQueueSize ?? 0,
         pendingConversations: state?.pendingSyncConversations ?? 0,
         oldestPendingMs: state?.pendingSyncOldestMs ?? 0,
+        noProgressMs: state?.pendingSyncNoProgressMs ?? 0,
         stuck: await stuckSyncs,
         mode: config?.sync_mode ?? "all",
         projects: config?.sync_projects ?? [],
@@ -1393,6 +1400,7 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
     const queueMessages = state?.pendingSyncMessages ?? 0;
     const queueConversations = state?.pendingSyncConversations ?? 0;
     const queueOldestMs = state?.pendingSyncOldestMs ?? 0;
+    const queueNoProgressMs = state?.pendingSyncNoProgressMs ?? 0;
     const queueSize = state?.pendingQueueSize ?? 0;
     const hasBacklog = queueMessages > 0 || queueSize > 0;
 
@@ -1420,6 +1428,15 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
       }
       if (queueOldestMs > 0) {
         parts.push(fmt.muted("oldest") + " " + fmt.warning(formatBehind(queueOldestMs)) + fmt.muted(" behind"));
+      }
+      // An old head alone does not mean stuck: a long backlog drains in order.
+      // Say which it is from how long the queue has gone without a success.
+      if (queueNoProgressMs > 0) {
+        parts.push(
+          queueNoProgressMs >= SYNC_NO_PROGRESS_STALL_MS
+            ? fmt.warning("no progress for " + formatBehind(queueNoProgressMs))
+            : fmt.success("draining"),
+        );
       }
       row("Queue", parts.join(fmt.muted(", ")));
     } else {
@@ -1715,7 +1732,6 @@ function startDaemon(): void {
 // applies recommended defaults instead of blocking on prompts.
 async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
-  await installCodecastSkills();
   installSessionRegisterHook();
   installStatusHook();
   await installStatusLineHook();
@@ -1750,9 +1766,15 @@ async function runOnboarding(config: Config): Promise<void> {
       await updateSyncSettingsOnServer(config);
     }
     await promptMemoryEnablement(false);
+    // Skills default on like memory: they cost nothing until invoked.
+    await installSkillsSnippet(true);
+    config.skills_enabled = true;
+    config.skills_version = getSkillsVersion();
+    writeConfig(config);
     console.log(`${fmt.muted("Applied:")}`);
     console.log(`  ${fmt.value("Sync: all projects")}     ${fmt.muted("change:")} ${fmt.cmd("cast sync-settings")}`);
     console.log(`  ${fmt.value("Agent memory: on")}       ${fmt.muted("change:")} ${fmt.cmd("cast memory --disable")}`);
+    console.log(`  ${fmt.value("Skills: on")}             ${fmt.muted("change:")} ${fmt.cmd("cast install skills --disable")}`);
     console.log(`  ${fmt.value("Stable context: off")}    ${fmt.muted("change:")} ${fmt.cmd("cast stable solo")}\n`);
     ensureTmux();
   }
@@ -2330,25 +2352,25 @@ async function installOrchestration(update = false): Promise<{ installed: boolea
   return { installed: anyChange && !update, updated: anyChange && update };
 }
 
-// The codecast skills are slash commands over the team's shared state
-// (/codecast-why, /codecast-conflicts, …). They ride the same paths as the
-// hooks: every onboarding, every `cast install` wizard or --all run, and every
-// refresh after an update. A single-slug install (`cast install memory`)
-// leaves them alone, so each snippet's install stays exactly its own files.
-async function installCodecastSkills(update = true): Promise<{ installed: number; updated: number }> {
+// The `skills` snippet: the cast-* slash commands over the team's shared
+// state (/cast-pickup, /cast-why, /cast-ship, …). One catalog entry, so the
+// Settings page toggle, the wizard, `cast install skills` and the post-update
+// refresh all reach it the way they reach memory or tasks. The bundle is
+// imported lazily: it carries every skill body and has no business in the
+// boot graph of a `cast` that is not installing anything.
+async function installSkillsSnippet(update = false): Promise<{ installed: boolean; updated: boolean }> {
   const { BUNDLED_SKILLS } = await import("./bundledSkills.js");
-  let installed = 0;
-  let updated = 0;
+  let wrote = false;
+  let existed = false;
   for (const skill of BUNDLED_SKILLS) {
     const dest = path.join(os.homedir(), ".claude", "skills", skill.name, "SKILL.md");
-    const existed = fs.existsSync(dest);
-    if (!writeOwnedFile(dest, skill.body, 0o644, update)) continue;
-    if (existed) updated++; else installed++;
+    existed = existed || fs.existsSync(dest);
+    wrote = writeOwnedFile(dest, skill.body, 0o644, update) || wrote;
   }
-  return { installed, updated };
+  return { installed: wrote && !existed, updated: wrote && existed };
 }
 
-function uninstallCodecastSkills(): void {
+function uninstallSkillsSnippet(): void {
   for (const name of CODECAST_SKILL_NAMES) {
     const dir = path.join(os.homedir(), ".claude", "skills", name);
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
@@ -2382,7 +2404,7 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
   else if (config.messaging_enabled) installMessagingSnippet(true);
   if (config.orch_enabled) await installOrchestration(true);
-  await installCodecastSkills();
+  if (config.skills_enabled) await installSkillsSnippet(true);
   installSessionRegisterHook();
   installStatusHook();
   await installStatusLineHook();
@@ -9285,7 +9307,7 @@ program
     }
 
     // 4. Remove slash command and skills
-    uninstallCodecastSkills();
+    uninstallSkillsSnippet();
     const commandFile = path.join(claudeDir, "commands", "codecast.md");
     if (fs.existsSync(commandFile)) {
       fs.unlinkSync(commandFile);
@@ -10037,6 +10059,7 @@ program
       browser: { getVersion: getBrowserVersion, install: installBrowserSnippet, reEnable: "cast install" },
       chat: { getVersion: getChatVersion, install: installChatSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
+      skills: { getVersion: getSkillsVersion, install: installSkillsSnippet, reEnable: "cast install skills" },
       // Wired late: the decide slug shipped in the catalog without a behavior
       // entry, so cast install decide crashed on entry.install(). The golden
       // suite is what caught it.
@@ -10074,6 +10097,7 @@ program
         // Take the section back off disk too. Without this the flag says off
         // while the agent keeps reading the capability out of CLAUDE.md.
         if (entry.enabledKey === "orch_enabled") uninstallOrchestration();
+        else if (entry.enabledKey === "skills_enabled") uninstallSkillsSnippet();
         else removeSnippetSection(entry.enabledKey);
         console.log(`${icons.cross} ${entry.name} disabled. Run ${fmt.cmd(`cast install ${desc?.slug ?? key}`)} to re-enable.`);
         return;
@@ -10084,7 +10108,8 @@ program
       (config as any)[entry.versionKey] = entry.getVersion();
       writeConfig(config);
       const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
-      console.log(`${icons.check} ${entry.name} — ${verb} in ${targetList}`);
+      // A snippet that writes files rather than a CLAUDE.md section names where it wrote.
+      console.log(`${icons.check} ${entry.name} — ${verb} in ${desc?.section ? targetList : desc?.writesTo ?? targetList}`);
       return;
     }
 
@@ -10093,9 +10118,9 @@ program
         (config as any)[s.enabledKey] = false;
         // Same promise as the single-snippet path: off means gone from disk.
         if (s.enabledKey === "orch_enabled") uninstallOrchestration();
+        else if (s.enabledKey === "skills_enabled") uninstallSkillsSnippet();
         else removeSnippetSection(s.enabledKey);
       }
-      uninstallCodecastSkills();
       // Stable is not in SNIPPET_CATALOG because it is a SessionStart hook,
       // but "all snippets" includes it in the UI and help text.
       applyStableMode(config, "off", false);
@@ -10185,11 +10210,6 @@ program
     }
 
     writeConfig(config);
-    const skills = await installCodecastSkills();
-    if (skills.installed || skills.updated) {
-      const { BUNDLED_SKILLS } = await import("./bundledSkills.js");
-      console.log(`  ${icons.check} skills — ${BUNDLED_SKILLS.map((k) => `/${k.name}`).join(", ")} in ~/.claude/skills`);
-    }
     if (anyInstalled) {
       console.log(`\n${fmt.success("Done.")} Snippets installed in ${targetList}`);
     }
@@ -12968,7 +12988,10 @@ const briefCmd = program
       const { briefHandLine } = await import("./briefLines.js");
       for (const h of f.hands) console.log(briefHandLine(h));
     }
+    const { briefCharterLines } = await import("./briefLines.js");
+    for (const line of briefCharterLines(String(brief.charter ?? ""))) console.log(line);
     console.log("");
+    console.log(`  ${c.bold}## Brief${c.reset}`);
     for (const line of String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n")) console.log(`  ${line}`);
   });
 
@@ -13005,6 +13028,14 @@ const ORG_STATE_ORDER = ["needs_input", "working", "dormant", "done", "idle"] as
 function orgTally(counts: Record<string, number>): string {
   return ORG_STATE_ORDER.filter((k) => counts[k] > 0).map((k) => `${counts[k]} ${k.replace("_", " ")}`).join(", ") || "no sessions";
 }
+/** " · needs input · Rotating the prod key": a standing agent's declared
+ *  status and pinned line, the same reading as the org card; empty when the
+ *  row carries neither a status nor a work state. */
+function orgStandingLine(s: { state?: string | null; state_status?: string | null; state_line?: string | null }): string {
+  const word = (s.state_status ?? s.state ?? "").replace("_", " ");
+  if (!word && !s.state_line) return "";
+  return `${word ? ` · ${word}` : ""}${s.state_line ? ` · ${s.state_line}` : ""}`;
+}
 function orgSessionLine(s: any): string {
   return `      ${c.dim}${s.short_id ?? String(s._id).slice(0, 7)}${c.reset} ${s.title || "(untitled)"} ${c.dim}· ${s.state}${s.subagent_count ? ` · ${s.subagent_count} subagents` : ""}${c.reset}`;
 }
@@ -13039,11 +13070,12 @@ org
         ? (tree.roles.find((x: any) => x._id === r.reports_to.role_id)?.name ?? r.reports_to.role_id)
         : (tree.people.find((x: any) => x.user_id === r.reports_to.user_id)?.name ?? "a person");
       console.log(`  ${c.magenta}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · reports to ${parent} · ${orgTally(r.counts)}${c.reset}`);
+      if (r.standing) console.log(`      ${c.dim}standing:${orgStandingLine(r.standing)}${c.reset}`);
       for (const s of r.sessions) console.log(orgSessionLine(s));
       if (r.total > r.sessions.length) console.log(`      ${c.dim}+${r.total - r.sessions.length} more${c.reset}`);
     }
     for (const a of tree.anchors) {
-      console.log(`  ${c.green}${a.name}${c.reset} ${c.dim}· anchor · ${a.status}${a.state ? ` · ${a.state}` : ""}${c.reset}`);
+      console.log(`  ${c.green}${a.name}${c.reset} ${c.dim}· anchor · ${a.status}${orgStandingLine(a)}${c.reset}`);
     }
   });
 
@@ -13160,6 +13192,7 @@ org
 // analyzer prompt and the apply loop live in orgInit.ts; they attach to the
 // org group above.
 registerOrgInitCommands(program, { cliPost, readWorkspace, workspaceArgs, workspaceLabel });
+registerOrgTemplateCommands(program, { cliPost, readWorkspace, workspaceArgs, workspaceLabel });
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is
@@ -15228,7 +15261,7 @@ work
   .argument("<short_id>", "Task short ID")
   .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
-  .option("-a, --author <name>", "Override comment author (default: auto-detect)")
+  .option("-a, --author <name>", "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts")
   .action(async (shortId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
@@ -15976,7 +16009,7 @@ doc
   .argument("<id>", "Document ID")
   .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", "note")
-  .option("-a, --author <name>", "Override comment author")
+  .option("-a, --author <name>", "Ignored: the author is the identity behind your token; kept for older scripts")
   .action(async (id: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { id, content: text, type: options.type };
@@ -16422,7 +16455,7 @@ plan
   .option("-f, --finding", "Shorthand for --type discovery")
   .option("--ref <path_or_url>", "Add a reference pointer (sets type to reference)")
   .option("-r, --rationale <why>", stdinText("Rationale (for decisions)"))
-  .option("-a, --author <name>", "Override comment author")
+  .option("-a, --author <name>", "Ignored: the author is the identity behind your token; kept for older scripts")
   .action(async (planId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     let type = options.type;
