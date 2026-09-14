@@ -3,9 +3,11 @@
 // is readable and writable by the members of its team; a private channel or
 // DM additionally requires a membership row — the team check stays underneath
 // so leaving the team closes every door at once, even if a membership row
-// lingers. `team_id` stays ROUTING on every kind — access never reads it
-// alone. Returns false rather than throwing so queries can degrade to an
-// empty result.
+// lingers. A community channel (the public site's rooms) is open to every
+// signed-in user, and canReadChannelAnonymously opens it to visitors too.
+// `team_id` stays ROUTING on every kind — access never reads it alone.
+// Returns false rather than throwing so queries can degrade to an empty
+// result.
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { isTeamMember } from "./privacy";
@@ -16,6 +18,22 @@ type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 /** Private channels and DMs gate on their member rows; public gates on the team. */
 export function isRestricted(channel: Doc<"chat_channels">): boolean {
   return channel.kind === "private" || channel.kind === "dm";
+}
+
+/** The product's public rooms: every visitor reads, every signed-in user
+ *  writes. The routing team is where they are managed, not who may enter. */
+export function isCommunity(channel: Doc<"chat_channels"> | null | undefined): boolean {
+  return channel?.kind === "community";
+}
+
+/**
+ * May someone with NO identity read this room? Only a community channel, and
+ * only while it is open — an archived room leaves the public site with the
+ * rail. The one place chat answers a question for an anonymous caller;
+ * every write still needs a signed-in user.
+ */
+export function canReadChannelAnonymously(channel: Doc<"chat_channels"> | null): boolean {
+  return !!channel && isCommunity(channel) && !channel.archived_at;
 }
 
 export async function isChannelMember(
@@ -48,6 +66,10 @@ export async function canAccessChannel(
   channel: Doc<"chat_channels"> | null,
 ): Promise<boolean> {
   if (!channel) return false;
+  // A community room is open to every signed-in user: no team membership, no
+  // per-team feature flag. Who may MANAGE it is a separate question the
+  // mutations ask of the routing team's admins.
+  if (isCommunity(channel)) return true;
   if (!(await isTeamMember(ctx as any, userId, channel.team_id))) return false;
   // Chat is a per-team opt-in: a team that turned it off (or never turned it
   // on) has no readable channels, member or not.

@@ -18,6 +18,7 @@ import {
   collectLinesSince,
   linesSince,
   listChannels,
+  listCommunityChannels,
   listLiveVoiceBursts,
   listMessages,
   listMyThreads,
@@ -3515,5 +3516,115 @@ describe("agent channels: roles and sessions in chat", () => {
     });
     const many = await call(linesSince, ctx, { channel_ids: Array.from({ length: 21 }, () => CHANNEL), since: 0 });
     expect(many.truncated).toBe(true);
+  });
+});
+
+// ── Community channels: the public site's rooms ─────────────────────────────
+// Read by anyone, posted in by any signed-in user, managed only by admins of
+// the one team flagged as the community. chatAccess.ts + listCommunityChannels.
+describe("community channels", () => {
+  const COMMUNITY_TEAM = "team-community" as any;
+  const COMMUNITY = "chat_channels_community" as any;
+  const ARCHIVED_COMMUNITY = "chat_channels_community_old" as any;
+  const IMPOSTOR = "chat_channels_impostor" as any;
+  const STAFF = "user-staff" as any;
+  const STRANGER = "user-stranger" as any;
+
+  function seed(extra: Record<string, any[]> = {}) {
+    return {
+      users: [
+        ...users(),
+        { _id: STAFF, name: "Staff", email: "staff@example.test", github_username: "staff" },
+        { _id: STRANGER, name: "Stranger", email: "stranger@example.test", github_username: "stranger" },
+      ],
+      teams: [
+        ...teams(),
+        { _id: COMMUNITY_TEAM, name: "Codecast Community", invite_code: "COMM", created_at: 1, features: { chat: true }, community: true },
+      ],
+      team_memberships: [
+        ...memberships(),
+        { _id: "m-staff", user_id: STAFF, team_id: COMMUNITY_TEAM, role: "admin" },
+      ],
+      chat_channels: [
+        ...channels(),
+        { _id: COMMUNITY, team_id: COMMUNITY_TEAM, name: "general", kind: "community", workspace: "public", created_by: STAFF, created_at: 1_000, updated_at: 1_000 },
+        { _id: ARCHIVED_COMMUNITY, team_id: COMMUNITY_TEAM, name: "old", kind: "community", workspace: "public", created_by: STAFF, created_at: 1_000, updated_at: 1_000, archived_at: 2_000 },
+        // A "community" row in a team nobody designated: inert, never public.
+        { _id: IMPOSTOR, team_id: TEAM, name: "fake-public", kind: "community", created_by: ALICE, created_at: 1_000, updated_at: 1_000 },
+      ],
+      ...extra,
+    };
+  }
+
+  test("a visitor with no identity reads the community rail and its messages", async () => {
+    const ctx = context(null, seed());
+    await call(sendMessage, as(ctx, STAFF), { channel_id: COMMUNITY, content: "welcome" });
+    const rail = await call(listCommunityChannels, ctx, {});
+    expect(rail.channels.map((c: any) => c._id)).toEqual([COMMUNITY]);
+    expect(rail.reads).toEqual([]);
+    expect(rail.rail[0].unread).toBe(0);
+    expect(rail.rail[0].last_message?.preview).toBe("welcome");
+    const page = await call(listMessages, ctx, { channel_id: COMMUNITY });
+    expect(page.messages.map((m: any) => m.content)).toEqual(["welcome"]);
+    expect(page.authors.map((a: any) => a.name)).toEqual(["Staff"]);
+  });
+
+  test("a visitor reads nothing else: team rooms, archived rooms, impostors", async () => {
+    const ctx = context(null, seed());
+    expect((await call(listMessages, ctx, { channel_id: CHANNEL })).messages).toEqual([]);
+    expect((await call(listMessages, ctx, { channel_id: ARCHIVED_COMMUNITY })).messages).toEqual([]);
+    expect((await call(listMessages, ctx, { channel_id: IMPOSTOR })).messages).toEqual([]);
+    expect((await call(listChannels, ctx, { team_id: COMMUNITY_TEAM })).channels).toEqual([]);
+  });
+
+  test("a signed-in user outside the team posts, replies, reacts and reads their own marks", async () => {
+    const ctx = context(STRANGER, seed());
+    const sent = await call(sendMessage, ctx, { channel_id: COMMUNITY, content: "hello from outside" });
+    expect(sent.created).toBe(true);
+    await call(sendMessage, ctx, { channel_id: COMMUNITY, content: "a reply", thread_root_id: sent.message_id });
+    await call(toggleReaction, ctx, { message_id: sent.message_id, emoji: "👋" });
+    const thread = await call(getThread, ctx, { root_id: sent.message_id });
+    expect(thread.replies.map((r: any) => r.content)).toEqual(["a reply"]);
+    const rail = await call(listCommunityChannels, ctx, {});
+    expect(rail.reads.map((r: any) => r.channel_id)).toEqual([COMMUNITY]);
+    expect(rail.rail[0].joined).toBe(true);
+    // Their own team's rail is untouched by the public room.
+    expect((await call(listChannels, as(ctx, ALICE), { team_id: TEAM })).channels.map((c: any) => c._id))
+      .not.toContain(COMMUNITY);
+  });
+
+  test("a signed-in stranger still cannot enter an ordinary team room", async () => {
+    const ctx = context(STRANGER, seed());
+    await expect(call(sendMessage, ctx, { channel_id: CHANNEL, content: "hi" })).rejects.toThrow(/not found/i);
+    expect((await call(listMessages, ctx, { channel_id: IMPOSTOR })).messages).toEqual([]);
+  });
+
+  test("only a community team admin opens, renames or archives a community room", async () => {
+    const ctx = context(STAFF, seed());
+    const made = await call(createChannel, ctx, { team_id: COMMUNITY_TEAM, name: "support", kind: "community" });
+    expect(made.created).toBe(true);
+    expect(ctx.db._tables.chat_channels.find((c: any) => c._id === made.channel_id).workspace).toBe("public");
+    // An admin of a team that is NOT the community: refused.
+    await expect(call(createChannel, as(ctx, BOB), { team_id: TEAM, name: "leak", kind: "community" }))
+      .rejects.toThrow(/community team/i);
+    // A stranger may post but never reshape.
+    await expect(call(updateChannel, as(ctx, STRANGER), { channel_id: COMMUNITY, name: "hijacked" }))
+      .rejects.toThrow(/admin/i);
+    await expect(call(archiveChannel, as(ctx, STRANGER), { channel_id: COMMUNITY, archived: true }))
+      .rejects.toThrow(/admin/i);
+    await call(archiveChannel, ctx, { channel_id: COMMUNITY, archived: true });
+    expect((await call(listCommunityChannels, context(null, seed()), {})).channels.length).toBe(1);
+  });
+
+  test("a stranger deletes their own line, an admin deletes anyone's, a stranger never deletes another's", async () => {
+    const ctx = context(STRANGER, seed());
+    const mine = await call(sendMessage, ctx, { channel_id: COMMUNITY, content: "mine" });
+    const theirs = await call(sendMessage, as(ctx, STAFF), { channel_id: COMMUNITY, content: "theirs" });
+    await expect(call(deleteMessage, ctx, { message_id: theirs.message_id })).rejects.toThrow();
+    await call(deleteMessage, ctx, { message_id: mine.message_id });
+    await call(deleteMessage, as(ctx, STAFF), { message_id: mine.message_id }).catch(() => {});
+    await call(deleteMessage, as(ctx, STAFF), { message_id: theirs.message_id });
+    const visible = messagesIn(ctx).filter((m: any) => !m.deleted_at);
+    expect(visible).toEqual([]);
   });
 });
