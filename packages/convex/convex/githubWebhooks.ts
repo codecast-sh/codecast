@@ -302,6 +302,23 @@ export const storeWebhookEvent = internalMutation({
 
 // ── Pull requests ──
 
+/**
+ * Read the commits of a pull request and store them on the row. A failure
+ * here costs the commits tab, never the files, so it is logged and swallowed.
+ */
+export async function syncPRCommits(ctx: any, prId: Id<"pull_requests">, repository: string, prNumber: number, token: string): Promise<void> {
+  try {
+    const commits = await ctx.runAction(internal.githubApi.listPRCommits, {
+      repository,
+      pr_number: prNumber,
+      github_access_token: token,
+    });
+    await ctx.runMutation(internal.pull_requests.updatePRCommits, { pr_id: prId, commits });
+  } catch (error) {
+    console.error(`Commits for ${repository}#${prNumber} failed:`, error);
+  }
+}
+
 export const processPROpenedEvent = internalAction({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -338,6 +355,7 @@ export const processPROpenedEvent = internalAction({
       base_sha: pr.base?.sha,
       draft: !!pr.draft,
       requested_reviewers: (pr.requested_reviewers ?? []).map((r: any) => r.login),
+      ...prMetadataFrom(pr),
       created_at: new Date(pr.created_at).getTime(),
       updated_at: new Date(pr.updated_at).getTime(),
     });
@@ -379,6 +397,7 @@ export const processPROpenedEvent = internalAction({
             commits_count: filesData.commits_count,
             base_ref: filesData.base_ref,
           });
+          await syncPRCommits(ctx, result.pr_id, repositoryFullName, prNumber, token);
           filesSynced = true;
         } catch (error) {
           console.error("Failed to fetch PR files:", error);
@@ -485,6 +504,7 @@ export const processPRSynchronizeEvent = internalAction({
         commits_count: filesData.commits_count,
         base_ref: filesData.base_ref,
       });
+      await syncPRCommits(ctx, prData._id, repositoryFullName, prNumber, token);
 
       await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
       return { success: true };
@@ -645,6 +665,7 @@ export const processPRMetaEvent = internalMutation({
       base_sha: prPayload.base?.sha,
       base_ref: prPayload.base?.ref,
       requested_reviewers: requested,
+      ...prMetadataFrom(prPayload),
       task_ids: links.task_ids.length ? links.task_ids : existing.task_ids,
     };
     if (action === "reopened") {
@@ -664,12 +685,18 @@ export const processPRMetaEvent = internalMutation({
       : "pr_edited";
 
     const requestedLogin = prPayload.requested_reviewer?.login ?? prPayload.requested_team?.name;
+    const labelName = payload.label?.name;
+    const assigneeLogin = payload.assignee?.login;
     const title =
       action === "reopened" ? `Reopened PR #${pr.number}: ${pr.title}`
       : action === "ready_for_review" ? `PR #${pr.number} is ready for review`
       : action === "converted_to_draft" ? `PR #${pr.number} went back to draft`
       : action === "review_requested" ? `Review requested from ${requestedLogin ?? "a reviewer"} on PR #${pr.number}`
       : action === "review_request_removed" ? `Review request withdrawn on PR #${pr.number}`
+      : action === "labeled" ? `PR #${pr.number} labeled ${labelName ?? ""}`.trim()
+      : action === "unlabeled" ? `Label ${labelName ?? ""} removed from PR #${pr.number}`.replace("  ", " ")
+      : action === "assigned" ? `PR #${pr.number} assigned to ${assigneeLogin ?? "someone"}`
+      : action === "unassigned" ? `${assigneeLogin ?? "Someone"} unassigned from PR #${pr.number}`
       : `PR #${pr.number} edited`;
 
     await recordExternalEvent(ctx, {
@@ -705,14 +732,28 @@ export const processPRMetaEvent = internalMutation({
 
 // ── Reviews ──
 
-// GitHub's review states, mapped onto the four this schema stores. A dismissed
-// review has been withdrawn, so it lands as "commented": present in the history,
-// counted by nothing.
-function mapReviewState(state: string | undefined): "approved" | "changes_requested" | "commented" {
+// GitHub's review states, mapped onto the ones this schema stores. A dismissed
+// review has been withdrawn: it stays in the history as dismissed, and the
+// review decision counts it as nothing.
+export function mapReviewState(state: string | undefined): "approved" | "changes_requested" | "commented" | "dismissed" {
   const normalized = (state ?? "").toLowerCase();
   if (normalized === "approved") return "approved";
   if (normalized === "changes_requested") return "changes_requested";
+  if (normalized === "dismissed") return "dismissed";
   return "commented";
+}
+
+/** GitHub's labels and assignees on a pull request payload, in the row's shape. */
+export function prMetadataFrom(prPayload: any): {
+  labels: Array<{ name: string; color?: string }>;
+  assignees: string[];
+} {
+  return {
+    labels: (prPayload?.labels ?? [])
+      .filter((l: any) => typeof l?.name === "string")
+      .map((l: any) => ({ name: l.name as string, color: typeof l.color === "string" ? l.color : undefined })),
+    assignees: (prPayload?.assignees ?? []).map((a: any) => a?.login).filter((l: any) => typeof l === "string"),
+  };
 }
 
 export const processReviewEvent = internalMutation({
@@ -843,6 +884,28 @@ async function ingestReviewComment(ctx: any, payload: any): Promise<boolean> {
   const rangeEnd: number | undefined = comment.line ?? comment.original_line;
   const rangeStart: number | undefined = comment.start_line ?? comment.original_start_line;
 
+  // A note codecast just submitted in a review may echo back before its GitHub
+  // id was recorded here. The same words on the same line of the same pull
+  // request from a row GitHub has no id for is that note: adopt it.
+  const twin = (await ctx.db
+    .query("review_comments")
+    .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pr._id))
+    .collect())
+    .find((row: any) =>
+      row.codecast_origin && !row.github_comment_id
+      && row.file_path === comment.path && row.content === comment.body
+      && row.line_number === (rangeStart ?? rangeEnd));
+  if (twin) {
+    await ctx.db.patch(twin._id, {
+      github_comment_id: comment.id,
+      github_review_id: comment.pull_request_review_id ?? undefined,
+      github_in_reply_to_id: comment.in_reply_to_id ?? undefined,
+      html_url: comment.html_url,
+      pending_review: undefined,
+    });
+    return false;
+  }
+
   const commentId = await ctx.db.insert("review_comments", {
     pull_request_id: pr._id,
     repository,
@@ -954,7 +1017,11 @@ export const processReviewThreadEvent = internalMutation({
         .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
         .first();
       if (!row) continue;
-      await ctx.db.patch(row._id, { resolved, resolved_at: resolvedAt });
+      await ctx.db.patch(row._id, {
+        resolved,
+        resolved_at: resolvedAt,
+        github_thread_id: payload.thread?.node_id ?? row.github_thread_id,
+      });
       marked++;
     }
 
@@ -1506,6 +1573,8 @@ export const matchPRToConversation = internalMutation({
     base_sha: v.optional(v.string()),
     draft: v.optional(v.boolean()),
     requested_reviewers: v.optional(v.array(v.string())),
+    labels: v.optional(v.array(v.object({ name: v.string(), color: v.optional(v.string()) }))),
+    assignees: v.optional(v.array(v.string())),
     created_at: v.number(),
     updated_at: v.number(),
   },
@@ -1576,6 +1645,8 @@ export const matchPRToConversation = internalMutation({
       base_sha: args.base_sha,
       draft: args.draft,
       requested_reviewers: args.requested_reviewers,
+      labels: args.labels,
+      assignees: args.assignees,
       task_ids: links.task_ids.length ? links.task_ids : undefined,
       linked_session_ids: conversations.map((c) => c._id),
       updated_at: args.updated_at,

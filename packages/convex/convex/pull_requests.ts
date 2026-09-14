@@ -132,6 +132,8 @@ export const syncPRFromGitHub = internalMutation({
     base_sha: v.optional(v.string()),
     draft: v.optional(v.boolean()),
     requested_reviewers: v.optional(v.array(v.string())),
+    labels: v.optional(v.array(v.object({ name: v.string(), color: v.optional(v.string()) }))),
+    assignees: v.optional(v.array(v.string())),
     created_at: v.number(),
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
@@ -155,6 +157,8 @@ export const syncPRFromGitHub = internalMutation({
       base_sha: args.base_sha,
       draft: args.draft,
       requested_reviewers: args.requested_reviewers,
+      labels: args.labels,
+      assignees: args.assignees,
       updated_at: args.updated_at,
       merged_at: args.merged_at,
       closed_at: args.closed_at,
@@ -317,6 +321,26 @@ export const getPRById = query({
       .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", pr.team_id))
       .first();
     return membership ? pr : null;
+  },
+});
+
+export const updatePRCommits = internalMutation({
+  args: {
+    pr_id: v.id("pull_requests"),
+    commits: v.array(v.object({
+      sha: v.string(),
+      message: v.string(),
+      author_login: v.optional(v.string()),
+      author_name: v.optional(v.string()),
+      author_avatar_url: v.optional(v.string()),
+      committed_at: v.optional(v.number()),
+      url: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db.get(args.pr_id);
+    if (!pr) return;
+    await ctx.db.patch(args.pr_id, { commits: args.commits, commits_count: args.commits.length });
   },
 });
 

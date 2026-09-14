@@ -1,9 +1,13 @@
 import { v } from "convex/values";
-import { mutation, query, action } from "./functions";
-import { api } from "./_generated/api";
+import { mutation, query, action, internalQuery } from "./functions";
+import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { requireUser } from "./lib/auth";
+import { requireUser, requireUserOrToken } from "./lib/auth";
 import { requireAccessiblePullRequest } from "./lib/access";
+import { githubSentence } from "./prCli";
+import { pendingRowsFor } from "./codeComments";
+import { sendNotesToSession } from "./reviewNotes";
+import { codecastPrUrl } from "@codecast/shared/contracts";
 
 async function requireReviewAccess(ctx: any, userId: any, reviewId: any) {
   const review = await ctx.db.get(reviewId);
@@ -298,5 +302,151 @@ export const submitReview = action({
       github_review_id: githubResult.review_id,
       github_review_url: githubResult.review_url,
     };
+  },
+});
+
+
+// ── The batched review ──
+//
+// Notes accumulate as pending rows while the reviewer reads (codeComments.create
+// with pending). They leave together: as one GitHub review under the reviewer's
+// own account, or as one message to a session, or both. The reviewer's own
+// token is required for GitHub, because a review is an opinion with a name on
+// it and the app has none.
+
+export const reviewerFor = internalQuery({
+  args: { user_id: v.id("users"), pull_request_id: v.id("pull_requests") },
+  handler: async (ctx, args) => {
+    const user: any = await ctx.db.get(args.user_id);
+    const pr = await ctx.db.get(args.pull_request_id);
+    if (!user || !pr) return null;
+    return {
+      github_token: user.github_access_token ?? null,
+      github_username: user.github_username ?? null,
+      pr: { repository: pr.repository, number: pr.number, head_sha: pr.head_sha ?? null, state: pr.state },
+    };
+  },
+});
+
+const EVENT_STATE = {
+  APPROVE: "approved",
+  REQUEST_CHANGES: "changes_requested",
+  COMMENT: "commented",
+} as const;
+
+export const submitPending = action({
+  args: {
+    api_token: v.optional(v.string()),
+    pull_request_id: v.id("pull_requests"),
+    event: v.union(v.literal("APPROVE"), v.literal("REQUEST_CHANGES"), v.literal("COMMENT")),
+    body: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const userId = await ctx.runQuery(internal.reviews.callerId, { api_token: args.api_token });
+    if (!userId) return { error: "Unauthorized" };
+    const reviewer: any = await ctx.runQuery(internal.reviews.reviewerFor, { user_id: userId, pull_request_id: args.pull_request_id });
+    if (!reviewer) return { error: "Pull request not found" };
+    if (!reviewer.github_token) {
+      return { error: "A review goes out under your own GitHub account, and this one has no GitHub token. Connect GitHub in codecast, or review on github.com." };
+    }
+    if (reviewer.pr.state !== "open") return { error: `${reviewer.pr.repository}#${reviewer.pr.number} is ${reviewer.pr.state}.` };
+
+    const notes: any[] = await ctx.runQuery(internal.codeComments.pendingRowsInternal, { user_id: userId, pull_request_id: args.pull_request_id });
+    if (args.event === "COMMENT" && !args.body?.trim() && notes.length === 0) {
+      return { error: "Nothing to submit: write a note or a summary first." };
+    }
+
+    const comments = notes
+      .filter((n) => n.file_path && n.line_number != null)
+      .map((n) => {
+        const side = n.side ?? "RIGHT";
+        const isRange = n.line_end != null && n.line_end !== n.line_number;
+        return {
+          path: n.file_path,
+          body: n.content,
+          line: isRange ? n.line_end : n.line_number,
+          side,
+          ...(isRange ? { start_line: n.line_number, start_side: side } : {}),
+        };
+      });
+
+    try {
+      const result: any = await ctx.runAction(api.githubApi.submitPRReview, {
+        repository: reviewer.pr.repository,
+        pr_number: reviewer.pr.number,
+        event: args.event,
+        body: args.body,
+        commit_id: reviewer.pr.head_sha ?? undefined,
+        comments,
+        github_access_token: reviewer.github_token,
+      });
+      const posted: any[] = comments.length
+        ? await ctx.runAction(internal.githubApi.listReviewComments, {
+            repository: reviewer.pr.repository,
+            pr_number: reviewer.pr.number,
+            review_id: result.review_id,
+            github_access_token: reviewer.github_token,
+          })
+        : [];
+      const stamped = await ctx.runMutation(internal.codeComments.recordSubmittedReview, {
+        user_id: userId,
+        pull_request_id: args.pull_request_id,
+        github_review_id: result.review_id,
+        review_url: result.review_url,
+        state: EVENT_STATE[args.event],
+        body: args.body,
+        commit_sha: reviewer.pr.head_sha ?? undefined,
+        comments: posted,
+      });
+      return {
+        repository: reviewer.pr.repository,
+        number: reviewer.pr.number,
+        state: EVENT_STATE[args.event],
+        url: result.review_url,
+        notes: notes.length,
+        as: reviewer.github_username,
+        ...stamped,
+      };
+    } catch (error) {
+      return { error: githubSentence(error) };
+    }
+  },
+});
+
+export const callerId = internalQuery({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    try {
+      return await requireUserOrToken(ctx, args.api_token);
+    } catch {
+      return null;
+    }
+  },
+});
+
+/**
+ * Hand the pending notes to a session as one message, the way `cast review
+ * send` does, without submitting them to GitHub. The notes stay pending, so
+ * the same batch can still go out as a review afterwards.
+ */
+export const handPendingToSession = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    pull_request_id: v.id("pull_requests"),
+    // Defaults to the pull request's shepherd.
+    conversation_ref: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const pr = await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
+    const ref = args.conversation_ref ?? (pr.shepherd_conversation_id ? String(pr.shepherd_conversation_id) : undefined);
+    if (!ref) throw new Error("No session to hand the review to: bind a shepherd or name a session.");
+    const rows = await pendingRowsFor(ctx, userId, args.pull_request_id);
+    if (rows.length === 0) throw new Error("No pending notes on this pull request");
+    return await sendNotesToSession(ctx, userId, ref, rows, {
+      repository: pr.repository,
+      ref: pr.head_sha ?? undefined,
+      url: codecastPrUrl(pr.repository, pr.number),
+    });
   },
 });

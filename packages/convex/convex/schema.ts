@@ -2344,6 +2344,19 @@ export default defineSchema({
     // "approved" | "changes_requested" | "review_required" | "none"
     review_decision: v.optional(v.string()),
     requested_reviewers: v.optional(v.array(v.string())),
+    // GitHub's own metadata on the pull request, kept as GitHub sends it.
+    labels: v.optional(v.array(v.object({ name: v.string(), color: v.optional(v.string()) }))),
+    assignees: v.optional(v.array(v.string())),
+    // The commits on the head branch, oldest first, read when the files are.
+    commits: v.optional(v.array(v.object({
+      sha: v.string(),
+      message: v.string(),
+      author_login: v.optional(v.string()),
+      author_name: v.optional(v.string()),
+      author_avatar_url: v.optional(v.string()),
+      committed_at: v.optional(v.number()),
+      url: v.optional(v.string()),
+    }))),
     unresolved_review_count: v.optional(v.number()),
     // One entry per check run or commit status context on head_sha, keyed by
     // name plus the suite's triggering event when known (a job that runs on
@@ -2402,7 +2415,9 @@ export default defineSchema({
       v.literal("pending"),
       v.literal("approved"),
       v.literal("changes_requested"),
-      v.literal("commented")
+      v.literal("commented"),
+      // Withdrawn on GitHub: kept in the history, counted by nothing.
+      v.literal("dismissed")
     ),
     body: v.optional(v.string()),
     submitted_at: v.number(),
@@ -2451,6 +2466,14 @@ export default defineSchema({
     // is still outstanding depends on who spoke last in it, not on the comment
     // that opened it. Absent means this comment opened its own thread.
     github_in_reply_to_id: v.optional(v.number()),
+    // The GraphQL node id of the review thread this comment sits in. Resolving
+    // a thread is a GraphQL mutation on that id, so it is cached here the first
+    // time it is learned, from the thread webhook or from a lookup.
+    github_thread_id: v.optional(v.string()),
+    // A note in a review the author has not submitted yet. Visible to nobody
+    // else, mirrored nowhere, until the review goes out as one GitHub review
+    // or to a session as one message.
+    pending_review: v.optional(v.boolean()),
     codecast_origin: v.optional(v.boolean()),
     author_github_username: v.optional(v.string()),
     author_user_id: v.optional(v.id("users")),
