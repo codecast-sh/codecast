@@ -103,6 +103,7 @@ describe("backfillInstallationPulls", () => {
           return { pulls: args.page === 1 ? (pullsByRepo[args.repository] ?? []).filter((p) => (args.state === "open") === (p.state === "open")) : [] };
         }
         if (name.includes("getPRFiles")) return { files: [], additions: 0, deletions: 0, changed_files: 0, commits_count: 0 };
+        if (name.includes("listPRCommits")) return [];
         throw new Error(`unexpected action ${name}`);
       },
       runMutation: async (ref: any, args: any) => {

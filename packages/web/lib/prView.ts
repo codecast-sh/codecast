@@ -137,6 +137,7 @@ export const REVIEW_STATE_ACCENT: Record<string, ExternalEventAccent> = {
   changes_requested: "red",
   commented: "blue",
   pending: "yellow",
+  dismissed: "muted",
 };
 
 // -- Code comments ------------------------------------------------------------

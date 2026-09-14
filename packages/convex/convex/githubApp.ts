@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action, mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { MappedPull } from "./githubApi";
+import { syncPRCommits } from "./githubWebhooks";
 import type { QueryCtx } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -782,6 +783,8 @@ async function ingestPull(
       base_sha: pull.base_sha,
       draft: pull.draft,
       requested_reviewers: pull.requested_reviewers,
+      labels: pull.labels,
+      assignees: pull.assignees,
       created_at: pull.created_at ?? Date.now(),
       updated_at: pull.updated_at ?? Date.now(),
       merged_at: pull.merged_at ?? undefined,
@@ -808,6 +811,7 @@ async function ingestPull(
     } catch (error) {
       console.error(`Files for ${repository}#${pull.number} failed:`, error);
     }
+    await syncPRCommits(ctx, result.pr_id, repository, pull.number, token);
   }
   await ctx.scheduler.runAfter(args.mergeStateDelayMs ?? 0, internal.prShepherd.refreshMergeState, {
     pr_id: result.pr_id,
