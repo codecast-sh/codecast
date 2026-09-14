@@ -264,6 +264,13 @@ Examples:
     load: () => import("./browser/cli.js").then((m) => m.registerBrowserCommand),
   },
   {
+    token: "preview",
+    args: ["<url>"],
+    hasOptions: true,
+    description: `Offer a page to your human as a pane beside this session (alias of cast browser pane)`,
+    load: () => import("./browser/paneOffer.js").then((m) => m.registerPreviewCommand),
+  },
+  {
     token: "app",
     hasOptions: true,
     description: `Drive and verify the codecast app itself: doctor, goto, sweep, wait-settle, as-user`,

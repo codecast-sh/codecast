@@ -14,6 +14,7 @@ import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscri
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
+import { stampBrowserPaneOfferHandled } from "./conversations";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser } from "./pendingMessages";
@@ -70,6 +71,11 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       // would bypass performReparentSession's rules and let the role's brief
       // and actor resolution treat the row as acting for the role.
       "org_role_id", "standing_role_id",
+      // An agent's pane offer is written by the agent and retired by the
+      // reader's click, and the retiring write must pass a VISIBILITY check
+      // rather than the ownership one this gate applies — a teammate reading a
+      // shared session acts on the chip too. It rides dismissBrowserPaneOffer.
+      "browser_pane_offer",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
@@ -606,14 +612,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo });
   },
   createOrgRole: async (ctx, _userId, [input]: [any]) => {
-    return await ctx.runMutation!((api as any).orgRoles.create, {
+    // The hire form (org-init.md O3) creates and provisions in one gesture and
+    // may set caps; the plain add-a-role path passes neither. Caps have their
+    // own human-only mutation, so they ride a second call.
+    const role = await ctx.runMutation!((api as any).orgRoles.create, {
       name: input.name,
       handle: input.handle,
       ...(input.team_id ? { team_id: input.team_id } : {}),
       ...(input.scope ? { scope: input.scope } : {}),
       ...(input.reports_to ? { reports_to: input.reports_to } : {}),
       ...(input.charter ? { charter: input.charter } : {}),
+      ...(input.provision ? { provision: true, project_path: input.project_path } : {}),
     });
+    if (input.caps && role?._id) {
+      await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: String(role._id), hands: input.caps.hands_per_day, wakes: input.caps.wakes_per_day, tokens: input.caps.tokens_per_day });
+    }
+    return role;
   },
   updateOrgRole: async (ctx, _userId, [roleId, fields]: [string, any]) => {
     // A pause or resume is the standing agent's (org-roles-standing.md T4):
@@ -1111,6 +1125,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       args: JSON.stringify({ conversation_id: convId }),
       created_at: Date.now(),
     });
+  },
+
+  // The reader opened or dismissed an agent's pane offer. One handler for both
+  // gestures: the offer only has to know it was handled. `at` is the client's
+  // own timestamp, written verbatim, so the optimistic value and the server's
+  // echo are the same object and the local field lock retires (see
+  // stampBrowserPaneOfferHandled).
+  dismissBrowserPaneOffer: async (ctx, userId, [convId, at]: [string, number]) => {
+    await stampBrowserPaneOfferHandled(ctx, userId, convId as Id<"conversations">, at);
   },
 
   // Mirror of conversations.setPrivacy — these two fields are immutable in
