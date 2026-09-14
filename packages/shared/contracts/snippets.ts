@@ -638,7 +638,8 @@ The loop is snapshot, then act on a ref — and when you can already name the ta
 What cast adds to the usual pattern:
 
 - **Evidence flows to the thread.** A failing step automatically prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation — \`--annotate\` numbers elements with their refs, \`--share\` uploads a link you can paste. \`cast browser shots on\` adds an automatic small capture after commands that change the page (off by default for agents; a \`do\` flow then captures once, at the end). Never link local file paths — the human's browser cannot read them.
-- **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL. Connection checks and tab lists create nothing; page actions need an existing page. Do not open \`about:blank\` as setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. Act only on yours, never the human's tabs. Use \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab with your session. \`cast browser stop\` closes your session's tab. Modal dialogs are dismissed automatically.
+- **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL. Connection checks and tab lists create nothing; page actions need an existing page. Do not open \`about:blank\` as setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. Act only on yours, never the human's tabs. Use \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab with your session. Modal dialogs are dismissed automatically.
+- **Clean up when finished.** Before ending a task that used the browser, close the tabs you opened: use \`cast browser tabs\` to check, \`cast browser tab close <id>\` for extra tabs, then \`cast browser stop\` for this session's current tab. Do not leave tabs behind for a later session to clean up. Never close the human's tabs or another session's tabs, and do not use \`stop --all\` for routine cleanup. Keep a tab open only when the human asked you to leave it for them. When driving the desktop app's pane, \`stop\` releases control and leaves the human's pane open.
 - **Connection recovery.** \`cast browser target\` reports the browser without checking the connection. Old session selections cannot switch ordinary commands away from the human's Chrome. \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection. If still disconnected, the human checks that Chrome is running and the extension is enabled. Pairing is the human's one-time \`cast browser extension setup\` step. A missing pairing, failed command, or unavailable verb is not permission to launch another browser.
 - **Pages Chrome walls off from extensions.** \`chrome://\` pages, \`chrome-extension://\` pages, the Chrome Web Store and its developer dashboard (\`chrome.google.com/webstore/...\`, \`chromewebstore.google.com\`) cannot be driven through the extension; Chrome refuses the navigation, and \`cast browser open\` says so before trying. Those pages are the human's to click through in their own Chrome: hand them the URL and the exact steps, and carry on with everything around them (other sites, the terminal, \`gh\`). Do not move the session to the agent browser for them unless the human asks.
 - **Showing the human a page.** The web's "open tab" link and \`cast browser show\` both bring this session's tab to the front of the human's screen, in whichever browser holds it. The link is theirs to click; the verb is yours, and it takes their screen, so run it only when they asked to see the page or must act in it themselves (a sign-in, a permission prompt) and you have told them what to do there. Never to check your own work, never on a loop, never while they are typing elsewhere: one raise, then wait.
@@ -1185,6 +1186,8 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "Adds `cast browser` for opening pages, reading, clicking, typing, screenshots, " +
       "and debugging in your own Chrome through the Cast extension. Agents use their " +
       "own background tabs, created only for an explicit URL; checks never create blank tabs. " +
+      "Before finishing, close extra tabs you opened with `cast browser tab close <id>`, " +
+      "then run `cast browser stop` for your current tab; leave the human's and other sessions' tabs alone. " +
       "All ordinary commands, including `start`, use your Chrome; " +
       "a missing or disconnected extension never launches a separate browser. " +
       "The separate agent Chrome is a last resort requiring your explicit permission, " +
@@ -1266,6 +1269,24 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     shipped: "2026-06-18",
     enabledKey: "orch_enabled",
     versionKey: "orch_version",
+  },
+  {
+    slug: "skills",
+    aliases: ["skill", "commands"],
+    name: "Skills",
+    desc: "Slash commands over the team's shared state (/cast-pickup, /cast-why, /cast-ship, …)",
+    detail:
+      "Installs the cast-* skills: rituals that need what one session cannot see. " +
+      "/cast-pickup rehydrates from the board and the team's history, /cast-handoff and " +
+      "/cast-pass hand work on, /cast-plan writes a plan the team reviews, /cast-verify " +
+      "leaves evidence on the task, /cast-ship shepherds a pull request to merge, /cast-why " +
+      "traces a line to the session that wrote it, /cast-conflicts finds sessions on the same " +
+      "files, /cast-standup and /cast-morning digest the team's work, and more. Each loads " +
+      "only when invoked, so they cost nothing until used.",
+    writesTo: "~/.claude/skills/cast-*/SKILL.md",
+    shipped: "2026-09-14",
+    enabledKey: "skills_enabled",
+    versionKey: "skills_version",
   },
 ];
 

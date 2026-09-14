@@ -89,3 +89,4 @@ export * from "./triggerPrecheck";
 // graph, so a re-export here is paid by `cast --help`.
 
 export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "./sessionSnooze";
+export * from "./unattended";
