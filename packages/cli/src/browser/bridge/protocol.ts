@@ -78,6 +78,16 @@ export function bridgePairingUrl(state: { token: string; port: number }): string
 }
 
 /**
+ * The options page as a wake: opening it runs the extension's page script,
+ * whose message starts the service worker if Chrome ended it and makes a
+ * live one drop a stuck socket (options.js pairFromFragment, background.js
+ * op "wake"). Carries no secret, so it may travel as a plain URL.
+ */
+export function bridgeWakeUrl(): string {
+  return `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html#wake`;
+}
+
+/**
  * A page that forwards to the pairing URL. `setup` writes it to a 0600 file
  * and starts Chrome on the file's path, so the token rides in a file only its
  * owner can read while the process table shows a path. The options page is
@@ -95,6 +105,15 @@ export function bridgePairingPage(pairingUrl: string): string {
 
 /** WS close code the host uses for a bad or missing token. */
 export const CLOSE_BAD_TOKEN = 4401;
+
+/**
+ * WS close code for a handshake that ran out of time: the host heard no
+ * hello (a worker starved on a loaded machine), or the extension saw no
+ * welcome (background.js CONNECT_TIMEOUT_MS). Distinct from CLOSE_BAD_TOKEN
+ * on purpose: a slow handshake is a retry, a rejected token is a re-pair,
+ * and the extension keys its badge and its retries on the code.
+ */
+export const CLOSE_HANDSHAKE_TIMEOUT = 4408;
 
 /** WebSocket close code for a CDP client whose sessions the host dropped while their tabs live on (host.ts disconnect). */
 export const CLOSE_SESSIONS_DROPPED = 4410;
@@ -197,8 +216,22 @@ export interface BridgeReply {
 
 /** Extension → host, unsolicited. */
 export type BridgeEventMsg =
-  | { op: "hello"; version?: string; protocol?: number; userAgent?: string }
+  | {
+      op: "hello";
+      version?: string;
+      protocol?: number;
+      userAgent?: string;
+      /** The worker's boot: a fresh id means Chrome ended the previous worker. */
+      boot?: string;
+      bootAt?: number;
+      /** Why it connected: boot, startup, installed, alarm, retry, reconnect. */
+      trigger?: string;
+      /** The worker's last few lifecycle notes (background.js note), oldest first, for the host log. */
+      recent?: string[];
+    }
   | { op: "pong" }
+  /** The worker's own keepalive; the host answers pong. */
+  | { op: "ping" }
   /** A chrome.debugger event on an attached tab. */
   | { op: "event"; tabId: number; method: string; params: Record<string, unknown> }
   /** Chrome's tab list changed (any tab, driven or not). */

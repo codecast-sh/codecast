@@ -24,6 +24,15 @@ let pairingOffer = null;
  */
 async function pairFromFragment() {
   const frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+  // options.html#wake: the CLI found the worker unreachable (no socket on
+  // the host after Chrome was given every chance to bring it back) and
+  // opened this page as the one thing that starts a worker from outside.
+  // The message is the wake; the worker reconnects and closes this tab.
+  if (frag.has("wake")) {
+    history.replaceState(null, "", location.pathname);
+    await chrome.runtime.sendMessage({ op: "wake" }).catch(() => {});
+    return false;
+  }
   const token = (frag.get("token") || "").trim();
   if (!token) return false;
   const port = parseInt(frag.get("port") || "", 10) || CAST_DEFAULT_PORT;

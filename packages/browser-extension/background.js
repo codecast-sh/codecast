@@ -29,10 +29,36 @@
  * Detaching removes the badge and the border; the group empties itself when
  * its tabs close.
  *
- * The open WebSocket keeps this service worker alive (Chrome 116+), helped by
- * the host's application-level pings every 20s. A dropped socket is retried
- * after 1 s, 2 s and 5 s while the worker is awake; a chrome.alarms tick is
- * the backstop that reconnects after the worker is ever torn down.
+ * Staying alive is this worker's own job. Chrome ends an MV3 service worker
+ * after 30 s without an extension API call or a WebSocket message, and the
+ * open socket alone does not count: something has to move on it. The host
+ * pings every 20 s, but the host is another process, and on a loaded
+ * machine (load average 300, 2026-09-13) its timer slipped past the 30 s
+ * mark and Chrome ended the worker every few minutes. So the worker also
+ * calls an extension API and pings the host itself every 20 s, from timers
+ * that run in the same process as Chrome's idle clock and drift with it. A
+ * dropped socket is retried after 1 s, then 2 s, then every 5 s for as long
+ * as the worker lives: each attempt reads storage, which is an API call, so
+ * a disconnected worker keeps itself awake and finds a restarted host within
+ * seconds instead of waiting on an alarm. A chrome.alarms tick every 30 s is
+ * the backstop that reconnects after the worker is ever torn down, and it
+ * keeps ticking after a token rejection too: a host that could not prove the
+ * token once (a stale host on the port, a machine under load) is not a
+ * reason to stay silent until a person runs setup. A connect that is not
+ * proven within 10 s is closed and retried: a socket stuck in CONNECTING
+ * while the host was starved otherwise held every reconnect off until
+ * Chrome's own handshake timeout, minutes later. The hello names this
+ * worker's boot, why it connected and the last few things that happened to
+ * it, so the host log can tell a worker that died from a socket that
+ * dropped, and say what the worker saw in between.
+ *
+ * Two more things stand between a session and a blocked command. Any
+ * debugger call is bounded at CDP_CALL_MAX_MS: Chrome ends a worker whose
+ * single API call runs past five minutes, and a tab whose renderer is
+ * frozen never answers, so the tab is detached (which fails the call) rather
+ * than let one wedged page take the whole bridge down. And a `wake` message
+ * from the options page (opened by the CLI when nothing else brought this
+ * worker back) drops whatever socket is stuck and connects afresh.
  */
 
 // The colour table and the status vocabulary shared with the options page and the popup.
@@ -43,6 +69,11 @@ const PROTOCOL = 4;
 let ws = null;
 let status = { state: "no-config", detail: "not paired yet" };
 const attached = new Set(); // tabIds we hold a debugger session on
+
+// This worker's identity for the host log: a new boot means Chrome ended the
+// previous worker (and its socket with it); the same boot on a reconnect
+// means the socket dropped under a living worker.
+const BOOT = { id: randomHex(4), at: Date.now() };
 
 // --------------------------------------------------------------------------
 // Connection management
@@ -65,19 +96,77 @@ function setStatus(state, detail) {
   }
 }
 
-/** Quick retries after a drop, while the worker is awake; the alarm takes over after. */
+/**
+ * Retries after a drop: quick at first, then every 5 s for as long as the
+ * worker lives. Never given up on: a host comes back whenever the next
+ * `cast browser` command starts one, and the only way to be there when it
+ * does is to keep asking. The alarm covers the case where the worker itself
+ * is gone.
+ */
 const RETRY_MS = [1000, 2000, 5000];
 let retries = 0;
 let retryTimer = null;
 
 function scheduleRetry() {
-  if (retryTimer || retries >= RETRY_MS.length) return;
-  const delay = RETRY_MS[retries++];
+  if (retryTimer) return;
+  const delay = RETRY_MS[Math.min(retries++, RETRY_MS.length - 1)];
   retryTimer = setTimeout(() => {
     retryTimer = null;
-    connect();
+    connect("retry");
   }, delay);
 }
+
+// --------------------------------------------------------------------------
+// What happened to this worker lately, for the host log. Kept in memory and
+// in storage, so a worker that was ended and restarted still hands the host
+// the tail of its predecessor's story in its first hello.
+// --------------------------------------------------------------------------
+
+const RECENT_MAX = 24;
+let recent = [];
+let recentLoaded = chrome.storage.local
+  .get("recent")
+  .then(({ recent: saved }) => {
+    if (Array.isArray(saved)) recent = [...saved, ...recent].slice(-RECENT_MAX);
+  })
+  .catch(() => {});
+
+function note(what) {
+  const stamp = new Date().toISOString().slice(11, 19);
+  // A retry every 5 s for an hour is one line with a count, not the whole history.
+  const last = recent[recent.length - 1];
+  const same = last && /^\S+ (\S+) (.*?)(?: x(\d+))?$/.exec(last);
+  if (same && same[1] === BOOT.id && same[2] === what) {
+    recent[recent.length - 1] = `${stamp} ${BOOT.id} ${what} x${(parseInt(same[3] || "1", 10) + 1)}`;
+  } else {
+    recent.push(`${stamp} ${BOOT.id} ${what}`);
+    if (recent.length > RECENT_MAX) recent = recent.slice(-RECENT_MAX);
+  }
+  chrome.storage.local.set({ recent }).catch(() => {});
+}
+
+// Every 20 s while connected: one extension API call (what Chrome counts as
+// activity, whatever the host is doing) and one ping to the host (traffic on
+// the socket, and the host's own view of our liveness). 20 s sits well
+// inside Chrome's 30 s idle teardown even with timer drift.
+const KEEPALIVE_MS = 20_000;
+let keepaliveTimer = null;
+
+function startKeepalive() {
+  stopKeepalive();
+  keepaliveTimer = setInterval(() => {
+    chrome.runtime.getPlatformInfo().catch(() => {});
+    send({ op: "ping" });
+  }, KEEPALIVE_MS);
+}
+
+function stopKeepalive() {
+  clearInterval(keepaliveTimer);
+  keepaliveTimer = null;
+}
+
+/** A connect that has not been proven by then is abandoned and retried. */
+const CONNECT_TIMEOUT_MS = 10_000;
 
 function resetRetries() {
   clearTimeout(retryTimer);
@@ -85,7 +174,7 @@ function resetRetries() {
   retries = 0;
 }
 
-async function connect() {
+async function connect(trigger = "boot") {
   const cfg = await getConfig();
   if (!cfg || !cfg.token || !cfg.port) {
     setStatus("no-config", "not paired yet; run `cast browser extension setup` in a terminal");
@@ -95,12 +184,22 @@ async function connect() {
 
   const sock = new WebSocket(`ws://127.0.0.1:${cfg.port}/ext`);
   ws = sock;
-  setStatus("connecting", `127.0.0.1:${cfg.port}`);
+  // A token rejection stays on the badge until a host proves the token; the
+  // attempt itself is silent so the badge does not flicker every 5 s.
+  if (status.state !== "bad-token") setStatus("connecting", `127.0.0.1:${cfg.port}`);
+  note(`connect via ${trigger}`);
   const nonce = randomHex(32);
   let proven = false;
   hostProven = false;
+  const deadline = setTimeout(() => {
+    if (proven || ws !== sock) return;
+    try {
+      sock.close(4408, "connect timed out");
+    } catch {}
+  }, CONNECT_TIMEOUT_MS);
 
   sock.onopen = async () => {
+    await recentLoaded;
     send({
       op: "hello",
       nonce,
@@ -108,6 +207,10 @@ async function connect() {
       version: chrome.runtime.getManifest().version,
       protocol: PROTOCOL,
       userAgent: navigator.userAgent,
+      boot: BOOT.id,
+      bootAt: BOOT.at,
+      trigger,
+      recent: recent.slice(-12),
     });
   };
 
@@ -124,16 +227,21 @@ async function connect() {
       if (sameHex(msg.proof, await hmacHex(cfg.token, nonce))) {
         proven = true;
         hostProven = true;
+        clearTimeout(deadline);
         resetRetries();
+        startKeepalive();
+        note("proven");
         setStatus("connected", `127.0.0.1:${cfg.port}`);
       } else {
         // Close first, then set the status: the close handler reads it.
+        note("host proof failed");
         sock.close(4401, "host could not prove the token");
         setStatus("bad-token", "the host on that port could not prove it holds the token; run `cast browser extension setup` again");
       }
       return;
     }
     if (msg.op === "ping") return send({ op: "pong" });
+    if (msg.op === "pong") return;
     if (typeof msg.id !== "number") return;
     try {
       const result = await handle(msg);
@@ -144,11 +252,17 @@ async function connect() {
   };
 
   sock.onclose = (e) => {
+    clearTimeout(deadline);
     if (ws !== sock) return;
     ws = null;
     hostProven = false;
-    // 4401 is the "bad token" close, from either side — retrying the same
-    // token is noise. Our own close already set a more specific status.
+    stopKeepalive();
+    note(`close ${e.code}${e.reason ? " " + e.reason : ""}${proven ? "" : " (unproven)"}`);
+    // 4401 is the "bad token" close, from either side. The badge says so
+    // until a host proves the token; the quick retries stop (the same token
+    // five seconds later is the same answer) and the alarm keeps asking
+    // every 30 s, because the host that answered may be a stale one about
+    // to be replaced. Our own close already set a more specific status.
     if (status.state === "bad-token") {
       /* keep it */
     } else if (e.code === 4401) {
@@ -187,7 +301,7 @@ function reconnect() {
   }
   resetRetries();
   status = { state: "disconnected", detail: "" };
-  connect();
+  connect("reconnect");
 }
 
 // --------------------------------------------------------------------------
@@ -215,22 +329,43 @@ function sameHex(a, b) {
 }
 
 // Reconnect backstop: fires even after the service worker was torn down.
+// It asks in every state, a token rejection included: the answer is one
+// small HMAC every 30 s, and it is what heals a pairing the moment the
+// right host is back on the port.
 chrome.alarms.create("cast-bridge-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "cast-bridge-reconnect" && status.state !== "bad-token") connect();
+  if (a.name === "cast-bridge-reconnect") connect("alarm");
 });
-chrome.runtime.onStartup.addListener(connect);
-chrome.runtime.onInstalled.addListener(connect);
-connect();
+chrome.runtime.onStartup.addListener(() => connect("startup"));
+chrome.runtime.onInstalled.addListener(() => connect("installed"));
+connect("boot");
 
 // The options page asks for status and pokes reconnects through here.
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.op === "status") {
     sendResponse({ ...status, attached: [...attached] });
     return false;
   }
   if (msg && msg.op === "reconnect") {
     reconnect();
+    sendResponse({ ok: true });
+    return false;
+  }
+  // The CLI's last resort (bridge/realChrome.ts wakeExtension): it opened
+  // the options page with #wake because nothing else brought this worker
+  // back. The page's message alone woke a dead worker; a live one drops
+  // whatever socket it was stuck on. The page is closed again so the
+  // human's window is as it was, unless it is the only tab there.
+  if (msg && msg.op === "wake") {
+    note("wake from the options page");
+    reconnect();
+    const tab = sender && sender.tab;
+    if (tab && tab.id !== undefined) {
+      chrome.tabs
+        .query({ windowId: tab.windowId })
+        .then((tabs) => (tabs.length > 1 ? chrome.tabs.remove(tab.id) : undefined))
+        .catch(() => {});
+    }
     sendResponse({ ok: true });
     return false;
   }
@@ -266,7 +401,7 @@ async function handle(m) {
       creating++;
       let t;
       try {
-        t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
+        t = await createTab({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
       } finally {
         creating--;
       }
@@ -304,7 +439,7 @@ async function handle(m) {
       try {
         if (screenshot) await setBorderVisible(m.tabId, false);
         else if (m.method === "Input.dispatchMouseEvent") movePointer(m.tabId, m.params || {});
-        const result = await chrome.debugger.sendCommand({ tabId: m.tabId }, m.method, m.params || {});
+        const result = await boundedCdp(m.tabId, m.method, m.params || {});
         return { result: result || {} };
       } finally {
         if (screenshot) await setBorderVisible(m.tabId, true);
@@ -326,6 +461,21 @@ async function handle(m) {
 }
 
 /**
+ * A tab in a normal window. Chrome started by the CLI with --no-startup-window
+ * (bridge/realChrome.ts launchRealChrome) runs with no window at all, and
+ * tabs.create has nowhere to put a tab; so a window is made, behind whatever
+ * the human is doing. A tab in an existing window is created as asked.
+ */
+async function createTab(props) {
+  const windows = await chrome.windows.getAll({ windowTypes: ["normal"] }).catch(() => []);
+  if (windows.length) return chrome.tabs.create(props);
+  const w = await chrome.windows.create({ url: props.url, focused: false, type: "normal" });
+  const t = (w && w.tabs && w.tabs[0]) || (await chrome.tabs.query({ windowId: w.id }))[0];
+  if (!t) throw new Error("Chrome opened a window but reports no tab in it");
+  return t;
+}
+
+/**
  * chrome.debugger.sendCommand has no timeout of its own: a tab whose renderer
  * is frozen, throttled in a background window, or discarded by memory saver
  * simply never answers, and one such tab stalled every client of the bridge
@@ -339,6 +489,30 @@ function bounded(promise, what) {
     timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ATTACH_STEP_MS}ms (tab frozen or discarded)`)), ATTACH_STEP_MS);
   });
   return Promise.race([promise, clock]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Chrome ends a service worker whose single API call has run for five
+ * minutes, and the socket, every session and every other tab go with it. A
+ * debugger call that has not answered in CDP_CALL_MAX_MS is on a tab that
+ * will not answer (renderer frozen, page hung); detaching the tab is what
+ * makes Chrome fail the call, and the next command attaches afresh.
+ */
+const CDP_CALL_MAX_MS = 240_000;
+async function boundedCdp(tabId, method, params) {
+  let timer;
+  const clock = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      note(`${method} on tab ${tabId} hung ${CDP_CALL_MAX_MS / 1000}s; detaching`);
+      detachTab(tabId).catch(() => {});
+      reject(new Error(`${method} did not answer within ${CDP_CALL_MAX_MS / 1000}s; the tab was detached (page hung or renderer frozen)`));
+    }, CDP_CALL_MAX_MS);
+  });
+  try {
+    return await Promise.race([chrome.debugger.sendCommand({ tabId }, method, params), clock]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function attachTab(tabId) {

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
+import * as http from "node:http";
 import { bridgeStatePath, ensureBridgeHost, readBridgeState, updateBridgeHostState, writeBridgeState } from "./host.js";
+import { BRIDGE_PROTOCOL, bridgeProof } from "./protocol.js";
 import { freePort } from "../instance.js";
 
 let isolation: IsolatedCodecastDir;
@@ -53,3 +55,31 @@ test("a real host shutting down leaves its replacement configuration intact", as
     await child.exited;
   }
 }, 30_000);
+
+test("a host that is slow to answer is waited for, never doubled", async () => {
+  // The bridge port answers /healthz correctly, but only after 2.5s — a host
+  // whose event loop is starved. The first 1.2s probe times out; the patient
+  // probe keeps asking; no second host is started against the port.
+  const port = await freePort();
+  writeBridgeState({ port, token: owner.token });
+  const slow = http.createServer((req, res) => {
+    const nonce = new URL(req.url ?? "/", "http://127.0.0.1").searchParams.get("nonce") ?? "";
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(`cast-bridge protocol=${BRIDGE_PROTOCOL} proof=${bridgeProof(owner.token, "healthz", nonce)}`);
+    }, 2_500);
+  });
+  await new Promise<void>((r) => slow.listen(port, "127.0.0.1", r));
+  let starts = 0;
+  try {
+    const bridge = await ensureBridgeHost(() => {
+      starts += 1;
+    });
+    expect(bridge.started).toBe(false);
+    expect(bridge.port).toBe(port);
+    expect(starts).toBe(0);
+  } finally {
+    slow.closeAllConnections?.();
+    slow.close();
+  }
+}, 20_000);
