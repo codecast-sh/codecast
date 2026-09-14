@@ -4,11 +4,11 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  pinnedTabBrowser, readBoundTarget, sessionDaemonPid, targetLiveness, writeBoundTarget,
+  ensurePinnedTab, pinnedTabBrowser, readBoundTarget, sessionDaemonPid, targetLiveness, writeBoundTarget,
 } from "./pinnedTab.js";
 import { writeBridgeState } from "./bridge/host.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
-import { testBridgeHost } from "./bridge/host.testutil.js";
+import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
 
 const TARGET = "2BE86883491FD502B8D986C164423006";
 
@@ -132,5 +132,52 @@ describe("targetLiveness", () => {
     const dead = await listServer([]);
     dead.close();
     expect(await targetLiveness(dead.port, "AAAA0001", 200)).toBe("unknown");
+  });
+});
+
+describe("page creation", () => {
+  let previousSocketDir: string | undefined;
+  beforeEach(() => {
+    previousSocketDir = process.env.AGENT_BROWSER_SOCKET_DIR;
+    process.env.AGENT_BROWSER_SOCKET_DIR = dir;
+  });
+  afterEach(() => {
+    if (previousSocketDir === undefined) delete process.env.AGENT_BROWSER_SOCKET_DIR;
+    else process.env.AGENT_BROWSER_SOCKET_DIR = previousSocketDir;
+  });
+
+  test("a command with no page never creates a blank placeholder", async () => {
+    const host = await testBridgeHost();
+    const extension = await new FakeExtension([]).connect(host.port);
+    try {
+      await expect(ensurePinnedTab("env-empty-real")).rejects.toThrow("No blank tab was created");
+      expect(extension.seen.filter((m) => m.op === "tabs.create")).toHaveLength(0);
+      expect(extension.tabs).toHaveLength(0);
+    } finally {
+      extension.ws.close();
+      await host.close();
+    }
+  });
+
+  test("open creates the requested URL in the background and reuses it without attaching", async () => {
+    const host = await testBridgeHost();
+    const extension = await new FakeExtension([]).connect(host.port);
+    const session = "env-page-real";
+    const url = "https://example.com/requested";
+    try {
+      expect(await ensurePinnedTab(session, url)).toBe(true);
+      const first = readBoundTarget(session);
+      expect(await ensurePinnedTab(session)).toBe(false);
+      fs.rmSync(path.join(dir, `${session}.target`));
+      expect(await ensurePinnedTab(session, url)).toBe(false);
+      expect(readBoundTarget(session)).toBe(first);
+      expect(extension.seen.filter((m) => m.op === "tabs.create")).toMatchObject([{ url, background: true }]);
+      expect(extension.seen.filter((m) => m.op === "attach")).toHaveLength(0);
+      expect(extension.tabs.map((tab) => tab.url)).toEqual([url]);
+      expect(JSON.parse(fs.readFileSync(path.join(dir, `${session}.target`), "utf8")).url).toBe(url);
+    } finally {
+      extension.ws.close();
+      await host.close();
+    }
   });
 });

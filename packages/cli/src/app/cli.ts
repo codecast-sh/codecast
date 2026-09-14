@@ -75,7 +75,6 @@ interface AppTarget {
 interface TargetOpts {
   desktop?: boolean;
   origin?: string;
-  /** `cast browser`'s --real / --clone: the human's own Chrome or the agent browser. */
   real?: boolean;
   clone?: boolean;
 }
@@ -735,7 +734,7 @@ async function asUser(who: string | undefined, o: TargetOpts & { restore?: boole
   if (target.humansOwn) {
     die(
       "as-user never changes the identity in your own Chrome",
-      "cast app --clone as-user … swaps the agent browser instead, or --desktop for the desktop app",
+      "Use --desktop only when the human asked to change the desktop app's signed-in account",
     );
   }
   const { conn, pages, main } = await appWindows(target);
@@ -842,12 +841,12 @@ wait-settle, then prove with cast browser (snapshot, get text, shot) or eval.
   cast app goto jx7abcd                a conversation by short id, through the app's own guard
   cast app wait-settle                 catch-up quiet, outbox empty
   cast app sweep --json                every surface: rendered, no crash, no errors
-  cast app as-user demo@example.com    a known identity for the run (--restore puts yours back)
+  cast app --desktop as-user demo@example.com    a known identity for the desktop run
   cast app --desktop doctor            the same against the desktop app (from-source run, port 9333)
 
-The web target is this session's tab: your own Chrome through the extension when
-it is paired (--real), the agent browser otherwise (--clone), the same choice
-\`cast browser\` makes. as-user only ever re-signs the agent browser or the desktop app.
+The web target is this session's tab in your own Chrome through the extension.
+A missing or disconnected extension never falls back to another browser; this is the same choice
+\`cast browser\` makes. as-user only re-signs the desktop app.
 `);
 
   // The target flags parse both before and after the verb.

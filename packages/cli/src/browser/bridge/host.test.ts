@@ -37,6 +37,33 @@ function closeCode(ws: WebSocket, timeoutMs = 3000): Promise<number> {
 
 const cdpEndpoint = (port: number) => ({ port, token: TOKEN });
 
+test("a created tab stays owned when the follow-up tab listing fails", async () => {
+  const h = await freshHost();
+  const extension = await new FakeExtension([]).connect(h.port);
+  const dispatch = extension.ws.listeners("message")[0];
+  let failList = true;
+  extension.ws.removeAllListeners("message");
+  extension.ws.on("message", (raw) => {
+    const message = JSON.parse(String(raw));
+    if (message.op === "tabs.list" && extension.tabs.length && failList) {
+      extension.ws.send(JSON.stringify({ id: message.id, ok: false, error: "listing failed after creation" }));
+    } else {
+      dispatch.call(extension.ws, raw);
+    }
+  });
+  const endpoint = { ...cdpEndpoint(h.port), session: "env-create-recovery" };
+  const conn = await CdpConnection.fromPort(endpoint);
+  try {
+    await expect(conn.send("Target.createTarget", { url: "https://requested.example/", background: true })).rejects.toThrow("listing failed after creation");
+    failList = false;
+    expect((await listTargets(endpoint)).map((tab) => tab.url)).toEqual(["https://requested.example/"]);
+    expect(extension.tabs).toHaveLength(1);
+  } finally {
+    conn.close();
+    extension.ws.close();
+  }
+});
+
 async function waitUntil(cond: () => boolean, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 15));

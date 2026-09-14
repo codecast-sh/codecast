@@ -19,12 +19,13 @@ import { fmt, icons } from "../../colors.js";
 import { spawn } from "../../proc.js";
 import { findChromeBinary, keychainArgs } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
+import type { StartOptions } from "../managedBrowser.js";
 import {
   bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
   reloadExtension, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
 import { BRIDGE_STORE_URL, bridgePairingPage, bridgePairingUrl } from "./protocol.js";
-import { connectRealBridge, explicitTarget, extensionReady, setStickyTarget, stickyTarget } from "./real.js";
+import { connectRealBridge, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 
 const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;
@@ -91,11 +92,27 @@ export interface BridgeCommandDeps {
   me: () => string | null;
 }
 
-/** The two flags every drivable command takes. --clone overrides a sticky real. */
 export function targetFlags(cmd: Command): Command {
-  return cmd
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the agent browser (overrides `target real`)");
+  return cmd.option("--real", "Use the human's Chrome through the extension (default)");
+}
+
+export const BROWSER_START_HELP = `
+Normal use: cast browser start connects to the human's Chrome through the extension.
+Missing pairing or a disconnected extension reports a recovery step and never
+launches a separate browser. Check the connection with cast browser extension status.`;
+
+export async function prepareRealBrowserStart(
+  opts: Partial<StartOptions> & { real?: boolean; clone?: boolean },
+  sessionKey: string | null,
+): Promise<boolean> {
+  if (!isRealMode(opts, sessionKey)) return false;
+  const launchOptions = Object.entries(opts).filter(([key, value]) => key !== "real" && key !== "clone" && value !== undefined && value !== false);
+  if (launchOptions.length) {
+    throw new Error("browser launch options are unavailable in ordinary commands. Use `cast browser start` to connect to the human's Chrome.");
+  }
+  await requireRealBridge();
+  console.log(`${OK} connected to the human's Chrome through the extension`);
+  return true;
 }
 
 /** One line for a connected extension, the same wherever it is reported. */
@@ -117,24 +134,17 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   const { me } = deps;
 
   br.command("target [mode]")
-    .description("Which browser the verbs act on: real (your Chrome, default once the extension is paired) or clone (the agent browser)")
+    .description("Show the browser; ordinary commands always use the human's Chrome")
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
-        const why = explicitTarget(me())
-          ? " (chosen for this session)"
-          : extensionReady()
-            ? " (default: the codecast extension is connected, so sessions use your Chrome)"
-            : cur === "real"
-              ? " (default: the codecast extension is paired; commands wait for it to reconnect to your Chrome)"
-              : " (default: no paired codecast extension, so sessions use the agent browser)";
-        console.log(`target: ${fmt.highlight(cur)}${fmt.muted(why)}`);
-        console.log(fmt.muted("  change with `cast browser target real|clone`; any command takes --real/--clone to override"));
+        console.log(`target: ${fmt.highlight(cur)}${fmt.muted(cur === "real" ? " (the human's Chrome; connection not checked)" : " (advanced command; this invocation only)")}`);
+        console.log(fmt.muted("  `cast browser extension status` checks the live connection"));
         return;
       }
-      if (mode !== "real" && mode !== "clone") die(`unknown target '${mode}'`, "use `real` or `clone`");
+      if (mode !== "real") die("Ordinary commands cannot select a separate browser. The human's Chrome is always the default.");
       setStickyTarget(me(), mode);
-      console.log(`${OK} verbs now act on the ${mode === "real" ? "real Chrome (extension bridge)" : "agent browser"}${me() ? " for this session" : ""}`);
+      console.log(`${OK} ordinary commands use the human's Chrome through the extension`);
       if (mode === "real" && !readBridgeState()?.token) {
         console.log(`${WARN} the bridge is not set up yet — run \`cast browser extension setup\``);
       }
@@ -184,7 +194,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         }
         if (status.extensionConnected) {
           console.log(connectedLine(status));
-          console.log(fmt.muted("  sessions on this machine now use your Chrome by default; `cast browser target clone` opts one out"));
+          console.log(fmt.muted("  sessions use your Chrome by default; no separate browser is started"));
           return;
         }
         console.log(`${WARN} the extension did not connect within ${PAIRING_WAIT_MS / 1000}s`);
