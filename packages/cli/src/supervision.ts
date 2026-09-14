@@ -398,7 +398,10 @@ check_once() {
         # wedged event loop. A large gap in our OWN loop = the machine slept and
         # the daemon may simply not have re-stamped yet — give it one cycle.
         if [ "\$LOOP_GAP" -ge 0 ] && [ "\$LOOP_GAP" -lt ${WATCHDOG_AWAKE_GAP_MS} ]; then
-          LOG_MTIME=\$(stat -f %m "\${HOME}/.codecast/daemon.log" 2>/dev/null || echo 0)
+          # GNU stat takes -c, BSD stat takes -f; -f on GNU is file system mode and
+          # prints several lines, so accept digits only or the age arithmetic aborts the shell.
+          LOG_MTIME=\$(stat -c %Y "\${HOME}/.codecast/daemon.log" 2>/dev/null || stat -f %m "\${HOME}/.codecast/daemon.log" 2>/dev/null || echo 0)
+          case "\$LOG_MTIME" in ''|*[!0-9]*) LOG_MTIME=0;; esac
           LOG_AGE=\$(( NOW_MS - LOG_MTIME * 1000 ))
           if [ "\$AGE" -le ${DAEMON_HEARTBEAT_BUSY_GRACE_MS} ] && [ "\$LOG_MTIME" -gt 0 ] && [ "\$LOG_AGE" -le ${DAEMON_HEARTBEAT_STALE_MS} ]; then
             log "Daemon tick stale (\${AGE}ms) but daemon.log written \${LOG_AGE}ms ago - busy, not wedged"
