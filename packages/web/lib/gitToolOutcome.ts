@@ -53,6 +53,19 @@ export type TranscriptMessage = {
   tool_results?: { tool_use_id: string; content?: string; is_error?: boolean }[] | null;
 };
 
+const commandCache = new WeakMap<object, { input: string; command: string }>();
+
+function transcriptCommand(call: { input?: unknown }): string {
+  const raw = call.input;
+  const cached = typeof raw === "string" ? commandCache.get(call) : undefined;
+  if (cached && cached.input === raw) return cached.command;
+  const input = typeof raw === "string" ? safeParse(raw) : raw;
+  const command = input && typeof input === "object" ? String((input as any).command ?? (input as any).cmd ?? "") : "";
+  if (typeof raw === "string") commandCache.set(call, { input: raw, command });
+  else commandCache.delete(call);
+  return command;
+}
+
 /**
  * Every commit sha and pull request a transcript's shell calls produced. The
  * transcript renders those on the calls themselves, so a linked commit or PR
@@ -64,8 +77,7 @@ export function transcriptGitOutcomes(messages: readonly TranscriptMessage[]): {
   const prRefs = new Set<string>();
   for (const message of messages) {
     for (const call of message.tool_calls ?? []) {
-      const input = typeof call.input === "string" ? safeParse(call.input) : call.input;
-      const command = input && typeof input === "object" ? String((input as any).command ?? (input as any).cmd ?? "") : "";
+      const command = transcriptCommand(call);
       if (command) commands.set(call.id, command);
     }
     for (const result of message.tool_results ?? []) {

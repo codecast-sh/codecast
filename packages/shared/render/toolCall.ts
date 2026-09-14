@@ -13,35 +13,8 @@ export interface ToolCallLike {
   input: string;
 }
 
-// Family classifiers — one set per kind so web, mobile, and the share view
-// don't keep growing parallel `name === "Bash" || name === "bash" || …` lists.
-// Grok's snake_case ids (`run_terminal_command`, `read_file`, `search_replace`)
-// belong in the same families as Claude's capitalized names and Codex's
-// `shell_command` / `file_read` synonyms.
-const SHELL_TOOL_IDS = new Set([
-  "Bash", "bash", "shell_command", "shell", "exec_command", "container.exec",
-  "commandExecution", "run_terminal_command",
-]);
-const READ_TOOL_IDS = new Set(["Read", "read", "file_read", "read_file"]);
-const WRITE_TOOL_IDS = new Set(["Write", "write", "file_write"]);
-const EDIT_TOOL_IDS = new Set(["Edit", "edit", "file_edit", "search_replace"]);
-const GREP_TOOL_IDS = new Set(["Grep", "grep"]);
-const GLOB_TOOL_IDS = new Set(["Glob", "glob", "list_dir"]);
-const TODO_TOOL_IDS = new Set(["TodoWrite", "todo_write", "todowrite"]);
-const ASK_TOOL_IDS = new Set(["AskUserQuestion", "ask_user_question"]);
-const PLAN_MODE_TOOL_IDS = new Set(["EnterPlanMode", "ExitPlanMode", "enter_plan_mode", "exit_plan_mode"]);
-const AGENT_TOOL_IDS = new Set(["Task", "Agent", "spawn_subagent"]);
-
-export const isShellTool = (name: string) => SHELL_TOOL_IDS.has(name);
-export const isReadTool = (name: string) => READ_TOOL_IDS.has(name);
-export const isWriteTool = (name: string) => WRITE_TOOL_IDS.has(name);
-export const isEditTool = (name: string) => EDIT_TOOL_IDS.has(name);
-export const isGrepTool = (name: string) => GREP_TOOL_IDS.has(name);
-export const isGlobTool = (name: string) => GLOB_TOOL_IDS.has(name);
-export const isTodoTool = (name: string) => TODO_TOOL_IDS.has(name);
-export const isAskTool = (name: string) => ASK_TOOL_IDS.has(name);
-export const isPlanModeTool = (name: string) => PLAN_MODE_TOOL_IDS.has(name);
-export const isAgentTool = (name: string) => AGENT_TOOL_IDS.has(name);
+import { isShellTool, isReadTool, isWriteTool, isEditTool, isGrepTool, isGlobTool, isTodoTool, isAskTool, isAgentTool } from "./toolKinds";
+export { isShellTool, isReadTool, isWriteTool, isEditTool, isGrepTool, isGlobTool, isTodoTool, isAskTool, isPlanModeTool, isAgentTool } from "./toolKinds";
 
 /** Path argument across Claude (`file_path`), Codex (`path`), opencode (`filePath`), and Grok (`target_file` / `target_directory`). */
 export function toolPathFromInput(parsed: Record<string, unknown>): string {
@@ -275,10 +248,18 @@ export function extractBrowserBatchActions(tc: ToolCallLike): NestedAction[] {
  * batch, and of what" — the collapsed-row name, the summary, the tool-group
  * counts and the expanded step list all key off it.
  */
+const nestedActionCache = new WeakMap<ToolCallLike, { name: string; input: string; actions: NestedAction[] }>();
+
 export function extractNestedActions(tc: ToolCallLike): NestedAction[] {
-  if (tc.name === "exec") return extractCodexExecActions(tc);
-  if (tc.name === BROWSER_BATCH_TOOL) return extractBrowserBatchActions(tc);
-  return [];
+  if (tc.name !== "exec" && tc.name !== BROWSER_BATCH_TOOL) {
+    nestedActionCache.delete(tc);
+    return [];
+  }
+  const cached = nestedActionCache.get(tc);
+  if (cached && cached.name === tc.name && cached.input === tc.input) return cached.actions;
+  const actions = tc.name === "exec" ? extractCodexExecActions(tc) : extractBrowserBatchActions(tc);
+  nestedActionCache.set(tc, { name: tc.name, input: tc.input, actions });
+  return actions;
 }
 
 export function summarizeNestedActions(actions: readonly NestedAction[]): string {
