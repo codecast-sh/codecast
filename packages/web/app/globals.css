@@ -4079,16 +4079,19 @@ pre[class*="language-"] {
 /* ---------------------------------------------------------------------------
    The inline reveal (components/ObjectReveal): an object reference opens its
    full page as a band across the whole scrolling surface. Width, left pull
-   and height are measured inline by the component; the ground is a
-   crosshatch so the band reads as a cutout in the conversation, not as one
-   more card in it.
+   and height are measured inline by the component. The band IS the page's
+   surface: no frame inside it, the page runs edge to edge under the strip,
+   and the crosshatch is the page's own ground (the page's plain background
+   goes transparent inside the band; cards and panels keep their fill), so
+   the reveal reads as a cutout in the conversation, not one more card in it.
    --------------------------------------------------------------------------- */
 .object-reveal {
   --reveal-hatch: color-mix(in srgb, var(--sol-text) 7%, transparent);
   position: relative;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   margin: 12px 0;
-  padding: 14px 18px;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
   background-color: var(--sol-bg-alt);
@@ -4103,17 +4106,6 @@ pre[class*="language-"] {
 }
 .dark .object-reveal {
   --reveal-hatch: color-mix(in srgb, var(--sol-text) 5%, transparent);
-}
-.object-reveal__frame {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--sol-border);
-  border-radius: 8px;
-  background: var(--sol-bg);
-  box-shadow: 0 12px 32px -16px color-mix(in srgb, var(--sol-text) 25%, transparent);
 }
 .object-reveal__strip {
   display: flex;
@@ -4130,6 +4122,11 @@ pre[class*="language-"] {
   position: relative;
   flex: 1;
   min-height: 0;
+}
+/* The page's plain ground lets the crosshatch through; only the base
+   surface, never a card, a panel head or a highlight. */
+.object-reveal__body .bg-sol-bg {
+  background-color: transparent;
 }
 @keyframes object-reveal-in {
   from { opacity: 0; transform: translateY(6px); }

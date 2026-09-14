@@ -17,7 +17,7 @@
 
 import React, { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, PanelBottomOpen } from "lucide-react";
+import { ArrowUpRight, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
@@ -89,29 +89,30 @@ export function RevealHost({ children, persistKey }: { children: React.ReactNode
 }
 
 /**
- * The control a reference shows for "open the full page here": an icon
- * button when the host exists, nothing otherwise. Stops propagation so a
- * card's own expand toggle never fires with it.
+ * The ONE control a reference shows for its full page: it opens the band,
+ * and the same button closes it — icon and label flip with the state, so
+ * the reader never hunts for a second control. Renders nothing without a
+ * host. Stops propagation so a card's own expand toggle never fires with it.
  */
 export function RevealButton({
   target,
   className = "",
-  label = "Show full page here",
-  children,
+  withLabel = false,
 }: {
   target: RevealTarget;
   className?: string;
-  label?: string;
-  /** Text after the icon, for a footer-style control. */
-  children?: React.ReactNode;
+  /** Show the words after the icon, for a footer-style control. */
+  withLabel?: boolean;
 }) {
   const host = useRevealHost();
   if (!host) return null;
   const on = host.isOpen(target.href);
+  const label = on ? "Hide full page" : "Show full page here";
+  const Icon = on ? PanelBottomClose : PanelBottomOpen;
   return (
     <button
       type="button"
-      title={on ? "Hide the page" : label}
+      title={label}
       aria-pressed={on}
       onClick={(e) => {
         e.preventDefault();
@@ -120,8 +121,8 @@ export function RevealButton({
       }}
       className={`inline-flex items-center gap-1 rounded p-0.5 transition-colors ${on ? "text-sol-cyan" : ""} ${className}`}
     >
-      <PanelBottomOpen className="h-3 w-3" />
-      {children}
+      <Icon className="h-3 w-3" />
+      {withLabel && label}
     </button>
   );
 }
@@ -198,24 +199,22 @@ function RevealBand({ target, onClose }: { target: RevealTarget; onClose: () => 
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <div className="object-reveal__frame">
-        <div className="object-reveal__strip">
-          <PageIcon path={path} className="h-3 w-3 flex-shrink-0 text-sol-text-dim" />
-          <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text-muted">{target.title}</span>
-          <Link href={target.href} onClick={target.onOpen} className="cc-panel__btn flex-shrink-0" title="Open the page">
-            <ArrowUpRight className="h-3 w-3" />
-          </Link>
-          <PaneControls onClose={onClose} closeTitle="Close" />
-        </div>
-        <div className="object-reveal__body">
-          <ErrorBoundary name="ObjectReveal" level="panel">
-            {sessionId ? (
-              <SessionPane sessionId={sessionId} targetMessageId={targetMessageId} />
-            ) : (
-              <RoutePane tabId={tab?.tabId ?? "reveal"} path={path} isActive={tab?.isActive ?? true} navigate={navigate} />
-            )}
-          </ErrorBoundary>
-        </div>
+      <div className="object-reveal__strip">
+        <PageIcon path={path} className="h-3 w-3 flex-shrink-0 text-sol-text-dim" />
+        <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text-muted">{target.title}</span>
+        <Link href={target.href} onClick={target.onOpen} className="cc-panel__btn flex-shrink-0" title="Open the page">
+          <ArrowUpRight className="h-3 w-3" />
+        </Link>
+        <PaneControls onClose={onClose} closeTitle="Close" />
+      </div>
+      <div className="object-reveal__body">
+        <ErrorBoundary name="ObjectReveal" level="panel">
+          {sessionId ? (
+            <SessionPane sessionId={sessionId} targetMessageId={targetMessageId} />
+          ) : (
+            <RoutePane tabId={tab?.tabId ?? "reveal"} path={path} isActive={tab?.isActive ?? true} navigate={navigate} />
+          )}
+        </ErrorBoundary>
       </div>
     </div>
   );

@@ -85,26 +85,30 @@ export function entityQueryArgs(
 }
 
 
-// Creator (only when it isn't the viewer) and assignee (only when it differs
-// from the creator) for task reference surfaces. Names resolve through the same
-// roster helper the task page uses; read non-reactively — these cards mount
-// fresh, so a subscription would only add churn.
+// Creator and assignee for task reference surfaces. Both are always reported
+// when the row carries them — a card that hides the creator because it is the
+// viewer, or the assignee because they created the task, reads as "nobody"
+// to everyone else who opens it. Names resolve through the same roster helper
+// the task page uses; read non-reactively — these cards mount fresh, so a
+// subscription would only add churn.
 export function taskPeople(task: any) {
   const s = useInboxStore.getState() as any;
   const me = s.currentUser;
   const members = s.teamMembers;
-  const myId = me?._id?.toString?.();
   const creatorId = task.user_id?.toString?.();
-  const creator =
-    creatorId && creatorId !== myId
-      ? resolveAssigneeInfo(creatorId, task.creator, members, me)
-      : null;
+  const creator = creatorId ? resolveAssigneeInfo(creatorId, task.creator, members, me) : null;
   const assigneeId = task.assignee?.toString?.();
-  const assignee =
-    assigneeId && assigneeId !== creatorId
-      ? resolveAssigneeInfo(assigneeId, task.assignee_info, members, me)
-      : null;
+  const assignee = assigneeId ? resolveAssigneeInfo(assigneeId, task.assignee_info, members, me) : null;
   return { creator, assignee };
+}
+
+// The project a task is filed under, from the local store (same non-reactive
+// read as taskPeople). Null when the task is unfiled or the row is not cached.
+export function taskProject(task: any): { _id: string; title: string } | null {
+  const id = task.project_id?.toString?.();
+  if (!id) return null;
+  const row = (useInboxStore.getState() as any).projects?.[id];
+  return row?.title ? { _id: id, title: row.title } : null;
 }
 
 
