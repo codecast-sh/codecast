@@ -4,6 +4,7 @@ import { copyToClipboard } from "../lib/utils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useTabActive } from "../hooks/usePagePresence";
 import { formatShortcutLabel, useShortcutAction } from "../shortcuts";
 import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
@@ -910,7 +911,11 @@ export function GenericListView<T>({
     });
   }, []);
 
+  // The list listens on the window, so only the focused pane of the visible
+  // tab may answer: a list beside a focused conversation must leave its keys.
+  const paneActive = useTabActive();
   useWatchEffect(() => {
+    if (!paneActive) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
@@ -991,7 +996,7 @@ export function GenericListView<T>({
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [shortcutsPanelOpen, disableKeyboard, paletteIsOpen, editingId, focusedItem, visibleItems, focusIndex, tabs,
+  }, [paneActive, shortcutsPanelOpen, disableKeyboard, paletteIsOpen, editingId, focusedItem, visibleItems, focusIndex, tabs,
     previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId, currentPath,
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
 

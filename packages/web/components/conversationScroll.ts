@@ -148,3 +148,41 @@ export function shouldAdjustScrollForResize(i: ResizeAdjustInput): boolean {
   if (i.held) return false;
   return i.itemStart < i.scrollOffset;
 }
+
+export type FeedJumpDensity = "full" | "condensed" | "compact";
+
+export type JumpReceiptAggregates = {
+  absorbed: ReadonlySet<string>;
+  receiptOf: ReadonlyMap<string, ReadonlyArray<{ messageId: string }>>;
+  turnKeyOf: ReadonlyMap<string, string>;
+  // Folded identical nudges ("continue" ×5) keep only the run head in the
+  // DOM. Map every id in the run, including the head, to that head.
+  nudgeHeadOf?: ReadonlyMap<string, string>;
+};
+
+// Where a message-jump lands. Height-0 rows are not in the DOM:
+// condensed receipts fold tools into an owner, compact hides a turn until
+// opened, and a run of identical nudges keeps only its first row. Resolve
+// the visible row, then expand whatever group still hides it.
+export function jumpRowForMessage(
+  messageId: string,
+  density: FeedJumpDensity,
+  aggregates: JumpReceiptAggregates,
+): { scrollToId: string; expandKey: string | null } {
+  const id = aggregates.nudgeHeadOf?.get(messageId) ?? messageId;
+  if (density === "full") return { scrollToId: id, expandKey: null };
+  if (density === "compact") {
+    return { scrollToId: id, expandKey: aggregates.turnKeyOf.get(id) ?? null };
+  }
+  if (aggregates.absorbed.has(id)) {
+    for (const [ownerId, entries] of aggregates.receiptOf) {
+      if (ownerId === id || entries.some((e) => e.messageId === id)) {
+        return { scrollToId: ownerId, expandKey: ownerId };
+      }
+    }
+  }
+  if (aggregates.receiptOf.has(id)) {
+    return { scrollToId: id, expandKey: id };
+  }
+  return { scrollToId: id, expandKey: null };
+}

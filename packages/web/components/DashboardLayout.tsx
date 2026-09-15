@@ -7,7 +7,7 @@ import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { PANE_EMBED } from "../lib/browserPane";
+import { PANE_EMBED, appDocumentTitle } from "../lib/browserPane";
 import { withApplyingViewHistory, sameFilterExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation } from "convex/react";
@@ -58,7 +58,7 @@ import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow, borrowsTabShell } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron, borrowsTabShell, isStandaloneCommunityPath } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { FilePathMenuHost } from "./FilePathMenuHost";
 import { LinkMenuHost } from "./LinkMenuHost";
@@ -302,50 +302,34 @@ function DashboardSyncEffects() {
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  useChatTitleBadge();
   return <Suspense fallback={null}><CallSyncEffects /></Suspense>;
 }
 
-// Unread mentions in the browser tab title.
+// The window's OS title: the surface, then the specific thing it shows,
+// "Codecast Chat | design", "Codecast Inbox | Fix the auth race". Window
+// switchers (Mission Control, the Window menu, AltTab) list windows by this
+// title, so the main window and every popped out one name what they show.
+// One writer for the whole title: a second writer re-asserting its own part
+// on a timer is how the title used to flicker between two names.
 //
-// Only mentions. An unread COUNT in the title turns every busy afternoon into a
-// number that never reaches zero, and a title that always shouts is a title
-// nobody reads. Being named is the one thing worth interrupting a different app
-// for, which is exactly what a tab title does.
-function useChatTitleBadge() {
+// Unread mentions lead it. Only mentions: an unread COUNT turns every busy
+// afternoon into a number that never reaches zero, and being named is the one
+// thing worth interrupting a different app for.
+function useWindowTitle(path: string) {
   const { mentions } = useChatUnread();
-  // The conversation view writes the title too (its own "codecast | <session>"),
-  // so the badge is re-asserted on a slow tick rather than only when the count
-  // changes — otherwise opening a session silently drops it.
-  const tick = useCoarseNow(5_000);
-  useWatchEffect(() => {
-    const base = document.title.replace(/^\(\d+\)\s*/, "");
-    const next = mentions > 0 ? `(${mentions}) ${base}` : base;
-    if (document.title !== next) document.title = next;
-  }, [mentions, tick]);
-  return null;
-}
-
-// Detached tab window OS title: lead with the surface, then the specific thing
-// — "Codecast Chat | design", "Codecast Inbox | Fix the auth race" — so
-// alt-tab and the window list name each window by what it shows. Only detached
-// windows: the main window keeps its own title writers (ConversationView, the
-// mention badge above).
-function useDetachedWindowTitle(path: string) {
-  const detached = isDetachedTabWindow();
   const title = useInboxStore((s) => {
-    if (!detached) return null;
     const label = pathLabel(path);
     // An inbox window titles by the session it is SHOWING (the store pointer);
     // the URL's ?s= deep link is the fallback inside tabTitle.
     const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
     const sessionId = inboxish ? s.currentSessionId ?? undefined : undefined;
-    const rest = tabTitle({ id: "detached", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels);
-    return rest && rest !== label ? `Codecast ${label} | ${rest}` : `Codecast ${label}`;
+    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels);
+    return appDocumentTitle(label, rest);
   });
   useWatchEffect(() => {
-    if (title) document.title = title;
-  }, [title]);
+    const next = mentions > 0 && !PANE_EMBED ? `(${mentions}) ${title}` : title;
+    if (document.title !== next) document.title = next;
+  }, [title, mentions]);
 }
 
 function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
@@ -424,7 +408,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // actually mounted, not the tab the user last worked in.
   const routerLocation = useLocation();
   const router = useRouter();
-  useDetachedWindowTitle(routerLocation.pathname + routerLocation.search);
+  useWindowTitle(routerLocation.pathname + routerLocation.search);
 
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -961,8 +945,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the
   // bottom bar. Always simple-view: anonymous share viewers get the calm reading
   // chrome without owning a simple_view pref (writing one could outlive the visit
-  // and clobber a later sign-in's stamped preference).
-  if (isGuest) {
+  // and clobber a later sign-in's stamped preference). The community page in a
+  // plain browser takes the same bare frame for a signed in reader too: it is
+  // the public site's chat, not a workspace surface (lib/desktop
+  // isStandaloneCommunityPath); the page draws its own slim header.
+  if (isGuest || isStandaloneCommunityPath(routerLocation.pathname)) {
     return (
       <div className="bg-sol-bg flex flex-col overflow-hidden simple-view" style={{ height: '100vh' }}>
         <div className="flex-1 min-h-0">

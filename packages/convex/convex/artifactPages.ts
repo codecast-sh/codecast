@@ -477,6 +477,19 @@ function barHtml(o: BrandOpts): string {
   };
   applyTheme();
   if(document.readyState!=="complete")window.addEventListener("load",applyTheme);
+  // Pages with their own light/dark switch (the markdown theme, many
+  // dashboards) flip a class or attribute on <html> or <body>, or follow the
+  // OS: follow them. Toggling __cc_dark to the value it already has records
+  // no mutation, so the observer cannot feed itself.
+  try{
+    var reTheme=function(){requestAnimationFrame(applyTheme);};
+    var mo=new MutationObserver(reTheme);
+    var watchEl=function(n){if(n)mo.observe(n,{attributes:true,attributeFilter:["class","style","data-theme"]});};
+    watchEl(document.documentElement);
+    if(document.body)watchEl(document.body);else document.addEventListener("DOMContentLoaded",function(){watchEl(document.body);});
+    var osq=matchMedia("(prefers-color-scheme: dark)");
+    if(osq.addEventListener)osq.addEventListener("change",reTheme);
+  }catch(e){}
   var rel=function(ts){var s=Math.max(0,(Date.now()-ts)/1e3);
     return s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":s<2592e3?Math.floor(s/86400)+"d ago":new Date(ts).toLocaleDateString();};
   var inFmt=function(ts){var s=(ts-Date.now())/1e3;

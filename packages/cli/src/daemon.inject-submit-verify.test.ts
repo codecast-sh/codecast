@@ -152,10 +152,10 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(actions).toEqual(["enter", "enter", "enter"]);
   });
 
-  test("collapsed multiline paste gets a discrete Enter instead of being re-pasted", async () => {
+  test.each(["[Pasted text #1 +3 lines]", "[Pasted text #98]"])("collapsed paste %s gets a discrete Enter instead of being re-pasted", async chip => {
     const PASTED_PANE = `
 ────────────────────────────────────────
-❯ [Pasted text #1 +3 lines]
+❯ ${chip}
 ────────────────────────────────────────
   paste again to expand
 `;
@@ -164,7 +164,7 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       prePaste: BOOT_PANE,
       pasteConfirmed: true,
       contentPrefix: "first line that is hidden by the paste chip",
-      multiline: true,
+      bracketedPaste: true,
     });
     expect(res.outcome).toBe("delivered");
     expect(res.rePasted).toBe(false);
@@ -461,7 +461,7 @@ describe("verifyTmuxSubmitAfterPaste — real client turn-started frames", () =>
         prePaste: frames.idle,
         pasteConfirmed: true,
         contentPrefix: MATRIX_PAYLOAD.slice(0, 40),
-        multiline: true,
+        bracketedPaste: true,
         deadlineMs: 4_000,
       });
       expect(result.outcome).toBe("delivered");
@@ -476,7 +476,7 @@ describe("verifyTmuxSubmitAfterPaste — real client turn-started frames", () =>
         prePaste: frames.idle,
         pasteConfirmed: true,
         contentPrefix: MATRIX_PAYLOAD.slice(0, 40),
-        multiline: true,
+        bracketedPaste: true,
         deadlineMs: 2_000,
       });
       if (frames.glyphless) {

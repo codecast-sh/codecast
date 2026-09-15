@@ -46,11 +46,13 @@ import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   RECORDING_SUMMARY_PUSH_TYPE,
+  TRANSCRIBE_LANGUAGE,
   TRANSCRIBE_MAX_BYTES,
   formatHuddleDigest,
   formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
   isRecRoomKey,
+  isWrongScriptTranscript,
   liveFeedChunkHeader,
   ownRoomChunkHeader,
   parseRoomKey,
@@ -385,6 +387,9 @@ async function writeSegments(
   for (const s of segments) {
     const text = s.text.trim();
     if (!text) continue;
+    // Language is pinned at the recognizer; this is the net for a leftover
+    // Hangul cough or a katakana utterance auto-detect still invents.
+    if (isWrongScriptTranscript(text)) continue;
     seq += 1;
     await ctx.db.insert("transcript_segments", {
       transcript_id: t._id,
@@ -935,7 +940,7 @@ export function parseTranscriptionSegments(
     const out = body.segments
       .map((raw: any) => {
         const text = typeof raw?.text === "string" ? raw.text.trim() : "";
-        if (!text) return null;
+        if (!text || isWrongScriptTranscript(text)) return null;
         const t0 = Math.max(0, Math.round((Number(raw?.start) || 0) * 1000));
         const t1 = Math.max(t0, Math.round((Number(raw?.end) || 0) * 1000));
         return { ...speaker, text, t0, t1 };
@@ -950,7 +955,7 @@ export function parseTranscriptionSegments(
     if (out.length) return out;
   }
   const whole = typeof body.text === "string" ? body.text.trim() : "";
-  if (!whole) return [];
+  if (!whole || isWrongScriptTranscript(whole)) return [];
   return [{ ...speaker, text: whole, t0: 0, t1: Math.max(0, fallbackDurationMs) }];
 }
 
@@ -1046,6 +1051,7 @@ export const transcribeRecording = internalAction({
       const ext = audio.type.includes("webm") ? "webm" : "m4a";
       form.append("file", audio, `recording.${ext}`);
       form.append("model", RECORDING_TRANSCRIBE_MODEL);
+      form.append("language", TRANSCRIBE_LANGUAGE);
       form.append("response_format", "verbose_json");
       const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
         method: "POST",
@@ -1351,6 +1357,24 @@ export const cliGetCall = query({
 // VAD speech start/stop events (the gap signal). The browser must never see
 // OPENAI_API_KEY, so this action mints a short-lived client secret scoped to
 // a transcription session. Authorization = may the caller transcribe the room.
+
+/**
+ * The session body the mint posts. Extracted so a test can see that language
+ * is pinned — that field is the whole fix for huddles coming back in Japanese.
+ */
+export function asrTranscriptionSession(model: string) {
+  return {
+    type: "transcription" as const,
+    audio: {
+      input: {
+        format: { type: "audio/pcm", rate: 24000 },
+        transcription: { model, language: TRANSCRIBE_LANGUAGE },
+        turn_detection: { type: "server_vad", silence_duration_ms: 600 },
+      },
+    },
+  };
+}
+
 export const mintAsrToken = action({
   args: { room_key: v.string() },
   handler: async (
@@ -1372,18 +1396,7 @@ export const mintAsrToken = action({
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        session: {
-          type: "transcription",
-          audio: {
-            input: {
-              format: { type: "audio/pcm", rate: 24000 },
-              transcription: { model },
-              turn_detection: { type: "server_vad", silence_duration_ms: 600 },
-            },
-          },
-        },
-      }),
+      body: JSON.stringify({ session: asrTranscriptionSession(model) }),
     });
     if (!resp.ok) {
       const body = (await resp.text()).slice(0, 300);
@@ -1533,7 +1546,7 @@ export const deliverRoutes = internalAction({
     const { transcript, segments } = data;
     for (const route of transcript.routes) {
       if (route.mode === "after" && !args.include_after_routes) continue;
-      const unsent = segments.filter((s) => s.seq > route.sent_seq);
+      const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
       if (unsent.length === 0) continue;
       const chunk = formatChunk(unsent);
       const maxSeq = unsent[unsent.length - 1].seq;

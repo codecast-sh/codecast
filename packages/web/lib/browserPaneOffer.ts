@@ -5,7 +5,7 @@
 // and so the one judgement call in the feature (may a preference open a pane on
 // the reader's behalf?) is written once, in a place a test can pin.
 
-import { PANE_OFFER_TTL_MS, type BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
+import { PANE_OFFER_TTL_MS, normalizePaneUrl, type BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { displayHost, isLoopbackUrl } from "./browserPane";
 
 export type PaneOfferDecision = {
@@ -56,4 +56,49 @@ export function paneOfferLabel(offer: BrowserPaneOffer): string {
 export function paneOfferHint(offer: BrowserPaneOffer, machine: string | null): string {
   const where = isLoopbackUrl(offer.url) && machine ? ` — served by ${machine}` : "";
   return `Open ${offer.url} beside this conversation${where}`;
+}
+
+/**
+ * Whether a session may drive a pane. The route carries `s=<session>` as a
+ * hint, and a hint is all it is: a hand-typed or pasted link could name any
+ * session at all. Ownership is stamped from the store, not the URL — the named
+ * session must be the one this conversation row belongs to, and that row must
+ * hold an offer for this very address that the reader has not already handled.
+ * Anything short of that is "no owner": the pane still opens, and no `cast
+ * browser` gets to drive it. The offer is compared by normalized address so a
+ * trailing slash or a stray `#` cannot separate the chip's click from its
+ * offer.
+ *
+ * "Not already handled" has one exception, and it is the legitimate path
+ * itself: the chip stamps the offer handled at the click (so a second window
+ * cannot open the same pane twice), and the pane that click opened mounts a
+ * beat later. An offer handled within OPENED_GRACE_MS is that pane arriving,
+ * and it owns the pane; an offer handled longer ago is history, and a link
+ * that names it stamps nobody.
+ */
+export const OPENED_GRACE_MS = 2 * 60 * 1000;
+
+export function paneOfferOwner(input: {
+  /** The `s=` hint from the route, if any. */
+  hinted: string | undefined;
+  /** The pane's address. */
+  url: string;
+  /** The conversation rows the store holds for that session id, in either
+   *  collection: `session_id` and `browser_pane_offer` are the fields read. */
+  rows: Array<{ session_id?: string | null; browser_pane_offer?: BrowserPaneOffer | null } | undefined>;
+  now: number;
+}): string | undefined {
+  const { hinted, url, rows, now } = input;
+  if (!hinted) return undefined;
+  const want = normalizePaneUrl(url);
+  if (!want) return undefined;
+  for (const row of rows) {
+    if (!row || row.session_id !== hinted) continue;
+    const offer = row.browser_pane_offer;
+    if (!offer) continue;
+    if (offer.opened_at !== undefined && now - offer.opened_at > OPENED_GRACE_MS) continue;
+    if (now - offer.offered_at > PANE_OFFER_TTL_MS) continue;
+    if (normalizePaneUrl(offer.url) === want) return hinted;
+  }
+  return undefined;
 }

@@ -333,4 +333,26 @@ describe("asrPipe: words while they are still being said", () => {
     delta("item_2", "actually");
     expect(partials.at(-1)).toBe("actually");
   });
+
+  test("a line invented in another script is not shown and not committed", async () => {
+    const partials: string[] = [];
+    const heard: string[] = [];
+    const h = open({ onPartial: (t) => partials.push(t), onUtterance: (u) => heard.push(u.text) });
+    const ws = await h.connect();
+    ws.open();
+
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_1",
+      delta: "위위위",
+    });
+    expect(partials.at(-1)).toBe("");
+
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_1",
+      transcript: "アショット, サムビット, エージェントレイヤー。",
+    });
+    expect(heard).toEqual([]);
+  });
 });

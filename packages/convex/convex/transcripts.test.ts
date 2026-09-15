@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import {
   appendRecordingSegments,
+  asrTranscriptionSession,
   attachRecording,
   beat,
   finishRecordingTranscript,
@@ -16,6 +17,7 @@ import {
   webGetCall,
   webListCalls,
 } from "./transcripts";
+import { TRANSCRIBE_LANGUAGE } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import {
   CALL_MEMBER_STALE_MS,
@@ -193,6 +195,29 @@ describe("parseTranscriptionSegments", () => {
     expect(out[0].t0).toBe(5000);
     expect(out[0].t1).toBe(5000);
   });
+
+  test("a line invented in another script is not a segment", () => {
+    expect(
+      parseTranscriptionSegments(
+        { text: "위위위", segments: [{ start: 0, end: 1, text: "위위위" }] },
+        1_000,
+      ),
+    ).toEqual([]);
+    expect(parseTranscriptionSegments({ text: "アショット, サムビット" }, 1_000)).toEqual([]);
+  });
+});
+
+// The huddle coming back in Japanese was auto-detect locking onto a short
+// noise and staying there. The mint is the only place the live recognizer
+// is configured, so language has to be on this object.
+describe("asrTranscriptionSession", () => {
+  test("pins the language the live recognizer may not guess", () => {
+    const session = asrTranscriptionSession("gpt-4o-mini-transcribe");
+    expect(session.audio.input.transcription).toEqual({
+      model: "gpt-4o-mini-transcribe",
+      language: TRANSCRIBE_LANGUAGE,
+    });
+  });
 });
 
 // attachRecording is where the whole server-side path is armed. These drive
@@ -302,6 +327,20 @@ describe("the transcription's own writes", () => {
     expect(second.last_seq).toBe(3);
     expect((await c.db.get("t1" as any)).last_seq).toBe(3);
     expect(c.db._inserted.map((r: any) => r.doc.text)).toEqual(["one", "two", "three"]);
+  });
+
+  test("a line invented in another script is not written", async () => {
+    const c = ctx([rec()]);
+    const out = await call(appendRecordingSegments, c, {
+      transcript_id: "t1",
+      segments: [
+        seg("위위위", 0, 500),
+        seg("I cannot hear you.", 500, 2000),
+        seg("アショット, サムビット, エージェントレイヤー。", 2000, 4000),
+      ],
+    });
+    expect(out.last_seq).toBe(1);
+    expect(c.db._inserted.map((r: any) => r.doc.text)).toEqual(["I cannot hear you."]);
   });
 
   test("a recording puts nobody on the participant roster", async () => {

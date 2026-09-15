@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource } from "./index";
+import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "./index";
 
 describe("docOrigin", () => {
   test("only an explicit human stamp is human", () => {
@@ -117,5 +117,21 @@ describe("title = leading heading", () => {
     const md = setTitleHeading("Round trip", "first para\n\n- item");
     expect(leadingHeading(md)).toBe("Round trip");
     expect(stripTitleHeading(md)).toBe("first para\n\n- item");
+  });
+});
+
+describe("DOC_TYPES", () => {
+  test("every type in the tuple has a label, so no tab or picker can dereference a missing entry", () => {
+    // The docs list crashed on "decision" when the ordered list and the label
+    // map were two hand-kept copies; now the tuple is the only list.
+    for (const t of DOC_TYPES) expect(DOC_TYPE_LABELS[t]).toBeTruthy();
+    expect(DOC_TYPES).toContain("decision");
+    expect(Object.keys(DOC_TYPE_LABELS).sort()).toEqual([...DOC_TYPES].sort());
+  });
+
+  test("an unknown stored type reads as a note, matching every client's style fallback", () => {
+    expect(docTypeLabel("decision")).toBe("Decision");
+    expect(docTypeLabel("some_future_type")).toBe("Note");
+    expect(docTypeLabel(undefined)).toBe("Note");
   });
 });

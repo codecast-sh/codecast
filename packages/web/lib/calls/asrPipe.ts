@@ -27,6 +27,7 @@
 // commits the buffer and waits, bounded, for the transcription to come back.
 // `close()` remains what it always was: the abandon path.
 import { api } from "@codecast/convex/convex/_generated/api";
+import { isWrongScriptTranscript } from "@codecast/shared/contracts";
 
 type AsrConvexHandle = {
   action: (fn: any, args: any) => Promise<any>;
@@ -343,7 +344,9 @@ export function openAsrPipe(opts: {
           partialText = "";
         }
         partialText += msg.delta;
-        events?.onPartial?.(partialText);
+        // A Japanese/Thai/Korean partial is the language-lock bug in progress;
+        // show nothing rather than a flash of the wrong script.
+        events?.onPartial?.(isWrongScriptTranscript(partialText) ? "" : partialText);
       } else if (msg.type === "conversation.item.input_audio_transcription.completed") {
         // Whatever the words turn out to be, the commit has been answered.
         transcribedSinceCommit = true;
@@ -351,7 +354,7 @@ export function openAsrPipe(opts: {
         partialText = "";
         events?.onPartial?.("");
         const text = typeof msg.transcript === "string" ? msg.transcript.trim() : "";
-        if (!text) return;
+        if (!text || isWrongScriptTranscript(text)) return;
         const t1 = clock();
         events?.onUtterance?.({ text, t0: utteranceStart || Math.max(0, t1 - 2000), t1 });
       } else if (msg.type === "conversation.item.input_audio_transcription.failed") {

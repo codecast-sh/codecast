@@ -105,8 +105,8 @@ bridge host or extension disconnects, and a command repairs what it can
 before it reports anything. It starts the bridge host if none is running,
 stopping a stale host of ours that holds an old token. It waits eight
 seconds for the extension, which reconnects to a fresh host on its own. If
-Chrome is not running, it starts Chrome in the background (no window on
-macOS) and waits up to a minute for the extension to load. If Chrome runs
+Chrome is not running, it starts Chrome (its normal window appears once)
+and waits up to a minute for the extension to load. If Chrome runs
 but the extension's worker has not called in, it gives the worker's own
 30 second alarm its chance, then opens the extension's options page with
 `#wake`, which starts the worker; the page closes itself. That wake is sent

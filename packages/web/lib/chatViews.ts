@@ -274,6 +274,22 @@ export function sessionAuthorFor(row: ChatMessageRow, ctx: ViewContext): ChatAut
   };
 }
 
+/** The Slack person behind a line the bridge identity carried in. Their name
+ *  and face come from the row's snapshot (the bridge user has none to give);
+ *  the row's `user_id` stays as the id so reactions and edits still key on it. */
+export function slackAuthorFor(row: ChatMessageRow): ChatAuthor | null {
+  const ext = row.external_author;
+  if (!ext) return null;
+  return {
+    id: row.user_id,
+    name: ext.name || "Someone",
+    avatarUrl: ext.avatar_url || undefined,
+    handle: ext.handle || undefined,
+    isAgent: false,
+    slack: { isBot: !!ext.is_bot },
+  };
+}
+
 export function mentionsViewer(row: ChatMessageRow, viewerId: string): boolean {
   if (row.mention_scope === "here") return true;
   // People only: a role or session entry is an object and can never be the
@@ -343,7 +359,11 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
   const reactions = ctx.reactionsFor?.(row._id);
   return {
     id: row._id,
-    author: sessionAuthorFor(row, ctx) ?? authorFor(row.user_id, row.author_kind, ctx.members),
+    author: slackAuthorFor(row) ?? sessionAuthorFor(row, ctx) ?? authorFor(row.user_id, row.author_kind, ctx.members),
+    slack: row.external?.provider === "slack"
+      ? { direction: row.external.direction, permalink: row.external.permalink }
+      : undefined,
+    localOnly: row.sync_local_only || undefined,
     threadRootId: row.thread_root_id,
     content: row.content,
     createdAt: row.created_at,
