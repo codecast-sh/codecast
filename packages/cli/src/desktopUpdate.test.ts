@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { shouldApplyWhileRunning, shouldAttemptDesktopUpdate } from "./desktopUpdate";
+import { macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate } from "./desktopUpdate";
 
 // Gate at the very top of checkForDesktopUpdate. The dev-mode skip exists so a
 // developer's source checkout (cast/daemon under `bun src/…`) doesn't auto-swap
@@ -52,5 +52,24 @@ describe("shouldApplyWhileRunning", () => {
   it("does NOT apply once at or above the floor (no relaunch loop)", () => {
     expect(shouldApplyWhileRunning("1.1.78", { minVersion: "1.1.78" })).toBe(false);
     expect(shouldApplyWhileRunning("1.2.0", { minVersion: "1.1.78" })).toBe(false);
+  });
+});
+
+// The swap replaces the working app, so a build this Mac cannot open must never
+// be installed: Electron 44 needs macOS 13, and a Mac on 12 keeps what it has.
+describe("macosMeetsMinimum", () => {
+  it("refuses a bundle that needs a newer macOS", () => {
+    expect(macosMeetsMinimum("12.7.6", "13.0")).toBe(false);
+  });
+
+  it("installs on the minimum and above, whatever the precision", () => {
+    expect(macosMeetsMinimum("13.0", "13.0")).toBe(true);
+    expect(macosMeetsMinimum("13", "13.0")).toBe(true);
+    expect(macosMeetsMinimum("26.2", "13.0")).toBe(true);
+  });
+
+  it("installs when either version is unknown, as every earlier release did", () => {
+    expect(macosMeetsMinimum(null, "13.0")).toBe(true);
+    expect(macosMeetsMinimum("12.7", null)).toBe(true);
   });
 });

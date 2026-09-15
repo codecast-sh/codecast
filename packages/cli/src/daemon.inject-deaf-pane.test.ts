@@ -56,7 +56,7 @@ describe.skipIf(!CAN_RUN)("the Enter gate waits for a buffered paste without rep
         await pasteTextIntoPane(exec as never, pane.target, payload, true);
         wake = setTimeout(() => signal(pid, "CONT"), 2_500);
         gate = await awaitTmuxComposerPayload(pane.target, payload, {
-          multiline: kind === "multiline",
+          bracketedPaste: kind === "multiline",
           prePaste: " never equal to a capture",
           rePaste: async () => { rePastes++; await pasteTextIntoPane(exec as never, pane.target, payload, true); },
           budgetMs: 25_000,

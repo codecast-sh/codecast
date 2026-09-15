@@ -86,6 +86,9 @@ export const CHURN_ONLY_FIELDS: Record<string, ReadonlySet<string>> = {
     "last_message_preview",
     "image_preview_url",
     "recent_files",
+    // The activity line (what the agent does now) is stamped on every tool
+    // call batch and cleared on settle; the liveness overlay carries it.
+    "activity",
   ]),
 };
 

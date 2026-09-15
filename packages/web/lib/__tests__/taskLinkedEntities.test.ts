@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   resolveTaskLinkedConversations,
   resolveTaskRelatedDocs,
+  sortTaskLinkedConversations,
   taskLinkedConversationIds,
+  taskSessionHref,
 } from "../liveEntities";
 
-// The task page must paint its linked sessions, origin chip and related docs
+// The task page must paint its linked sessions and related docs
 // from the store on the first frame. The server join (linked_conversations /
 // related_docs) is a snapshot that only the detail query carries; until it is
 // cached the client derives the same rows from the sessions it already holds,
@@ -49,6 +51,26 @@ describe("resolveTaskLinkedConversations", () => {
 
   test("ids the client knows nothing about are skipped rather than rendered blank", () => {
     expect(resolveTaskLinkedConversations({ conversation_ids: [ORIGIN] }, {}, {})).toEqual([]);
+  });
+});
+
+describe("taskSessionHref", () => {
+  test("uses the Convex conversation id, never the daemon session_id", () => {
+    expect(taskSessionHref({ _id: ORIGIN, session_id: "sess-daemon-handle" } as any)).toBe(`/conversation/${ORIGIN}`);
+    expect(taskSessionHref({ session_id: "sess-daemon-handle" } as any)).toBeNull();
+    expect(taskSessionHref(null)).toBeNull();
+  });
+});
+
+describe("sortTaskLinkedConversations", () => {
+  test("origin first, then live, then recency", () => {
+    const rows = [
+      { _id: "c", is_active: false, updated_at: 30 },
+      { _id: ORIGIN, is_active: false, updated_at: 1 },
+      { _id: ADOPTED, is_active: true, updated_at: 10 },
+    ];
+    expect(sortTaskLinkedConversations(rows, ORIGIN).map((r) => r._id)).toEqual([ORIGIN, ADOPTED, "c"]);
+    expect(sortTaskLinkedConversations(rows).map((r) => r._id)).toEqual([ADOPTED, "c", ORIGIN]);
   });
 });
 

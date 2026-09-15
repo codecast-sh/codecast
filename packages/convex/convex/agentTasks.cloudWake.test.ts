@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { getFunctionName } from "convex/server";
+import { triggerLifecycleInstructions } from "@codecast/shared/contracts";
 import { claimTask, completeTaskRun, dispatchCloudTriggers, getDueTasks, matchTaskTriggers } from "./agentTasks";
 import { hashToken } from "./apiTokens";
 import crons from "./crons";
 import { makeFakeDb } from "./testDb";
+import { enqueueRoleEvent, MAX_CAUSE_CHARS } from "./orgEvents";
+import { performFlush } from "./orgWakes";
 
 const NOW = 1_800_000_000_000;
 const USER = "users_cloud";
@@ -102,6 +105,74 @@ const claim = (ctx: any, taskId = "agent_tasks_cloud") => (claimTask as any)._ha
 });
 
 describe("dispatchCloudTriggers", () => {
+  for (const route of ["inline", "role", "role-fallback"]) {
+    test.each([7200, 8100])(`${route} delivers the complete %i-character mandate and lifecycle through its final wrapper`, async (length) => {
+      const sentinel = "FINAL MANDATE: remain active until explicitly ended; do not exceed read-only authority.";
+      const prompt = "Check the release. ".repeat(Math.ceil(length / 19)).slice(0, length - sentinel.length) + sentinel;
+      const { ctx, tables } = await world({
+        users: [{ _id: USER, name: "Ashot" }],
+        org_roles: [{ _id: "role_cloud", short_id: "or-1", status: route === "role-fallback" ? "retired" : "active",
+          anchor_id: "anchors_cloud", scope_type: "personal", scope_user_id: USER, host_user_id: USER,
+          name: "Release checker", handle: "release-checker", scope: { project_ids: [], plan_ids: [] },
+          reports_to: { kind: "user", user_id: USER } }],
+        anchors: [{ _id: "anchors_cloud", conversation_id: CONV, status: "active" }],
+        role_wake_outbox: [],
+        agent_tasks: [task({ short_id: "tr-42", mode: "propose", schedule_type: "recurring", interval_ms: 60_000, prompt })],
+      });
+      if (route !== "inline") tables.conversations[0].standing_role_id = "role_cloud";
+      const lifecycle = triggerLifecycleInstructions(tables.agent_tasks[0]);
+      expect(prompt).toHaveLength(length);
+      await dispatch(ctx);
+      if (route === "role") {
+        expect(tables.pending_messages).toHaveLength(0);
+        expect(tables.role_wake_outbox[0].cause.length).toBeGreaterThan(MAX_CAUSE_CHARS);
+        expect((await performFlush(ctx as any, "role_cloud" as any)).outcome).toBe("delivered");
+      } else {
+        expect(tables.role_wake_outbox).toHaveLength(0);
+      }
+      expect(tables.pending_messages).toHaveLength(1);
+      const delivered = tables.pending_messages[0].content;
+      expect(delivered).toStartWith(route === "role" ? "<role-wake " : "<scheduled-task ");
+      expect(delivered).toContain(`${prompt}\n\n${lifecycle}`);
+      expect(delivered).toContain(sentinel);
+      expect(delivered).toContain("if cancellation is outside this run's authority");
+      expect(tables.agent_tasks[0]).toMatchObject({ prompt, mode: "propose", status: "scheduled" });
+    });
+  }
+
+  test.each([undefined, "tasks"])("ordinary role causes still obey the display limit with reference %s", async (table) => {
+    const { ctx, tables } = await world({
+      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV }],
+      role_wake_outbox: [],
+    });
+    await enqueueRoleEvent(ctx, "role_cloud" as any, {
+      kind: "immediate", cause: "x".repeat(MAX_CAUSE_CHARS + 100),
+      ...(table ? { ref: { table, id: "tasks_example" } } : {}),
+    });
+    expect(tables.role_wake_outbox[0].cause).toBe("x".repeat(MAX_CAUSE_CHARS - 1) + "…");
+  });
+
+  test("a role routine receives the same lifecycle defaults without changing its mandate or mode", async () => {
+    const { ctx, tables } = await world({
+      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV }],
+      role_wake_outbox: [],
+      agent_tasks: [task({ short_id: "tr-42", mode: "propose", schedule_type: "recurring", interval_ms: 60_000,
+        prompt: "Ongoing mandate: keep checking until explicitly ended." })],
+    });
+    tables.conversations[0].standing_role_id = "role_cloud";
+    const original = tables.agent_tasks[0].prompt;
+    await dispatch(ctx);
+    expect(tables.pending_messages).toHaveLength(0);
+    expect(tables.role_wake_outbox).toHaveLength(1);
+    const cause = tables.role_wake_outbox[0].cause;
+    expect(cause).toContain(original);
+    expect(cause).toContain("cast trigger complete tr-42 --summary");
+    expect(cause).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");
+    expect(cause).toContain("Ongoing mandates remain active until explicitly ended");
+    expect(cause).toContain("Preserve safe-mode restrictions");
+    expect(tables.agent_tasks[0]).toMatchObject({ prompt: original, mode: "propose", status: "scheduled" });
+  });
+
   test("queues a once trigger on the existing rail and completes it with audit evidence", async () => {
     const { ctx, tables, pages, indexes, scheduled } = await world();
     expect(await dispatch(ctx)).toEqual({ scanned: 1, dispatched: 1, done: true });
@@ -109,8 +180,14 @@ describe("dispatchCloudTriggers", () => {
     expect(pending).toMatchObject({
       conversation_id: CONV, owner_user_id: USER, from_user_id: USER,
       origin: "scheduler", status: "pending", client_id: "cloud-trigger:agent_tasks_cloud:0",
-      content: '<scheduled-task title="Check &quot;release&quot;" task-id="agent_tasks_cloud">Check the release and report its status.</scheduled-task>',
     });
+    expect(pending.content).toStartWith('<scheduled-task title="Check &quot;release&quot;" task-id="agent_tasks_cloud">Check the release and report its status.');
+    expect(pending.content).toContain("bounded trigger and its terminal condition is verified complete");
+    expect(pending.content).toContain("Completing one recurring run alone does not retire its trigger");
+    expect(pending.content).toContain("Ongoing mandates remain active until explicitly ended");
+    expect(pending.content).toContain("pending deadlines are NOT proof of completion");
+    expect(pending.content).toContain("subordinate to this trigger's prompt");
+    expect(pending.content).toContain("Preserve safe-mode restrictions");
     expect(tables.agent_tasks[0]).toMatchObject({
       status: "completed", run_count: 1, last_run_at: NOW, last_run_conversation_id: CONV,
       last_run_failed: false, last_run_needs_attention: false, retry_count: 0,

@@ -27,6 +27,7 @@ import { enqueueRoleEvent, trustOf } from "./orgEvents";
 import { roleOfConversation } from "./lib/actor";
 import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
+import { artifactUrl } from "./artifacts";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -35,6 +36,8 @@ export const optionValidator = v.object({
   evidence: v.optional(v.array(v.object({ label: v.string(), url: v.string() }))),
   cost: v.optional(v.string()),
   risk: v.optional(v.string()),
+  // A published page of its own (the-line.md L6), rendered as a comparison row.
+  page_slug: v.optional(v.string()),
 });
 
 export const formValidator = v.object({
@@ -280,7 +283,9 @@ async function wakeLadder(
 // ── Answers ───────────────────────────────────────────────────────────────────
 
 export type Verdict = {
-  status: "answered" | "dismissed";
+  // withdrawn: the asker took the question back (withdrawCore); it settles
+  // like a dismissal so the ladder learns the fact, and never scores a grant.
+  status: "answered" | "dismissed" | "withdrawn";
   answer_index?: number;
   answer_text?: string;
   answer_json?: any;
@@ -358,29 +363,73 @@ export async function finalizeAnswer(
     answered_by: { kind: by.kind, id: by.id },
     grant_id: by.grant_id,
   });
-  await settleResolution(ctx, row, verdict, by, now);
-  if (opts.deliver && verdict.status === "answered" && label) {
-    const conversation = await ctx.db.get(row.conversation_id);
-    if (conversation) {
-      await enqueuePendingMessage(ctx, conversation, by.user_id ?? conversation.user_id, {
-        content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label }),
-        client_id: `decision-answer:${row._id}`,
-        human: by.kind === "user",
-      });
-    }
-  }
+  const consumed = await settleResolution(ctx, row, verdict, by, now);
+  // A decision bound to a run (the-line.md L4) is never delivered by a
+  // client, so the server delivers it unless the run consumed it as its
+  // open gate (the runner's poll reads gate_response instead). A failure
+  // gate on a run that is already failed is still delivered to its asker.
+  if ((opts.deliver || row.workflow_run_id) && !consumed) await deliverAnswer(ctx, row, verdict, by);
   return { already_resolved: false, answer_label: label };
+}
+
+// The "Decision: …" user message into the asking session, the one delivery
+// for every server path (finalizeAnswer, settleClientResolution).
+async function deliverAnswer(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy) {
+  const label = answerLabel(row, verdict);
+  if (verdict.status !== "answered" || !label) return;
+  const conversation = await ctx.db.get(row.conversation_id);
+  if (!conversation) return;
+  await enqueuePendingMessage(ctx, conversation, by.user_id ?? conversation.user_id, {
+    content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label }),
+    client_id: `decision-answer:${row._id}`,
+    human: by.kind === "user",
+  });
+}
+
+// A gate decision resumes its run (the-line.md L4): gate_response is the
+// chosen option's gate key (gate_choices[i].key, by option index) or the
+// typed text, and the run goes back to running so the runner's poll picks
+// it up. A dismissed gate has no answer for the run to route on, so the run
+// fails the same way a withdrawn gate does. Every resolve path (server
+// answers through finalizeAnswer, the web's dispatch patch through
+// settleClientResolution) lands here, so the run cannot miss an answer.
+// Returns true when the run consumed the answer (it was paused on this
+// decision); a decision on a run that is past it, or failed, is not consumed
+// and is delivered to its asker like any other.
+async function settleGateRun(ctx: Ctx, row: DecisionRow, verdict: Verdict, now: number): Promise<boolean> {
+  if (!row.workflow_run_id) return false;
+  const run = await ctx.db.get(row.workflow_run_id);
+  if (!run || run.status !== "paused") return false;
+  if (String(run.gate_decision_id ?? "") !== String(row._id)) return false;
+  if (verdict.status !== "answered") {
+    await ctx.db.patch(run._id, { status: "failed", fail_reason: "gate dismissed", updated_at: now });
+    return true;
+  }
+  const key: string | undefined = verdict.answer_index !== undefined ? run.gate_choices?.[verdict.answer_index]?.key : undefined;
+  const text = verdict.answer_text?.trim();
+  let response: string;
+  if (!key) response = text || answerLabel(row, verdict) || "";
+  else if (!text) response = key;
+  else {
+    // A note typed beside a chosen option keeps the key in front so the
+    // runner routes on it and still hands the note to the next node.
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    response = new RegExp(`^\\[?${escaped}\\]?([:\\s]|$)`, "i").test(text) ? text : `${key}: ${text}`;
+  }
+  await ctx.db.patch(run._id, { gate_response: response, status: "running", updated_at: now });
+  return true;
 }
 
 // The side effects every resolution carries, whoever wrote it: the people's
 // inbox rows close, a reopened granted answer is scored, the stack closes when
 // this was its last member. Shared by finalizeAnswer (server answers) and the
 // web's generic dispatch patch (settleClientResolution), so the two paths
-// cannot drift.
-async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy, now: number) {
+// cannot drift. Returns whether a run consumed the answer as its open gate.
+async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy, now: number): Promise<boolean> {
   await setInboxStatus(ctx, row._id, "done");
   await scoreOverride(ctx, row, verdict, by, now);
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
+  const consumed = await settleGateRun(ctx, row, verdict, now);
   // Every role on the ladder, and the role the asking hand reports to, learns
   // the answer as a passive fact in its next frame (org-roles-standing.md T3).
   const asker = await ctx.db.get(row.conversation_id);
@@ -394,12 +443,15 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
       ref: { table: "session_decisions", id: String(row._id), short_id: row.short_id },
     });
   }
+  return consumed;
 }
 
 // A web client resolved the row through the dispatch collection patch (the
 // store's answerDecision). The client already sent the answer message into
 // the session, so nothing is delivered here; the row gets its answered_by
-// stamp and the shared side effects. `row` is the PRE-patch row.
+// stamp and the shared side effects. `row` is the PRE-patch row. The one
+// exception is a decision bound to a run (the-line.md L4): the client never
+// delivers those, so the server delivers when the run did not consume it.
 export async function settleClientResolution(
   ctx: Ctx,
   row: DecisionRow,
@@ -417,7 +469,8 @@ export async function settleClientResolution(
   };
   const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId };
   await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
-  await settleResolution(ctx, row, verdict, by, now);
+  const consumed = await settleResolution(ctx, row, verdict, by, now);
+  if (row.workflow_run_id && !consumed) await deliverAnswer(ctx, row, verdict, by);
 }
 
 // The dispatch rail's pending guard (first writer wins on every rail): a
@@ -437,7 +490,7 @@ export function personMayResolve(row: { user_id: any; asked_user_ids?: any[] }, 
   return (row.asked_user_ids ?? []).some((id) => id.toString() === userId.toString());
 }
 
-async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions">, status: "pending" | "done") {
+export async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions">, status: "pending" | "done") {
   const rows = await ctx.db
     .query("decision_inbox")
     .withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId))
@@ -449,7 +502,7 @@ async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions">, sta
 // differently is an override; two in a row revoke the grant. An agreement
 // resets the streak.
 async function scoreOverride(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy, now: number) {
-  if (by.kind !== "user" || !row.reopened_from) return;
+  if (by.kind !== "user" || !row.reopened_from || verdict.status === "withdrawn") return;
   const grant = await ctx.db.get(row.reopened_from.grant_id);
   if (!grant || grant.revoked_at) return;
   const agreed = verdict.status === "answered" && verdict.answer_index === row.reopened_from.answer_index;
@@ -488,7 +541,7 @@ async function closeStackIfDone(ctx: Ctx, stackId: Id<"decision_stacks"> | undef
 export type AskArgs = {
   session_id: string;
   question: string;
-  options: Array<{ label: string; description?: string; body_md?: string; evidence?: { label: string; url: string }[]; cost?: string; risk?: string }>;
+  options: Array<{ label: string; description?: string; body_md?: string; evidence?: { label: string; url: string }[]; cost?: string; risk?: string; page_slug?: string }>;
   context_md?: string;
   report_slug?: string;
   blocking?: boolean;
@@ -500,6 +553,11 @@ export type AskArgs = {
   task?: string;
   station?: string;
   stack?: string;
+  // A gate on the line (the-line.md L4): the run this question pauses and
+  // the node that asked. Set by workflow_runs.pauseAtGate and the runner's
+  // failure gates; finalizeAnswer resumes the run.
+  workflow_run_id?: Id<"workflow_runs">;
+  gate_node_id?: string;
 };
 
 function validateShape(kind: DecisionKind, args: { question: string; options: any[]; default_option?: number; form?: any }): string | null {
@@ -623,6 +681,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       form: args.form,
       ...(docId ? { doc_id: docId } : {}),
       ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : {}),
+      ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id } : {}),
       ...(stack && existing.stack_id !== stack._id
         ? { stack_id: stack._id, stack_joined_at: now, scope_keys: keys.includes(stackKey!) ? keys : [...keys, stackKey!] }
         : {}),
@@ -679,6 +738,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     station: task ? args.station ?? task.status_id ?? task.status : args.station,
     stack_id: stack?._id,
     stack_joined_at: stack ? now : undefined,
+    workflow_run_id: args.workflow_run_id,
+    gate_node_id: args.gate_node_id,
     holder,
     holder_key,
     asked_user_ids: people,
@@ -731,6 +792,9 @@ export const ask = mutation({
     task: v.optional(v.string()),
     station: v.optional(v.string()),
     stack: v.optional(v.string()),
+    // the-line.md L4: the runner's failure gates bind their decision to the run.
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+    gate_node_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -787,6 +851,16 @@ export const edit = mutation({
     default_option: v.optional(v.number()),
     // true clears the default (an advisory ask becoming a blocking one).
     clear_default: v.optional(v.boolean()),
+    // Every ask field (the-line.md L10): kind and form reshape the answer,
+    // doc_md rewrites the decision document, task and station rebind the
+    // hold (L5), stack appends, category is a new proposal re-assigned here.
+    kind: v.optional(kindValidator),
+    form: v.optional(formValidator),
+    doc_md: v.optional(v.string()),
+    task: v.optional(v.string()),
+    station: v.optional(v.string()),
+    stack: v.optional(v.string()),
+    category: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -797,19 +871,45 @@ export const edit = mutation({
     if (row.status !== "pending") {
       return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
     }
+    const now = Date.now();
 
     const question = args.question ?? row.question;
     const options = args.options ?? row.options;
     const blocking = args.blocking ?? row.blocking;
+    const kind = (args.kind ?? row.kind ?? "single") as DecisionKind;
+    const form = args.form ?? row.form;
     let defaultOption = args.clear_default ? undefined : args.default_option ?? row.default_option;
-    const shapeError = validateShape((row.kind ?? "single") as DecisionKind, { question, options, default_option: defaultOption, form: row.form });
+    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form });
     if (shapeError) return { error: shapeError };
     // A blocking ask has no default; an advisory one needs one.
     if (blocking) defaultOption = undefined;
     else if (defaultOption === undefined) return { error: "An advisory decision needs a default option" };
 
-    // Options that changed may pin a protected category the old text did not.
-    const { category } = assignCategory({ question, options, context_md: args.context_md ?? row.context_md }, row.category_proposed);
+    let task: any = null;
+    if (args.task) {
+      task = await findTask(ctx, args.task);
+      if (!task) return { error: `Task not found: ${args.task}` };
+      if (!(await canAccessTask(ctx, auth.userId, task))) return { error: `Task not accessible: ${args.task}` };
+    }
+    let stack: Doc<"decision_stacks"> | null = null;
+    if (args.stack) {
+      stack = await findStack(ctx, args.stack);
+      if (!stack) return { error: `Stack not found: ${args.stack}` };
+      if (!(await userCanAccessRole(ctx, auth.userId, { host_user_id: stack.owner_user_id, scope_user_id: stack.scope_user_id, team_id: stack.team_id }))) {
+        return { error: `Stack not accessible: ${args.stack}` };
+      }
+      if (stack.status === "done") return { error: `Stack ${stack.short_id} is done; create a new one` };
+    }
+    const conversation = args.doc_md ? await ctx.db.get(row.conversation_id) : null;
+    const docId = args.doc_md && conversation ? await upsertDecisionDoc(ctx, conversation, question, args.doc_md, now, row.doc_id) : undefined;
+
+    // Options that changed may pin a protected category the old text did not;
+    // a new proposal is re-assigned the same way the ask assigned it.
+    const proposed = args.category ?? row.category_proposed;
+    const { category } = assignCategory({ question, options, context_md: args.context_md ?? row.context_md }, proposed);
+    const stackKey = stack ? `stack:${stack._id}` : undefined;
+    const keys: string[] = (row as any).scope_keys ?? [];
+    const joinsStack = !!stack && row.stack_id !== stack._id;
     await ctx.db.patch(row._id, {
       question,
       options,
@@ -817,11 +917,32 @@ export const edit = mutation({
       report_slug: args.report_slug ?? row.report_slug,
       blocking,
       default_option: defaultOption,
+      kind,
+      form,
       category,
-      updated_at: Date.now(),
+      category_proposed: proposed,
+      ...(docId ? { doc_id: docId } : {}),
+      ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : args.station ? { station: args.station } : {}),
+      ...(joinsStack ? { stack_id: stack!._id, stack_joined_at: now, scope_keys: keys.includes(stackKey!) ? keys : [...keys, stackKey!] } : {}),
+      updated_at: now,
     });
-    if (category !== row.category) await refreshHolder(ctx, { ...row, category }, Date.now());
-    return { id: row._id, short_id: row.short_id, status: "pending", category };
+    if (stack && !stack.decision_ids.includes(row._id)) {
+      await ctx.db.patch(stack._id, { decision_ids: [...stack.decision_ids, row._id], updated_at: now });
+    }
+    // The holder follows the category and the stack's delegate.
+    if (category !== row.category || joinsStack) {
+      const updated = await ctx.db.get(row._id);
+      if (updated) await refreshHolder(ctx, updated, now);
+    }
+    return {
+      id: row._id,
+      short_id: row.short_id,
+      status: "pending",
+      category,
+      task: task ? { id: task._id, short_id: task.short_id, station: args.station ?? task.status_id ?? task.status } : undefined,
+      stack: stack ? { id: stack._id, short_id: stack.short_id } : undefined,
+      doc_id: docId,
+    };
   },
 });
 
@@ -842,13 +963,28 @@ export const withdraw = mutation({
     if (row.status !== "pending") {
       return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
     }
-    const now = Date.now();
-    await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now });
-    await setInboxStatus(ctx, row._id, "done");
-    await closeStackIfDone(ctx, row.stack_id, row._id, now);
-    return { id: row._id, short_id: row.short_id, status: "withdrawn" };
+    return withdrawCore(ctx, row, Date.now());
   },
 });
+
+// The one withdraw for every path (`cast decide cancel`, workflow_runs.cancel
+// taking back its open gate). A gate decision (the-line.md L4) fails its run
+// with "gate withdrawn" unless the run is already past it.
+export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number) {
+  await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now });
+  if (row.workflow_run_id) {
+    const run = await ctx.db.get(row.workflow_run_id);
+    if (run && run.status === "paused" && String(run.gate_decision_id ?? "") === String(row._id)) {
+      await ctx.db.patch(run._id, { status: "failed", fail_reason: "gate withdrawn", updated_at: now });
+    }
+  }
+  // The same settle every resolution takes (the-line.md L4): inbox rows
+  // close, the stack closes when this was its last member, and the ladder
+  // roles receive the withdrawal as a passive fact. The run is failed above,
+  // so the gate settle finds it past the pause and leaves "gate withdrawn".
+  await settleResolution(ctx, row, { status: "withdrawn" }, { kind: "user", id: String(row.user_id), user_id: row.user_id }, now);
+  return { id: row._id, short_id: row.short_id, status: "withdrawn" };
+}
 
 // The CLI's row shape for `cast decide ls` and the ladder listings.
 function cliRowShape(r: DecisionRow, conversation?: any) {
@@ -858,7 +994,8 @@ function cliRowShape(r: DecisionRow, conversation?: any) {
     question: r.question,
     kind: r.kind ?? "single",
     category: r.category,
-    options: r.options,
+    // An option page (the-line.md L6) prints as a url; the slug stays for edits.
+    options: r.options.map((o) => (o.page_slug ? { ...o, page_url: artifactUrl(o.page_slug) } : o)),
     form: r.form,
     blocking: r.blocking,
     default_option: r.default_option,
@@ -889,7 +1026,7 @@ function cliRowShape(r: DecisionRow, conversation?: any) {
 export async function listForSessionCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { session_id: string; stack?: string; task?: string },
+  args: { session_id: string; stack?: string; task?: string; mine?: boolean },
 ): Promise<any> {
   const conversation = await ctx.db
     .query("conversations")
@@ -900,6 +1037,14 @@ export async function listForSessionCore(
     return { error: "Unauthorized: not your session" };
   }
   let rows: DecisionRow[] = [];
+  if (args.mine) {
+    // `cast decide ls --mine` (the-line.md L10): every pending decision the
+    // caller holds, from the same read the web queue uses, oldest first so
+    // the list reads as the queue does.
+    rows = (await listForUserCore(ctx, auth.userId, Date.now())).filter((r) => r.status === "pending");
+    rows.sort((a, b) => a.created_at - b.created_at);
+    return { decisions: rows.map((r) => cliRowShape(r, r.conversation_id === conversation._id ? conversation : undefined)) };
+  }
   if (args.stack) {
     // The same boundary askCore applies when appending: the stack's team or
     // its personal owner. Short ids are sequential, so a bare lookup would
@@ -944,6 +1089,7 @@ export const listForSession = mutation({
     session_id: v.string(),
     stack: v.optional(v.string()),
     task: v.optional(v.string()),
+    mine: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);

@@ -13,6 +13,7 @@ import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, trustOf } from "./orgEvents";
+import { charterLine, type CharterRow } from "./lib/orgCharter";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -300,7 +301,9 @@ export const createSessionFromCli = mutation({
     if (review?.role) await gateRoleCaps(review.role);
     // A hand's first turn opens with the unattended mandate and the hand
     // briefing (the-line.md L2): who it works for and how it ends its turn.
-    const prompt = roleGate ? handBriefing(roleGate, asDef.prompt, spawner?.active_task_id ? await taskShortIdOf(ctx, spawner.active_task_id) : undefined) : asDef.prompt;
+    const handTask: any = roleGate && spawner?.active_task_id ? await ctx.db.get(spawner.active_task_id) : null;
+    const handProject: any = handTask?.project_id ? await ctx.db.get(handTask.project_id) : null;
+    const prompt = roleGate ? handBriefing(roleGate, asDef.prompt, handTask?.short_id ?? undefined, handProject) : asDef.prompt;
 
     const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
       agentType: asDef.agentType ?? args.agent_type,
@@ -394,19 +397,22 @@ export async function recordHandStart(ctx: { db: any }, role: any, conversationI
   await ctx.db.patch(conversationId, { org_role_id: role._id });
 }
 
-async function taskShortIdOf(ctx: { db: any }, taskId: any): Promise<string | undefined> {
-  const task = await ctx.db.get(taskId);
-  return task?.short_id ?? undefined;
-}
-
 // The briefing a hand starts with (org-roles-standing.md T4, the-line.md L2):
-// the unattended mandate, who the hand works for, and the structured ending.
-// Written where the hand pointer is written, so no hand can start without it.
-export function handBriefing(role: { name: string; handle: string; short_id?: string }, prompt: string | undefined, taskShortId?: string): string {
+// the unattended mandate, who the hand works for, the goal of the project the
+// task serves (org-staffing.md S7), and the structured ending. Written where
+// the hand pointer is written, so no hand can start without it.
+export function handBriefing(
+  role: { name: string; handle: string; short_id?: string },
+  prompt: string | undefined,
+  taskShortId?: string,
+  project?: ({ title: string } & CharterRow) | null,
+): string {
   const ct = taskShortId ?? "<ct-id>";
+  const direction = charterLine(`Project ${project?.title ?? ""}`, project);
   const header = [
     `## You are a hand of ${role.name} (@${role.handle})`,
     `You work for that role, not for a person. It reads your handoff, not your transcript.`,
+    ...(direction ? [`${direction}. Your work serves that goal; say in the handoff how it moved.`] : []),
     `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
     `- A question you cannot answer yourself goes to your role, attached to the task: \`cast decide --task ${ct} "<question>" -o ... -o ...\`, then end your turn.`,
     `- If you review another hand's work, end with \`cast task verdict ${ct} approve|changes|reject --note -\`.`,
