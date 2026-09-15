@@ -69,7 +69,51 @@ const DEFAULT_CAST_GROUP = { title: "Cast", color: "red" };
 
 let ws = null;
 let status = { state: "no-config", detail: "not paired yet" };
-const attached = new Set(); // tabIds we hold a debugger session on
+// tabIds we hold a debugger session on. Every change re-checks the session
+// this worker holds on itself (holdSelf).
+const attached = new (class extends Set {
+  add(tabId) {
+    super.add(tabId);
+    holdSelf();
+    return this;
+  }
+  delete(tabId) {
+    const had = super.delete(tabId);
+    if (had) holdSelf();
+    return had;
+  }
+})();
+
+// Chrome stops a running service worker that leaves its ping unanswered for
+// 30 s (ServiceWorkerVersion::OnPingTimeout). This worker's process runs in
+// Chrome's throttled background priority, and on a loaded Mac a stall that
+// long is ordinary, so Chrome ended the worker in the middle of commands and
+// a fresh one booted seconds later (reproduced 2026-09-15 by freezing the
+// extension process for 90 s). A DevTools session on the worker itself
+// cancels that stop (EmbeddedWorkerInstance::StopIfNotAttachedToDevTools).
+// Any session shows Chrome's debugging banner, which is already up while a
+// tab is attached, so the worker holds this one exactly while it holds a tab.
+let selfTarget = null;
+let selfSync = Promise.resolve();
+
+function holdSelf() {
+  selfSync = selfSync.then(async () => {
+    const want = attached.size > 0;
+    if (want === (selfTarget !== null)) return;
+    if (!want) {
+      const targetId = selfTarget;
+      selfTarget = null;
+      await bounded(chrome.debugger.detach({ targetId }), "debugger.detach").catch(() => {});
+      return note("released own worker session");
+    }
+    const self = (await bounded(chrome.debugger.getTargets(), "debugger.getTargets")).find((t) => t.type === "worker" && t.url === chrome.runtime.getURL("background.js"));
+    if (!self) return note("own service worker is not a debugger target");
+    await attachDebugger({ targetId: self.id });
+    selfTarget = self.id;
+    note("holding own worker session");
+  }).catch((err) => note(`self session failed: ${String((err && err.message) || err)}`));
+  return selfSync;
+}
 
 // This worker's identity for the host log: a new boot means Chrome ended the
 // previous worker (and its socket with it); the same boot on a reconnect
@@ -536,25 +580,31 @@ async function boundedCdp(tabId, method, params) {
   }
 }
 
+/**
+ * Chrome keeps an extension's debugger sessions across service worker lives;
+ * our bookkeeping does not. A session this worker's predecessor held is still
+ * on the target, and only a detach clears it. The detach succeeds for our own
+ * session alone: another extension's, or open DevTools, leaves an error worth
+ * naming.
+ */
+async function attachDebugger(debuggee) {
+  try {
+    await bounded(chrome.debugger.attach(debuggee, "1.3"), "debugger.attach");
+  } catch (err) {
+    if (!/already attached/i.test(String((err && err.message) || err))) throw err;
+    const ours = await bounded(chrome.debugger.detach(debuggee), "debugger.detach").then(() => true, () => false);
+    if (!ours) throw new Error(`another debugger holds this target (DevTools, or another extension); close it there first`);
+    await bounded(chrome.debugger.attach(debuggee, "1.3"), "debugger.attach");
+  }
+}
+
 async function attachTab(tabId) {
   await loadOwnership();
   const t = await chrome.tabs.get(tabId).catch(() => null);
   if (ownedTabs.has(tabId) && t?.groupId === NO_GROUP) await placeInGroup(t, DEFAULT_CAST_GROUP);
   if (!attached.has(tabId)) {
     if (t && t.discarded) throw new Error("this tab was discarded by Chrome's memory saver; activate it once to wake it");
-    try {
-      await bounded(chrome.debugger.attach({ tabId }, "1.3"), "debugger.attach");
-    } catch (err) {
-      // Chrome keeps an extension's debugger sessions across service worker
-      // lives; our bookkeeping does not. A session this worker's predecessor
-      // held is still on the tab, and only a detach clears it. The detach
-      // succeeds for our own session alone: another extension's, or open
-      // DevTools, leaves an error worth naming.
-      if (!/already attached/i.test(String((err && err.message) || err))) throw err;
-      const ours = await bounded(chrome.debugger.detach({ tabId }), "debugger.detach").then(() => true, () => false);
-      if (!ours) throw new Error(`another debugger holds this tab (DevTools, or another extension); close it there first`);
-      await bounded(chrome.debugger.attach({ tabId }, "1.3"), "debugger.attach");
-    }
+    await attachDebugger({ tabId });
     attached.add(tabId);
     markDriven(tabId, true);
   }
@@ -1023,6 +1073,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 // The user can cancel via Chrome's banner; keep our books straight when they
 // do. The border cannot be removed (the session is gone); its lease hides it.
 chrome.debugger.onDetach.addListener((source) => {
+  if (source.targetId && source.targetId === selfTarget) {
+    selfTarget = null;
+    holdSelf();
+  }
   if (source.tabId && attached.has(source.tabId)) {
     attached.delete(source.tabId);
     borderScripts.delete(source.tabId); // the session is gone, and its scripts with it

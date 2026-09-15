@@ -404,6 +404,9 @@ describe("churn exemption (design D1)", () => {
 
   test("isChurnOnlyPatch: only listed tables, only full-churn key sets", () => {
     expect(isChurnOnlyPatch("conversations", { message_count: 1 })).toBe(true);
+    // The message flush stamps the activity line on every tool call batch; it
+    // must stay inside the exemption or the flush contends on the head row.
+    expect(isChurnOnlyPatch("conversations", { message_count: 1, updated_at: 2, activity: { text: "editing a.ts", tool: "Edit", at: 2 } })).toBe(true);
     expect(isChurnOnlyPatch("conversations", { message_count: 1, title: "x" })).toBe(false);
     expect(isChurnOnlyPatch("conversations", {})).toBe(false);
     expect(isChurnOnlyPatch("tasks", { updated_at: 1 })).toBe(false);

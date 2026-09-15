@@ -55,7 +55,7 @@ function RunCard({ run }: { run: any }) {
   );
 }
 
-function WorkflowsDashboardContent() {
+export function WorkflowsDashboardContent() {
   // Store-fed (hooks/useSyncWorkflows): the dashboard paints from cached
   // runs; the loader shows only for a genuinely cold cache.
   const { runs: runRows, ready } = useDynamicRuns();

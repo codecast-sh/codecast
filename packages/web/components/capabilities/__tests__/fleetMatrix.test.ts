@@ -63,6 +63,22 @@ const skill = (name: string, over: Partial<FleetInventoryItem> = {}) =>
 const plugin = (name: string, over: Partial<FleetInventoryItem> = {}) =>
   item({ kind: "plugin", name, ...over });
 
+describe("reader extras survive the fleet fold", () => {
+  test("source and command stay on the grid row", () => {
+    const rows = buildFleetRows(
+      [machine("a", "laptop")],
+      {
+        a: [
+          skill("deploy", { source: "/Users/me/.claude/skills/deploy/SKILL.md" }),
+          item({ kind: "mcp", name: "db", command: "npx db-mcp", url: undefined }),
+        ],
+      },
+    );
+    expect(rowFor(rows, "skill:deploy").source).toContain("SKILL.md");
+    expect(rowFor(rows, "mcp:db").command).toBe("npx db-mcp");
+  });
+});
+
 function rowFor(rows: FleetGridRow[], key: string): FleetGridRow {
   const row = rows.find((r) => r.key === key);
   if (!row) throw new Error(`no row ${key}; built: ${rows.map((r) => r.key).join(", ") || "(none)"}`);

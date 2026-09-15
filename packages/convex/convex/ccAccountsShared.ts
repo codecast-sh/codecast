@@ -300,23 +300,57 @@ export const PACED_CONTINUE_KINDS: ReadonlySet<string> = new Set(["throttle", "c
 export const THROTTLE_CONTINUE_DELAY_MS = 60 * 1000;
 export const THROTTLE_CONTINUE_BATCH = 3;
 export const THROTTLE_CONTINUE_SPACING_MS = 20 * 1000;
+// A session that 429s again after our continue is not a new burst: wait longer
+// each time, capped, so a misread usage limit cannot be retried every minute.
+export const THROTTLE_CONTINUE_BACKOFF_CAP_MS = 15 * 60 * 1000;
+export const THROTTLE_CONTINUE_ATTEMPT_PREFIX = "throttle-continue:";
+
+export function throttleContinueAttemptKey(conversationId: string): string {
+  return `${THROTTLE_CONTINUE_ATTEMPT_PREFIX}${conversationId}`;
+}
+
+/** When this paced-continue row is due. First try: THROTTLE_CONTINUE_DELAY_MS
+ * after the park. Each later try in the same 5h window doubles that delay
+ * from the last continue, capped at THROTTLE_CONTINUE_BACKOFF_CAP_MS. */
+export function throttleContinueDueAt(
+  parkedAt: number,
+  conversationId: string | undefined,
+  attempts: Array<{ profile: string; at: number }>,
+  now: number,
+): number {
+  if (!conversationId) return parkedAt + THROTTLE_CONTINUE_DELAY_MS;
+  const key = throttleContinueAttemptKey(conversationId);
+  const recent = attempts.filter((a) => a.profile === key && now - a.at < AUTO_SWITCH_SESSION_WINDOW_MS);
+  if (recent.length === 0) return parkedAt + THROTTLE_CONTINUE_DELAY_MS;
+  const last = Math.max(...recent.map((a) => a.at));
+  const delay = Math.min(
+    THROTTLE_CONTINUE_DELAY_MS * 2 ** recent.length,
+    THROTTLE_CONTINUE_BACKOFF_CAP_MS,
+  );
+  return last + delay;
+}
 
 /** The paced-continue sessions (PACED_CONTINUE_KINDS) to continue on this
- * tick: those parked at least THROTTLE_CONTINUE_DELAY_MS ago, oldest park
- * first, capped at the batch. `waiting` counts the ones still inside the
- * delay — a caller with nothing to send now but some waiting books the next
- * tick for the moment the oldest of them becomes due. */
+ * tick: those whose due time has arrived, oldest park first, capped at the
+ * batch. `waiting` counts the ones still inside the delay or backoff — a
+ * caller with nothing to send now but some waiting books the next tick for
+ * the soonest of them. */
 export function pickThrottleContinueBatch<
-  T extends { pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
->(blocked: T[], now: number): { batch: T[]; remaining: number; waiting: number; nextDueAt: number | null } {
+  T extends { _id?: string; pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
+>(
+  blocked: T[],
+  now: number,
+  attempts: Array<{ profile: string; at: number }> = [],
+): { batch: T[]; remaining: number; waiting: number; nextDueAt: number | null } {
   const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const dueAt = (c: T): number => throttleContinueDueAt(parkedAt(c), c._id, attempts, now);
   const throttled = blocked
     .filter((c) => PACED_CONTINUE_KINDS.has(c.pending_api_error_kind ?? ""))
     .sort((a, b) => parkedAt(a) - parkedAt(b));
-  const due = throttled.filter((c) => now - parkedAt(c) >= THROTTLE_CONTINUE_DELAY_MS);
-  const waitingRows = throttled.filter((c) => now - parkedAt(c) < THROTTLE_CONTINUE_DELAY_MS);
+  const due = throttled.filter((c) => now >= dueAt(c));
+  const waitingRows = throttled.filter((c) => now < dueAt(c));
   const batch = due.slice(0, THROTTLE_CONTINUE_BATCH);
-  const nextDueAt = waitingRows.length > 0 ? parkedAt(waitingRows[0]) + THROTTLE_CONTINUE_DELAY_MS : null;
+  const nextDueAt = waitingRows.length > 0 ? Math.min(...waitingRows.map(dueAt)) : null;
   return { batch, remaining: due.length - batch.length, waiting: waitingRows.length, nextDueAt };
 }
 
@@ -530,8 +564,8 @@ export function resetCreditAttemptKey(profile: string): string {
 
 /**
  * Pick the cheapest recovery for limit-parked sessions:
- *  1. no switch — the active account has headroom again and we haven't already
- *     tried a continue for this park. Two proofs, either suffices:
+ *  1. no switch — the active account has headroom again and a continue is still
+ *     worth sending. Two proofs, either suffices:
  *     (a) its 5h session window reset AFTER the newest park (resets_at is an
  *         absolute timestamp, so even a stale snapshot stays truthful);
  *     (b) a usage snapshot fetched after the park SETTLED (the same margin the
@@ -633,11 +667,20 @@ export function decideAutoSwitch(input: {
   const settledProbeShowsHeadroom =
     !noParkOnActive &&
     activeFetchedAt >= (parksPredateActivation ? activeSince : activeParkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS);
+  // A continue already sent is spent until something NEW happens after it: the
+  // window rolls, or a probe fetched after the continue settled shows headroom.
+  // A refused continue stamps a fresh park, so `lastContinue < parkedAt` used
+  // to look like a new incident and retried every cooldown while the quota
+  // was still spent (jx7dnat: hundreds of continues into a usage limit).
+  const continueHasNewEvidence =
+    !lastContinue ||
+    (!!sessionResetAt && sessionResetAt > lastContinue && sessionResetAt <= now) ||
+    activeFetchedAt >= lastContinue + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS;
   if (
     !input.activeDead &&
     (noParkOnActive || windowRolledSincePark || settledProbeShowsHeadroom) &&
     !isUsageExhausted(active?.usage, now) &&
-    (!lastContinue || lastContinue < parkedAt)
+    continueHasNewEvidence
   ) {
     return { action: "continue" };
   }
@@ -705,11 +748,10 @@ export function isDeviceOnline(device: { last_seen: number }, now: number): bool
 // banner its own agent's recovery chain can act on. Which kinds those are per
 // agent is blockedKindsForAgent (apiErrorBanner.ts) — for Claude Code every
 // blocked kind, for Codex the ones needing no Claude credential. kind "error"
-// (statusful 429/5xx provider failures) is deliberately OUT of the blocked set
-// for everyone: the CLI retries those itself and they must not paint a
-// mid-retry session as blocked (a mid-conversation 500 otherwise throws the
-// active session into the fleet banner). Dismissed is an explicit user "go
-// away" — never auto-revive.
+// (a marked opencode/pi client error) is OUT of the blocked set for everyone.
+// A statusful 5xx banner is kind "fatal": Claude Code writes it only after its
+// own retries are spent. Dismissed is an explicit user "go away" — never
+// auto-revive.
 export function isBlockedConversation(conv: {
   pending_api_error?: boolean;
   pending_api_error_kind?: string | null;

@@ -493,14 +493,18 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const HELLO_TIMEOUT_MS = 15_000;
 
 /**
- * How long the extension may go silent before its socket is declared dead.
- * The worker pings every 20 s (background.js KEEPALIVE_MS) and answers ours
- * at the same rate, so three quiet cycles is a worker that is gone while
- * Chrome's network process still holds the TCP side open: without this,
- * every command timed out against a socket nobody was reading, and a new
- * worker's hello sat behind it.
+ * How long the extension may go silent before its socket is declared dead:
+ * a worker that is gone while Chrome's network process still holds the TCP
+ * side open would otherwise keep every command waiting on a socket nobody
+ * reads. Silence alone is weak evidence of that. Chrome runs the worker's
+ * process at background priority, and on a loaded Mac it can go a minute
+ * or more without CPU while alive and holding tabs (background.js holdSelf
+ * keeps Chrome from ending it). Cutting that socket failed every command in
+ * flight for no gain, because a truly dead worker is replaced sooner anyway:
+ * its successor connects within the 30 s alarm and a newer connection wins.
+ * So the budget matches Chrome's own limit for one request, five minutes.
  */
-const EXTENSION_SILENCE_MS = 65_000;
+const EXTENSION_SILENCE_MS = 5 * 60_000;
 
 /** `castGroup` as a client may send it; anything else is treated as absent. */
 function parseGroup(raw: unknown): BridgeGroup | null {

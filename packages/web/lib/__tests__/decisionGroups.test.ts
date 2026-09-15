@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { groupDecisions, stackCursor, advisoryDefaults, decisionScopeKey } from "../decisionGroups";
+import { groupDecisions, stackCursor, advisoryDefaults, decisionScopeKey, stackDue, sortStacksByDue } from "../decisionGroups";
 
 const row = (id: string, extra: Record<string, any> = {}) => ({
   _id: id,
@@ -13,8 +13,8 @@ const row = (id: string, extra: Record<string, any> = {}) => ({
   ...extra,
 });
 
-const stack = (id: string, decision_ids: string[]) => ({
-  _id: id, title: id, owner_user_id: "u", policy: {}, status: "open" as const, decision_ids,
+const stack = (id: string, decision_ids: string[], policy: Record<string, any> = {}) => ({
+  _id: id, title: id, owner_user_id: "u", policy, status: "open" as const, decision_ids,
   total: decision_ids.length, resolved: 0, pending: decision_ids.length, created_at: 1, updated_at: 1,
 });
 
@@ -80,5 +80,48 @@ describe("advisoryDefaults", () => {
       row("w", { blocking: false, default_option: 0, status: "answered" }),
     ] as any);
     expect(out).toEqual([{ id: "x", index: 1 }]);
+  });
+});
+
+// Due (the-line.md L10): the label the group header and the stacks index
+// show, and the sort that puts an overdue stack first.
+describe("stackDue", () => {
+  const now = 10 * 3_600_000;
+  test("no due, no label", () => {
+    expect(stackDue({}, now)).toBeNull();
+    expect(stackDue(undefined, now)).toBeNull();
+  });
+  test("a future due reads as due in, in minutes, hours or days", () => {
+    expect(stackDue({ due_at: now + 5 * 60_000 }, now)).toEqual({ text: "due in 5m", overdue: false, at: now + 5 * 60_000 });
+    expect(stackDue({ due_at: now + 3 * 3_600_000 }, now)?.text).toBe("due in 3h");
+    expect(stackDue({ due_at: now + 72 * 3_600_000 }, now)?.text).toBe("due in 3d");
+  });
+  test("a passed due reads as overdue and flags red", () => {
+    expect(stackDue({ due_at: now - 2 * 3_600_000 }, now)).toEqual({ text: "overdue 2h", overdue: true, at: now - 2 * 3_600_000 });
+    expect(stackDue({ due_at: now - 10_000 }, now)?.text).toBe("due now");
+  });
+});
+
+describe("overdue stacks sort first", () => {
+  const now = 100 * 3_600_000;
+  test("sortStacksByDue: the longest overdue first, the rest keep their order", () => {
+    const rows = [
+      stack("fresh", ["a"]),
+      stack("soon", ["b"], { due_at: now + 3_600_000 }),
+      stack("late", ["c"], { due_at: now - 3_600_000 }),
+      stack("later", ["d"], { due_at: now - 5 * 3_600_000 }),
+    ];
+    expect(sortStacksByDue(rows, now).map((s) => s._id)).toEqual(["later", "late", "fresh", "soon"]);
+  });
+  test("groupDecisions lists an overdue stack's group before an earlier listed stack", () => {
+    const rows = [
+      row("d1", { stack_id: "st1", created_at: 10 }),
+      row("d2", { stack_id: "st2", created_at: 20 }),
+    ];
+    const groups = groupDecisions(rows as any, [stack("st1", ["d1"]), stack("st2", ["d2"], { due_at: now - 60_000 })], now);
+    expect(groups.map((g) => g.key)).toEqual(["stack:st2", "stack:st1"]);
+    // The clock decides: before the due passes, the server's order stands.
+    const before = groupDecisions(rows as any, [stack("st1", ["d1"]), stack("st2", ["d2"], { due_at: now - 60_000 })], now - 120_000);
+    expect(before.map((g) => g.key)).toEqual(["stack:st1", "stack:st2"]);
   });
 });

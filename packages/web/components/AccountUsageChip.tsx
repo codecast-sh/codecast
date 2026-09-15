@@ -4,25 +4,28 @@
 // session you're viewing (sticky to the last shown when the selection is
 // neither Claude nor Codex). A status dot carries its most-utilized limit
 // window — green with headroom, orange near the limit, red once sessions on
-// it are blocked — always visible so a session-limit surprise never is one.
+// it are blocked. Last-known accounts stay in the bar while the daemon is
+// quiet or offline so a session-limit surprise (or a missing switcher) never
+// is one; switching itself stays blocked until the machine is back.
 // Hovering the chip opens the full panel with the real meters: the ACTIVE
 // accounts broken out on top (what's "on" right now), the rest grouped by
 // email below, the auto-switch toggle, and the path to Settings.
 
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { toast } from "sonner";
 import { KeyRound, TimerReset, Zap, ZapOff } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
+import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo } from "@codecast/shared/contracts";
+import { resolveAccountChip } from "../lib/accountUsageChip";
+import { machineSwitchBlock, machineSwitchPendingCopy } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
 import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge } from "./MintTokenDialog";
@@ -37,6 +40,55 @@ type ProfileRow = {
   login_expired_at?: number;
   setup_token?: { stored_at: number; expires_at: number };
 };
+
+function ClaudeSwitchControl({
+  profile,
+  email,
+  loginExpired,
+  online,
+  isRemote,
+  onSwitch,
+}: {
+  profile: string;
+  email?: string;
+  loginExpired: boolean;
+  online?: boolean;
+  isRemote?: boolean;
+  onSwitch: (profile: string, email?: string) => void;
+}) {
+  const blocked = machineSwitchBlock({
+    isActive: false,
+    online,
+    isRemote,
+    loginExpired,
+    thisProfile: profile,
+  });
+  if (blocked?.block === "login_expired") {
+    return (
+      <span className="shrink-0 text-[10px] text-sol-text-dim" title={blocked.label}>
+        sign in to switch
+      </span>
+    );
+  }
+  if (blocked) {
+    return (
+      <span className="shrink-0 cursor-default text-[10px] text-sol-text-dim" title={blocked.label}>
+        switch →
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onPointerDown={(ev) => ev.stopPropagation()}
+      onClick={() => onSwitch(profile, email)}
+      title={`Switch this machine to "${profile}". Running sessions keep the account they started on.`}
+      className="shrink-0 text-[10px] font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline"
+    >
+      switch →
+    </button>
+  );
+}
 
 // The chip's visible slice: status dot + provider icon + account name — the
 // same dot-led shape as the daemon and agents chips beside it, and a fixed
@@ -72,7 +124,6 @@ export function AccountUsageChip() {
   // serve this must cost the chip, not the surface hosting it. Undefined reads
   // as "no accounts yet", which the render below already handles.
   const { data } = useQueryNoThrow(api.accountSwitch.listAccountProfiles, {});
-  const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const router = useRouter();
   const now = useCoarseNow(30_000);
   // Hovering the chip expands the full usage panel DOWN from it. The panel is
@@ -82,16 +133,13 @@ export function AccountUsageChip() {
   // makes that read as a dropped hover.
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pointerInside = useRef(false);
   const openNow = () => {
+    pointerInside.current = true;
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = null;
     setOpen(true);
   };
-  const closeSoon = () => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = setTimeout(() => setOpen(false), 160);
-  };
-  const [switching, setSwitching] = useState<string | null>(null);
   // The chip shows ONE provider: the one backing the session you're viewing.
   // Sticky across selections that map to neither provider (other agent types,
   // nothing selected) so the chip doesn't blink to a default; the other
@@ -108,26 +156,39 @@ export function AccountUsageChip() {
     : null;
   const lastShownProvider = useRef<"claude" | "codex" | null>(null);
 
-  // The primary (non-remote) machine is the one whose login rotates through
-  // profiles; remotes mirror it, so their meters would be duplicates.
-  // Online only: the query also carries a recently-offline primary (for the
-  // settings page's auto-switch toggle), whose meters would render stale here.
-  const device = data?.devices.find((d) => !d.is_remote && d.online !== false);
+  // Last-known primary, even when the daemon is quiet or offline. The query
+  // also carries remotes and a 7-day offline primary (for Settings); remotes
+  // never win, and going quiet must not hide the switcher. Switch itself stays
+  // blocked while the machine is offline.
+  const resolved = resolveAccountChip({
+    devices: data?.devices,
+    currentAgentType,
+    lastShown: lastShownProvider.current,
+  });
+  const device = resolved?.device;
   // Hooks run unconditionally; the placeholder device is never flipped because
   // the panel (and its switches) only render once a real device exists.
   const recovery = useAccountRecoveryToggles(
     device ?? { device_id: "", auto_switch: false, auto_continue: undefined },
   );
+  const sw = useMachineAccountSwitch({
+    deviceId: device?.device_id,
+    activeEmail: device?.active_email,
+  });
+  const closeSoon = () => {
+    pointerInside.current = false;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => {
+      if (pointerInside.current) return;
+      setOpen(false);
+      sw.clearOutcome();
+    }, 160);
+  };
   const profiles: ProfileRow[] = device?.profiles ?? [];
-  const active = profiles.find((p) => p.email && p.email === device?.active_email);
-  // Codex accounts arrive in the same inventory shape as Claude's; the active
-  // login is matched by email (uuid isn't exposed per profile), first profile
-  // as fallback for legacy single-snapshot devices.
+  const active = resolved?.active;
   const codexProfiles: ProfileRow[] = device?.codex_accounts?.profiles ?? [];
-  const activeCodex =
-    codexProfiles.find((p) => p.email && p.email === device?.codex_accounts?.active_email) ??
-    codexProfiles[0];
-  if (!device || (!active && !activeCodex)) return null;
+  const activeCodex = resolved?.activeCodex;
+  if (!resolved || !device) return null;
 
   // Time-aware: a window whose reset has passed contributes 0, so a dormant
   // account's old 100% never keeps the chip pegged red.
@@ -142,32 +203,12 @@ export function AccountUsageChip() {
   const claudeUsed = !!active && worst != null && worst > 0;
   const codexUsed =
     !!activeCodex && ((activeCodex.usage?.models?.length ?? 0) > 0 || (codexWorst ?? 0) > 0);
-  // Session's provider wins; a selection that maps to neither (cursor, gemini,
-  // nothing open) keeps the last shown; first render falls back to whichever
-  // provider has an account, Claude first. Every branch checks the account
-  // exists, so the shown provider always has one (the early return above
-  // guarantees at least one does).
-  const sessionProvider =
-    currentAgentType === "codex" || currentAgentType === "codex_cli"
-      ? "codex"
-      : currentAgentType === "claude_code"
-        ? "claude"
-        : null;
-  const shown: "claude" | "codex" =
-    sessionProvider === "codex" && activeCodex
-      ? "codex"
-      : sessionProvider === "claude" && active
-        ? "claude"
-        : lastShownProvider.current === "codex" && activeCodex
-          ? "codex"
-          : lastShownProvider.current === "claude" && active
-            ? "claude"
-            : active
-              ? "claude"
-              : "codex";
+  const shown = resolved.shown;
   lastShownProvider.current = shown;
   // The chip border speaks for the shown provider.
   const tone = shown === "codex" ? codexTone : claudeTone;
+  const shownClaudeName =
+    sw.outcome?.kind === "success" ? sw.outcome.profile : active?.name;
   // Panel list: the ACTIVE accounts (the Claude and Codex login actually in
   // use) break out into their own section on top — that's the "what is on"
   // answer. Everything else groups by email below: the same login usually
@@ -175,7 +216,11 @@ export function AccountUsageChip() {
   // Codex rows.
   type AccountEntry = { provider: "claude" | "codex"; p: ProfileRow; isActive: boolean };
   const allEntries: AccountEntry[] = [
-    ...profiles.map((p) => ({ provider: "claude" as const, p, isActive: p === active })),
+    ...profiles.map((p) => ({
+      provider: "claude" as const,
+      p,
+      isActive: p === active,
+    })),
     ...codexProfiles.map((p) => ({ provider: "codex" as const, p, isActive: p === activeCodex })),
   ];
   const buildGroups = (entries: AccountEntry[]) => {
@@ -193,21 +238,11 @@ export function AccountUsageChip() {
   // Only a re-check clears the stamp, so an old one keeps claiming "everything
   // is spent" after the windows rolled — read it against the clock.
   const exhausted = isExhaustionCurrent(state?.exhausted_at, [...profiles, ...codexProfiles], now);
-
-  const handleSwitch = async (profile: string) => {
-    setSwitching(profile);
-    try {
-      // Pure swap, same as the settings page: running sessions are untouched;
-      // new/resumed ones adopt the account. The query refresh flips which card
-      // shows "active" once the daemon confirms.
-      await requestSwitch({ profile, device_id: device.device_id, continue_blocked: false });
-      toast.success(`Switching to "${profile}" — new and resumed sessions will use it`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Switch failed");
-    } finally {
-      setSwitching(null);
-    }
+  const handleSwitch = (profile: string, email?: string) => {
+    setOpen(true);
+    void sw.switchTo(profile, email);
   };
+  const panelOpen = open;
 
   // One email group card, shared by both panel sections; the active section
   // gets the green treatment.
@@ -247,20 +282,24 @@ export function AccountUsageChip() {
                 {e.p.name}
                 {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ?? e.p.tier}` : ""}
               </span>
-              {e.isActive ? (
+              {e.provider === "claude" && sw.switching === e.p.name ? (
+                <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-sol-cyan">
+                  <span className="h-2 w-2 animate-spin rounded-full border-2 border-sol-cyan/30 border-t-sol-cyan" aria-hidden />
+                  switching…
+                </span>
+              ) : e.isActive ? (
                 <span className="shrink-0 text-[10px] font-medium text-sol-green">active</span>
               ) : e.provider === "claude" ? (
                 // Codex rows are display-only for now — switching the
                 // machine's Codex account is the follow-up (auth.json swap).
-                <button
-                  type="button"
-                  disabled={switching !== null}
-                  onClick={() => handleSwitch(e.p.name)}
-                  title={`Switch this machine to "${e.p.name}"`}
-                  className="shrink-0 text-[10px] font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline disabled:opacity-50"
-                >
-                  {switching === e.p.name ? "switching…" : "switch →"}
-                </button>
+                <ClaudeSwitchControl
+                  profile={e.p.name}
+                  email={e.p.email}
+                  loginExpired={!!e.p.login_expired_at}
+                  online={device.online}
+                  isRemote={device.is_remote}
+                  onSwitch={handleSwitch}
+                />
               ) : null}
             </div>
             {/* Status chips get their own wrapping line: the panel is too narrow to
@@ -268,7 +307,17 @@ export function AccountUsageChip() {
                 nothing to say, so the line collapses when all are absent. */}
             <div className="mb-1 flex flex-wrap items-center gap-1 empty:hidden">
               <LoginExpiredBadge profile={e.p} />
-              {e.provider === "claude" && device && <ProfileSignInButton device={device} profile={e.p} />}
+              {e.provider === "claude" && device && (
+                <ProfileSignInButton
+                  device={device}
+                  profile={e.p}
+                  force={
+                    sw.outcome?.kind === "error" &&
+                    sw.outcome.profile === e.p.name &&
+                    /sign in again/i.test(sw.outcome.message)
+                  }
+                />
+              )}
               {e.provider === "claude" && <SetupTokenBadge profile={e.p} now={now} />}
               {e.provider === "claude" && device && <MintTokenButton device={device} profile={e.p} />}
             </div>
@@ -294,13 +343,15 @@ export function AccountUsageChip() {
         {shown === "claude" ? (
           <ProviderSegment
             icon={<ClaudeIcon className="h-3 w-3 shrink-0 text-sol-orange" />}
-            label={active?.name ?? "claude"}
+            label={shownClaudeName ?? resolved.claudeLabel}
             percent={worst}
             tone={claudeTone}
             title={
-              !claudeUsed
-                ? `Claude "${active?.name}" — no usage this week`
-                : `Claude "${active?.name}" — worst limit window at ${worst != null ? Math.round(worst) : "?"}%`
+              sw.switching
+                ? machineSwitchPendingCopy(sw.phase, sw.switching, device.label)
+                : !claudeUsed
+                  ? `Claude "${active?.name}" — no usage this week`
+                  : `Claude "${active?.name}" — worst limit window at ${worst != null ? Math.round(worst) : "?"}%`
             }
           />
         ) : (
@@ -316,7 +367,13 @@ export function AccountUsageChip() {
             }
           />
         )}
-        {autoOn ? (
+        {sw.switching ? (
+          <span
+            className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-current/30 border-t-current"
+            style={{ color: tone }}
+            aria-label={machineSwitchPendingCopy(sw.phase, sw.switching, device.label)}
+          />
+        ) : autoOn ? (
           <Zap
             className="h-3 w-3"
             style={{ color: exhausted ? "var(--sol-red)" : "var(--sol-cyan)" }}
@@ -331,7 +388,7 @@ export function AccountUsageChip() {
           )
         )}
       </button>
-      {open && (
+      {panelOpen && (
         <div className="absolute right-0 top-full z-50 pt-1.5">
           <div className="w-[320px] rounded-md border bg-popover text-popover-foreground shadow-md">
         <div className="border-b border-sol-border/60 px-3 py-2">
@@ -343,16 +400,59 @@ export function AccountUsageChip() {
           </div>
         </div>
 
-        <div className="max-h-[360px] space-y-2 overflow-y-auto px-3 py-2">
-          <div className="px-0.5 text-[9px] font-semibold uppercase tracking-wider text-sol-green">
-            Active
+        {(sw.switching || sw.outcome) && (
+          <div
+            className={`border-b px-3 py-2 text-[10px] leading-snug ${
+              sw.outcome?.kind === "error"
+                ? "border-sol-red/30 bg-sol-red/10 text-sol-red"
+                : sw.outcome?.kind === "success"
+                  ? "border-sol-green/30 bg-sol-green/10 text-sol-green"
+                  : "border-sol-cyan/30 bg-sol-cyan/10 text-sol-cyan"
+            }`}
+          >
+            {sw.switching ? (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 animate-spin rounded-full border-2 border-current/30 border-t-current" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  {machineSwitchPendingCopy(sw.phase, sw.switching, device.label)}
+                </span>
+                <button
+                  type="button"
+                  onPointerDown={(ev) => ev.stopPropagation()}
+                  onClick={sw.cancel}
+                  className="shrink-0 font-medium text-current/80 underline-offset-2 hover:underline"
+                >
+                  cancel
+                </button>
+              </span>
+            ) : sw.outcome?.kind === "error" ? (
+              sw.outcome.message
+            ) : (
+              <>
+                Now using {sw.outcome?.profile}. Running sessions keep the account they started on.
+              </>
+            )}
           </div>
-          {activeGroups.map((g) => renderGroup(g, true))}
+        )}
+
+        <div className="max-h-[min(45rem,calc(100dvh-16rem))] space-y-2 overflow-y-auto px-3 py-2">
+          {activeGroups.length > 0 && (
+            <>
+              <div className="px-0.5 text-[9px] font-semibold uppercase tracking-wider text-sol-green">
+                Active
+              </div>
+              {activeGroups.map((g) => renderGroup(g, true))}
+            </>
+          )}
           {otherGroups.length > 0 && (
             <>
               <div className="px-0.5 pt-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
                 Available
               </div>
+              <p className="px-0.5 text-[10px] leading-snug text-sol-text-dim">
+                Switch changes the default login on this machine. Sessions already running keep the
+                account they started on.
+              </p>
               {otherGroups.map((g) => renderGroup(g, false))}
             </>
           )}

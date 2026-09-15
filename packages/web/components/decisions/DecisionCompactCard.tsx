@@ -2,10 +2,13 @@
 
 import { useCallback } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Layers, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, Layers, LayoutTemplate, ShieldCheck, Workflow } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
-import { decisionHref, ladderRecommendation } from "../../lib/decisionLinks";
+import { decisionHref, gateRunLabel, ladderRecommendation, runHref } from "../../lib/decisionLinks";
+import { optionPageSlugs } from "../../lib/decisionQueue";
+import { useSyncWorkflowRun } from "../../hooks/useSyncWorkflows";
+import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
@@ -35,6 +38,7 @@ export function DecisionCompactCard({
     (st) => decision.stack_id ? st.decisionStacks[decision.stack_id]?.title : undefined,
   ]);
   const answerDecision = useInboxStore((st) => st.answerDecision);
+  const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
   const session = s.sessions[decision.conversation_id];
   const task = decision.task_id ? s.tasks[decision.task_id] : undefined;
   const stack = decision.stack_id ? s.decisionStacks[decision.stack_id] : undefined;
@@ -44,6 +48,7 @@ export function DecisionCompactCard({
   const rec = ladderRecommendation(decision);
   const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
   const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
+  const pageCount = optionPageSlugs(decision.options).length;
 
   return (
     <div
@@ -56,8 +61,16 @@ export function DecisionCompactCard({
             <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
           )}
           <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${decision.blocking ? "bg-sol-yellow animate-pulse" : "bg-sol-blue"}`} />
-          <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-text-muted hover:text-sol-blue truncate max-w-[16rem]">
-            {session?.title || decision.session_title || "Session"}
+          <Link
+            href={`/conversation/${decision.conversation_id}`}
+            className="text-sol-text-muted hover:text-sol-blue truncate max-w-[16rem]"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              void jumpToAsk();
+            }}
+          >
+            {session?.title || decision.session_title || "See the conversation"}
           </Link>
           {(session?.project_path || decision.project_path) && <span className="truncate">{getProjectName(session?.project_path || decision.project_path!)}</span>}
           <span>· asked {formatTimeAgo(decision.created_at, now)}</span>
@@ -75,6 +88,12 @@ export function DecisionCompactCard({
           {stack && (
             <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10">
               <Layers className="w-3 h-3" />{stack.title}
+            </Link>
+          )}
+          {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
+          {pageCount > 0 && (
+            <Link href={decisionHref(decision)} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim hover:text-sol-text" title="The options carry pages to compare">
+              <LayoutTemplate className="w-3 h-3" />{pageCount} page{pageCount === 1 ? "" : "s"}
             </Link>
           )}
           {decision.holder?.kind === "role" && (
@@ -103,5 +122,29 @@ export function DecisionCompactCard({
         </div>
       )}
     </div>
+  );
+}
+
+// The run chip on a gate (the-line.md L4, L10): workflow name and gate node
+// label from the workflowRuns store row, which useSyncWorkflowRun feeds per
+// card (a run is per view data, not a global feed). A row not yet synced
+// reads "a workflow run"; the chip links to the run either way.
+const runChipSig = (r: any) => (r ? `${r.workflow_name ?? ""}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.status ?? ""}` : "");
+
+export function GateRunChip({ runId, nodeId, className = "" }: { runId: string; nodeId?: string; className?: string }) {
+  useSyncWorkflowRun(runId);
+  const s = useTrackedStore([(st) => runChipSig((st as any).workflowRuns?.[runId])]);
+  const run = (s as any).workflowRuns?.[runId];
+  const label = gateRunLabel(run, nodeId);
+  return (
+    <Link
+      href={runHref(runId)}
+      data-gate-run={runId}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green hover:bg-sol-green/10 max-w-[18rem] min-w-0 ${className}`}
+      title={label.known ? `Gate on ${label.workflow}${label.node ? ` at ${label.node}` : ""}` : "A gate on a workflow run"}
+    >
+      <Workflow className="w-3 h-3 shrink-0" />
+      <span className="truncate">{label.workflow}{label.node ? ` · ${label.node}` : ""}</span>
+    </Link>
   );
 }

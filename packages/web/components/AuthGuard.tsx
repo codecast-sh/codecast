@@ -2,11 +2,15 @@ import { useRouter } from "next/navigation";
 import { AuthGuard as LocalFirstAuthGuard } from "@platform/auth/web";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useLocalAuth } from "../lib/localAuth";
+import { oauthJustFailed } from "../lib/oauthReturn";
 import { AppLoader } from "./AppLoader";
 
-function RedirectToHome() {
+function RedirectUnsignedIn() {
   const router = useRouter();
-  useMountEffect(() => { router.push("/"); });
+  useMountEffect(() => {
+    if (oauthJustFailed()) router.replace("/login?reason=oauth");
+    else router.push("/");
+  });
   return null;
 }
 
@@ -44,7 +48,7 @@ export function AuthGuard({
       guestOk={guestOk}
       useLocalAuth={useLocalAuth}
       loading={blankSignedOut ? null : <AppLoader />}
-      unauthenticated={blankSignedOut ? null : <RedirectToHome />}
+      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn />}
     >
       {children}
     </LocalFirstAuthGuard>

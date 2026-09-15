@@ -1630,3 +1630,16 @@ export function subscribeNativeBrowserPane(fn: () => void): () => void {
   paneWatchers.add(fn);
   return () => paneWatchers.delete(fn);
 }
+
+/**
+ * The community rooms (/community) loaded in a plain browser are a standalone
+ * page: no app sidebar, no tab strip, their own slim header. Inside the desktop
+ * app (and in a detached tab window that borrows the shell) they are an
+ * ordinary tab beside the workspace. DashboardLayout paints the bare frame
+ * from this and the chat page adds the header from the same answer, so the two
+ * can never disagree.
+ */
+export function isStandaloneCommunityPath(pathname: string): boolean {
+  if (!/^\/community(\/|$)/.test(pathname)) return false;
+  return !isElectron() && !borrowsTabShell();
+}

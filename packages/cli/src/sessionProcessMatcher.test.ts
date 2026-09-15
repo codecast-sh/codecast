@@ -16,6 +16,7 @@ import {
   shortId,
   argvSessionId,
   parsePsEtimeSeconds,
+  processStartSecFromEtime,
   processDeclaredSessionId,
   judgeProcessIdentity,
   registrationPredatesProcess,
@@ -616,5 +617,27 @@ describe("registrationPredatesProcess", () => {
     expect(registrationPredatesProcess(registeredAt, null)).toBe(false);
     expect(registrationPredatesProcess(undefined, fixtureStart)).toBe(false);
     expect(registrationPredatesProcess("1788746312", fixtureStart)).toBe(false);
+  });
+});
+
+describe("processStartSecFromEtime", () => {
+  test("subtracts the elapsed count from the clock read when ps answered", () => {
+    expect(processStartSecFromEtime("16:40", 1_789_491_314_000)).toBe(1_789_491_314 - 1000);
+    expect(processStartSecFromEtime("garbage", 1_789_491_314_000)).toBeNull();
+  });
+
+  test("keeps a live process's own hook claim valid however long the claims scan takes", () => {
+    // A grok pane launched at T, its SessionStart hook claimed it at T+6s. The
+    // daemon asked ps at T+1000s ("16:40"), then waited 20s on the registry scan.
+    const startSec = 1_789_490_314;
+    const registeredAtSec = startSec + 6;
+    const psAnsweredMs = (startSec + 1000) * 1000;
+    const scanFinishedMs = psAnsweredMs + 20_000;
+    const startFromPs = processStartSecFromEtime("16:40", psAnsweredMs);
+    expect(startFromPs).toBe(startSec);
+    expect(registrationPredatesProcess(registeredAtSec, startFromPs)).toBe(false);
+    // The clock read after the scan is the wrong one: it dates the process
+    // after its own claim and convicts it as a reused pid.
+    expect(registrationPredatesProcess(registeredAtSec, processStartSecFromEtime("16:40", scanFinishedMs))).toBe(true);
   });
 });

@@ -1324,9 +1324,38 @@ export const INBOX_FACT_FIELDS = [
   "auq_open",
   "daemon_alive_until",
   "producing_until",
+  // What the agent is doing right now (conversations.activity): stamped at
+  // message ingest from the newest tool call, cleared when the turn settles.
+  // Overlay borne so a tool call never changes the session list result; the
+  // overlay already re-pushes on the same flush (updated_at is a fact).
+  "activity",
 ] as const;
 
 export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];
+
+// The activity line on a session row: a present tense phrase built by the
+// shared phrase library (render/toolCall activityLine), the raw tool name it
+// came from, and the timestamp of the message that carried the call.
+export type SessionActivity = { text: string; tool: string; at: number };
+
+// How long an activity stamp counts as current. A working session stamps a
+// new one on every tool call, so a stamp older than this on a row that still
+// reads "working" is a tool that has run long (a build, a deploy) or a stale
+// row; either way the line stops claiming it is what the agent does now.
+export const SESSION_ACTIVITY_FRESH_MS = 5 * 60 * 1000;
+
+// The one rule every surface applies before showing an activity line: the row
+// must be working, and the stamp must be fresh. Presence is derived from real
+// activity and stale data hides rather than shows as current.
+export function isSessionActivityFresh(
+  activity: SessionActivity | null | undefined,
+  workState: WorkState | null | undefined,
+  now: number,
+): activity is SessionActivity {
+  if (!activity || !activity.text) return false;
+  if (workState !== "working") return false;
+  return now - activity.at <= SESSION_ACTIVITY_FRESH_MS;
+}
 
 // The projection STAMP fields — checking data, never render sources on a
 // replica: stripped from every row channel, stored only in the client's

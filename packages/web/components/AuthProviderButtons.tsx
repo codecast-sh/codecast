@@ -1,6 +1,7 @@
 import { useProviderSignIn, type OAuthProviderId } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { bridge } from "../lib/desktop";
+import { markOAuthStarted } from "../lib/oauthReturn";
 
 // Apple + GitHub sign-in buttons, shared by /login and /signup.
 //
@@ -68,7 +69,11 @@ export function AuthProviderButtons({
       {buttons.map((p) => (
         <button
           key={p.id}
-          onClick={() => start(p.id, p.label)}
+          type="button"
+          onClick={() => {
+            markOAuthStarted();
+            void start(p.id, p.label);
+          }}
           disabled={loading}
           className={BUTTON_CLASS[p.id]}
         >

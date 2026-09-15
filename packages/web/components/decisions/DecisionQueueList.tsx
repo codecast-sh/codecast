@@ -13,7 +13,7 @@ import { useSyncHandledDecisions } from "../../hooks/useSyncHandledDecisions";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
-import { groupDecisions, type DecisionGroup } from "../../lib/decisionGroups";
+import { groupDecisions, stackDue, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { StackChecklist } from "./StackChecklist";
@@ -36,7 +36,10 @@ export function DecisionQueueList() {
   const pending = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: pendingWhere, sig: pendingSig });
   const stacks = useInboxStore((s) => s.decisionStacks);
   const handled = useCollectionRows<HandledDecisionItem>("handledDecisions", { sig: handledSig, sort: (a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0) });
-  const groups = useMemo(() => groupDecisions(pending, stacks), [pending, stacks]);
+  // Overdue stacks sort first (the-line.md L10), so the grouping follows the
+  // clock: a coarse tick re-sorts when a due passes.
+  const now = useCoarseNow(60_000);
+  const groups = useMemo(() => groupDecisions(pending, stacks, now), [pending, stacks, now]);
   const terminal = useDecisionQueue().filter((i) => i.source !== "decide");
 
   // Stack creation from selected cards: tick, name, group.
@@ -73,6 +76,9 @@ export function DecisionQueueList() {
           <h1 className="text-lg text-sol-text">Questions</h1>
           <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
           <div className="ml-auto flex items-center gap-2 text-[11px]">
+            <Link href="/decisions/stacks" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors" title="Every stack: open and done, progress, due">
+              <Layers className="w-3.5 h-3.5" />stacks
+            </Link>
             {pending.length > 0 && (
               <Link href="/questions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
                 <ListChecks className="w-3.5 h-3.5" />one at a time
@@ -179,7 +185,10 @@ function RoleName({ roleId }: { roleId: string }) {
 
 function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: DecisionGroup; selecting: boolean; selected: Set<string>; onToggle: (id: string) => void; keys: boolean }) {
   const [open, setOpen] = useState(group.kind !== "role");
+  const now = useCoarseNow(60_000);
   if (group.kind === "stack") {
+    // Due (the-line.md L10) on the header: red once it has passed.
+    const due = stackDue(group.stack.policy, now);
     return (
       <section>
         <GroupHeader
@@ -187,7 +196,12 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
           title={<Link href={`/decisions/stacks/${group.stack.short_id ?? group.stack._id}`} className="hover:text-sol-cyan">{group.stack.title}</Link>}
           count={group.stack.pending}
           hint={group.stack.policy.auto_default_after_ms ? `defaults apply after ${Math.round(group.stack.policy.auto_default_after_ms / 3_600_000)}h` : group.stack.policy.delegate_role_id ? "delegated to a role" : "a stack"}
-          right={<span className="font-mono text-[11px] text-sol-text-dim">{group.stack.short_id}</span>}
+          right={
+            <span className="flex items-center gap-2 text-[11px]">
+              {due && <span data-stack-due={due.overdue ? "overdue" : "due"} className={due.overdue ? "text-sol-red" : "text-sol-text-dim"}>{due.text}</span>}
+              <span className="font-mono text-sol-text-dim">{group.stack.short_id}</span>
+            </span>
+          }
         />
         <StackChecklist stack={group.stack} keys={keys} />
       </section>

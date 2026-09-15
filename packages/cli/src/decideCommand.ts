@@ -48,6 +48,12 @@ export interface DecideOption {
   evidence?: { label: string; url: string }[];
   cost?: string;
   risk?: string;
+  // A published page of its own (the-line.md L6); the server adds page_url
+  // on the rows it returns. A spec may carry `page` instead: a file to
+  // publish or an existing slug or url, resolved before the ask is sent.
+  page_slug?: string;
+  page_url?: string;
+  page?: string;
 }
 
 export type DecideKind = "single" | "multi" | "rank" | "form";
@@ -155,11 +161,62 @@ export function parseAnswerSpec(
   return { answer_index: idx(raw) };
 }
 
-// `--option-body 2=body.md`: attach a markdown body to option 2.
-export function parseOptionBodyArg(raw: string): { index: number; file: string } {
+// `--option-body 2=body.md` and `--option-page 2=mockup.html`: one grammar,
+// n=file, for every flag that attaches a file to option n.
+export function parseOptionFileArg(raw: string, flag: string, example: string): { index: number; file: string } {
   const m = raw.match(/^(\d+)\s*[=:]\s*(.+)$/);
-  if (!m) throw new Error(`--option-body expects n=file (e.g. 2=why-b.md), got "${raw}"`);
+  if (!m) throw new Error(`${flag} expects n=file (e.g. ${example}), got "${raw}"`);
   return { index: parseInt(m[1], 10) - 1, file: m[2].trim() };
+}
+export const parseOptionBodyArg = (raw: string) => parseOptionFileArg(raw, "--option-body", "2=why-b.md");
+export const parseOptionPageArg = (raw: string) => parseOptionFileArg(raw, "--option-page", "2=mockup-b.html");
+
+// An option page reference that is already published: a codecast page url
+// (…/a/<slug>) or a bare slug. Anything else is a file to publish. A path
+// that exists on disk is always a file, so a file named like a slug still
+// publishes.
+export function pageRefToSlug(ref: string): string | null {
+  if (fs.existsSync(path.resolve(ref))) return null;
+  const fromUrl = ref.match(/^https?:\/\/[^/]+\/a\/([A-Za-z0-9_-]+)(?:[?#].*)?$/);
+  if (fromUrl) return fromUrl[1];
+  if (/^[A-Za-z0-9_-]{6,}$/.test(ref) && !/\.(html?|md|markdown|txt)$/i.test(ref)) return ref;
+  return null;
+}
+
+// Option pages (the-line.md L6): `--option-page n=file` flags and `page` on
+// spec options. A file publishes through the same path --report uses (one
+// publish per option, session_ref set); an existing slug or url is kept as
+// its slug. Returns the urls to print, by option index; the options are
+// patched in place with page_slug and stripped of `page` so the wire shape
+// matches the server validator.
+export async function attachOptionPages(
+  optionList: DecideOption[],
+  pageArgs: string[],
+  publish: (file: string) => Promise<{ slug?: string; url?: string }>,
+): Promise<Record<number, string | undefined>> {
+  const refs = new Map<number, string>();
+  optionList.forEach((o, i) => {
+    if (o.page) refs.set(i, o.page);
+  });
+  for (const raw of pageArgs) {
+    const { index, file } = parseOptionPageArg(raw);
+    if (index < 0 || index >= optionList.length) throw new Error(`--option-page ${raw}: no option ${index + 1}.`);
+    refs.set(index, file);
+  }
+  const urls: Record<number, string | undefined> = {};
+  for (const [index, ref] of refs) {
+    const slug = pageRefToSlug(ref);
+    let pageSlug: string | undefined = slug ?? undefined;
+    if (!slug) {
+      if (!fs.existsSync(path.resolve(ref))) throw new Error(`--option-page: no such file or page: ${ref}`);
+      const published = await publish(ref);
+      pageSlug = published.slug;
+      urls[index] = published.url;
+    }
+    const { page: _page, ...rest } = optionList[index];
+    optionList[index] = { ...rest, page_slug: pageSlug };
+  }
+  return urls;
 }
 
 // A markdown body from a file path, or the text itself when it arrived via
@@ -285,8 +342,8 @@ export function describeResolution(row: DecisionRow): string {
   return "withdrawn";
 }
 
-export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()): string {
-  if (rows.length === 0) return "No decisions posted from this session.";
+export function formatDecisionList(rows: DecisionRow[], now: number = Date.now(), empty = "No decisions posted from this session."): string {
+  if (rows.length === 0) return empty;
   const body = rows
     .map((r) => {
       const head = `${r.status === "pending" ? "●" : "○"} ${decisionHandle(r)}  ${r.question}${r.kind && r.kind !== "single" ? `  [${r.kind}]` : ""}${r.category ? `  (${r.category})` : ""}`;
@@ -301,6 +358,7 @@ export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()
         const mark = picked.has(i) ? "✓" : r.default_option === i && r.status === "pending" ? "→" : " ";
         const recs = (r.hops ?? []).filter((h) => h.recommendation === i).length;
         lines.push(`    ${mark} ${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}${recs ? `  (${recs} recommend${recs === 1 ? "s" : ""})` : ""}`);
+        if (o.page_url ?? o.page_slug) lines.push(`         page: ${o.page_url ?? o.page_slug}`);
       });
       return lines.join("\n");
     })
@@ -387,12 +445,13 @@ async function publishReport(deps: PublishDeps, file: string, sessionId: string)
 
 // What the human will see, printed back to the one party that can still fix a
 // thin payload. Shared by ask and edit.
-function printPreview(question: string, optionList: DecideOption[], defaultOption: number | undefined, contextMd: string | undefined, reportUrl: string | undefined, reportSlug: string | undefined) {
+function printPreview(question: string, optionList: DecideOption[], defaultOption: number | undefined, contextMd: string | undefined, reportUrl: string | undefined, reportSlug: string | undefined, pageUrls: Record<number, string | undefined> = {}) {
   for (let i = 0; i < optionList.length; i++) {
     const opt = optionList[i];
     const marker = defaultOption === i ? "  (your default)" : "";
     const extras = [opt.cost ? `cost: ${opt.cost}` : "", opt.risk ? `risk: ${opt.risk}` : "", opt.body_md ? `${opt.body_md.length} chars body` : "", opt.evidence?.length ? `${opt.evidence.length} evidence` : ""].filter(Boolean);
     console.log(fmt.muted(`  ${i + 1}. ${opt.label}${opt.description ? ` — ${opt.description}` : ""}${marker}${extras.length ? `  [${extras.join(", ")}]` : ""}`));
+    if (pageUrls[i] ?? opt.page_slug) console.log(fmt.muted(`     page: ${pageUrls[i] ?? opt.page_slug}`));
   }
   if (reportUrl) console.log(fmt.muted(`  report: ${reportUrl}`));
   if (contextMd) {
@@ -443,13 +502,20 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--category <c>", "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)")
     .option("--kind <k>", `single|multi|rank|form (default single)`)
     .option("--doc <file>", stdinText("Markdown document as the decision's long body (creates a decision doc)"))
-    .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk}], form{fields}, doc_md, task, station, stack, advisory, default }")
+    .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default }")
     .option(
       "--option-body <n=file>",
       "Markdown body for option n (repeatable): --option-body 2=why-b.md",
       (val: string, acc: string[]) => [...acc, val],
       [] as string[]
     )
+    .option(
+      "--option-page <n=file|slug|url>",
+      "A page for option n (repeatable): a file publishes like --report, a slug or codecast url attaches an existing page",
+      (val: string, acc: string[]) => [...acc, val],
+      [] as string[]
+    )
+    .option("--mine", "ls: every pending decision you hold, across sessions")
     .option("--note <text>", stdinText("recommend/escalate: a short note for the card"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--json", "Machine-readable output")
@@ -481,10 +547,10 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
 
       // ── ls ──
       if (sub === "ls" || sub === "list") {
-        const result = await decideApi(deps, { action: "ls", session_id: sessionId, stack: options.stack, task: typeof options.task === "string" ? options.task : undefined });
+        const result = await decideApi(deps, { action: "ls", session_id: sessionId, stack: options.stack, task: typeof options.task === "string" ? options.task : undefined, mine: options.mine ? true : undefined });
         const rows: DecisionRow[] = result.decisions ?? [];
         if (options.json) console.log(JSON.stringify(rows, null, 2));
-        else console.log(formatDecisionList(rows));
+        else console.log(formatDecisionList(rows, Date.now(), options.mine ? "No pending decisions held by you." : undefined));
         return;
       }
 
@@ -514,8 +580,9 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           }
           for (let i = 0; i < d.options.length; i++) {
             const o = d.options[i];
-            if (!o.body_md && !o.evidence?.length && !o.cost && !o.risk) continue;
+            if (!o.body_md && !o.evidence?.length && !o.cost && !o.risk && !o.page_url) continue;
             console.log(fmt.muted(`\n  ── option ${i + 1}: ${o.label} ──`));
+            if (o.page_url) console.log(fmt.muted(`  page: ${o.page_url}`));
             if (o.cost) console.log(fmt.muted(`  cost: ${o.cost}`));
             if (o.risk) console.log(fmt.muted(`  risk: ${o.risk}`));
             for (const e of o.evidence ?? []) console.log(fmt.muted(`  evidence: ${e.label} ${e.url}`));
@@ -550,7 +617,9 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         } catch (err) {
           fail(err instanceof Error ? err.message : String(err));
         }
-        const result = await decideApi(deps, { decision_id: target, session_id: sessionId, ...parsed }, "/cli/decide/answer");
+        // No session means a person at a plain shell: omit the key rather
+        // than send null, which the route's validator refuses.
+        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...parsed }, "/cli/decide/answer");
         if (options.json) console.log(JSON.stringify(result, null, 2));
         else if (result.already_resolved) console.log(fmt.muted(`${decisionHandle(result)} was already resolved; the first answer stands.`));
         else {
@@ -584,11 +653,24 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           return;
         }
 
-        // edit
+        // edit: every ask field (the-line.md L10), each passed only when given.
         const changes: Record<string, unknown> = {};
         if (options.question) changes.question = options.question;
-        if (optionList) changes.options = optionList;
+        let pageUrls: Record<number, string | undefined> = {};
+        if (optionList) {
+          pageUrls = await attachOptionPages(optionList, options.optionPage as string[], (file) => publishReport(deps, file, sessionId)).catch((err) => fail(err instanceof Error ? err.message : String(err)));
+          changes.options = optionList;
+        } else if ((options.optionPage as string[]).length > 0) {
+          fail("--option-page needs the option list: pass every -o (or --spec) with it, pages attach by option number.");
+        }
         if (contextMd !== undefined) changes.context_md = contextMd;
+        if (options.kind ?? spec?.kind) changes.kind = options.kind ?? spec?.kind;
+        if (spec?.form) changes.form = spec.form;
+        if (options.doc ?? spec?.doc_md) changes.doc_md = options.doc ? bodyFromArg(options.doc, "--doc") : spec?.doc_md;
+        if (typeof options.task === "string" || spec?.task) changes.task = typeof options.task === "string" ? options.task : spec?.task;
+        if (options.station ?? spec?.station) changes.station = options.station ?? spec?.station;
+        if (options.stack ?? spec?.stack) changes.stack = options.stack ?? spec?.stack;
+        if (options.category ?? spec?.category) changes.category = options.category ?? spec?.category;
         if (options.report) {
           const report = await publishReport(deps, options.report, sessionId);
           changes.report_slug = report.slug;
@@ -606,7 +688,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         }
         const { report_url: reportUrl, ...payload } = changes as any;
         if (Object.keys(payload).length === 0) {
-          fail("Nothing to change. Pass --question, -o, --context, --report, --advisory --default <n>, or --blocking.");
+          fail("Nothing to change. Pass --question, -o, --context, --report, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory --default <n>, or --blocking.");
         }
         const result = await decideApi(deps, { action: "edit", session_id: sessionId, decision_id: target, ...payload });
         if (options.json) {
@@ -615,8 +697,10 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         }
         console.log(`${fmt.success("Decision updated:")} ${target}`);
         console.log(fmt.muted(`  changed: ${Object.keys(payload).filter((k) => k !== "clear_default").join(", ")}`));
+        if (result.task) console.log(fmt.muted(`  task: ${result.task.short_id} held at ${result.task.station}`));
+        if (result.stack) console.log(fmt.muted(`  stack: ${result.stack.short_id}`));
         if (optionList || contextMd !== undefined) {
-          printPreview(options.question ?? "(question unchanged)", optionList ?? [], payload.default_option, contextMd, reportUrl, payload.report_slug ?? "kept");
+          printPreview(options.question ?? "(question unchanged)", optionList ?? [], payload.default_option, contextMd, reportUrl, payload.report_slug ?? "kept", pageUrls);
         }
         console.log(fmt.muted("The card in the conversation and the queue now show the new text. Do not restate it in prose."));
         return;
@@ -652,6 +736,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         reportSlug = report.slug;
         reportUrl = report.url;
       }
+      // Option pages (the-line.md L6): one publish per option, same path.
+      const pageUrls = await attachOptionPages(optionList, options.optionPage as string[], (file) => publishReport(deps, file, sessionId)).catch((err) => fail(err instanceof Error ? err.message : String(err)));
 
       const result = await decideApi(deps, {
         session_id: sessionId,
@@ -671,7 +757,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       });
 
       if (options.json) {
-        console.log(JSON.stringify({ ...result, report_slug: reportSlug, report_url: reportUrl }, null, 2));
+        console.log(JSON.stringify({ ...result, report_slug: reportSlug, report_url: reportUrl, option_pages: optionList.map((o, i) => (o.page_slug ? { index: i, slug: o.page_slug, url: pageUrls[i] } : null)).filter(Boolean) }, null, 2));
         return;
       }
 
@@ -689,7 +775,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (ladder.length) {
         console.log(fmt.muted(`  ladder: ${ladder.length} role${ladder.length === 1 ? "" : "s"} (${ladder.filter((h) => h.woken).length} woken${ladder.some((h) => h.skipped) ? `, ${ladder.filter((h) => h.skipped).length} skipped` : ""}); people: ${result.people ?? 1}`));
       }
-      printPreview(question, optionList, defaultOption, contextMd, reportUrl, reportSlug);
+      printPreview(question, optionList, defaultOption, contextMd, reportUrl, reportSlug, pageUrls);
 
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));
       console.log(fmt.muted("If the facts change: cast decide edit — never a second decision. If it no longer applies: cast decide cancel."));

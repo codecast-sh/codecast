@@ -1,5 +1,8 @@
-import { describe, expect, it } from "bun:test";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, type DecisionRow } from "./decideCommand.js";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, type DecideOption, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -176,5 +179,158 @@ describe("cast decide answer parsing (W2)", () => {
   it("--option-body takes n=file", () => {
     expect(parseOptionBodyArg("2=why.md")).toEqual({ index: 1, file: "why.md" });
     expect(() => parseOptionBodyArg("why.md")).toThrow(/n=file/);
+  });
+});
+
+// Option pages (the-line.md L6): `--option-page n=file|slug|url` and `page`
+// on a spec option. A file publishes through the report path, once per
+// option; an existing slug or url attaches as its slug.
+describe("cast decide option pages (the-line.md L6)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "decide-pages-"));
+  const fileA = path.join(dir, "mockup-a.html");
+  fs.writeFileSync(fileA, "<h1>A</h1>");
+
+  it("--option-page takes n=file, like --option-body", () => {
+    expect(parseOptionPageArg("2=mockup-b.html")).toEqual({ index: 1, file: "mockup-b.html" });
+    expect(() => parseOptionPageArg("mockup.html")).toThrow(/--option-page expects n=file/);
+  });
+
+  it("a codecast page url or a bare slug is an existing page; a file on disk is not", () => {
+    expect(pageRefToSlug("https://codecast.sh/a/abc123xyz")).toBe("abc123xyz");
+    expect(pageRefToSlug("https://codecast.sh/a/abc123xyz?v=2")).toBe("abc123xyz");
+    expect(pageRefToSlug("abc123xyz")).toBe("abc123xyz");
+    expect(pageRefToSlug("mockup-b.html")).toBeNull();
+    expect(pageRefToSlug(fileA)).toBeNull();
+  });
+
+  it("publishes a file once per option through the given publish path, keeps a slug ref, and strips spec `page`", async () => {
+    const published: string[] = [];
+    const publish = async (file: string) => {
+      published.push(file);
+      return { slug: `slug-${published.length}`, url: `https://codecast.sh/a/slug-${published.length}` };
+    };
+    const optionList: DecideOption[] = [{ label: "A" }, { label: "B", page: "https://codecast.sh/a/existing1" }, { label: "C" }];
+    const urls = await attachOptionPages(optionList, [`1=${fileA}`], publish);
+    expect(published).toEqual([fileA]);
+    expect(optionList[0]).toEqual({ label: "A", page_slug: "slug-1" });
+    expect(optionList[1]).toEqual({ label: "B", page_slug: "existing1" });
+    expect(optionList[2]).toEqual({ label: "C" });
+    expect(urls).toEqual({ 0: "https://codecast.sh/a/slug-1" });
+    // The wire shape carries page_slug only: no `page`, no `page_url`.
+    for (const o of optionList) expect(Object.keys(o).every((k) => k !== "page" && k !== "page_url")).toBe(true);
+  });
+
+  it("a flag names the option by number and refuses one that does not exist or a file that is missing", async () => {
+    const publish = async () => ({ slug: "x", url: "u" });
+    await expect(attachOptionPages([{ label: "A" }, { label: "B" }], ["3=" + fileA], publish)).rejects.toThrow(/no option 3/);
+    await expect(attachOptionPages([{ label: "A" }, { label: "B" }], ["1=" + path.join(dir, "missing.html")], publish)).rejects.toThrow(/no such file or page/);
+  });
+
+  it("a flag wins over the spec's page for the same option", async () => {
+    const publish = async (file: string) => ({ slug: "fromfile", url: `u:${file}` });
+    const optionList: DecideOption[] = [{ label: "A", page: "specslug1" }, { label: "B" }];
+    await attachOptionPages(optionList, [`1=${fileA}`], publish);
+    expect(optionList[0].page_slug).toBe("fromfile");
+  });
+
+  it("ls prints an option's page url, and --mine has its own empty line", () => {
+    const out = formatDecisionList([row({ options: [{ label: "A", page_slug: "s1", page_url: "https://codecast.sh/a/s1" }, { label: "B" }] })], 1);
+    expect(out).toContain("1. A");
+    expect(out).toContain("page: https://codecast.sh/a/s1");
+    expect(out.split("page:").length).toBe(2);
+    expect(formatDecisionList([], 1, "No pending decisions held by you.")).toBe("No pending decisions held by you.");
+  });
+
+  it("a spec option may carry page", () => {
+    const spec = parseDecideSpec(JSON.stringify({ options: [{ label: "A", page: "mockup-a.html" }, "B"] }));
+    expect(spec.options?.[0].page).toBe("mockup-a.html");
+  });
+});
+
+// The wire for `cast decide ls --mine` (the-line.md L10): the flag rides to
+// /cli/decide as `mine: true`. The transport is faked (globalThis.fetch), so
+// the real decideApi shapes the request.
+describe("cast decide ls --mine on the wire", () => {
+  const SITE = "https://x.test";
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  let logs: string[] = [];
+  const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => "s1" } as any;
+
+  beforeEach(() => {
+    calls.length = 0;
+    logs = [];
+    globalThis.fetch = (async (url: string | URL | Request, init: RequestInit) => {
+      const path = String(url).slice(SITE.length);
+      const { api_token: _token, ...body } = JSON.parse(String(init.body));
+      calls.push({ path, body });
+      return new Response(JSON.stringify({ decisions: [] }), { status: 200 });
+    }) as typeof fetch;
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+  });
+
+  async function run(...argv: string[]) {
+    const { Command } = await import("commander");
+    const { registerDecideCommand } = await import("./decideCommand.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDecideCommand(program, deps);
+    await program.parseAsync(["node", "cast", "decide", ...argv]);
+  }
+
+  it("posts mine: true and prints the empty line for decisions held by you", async () => {
+    await run("ls", "--mine");
+    expect(calls).toEqual([{ path: "/cli/decide", body: { action: "ls", session_id: "s1", mine: true } }]);
+    expect(logs.join("\n")).toContain("No pending decisions held by you.");
+    calls.length = 0;
+    await run("ls");
+    expect(calls[0].body).toEqual({ action: "ls", session_id: "s1" });
+  });
+});
+
+// A person at a plain shell answers with no session (decisions-as-documents.md
+// D2). The request must omit session_id rather than send null: the route's
+// validator takes a string or nothing, and null parked every terminal answer.
+describe("cast decide answer from a plain shell on the wire", () => {
+  const SITE = "https://x.test";
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => null } as any;
+
+  beforeEach(() => {
+    calls.length = 0;
+    globalThis.fetch = (async (url: string | URL | Request, init: RequestInit) => {
+      const path = String(url).slice(SITE.length);
+      const { api_token: _token, ...body } = JSON.parse(String(init.body));
+      calls.push({ path, body });
+      if (path === "/cli/decide/show") {
+        return new Response(JSON.stringify({ decision: { short_id: "sd-1", kind: "single", options: [{ label: "A" }, { label: "B" }], status: "pending" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, short_id: "sd-1", answer_label: "A", answered_by: { kind: "user", id: "u1" } }), { status: 200 });
+    }) as typeof fetch;
+    console.log = () => {};
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+  });
+
+  it("omits session_id when no session is detected", async () => {
+    const { Command } = await import("commander");
+    const { registerDecideCommand } = await import("./decideCommand.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDecideCommand(program, deps);
+    await program.parseAsync(["node", "cast", "decide", "answer", "sd-1", "1"]);
+    const answer = calls.find((c) => c.path === "/cli/decide/answer");
+    expect(answer).toBeDefined();
+    expect("session_id" in answer!.body).toBe(false);
+    expect(answer!.body.answer_index).toBe(0);
   });
 });

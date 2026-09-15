@@ -13,6 +13,13 @@
  * screenshot instead. This file only knows the wire protocol, who owns which
  * tab, and when to stop.
  *
+ * Beside the frames ride `action` messages (watchActions.ts): where the
+ * agent's cursor is, what it clicked, what it typed, where it navigated. The
+ * ready message names the protocol version; a viewer ignores message types
+ * it does not know, so an older viewer just sees frames. The last few
+ * actions of a tab are kept here across connections and replayed after
+ * ready, so a viewer who arrives mid flow sees the cursor at once.
+ *
  * Read-only unless the viewer asks for control. A hello with `control: true`
  * lets the SAME authenticated socket carry input back (mouse/keys, dispatched
  * through CDP by the frame source) — this is how a human signs into an OAuth
@@ -31,6 +38,7 @@ import {
 } from "../terminal/terminalServer.js";
 import { tmuxRunAsync } from "../tmux.js";
 import { cdpWatchEngine, type FrameSource, type WatchEngine } from "./watchSource.js";
+import { RecentActions, WATCH_PROTOCOL_VERSION } from "./watchActions.js";
 
 export { resolveOwnedTab as resolveWatchTarget } from "./watchSource.js";
 
@@ -51,6 +59,10 @@ const HIGH_WATER_BYTES = 4_000_000;
 const FRAME_QUALITY = 60;
 const FRAME_MAX_DIM = 1280;
 
+// One memory per daemon: the second viewer of a tab gets the cursor from the
+// first viewer's stream without waiting for the agent's next move.
+const recentActions = new RecentActions();
+
 interface WatchHello {
   type: "hello";
   token: string;
@@ -63,6 +75,10 @@ interface WatchHello {
   /** Ask to send input back (mouse/keys). Granted when the frame source can
    * dispatch it; the viewer is told via the ready message. */
   control?: boolean;
+  /** The newest protocol the viewer understands (WATCH_PROTOCOL_VERSION).
+   * Informational: the server sends its own version in ready and never
+   * withholds anything, since unknown message types are ignored. */
+  protocol?: number;
 }
 
 /**
@@ -133,6 +149,9 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
   let minInterval = MIN_FRAME_INTERVAL_MS;
   let controlWanted = false;
   let closed = false;
+  // Actions go out live once the viewer has had ready; before that they are
+  // only remembered, and the replay after ready delivers them in order.
+  let readySent = false;
   // Guards the async open(): the viewer may leave mid-dial, and a source that
   // finishes opening after cleanup would have no owner to stop it.
   let opening = false;
@@ -243,6 +262,10 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
             // new one; drop our handle so it knows to reopen.
             source = null;
           },
+          onAction: (a) => {
+            recentActions.remember(tabId, a);
+            if (!closed && readySent) sendJson(a);
+          },
         },
       );
     } catch (err) {
@@ -265,13 +288,17 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
       return;
     }
     source = next;
+    readySent = false;
     sendJson({
       type: "ready",
+      protocol: WATCH_PROTOCOL_VERSION,
       targetId: next.tab.id,
       title: next.tab.title,
       url: next.tab.url,
       control: controlWanted && typeof next.input === "function",
     });
+    readySent = true;
+    for (const a of recentActions.recall(tabId)) sendJson(a);
     if (first) {
       lifeTimer = setTimeout(() => exit("timeout"), MAX_WATCH_MS);
       lifeTimer.unref?.();
