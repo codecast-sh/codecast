@@ -332,6 +332,8 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
     .option("--timeout <duration>", "Per step (30s, 2m, 10m)")
     .option("--quiet", "No progress on stderr")
     .option("--dry-run", "Print each step's command and exit")
+    .option("--task <id>", "Record the run against this task (ct-N)")
+    .option("--plan <id>", "Record the run against this plan (pl-N)")
     .action(async (chainName: string, parts: string[], options: any) => {
       const outputFormat = parseOutputFormat(options.outputFormat);
       if (options.outputFormat && !outputFormat) fail(`Unknown --output-format "${options.outputFormat}". Use: text, json`);
@@ -344,6 +346,9 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
         timeoutMs,
         quiet: !!options.quiet,
         dryRun: !!options.dryRun,
+        // the-line.md L7: the chain is a run, bound when asked.
+        taskId: options.task ? String(options.task) : undefined,
+        planId: options.plan ? String(options.plan) : undefined,
       });
       process.exit(code);
     });

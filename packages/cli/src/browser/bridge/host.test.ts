@@ -10,7 +10,7 @@ import * as net from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
-import { probeHost, startBridgeHost, type RunningHost } from "./host.js";
+import { probeHost, proveBridgeHost, startBridgeHost, type RunningHost } from "./host.js";
 import { CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
 import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
@@ -173,6 +173,16 @@ describe("bridge host auth", () => {
     await new Promise<void>((r) => silent.listen(port, "127.0.0.1", r));
     try {
       expect(await probeHost({ port, token: TOKEN }, 300)).toBe("busy");
+      // The error names what was measured: a listener that did not answer,
+      // the host's pid and its log. It does not guess at the machine's load;
+      // the host runs at normal priority and answers in under a millisecond
+      // under a load average of 400, so a silent port is a stalled host or
+      // a stranger on the port, not a busy computer.
+      const err = await proveBridgeHost({ port, token: TOKEN, hostPid: 4242 }, 300).then(() => null, (e: Error) => e.message);
+      expect(err).toContain(`listening on 127.0.0.1:${port} but did not answer`);
+      expect(err).toContain("pid 4242");
+      expect(err).toContain("bridge-host.log");
+      expect(err).not.toMatch(/machine|busy/);
     } finally {
       silent.close();
     }

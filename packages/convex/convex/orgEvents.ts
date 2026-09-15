@@ -16,6 +16,7 @@
 // Leaf module on purpose: it is imported from pendingMessages, functions.ts
 // and every write path, so it must not import any of them back.
 
+import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { conversationActsForRole, roleOfConversation } from "./lib/actor";
@@ -35,7 +36,9 @@ export type EnqueueRoleEventOpts = {
 };
 
 export const DEFAULT_COALESCE_MS = 120_000;
-export const DEFAULT_CAPS = { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 } as const;
+// The numbers live in the shared capacity model (org-staffing.md S2), which
+// the analyzer prompt and org.health read too.
+export const DEFAULT_CAPS = DEFAULT_ROLE_CAPS;
 export const DEFAULT_TRUST = "understand" as const;
 // The restart marker: a row whose cause starts with this asks for the full
 // charter and brief in the next frame.
@@ -136,10 +139,28 @@ export async function enqueueRoleEvent(
 
   const now = Date.now();
   const dueAt = opts.kind === "fold" ? now + coalesceOf(role) : now;
+  const cause = opts.ref?.table === "agent_tasks" ? opts.cause : clipCause(opts.cause);
+  const waiting = await unflushedRowsFor(ctx, roleId);
+
+  // One row per (table, id) per window (ct-51491). A task moved seven times
+  // by seven mutations is one change to the role, not seven: the waiting row
+  // for that ref takes the newest cause and keeps its FIRST due time, so a
+  // work item that keeps moving cannot push its own wake forever, and the
+  // frame carries one line for it. Immediate rows never fold this way: each
+  // is a person's message or a decision that must reach the role as itself.
+  if (opts.kind !== "immediate" && opts.ref) {
+    const same = waiting.find((r: any) =>
+      r.kind === opts.kind && r.ref?.table === opts.ref!.table && String(r.ref?.id) === String(opts.ref!.id));
+    if (same) {
+      await ctx.db.patch(same._id, { cause, count: (same.count ?? 1) + 1, actor_conversation_id: actor?._id ?? same.actor_conversation_id });
+      return same._id;
+    }
+  }
+
   const id: Id<"role_wake_outbox"> = await ctx.db.insert("role_wake_outbox", {
     role_id: roleId,
     kind: opts.kind,
-    cause: clipCause(opts.cause),
+    cause,
     ref: opts.ref,
     actor_conversation_id: actor?._id,
     pending_message_id: opts.pendingMessageId,
@@ -153,9 +174,8 @@ export async function enqueueRoleEvent(
     await scheduleFlush(ctx, roleId, 0);
   } else if (opts.kind === "fold") {
     // One flush per coalesce window: arm it only when no earlier unflushed
-    // row already has one coming.
-    const waiting = await unflushedRowsFor(ctx, roleId);
-    const earlier = waiting.some((r: any) => String(r._id) !== String(id) && r.kind !== "passive" && r.due_at <= dueAt);
+    // row already has one coming (the flush takes every waiting row).
+    const earlier = waiting.some((r: any) => r.kind !== "passive" && r.due_at <= dueAt);
     if (!earlier) await scheduleFlush(ctx, roleId, dueAt - now);
   }
   return id;

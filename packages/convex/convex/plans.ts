@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { charterPatch, planCharterArgs } from "./lib/orgCharter";
 import { resolveActor } from "./lib/actor";
 import { mutation, query, internalMutation } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -401,6 +402,8 @@ export const update = mutation({
     doc_id: v.optional(v.string()),
     model_stylesheet: v.optional(v.string()),
     workflow_id: v.optional(v.string()),
+    // The charter (org-staffing.md S7); `goal` above completes it.
+    ...planCharterArgs,
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -415,13 +418,12 @@ export const update = mutation({
     if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const now = Date.now();
-    const updates: any = { updated_at: now };
+    const updates: any = { updated_at: now, ...(await charterPatch(ctx, plan, args, "plans")) };
     if (args.title) {
       updates.title = args.title;
       // The generated short name follows the title; the cron refills it.
       updates.short_title = undefined;
     }
-    if (args.goal !== undefined) updates.goal = args.goal;
     if (args.acceptance_criteria) updates.acceptance_criteria = args.acceptance_criteria;
     if (args.status) updates.status = args.status;
     if (args.context_pointers) updates.context_pointers = args.context_pointers;
@@ -1257,6 +1259,7 @@ export const webUpdate = mutation({
       label: v.string(),
       path_or_url: v.string(),
     }))),
+    ...planCharterArgs,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1270,9 +1273,8 @@ export const webUpdate = mutation({
 
     if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
 
-    const updates: any = { updated_at: Date.now() };
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, plan, args, "plans")) };
     if (args.title) updates.title = args.title;
-    if (args.goal !== undefined) updates.goal = args.goal;
     if (args.acceptance_criteria) updates.acceptance_criteria = args.acceptance_criteria;
     if (args.status) updates.status = args.status;
     if (args.context_pointers) updates.context_pointers = args.context_pointers;

@@ -18,7 +18,8 @@ function boundsOf(nodes: OrgLayoutNode[]): Rect | null {
 
 /**
  * The viewport for a canvas of `width` x `height` with `panelWidth` covered on
- * the right. The tree is anchored to the TOP of the free area, never centred
+ * the right (the desktop panel) and `panelHeight` covered at the bottom (the
+ * phone sheet). The tree is anchored to the TOP of the free area, never centred
  * vertically: the root row belongs next to the toolbar. If the whole tree only
  * fits below MIN_READABLE_ZOOM, the root tier (people, roles, anchors) is
  * fitted instead, at readable size, centred on `focusId` when it is wider than
@@ -30,12 +31,27 @@ export function computeOrgViewport(
   height: number,
   panelWidth: number,
   focusId: string | null,
+  /** A card to bring to the centre of the free area (a focused ghost), at
+   *  the viewer's current zoom when given, else at the fitted one. The tree
+   *  is not refitted around it: only the pan changes. */
+  focusTarget?: { id: string; zoom?: number } | null,
+  panelHeight = 0,
 ): { x: number; y: number; zoom: number; whole: boolean } | null {
   const all = boundsOf(nodes);
   if (!all || width <= 0 || height <= 0) return null;
   const freeW = Math.max(120, width - panelWidth - FIT_PAD * 2);
-  const freeH = Math.max(120, height - FIT_PAD * 2);
+  const freeH = Math.max(120, height - panelHeight - FIT_PAD * 2);
   let zoom = Math.min(1, freeW / all.w, freeH / all.h);
+  const focus = focusTarget ? nodes.find((n) => n.id === focusTarget.id) : undefined;
+  if (focus) {
+    const z = focusTarget?.zoom ?? Math.max(zoom, MIN_READABLE_ZOOM);
+    return {
+      x: FIT_PAD + (freeW - focus.w * z) / 2 - focus.x * z,
+      y: FIT_PAD + (freeH - focus.h * z) / 2 - focus.y * z,
+      zoom: z,
+      whole: false,
+    };
+  }
   let target = all;
   let whole = true;
   if (zoom < MIN_READABLE_ZOOM) {

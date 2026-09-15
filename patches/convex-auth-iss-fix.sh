@@ -1,9 +1,10 @@
 #!/bin/bash
 # Local patches for @convex-dev/auth, applied on postinstall to every copy
-# (direct node_modules + bun-cached). Two independent fixes live here:
+# (direct node_modules + bun-cached). Independent fixes live here:
 #
 #   1. iss-fix  — OAuth callback "unexpected iss response parameter" (RFC 9207)
 #   2. reuse-window — widen refresh-token reuse window 10s -> 30 days
+#   3. ios-oauth — Chrome iOS GitHub sign-in (see convex-auth-ios-oauth.mjs)
 #
 # ---------------------------------------------------------------------------
 # Patch 1: OAuth callback "unexpected iss (issuer) response parameter value"
@@ -96,3 +97,17 @@ for f in node_modules/@convex-dev/auth/src/server/implementation/refreshTokens.t
          node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth/dist/server/implementation/refreshTokens.js; do
   apply_reuse_window_patch "$f"
 done
+
+# ---------------------------------------------------------------------------
+# Patch 3: Chrome iOS GitHub OAuth.
+#
+# Convex Auth sets PKCE/state/redirectTo as Partitioned SameSite=None cookies
+# on a 302 bounce through CONVEX_SITE_URL. Chrome iOS WKWebView drops those
+# cookies (it rejects Partitioned, and it often ignores Set-Cookie on a 302
+# that immediately leaves the origin). The callback then fails silently and
+# redirects to SITE_URL — the marketing homepage. Safari keeps the cookies,
+# which is why the same button works there.
+#
+# The rewrite lives in convex-auth-ios-oauth.mjs (multi-line, idempotent).
+
+bun "$(dirname "$0")/convex-auth-ios-oauth.mjs"

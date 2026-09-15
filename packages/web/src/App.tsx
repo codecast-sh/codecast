@@ -47,12 +47,14 @@ const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
+const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
+const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
 const Threads = lazy(() => import("@/app/threads/page"));
 
@@ -100,6 +102,7 @@ const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Triggers = lazy(() => import("@/app/triggers/page"));
 const TriggerDetail = lazy(() => import("@/app/triggers/[id]/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
+const SlackConnect = lazy(() => import("@/app/slack/connect/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -212,9 +215,14 @@ export function App() {
                   (convex/chatText.ts chatPermalink → /chat/<id>?m=<msg>). */}
               <Route path="chat" element={<E name="Chat"><Chat /></E>} />
               <Route path="chat/:channelId" element={<E name="Chat"><Chat /></E>} />
+              {/* The public rooms: the chat page in community scope, open to
+                  visitors (DashboardShell guestOk). */}
+              <Route path="community" element={<E name="Community"><Community /></E>} />
+              <Route path="community/:channelId" element={<E name="Community"><Community /></E>} />
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
               <Route path="questions" element={<E name="Questions"><Questions /></E>} />
+              <Route path="decisions/stacks" element={<E name="DecisionStacks"><DecisionStacks /></E>} />
               <Route path="decisions/stacks/:id" element={<E name="DecisionStack"><DecisionStack /></E>} />
               <Route path="decisions/:id" element={<E name="DecisionDetail"><DecisionDetail /></E>} />
               <Route path="threads" element={<E name="Threads"><Threads /></E>} />
@@ -250,6 +258,7 @@ export function App() {
               <Route path="schedules/:id" element={<E name="TriggerDetail"><TriggerDetail /></E>} />
               <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
               <Route path="anchor" element={<E name="Anchor"><Anchor /></E>} />
+              <Route path="slack/connect" element={<E name="SlackConnect"><SlackConnect /></E>} />
               <Route path="team" element={<E name="Team"><Team /></E>} />
               <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
               <Route path="team/charts" element={<E name="TeamCharts"><TeamCharts /></E>} />

@@ -88,6 +88,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
+import { RevealAncestryCtx, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -96,9 +97,12 @@ import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { tryRenderCanvas, tryRenderHtmlMessage } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
-import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./workingStatus";
+import { formatElapsedClock, shouldShowElapsed, deriveRunningPhrase } from "./workingStatus";
+import { activitySig } from "../lib/sessionActivity";
+import { LivePulseDot } from "./SessionActivityLine";
+import { isSessionActivityFresh } from "@codecast/shared/contracts";
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
 import { quoteToComposer, submitReview, attachReviewToMessage, takeReviewBatch } from "../lib/reviewActions";
@@ -116,6 +120,8 @@ import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../li
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
+import { RoleWakeBlock } from "./RoleWakeBlock";
+import { isRoleWakeFrame, parseRoleWakeFrame, type RoleWakeFrame } from "./roleWake";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, parseNotificationSummary, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function messageLink(conversationId: string | undefined, messageId: string) {
@@ -164,7 +170,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { AssignmentBadge } from "./AssignmentBadge";
+import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
@@ -201,14 +207,15 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
-import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent } from "../lib/messageNavigator";
+import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
-import { parseInboundSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
+import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { DocDates } from "./DocDates";
 
@@ -246,8 +253,7 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getToolPatchInputs, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
-import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
-import { appDocumentTitle } from "../lib/browserPane";
+import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
@@ -2051,7 +2057,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
     const store = useInboxStore.getState();
     const real = store.getConvexId(convId) ?? convId;
     if (!isConvexId(real)) return;
-    if (convBucketMap(store.bucketAssignments)[real]) return;
+    if (Object.values(store.bucketAssignments).some((row) => row.conversation_id === real)) return;
     store.assignSessionToBucket(real, activeBucketFilter);
   }, [convId, activeBucketFilter, assigned]);
 
@@ -2967,6 +2973,9 @@ type UserMessageKind =
   | { kind: 'direct_user'; from: string; body: string }
   | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
+  // A standing role's wake frame (<role-wake or-N …>): the rail's own words,
+  // rendered as the wake card with the role's controls.
+  | { kind: 'role_wake'; frame: RoleWakeFrame }
   // The human's answer to a `cast decide` question (store answerDecision).
   | { kind: 'decision_answer'; decision: DecisionAnswerMessage };
 
@@ -3017,6 +3026,10 @@ function classifyUserMessage(
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const directUser = parseUserMessage(t);
   if (directUser) return { kind: 'direct_user', from: directUser.from, body: directUser.body };
+  if (isRoleWakeFrame(tNoReminders)) {
+    const frame = parseRoleWakeFrame(tNoReminders);
+    if (frame) return { kind: 'role_wake', frame };
+  }
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) {
     // A huddle that ended in this session's room: the digest rides the
@@ -3024,6 +3037,16 @@ function classifyUserMessage(
     const huddle = parseHuddleSummaryTag(sessionMsg.body);
     if (huddle) return { kind: 'huddle_summary', huddle };
     return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
+  }
+  // Truncated wrappers (a preview slice, a torn JSONL line) still carry the
+  // opening tag with `from=`, which is enough to keep them off the human rail.
+  if (isSessionMessage(t)) {
+    const authored = parseAgentAuthoredMessage(t);
+    if (authored) {
+      const huddle = parseHuddleSummaryTag(authored.body);
+      if (huddle) return { kind: 'huddle_summary', huddle };
+      return { kind: 'session_message', from: authored.from, body: authored.body };
+    }
   }
   // A subagent reporting back to its parent arrives in the same shape under its
   // own tag, so it rides the same rail instead of reading as the human's words.
@@ -3139,6 +3162,13 @@ function classifyUserMessage(
   }
   if (STICKY_NOISE_PREFIXES.some(p => displayable.startsWith(p))) {
     return { kind: 'noise' };
+  }
+  // `cast send --raw` drops the session-message wrapper (the flag is for
+  // slash commands). The body still arrives as a user-role turn, so without
+  // this it renders under the human's name and avatar.
+  const unwrappedReport = parseUnwrappedSessionReport(t);
+  if (unwrappedReport) {
+    return { kind: 'session_message', from: unwrappedReport.from, body: unwrappedReport.body, name: unwrappedReport.name };
   }
   return { kind: 'normal' };
 }
@@ -3882,8 +3912,9 @@ function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
   // fire), not a transient tool step. A sent file is here for a different
   // reason: it is addressed to the reader. Folding a delivery into a receipt
-  // chip is how the file went unseen in the first place.
-  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  // chip is how the file went unseen in the first place. `cast decide` is the
+  // authored twin of AskUserQuestion — the card is the ask, not a command.
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc));
 }
 
 // A row that is nothing but tool calls: one-line receipts, not prose. The
@@ -6711,15 +6742,15 @@ function ImageBlock({ image }: { image: ImageData }) {
   );
 }
 
-function UserIcon({ avatarUrl }: { avatarUrl?: string | null }) {
+function UserIcon({ avatarUrl, size = "w-6 h-6" }: { avatarUrl?: string | null; size?: string }) {
   return (
     <AvatarImg
       src={avatarUrl}
       alt=""
-      className="w-6 h-6 rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]"
+      className={`${size} rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]`}
       fallback={
-        <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+        <div className={`${size} rounded bg-sol-blue flex items-center justify-center shrink-0`}>
+          <svg width="70%" height="70%" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
           </svg>
@@ -7054,6 +7085,28 @@ function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { lab
       <div className={lineClass} />
       <span className={textClass}>{label}</span>
       <div className={lineClass} />
+    </div>
+  );
+}
+
+// A bare nudge ("continue") the human typed to keep the agent moving. It carries
+// no ask, so it renders as one slim line instead of a full prompt bubble, and a
+// run of the same nudge shows once with its count.
+function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null }) {
+  const title = count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
+  return (
+    <div data-cc-message="user" id={`msg-${messageId}`} className="my-3 flex items-center gap-3 scroll-mt-20" title={title}>
+      <span className="inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full border border-sol-border/70 bg-sol-bg-alt/60 text-xs text-sol-text-muted">
+        <UserIcon avatarUrl={avatarUrl} size="w-4 h-4" />
+        <svg className="w-3 h-3 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m0 0l-5-5m5 5l-5 5" />
+        </svg>
+        <span className="font-medium">{text}</span>
+        {count > 1 && (
+          <span className="ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-[11px] font-semibold tabular-nums">×{count}</span>
+        )}
+      </span>
+      <span className="text-[11px] text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -9709,6 +9762,13 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
   if (wf === "gate") {
     const choices = event.choices as Array<{ key: string; label: string; target: string }> | undefined;
     const isResolved = !workflowRun || workflowRun.status !== "paused";
+    // A gate IS a decision (the-line.md L4): the message carries the
+    // session_decisions id, and the card renders that row with the same
+    // answer path every other surface uses. The choice buttons below stay
+    // only for a gate posted before decisions existed (no decision id).
+    if (typeof event.decision_id === "string" && event.decision_id) {
+      return <GateDecisionBlock decisionId={event.decision_id} shortId={event.decision_short_id} prompt={event.prompt} resolved={isResolved} />;
+    }
     return (
       <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 overflow-hidden">
         <div className="px-3 py-2 border-b border-sol-magenta/20 flex items-center gap-2">
@@ -9745,6 +9805,28 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
 
   return null;
 }
+// The gate's decision card in the transcript: the live store row when the
+// viewer holds it (pending or just answered); otherwise a link to the
+// decision page, which reads for anyone who can read the run.
+function GateDecisionBlock({ decisionId, shortId, prompt, resolved }: { decisionId: string; shortId?: string; prompt?: string; resolved: boolean }) {
+  const row = useInboxStore((s) => s.sessionDecisions[decisionId]);
+  if (row) {
+    return <div className="my-3" data-gate-decision={decisionId}><DecisionCompactCard decision={row} showTask /></div>;
+  }
+  return (
+    <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 px-3 py-2.5 text-sm" data-gate-decision={decisionId}>
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold text-sol-magenta">
+        Human gate
+        <span className={`ml-auto normal-case tracking-normal font-normal ${resolved ? "text-sol-green" : "text-sol-magenta/70 animate-pulse"}`}>{resolved ? "responded" : "waiting…"}</span>
+      </div>
+      {prompt && <p className="mt-1 text-sol-text">{prompt.split("\n")[0]}</p>}
+      <Link href={`/decisions/${shortId ?? decisionId}`} className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-sol-blue hover:underline">
+        Open the decision {shortId ?? ""}
+      </Link>
+    </div>
+  );
+}
+
 const SystemBlock = memo(SystemBlockImpl);
 
 const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ content }: { content: string }) {
@@ -10171,28 +10253,35 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 // landed yet — and a static "Working" reads as frozen. Past a short grace, surface
 // a live-ticking elapsed clock (and the tool in flight, if any) so a long turn
 // visibly reads as progressing. startedAt = last rendered message timestamp (how
-// long the view has been static); toolLabel = the tool currently in flight, if the
-// tail is an unanswered tool call. Owns its own 1s ticker so only this tiny node
-// re-renders each second, not the whole composer.
-function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolLabel?: string }) {
+// long the view has been static); phrase = what the loaded timeline says is in
+// flight ("editing chat.ts"), the fallback when the row's server side activity
+// stamp (the same phrase, written at ingest and shown on the inbox card) is
+// absent or stale. Owns its own 1s ticker so only this tiny node re-renders each
+// second, not the whole composer; the activity dep is per row, text plus stamp.
+function WorkingStatusLine({ startedAt, phrase, conversationId }: { startedAt?: number; phrase?: string; conversationId: string }) {
   const [now, setNow] = useState(() => Date.now());
   useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   });
+  const st = useTrackedStore([(s) => activitySig(s.sessions[conversationId]?.activity)]);
+  const rowActivity = st.sessions[conversationId]?.activity;
+  // This line renders only while the turn is working, so the work state half
+  // of the shared rule is already true here.
+  const label = isSessionActivityFresh(rowActivity, "working", now) ? rowActivity.text : phrase;
   const elapsedMs = startedAt ? now - startedAt : 0;
   const showElapsed = shouldShowElapsed(startedAt, now);
   return (
-    <span className="flex items-center gap-1.5">
-      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+    <span className="flex items-center gap-1.5 min-w-0">
+      <LivePulseDot className="w-2 h-2" />
       Working
       {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
-      {showElapsed && toolLabel && <span className="text-sol-text-dim/60">· {formatToolName(toolLabel)}</span>}
+      {showElapsed && label && <span className="text-sol-text-dim/60 truncate" title={label}>· {label}</span>}
     </span>
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -12133,7 +12222,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connected
                   </span>
                 ) : agentStatus === "working" ? (
-                  <WorkingStatusLine startedAt={workingSinceTs} toolLabel={workingTool} />
+                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} />
                 ) : agentStatus === "idle" && queuedMessages.length > 0 ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
@@ -12152,7 +12241,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connecting...
                   </span>
                 ) : isConversationLive ? (
-                  <WorkingStatusLine startedAt={workingSinceTs} toolLabel={workingTool} />
+                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} />
                 ) : isSessionDisconnected ? (
                   isResuming ? (
                     <span className="flex items-center gap-1.5 text-sol-text-dim">
@@ -12709,6 +12798,12 @@ const ConversationViewInner = (
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
   const setUserScrolled = useCallback((v: boolean) => { userScrolledRef.current = v; _setUserScrolled(v); }, []);
+  // Unsigned share-link visitors stay at the top until they choose the tail
+  // (jump-to-end / scroll-to-bottom). End-follow and the size-reconciler pin
+  // would otherwise yank them to the latest message as rows measure in.
+  const [guestStayAtTop, _setGuestStayAtTop] = useState(() => guest && !targetMessageId && !propHighlightQuery);
+  const guestStayAtTopRef = useRef(guestStayAtTop);
+  const setGuestStayAtTop = useCallback((v: boolean) => { guestStayAtTopRef.current = v; _setGuestStayAtTop(v); }, []);
   const [isNearTop, setIsNearTop] = useState(true);
   // Position twin of isNearTop for the bottom edge (200px band). The jump
   // buttons hide inside these bands — the userScrolled gesture latch alone
@@ -12813,7 +12908,7 @@ const ConversationViewInner = (
   const scrollToBottomFnRef = useRef<() => void>(() => {});
   const lastScrollTopRef = useRef(0);
   const scrollProgressRef = useRef<HTMLDivElement>(null);
-  const [navScrollProgress, setNavScrollProgress] = useState(1);
+  const [navScrollProgress, setNavScrollProgress] = useState(() => (guest && !targetMessageId && !propHighlightQuery ? 0 : 1));
   const hasScrolledToTarget = useRef(false);
   const [jumpPending, _setJumpPending] = useState<'start' | 'end' | null>(null);
   // Synchronous mirror of jumpPending so scroll handlers / effects can read it
@@ -12906,6 +13001,7 @@ const ConversationViewInner = (
     _setTrackedConvId(stableConvKey);
     _setUserScrolled(false);
     userScrolledRef.current = false;
+    setGuestStayAtTop(guest && !targetMessageId && !propHighlightQuery);
     setIsNearTop(true);
     setIsNearBottom(true);
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || resolveDefaultDensity());
@@ -13055,8 +13151,8 @@ const ConversationViewInner = (
     };
   }));
   const isSessionLive = !!managedSession?.is_connected;
-  // The simple-view menu's "Copy tmux attach" — the same gesture as the header
-  // pill's copy button, so it copies the same command for the same machine.
+  // The command palette's "Copy tmux attach command" — the same gesture as the
+  // header pill's copy button, so it copies the same command for the same machine.
   const { copyAttach: copyTmuxAttach } = useAttachCopy(managedSession?.tmux_session, conversation?._id?.toString());
 
   // Store-fed (hooks/useSyncWorkflows): the gate banner paints from the cached
@@ -13954,7 +14050,7 @@ const ConversationViewInner = (
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'chat_wake', 'agent_switch']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'chat_wake', 'role_wake', 'agent_switch']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -14057,6 +14153,31 @@ const ConversationViewInner = (
     return { byCommand, consumed, bashByInput };
   }, [timeline, userMsgKindMap]);
 
+  // Bare nudges ("continue") render as one compact line, and a run of the same
+  // nudge folds into its first row with a count. Rows that render nothing sit
+  // between two nudges without breaking the run. A nudge still pending or
+  // queued keeps the full bubble, so its delivery state stays visible.
+  const nudgeRuns = useMemo(() => {
+    const HIDDEN_USER_KINDS = new Set(['tool_results_only', 'compaction_prompt', 'noise', 'empty', 'poll_response', 'task_prompt']);
+    const rows: NudgeRow[] = timeline.map((item) => {
+      if (item.type !== 'message') return { id: String(item.data._id), nudge: null };
+      const msg = item.data as Message;
+      if (msg.role === 'system') return { id: msg._id, nudge: null, invisible: isHiddenSystemNotice(msg.content, msg.subtype) };
+      if (msg.role === 'user') {
+        const kind = userMsgKindMap.get(msg._id)?.kind ?? 'normal';
+        const isNudge = kind === 'normal' && !msg._isOptimistic && !msg._isQueued && !msg.images?.length;
+        return {
+          id: msg._id,
+          nudge: isNudge ? nudgeLabel(msg.content) : null,
+          invisible: HIDDEN_USER_KINDS.has(kind) || commandExpansionMap.consumed.has(msg._id),
+        };
+      }
+      const empty = !msg.content?.trim() && !msg.tool_calls?.length && !msg.images?.length && !msg.thinking?.trim();
+      return { id: msg._id, nudge: null, invisible: empty || isHiddenStubMessage(msg) };
+    });
+    return foldNudgeRuns(rows);
+  }, [timeline, userMsgKindMap, commandExpansionMap]);
+
   const sessionSkills = useMemo(() => resolveSessionSkills({
     availableSkills: (currentUser as any)?.available_skills,
     projectPath: conversation?.project_path,
@@ -14106,18 +14227,29 @@ const ConversationViewInner = (
   }, [conversation, timeline, hasMoreBelow]);
 
   // Full navigable-message list from the store cache (populated once by
-  // useConversationMessages). Always complete regardless of pagination window,
-  // so the sticky header resolves the right prompt even deep in long threads.
+  // useConversationMessages), unioned with the loaded transcript window.
+  // The cache is newest-first capped, so a long thread's opening prompts can
+  // be missing from it while still sitting on screen — those loaded rows have
+  // to join the navigator or the highlighted #1 is a later prompt.
   const serverUserMessages = cachedUserMessages;
+  const navigatorSources = useMemo(
+    () => mergeNavigatorSources(serverUserMessages, messages),
+    [serverUserMessages, messages],
+  );
 
   const processedServerMsgIds = useMemo(() => {
-    if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
-    for (const m of serverUserMessages) {
-      if (isStickyEligible(m.content)) ids.add(m._id);
+    for (const m of navigatorSources) {
+      if (isStickyEligible(m.content ?? "")) ids.add(m._id);
     }
     return ids;
-  }, [serverUserMessages]);
+  }, [navigatorSources]);
+
+  const navigatorIdSet = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of buildNavigatorRows(navigatorSources)) ids.add(row._id);
+    return ids;
+  }, [navigatorSources]);
 
   const stickyUserMsgIndices = useMemo(() => {
     const useServer = processedServerMsgIds.size > 0;
@@ -14137,6 +14269,21 @@ const ConversationViewInner = (
     return indices;
   }, [timeline, processedServerMsgIds, userMsgKindMap]);
 
+  const navigatorTimelineIndices = useMemo(() => {
+    const indices: number[] = [];
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      if (navigatorIdSet.has((item.data as Message)._id)) indices.push(i);
+    }
+    return indices;
+  }, [timeline, navigatorIdSet]);
+
+  const timelineMessageIds = useMemo(
+    () => timeline.map((item) => (item.type === "message" ? (item.data as Message)._id : null)),
+    [timeline],
+  );
+
   const serverStickyFallback = useMemo(() => {
     if (!hasMoreAbove) return null;
     const loaded: Message[] = [];
@@ -14147,6 +14294,7 @@ const ConversationViewInner = (
   }, [serverUserMessages, timeline, hasMoreAbove]);
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
+  const [navigatorCurrentId, setNavigatorCurrentId] = useState<string | null>(null);
   const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string; fromUserId?: string } | null) => {
     setActiveStickyMsgRaw(prev => {
       if (prev === val) return prev;
@@ -14576,6 +14724,10 @@ const ConversationViewInner = (
         case 'machine_move': return 34;
         case 'agent_switch': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'continuation': return 30;
+        case 'normal':
+          if (nudgeRuns.folded.has(msg._id)) return 0;
+          if (nudgeRuns.runs.has(msg._id)) return 36;
+          break;
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
@@ -14598,7 +14750,7 @@ const ConversationViewInner = (
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey, rowDensityKey, turnAggregates, expandedGroups]);
+  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, nudgeRuns, getItemKey, rowDensityKey, turnAggregates, expandedGroups]);
 
   // Mirror @tanstack/virtual-core's default measureElement, but persist every
   // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
@@ -14687,8 +14839,8 @@ const ConversationViewInner = (
     // growth and re-measurements can move the geometry without user intent.
     // Gate both mechanisms on our real upward-scroll latch so a reader who left
     // the tail is never pulled back down by a newly rendered chunk.
-    anchorTo: shouldFollowStreaming(userScrolled) ? "end" : undefined,
-    followOnAppend: shouldFollowStreaming(userScrolled) ? "auto" : false,
+    anchorTo: shouldFollowStreaming(userScrolled, guestStayAtTop) ? "end" : undefined,
+    followOnAppend: shouldFollowStreaming(userScrolled, guestStayAtTop) ? "auto" : false,
     scrollEndThreshold: 8,
   });
 
@@ -14776,7 +14928,7 @@ const ConversationViewInner = (
       // A correction while the reader sits at the tail must keep them there
       // (same contract as followOnAppend) — without this, healing the sizes
       // under a bottom-pinned view leaves the last message's tail cut off.
-      if (corrections.length > 0 && nearBottom && !userScrolledRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
+      if (corrections.length > 0 && nearBottom && !userScrolledRef.current && !guestStayAtTopRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
     };
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
@@ -15043,6 +15195,7 @@ const ConversationViewInner = (
       if (stickyUserMsgIndices.length === 0 && !fallbackStickyContent) {
         setActiveStickyMsg(null);
         setStickyMsgVisible(false);
+        setNavigatorCurrentId(null);
       }
       return;
     }
@@ -15054,74 +15207,65 @@ const ConversationViewInner = (
       // target edge before the view actually moves there.
       if (jumpPendingRef.current) return;
       const scrollTop = el.scrollTop;
-      if (scrollTop <= headerHeight + 40) {
-        prevStickyMsgIdRef.current = null;
-        prevStickyIdxRef.current = null;
-        stickyGapRef.current = null;
-        setActiveStickyMsg(null);
-        setStickyMsgVisible(false);
-        return;
-      }
-      if (stickyDisabled && localStorage.getItem('__STICKY_FORCE') !== '1') {
-        setActiveStickyMsg(null);
-        setStickyMsgVisible(false);
-        return;
-      }
+      const containerRect = el.getBoundingClientRect();
       const virtualItems = virtualizer.getVirtualItems();
-      let bestIdx: number | null = null;
-      let bestArrayIdx: number | null = null;
-      for (let i = stickyUserMsgIndices.length - 1; i >= 0; i--) {
-        const tlIdx = stickyUserMsgIndices[i];
-        const item = timeline[tlIdx];
-        if (item?.type === 'message') {
-          const msgId = (item.data as Message)._id;
-          if (dismissedStickyIdsRef.current.has(msgId)) continue;
-        }
-        const vItem = virtualItems.find(v => v.index === tlIdx);
-        if (vItem) {
-          const domEl = el.querySelector(`[data-index="${tlIdx}"]`);
-          if (!domEl) continue;
-          const msgBottom = domEl.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
-          if (msgBottom <= 0) {
-            bestIdx = tlIdx;
-            bestArrayIdx = i;
-            break;
-          }
-        } else {
-          if (tlIdx < (virtualItems[0]?.index ?? 0) && scrollTop > el.clientHeight) {
-            bestIdx = tlIdx;
-            bestArrayIdx = i;
-            break;
-          }
-        }
+      const rects = [];
+      for (const v of virtualItems) {
+        const domEl = el.querySelector(`[data-index="${v.index}"]`);
+        if (!domEl) continue;
+        const r = domEl.getBoundingClientRect();
+        rects.push({ index: v.index, top: r.top, bottom: r.bottom });
       }
-      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, bestIdx, serverFb: serverStickyFallback?.id ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
-      if (bestIdx !== null) {
-        let hideForNextMsg = false;
-        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
-        if (bestArrayIdx !== null) {
-          const nextArrayIdx = bestArrayIdx + 1;
-          if (nextArrayIdx < stickyUserMsgIndices.length) {
-            const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
-            const nextVItem = virtualItems.find(v => v.index === nextTlIdx);
-            if (nextVItem) {
-              const nextMsgTop = nextVItem.start - scrollTop;
-              if (nextMsgTop < stickyBottom) {
-                hideForNextMsg = true;
-              }
-            }
-          }
-        }
-        const item = timeline[bestIdx];
+      const { topVisibleIndex, visible } = topVisibleIndexFromRects(rects, containerRect.top, containerRect.bottom);
+      const navId = resolveNavigatorCurrentId(
+        navigatorTimelineIndices,
+        timelineMessageIds,
+        topVisibleIndex,
+        serverStickyFallback?.id ?? null,
+      );
+      setNavigatorCurrentId(navId);
+
+      const bannerOff = stickyDisabled && localStorage.getItem('__STICKY_FORCE') !== '1';
+      const stickyResolved = resolveStickyPrompt(stickyUserMsgIndices, topVisibleIndex, visible);
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, topVisibleIndex, navId, stickyIdx: stickyResolved?.index ?? null, serverFb: serverStickyFallback?.id ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
+
+      if (bannerOff) {
+        setActiveStickyMsg(null);
+        setStickyMsgVisible(false);
+        return;
+      }
+
+      if (stickyResolved) {
+        const item = timeline[stickyResolved.index];
+        if (item?.type !== 'message') return;
         const msg = item.data as Message;
         const msgId = msg._id;
+        if (dismissedStickyIdsRef.current.has(msgId)) {
+          setActiveStickyMsg(null);
+          setStickyMsgVisible(false);
+          return;
+        }
+        let hideForNextMsg = false;
+        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
+        const nextArrayIdx = stickyUserMsgIndices.indexOf(stickyResolved.index) + 1;
+        if (nextArrayIdx > 0 && nextArrayIdx < stickyUserMsgIndices.length) {
+          const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
+          const nextVItem = virtualItems.find(v => v.index === nextTlIdx);
+          if (nextVItem) {
+            const nextDom = el.querySelector(`[data-index="${nextTlIdx}"]`);
+            const nextTop = nextDom
+              ? nextDom.getBoundingClientRect().top - containerRect.top
+              : nextVItem.start - scrollTop;
+            if (nextTop < stickyBottom) hideForNextMsg = true;
+          }
+        }
         const prevId = prevStickyMsgIdRef.current;
         if (msgId !== prevId) {
           if (prevId !== null && prevId !== '__fallback__' && prevStickyIdxRef.current !== null) {
             stickyGapRef.current = { prevIdx: prevStickyIdxRef.current };
           }
           prevStickyMsgIdRef.current = msgId;
-          prevStickyIdxRef.current = bestIdx;
+          prevStickyIdxRef.current = stickyResolved.index;
         }
         let inGap = false;
         if (stickyGapRef.current) {
@@ -15137,9 +15281,9 @@ const ConversationViewInner = (
             stickyGapRef.current = null;
           }
         }
-        setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msgId, fromUserId: msg.from_user_id });
-        setStickyMsgVisible(!inGap && !hideForNextMsg);
-      } else if (serverStickyFallback && scrollTop > headerHeight + 40) {
+        setActiveStickyMsg({ index: stickyResolved.index, content: msg.content!, id: msgId, fromUserId: msg.from_user_id });
+        setStickyMsgVisible(!stickyResolved.hidden && !inGap && !hideForNextMsg);
+      } else if (serverStickyFallback) {
         prevStickyMsgIdRef.current = serverStickyFallback.id;
         prevStickyIdxRef.current = null;
         stickyGapRef.current = null;
@@ -15163,22 +15307,31 @@ const ConversationViewInner = (
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
+  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
+    const jump = jumpRowForMessage(messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
+    if (jump.expandKey) {
+      setExpandedGroups((prev) => {
+        if (prev.has(jump.expandKey!)) return prev;
+        const next = new Set(prev);
+        next.add(jump.expandKey!);
+        return next;
+      });
+    }
     const itemIndex = timeline.findIndex(item =>
-      item.type === 'message' && item.data._id === messageId
+      item.type === 'message' && item.data._id === jump.scrollToId
     );
 
     if (itemIndex >= 0) {
       setUserScrolled(true);
-      virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
-      setHighlightedMessageId(messageId);
+      virtualizer.scrollToIndex(itemIndex, { align: "start", behavior: "auto" });
+      setHighlightedMessageId(jump.scrollToId);
       setTimeout(() => setHighlightedMessageId(null), 2000);
     } else if (conversation?._id) {
       useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: messageId });
     }
-  }, [timeline, virtualizer, conversation?._id]);
+  }, [timeline, virtualizer, conversation?._id, feedDensity, turnAggregates, nudgeRuns]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: scrollToMessageById,
@@ -15435,10 +15588,15 @@ const ConversationViewInner = (
     }
   }, [timeline.length, initialScrollDone]);
 
-  // Initial scroll: snap to bottom using virtualizer (not raw scrollHeight which desyncs with estimates)
+  // Initial scroll: authed viewers snap to the live tail; unsigned share-link
+  // visitors stay at the top so the thread reads from the beginning.
   useLayoutEffect(() => {
     if (timeline.length === 0 || initialScrollDone) return;
-    if (window.location.hash || highlightQuery) {
+    const edge = initialScrollEdge({
+      guest,
+      hasExplicitTarget: !!(window.location.hash || highlightQuery),
+    });
+    if (edge === null) {
       setInitialScrollDone(true);
       return;
     }
@@ -15449,6 +15607,22 @@ const ConversationViewInner = (
       return;
     }
     const sc = containerRef.current;
+    if (sc && edge === "top") {
+      // Stay at offset 0. Do not run scrollToEdge's retry ladder: that would
+      // keep writing scrollTop=0 for 600ms and fight a guest who started
+      // reading downward. End-follow is already off (guestStayAtTop).
+      paginationCooldownRef.current = Date.now() + 1000;
+      if (timeline.length > 0) virtualizer.scrollToIndex(0, { align: "start" });
+      sc.scrollTop = 0;
+      lastScrollTopRef.current = 0;
+      setNavScrollProgress(0);
+      setTimeout(() => {
+        paginationCooldownRef.current = 0;
+        sc.dispatchEvent(new Event("scroll"));
+      }, 1000);
+      setInitialScrollDone(true);
+      return;
+    }
     if (sc) {
       paginationCooldownRef.current = Date.now() + 1000;
       // One shot is not enough: the target offset is computed from believed
@@ -15479,7 +15653,7 @@ const ConversationViewInner = (
       }, 1000);
     }
     setInitialScrollDone(true);
-  }, [timeline.length, highlightQuery, initialScrollDone, virtualizer]);
+  }, [timeline.length, highlightQuery, initialScrollDone, virtualizer, guest]);
 
   // Detect user scroll-up via wheel events (fires synchronously, no race condition
   // with the async scroll event). This ensures userScrolledRef is set before any
@@ -15528,6 +15702,7 @@ const ConversationViewInner = (
     jumpDirectionRef.current = null;
     paginationCooldownRef.current = Date.now() + 900;
     setUserScrolled(dir === 'start');
+    if (dir === 'end') setGuestStayAtTop(false);
 
     scrollToEdgeRef.current(dir === 'start' ? 'top' : 'bottom');
 
@@ -15635,9 +15810,20 @@ const ConversationViewInner = (
       return;
     }
 
+    const jump = jumpRowForMessage(targetMessageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
+    if (jump.expandKey && !expandedGroups.has(jump.expandKey)) {
+      setExpandedGroups((prev) => {
+        if (prev.has(jump.expandKey!)) return prev;
+        const next = new Set(prev);
+        next.add(jump.expandKey!);
+        return next;
+      });
+      return;
+    }
+
     const itemIndex = timeline.findIndex(item => {
       if (item.type === 'message') {
-        return item.data._id === targetMessageId;
+        return item.data._id === jump.scrollToId;
       }
       return false;
     });
@@ -15649,6 +15835,7 @@ const ConversationViewInner = (
       if (!container) return;
 
       const targetItem = timeline[itemIndex];
+      const scrollToId = jump.scrollToId;
       settleTimelineItemAtOffset(container, virtualizer, itemIndex, 50, {
         // A same-session jump starts on the tail timeline and the target-mode
         // window then replaces it — identity + re-resolution keep the settle
@@ -15656,10 +15843,10 @@ const ConversationViewInner = (
         itemKey: targetItem?.type === "message" ? messageRowKey(targetItem.data as Message) : undefined,
         resolveIndex: () =>
           timelineRef.current.findIndex(
-            (item: any) => item.type === "message" && item.data._id === targetMessageId,
+            (item: any) => item.type === "message" && item.data._id === scrollToId,
           ),
         onSettled: () => {
-          setHighlightedMessageId(targetMessageId);
+          setHighlightedMessageId(scrollToId);
           setTimeout(() => setHighlightedMessageId(null), 3000);
           if (window.location.hash) {
             history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -15667,7 +15854,7 @@ const ConversationViewInner = (
         },
       });
     }
-  }, [targetMessageId, targetNonce, timeline, virtualizer]);
+  }, [targetMessageId, targetNonce, timeline, virtualizer, feedDensity, turnAggregates, expandedGroups, nudgeRuns]);
 
   // Land a branch switch scroll-stable: once the target conversation renders,
   // find the fork-point message (same message_uuid — fork copies preserve it)
@@ -15740,9 +15927,11 @@ const ConversationViewInner = (
     }
     return undefined;
   }, [timeline]);
-  // The tool currently in flight, surfaced in the "working" status line — e.g. a
-  // multi-minute deploy reads as "Working · 3:14 · Bash". See deriveRunningTool.
-  const workingTool = useMemo(() => deriveRunningTool(timeline), [timeline]);
+  // What is in flight, for the "working" status line: a multi-minute deploy
+  // reads as "Working · 3:14 · running deploy.sh". The composer prefers the
+  // row's server side activity stamp; this is its fallback from the loaded
+  // timeline. See deriveRunningPhrase.
+  const workingPhrase = useMemo(() => deriveRunningPhrase(timeline), [timeline]);
   // Clock for the liveness booleans below. Re-renders THIS whole view only when
   // one of them would flip (45s / 5min since last activity; 30s / 120s of age),
   // not on every tick — an unconditional 10s ticker re-rendered the entire
@@ -15838,17 +16027,6 @@ const ConversationViewInner = (
     { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
 
-  useWatchEffect(() => {
-    // A detached tab window's OS title is owned by DashboardLayout
-    // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
-    if (isDetachedTabWindow()) return;
-    if (conversation) {
-      document.title = appDocumentTitle(truncatedTitle);
-    }
-    return () => {
-      document.title = appDocumentTitle(null);
-    };
-  }, [truncatedTitle, conversation]);
 
   const toolCallMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -15921,6 +16099,9 @@ const ConversationViewInner = (
   // the session's working directory, and the home it implies for `~/…`.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
   const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository }), [filePathBase, codeRepository]);
+  // What this transcript is nested in, plus itself: the bound a reveal band
+  // in it checks before showing a conversation (lib/revealHost).
+  const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16328,6 +16509,8 @@ const ConversationViewInner = (
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
           return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
+        case 'role_wake':
+          return <RoleWakeBlock key={msg._id} frame={kind.frame} timestamp={msg.timestamp} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -16340,7 +16523,12 @@ const ConversationViewInner = (
         case 'decision_answer':
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
+          if (nudgeRuns.folded.has(msg._id)) return null;
           const msgSender = resolveMsgSender(msg);
+          const nudgeRun = kind.kind === 'normal' ? nudgeRuns.runs.get(msg._id) : undefined;
+          if (nudgeRun) {
+            return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeRun.text} count={nudgeRun.count} timestamp={msg.timestamp} userName={msgSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} />;
+          }
           // A direct send names its sender on the wire, so the bubble is theirs
           // even when the roster can't resolve the row (no from_user_id yet, or
           // a sender outside the viewer's team).
@@ -16548,6 +16736,7 @@ const ConversationViewInner = (
     <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
     <BrowserSessionContext.Provider value={browserSession}>
+    <RevealAncestryCtx.Provider value={revealAncestry}>
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
@@ -16756,32 +16945,7 @@ const ConversationViewInner = (
 
                 <BranchCodeLink session={conversation} />
 
-                {/* Simple view keeps the assignment pill but drops the names —
-                    device icon + dot + avatar still say where it runs and whose
-                    it is; the popover carries the detail. */}
-                {isOwner && (
-                  <AssignmentBadge
-                    conversationId={conversation._id}
-                    ownerDeviceId={(conversation as any).owner_device_id}
-                    compact={simpleViewPref}
-                  />
-                )}
-
-                {!isOwner && conversation.user && (
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/30">
-                    <AvatarImg
-                      src={conversation.user.avatar_url}
-                      alt={conversation.user.name || "User"}
-                      className="w-4 h-4 rounded-full"
-                      fallback={
-                        <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
-                          {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
-                        </span>
-                      }
-                    />
-                    {conversation.user.name || conversation.user.email?.split("@")[0] || "Teammate"}
-                  </span>
-                )}
+                <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
@@ -16993,18 +17157,10 @@ const ConversationViewInner = (
                         Copy ID ({conversation.short_id})
                       </DropdownMenuItem>
                     )}
-                    {/* Simple view strips the header's copy affordances (the
-                        pill's copy sub-button, the branch chip) — resurface
-                        them here so the hamburger stays the full command
-                        surface in that mode. */}
-                    {simpleViewPref && managedSession?.tmux_session && (
-                      <DropdownMenuItem onSelect={() => { setTimeout(() => copyTmuxAttach()); }}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                        Copy tmux attach
-                      </DropdownMenuItem>
-                    )}
+                    {/* Simple view strips the header's branch chip — resurface
+                        its copy here so the hamburger stays the full command
+                        surface in that mode. The tmux pill keeps its own copy
+                        button in both modes. */}
                     {simpleViewPref && conversation?.git_branch && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.git_branch!).then(() => toast.success("Branch copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -17214,20 +17370,12 @@ const ConversationViewInner = (
           <div className="absolute top-full right-3 mt-24 z-30">
             <MessageNavButton
               conversationId={conversation._id}
-              currentMessageId={activeStickyMsg?.id ?? null}
+              currentMessageId={navigatorCurrentId ?? activeStickyMsg?.id ?? null}
+              loadedMessages={messages}
               scrollProgress={navScrollProgress}
               onScrollToMessage={(messageId) => {
-                const itemIndex = timeline.findIndex(item =>
-                  item.type === 'message' && item.data._id === messageId
-                );
-                if (itemIndex >= 0) {
-                  setUserScrolled(true);
-                  virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
-                  setHighlightedMessageId(messageId);
-                  setTimeout(() => setHighlightedMessageId(null), 2000);
-                } else if (conversation?._id) {
-                  useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: messageId });
-                }
+                setNavigatorCurrentId(messageId);
+                scrollToMessageById(messageId);
               }}
             />
           </div>
@@ -17615,7 +17763,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
@@ -17683,14 +17831,16 @@ const ConversationViewInner = (
                   } else if (hasMoreBelow && onJumpToEnd) {
                     jumpDirectionRef.current = 'end';
                     setJumpPending('end');
+                    setGuestStayAtTop(false);
                     onJumpToEnd();
                   } else {
+                    setGuestStayAtTop(false);
                     setUserScrolled(false);
                     paginationCooldownRef.current = Date.now() + 1000;
                     scrollToEdgeRef.current('bottom');
                   }
                 }}
-                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
                 title={jumpPending === 'end' ? "Cancel" : undefined}
               >
@@ -17803,6 +17953,7 @@ const ConversationViewInner = (
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
     </ChatWakeContext.Provider>
+    </RevealAncestryCtx.Provider>
     </BrowserSessionContext.Provider>
     </CastBrowserRowContext.Provider>
     </FilePathContext.Provider>

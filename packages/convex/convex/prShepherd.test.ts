@@ -140,8 +140,8 @@ describe("buildWakePrompt", () => {
   test("a merge turns the job into closing the work out", () => {
     const prompt = buildWakePrompt({ pr: pullRequest({ state: "merged" }) as any, reason: "merged" });
     expect(prompt).toContain("State: merged");
-    expect(prompt).toContain("mark the linked tasks done");
-    expect(prompt).toContain("cast state --status done");
+    expect(prompt).toContain("Save the verified outcome and retire its trigger");
+    expect(prompt).toContain("Do not close linked tasks unless their own acceptance criteria are verified complete");
     expect(prompt).not.toContain("Do not merge the pull request");
   });
 
@@ -150,6 +150,7 @@ describe("buildWakePrompt", () => {
     expect(prompt).toContain("You own this pull request until it merges.");
     expect(prompt).toContain("Do not merge the pull request unless a human asked");
     expect(prompt).toContain("push to the same");
+    expect(prompt).toContain("Being behind alone is not a reason to rebase or push");
     expect(prompt).toContain("cast state");
     expect(prompt.split("\n").length).toBeLessThan(60);
   });
@@ -207,6 +208,7 @@ describe("wakeShepherd", () => {
 
   test("gives up retrying instead of looping forever", async () => {
     const ctx = context({
+      pull_requests: [pullRequest({ checks_state: "failure" })],
       agent_tasks: [
         { _id: TASK, user_id: "user_1", title: "t", prompt: "p", status: "running", schedule_type: "event", retry_count: 0, run_count: 0, created_at: 0, mode: "apply" },
       ],
@@ -403,6 +405,7 @@ describe("pickWakeReason", () => {
 describe("wakes that pile up while the shepherd is busy", () => {
   test("the reasons are kept and the most urgent leads when it is free", async () => {
     const ctx = context({
+      pull_requests: [pullRequest({ checks_state: "failure", mergeable: false })],
       agent_tasks: [
         {
           _id: TASK, user_id: "user_1", title: "Shepherd PR #12", prompt: "old prompt",
@@ -413,20 +416,18 @@ describe("wakes that pile up while the shepherd is busy", () => {
     });
 
     // Busy: nothing is delivered, but the reasons are remembered.
-    await wakeShepherd(ctx, PR, "checks_green");
+    await wakeShepherd(ctx, PR, "check_failed");
     await wakeShepherd(ctx, PR, "conflict");
     expect(ctx.db._tables.agent_tasks[0].prompt).toBe("old prompt");
-    expect(ctx.db._tables.pull_requests[0].shepherd_pending_reasons).toEqual(["checks_green", "conflict"]);
+    expect(ctx.db._tables.pull_requests[0].shepherd_pending_reasons).toEqual(["check_failed", "conflict"]);
 
-    // Free again. The last event was review_requested, but conflict is the one
-    // that matters, and the others are named underneath.
     ctx.db._tables.agent_tasks[0].status = "scheduled";
-    await wakeShepherd(ctx, PR, "review_requested");
+    await wakeShepherd(ctx, PR, "review_comment_created");
 
     const prompt = ctx.db._tables.agent_tasks[0].prompt;
     expect(prompt).toContain("Woken because the branch no longer merges cleanly");
     expect(prompt).toContain("Also since the last wake:");
-    expect(prompt).toContain("the checks went green");
+    expect(prompt).toContain("a check failed");
     expect(ctx.db._tables.pull_requests[0].shepherd_last_wake_reason).toBe("conflict");
     // Handed over, so the next wake starts clean.
     expect(ctx.db._tables.pull_requests[0].shepherd_pending_reasons).toEqual([]);
@@ -445,7 +446,7 @@ describe("the prompt describes the row as it is when it is built", () => {
   test("a head commit written before the wake is the one reported", async () => {
     const ctx = context();
     await patchPullRequest(ctx, PR, { head_sha: "9999999999999999999999999999999999999999" });
-    await wakeShepherd(ctx, PR, "synchronize");
+    await wakeShepherd(ctx, PR, "check_failed");
 
     const prompt = ctx.db._tables.agent_tasks[0].prompt;
     expect(prompt).toContain("9999999");

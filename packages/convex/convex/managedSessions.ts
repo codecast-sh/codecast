@@ -846,6 +846,14 @@ export const updateAgentStatus = mutation({
     if (turnStampAdvanced || activeSettled) {
       await scheduleAgentTurnMirror(ctx, args.conversation_id);
     }
+    // The activity line names what the agent does NOW; a settled turn does
+    // nothing, so the stamp comes off the row here rather than lingering until
+    // the next tool call. Only a settle pays the conversation read: the per
+    // tool call "working" re-assertion never reaches this branch.
+    if (activeSettled) {
+      const conv = await ctx.db.get(args.conversation_id);
+      if (conv?.activity) await ctx.db.patch(conv._id, { activity: undefined });
+    }
 
     // agent_status_updated_at is only set on an ACTUAL status change — the
     // needs-input push keys off transitions, never re-assertions.
