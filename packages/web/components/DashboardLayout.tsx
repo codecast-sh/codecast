@@ -58,7 +58,7 @@ import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow, borrowsTabShell } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow, borrowsTabShell, isStandaloneCommunityPath } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { FilePathMenuHost } from "./FilePathMenuHost";
 import { LinkMenuHost } from "./LinkMenuHost";
@@ -961,8 +961,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the
   // bottom bar. Always simple-view: anonymous share viewers get the calm reading
   // chrome without owning a simple_view pref (writing one could outlive the visit
-  // and clobber a later sign-in's stamped preference).
-  if (isGuest) {
+  // and clobber a later sign-in's stamped preference). The community page in a
+  // plain browser takes the same bare frame for a signed in reader too: it is
+  // the public site's chat, not a workspace surface (lib/desktop
+  // isStandaloneCommunityPath); the page draws its own slim header.
+  if (isGuest || isStandaloneCommunityPath(routerLocation.pathname)) {
     return (
       <div className="bg-sol-bg flex flex-col overflow-hidden simple-view" style={{ height: '100vh' }}>
         <div className="flex-1 min-h-0">

@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Archive, Bell, Pencil, Text } from "lucide-react";
+import { SlackLogo } from "../SlackLogo";
+import { SlackSyncDialog } from "./SlackSyncDialog";
 import {
   ContextMenu,
   CtxCheckItem,
@@ -49,6 +51,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
     x: number;
     y: number;
   } | null>(null);
+  const [slackFor, setSlackFor] = useState<string | null>(null);
 
   return (
     <>
@@ -103,6 +106,18 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
               >
                 {channel.topic ? "Edit topic" : "Set topic"}
               </CtxItem>}
+              {!isDm && channel.kind !== "community" && <CtxItem
+                icon={SlackLogo as any}
+                onSelect={(e: Event) => {
+                  e.preventDefault();
+                  state.close();
+                  setSlackFor(p.channelId);
+                }}
+              >
+                {Object.values(s.chatSlackLinks ?? {}).some((l: any) => l.chat_channel_id === p.channelId)
+                  ? "Slack mirror settings"
+                  : "Mirror with Slack…"}
+              </CtxItem>}
               {!isDm && <CtxSeparator />}
               {!isDm && <CtxItem
                 icon={Archive}
@@ -119,6 +134,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
         }}
       </ContextMenu>
       {editor && <ChannelFieldEditor {...editor} onClose={() => setEditor(null)} />}
+      {slackFor && <SlackSyncDialog channelId={slackFor} onClose={() => setSlackFor(null)} />}
     </>
   );
 }

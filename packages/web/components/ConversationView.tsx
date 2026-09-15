@@ -88,6 +88,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
+import { RevealAncestryCtx, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -164,7 +165,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { AssignmentBadge } from "./AssignmentBadge";
+import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
@@ -2051,7 +2052,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
     const store = useInboxStore.getState();
     const real = store.getConvexId(convId) ?? convId;
     if (!isConvexId(real)) return;
-    if (convBucketMap(store.bucketAssignments)[real]) return;
+    if (Object.values(store.bucketAssignments).some((row) => row.conversation_id === real)) return;
     store.assignSessionToBucket(real, activeBucketFilter);
   }, [convId, activeBucketFilter, assigned]);
 
@@ -15921,6 +15922,9 @@ const ConversationViewInner = (
   // the session's working directory, and the home it implies for `~/…`.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
   const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository }), [filePathBase, codeRepository]);
+  // What this transcript is nested in, plus itself: the bound a reveal band
+  // in it checks before showing a conversation (lib/revealHost).
+  const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16548,6 +16552,7 @@ const ConversationViewInner = (
     <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
     <BrowserSessionContext.Provider value={browserSession}>
+    <RevealAncestryCtx.Provider value={revealAncestry}>
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
@@ -16756,32 +16761,7 @@ const ConversationViewInner = (
 
                 <BranchCodeLink session={conversation} />
 
-                {/* Simple view keeps the assignment pill but drops the names —
-                    device icon + dot + avatar still say where it runs and whose
-                    it is; the popover carries the detail. */}
-                {isOwner && (
-                  <AssignmentBadge
-                    conversationId={conversation._id}
-                    ownerDeviceId={(conversation as any).owner_device_id}
-                    compact={simpleViewPref}
-                  />
-                )}
-
-                {!isOwner && conversation.user && (
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/30">
-                    <AvatarImg
-                      src={conversation.user.avatar_url}
-                      alt={conversation.user.name || "User"}
-                      className="w-4 h-4 rounded-full"
-                      fallback={
-                        <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
-                          {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
-                        </span>
-                      }
-                    />
-                    {conversation.user.name || conversation.user.email?.split("@")[0] || "Teammate"}
-                  </span>
-                )}
+                <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
@@ -17803,6 +17783,7 @@ const ConversationViewInner = (
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
     </ChatWakeContext.Provider>
+    </RevealAncestryCtx.Provider>
     </BrowserSessionContext.Provider>
     </CastBrowserRowContext.Provider>
     </FilePathContext.Provider>

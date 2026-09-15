@@ -11,6 +11,7 @@ import {
   GitPullRequest,
   GitCommitHorizontal,
   ChevronDown,
+  PanelBottomOpen,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
@@ -997,7 +998,9 @@ export function EntityIdPill({
         <Link
           href={href}
           onClick={handleClick}
-          onMouseEnter={openSoon}
+          // While its band is open the full page is right below: no hover
+          // card over it, and a stale timer never brings one back.
+          onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           aria-pressed={revealHost ? revealOpen : undefined}
           className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
@@ -1067,6 +1070,15 @@ export function EntityIdPill({
             >
               Open on GitHub <ArrowUpRight className="w-2.5 h-2.5" />
             </a>
+          </div>
+        )}
+        {/* The card is the preview; the pill itself opens the full page in
+            place. Said once here, where a reader hovering for the first time
+            is looking, so the band that follows a click is no surprise. */}
+        {revealHost && entity && (
+          <div className="flex items-center gap-1.5 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
+            <PanelBottomOpen className="h-3 w-3" />
+            Click to open here, below the message
           </div>
         )}
       </PopoverContent>

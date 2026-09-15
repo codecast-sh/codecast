@@ -234,6 +234,7 @@ export type {
   ChatMessageRow,
   ChatReadRow,
   ChatReactionRow,
+  ChatSlackLinkRow,
   ChatRailRow,
   ChatRailChannel,
   ChatRailScope,
@@ -395,6 +396,11 @@ export type PlanItem = {
   short_id: string;
   title: string;
   goal?: string;
+  // The charter (docs/architecture/org-staffing.md S7; components/charter).
+  success_metrics?: string[];
+  priority?: "p0" | "p1" | "p2" | "p3";
+  owner_role_id?: string;
+  non_goals?: string[];
   status: string;
   source: string;
   // Workspace: set = that team's plan, unset = personal (lib/workspaceScope).
@@ -434,6 +440,14 @@ export type ProjectItem = {
   icon?: string;
   target_date?: number;
   labels?: string[];
+  // The charter (docs/architecture/org-staffing.md S7; components/charter).
+  goal?: string;
+  success_metrics?: string[];
+  priority?: "p0" | "p1" | "p2" | "p3";
+  owner_role_id?: string;
+  non_goals?: string[];
+  risks?: string[];
+  budget?: { tokens_per_day?: number; hands_per_day?: number };
   task_counts: { total: number; done: number; in_progress: number };
   plan_count: number;
   doc_count: number;
@@ -625,6 +639,8 @@ export type InboxSession = {
   // When the block landed (the newest banner message's timestamp) — renders
   // the ticking "Xm ago" on the blocked-sessions banner and its rows.
   pending_api_error_at?: number | null;
+  context_tokens?: number | null;
+  last_model_call_at?: number | null;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
@@ -5377,8 +5393,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
   moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
-  updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }> }) => void;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null }) => void;
+  // Charter fields (components/charter/charterMeta CharterPatch): null clears
+  // a scalar, an empty array is a value.
+  updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
@@ -6182,6 +6200,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
 // overrides survive the stub-to-Convex ID transition.
 function rekeyPending(pending: Record<string, any>, oldId: string, newId: string): void {
   for (const key of Object.keys(pending)) {
+    const entry = pending[key];
+    if (entry.type === "field" && entry.value === oldId &&
+      (key.endsWith(":bucket_id") || key.endsWith(":_postCreateBucketId"))) {
+      pending[key] = { ...entry, value: newId };
+    }
     const newKey = key.replace(`:${oldId}`, `:${newId}`);
     if (newKey !== key) {
       pending[newKey] = pending[key];
@@ -6299,6 +6322,59 @@ function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void
   }
 }
 
+function assignSessionBucketDraft(draft: Draft, conversationId: string, bucketId: string | null, deferred = !isConvexId(conversationId)) {
+  const now = Date.now();
+  if (deferred) {
+    for (const row of [draft.sessions[conversationId], draft.conversations[conversationId]] as any[]) {
+      if (!row) continue;
+      if (bucketId) row._postCreateBucketId = bucketId;
+      else delete row._postCreateBucketId;
+    }
+  }
+  // A create-time focused-bucket marker is only a fallback until the first
+  // authoritative filing. A later explicit move/unfile is newer user intent
+  // and must survive reload; clear the old marker in the same local commit.
+  // Assigning the marker's own bucket keeps it until server echo, preserving
+  // crash-after-enqueue recovery for the automatic filing.
+  const clearSupersededIntent = (row: any) => {
+    if (
+      row?._postCreateBucketId &&
+      row._postCreateBucketId !== bucketId
+    ) {
+      delete row._postCreateBucketId;
+    }
+  };
+  clearSupersededIntent(draft.sessions[conversationId]);
+  clearSupersededIntent(draft.conversations[conversationId]);
+  const existing = (Object.values(draft.bucketAssignments) as BucketAssignmentItem[])
+    .find(a => a.conversation_id === conversationId);
+  const previous = existing
+    ? {
+        rowId: String(existing._id),
+        bucketId: existing.bucket_id ?? null,
+        updatedAt: existing.updated_at,
+      }
+    : null;
+  if (existing) {
+    existing.bucket_id = bucketId ?? undefined;
+    existing.updated_at = now;
+  } else {
+    const stubId = `bucketassign-${conversationId}`;
+    draft.bucketAssignments[stubId] = {
+      _id: stubId,
+      conversation_id: conversationId,
+      bucket_id: bucketId ?? undefined,
+      updated_at: now,
+    };
+  }
+  return {
+    conversationId,
+    bucketId,
+    previous,
+    optimisticRowId: String(existing?._id ?? `bucketassign-${conversationId}`),
+  };
+}
+
 function resumePostCreateBucketIntentFor(
   convexId: string,
   explicitBucketId?: string,
@@ -6308,6 +6384,7 @@ function resumePostCreateBucketIntentFor(
   const bucketId = store.sessions[convexId]?._postCreateBucketId
     ?? (store.conversations[convexId] as any)?._postCreateBucketId;
   if (!bucketId) return;
+  if (!isConvexId(bucketId)) return;
   // A Promise continuation captured when the session was first summoned can
   // run after the user has moved it elsewhere (or a later summon superseded
   // the focused bucket). The persisted marker is the current intent; never let
@@ -6488,6 +6565,12 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   // ungroup the session AND orphan as an immortal stub.
   for (const row of Object.values(draft.bucketAssignments || {}) as BucketAssignmentItem[]) {
     if (row.conversation_id === oldId) row.conversation_id = newId;
+    if (row.bucket_id === oldId) row.bucket_id = newId;
+  }
+  if (draft.buckets[oldId]) {
+    for (const row of [...Object.values(draft.sessions), ...Object.values(draft.conversations)] as any[]) {
+      if (row._postCreateBucketId === oldId) row._postCreateBucketId = newId;
+    }
   }
   // A tab persists its session as a `?s=<id>` path (and AppTab.sessionId). Left
   // pointing at the dead stub, the inbox's re-assert effect would chase a session
@@ -9306,6 +9389,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
           if (field === "chatChannels" && isConvexId(match._id)) {
             scheduleResolvedChatChannelSends(match._id);
           }
+          if (field === "buckets" && isConvexId(match._id)) {
+            setTimeout(() => useInboxStore.getState().resumePostCreateSessionIntents(), 0);
+          }
         } else if (!table[oldId]) {
           mutTable()[oldId] = old as any;
         }
@@ -10729,6 +10815,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
       created_at: now,
       updated_at: now,
     };
+    if (continuation?.kind === "assignBucket") {
+      const conversationIds: string[] = [];
+      const deferredAssignments: ReturnType<typeof assignSessionBucketDraft>[] = [];
+      for (const id of continuation.conversationIds) {
+        const conversationId = get().getConvexId(id) ?? id;
+        if (isConvexId(conversationId)) {
+          conversationIds.push(conversationId);
+        } else if (this.sessions[conversationId] || this.conversations[conversationId]) {
+          deferredAssignments.push(assignSessionBucketDraft(this, conversationId, stubId));
+        }
+      }
+      return {
+        stubId,
+        deferredAssignments,
+        ...(conversationIds.length ? { continuation: { ...continuation, conversationIds } } : {}),
+      };
+    }
     return { stubId, ...(continuation ? { continuation } : {}) };
   }),
 
@@ -10867,49 +10970,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the server reaches the same assignment on its own (fork label inheritance):
   // the dispatch no-ops there, and rekeyId carries the local row to the real id.
   assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
-    const now = Date.now();
-    // A create-time focused-bucket marker is only a fallback until the first
-    // authoritative filing. A later explicit move/unfile is newer user intent
-    // and must survive reload; clear the old marker in the same local commit.
-    // Assigning the marker's own bucket keeps it until server echo, preserving
-    // crash-after-enqueue recovery for the automatic filing.
-    const clearSupersededIntent = (row: any) => {
-      if (
-        row?._postCreateBucketId &&
-        row._postCreateBucketId !== bucketId
-      ) {
-        delete row._postCreateBucketId;
-      }
-    };
-    clearSupersededIntent(this.sessions[conversationId]);
-    clearSupersededIntent(this.conversations[conversationId]);
-    const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
-      .find(a => a.conversation_id === conversationId);
-    const previous = existing
-      ? {
-          rowId: String(existing._id),
-          bucketId: existing.bucket_id ?? null,
-          updatedAt: existing.updated_at,
-        }
-      : null;
-    if (existing) {
-      existing.bucket_id = bucketId ?? undefined;
-      existing.updated_at = now;
-    } else {
-      const stubId = `bucketassign-${conversationId}`;
-      this.bucketAssignments[stubId] = {
-        _id: stubId,
-        conversation_id: conversationId,
-        bucket_id: bucketId ?? undefined,
-        updated_at: now,
-      };
-    }
-    return {
-      conversationId,
-      bucketId,
-      previous,
-      optimisticRowId: String(existing?._id ?? `bucketassign-${conversationId}`),
-    };
+    return assignSessionBucketDraft(this, conversationId, bucketId);
   }),
 
   // -- Teammate comments --
@@ -11103,9 +11164,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (actionName === "createBucket") {
       const stubId = localResult.stubId;
       if (typeof stubId !== "string") return false;
+      for (const assignment of localResult.deferredAssignments ?? []) {
+        const conversationId = get().getConvexId(assignment.conversationId) ?? assignment.conversationId;
+        const current = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
+          .find((row) => row.conversation_id === conversationId);
+        if (current?.bucket_id === stubId) {
+          assignSessionBucketDraft(this, conversationId, assignment.previous?.bucketId ?? null, true);
+          setTimeout(() => resumePostCreateBucketIntentFor(conversationId), 0);
+        }
+      }
       delete this.buckets[stubId];
       delete this.pending[`buckets:${stubId}`];
-      return ["buckets", "pending"];
+      for (const [key, entry] of Object.entries(this.pending)) {
+        if (entry.type === "field" && entry.value === stubId &&
+          (key.endsWith(":bucket_id") || key.endsWith(":_postCreateBucketId"))) {
+          delete this.pending[key];
+        }
+      }
+      return ["buckets", "bucketAssignments", "sessions", "conversations", "pending"];
     }
 
     if (actionName === "updateBucket") {

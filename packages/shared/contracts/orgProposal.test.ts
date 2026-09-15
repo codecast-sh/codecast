@@ -23,3 +23,106 @@ describe("org proposal block", () => {
     expect(applyProposalChanges(p, "  ")).toEqual({ proposal: p });
   });
 });
+
+// Staffing changes (org-staffing.md S4): one validator per kind, the spec
+// envelope, the accept order and the one-line describer.
+import { ORG_CHANGE_KINDS, describeOrgChange, isOrgChange, orderOrgChanges, orgChangeError, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
+
+const GOOD: Record<OrgChange["kind"], OrgChange> = {
+  role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
+  projects: { kind: "projects", changes: [{ op: "create", title: "Platform" }, { op: "merge", from: "pr-3", into: "pr-1" }] },
+  move: { kind: "move", handle: "growth", reports_to: "@product", scope_add: ["pr-5"] },
+  retire: { kind: "retire", handle: "ops", reason: "idle 21 days" },
+  scope: { kind: "scope", handle: "growth", add: ["pr-5"], remove: ["pl-2"] },
+  budget: { kind: "budget", handle: "growth", caps: { tokens_per_day: 800_000 } },
+  trust: { kind: "trust", handle: "growth", trust: "decide" },
+  routine: { kind: "routine", handle: "growth", title: "Weekly funnel", prompt: "Read the funnel and report.", every: "7d" },
+  project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
+  adopt: { kind: "adopt", handle: "chief-of-staff", conversation: "jx7abcd" },
+};
+
+describe("org change validation", () => {
+  test("every kind has a valid example and the list is complete", () => {
+    expect(Object.keys(GOOD).sort()).toEqual([...ORG_CHANGE_KINDS].sort());
+    for (const c of Object.values(GOOD)) expect(orgChangeError(c), c.kind).toBeNull();
+  });
+  test("each kind names its first fault", () => {
+    const faults: Array<[any, string]> = [
+      [null, "an object with a kind"],
+      [{ kind: "nope" }, "unknown change kind"],
+      [{ kind: "role", name: "X" }, "missing its required fields"],
+      [{ kind: "role", name: "X", handle: "Bad Handle" }, "not a-z, 0-9 and -"],
+      [{ kind: "projects", changes: [{ op: "create" }] }, "missing its required fields"],
+      [{ kind: "move" }, "missing its required fields"],
+      [{ kind: "retire", handle: "" }, "missing its required fields"],
+      [{ kind: "scope", handle: "gr" }, "at least one ref"],
+      [{ kind: "scope", handle: "gr", add: "pr-1" }, "lists of project or plan refs"],
+      [{ kind: "budget", handle: "gr", caps: {} }, "at least one of hands_per_day"],
+      [{ kind: "budget", handle: "gr", caps: { tokens_per_day: -1 } }, "non-negative"],
+      [{ kind: "trust", handle: "gr", trust: "god" }, "one of understand, decide, direct"],
+      [{ kind: "routine", handle: "gr", title: "t", prompt: "p", every: "weekly" }, "duration like 7d"],
+      [{ kind: "routine", handle: "gr", title: "t", every: "7d" }, "title and a prompt"],
+      [{ kind: "project_meta", project: "pr-1" }, "changes nothing"],
+      [{ kind: "project_meta", project: "pr-1", priority: "p9" }, "priority is one of"],
+      [{ kind: "project_meta", project: "pr-1", success_metrics: "x" }, "lists of strings"],
+      [{ kind: "adopt", handle: "chief-of-staff" }, "adopt needs the conversation"],
+      [{ kind: "adopt", conversation: "jx7abcd" }, "handle is required"],
+    ];
+    for (const [raw, fault] of faults) {
+      const err = orgChangeError(raw);
+      expect(err, JSON.stringify(raw)).not.toBeNull();
+      expect(err!, JSON.stringify(raw)).toContain(fault);
+      expect(isOrgChange(raw)).toBe(false);
+    }
+  });
+});
+
+describe("parseOrgProposalSpec", () => {
+  const spec = { title: "Staffing for Acme", summary_md: "Two paragraphs.", mode: "init", changes: Object.values(GOOD).map((change) => ({ change, rationale: `why ${change.kind}`, evidence: [{ label: "3 sessions", href: "https://x" }], expected_effect: "less chatter", risk: "none" })) };
+  test("a spec with every kind parses and keeps only the known fields", () => {
+    const r = parseOrgProposalSpec({ ...spec, extra: 1 });
+    expect(r.errors).toEqual([]);
+    expect(r.spec!.changes.length).toBe(ORG_CHANGE_KINDS.length);
+    expect(Object.keys(r.spec!)).toEqual(["title", "summary_md", "mode", "changes"]);
+    expect(r.spec!.changes[0]).toEqual({ change: GOOD.role, rationale: "why role", evidence: [{ label: "3 sessions", href: "https://x" }], expected_effect: "less chatter", risk: "none" });
+  });
+  test("every fault is reported, named by index and kind", () => {
+    const r = parseOrgProposalSpec({ title: "", mode: "later", changes: [
+      { change: GOOD.role },
+      { change: { kind: "budget", handle: "gr", caps: {} }, rationale: "r", evidence: [{ href: "x" }] },
+      "nope",
+    ] });
+    expect(r.spec).toBeNull();
+    expect(r.errors).toEqual([
+      "title is required",
+      "summary_md is required: the summary a founder reads on a phone",
+      "mode is one of init, review, request",
+      "changes[0] (role): rationale is required",
+      "changes[1] (budget): budget caps needs at least one of hands_per_day, wakes_per_day, tokens_per_day as a non-negative number",
+      "changes[1] (budget): evidence is a list of { label, href? }",
+      "changes[2]: an object with change and rationale",
+    ]);
+    expect(parseOrgProposalSpec([]).errors[0]).toContain("JSON object");
+    expect(parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [] }).errors).toEqual(["changes is a non-empty list"]);
+  });
+});
+
+describe("orderOrgChanges and describeOrgChange", () => {
+  test("projects, role, move, scope, budget, trust, routine, adopt, retire; unknown last; ties keep order", () => {
+    const rows = [GOOD.retire, GOOD.adopt, GOOD.routine, GOOD.trust, GOOD.budget, GOOD.scope, GOOD.move, { kind: "role", name: "B", handle: "b" } as OrgChange, GOOD.role, GOOD.projects, null];
+    expect(orderOrgChanges(rows, (c) => c).map((c) => c ? (c.kind === "role" ? `role:${c.handle}` : c.kind) : "none"))
+      .toEqual(["projects", "role:b", "role:growth", "move", "scope", "budget", "trust", "routine", "adopt", "retire", "none"]);
+  });
+  test("one line per kind, in the words the walk and the ghosts use", () => {
+    expect(describeOrgChange(GOOD.role)).toBe("create role Head of Growth @growth reporting to me over pr-1");
+    expect(describeOrgChange(GOOD.projects)).toBe("create project Platform; merge project pr-3 into pr-1");
+    expect(describeOrgChange(GOOD.move)).toBe("move @growth under @product +pr-5");
+    expect(describeOrgChange(GOOD.retire)).toBe("retire @ops");
+    expect(describeOrgChange(GOOD.scope)).toBe("scope @growth +pr-5 -pl-2");
+    expect(describeOrgChange(GOOD.budget)).toBe("budget @growth tokens 800000/day");
+    expect(describeOrgChange(GOOD.trust)).toBe("trust @growth to decide");
+    expect(describeOrgChange(GOOD.routine)).toBe("routine on @growth: Weekly funnel every 7d");
+    expect(describeOrgChange(GOOD.project_meta)).toBe("charter pr-1 owner @growth p1: Ship the onboarding");
+    expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @chief-of-staff's standing session");
+  });
+});

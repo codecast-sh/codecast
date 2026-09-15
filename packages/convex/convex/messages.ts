@@ -1209,6 +1209,7 @@ export async function rollUpUsage(
   const seen = new Set<string>(prev.last_api_message_id ? [prev.last_api_message_id] : []);
   let input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
   let lastId: string | undefined = prev.last_api_message_id;
+  let contextTokens: number | undefined = prev.context_tokens;
   for (const r of rows) {
     if (!r.inserted || !r.usage) continue;
     if (r.api_message_id) {
@@ -1220,6 +1221,10 @@ export async function rollUpUsage(
     output += r.usage.output_tokens || 0;
     cacheRead += r.usage.cache_read_input_tokens || 0;
     cacheWrite += r.usage.cache_creation_input_tokens || 0;
+    // A refused turn (a limit banner) carries an all-zero usage block; it did not
+    // shrink the context, so it never overwrites the last real reading.
+    const context = (r.usage.input_tokens || 0) + (r.usage.cache_read_input_tokens || 0) + (r.usage.cache_creation_input_tokens || 0);
+    if (context > 0) contextTokens = context;
   }
   if (input + output + cacheRead + cacheWrite === 0) return;
   convPatch.usage_totals = {
@@ -1228,6 +1233,7 @@ export async function rollUpUsage(
     cache_read: prev.cache_read + cacheRead,
     cache_write: prev.cache_write + cacheWrite,
     updated_at: now,
+    ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
     ...(lastId ? { last_api_message_id: lastId } : {}),
   };
   const roleId = conversation.standing_role_id ?? conversation.org_role_id;

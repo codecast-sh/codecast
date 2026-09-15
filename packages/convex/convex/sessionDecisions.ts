@@ -437,7 +437,7 @@ export function personMayResolve(row: { user_id: any; asked_user_ids?: any[] }, 
   return (row.asked_user_ids ?? []).some((id) => id.toString() === userId.toString());
 }
 
-async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions">, status: "pending" | "done") {
+export async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions">, status: "pending" | "done") {
   const rows = await ctx.db
     .query("decision_inbox")
     .withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId))

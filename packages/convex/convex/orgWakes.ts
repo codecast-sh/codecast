@@ -14,6 +14,7 @@
 // delivery bumps, and the fake db tests drive the same code.
 
 import { internalMutation, internalQuery } from "./functions";
+import { charterLine } from "./lib/orgCharter";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
@@ -126,8 +127,12 @@ export function buildFrame(input: FrameInput): Frame {
   const planLines = facts.plans.map((p) => `- plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress (${p.status})`);
   const changed = facts.changed.filter((c) => c.updated_at > since);
   const changedLines = changed.map((c) => `- ${c.kind} ${c.short_id ?? ""} ${c.title} → ${c.status}`);
+  // The charters lead (org-staffing.md S7): a role directs its hands toward
+  // each project's goal, not its task list. One line per chartered project.
+  const charterLines = facts.scope.projects.map((p) => charterLine(`- project ${p.title}`, p)).filter((l): l is string => !!l);
   sections.push([
     `## Your scope now`,
+    ...(charterLines.length ? [`Direction:`, ...budgeted(charterLines, budget)] : []),
     ...factLines,
     ...(planLines.length ? [`Plans:`, ...budgeted(planLines, budget)] : []),
     ...(changedLines.length ? [`Changed since your last frame:`, ...budgeted(changedLines, budget)] : [`Nothing in scope changed since your last frame.`]),

@@ -51,6 +51,191 @@ export type OrgProposal = OrgRoleProposal | OrgProjectsProposal | OrgMoveProposa
 
 export const ORG_PROPOSAL_KINDS = ["role", "projects", "move", "retire"] as const;
 
+// ── Staffing changes (docs/architecture/org-staffing.md S4) ──────────────────
+// A proposal (op-N) is a list of changes decided one by one. The four stack
+// kinds above are changes too; these six are the staffing additions. One
+// validator per kind, one apply order, one describer: the CLI walk, the
+// server's create mutation and the ghost nodes on the org page read these.
+
+export type OrgTrustStage = "understand" | "decide" | "direct";
+export type OrgPriority = "p0" | "p1" | "p2" | "p3";
+
+export type OrgScopeChange = { kind: "scope"; handle: string; add?: string[]; remove?: string[] };
+export type OrgBudgetChange = { kind: "budget"; handle: string; caps: OrgProposalCaps };
+export type OrgTrustChange = { kind: "trust"; handle: string; trust: OrgTrustStage };
+export type OrgRoutineChange = { kind: "routine"; handle: string; title: string; prompt: string; every: string };
+export type OrgProjectMetaChange = {
+  kind: "project_meta";
+  project: string;
+  goal?: string;
+  success_metrics?: string[];
+  priority?: OrgPriority;
+  /** "@handle" of the owner role. */
+  owner?: string;
+  non_goals?: string[];
+  risks?: string[];
+};
+/** This session becomes the role's standing session (the analyzer offering to be the chief of staff). */
+export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: string };
+
+export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange;
+
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "scope", "budget", "trust", "routine", "project_meta", "adopt"] as const;
+export type OrgChangeKind = OrgChange["kind"];
+
+/** Accept order (S4): projects first, then roles (parents before children in
+ *  the proposal's own order), then moves, scope, budget, trust, routines,
+ *  adopt, retire. A retirement goes last so a move off the retiring role
+ *  lands first; adopt goes after the role it names exists. */
+export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
+  projects: 0, role: 1, move: 2, scope: 3, budget: 4, trust: 5, routine: 6, adopt: 7, retire: 8,
+};
+
+/** Stable sort by apply rank; ties keep their given order. */
+export function orderOrgChanges<T>(rows: T[], changeOf: (row: T) => OrgChange | null | undefined): T[] {
+  const rank = (row: T) => { const c = changeOf(row); return c ? ORG_CHANGE_APPLY_RANK[c.kind] : 9; };
+  return rows.map((row, i) => ({ row, i, r: rank(row) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.row);
+}
+
+const ORG_TRUST_STAGES: readonly string[] = ["understand", "decide", "direct"];
+const ORG_PRIORITIES: readonly string[] = ["p0", "p1", "p2", "p3"];
+const HANDLE_RE = /^[a-z0-9-]{2,32}$/;
+const EVERY_RE = /^\d+(m|h|d|w)$/;
+
+/** A routine's cadence ("7d", "12h", "30m", "2w") in milliseconds; null when it is not one. */
+export function orgEveryToMs(every: string): number | null {
+  const m = /^(\d+)(m|h|d|w)$/.exec((every ?? "").trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 }[m[2] as "m" | "h" | "d" | "w"];
+  return n > 0 ? n * unit : null;
+}
+
+const nonEmpty = (x: any): x is string => typeof x === "string" && x.trim().length > 0;
+const strings = (x: any): boolean => Array.isArray(x) && x.every(nonEmpty);
+const optStrings = (x: any): boolean => x === undefined || strings(x);
+const optString = (x: any): boolean => x === undefined || typeof x === "string";
+const capsOk = (x: any): boolean => !!x && typeof x === "object" && !Array.isArray(x) &&
+  ["hands_per_day", "wakes_per_day", "tokens_per_day"].every((k) => x[k] === undefined || (typeof x[k] === "number" && x[k] >= 0)) &&
+  ["hands_per_day", "wakes_per_day", "tokens_per_day"].some((k) => typeof x[k] === "number");
+
+/** Why a change is not one, or null when it is. One message, the first fault. */
+export function orgChangeError(raw: any): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "a change is an object with a kind";
+  if (!ORG_CHANGE_KINDS.includes(raw.kind)) return `unknown change kind ${JSON.stringify(raw.kind)}; one of ${ORG_CHANGE_KINDS.join(", ")}`;
+  const handle = (): string | null => nonEmpty(raw.handle) ? (HANDLE_RE.test(raw.handle.replace(/^@/, "")) ? null : `handle ${JSON.stringify(raw.handle)} is not a-z, 0-9 and - (2 to 32 chars)`) : "handle is required";
+  switch (raw.kind as OrgChangeKind) {
+    case "role": case "projects": case "move": case "retire":
+      return isOrgProposal(raw) ? (raw.kind === "role" ? handle() : null) : `${raw.kind} is missing its required fields`;
+    case "scope": {
+      const h = handle(); if (h) return h;
+      if (!optStrings(raw.add) || !optStrings(raw.remove)) return "scope add and remove are lists of project or plan refs";
+      if (!(raw.add?.length || raw.remove?.length)) return "scope needs at least one ref to add or remove";
+      return null;
+    }
+    case "budget": {
+      const h = handle(); if (h) return h;
+      return capsOk(raw.caps) ? null : "budget caps needs at least one of hands_per_day, wakes_per_day, tokens_per_day as a non-negative number";
+    }
+    case "trust": {
+      const h = handle(); if (h) return h;
+      return ORG_TRUST_STAGES.includes(raw.trust) ? null : `trust is one of ${ORG_TRUST_STAGES.join(", ")}`;
+    }
+    case "routine": {
+      const h = handle(); if (h) return h;
+      if (!nonEmpty(raw.title) || !nonEmpty(raw.prompt)) return "routine needs a title and a prompt";
+      return nonEmpty(raw.every) && EVERY_RE.test(raw.every) ? null : "routine every is a duration like 7d, 1d, 12h";
+    }
+    case "project_meta": {
+      if (!nonEmpty(raw.project)) return "project_meta needs a project ref";
+      if (!optString(raw.goal) || !optStrings(raw.success_metrics) || !optStrings(raw.non_goals) || !optStrings(raw.risks)) return "project_meta goal is a string; success_metrics, non_goals and risks are lists of strings";
+      if (raw.priority !== undefined && !ORG_PRIORITIES.includes(raw.priority)) return `priority is one of ${ORG_PRIORITIES.join(", ")}`;
+      if (raw.owner !== undefined && !nonEmpty(raw.owner)) return "owner is a role handle";
+      if (![raw.goal, raw.success_metrics, raw.priority, raw.owner, raw.non_goals, raw.risks].some((x) => x !== undefined)) return "project_meta changes nothing";
+      return null;
+    }
+    case "adopt": {
+      const h = handle(); if (h) return h;
+      return nonEmpty(raw.conversation) ? null : "adopt needs the conversation (a session short id) that becomes the role's standing session";
+    }
+  }
+  return null;
+}
+
+export function isOrgChange(raw: any): raw is OrgChange { return orgChangeError(raw) === null; }
+
+export type OrgEvidenceLink = { label: string; href?: string };
+
+/** One change as the spec carries it, with the reader's side. */
+export type OrgSpecChange = {
+  change: OrgChange;
+  rationale: string;
+  evidence?: OrgEvidenceLink[];
+  expected_effect?: string;
+  risk?: string;
+};
+
+export type OrgProposalMode = "init" | "review" | "request";
+export const ORG_PROPOSAL_MODES: readonly OrgProposalMode[] = ["init", "review", "request"];
+
+/** The file `cast org propose --spec` reads and `orgProposals.create` stores. */
+export type OrgProposalSpec = {
+  title: string;
+  summary_md: string;
+  mode: OrgProposalMode;
+  changes: OrgSpecChange[];
+};
+
+/** Validate a spec. Every fault is reported, each naming the change by index
+ *  and kind, so a long spec is fixed in one pass. */
+export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; errors: [] } | { spec: null; errors: string[] } {
+  const errors: string[] = [];
+  const r: any = raw;
+  if (!r || typeof r !== "object" || Array.isArray(r)) return { spec: null, errors: ["the spec is a JSON object with title, summary_md, mode and changes"] };
+  if (!nonEmpty(r.title)) errors.push("title is required");
+  if (!nonEmpty(r.summary_md)) errors.push("summary_md is required: the summary a founder reads on a phone");
+  if (!ORG_PROPOSAL_MODES.includes(r.mode)) errors.push(`mode is one of ${ORG_PROPOSAL_MODES.join(", ")}`);
+  if (!Array.isArray(r.changes) || r.changes.length === 0) errors.push("changes is a non-empty list");
+  else r.changes.forEach((c: any, i: number) => {
+    const at = `changes[${i}]${c?.change?.kind ? ` (${c.change.kind})` : ""}`;
+    if (!c || typeof c !== "object") { errors.push(`${at}: an object with change and rationale`); return; }
+    const fault = orgChangeError(c.change);
+    if (fault) errors.push(`${at}: ${fault}`);
+    if (!nonEmpty(c.rationale)) errors.push(`${at}: rationale is required`);
+    if (c.evidence !== undefined && !(Array.isArray(c.evidence) && c.evidence.every((e: any) => e && nonEmpty(e.label) && optString(e.href)))) errors.push(`${at}: evidence is a list of { label, href? }`);
+    if (!optString(c.expected_effect) || !optString(c.risk)) errors.push(`${at}: expected_effect and risk are strings`);
+  });
+  if (errors.length) return { spec: null, errors };
+  return {
+    spec: {
+      title: r.title.trim(),
+      summary_md: r.summary_md,
+      mode: r.mode,
+      changes: r.changes.map((c: any) => ({ change: c.change, rationale: c.rationale, ...(c.evidence ? { evidence: c.evidence } : {}), ...(c.expected_effect ? { expected_effect: c.expected_effect } : {}), ...(c.risk ? { risk: c.risk } : {}) })),
+    },
+    errors: [],
+  };
+}
+
+const at = (h: string) => `@${h.replace(/^@/, "")}`;
+const list = (xs?: string[]) => (xs ?? []).join(", ");
+
+/** One line per change, the words the CLI walk and the ghost chips use. */
+export function describeOrgChange(c: OrgChange): string {
+  switch (c.kind) {
+    case "role": return `create role ${c.name} ${at(c.handle)}${c.reports_to ? ` reporting to ${c.reports_to}` : ""}${c.scope?.projects?.length || c.scope?.plans?.length ? ` over ${list([...(c.scope.projects ?? []), ...(c.scope.plans ?? [])])}` : ""}`;
+    case "projects": return c.changes.map((x) => x.op === "create" ? `create project ${x.title}` : `merge project ${x.from} into ${x.into}`).join("; ");
+    case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${c.reports_to}` : ""}${c.scope_add?.length ? ` +${list(c.scope_add)}` : ""}${c.scope_remove?.length ? ` -${list(c.scope_remove)}` : ""}`;
+    case "retire": return `retire ${at(c.handle)}`;
+    case "scope": return `scope ${at(c.handle)}${c.add?.length ? ` +${list(c.add)}` : ""}${c.remove?.length ? ` -${list(c.remove)}` : ""}`;
+    case "budget": return `budget ${at(c.handle)} ${Object.entries(c.caps).filter(([, v]) => v !== undefined).map(([k, v]) => `${k.replace("_per_day", "")} ${v}/day`).join(", ")}`;
+    case "trust": return `trust ${at(c.handle)} to ${c.trust}`;
+    case "routine": return `routine on ${at(c.handle)}: ${c.title} every ${c.every}`;
+    case "project_meta": return `charter ${c.project}${c.owner ? ` owner ${at(c.owner)}` : ""}${c.priority ? ` ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
+    case "adopt": return `adopt session ${c.conversation} as ${at(c.handle)}'s standing session`;
+  }
+}
+
 /** Option order every org proposal decision uses. The index is the verdict. */
 export const ORG_PROPOSAL_OPTIONS = {
   role: ["Create as proposed", "Create with changes", "Skip"],

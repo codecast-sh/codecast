@@ -21,12 +21,18 @@ import { ArrowUpRight, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
-import { PageIcon } from "./RecentVisitRow";
+import { PageIcon, pageAccent } from "./RecentVisitRow";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+import { hasOpenModal, isEditableTarget } from "../shortcuts";
+import { useRouter } from "next/navigation";
 import { useTabContext } from "../lib/tabParams";
 import { paneSessionId } from "../lib/stage";
 import { cssZoomOf } from "../lib/cssZoom";
-import { RevealHostCtx, useRevealHost, type RevealTarget } from "../lib/revealHost";
+import { useInboxStore } from "../store/inboxStore";
+import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
+import { useEventListener } from "../hooks/useEventListener";
+import { RevealHostCtx, useRevealHost, useRevealAncestry, type RevealTarget } from "../lib/revealHost";
 
 export type { RevealTarget } from "../lib/revealHost";
 
@@ -36,6 +42,10 @@ export type { RevealTarget } from "../lib/revealHost";
 // stays bounded; an entry is dropped once its last band closes.
 const OPEN_BY_KEY = new Map<string, Map<string, RevealTarget>>();
 const OPEN_BY_KEY_MAX = 200;
+// Targets the reader just opened, as opposed to bands restored when a
+// recycled row scrolls back: only a fresh band grows in and takes the scroll
+// to itself. A restored one is already where the reader left it.
+const FRESH = new WeakSet<RevealTarget>();
 
 export function RevealHost({ children, persistKey }: { children: React.ReactNode; persistKey?: string }) {
   // Insertion-ordered by href: a second reveal opens below the first.
@@ -46,7 +56,10 @@ export function RevealHost({ children, persistKey }: { children: React.ReactNode
     setOpen((prev) => {
       const next = new Map(prev);
       if (next.has(target.href)) next.delete(target.href);
-      else next.set(target.href, target);
+      else {
+        next.set(target.href, target);
+        FRESH.add(target);
+      }
       if (persistKey) {
         OPEN_BY_KEY.delete(persistKey);
         if (next.size > 0) {
@@ -214,43 +227,154 @@ function useResizeGrip(ref: React.RefObject<HTMLDivElement | null>) {
   );
 }
 
+const reducedMotion = () =>
+  typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const EASE_OUT = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+/** The reference that opened this band: the pressed pill for its href in the
+ *  same message body (RevealHost renders a fragment, so it is a sibling). */
+function originOf(el: HTMLElement | null, href: string): HTMLElement | null {
+  const pressed = el?.parentElement?.querySelectorAll<HTMLElement>('[aria-pressed="true"]') ?? [];
+  for (const p of pressed) if (p.getAttribute("href") === href) return p;
+  return null;
+}
+
+/**
+ * A fresh band grows from the rule under the message to its height, then
+ * takes the scroll to itself — a nearest scroll, so a band that already fits
+ * moves nothing. Restored bands (a recycled row scrolling back) skip both:
+ * they are where the reader left them.
+ */
+function useOpenMotion(ref: React.RefObject<HTMLDivElement | null>, fresh: boolean) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !fresh) return;
+    const settle = () => el.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+    if (reducedMotion() || typeof el.animate !== "function") {
+      settle();
+      return;
+    }
+    const anim = el.animate(
+      [{ height: "0px", opacity: 0.4 }, { height: el.style.height, opacity: 1 }],
+      { duration: 260, easing: EASE_OUT },
+    );
+    anim.finished.then(settle, () => {});
+    return () => anim.cancel();
+  }, [ref, fresh]);
+}
+
 function RevealBand({ target, onClose }: { target: RevealTarget; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [fresh] = useState(() => FRESH.delete(target));
   useFullBleed(ref);
+  useOpenMotion(ref, fresh);
   const onGripDown = useResizeGrip(ref);
+  // Closing folds the band back into the rule it grew from, then brings the
+  // reference that opened it back into view if the read had scrolled past it
+  // — so a toggle lands the reader where they started, not on whatever the
+  // collapse pulled up under the cursor.
+  const closing = useRef(false);
+  const requestClose = useCallback(() => {
+    const el = ref.current;
+    if (closing.current) return;
+    closing.current = true;
+    const origin = originOf(el, target.href);
+    const done = () => {
+      onClose();
+      if (origin) requestAnimationFrame(() => origin.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" }));
+    };
+    if (!el || reducedMotion() || typeof el.animate !== "function") {
+      done();
+      return;
+    }
+    el.animate([{ height: el.style.height, opacity: 1 }, { height: "0px", opacity: 0 }], { duration: 180, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" })
+      .finished.then(done, done);
+  }, [onClose, target.href]);
+  // Escape closes the band the reader is in: focus inside it (the band's own
+  // key handler, since it stops keys from leaving the band), the pointer over
+  // it, or focus still on the reference that opened it — the pill keeps
+  // focus after the click, so open then Escape is one round trip. Never from
+  // an editable or under a modal; both own Escape.
+  const escapes = useCallback((e: { key: string; defaultPrevented: boolean; target: EventTarget | null }) =>
+    e.key === "Escape" && !e.defaultPrevented && !isEditableTarget(e.target) && !hasOpenModal(), []);
+  const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (!escapes(e)) return;
+    e.preventDefault();
+    requestClose();
+  }, [escapes, requestClose]);
+  useEventListener("keydown", (e) => {
+    const el = ref.current;
+    if (!el || !escapes(e)) return;
+    const active = document.activeElement;
+    if (!el.matches(":hover") && !(active !== null && active === originOf(el, target.href))) return;
+    e.preventDefault();
+    requestClose();
+  }, typeof document === "undefined" ? undefined : document);
   const tab = useTabContext();
   // In-band navigation (a page's own links, its list → detail) stays in the
-  // band: the pane-local navigate re-points this band, not the tab.
+  // band: the pane-local navigate re-points this band, not the tab. A
+  // conversation is the exception. The band lives inside a conversation, and
+  // the session a revealed task or plan links is often that very one; shown
+  // in the band it would render itself, its bands open, without end. So a
+  // session opened from inside the band goes where a click on it goes from
+  // the host page — onto the stage — through the same gesture, and a message
+  // deep link rides the host's router so its target survives.
   const [path, setPath] = useState(target.href);
-  const navigate = useCallback((p: string) => setPath(p), []);
+  const openLinkedSession = useOpenLinkedSession();
+  const hostRouter = useRouter();
+  const navigate = useCallback((p: string, mode: "push" | "replace") => {
+    const [pathname, hash] = p.split("#");
+    const sid = paneSessionId(pathname);
+    if (!sid) {
+      setPath(p);
+    } else if (hash) {
+      hostRouter[mode](p);
+    } else {
+      openLinkedSession(useInboxStore.getState().sessions[sid] ?? { _id: sid });
+    }
+  }, [openLinkedSession, hostRouter]);
   const sessionId = paneSessionId(path);
   const targetMessageId = path.includes("#msg-") ? path.slice(path.indexOf("#msg-") + 5) : undefined;
+  // A reference to a conversation this band is already inside (a session's
+  // own id in its transcript, two sessions citing each other) shows a line,
+  // not the conversation again.
+  const ancestry = useRevealAncestry();
+  const nested = sessionId !== null && ancestry.includes(sessionId);
   return (
     <div
       ref={ref}
       className="object-reveal not-prose"
       data-object-reveal
+      style={{ "--reveal-accent": pageAccent(path) } as React.CSSProperties}
       // A band lives inside a card row / a message body whose click handlers
       // toggle things; nothing inside the page should reach them.
       onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={onKeyDown}
     >
+      <div className="object-reveal__frame">
       <div className="object-reveal__strip">
-        <PageIcon path={path} className="h-3 w-3 flex-shrink-0 text-sol-text-dim" />
-        <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text-muted">{target.title}</span>
+        <PageIcon path={path} className="object-reveal__icon h-3 w-3 flex-shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text">{target.title}</span>
+        <span className="object-reveal__hint" aria-hidden><KeyCap size="xs">esc</KeyCap></span>
         <Link href={target.href} onClick={target.onOpen} className="cc-panel__btn flex-shrink-0" title="Open the page">
           <ArrowUpRight className="h-3 w-3" />
         </Link>
-        <PaneControls onClose={onClose} closeTitle="Close" />
+        <PaneControls onClose={requestClose} closeTitle="Close (Esc)" />
       </div>
       <div className="object-reveal__body">
         <ErrorBoundary name="ObjectReveal" level="panel">
-          {sessionId ? (
+          {nested ? (
+            <div className="flex h-full items-center justify-center text-xs text-sol-text-dim" data-reveal-nested>
+              This is the conversation you are reading
+            </div>
+          ) : sessionId ? (
             <SessionPane sessionId={sessionId} targetMessageId={targetMessageId} />
           ) : (
             <RoutePane tabId={tab?.tabId ?? "reveal"} path={path} isActive={tab?.isActive ?? true} navigate={navigate} />
           )}
         </ErrorBoundary>
+      </div>
       </div>
       <div
         className="object-reveal__grip"

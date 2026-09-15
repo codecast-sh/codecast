@@ -3777,11 +3777,23 @@ http.route({
       // Ignore the bot's own posts on both paths, so an anchor reply that happens
       // to @mention the app can't wake it in a loop (each loop has a new event_id,
       // so dedup wouldn't catch it).
+      // Channel mirroring first (slackSync): a linked channel takes every event
+      // for it, including the mention (the mirrored line's @mention wakes the
+      // anchor through chat). "no_link" leaves the event for the anchor path.
+      let mirrored = false;
+      if (eventId && payload.team_id) {
+        const routed = await ctx.runMutation(internal.slackSync.ingestEvent, {
+          event_id: eventId,
+          workspace: String(payload.team_id),
+          event,
+        });
+        mirrored = routed.status !== "no_link";
+      }
       const isMention =
         event.type === "app_mention" && !event.bot_id && !event.subtype;
       const isDM =
         event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
-      if ((isMention || isDM) && eventId && event.channel) {
+      if (!mirrored && (isMention || isDM) && eventId && event.channel) {
         // One atomic mutation: dedup + resolve channel→anchor + wake. If the wake
         // throws it returns 500 and Slack retries — the dedup row rolls back with
         // it, so a transient failure never silently drops the mention.
@@ -4093,7 +4105,20 @@ cliRoute("/cli/org/scope-summary", async (ctx, body) => {
 // Org init and update (docs/architecture/org-init.md): the analyzer's inputs
 // and the apply path for an answered proposal.
 cliRoute("/cli/org/analysis-inputs", async (ctx, body) => ctx.runQuery(api.org.analysisInputs, body));
+// The chief of staff (docs/architecture/org-staffing.md S6): `cast org staff
+// [--adopt] [--every 7d]` and the "Hire a Chief of Staff" button.
+cliRoute("/cli/org/staff", async (ctx, body) => ctx.runMutation(api.orgRoles.staff, body));
 cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as any).orgInit.applyDecision, body));
+// Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
+// the proposal lifecycle. Decide, accept-all and withdraw refuse a session
+// caller on the server; the CLI passes from_session as on every org verb.
+cliRoute("/cli/org/health", async (ctx, body) => ctx.runQuery((api as any).org.health, body));
+cliRoute("/cli/org/propose", async (ctx, body) => ctx.runMutation((api as any).orgProposals.create, body));
+cliRoute("/cli/org/proposals", async (ctx, body) => ctx.runQuery((api as any).orgProposals.list, body));
+cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).orgProposals.get, body));
+cliRoute("/cli/org/proposal/decide", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decide, body));
+cliRoute("/cli/org/proposal/accept-all", async (ctx, body) => ctx.runMutation((api as any).orgProposals.acceptAll, body));
+cliRoute("/cli/org/proposal/withdraw", async (ctx, body) => ctx.runMutation((api as any).orgProposals.withdraw, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the
@@ -4157,6 +4182,24 @@ cliRoute("/cli/chat/archive", async (ctx, body) => {
 // wake frame and `cast chat read --since`). body: { channel_ids, since, limit? }.
 cliRoute("/cli/chat/lines-since", async (ctx, body) => {
   return await ctx.runQuery(api.chat.linesSince, body);
+});
+// The Slack mirror (`cast chat slack …`): the team's installation and every
+// mirrored pair, the Slack channels the app can see, and link / update /
+// unlink. Each function checks membership and channel management inside.
+cliRoute("/cli/chat/slack/status", async (ctx, body) => {
+  return await ctx.runQuery(api.slackSync.getTeamSlack, body);
+});
+cliRoute("/cli/chat/slack/channels", async (ctx, body) => {
+  return await ctx.runAction(api.slackSync.listSlackChannels, body);
+});
+cliRoute("/cli/chat/slack/link", async (ctx, body) => {
+  return await ctx.runAction(api.slackSync.linkChannel, body);
+});
+cliRoute("/cli/chat/slack/update", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.updateLink, body);
+});
+cliRoute("/cli/chat/slack/unlink", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.unlinkChannel, body);
 });
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }

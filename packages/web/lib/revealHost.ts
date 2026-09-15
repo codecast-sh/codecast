@@ -3,7 +3,7 @@
 // the provider and the band are components in components/ObjectReveal.tsx.
 // Its own module so that file stays a Fast Refresh boundary (a hook exported
 // next to components remounts every importer on an unrelated edit).
-import { createContext, useContext, type MouseEvent } from "react";
+import { createContext, useContext, useMemo, type MouseEvent } from "react";
 
 export type RevealTarget = {
   /** The object's page — the same href the reference links to. */
@@ -25,4 +25,22 @@ export const RevealHostCtx = createContext<RevealHostValue | null>(null);
 /** The host a reference toggles itself in — null on a surface without one. */
 export function useRevealHost(): RevealHostValue | null {
   return useContext(RevealHostCtx);
+}
+
+/**
+ * The conversations this render is inside, outermost first: the transcript
+ * on the stage, then the conversation of each reveal band nested in it. A
+ * band never shows one of these — a conversation rendered inside itself
+ * renders its own open bands again, and that has no floor.
+ */
+export const RevealAncestryCtx = createContext<readonly string[]>([]);
+
+export function useRevealAncestry(): readonly string[] {
+  return useContext(RevealAncestryCtx);
+}
+
+/** The ancestry a transcript hands to its own bands: what it is inside, plus itself. */
+export function useRevealAncestryWith(conversationId: string): readonly string[] {
+  const outer = useContext(RevealAncestryCtx);
+  return useMemo(() => [...outer, conversationId], [outer, conversationId]);
 }

@@ -16,6 +16,7 @@
 // Leaf module on purpose: it is imported from pendingMessages, functions.ts
 // and every write path, so it must not import any of them back.
 
+import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { conversationActsForRole, roleOfConversation } from "./lib/actor";
@@ -35,7 +36,9 @@ export type EnqueueRoleEventOpts = {
 };
 
 export const DEFAULT_COALESCE_MS = 120_000;
-export const DEFAULT_CAPS = { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 } as const;
+// The numbers live in the shared capacity model (org-staffing.md S2), which
+// the analyzer prompt and org.health read too.
+export const DEFAULT_CAPS = DEFAULT_ROLE_CAPS;
 export const DEFAULT_TRUST = "understand" as const;
 // The restart marker: a row whose cause starts with this asks for the full
 // charter and brief in the next frame.
@@ -139,7 +142,7 @@ export async function enqueueRoleEvent(
   const id: Id<"role_wake_outbox"> = await ctx.db.insert("role_wake_outbox", {
     role_id: roleId,
     kind: opts.kind,
-    cause: clipCause(opts.cause),
+    cause: opts.ref?.table === "agent_tasks" ? opts.cause : clipCause(opts.cause),
     ref: opts.ref,
     actor_conversation_id: actor?._id,
     pending_message_id: opts.pendingMessageId,

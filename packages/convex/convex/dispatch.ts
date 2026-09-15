@@ -174,6 +174,11 @@ export const dispatch = mutation({
 // stub reaching a mutation's `v.id()` validator is an argument error the outbox
 // would then re-drive forever. Handlers that can receive one check first.
 const SERVER_ID_RE = /^[a-z0-9]{32}$/;
+function charterWire(fields: Record<string, any>): Record<string, any> {
+  const { owner_role_id, ...rest } = fields;
+  return owner_role_id === undefined ? rest : { ...rest, owner: owner_role_id };
+}
+
 function isServerId(value: unknown): value is string {
   return typeof value === "string" && SERVER_ID_RE.test(value);
 }
@@ -679,6 +684,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   retireOrgRole: async (ctx, _userId, [roleId]: [string]) => {
     return await ctx.runMutation!((api as any).orgRoles.retire, { role_id: roleId });
+  },
+  // Staffing (org-staffing.md S4/S6). The web pushes a role stub for the
+  // chief of staff and flips a proposal's changes to accepted on the draft;
+  // these are the server writes those rows reconcile against.
+  staffChiefOfStaff: async (ctx, _userId, [input]: [any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.staff, {
+      ...(input.team_id ? { team_id: input.team_id } : {}),
+      ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
+    });
+  },
+  acceptAllOrgProposal: async (ctx, _userId, [proposalId]: [string]) => {
+    return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal_id: proposalId });
   },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
@@ -1296,12 +1313,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // than duplicate it, the side-effect delegates via ctx.runMutation in the
   // same transaction — same identity, atomic. The client mutates plans[]/
   // projects[] optimistically; this performs the authoritative write.
+  // The charter's owner is stored as `owner_role_id` (the field the web row
+  // paints) but travels as `owner`, a role ref the mutation resolves inside
+  // the row's workspace (lib/orgCharter.ts). One translation for both tables.
   updatePlan: async (ctx, userId, [shortId, fields]: [string, Record<string, any>]) => {
-    await (ctx as any).runMutation(api.plans.webUpdate, { short_id: shortId, ...fields });
+    await (ctx as any).runMutation(api.plans.webUpdate, { short_id: shortId, ...charterWire(fields) });
   },
 
   updateProject: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
-    await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
+    await (ctx as any).runMutation(api.projects.webUpdate, { id, ...charterWire(fields) });
   },
 
   // Issue sync sources (docs/architecture/issue-sync.md S1.3, S9). Like plans
@@ -1834,13 +1854,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       string,
       string,
       string,
-      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent" }?,
+      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent"; syncLocalOnly?: boolean }?,
     ],
   ) => {
     if (!isServerId(channelId)) return;
     return await ctx.runMutation!(api.chat.sendMessage, {
       channel_id: channelId as Id<"chat_channels">,
       content,
+      ...(opts?.syncLocalOnly ? { sync_local_only: true } : {}),
       // The dedupe key: a re-driven delivery returns the existing row instead of
       // inserting a twin, and does not wake the anchor a second time.
       client_id: clientId,
@@ -1976,6 +1997,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(fields?.name !== undefined ? { name: fields.name } : {}),
       ...(fields?.topic !== undefined ? { topic: fields.topic } : {}),
     });
+  },
+  // Slack mirror controls (slackSync). The link row is server-owned; the
+  // store patches its copy and this carries the same patch.
+  updateChatSlackLink: async (
+    ctx,
+    _userId,
+    [linkId, patch]: [string, { direction?: any; options?: Record<string, boolean>; paused?: boolean }],
+  ) => {
+    if (!isServerId(linkId)) return;
+    return await ctx.runMutation!(api.slackSync.updateLink, {
+      link_id: linkId as Id<"slack_channel_links">,
+      ...(patch?.direction ? { direction: patch.direction } : {}),
+      ...(patch?.options ? { options: patch.options } : {}),
+      ...(typeof patch?.paused === "boolean" ? { paused: patch.paused } : {}),
+    });
+  },
+  unlinkChatSlack: async (ctx, _userId, [linkId]: [string]) => {
+    if (!isServerId(linkId)) return;
+    return await ctx.runMutation!(api.slackSync.unlinkChannel, { link_id: linkId as Id<"slack_channel_links"> });
+  },
+  shareChatMessageToSlack: async (ctx, _userId, [messageId]: [string]) => {
+    if (!isServerId(messageId)) return;
+    return await ctx.runMutation!(api.slackSync.shareMessageToSlack, { message_id: messageId as Id<"chat_messages"> });
   },
   archiveChatChannel: async (
     ctx,

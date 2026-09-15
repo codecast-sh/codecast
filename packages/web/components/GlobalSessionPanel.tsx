@@ -22,16 +22,20 @@ import type { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../lib/threadState";
+import { ORG_STATE_META } from "./org/orgMeta";
+import { StatusDot } from "./StatusDot";
+import type { WorkState } from "@codecast/shared/contracts";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { formatIdle, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { rankByHeadroom, isStashHidden, USER_RESTS, type UserRest } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
@@ -43,7 +47,7 @@ import { memberListSig, rosterIdentity } from "../hooks/useTeamRoster";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
-import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
+import { partitionTriggerInbox, groupSessionsByTrigger, groupTriggerRowsByHome, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { DeviceIcon, rosterDeviceOf, deviceWakesOnUse, deviceDisplayName } from "./DeviceBadge";
 import { SessionWorktreeChip } from "./SessionWorktreeChip";
@@ -69,8 +73,8 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
 };
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
-import { FilterOptionList } from "./FilterDropdown";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
+import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
@@ -593,6 +597,10 @@ function BlockedSessionsBanner({
   // into now (the default — no switch, no restart unless a session needs one).
   const [onAccount, setOnAccount] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // Which sessions the continue restarts. null = the default pick: parks inside
+  // the auto-continue window, since an older park already sat through a reset
+  // nobody came back for. The first tick or untick makes it an explicit set.
+  const [picked, setPicked] = useState<Set<string> | null>(null);
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
   // The X is a durable, cross-device snooze (24h) — a banner that resurrects
@@ -646,6 +654,13 @@ function BlockedSessionsBanner({
   // that answers "which sessions?" most usefully: fresh casualties on top).
   const blockedSorted = [...blocked].sort((a, b) => blockAt(b) - blockAt(a));
 
+  const togglePick = (id: string) => {
+    const next = new Set(chosenIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setPicked(next);
+  };
+
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
   // one whose keychain holds the login and whose browser the OAuth flow opens
   // in. Remotes run a pushed credential copy and can never sign in themselves.
@@ -697,6 +712,21 @@ function BlockedSessionsBanner({
     .map((p) => p.usage)
     .find((u) => !!u);
   const selectedAccount = rankedAccounts.find((t) => t.key === onAccount);
+  // What the restart costs before any new work: each session that comes back
+  // on another account or a cold cache reads its whole context again, at
+  // twice the input price. A partial pick is a scoped revive: the server acts
+  // on exactly these and dismisses nothing, so the unticked rows stay blocked.
+  const reloads = (sess: InboxSession) =>
+    restartReloadsContext(sess, now, { switchingAccount: !!selectedAccount, activeSince: executorFor(sess)?.active_since });
+  const { chosenIds, chosen, scoped, reloadTokens, leftUnticked: olderUnticked } = restartPlan(acted, {
+    now,
+    windowMs: AUTO_CONTINUE_WINDOW_MS,
+    parkedAt: blockAt,
+    picked,
+    switchingAccount: !!selectedAccount,
+    rowFor: (sess) => sess,
+    activeSinceFor: (sess) => executorFor(sess)?.active_since,
+  });
   const switchTarget = (opt: AccountOption) => (opt.email ? { email: opt.email } : { profile: opt.name });
   // "82% used" / "at limit" — enough to steer the pick, nothing more.
   const usageNote = (usage?: CcUsage): string => {
@@ -741,7 +771,7 @@ function BlockedSessionsBanner({
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
   const runRevive = async (target: { email?: string; profile?: string } | undefined) => {
-    const ids = acted.map((sess) => sess._id);
+    const ids = chosen.map((sess) => sess._id);
     const store = useInboxStore.getState();
     const nonce = Math.random().toString(36).slice(2, 10);
     const clientIds: Record<string, string> = {};
@@ -754,7 +784,7 @@ function BlockedSessionsBanner({
     // acted sessions turn WORKING; the mutation persists the same clear. If it
     // fails, the next server sync re-flags whatever didn't persist (the same
     // reconciliation the dismiss button relies on).
-    const skippedIds = skippedWorkers.map((sess) => sess._id);
+    const skippedIds = scoped ? [] : skippedWorkers.map((sess) => sess._id);
     if (skippedIds.length > 0) store.markBlockedAcknowledged(skippedIds);
     closeBanner();
     const targetLabel = target?.email ?? target?.profile;
@@ -764,13 +794,14 @@ function BlockedSessionsBanner({
         ...target,
         include_subagents: includeSubs,
         continue_client_ids: clientIds,
+        ...(scoped ? { conversation_ids: ids as any } : {}),
       });
       // Sessions on a machine that lacks the account got no command: their
       // painted "continue" and revive stamp must not stand.
       const unswitchable = (res as { unswitchable?: number; unswitchable_devices?: string[] }).unswitchable ?? 0;
       const unswitchableDevices = (res as { unswitchable_devices?: string[] }).unswitchable_devices ?? [];
       if (unswitchable > 0) {
-        const stranded = acted
+        const stranded = chosen
           .filter((sess) => unswitchableDevices.includes(executorFor(sess)?.label ?? ""))
           .map((sess) => sess._id);
         for (const id of stranded) store.removeOptimisticMessage(id, clientIds[id]);
@@ -811,11 +842,13 @@ function BlockedSessionsBanner({
   // are skipped the button says what happens to BOTH halves — the skipped
   // workers are dismissed by the same click, and a button that only said
   // "Continue 1" would hide that the other 37 rows are about to go.
-  const dismissLabel = skippedWorkers.length > 0 ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
-  const countLabel = skippedWorkers.length > 0
+  const dismissLabel = skippedWorkers.length > 0 && !scoped ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
+  const countLabel = scoped
+    ? `${chosen.length} of ${acted.length}`
+    : skippedWorkers.length > 0
     ? `${acted.length}${dismissLabel}`
     : acted.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
-  const dismissTitle = skippedWorkers.length > 0
+  const dismissTitle = skippedWorkers.length > 0 && !scoped
     ? `; the ${skippedWorkers.length} skipped worker${skippedWorkers.length === 1 ? " is" : "s are"} dismissed from the blocked set, not continued (tick the box above to continue them instead)`
     : "";
   const continueTitle = (selectedAccount
@@ -873,6 +906,25 @@ function BlockedSessionsBanner({
               .filter(Boolean)
               .join(" · ")}
           </div>
+          {acted.length > 0 && (
+            <div
+              className="mt-0.5 text-[11px] leading-snug text-sol-text-muted"
+              title="A session that comes back on another account, or after its prompt cache expired (one hour), reads its whole context again before it does new work. Untick the ones nobody is waiting for."
+            >
+              {chosen.length === 0
+                ? "nothing ticked to restart"
+                : reloadTokens > 0
+                  ? `restarting ${chosen.length} reloads about ${formatTokens(reloadTokens)} tokens of context`
+                  : `restarting ${chosen.length}`}
+              {olderUnticked > 0 && ` · ${olderUnticked} parked over ${formatIdle(AUTO_CONTINUE_WINDOW_MS)} ago left unticked`}
+              {" "}
+              {!expanded && acted.length > 1 && (
+                <button onClick={() => setExpanded(true)} className="ml-1.5 underline decoration-dotted hover:text-sol-text">
+                  choose
+                </button>
+              )}
+            </div>
+          )}
           {subagents.length > 0 && (
             <label
               className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text"
@@ -922,6 +974,15 @@ function BlockedSessionsBanner({
               key={sess._id}
               className="group flex w-full items-center gap-2 px-2 py-1.5 hover:bg-amber-500/10 transition-colors"
             >
+              <input
+                type="checkbox"
+                checked={chosenIds.has(sess._id) && acted.includes(sess)}
+                disabled={!acted.includes(sess) || busy !== null}
+                onChange={() => togglePick(sess._id)}
+                className="h-3 w-3 shrink-0 accent-amber-500 disabled:opacity-40"
+                title={acted.includes(sess) ? "Restart this session with the continue below" : "Not restartable from here (a skipped worker or a safety stop)"}
+                aria-label="Include this session in the restart"
+              />
               <button
                 onClick={() => onOpen?.(sess)}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -937,6 +998,16 @@ function BlockedSessionsBanner({
                   </span>
                 )}
                 <span className="shrink-0 text-[10px] text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
+                {sess.context_tokens ? (
+                  <span
+                    className={`shrink-0 text-[10px] tabular-nums ${reloads(sess) ? "text-amber-600 dark:text-amber-500" : "text-sol-text-dim"}`}
+                    title={reloads(sess)
+                      ? `${formatTokens(sess.context_tokens)} tokens of context, reloaded in full on restart`
+                      : `${formatTokens(sess.context_tokens)} tokens of context; its cache is still warm, so a restart reads it cheaply`}
+                  >
+                    {formatTokens(sess.context_tokens)}
+                  </span>
+                ) : null}
                 <span
                   className="shrink-0 text-[10px] tabular-nums text-sol-text-dim"
                   title={`Blocked ${new Date(blockAt(sess)).toLocaleString()}`}
@@ -968,7 +1039,7 @@ function BlockedSessionsBanner({
         {acted.length > 0 && <>
         <button
           onClick={handleContinue}
-          disabled={busy !== null || acted.length === 0}
+          disabled={busy !== null || chosen.length === 0}
           title={acted.length === 0 ? "Only subagent workers are blocked — tick the box above to include them" : continueTitle}
           className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
@@ -1128,18 +1199,19 @@ const SchedFireBadge = memo(function SchedFireBadge({ task, className = "" }: { 
 // outcome, and hover verbs (history / open / run now / pause) on every
 // surface. Cancel is destructive and rare, so it lives in the right-click menu
 // and on /triggers, not one slip away on the hover rail.
-const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip, onNavigated }: {
+const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOpen, attached, grouped, highlighted, onNavigated }: {
   row: TriggerRow;
   activeSessionId?: string | null;
   onOpen: (row: TriggerRow) => void;
   // Rendered under its owning session card — tinted like the subagent stack
   // and top-joined to the card instead of list-bordered below.
   attached?: boolean;
+  // Rendered under a session header in the dock roster: wears the ↳ child
+  // arrow like an attached row (the header names the home, so the row need
+  // not) but keeps the roster's full-tone title, cadence and run count.
+  grouped?: boolean;
   // Keyboard cursor (roster arrow-nav) — visual only; Enter acts on it.
   highlighted?: boolean;
-  // Short project name, shown when the roster spans several projects so
-  // cross-project schedules stop being indistinguishable.
-  projectChip?: string;
   // Called after a run-history click navigated away — the dock roster passes
   // its close() so the overlay doesn't linger over the new conversation.
   onNavigated?: () => void;
@@ -1219,7 +1291,7 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
             child instead of a glyph floating in indented space. The orange
             alone marks it as a schedule — no extra identity icon. */}
         <div className="flex gap-1.5 min-w-0">
-        {attached && <SchedChildArrow label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"} />}
+        {(attached || grouped) && <SchedChildArrow label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"} />}
         <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
           <SchedHealthDot accent={accent} task={task} />
@@ -1228,13 +1300,6 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
               card stays the primary read and the two child idioms match in both
               themes; the roster version keeps full prominence. */}
           <span className={`text-xs truncate min-w-0 ${attached ? "text-gray-400 font-normal" : "text-sol-text font-medium"}`}>{taskDisplayTitle(task)}</span>
-          {projectChip && (
-            <ShortcutTooltip label={task.project_path || projectChip}>
-              <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(projectChip).bg} ${getLabelColor(projectChip).text} ${getLabelColor(projectChip).border}`}>
-                {projectChip}
-              </span>
-            </ShortcutTooltip>
-          )}
           {/* Same pill as the dock bar's "N new" count, so opening the roster
               shows exactly which rows that number pointed at. Roster only: a
               bar under a card is always in view, so "since you last opened the
@@ -1272,74 +1337,54 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
               <span className="shrink-0 text-[10px] text-sol-red/80 font-medium">retrying ×{task.retry_count}</span>
             </ShortcutTooltip>
           );
+          // Two lines, ALWAYS — a row never grows a third. When the last run
+          // left a report, the report IS the second line: the robot speaking
+          // (same voice idiom as the card's blue "> message" line) outranks the
+          // static gist, which retreats into the report's tooltip. A schedule
+          // that hasn't reported yet shows the gist. Where a fire lands is not
+          // the row's to say: the dock groups rows under their home session
+          // and the trigger lens stacks the sessions beneath the row.
+          const runsLabel = !attached && task.run_count > 0 ? `${task.run_count} run${task.run_count === 1 ? "" : "s"}` : undefined;
+          const meta = [runsLabel, ago].filter(Boolean).join(" · ");
+          // Under a card the bar is two lines, always, so the text truncates.
+          // In the roster the description IS what you came to read: it wraps
+          // (three lines at most) and the run meta drops to its own line.
+          const textClass = attached ? "truncate" : "line-clamp-3 whitespace-normal break-words";
+          const text = task.last_run_summary ? (
+            <ShortcutTooltip label={gist} hint="the trigger's standing prompt">
+              <span className={`block min-w-0 ${textClass} text-[11px] leading-snug font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
+                <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
+                {task.last_run_summary}
+              </span>
+            </ShortcutTooltip>
+          ) : (
+            <span className={`block min-w-0 ${textClass} text-[11px] leading-snug text-sol-text-dim`}>
+              {sparkle}
+              {gist}
+            </span>
+          );
+          const metaEl = meta ? (
+            <span className={`shrink-0 text-[10px] tabular-nums ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim"}`}>{meta}</span>
+          ) : null;
           if (attached) {
-            // Two lines, ALWAYS — an attached bar never grows a third. When
-            // the last run left a report, the report IS the second line: the
-            // robot speaking (same voice idiom as the card's blue "> message"
-            // line) outranks the static gist, which retreats into the report's
-            // tooltip. A schedule that hasn't reported yet shows the gist.
-            const agoEl = ago ? (
-              <span className={`shrink-0 text-[10px] tabular-nums ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim"}`}>{ago}</span>
-            ) : null;
             return (
               <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                {task.last_run_summary ? (
-                  <ShortcutTooltip label={gist} hint="the trigger's standing prompt">
-                    <span className={`flex-1 min-w-0 truncate text-[11px] leading-snug font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
-                      <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
-                      {task.last_run_summary}
-                    </span>
-                  </ShortcutTooltip>
-                ) : (
-                  <span className="flex-1 min-w-0 truncate text-[11px] leading-snug text-sol-text-dim">
-                    {sparkle}
-                    {gist}
-                  </span>
-                )}
+                <span className="flex-1 min-w-0">{text}</span>
                 {retrying}
-                {agoEl}
+                {metaEl}
               </div>
             );
           }
-          // Where a fire lands: an injecting schedule wakes its home session —
-          // named, so the roster row isn't a mystery verb. Hidden when the home
-          // session is just named after the schedule itself (says nothing).
-          const target =
-            task.originating_conversation_title &&
-            task.originating_conversation_title.trim().toLowerCase() !== taskDisplayTitle(task).trim().toLowerCase()
-              ? task.originating_conversation_title
-              : undefined;
-          const meta = [
-            task.run_count > 0 ? `${task.run_count} run${task.run_count === 1 ? "" : "s"}` : undefined,
-            ago,
-          ].filter(Boolean).join(" · ");
           return (
-            <>
-              <div className="mt-0.5 text-[11px] leading-snug text-sol-text-dim min-w-0 line-clamp-2">
-                {sparkle}
-                {gist}
-              </div>
-              {(task.run_count > 0 || task.last_run_summary || (task.retry_count ?? 0) > 0 || target) && (
-                <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                  {target && (
-                    <ShortcutTooltip label={`Fires into: ${target}`}>
-                      <span className="shrink-0 max-w-[40%] truncate text-[10px] text-sol-text-dim">→ {target}</span>
-                    </ShortcutTooltip>
-                  )}
+            <div className="mt-0.5 min-w-0">
+              {text}
+              {(retrying || metaEl) && (
+                <div className="flex items-baseline justify-end gap-1.5 mt-0.5 min-w-0">
                   {retrying}
-                  {/* The last run's report in the same voice idiom as the
-                      attached rows (and the card's blue "> message" line):
-                      semibold, status-tinted, dim ">" prefix. */}
-                  {task.last_run_summary && (
-                    <span className={`truncate min-w-0 text-[11px] font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
-                      <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
-                      {task.last_run_summary}
-                    </span>
-                  )}
-                  {meta && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">{meta}</span>}
+                  {metaEl}
                 </div>
               )}
-            </>
+            </div>
           );
         })()}
         </div>
@@ -1974,17 +2019,96 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
 // overlay of full schedule rows (same anatomy as /schedules); CLOSING it marks
 // the briefing read (schedules_seen_at) — while open, the per-row "new" pills
 // stay visible so the count on the bar points at something.
-function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: {
+// The session a group of roster rows fires into, as the group's header: state
+// dot, title, work-state word, project, and how many triggers it carries. The
+// roster then reads as "which sessions carry machinery, and what", and no row
+// has to name its home in a truncated footnote. A spawn group (no home —
+// every run is a fresh session) says so and names the project instead. The
+// home's pinned thread state rides the tooltip: it is what the session says
+// it is doing, and one line per group is the budget here.
+function TriggerHomeHeader({ group, home, now, isActive, showProject, onOpen }: {
+  group: TriggerHomeGroup;
+  home?: InboxSession;
+  now: number;
+  isActive: boolean;
+  showProject: boolean;
+  onOpen: () => void;
+}) {
+  const count = group.rows.length;
+  const projectPath = home?.project_path ?? home?.git_root ?? group.projectPath ?? group.rows[0].task.project_path;
+  const project = showProject && projectPath ? getProjectName(undefined, projectPath) : undefined;
+  const projectChip = project ? (
+    <ShortcutTooltip label={projectPath!}>
+      <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(project).bg} ${getLabelColor(project).text} ${getLabelColor(project).border}`}>
+        {project}
+      </span>
+    </ShortcutTooltip>
+  ) : null;
+  // A count only when there is something to count: "1 trigger" on every
+  // header would be the roster's most repeated words.
+  const countEl = (
+    <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sol-text-dim">
+      {count > 1 ? `${count} ${group.rows.every((r) => r.kind === "loop") ? "loops" : "triggers"}` : ""}
+    </span>
+  );
+  const shell = `w-full flex items-center gap-1.5 px-3 py-1 text-left border-b border-sol-border/30 transition-colors ${
+    isActive ? "bg-sol-cyan/[0.10]" : "bg-sol-bg-alt/40 hover:bg-sol-bg-alt/70"
+  }`;
+  if (!group.homeId) {
+    return (
+      <button onClick={onOpen} className={shell}>
+        <ShortcutTooltip label="Every run starts a fresh session (--spawn)" hint="opens the newest run">
+          <span aria-hidden className="w-2 h-2 shrink-0 rounded-full border border-dashed border-sol-amber/70" />
+        </ShortcutTooltip>
+        <span className="text-[11px] font-medium text-sol-text-muted truncate min-w-0">Fresh session per run</span>
+        {projectChip}
+        {countEl}
+      </button>
+    );
+  }
+  const verdict = home ? classifySession(home) : null;
+  const ws: WorkState = !verdict ? "idle" : verdict.waiting ? verdict.rest : verdict.idle ? "idle" : "working";
+  const meta = ORG_STATE_META[ws];
+  const hidden = !!home && isSessionHidden(home);
+  const title = home
+    ? cleanTitle(home.title || "New Session")
+    : group.rows[0].task.originating_conversation_title || "Session";
+  const stateLine = home ? threadStateView(home, home.message_count, now)?.cardLine : undefined;
+  const stateWord = home ? `${meta.label}${hidden ? " · stashed" : ""}` : "not loaded";
+  return (
+    <ShortcutTooltip label={stateLine ?? title} hint={stateLine ? `${meta.label} · open session` : "open session"} side="top">
+      <button onClick={onOpen} className={shell} data-trigger-home={group.homeId}>
+        <StatusDot color={meta.color} ping={ws === "working"} />
+        <span className={`text-[11px] font-medium truncate min-w-0 ${hidden ? "text-sol-text-muted" : "text-sol-text"}`}>{title}</span>
+        <span className="shrink-0 text-[10px]" style={{ color: meta.color }}>{stateWord}</span>
+        {projectChip}
+        {countEl}
+      </button>
+    </ShortcutTooltip>
+  );
+}
+
+function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, onOpenSession }: {
   rows: TriggerRow[];
   unreadCount: number;
   nextRunAt?: number;
   activeSessionId?: string | null;
   onOpen: (row: TriggerRow) => void;
+  // A group header opens its home session plainly (no run to land on).
+  onOpenSession: (session: InboxSession) => void;
 }) {
   const [open, setOpen] = useState(false);
   // Keyboard cursor into the roster: −1 = nothing selected (mouse mode).
   const [cursor, setCursor] = useState(-1);
   const now = useCoarseNow(30_000);
+  // The roster reads grouped by home session; `ordered` is that reading order
+  // flattened, which is what the keyboard cursor walks.
+  const groups = useMemo(() => groupTriggerRowsByHome(rows), [rows]);
+  const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+  // Home sessions for the headers. Subscribed only while the roster is open
+  // (the dock bar is always mounted), and on the structural signature, so
+  // heartbeats never re-render a closed dock.
+  const st = useTrackedStore([(s) => (open ? sessionsWakeSig(s.sessions) : "")]);
   // Mark the briefing read on CLOSE, not open: the per-row "new" pills are
   // derived from schedules_seen_at, so stamping on open erased them the moment
   // the roster appeared — you'd see "4 new" on the bar and nothing marked
@@ -2007,8 +2131,8 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         setCursor((c) => {
-          const next = e.key === "ArrowDown" ? Math.min(c + 1, rows.length - 1) : Math.max(c - 1, 0);
-          const id = rows[next]?.task._id;
+          const next = e.key === "ArrowDown" ? Math.min(c + 1, ordered.length - 1) : Math.max(c - 1, 0);
+          const id = ordered[next]?.task._id;
           if (id) {
             document.querySelector(`[data-schedrow="${id}"]`)?.scrollIntoView({ block: "nearest" });
           }
@@ -2017,7 +2141,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
         return;
       }
       if (e.key === "Enter") {
-        const target = rows[cursor];
+        const target = ordered[cursor];
         if (target) {
           e.preventDefault();
           close();
@@ -2027,7 +2151,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, rows, cursor, onOpen, close]);
+  }, [open, ordered, cursor, onOpen, close]);
   // A closed roster has no cursor — reopening starts fresh in mouse mode.
   useWatchEffect(() => {
     if (!open) setCursor(-1);
@@ -2042,10 +2166,11 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
   const oneTimeCount = realRows.length - recurringCount;
   const overdueCount = rows.filter((r) => !r.kind && isTaskOverdue(r.task, now)).length;
   const runningCount = rows.filter((r) => r.task.status === "running").length;
-  // Project chips only when the roster actually mixes projects — a
-  // single-project roster doesn't need every row stamped with the same name.
+  // Project chips (on the group headers) only when the roster actually mixes
+  // projects — a single-project roster doesn't need every header stamped
+  // with the same name.
   const projects = new Set(rows.map((r) => r.task.project_path).filter(Boolean));
-  const chipFor = (p?: string) => (projects.size > 1 && p ? p.split("/").filter(Boolean).pop() : undefined);
+  const showProject = projects.size > 1;
   const nextIn = nextRunAt !== undefined ? Math.max(0, nextRunAt - now) : undefined;
   // Name WHAT fires next, not just when — "next in 1h" says nothing. Running
   // state lives in its own pill, so this slot is purely the next fire.
@@ -2075,17 +2200,42 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
                 <Link href="/triggers" onClick={close} className="text-sol-cyan hover:underline">Manage</Link>
               </span>
             </div>
-            {rows.map((r, i) => (
-              <TriggerRowItem
-                key={r.task._id}
-                row={r}
-                activeSessionId={activeSessionId}
-                onOpen={(r) => { close(); onOpen(r); }}
-                onNavigated={close}
-                highlighted={i === cursor}
-                projectChip={chipFor(r.task.project_path)}
-              />
-            ))}
+            {(() => {
+              let i = 0;
+              return groups.map((g) => {
+                const home = g.homeId ? st.sessions[g.homeId] : undefined;
+                return (
+                  <div key={g.key}>
+                    <TriggerHomeHeader
+                      group={g}
+                      home={home}
+                      now={now}
+                      isActive={!!g.homeId && g.homeId === activeSessionId}
+                      showProject={showProject}
+                      onOpen={() => {
+                        close();
+                        if (home) onOpenSession(home);
+                        else onOpen(g.rows[0]);
+                      }}
+                    />
+                    {g.rows.map((r) => {
+                      const idx = i++;
+                      return (
+                        <TriggerRowItem
+                          key={r.task._id}
+                          row={r}
+                          activeSessionId={activeSessionId}
+                          onOpen={(r) => { close(); onOpen(r); }}
+                          onNavigated={close}
+                          highlighted={idx === cursor}
+                          grouped
+                        />
+                      );
+                    })}
+                  </div>
+                );
+              });
+            })()}
           </div>
         </>
       )}
@@ -4131,17 +4281,6 @@ function SessionListPanelImpl({
     [sortedSessions],
   );
 
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
-  useWatchEffect(() => {
-    if (!viewMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) setViewMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [viewMenuOpen]);
-
   // "By label" view: every active non-pinned top-level session grouped by its
   // manual label; unlabeled sessions group by PROJECT — projects are a specific
   // kind of label, auto-derived from the directory. Pinned stays its own top
@@ -4881,43 +5020,13 @@ function SessionListPanelImpl({
               {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
             </button>
           </ShortcutTooltip>
-          {(() => {
-            const viewModeOptions = [
-              { key: "grouped", label: "By status", icon: List },
-              { key: "recent", label: "By updated", icon: Activity },
-              { key: "time", label: "By created", icon: Clock },
-              ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
-              ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
-              ...(scheduleRowsView.length > 0 ? [{ key: "trigger", label: "By trigger", icon: Zap }] : []),
-            ];
-            const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
-            const CurrentIcon = current.icon;
-            return (
-              <div ref={viewMenuRef} className="relative">
-                <ShortcutTooltip label={current.label} action="inbox.toggleFlatView" hint="cycles" side="bottom">
-                  <button
-                    onClick={() => setViewMenuOpen((o) => !o)}
-                    className={`flex items-center px-1 py-[3px] rounded-[5px] transition-colors ${
-                      viewMenuOpen ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim/70 hover:text-sol-text"
-                    }`}
-                  >
-                    <CurrentIcon className="w-3 h-3" />
-                    <ChevronDown className="w-2 h-2 opacity-60" />
-                  </button>
-                </ShortcutTooltip>
-                {viewMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
-                    <FilterOptionList
-                      options={viewModeOptions}
-                      value={viewMode}
-                      onChange={(mode) => s.setInboxViewMode(mode as InboxViewMode)}
-                      onPicked={() => setViewMenuOpen(false)}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+          <InboxViewMenu
+            value={viewMode}
+            onChange={s.setInboxViewMode}
+            hasLabels={visibleBuckets.length > 0}
+            hasPlans={hasPlanSessions}
+            hasTriggers={scheduleRowsView.length > 0}
+          />
           {totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
@@ -5297,6 +5406,7 @@ function SessionListPanelImpl({
           nextRunAt={schedulePartition.nextRunAt}
           activeSessionId={activeSessionId}
           onOpen={openScheduleTarget}
+          onOpenSession={handleSelect}
         />
       )}
       <ContextMenu state={sessionCtxMenu}>

@@ -124,6 +124,17 @@ async function listBlockedConversations(
   };
 }
 
+async function hasUndeliveredContinue(ctx: { db: any }, conversationId: Id<"conversations">): Promise<boolean> {
+  for (const status of ["pending", "injected"] as const) {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", status))
+      .take(50);
+    if (rows.some((m: any) => m.content === "continue")) return true;
+  }
+  return false;
+}
+
 // The one patch that takes a conversation out of the blocked set — the
 // permanent "don't restart this" decision, whether the user made it with the
 // dismiss button (acknowledgeBlocked) or by leaving workers out of a revive
@@ -415,6 +426,12 @@ export async function insertSwitchCommands(
   // racing CLI run and a double-click collapse into one send).
   let messaged = 0;
   const sendContinue = async (conv: Doc<"conversations">) => {
+    // An automatic continue still waiting to land already asks for the retry.
+    // Queuing another each paced tick built a backlog (one row a minute while a
+    // daemon read the session as busy) that drained as a refused turn every
+    // second once it went idle (ct-51376). A human's click carries its own id
+    // and always goes through.
+    if (!opts.continueClientIds?.[conv._id] && (await hasUndeliveredContinue(ctx, conv._id))) return;
     await enqueuePendingMessage(ctx, conv, userId, {
       content: "continue",
       client_id: opts.continueClientIds?.[conv._id] ?? blockedContinueClientId(conv._id, opts.now),
@@ -2111,6 +2128,9 @@ export const listAccountProfiles = query({
           is_remote: d.is_remote === true,
           online: isDeviceOnline(d, now),
           active_email: d.cc_accounts?.active_email,
+          // When the current login took over: a session whose last call predates
+          // it restarts on a cache that belongs to another account.
+          active_since: d.cc_accounts?.active_since,
           login_flow: d.cc_login_flow,
           session_tokens: true,
           mint_flow: d.cc_mint_flow,

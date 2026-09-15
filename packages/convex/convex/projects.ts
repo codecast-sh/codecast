@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { charterPatch, projectCharterArgs } from "./lib/orgCharter";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -129,6 +130,9 @@ export const update = mutation({
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
+    // The charter (org-staffing.md S7); `--owner @handle` resolves inside the
+    // project's own workspace. Access is the project's, unchanged.
+    ...projectCharterArgs,
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -137,7 +141,7 @@ export const update = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || !(await canAccessProject(ctx, auth.userId, project))) throw new Error("Project not found");
 
-    const updates: any = { updated_at: Date.now() };
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, args, "projects")) };
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
     if (args.status) updates.status = args.status;
@@ -335,6 +339,7 @@ export const webUpdate = mutation({
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
+    ...projectCharterArgs,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -343,8 +348,9 @@ export const webUpdate = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || !(await canAccessProject(ctx, userId, project))) throw new Error("Project not found");
 
-    const { id, ...fields } = args;
-    const updates: any = { updated_at: Date.now() };
+    // The charter fields ride the same patch; `owner` is a ref, never stored.
+    const { id, goal, success_metrics, priority, owner, non_goals, risks, budget, ...fields } = args;
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, { goal, success_metrics, priority, owner, non_goals, risks, budget }, "projects")) };
     for (const [k, val] of Object.entries(fields)) {
       if (val !== undefined) updates[k] = val === null ? undefined : val;
     }
