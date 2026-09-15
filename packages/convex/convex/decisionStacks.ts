@@ -325,6 +325,10 @@ export const setStackPolicy = mutation({
     auto_default_after_ms: v.optional(v.number()),
     clear_auto_default: v.optional(v.boolean()),
     delegate: v.optional(v.string()),
+    // When the person means to have cleared the stack (the-line.md L10);
+    // `cast stack policy --due <when>`. clear_due removes it.
+    due_at: v.optional(v.number()),
+    clear_due: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await authUser(ctx, args.api_token);
@@ -338,6 +342,11 @@ export const setStackPolicy = mutation({
     else if (args.auto_default_after_ms !== undefined) {
       if (args.auto_default_after_ms <= 0) return { error: "auto_default_after_ms must be positive" };
       policy.auto_default_after_ms = args.auto_default_after_ms;
+    }
+    if (args.clear_due) policy.due_at = undefined;
+    else if (args.due_at !== undefined) {
+      if (!Number.isFinite(args.due_at) || args.due_at <= 0) return { error: "due_at must be a unix time in milliseconds" };
+      policy.due_at = args.due_at;
     }
     await ctx.db.patch(stack._id, { policy, updated_at: now });
     let delegated: any = undefined;

@@ -149,8 +149,12 @@ describe("command groups stay off the boot graph", () => {
     // 218 after the third 2026-09-15 cut: orgTemplate.ts, the org template
     // registrar (its verb bodies load inside each action, like orgInit), and the
     // unattended contract the shared barrel now exports.
+    //
+    // 3,032 KB at the same 218 files after ct-51367: the `cast chat slack`
+    // verbs (the two way Slack mirror of team chat) are 11 KB of code in
+    // index.ts itself, reaching nothing new. Code, not reach, again.
     expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(218);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3018);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3032);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

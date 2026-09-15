@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One line: a product proposal for codecast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F6F4EE; --paper-2:#EDEAE1; --card:#FFFFFF; --rule:#D9D4C7; --rule-2:#EAE6DB;
+  --ink:#14202B; --ink-2:#3D4956; --ink-3:#6E7885;
+  --petrol:#0E4F62; --petrol-2:#0B3F4F; --petrol-soft:#DCEBEF; --petrol-line:#B7D3DB;
+  --coral:#E8472B; --coral-soft:#FBE1DB;
+  --green:#1F7A4D; --green-soft:#DDF0E4;
+  --gold:#B8860B; --gold-soft:#F6EBC8;
+  --blue:#2A5BD7; --blue-soft:#DEE6FA;
+  --grey:#7A828C; --grey-soft:#E9E8E3;
+  --display:"Sora",system-ui,sans-serif;
+  --body:"Newsreader",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --maxw:760px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:64px}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:19px;line-height:1.55;font-weight:400}
+a{color:var(--petrol);text-decoration-thickness:1px;text-underline-offset:3px}
+strong{font-weight:600}
+
+/* top rail: the sections drawn as stations */
+.rail{position:sticky;top:0;z-index:5;background:var(--petrol);color:#fff;border-bottom:3px solid var(--coral)}
+.rail .in{display:flex;align-items:stretch;gap:0;max-width:1180px;margin:0 auto;padding:0 16px;overflow-x:auto;scrollbar-width:none}
+.rail .in::-webkit-scrollbar{display:none}
+.rail .brand{font-family:var(--display);font-weight:800;font-size:14px;letter-spacing:.01em;padding:14px 18px 14px 0;white-space:nowrap;display:flex;align-items:center;gap:10px}
+.rail .brand i{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--coral);box-shadow:0 0 0 3px #fff3}
+.rail a{color:#fff;opacity:.78;text-decoration:none;font-family:var(--display);font-size:12.5px;font-weight:600;padding:14px 12px;white-space:nowrap;border-bottom:3px solid transparent;margin-bottom:-3px;position:relative}
+.rail a:hover{opacity:1}
+.rail a::before{content:"";position:absolute;left:0;top:50%;width:1px;height:16px;background:#ffffff33;transform:translateY(-50%)}
+.rail a:first-of-type::before{display:none}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 120px}
+main{max-width:var(--maxw);min-width:0}
+@media (min-width:1100px){.wrap{display:grid;grid-template-columns:minmax(0,var(--maxw)) 1fr;gap:56px}.wide{grid-column:1 / -1;max-width:none}}
+.wide{max-width:none}
+
+header.hero{padding:64px 0 40px}
+.hero h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,8vw,92px);line-height:.98;letter-spacing:-.03em;margin:0 0 22px;color:var(--petrol)}
+.hero .lede{font-size:clamp(20px,2.6vw,25px);line-height:1.4;color:var(--ink-2);max-width:640px;margin:0 0 24px;font-weight:500}
+.hero .meta{display:flex;flex-wrap:wrap;gap:8px 16px;font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+
+/* the strip: a big instance of the product's station strip */
+.strip{display:flex;align-items:stretch;gap:0;margin:28px 0 8px;border:2px solid var(--petrol);border-radius:10px;overflow:hidden;background:var(--card)}
+.strip .st{flex:1 1 0;min-width:0;padding:12px 12px 10px;border-right:1px solid var(--rule);position:relative}
+.strip .st:last-child{border-right:0}
+.strip .st .k{font-family:var(--mono);font-size:11px;color:var(--ink-3);display:block;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strip .st .n{font-family:var(--display);font-weight:700;font-size:13.5px;letter-spacing:-.01em}
+.strip .st.now{background:var(--petrol-soft)}
+.strip .st.now::after{content:"";position:absolute;left:0;right:0;bottom:0;height:4px;background:var(--petrol)}
+.strip .st.past .n{color:var(--ink-3)}
+.strip .st .sub{font-family:var(--mono);font-size:11px;color:var(--petrol);margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.strip .held{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--coral);background:var(--coral-soft);border-radius:999px;padding:1px 7px;white-space:nowrap}
+.strip .held::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--coral)}
+@media (max-width:640px){.strip{flex-wrap:wrap}.strip .st{flex:1 1 45%;border-bottom:1px solid var(--rule)}}
+.strip-cap{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin:0 0 8px}
+
+section{scroll-margin-top:70px}
+h2{font-family:var(--display);font-size:clamp(28px,4vw,36px);line-height:1.08;font-weight:800;letter-spacing:-.025em;margin:88px 0 20px;color:var(--petrol)}
+h2 .num{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:var(--petrol);color:#fff;font-size:15px;font-weight:700;margin-right:14px;vertical-align:6px;letter-spacing:0}
+h3{font-family:var(--display);font-size:20px;font-weight:700;margin:40px 0 10px;letter-spacing:-.015em}
+h4{font-family:var(--display);font-size:15.5px;font-weight:700;margin:26px 0 6px}
+p{margin:0 0 16px}
+ul,ol{padding-left:22px;margin:0 0 18px}
+li{margin:0 0 7px}
+code{font-family:var(--mono);font-size:.8em;background:var(--paper-2);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
+pre{font-family:var(--mono);font-size:13px;line-height:1.55;background:var(--petrol-2);color:#E6EEF0;padding:16px 18px;border-radius:8px;overflow:auto;margin:0 0 22px}
+pre .c{color:#8FB3BD}pre .g{color:#9BE3B9}pre .y{color:#F5D67A}pre .b{color:#A9C8FF}pre .r{color:#FFA593}
+.thesis{font-family:var(--display);font-size:clamp(20px,2.6vw,25px);line-height:1.32;font-weight:600;letter-spacing:-.015em;margin:8px 0 26px;padding:24px 26px;border-radius:10px;background:var(--petrol);color:#fff}
+.thesis b{color:#FFD7CE;font-weight:700}
+.callout{border-left:4px solid var(--coral);background:var(--card);padding:14px 18px;margin:0 0 22px;border-radius:0 8px 8px 0}
+.callout p:last-child{margin:0}
+.callout.green{border-left-color:var(--green)}
+table{border-collapse:collapse;width:100%;font-size:15.5px;margin:0 0 26px;background:var(--card);border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+th,td{text-align:left;vertical-align:top;padding:10px 12px;border-bottom:1px solid var(--rule-2)}
+tr:last-child td{border-bottom:0}
+th{font-family:var(--display);font-weight:700;font-size:12.5px;background:var(--petrol-soft);color:var(--petrol)}
+td.w{font-family:var(--display);font-weight:700;font-size:15px;white-space:nowrap}
+td code{font-size:.78em}
+.tbl-wrap{overflow-x:auto;margin:0 0 26px}
+.tbl-wrap table{margin:0;min-width:520px}
+
+.seams{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:0 0 26px}
+.seam{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;border-top:4px solid var(--coral)}
+.seam b{font-family:var(--display);font-size:14.5px;display:block;margin-bottom:6px;letter-spacing:-.01em}
+.seam p{font-size:15px;color:var(--ink-2);margin:0;line-height:1.45}
+.seam .fix{display:block;margin-top:8px;font-family:var(--mono);font-size:11.5px;color:var(--green)}
+
+/* mockups */
+.fig{margin:26px 0 36px}
+.fig .cap{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:10px;line-height:1.5}
+.mock{background:var(--card);border:1px solid var(--rule);border-radius:12px;box-shadow:0 1px 0 #0000000a,0 18px 40px -28px #0e4f6266;overflow:hidden;font-size:14px;font-family:var(--display);color:var(--ink)}
+.mock .bar{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--rule);background:var(--paper-2);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.mock .bar .dots{display:inline-flex;gap:4px}.mock .bar .dots i{width:8px;height:8px;border-radius:50%;background:var(--rule)}
+.mock .body{padding:14px 16px}
+.mock.phone{width:390px;max-width:100%;margin:0 auto}
+.mock h5{font-family:var(--display);font-size:16px;font-weight:700;margin:0 0 4px;letter-spacing:-.01em}
+.mock .sub{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--rule);color:var(--ink-2);background:#fff;white-space:nowrap;vertical-align:middle}
+.chip.run{background:var(--petrol-soft);border-color:var(--petrol-line);color:var(--petrol)}
+.chip.held{background:var(--coral-soft);border-color:#f2b7a8;color:var(--coral)}
+.chip.done{background:var(--green-soft);border-color:#b7dcc6;color:var(--green)}
+.chip.working{background:var(--blue-soft);border-color:#b8c8f2;color:var(--blue)}
+.chip.review{background:var(--gold-soft);border-color:#e5cf8a;color:var(--gold)}
+.chip.dormant{background:var(--grey-soft);border-color:#d5d3cd;color:var(--grey)}
+.chip.stack{background:var(--petrol);border-color:var(--petrol);color:#fff}
+.chip i{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+.stations{display:flex;gap:0;border:1px solid var(--rule);border-radius:8px;overflow:hidden;margin:10px 0 12px;font-family:var(--mono);font-size:11px}
+.stations span{flex:1 1 0;padding:7px 8px;text-align:center;border-right:1px solid var(--rule);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stations span:last-child{border-right:0}
+.stations span.past{color:var(--green)}
+.stations span.now{background:var(--petrol);color:#fff;font-weight:600}
+.stations span.now.held{background:var(--coral)}
+@media (max-width:640px){.stations{flex-wrap:wrap}.stations span{flex:1 1 33%;border-bottom:1px solid var(--rule)}.fields .row{white-space:normal}.fields .c{display:block;padding-left:12px}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;margin:8px 0 12px}
+.kv b{font-family:var(--mono);font-weight:500;font-size:11.5px;color:var(--ink-3)}
+.card{border:1px solid var(--rule);border-radius:8px;padding:10px 12px;background:#fff;margin:0 0 8px;min-width:0}
+.card .t{font-weight:700;font-size:14px;display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;letter-spacing:-.01em}
+.card .l{font-size:13px;color:var(--ink-2);margin-top:3px;font-family:var(--body);font-size:14.5px}
+.card .f{display:flex;gap:8px;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--ink-3);flex-wrap:wrap}
+.card.held{box-shadow:inset 4px 0 0 var(--coral)}
+.card.working{box-shadow:inset 4px 0 0 var(--blue)}
+.card.done{box-shadow:inset 4px 0 0 var(--green)}
+.card.review{box-shadow:inset 4px 0 0 var(--gold)}
+.card.gate{border-color:var(--petrol-line);background:linear-gradient(0deg,#fff,var(--petrol-soft))}
+.sect{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin:12px 0 6px;display:flex;align-items:center;gap:8px}
+.sect::after{content:"";flex:1;height:1px;background:var(--rule-2)}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin:6px 0 4px}
+.thumb{border:1px solid var(--rule);border-radius:8px;overflow:hidden;background:#fff}
+.thumb .img{height:66px;background:
+  linear-gradient(90deg,var(--petrol-soft) 0 28%,transparent 28%),
+  repeating-linear-gradient(0deg,var(--paper-2) 0 6px,#fff 6px 14px);position:relative}
+.thumb .img.b{background:
+  linear-gradient(0deg,transparent 0 76%,var(--petrol-soft) 76%),
+  repeating-linear-gradient(0deg,var(--paper-2) 0 6px,#fff 6px 14px)}
+.thumb .img.pr{background:repeating-linear-gradient(0deg,#fff 0 5px,var(--green-soft) 5px 9px)}
+.thumb .img.shot{background:radial-gradient(60px 30px at 40% 55%,var(--blue-soft),transparent),repeating-linear-gradient(0deg,var(--paper-2) 0 6px,#fff 6px 14px)}
+.thumb .n{font-family:var(--mono);font-size:10.5px;padding:5px 8px;border-top:1px solid var(--rule-2);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:8px 0}
+.optp{border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:#fff}
+.optp .img{height:110px;border-bottom:1px solid var(--rule)}
+.optp .img.a{background:linear-gradient(90deg,var(--petrol) 0 26%,transparent 26%),repeating-linear-gradient(0deg,var(--paper-2) 0 8px,#fff 8px 18px)}
+.optp .img.b{background:linear-gradient(0deg,transparent 0 78%,var(--petrol) 78%),repeating-linear-gradient(0deg,var(--paper-2) 0 8px,#fff 8px 18px)}
+.optp .h{padding:9px 11px 4px;font-weight:700;font-size:13.5px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.optp .key{font-family:var(--mono);font-size:11px;background:var(--petrol);color:#fff;border-radius:4px;padding:1px 6px}
+.optp .d{padding:0 11px 8px;font-size:13px;color:var(--ink-2);font-family:var(--body);font-size:14.5px}
+.optp .links{padding:6px 11px 9px;border-top:1px solid var(--rule-2);font-family:var(--mono);font-size:10.5px;color:var(--petrol);display:flex;gap:10px;flex-wrap:wrap}
+.optp .cr{display:flex;gap:6px;padding:0 11px 8px;flex-wrap:wrap}
+.optrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--rule);border-radius:8px;margin:0 0 6px;background:#fff;font-size:14px}
+.optrow .key{font-family:var(--mono);font-size:11px;background:var(--petrol);color:#fff;border-radius:4px;padding:1px 6px;margin-right:8px}
+.optrow .btn{font-family:var(--mono);font-size:11px;padding:4px 10px;border:1px solid var(--petrol);border-radius:6px;color:var(--petrol);white-space:nowrap}
+.optrow .btn.on{background:var(--petrol);color:#fff}
+.ladder{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;font-size:13px;margin:6px 0}
+.av{width:26px;height:26px;border-radius:7px;background:var(--gold-soft);display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:11px;color:var(--gold)}
+.av.h{background:var(--blue-soft);color:var(--blue)}.av.r{background:var(--petrol-soft);color:var(--petrol)}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:10px;overflow-x:auto;padding-bottom:6px}
+.col{background:var(--paper-2);border-radius:10px;padding:8px;min-width:0}
+.col .ch{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px;color:var(--ink-3);padding:2px 4px 8px}
+.col .card{margin-bottom:8px}
+.col .card:last-child{margin-bottom:0}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin:0 0 12px;font-family:var(--display);font-size:12.5px;font-weight:600;overflow-x:auto}
+.tabs span{padding:8px 10px;color:var(--ink-3);white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs span.on{color:var(--petrol);border-bottom-color:var(--petrol)}
+.runs{width:100%;border-collapse:collapse;font-size:13px;font-family:var(--display)}
+.runs th{font-family:var(--mono);font-weight:500;font-size:11px;color:var(--ink-3);text-align:left;padding:6px 8px;border-bottom:1px solid var(--rule);background:none}
+.runs td{padding:8px 8px;border-bottom:1px solid var(--rule-2);vertical-align:middle;white-space:nowrap}
+.runs tr:last-child td{border-bottom:0}
+.runs td.t{white-space:normal;font-weight:600;min-width:150px}
+.runs .mono{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.node-run{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;flex-wrap:wrap}
+.node-run span{padding:3px 8px;border:1px solid var(--rule);border-radius:5px;background:#fff;color:var(--ink-3)}
+.node-run span.past{color:var(--green);border-color:#b7dcc6}
+.node-run span.now{background:var(--petrol);color:#fff;border-color:var(--petrol)}
+.node-run span.gate{background:var(--coral);color:#fff;border-color:var(--coral)}
+.node-run em{font-style:normal;color:var(--ink-3)}
+.queue-group{border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin:0 0 10px;background:#fff}
+.queue-group .gh{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;background:var(--petrol);color:#fff;font-size:13px;font-weight:700;flex-wrap:wrap}
+.queue-group .gh .due{font-family:var(--mono);font-size:11px;font-weight:500;background:#fff2;padding:2px 8px;border-radius:999px}
+.queue-group .gh .due.over{background:var(--coral)}
+.queue-group .qi{display:grid;grid-template-columns:22px 1fr;gap:10px;padding:10px 12px;border-top:1px solid var(--rule-2);align-items:start}
+.queue-group .qi .n{font-family:var(--mono);font-size:11px;color:var(--ink-3);padding-top:3px}
+.queue-group .qi .q{font-weight:600;font-size:14px;letter-spacing:-.01em}
+.queue-group .qi .m{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.queue-group .qi.answered .q{color:var(--ink-3);text-decoration:line-through}
+.keys{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.keys span{font-family:var(--mono);font-size:11px;border:1px solid var(--rule);border-radius:5px;padding:3px 8px;background:#fff}
+.keys span.on{background:var(--petrol);color:#fff;border-color:var(--petrol)}
+
+/* scenario */
+.day{border-left:3px solid var(--petrol-line);margin:0 0 8px 8px;padding:0 0 0 22px}
+.day .t{position:relative;margin:0 0 26px}
+.day .t::before{content:"";position:absolute;left:-30px;top:8px;width:13px;height:13px;border-radius:50%;background:var(--petrol);border:3px solid var(--paper)}
+.day .t.hot::before{background:var(--coral)}
+.day .t h4{margin:0 0 6px}
+.day .t h4 span{font-family:var(--mono);font-weight:500;font-size:12px;color:var(--ink-3);margin-right:10px}
+.day .t p{margin:0 0 10px}
+
+/* mechanics flow */
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 22px}
+.flow .step{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;position:relative}
+.flow .step b{font-family:var(--display);font-size:14px;display:block;margin-bottom:5px;color:var(--petrol)}
+.flow .step p{font-size:14.5px;margin:0;color:var(--ink-2);line-height:1.45}
+.flow .step .n{position:absolute;top:-10px;left:12px;font-family:var(--mono);font-size:10.5px;background:var(--coral);color:#fff;border-radius:999px;padding:1px 7px}
+
+.fields{font-family:var(--mono);font-size:13px;line-height:1.6;background:var(--card);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;margin:0 0 20px;overflow:auto}
+.fields b{color:var(--petrol);font-weight:600}
+.fields .c{color:var(--ink-3)}
+.fields .row{white-space:nowrap}
+
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin:0 0 22px}
+.two .box{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.two .box h4{margin:0 0 8px}
+.two .box.stop{border-top:4px solid var(--coral)}
+.two .box.see{border-top:4px solid var(--gold)}
+.two .box ul{margin:0;padding-left:18px;font-size:16px}
+.two .box li{margin:0 0 6px}
+
+.wave{border:1px solid var(--rule);border-radius:10px;margin:0 0 14px;background:var(--card);overflow:hidden}
+.wave .wh{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 16px;border-bottom:1px solid var(--rule);background:var(--petrol-soft);flex-wrap:wrap}
+.wave .wh b{font-family:var(--display);font-size:15px;color:var(--petrol)}
+.wave .wh span{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.wave .wb{padding:12px 16px;font-size:16.5px}
+.wave .wb p{margin:0 0 8px}
+.wave .wb p:last-child{margin:0}
+
+.not li{margin-bottom:10px}
+footer{margin-top:80px;padding-top:18px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+aside.side{display:none}
+@media (min-width:1100px){
+  aside.side{display:block;position:sticky;top:76px;align-self:start;font-family:var(--display);font-size:12.5px;color:var(--ink-3);padding-top:80px}
+  aside.side .k{font-weight:700;color:var(--petrol);margin-bottom:8px;font-size:12px}
+  aside.side ol{list-style:none;margin:0;padding:0}
+  aside.side li{margin:0 0 6px}
+  aside.side a{color:var(--ink-2);text-decoration:none}
+  aside.side a:hover{color:var(--petrol)}
+  aside.side .w{margin-top:20px;font-family:var(--mono);font-size:11px;line-height:1.6}
+}
+</style>
+</head>
+<body>
+
+<nav class="rail" aria-label="Sections"><div class="in">
+  <span class="brand"><i></i>One line</span>
+  <a href="#summary">Summary</a>
+  <a href="#why">Why now</a>
+  <a href="#words">Nine words</a>
+  <a href="#day">A day</a>
+  <a href="#surfaces">Surfaces</a>
+  <a href="#mechanics">Mechanics</a>
+  <a href="#data">Data</a>
+  <a href="#guardrails">Guardrails</a>
+  <a href="#rollout">Rollout</a>
+  <a href="#not">Not built</a>
+</div></nav>
+
+<div class="wrap">
+<main>
+
+<header class="hero">
+  <h1>One line</h1>
+  <p class="lede">A task moves along its scope's line through stations. Every human gate is a decision in the queue. Evidence attaches where it was made. Chains are runs. One model, read by every page and every command.</p>
+  <div class="meta"><span>product proposal</span><span>codecast</span><span>contract: docs/architecture/the-line.md</span><span>plan pl-682</span><span>September 2026</span></div>
+
+  <div class="strip" aria-label="A task's station strip">
+    <div class="st past"><span class="k">station 1</span><span class="n">Backlog</span></div>
+    <div class="st past"><span class="k">station 2</span><span class="n">Open</span><span class="sub">analyze · gate approve</span></div>
+    <div class="st past"><span class="k">station 3</span><span class="n">In progress</span><span class="sub">implement · 3 visits max</span></div>
+    <div class="st now"><span class="k">station 4 · now</span><span class="n">In review</span><span class="sub"><span class="held">held by sd-402</span> gate pick · 14 min</span></div>
+    <div class="st"><span class="k">station 5</span><span class="n">Done</span></div>
+    <div class="st"><span class="k">station 6</span><span class="n">Dropped</span></div>
+  </div>
+  <p class="strip-cap">The strip on every task page. Stations are the team's statuses, the six defaults here. The line under a station is the run's node there. The red chip is an open blocking decision.</p>
+</header>
+
+<section id="summary">
+<div class="thesis">Codecast has every part of an automated factory and none of the joints. This proposal adds <b>no new part</b>. It joins the parts that exist with nine words, one ask rail, and one place for evidence.</div>
+<p>Sessions do the work. Tasks hold it. Decisions ask a person. Published pages carry evidence. DOT workflows route a task from node to node. Chains run agent definitions in order. Org roles own scopes and stand by as agents. Each part is built and tested. Each one also has its own rail, so they cannot see each other. A workflow gate never reaches the queue. A decision names a station but nothing holds the task there. A chain leaves no run behind. A page belongs to a session and to nothing else.</p>
+<p>The fix is a contract, not a feature. A <strong>scope</strong> owns a <strong>line</strong>. A <strong>task</strong> moves along it through <strong>stations</strong>, which are its statuses. A <strong>run</strong> is one passage. A <strong>gate</strong> on the line is a <strong>decision</strong> in a person's queue, inside a <strong>stack</strong> when the graph declares one. A blocking decision <strong>holds</strong> its task. <strong>Evidence</strong> attaches to the task at the station that produced it. A chain run is a run. The sweep starts the line for tasks assigned to a role.</p>
+<div class="callout"><p><strong>What changes for the person.</strong> One queue answers every question a machine has for them, including the ones a workflow used to hide in a run panel. One task page shows where the work is, who holds it there, and what it produced. One scope page shows the whole line as columns. A teammate who can read the task can read its run. The person's day is the queue, the task page, and nothing else.</p></div>
+</section>
+
+<section id="why">
+<h2><span class="num">1</span>Why now: the seams</h2>
+<p>Every seam below is a real gap between two shipped parts. Each one costs a person a page they did not need to open, or hides a fact they needed. Together they are why a workflow with a human gate still feels like a script and not like a colleague.</p>
+<div class="seams">
+  <div class="seam"><b>Two ask rails</b><p>A workflow gate pauses the run and polls its own <code>gate_response</code>. It never becomes a decision. The queue, stacks, the ladder and roles cannot see it.</p><span class="fix">fix: a gate is a decision (L4)</span></div>
+  <div class="seam"><b>Station stored, not enforced</b><p><code>cast decide --station</code> is stored and shown. Nothing keeps the task at that station. The rule lives in prose.</p><span class="fix">fix: a blocking decision holds its task (L5)</span></div>
+  <div class="seam"><b>Chains leave no record</b><p><code>cast exec --chain</code> runs headless. No run row, no task comment, nothing on the scope page. Parallel <code>-j</code> runs likewise.</p><span class="fix">fix: chains are runs (L7)</span></div>
+  <div class="seam"><b>Pages float free</b><p>A published page belongs to a session. A task, a station or a decision option cannot own one. The design comparison, where a page matters most, has no home.</p><span class="fix">fix: evidence attaches at the station (L6)</span></div>
+  <div class="seam"><b>Web runs lose node attributes</b><p>A run started from the web drops <code>definition</code>, <code>reviewer</code> and <code>timeout</code>. The line's independent review quietly becomes the role's own session.</p><span class="fix">fix: node fidelity (L8)</span></div>
+  <div class="seam"><b>Nothing starts the line</b><p>A role's charter says "run the line". No code does. A task assigned to a role waits for a person to type the command.</p><span class="fix">fix: the sweep (L9)</span></div>
+  <div class="seam"><b>Runs private to one user</b><p>A teammate who can read a task cannot see its run. The run panel is empty for everyone but the starter.</p><span class="fix">fix: runs belong to the workspace (L8)</span></div>
+  <div class="seam"><b>Two workflow pages</b><p><code>/workflows</code> and <code>/routines</code> are two pages under two names in two menus for one idea.</p><span class="fix">fix: one entry, a Runs tab (L10)</span></div>
+</div>
+<p>None of these needs a new concept. Each one is a missing pointer between two rows that already exist, and one rule that says which row reads it.</p>
+</section>
+
+<section id="words">
+<h2><span class="num">2</span>The model in nine words</h2>
+<p>Nine words, each with one meaning and one table behind it. Nothing else is coined. This is L1 of the contract, and every section after it uses only these words.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Word</th><th>Meaning</th><th>Table</th></tr></thead>
+<tbody>
+<tr><td class="w">scope</td><td>what a role owns: projects and plans</td><td><code>org_roles.scope</code></td></tr>
+<tr><td class="w">line</td><td>the workflow a scope's tasks run on; one per scope; shipped <code>line</code> by default</td><td><code>org_roles.line_workflow_slug</code>, <code>workflows</code></td></tr>
+<tr><td class="w">station</td><td>a task status. The team's statuses, in order, are the stations</td><td><code>tasks.status</code> / <code>status_id</code></td></tr>
+<tr><td class="w">run</td><td>one task's passage along a line</td><td><code>workflow_runs</code></td></tr>
+<tr><td class="w">gate</td><td>a workflow node where a person decides. A gate IS a decision</td><td><code>session_decisions</code> with <code>workflow_run_id</code></td></tr>
+<tr><td class="w">hold</td><td>a pending blocking decision bound to a task keeps it at its station</td><td><code>session_decisions.task_id</code> + <code>station</code></td></tr>
+<tr><td class="w">evidence</td><td>what a station produced: pages, images, docs, files, a PR, verification text</td><td><code>artifacts.task_id</code>, <code>tasks.*</code></td></tr>
+<tr><td class="w">stack</td><td>a person's ordered set of decisions</td><td><code>decision_stacks</code></td></tr>
+<tr><td class="w">hand</td><td>a session a run or a role starts for bounded work</td><td><code>conversations.org_role_id</code></td></tr>
+</tbody></table></div>
+<p>Two words deserve a note. A <strong>station</strong> is not a new state. The run moves the task through its statuses exactly as a hand would with <code>cast task handoff</code> and <code>cast task verdict</code>. And a <strong>gate</strong> is not a new kind of ask. It is a <code>session_decisions</code> row like every other, with two extra fields that name the run and the node.</p>
+<p>The shipped line has four working nodes: analyze, implement (in a worktree, three visits at most), verify (the repo's check), and review (an independent session that sees only the branch, the title and the criteria). Edges route on the task's own fields, refreshed after every node: <code>handoff</code>, <code>outcome</code>, <code>review_verdict</code>.</p>
+<pre><span class="c">// packages/cli/src/workflow/templates/line.cast (edges)</span>
+start -> analyze
+analyze -> implement
+implement -> verify   <span class="y">[condition="handoff = done"]</span>
+verify -> review      <span class="y">[condition="outcome = success"]</span>
+verify -> implement   <span class="y">[condition="outcome = failure"]</span>
+review -> exit        <span class="y">[condition="review_verdict = approve"]</span>
+review -> implement   <span class="y">[condition="review_verdict = changes"]</span>
+review -> exit        <span class="y">[condition="review_verdict = reject"]</span></pre>
+</section>
+
+<section id="day">
+<h2><span class="num">3</span>A day on the line</h2>
+<p>A scenario is the honest test. This one assumes all three waves have shipped. The scope is the Product project. Its role is <code>@product</code>, trust <code>direct</code>, six hands a day. Its line, slug <code>design</code>, is a copy of the shipped line with two gates added. <code>approve</code> sits after analyze, with edges <code>[A] Go</code> and <code>[B] Rework</code>. <code>pick</code> sits after verify and before review, with edges <code>[A] Left rail</code> to review and <code>[B] Top bar</code> back to implement. The graph carries <code>stack="Empty state"</code>. Ashot is the person.</p>
+
+<div class="day">
+<div class="t"><h4><span>08:51</span>A person assigns a task</h4>
+<p>Ashot files <code>ct-50210</code>, "Empty state for the decision queue", and assigns it to <code>agent:product</code>. Nothing else happens. The task sits at <strong>open</strong> with no run.</p></div>
+
+<div class="t"><h4><span>08:52</span>The sweep starts the line</h4>
+<p><code>orgLine.sweep</code> runs every two minutes. It finds one task in the role's scope assigned to the role, at open, not blocked, with no run, and the role has used two of six hands today. It creates a run as the role's host user with the role's project path, spawner the role's standing session, and a <code>run_workflow</code> command for the host's daemon. It bumps the hand counter and comments once on the task. If the sweep runs again before the daemon picks it up, nothing happens: a task with a run is never started twice.</p></div>
+
+<div class="t"><h4><span>08:53</span>Analyze</h4>
+<p>The analyze hand reads the task and the code it touches and writes five steps a reviewer can check. The task page shows the strip with <strong>open</strong> lit, and under it "analyze · hand jx7c6zk · 2 min". The run reaches <code>approve</code>, its first gate. The stack "Empty state" is created and the gate <code>sd-380</code>, "Criteria as written?", is its first member. Ashot answers A from the laptop a minute later and the run goes on.</p></div>
+
+<div class="t"><h4><span>09:01</span>Implement, in a worktree</h4>
+<p>The implement hand starts in worktree <code>line-ct-50210</code> on its own branch. Node start moves the task to <strong>in progress</strong>. The hand builds two candidate layouts behind a flag, publishes each as a page with <code>cast publish --task ct-50210</code>, and both pages attach to the task at in progress. It commits, pushes, and ends with a handoff: status done, the evidence text naming both pages, and the files. The handoff posts a review comment and moves the task to <strong>in review</strong>.</p></div>
+
+<div class="t"><h4><span>09:24</span>Verify</h4>
+<p>Verify runs <code>cast ws check</code> in the worktree: success. The edge out of verify leads to the second gate, not to review. Ashot picks the layout before an independent reviewer spends a session on it.</p></div>
+
+<div class="t hot"><h4><span>09:41</span>A gate lands in the queue</h4>
+<p>The run reaches <code>pick</code>. <code>pauseAtGate</code> asks through <code>askCore</code> as the role's standing session: task <code>ct-50210</code>, station in review, options A and B from the edges, the prompt as context, <code>doc="$implement.output"</code> as the body, blocking. The body is the handoff evidence, so it names both pages. This is the run's second gate, so it joins the stack "Empty state" as <code>sd-402</code>. The run stores the decision id and pauses. Ashot's queue shows the stack, one answered and one open, with a run chip on the open card. The task is now <strong>held</strong> at in review: a chip on the strip links to <code>sd-402</code>.</p></div>
+
+<div class="t hot"><h4><span>09:58</span>The person answers from the phone</h4>
+<p>Ashot opens the queue in the phone browser. The stack header says one of two answered. The card shows the question, the run chip "design · pick", the body with both page links, and a link to the task. On the task page the Evidence section shows the two pages side by side as thumbnails under in progress. Ashot opens each, goes back, and picks A. <code>finalizeAnswer</code> sees <code>workflow_run_id</code> on the row, writes <code>gate_response = "A"</code>, and sets the run back to running. The run consumes the answer; no message goes to the asking session.</p></div>
+
+<div class="t"><h4><span>09:59</span>The run resumes, the hold releases</h4>
+<p>The runner's poll reads the response and follows edge A to review. The decision is no longer pending, so nothing holds the task. Both members are answered, so the stack is done. The role's standing session receives the answer as a passive fact on its next wake.</p></div>
+
+<div class="t"><h4><span>10:10</span>Review</h4>
+<p>Review starts a fresh session with the branch, the title and the five steps, and nothing else. It checks each step against the diff and ends with <code>cast task verdict ct-50210 approve</code>. Approve closes the task: it moves to <strong>done</strong>, and the run exits. The reviewer is a session outside the role, so the independent review rule is met.</p></div>
+
+<div class="t"><h4><span>10:12</span>Evidence on the task, a column move on the scope</h4>
+<p>The task page's Evidence section lists, by station: two pages at in progress with thumbnails, the files changed and the verification text from the handoff, the PR, and the approve verdict at in review. On the scope page's Line tab the card slides from the in review column to done. The scope feed shows one <code>run</code> row: design, 80 minutes, two gates. The role's brief counts one hand and two decisions answered today.</p></div>
+</div>
+
+<div class="callout green"><p><strong>Count the person's touches:</strong> one assignment, two answers, one of them from the phone. Everything else is on the record with the run's id on it, readable by any teammate who can read the task.</p></div>
+</section>
+
+<section id="surfaces" class="wide">
+<h2><span class="num">4</span>Surfaces</h2>
+<p style="max-width:var(--maxw)">Five pages and the CLI read the model. None of them stores anything the others cannot see. Every held marker, run chip and evidence count is derived from the same rows: the task's decisions by <code>by_task</code>, its runs by <code>by_task</code>, its artifacts by <code>by_task</code>.</p>
+
+<h3 id="s-task">4.1 The task page</h3>
+<p style="max-width:var(--maxw)">The station strip sits at the top with the current station lit. Under it: the run's live node, the hand working it, the elapsed time, and the review verdict when one exists. A held marker links the open decision. Decisions render as cards, answered ones folded. Evidence groups by station with page thumbnails. The run panel's gates render the decision card, never their own buttons.</p>
+<div class="fig">
+<div class="mock"><div class="bar"><span class="dots"><i></i><i></i><i></i></span><span>/tasks/ct-50210</span></div>
+<div class="body">
+  <h5>Empty state for the decision queue <span class="chip run"><i></i>run · design</span></h5>
+  <div class="sub">ct-50210 · Product · assigned agent:product · high</div>
+  <div class="stations"><span class="past">backlog</span><span class="past">open</span><span class="past">in progress</span><span class="now held">in review · held</span><span>done</span><span>dropped</span></div>
+  <div class="kv"><b>node</b><span>pick · gate · waiting 14 min</span><b>hand</b><span>none (implement handed off, done)</span><b>held by</b><span><span class="chip held"><i></i>sd-402 · Which layout ships?</span></span></div>
+  <div class="sect">decisions</div>
+  <div class="card gate"><div class="t">Which layout ships? <span class="chip run">design · pick</span></div><div class="l">A: Left rail, send to review. B: Top bar, one more implement visit.</div><div class="f"><span>sd-402</span><span>blocking</span><span>stack: Empty state</span><span>category: approach</span><span>asked by @product</span></div><div class="keys"><span>1 · Left rail</span><span>2 · Top bar</span><span>open page</span></div></div>
+  <div class="card"><div class="t" style="color:var(--ink-3)">Criteria as written? <span class="chip done"><i></i>answered A</span></div></div>
+  <div class="sect">evidence</div>
+  <div class="sub" style="margin-bottom:6px">in progress · 2 pages · 6 files</div>
+  <div class="thumbs">
+    <div class="thumb"><div class="img"></div><div class="n">queue-empty-rail</div></div>
+    <div class="thumb"><div class="img b"></div><div class="n">queue-empty-bar</div></div>
+    <div class="thumb"><div class="img pr"></div><div class="n">PR #482 · 6 files</div></div>
+  </div>
+  <div class="sub" style="margin:10px 0 6px">in review · 2 images from the hand's session · no verdict yet</div>
+  <div class="thumbs"><div class="thumb"><div class="img shot"></div><div class="n">shot · 390px</div></div><div class="thumb"><div class="img shot"></div><div class="n">shot · 1280px</div></div></div>
+</div></div>
+<div class="cap">Nothing here is stored for the page. "Held" comes from the open decisions by task. The evidence groups come from artifacts by task, images from the bound session, and the handoff fields on the task row.</div>
+</div>
+
+<h3 id="s-decision">4.2 The decision document</h3>
+<p style="max-width:var(--maxw)">A decision with a run shows its run chip and the node's inputs in the body. A decision whose options carry pages renders them as a comparison row above the option list: thumbnail, title, open in a pane, open in full. Option pages come from <code>cast decide --option-page n=file.html</code>, or <code>page</code> per option in a JSON spec. This one was asked by a session on the task, not by a gate.</p>
+<div class="fig">
+<div class="mock"><div class="bar"><span class="dots"><i></i><i></i><i></i></span><span>/decisions/sd-388</span></div>
+<div class="body">
+  <h5>Which layout for the empty queue?</h5>
+  <div class="sub" style="margin-bottom:8px">sd-388 · asked by jx7c6zk · task ct-50210 · station in progress · category product (server) · stack Empty state</div>
+  <div class="opts">
+    <div class="optp"><div class="img a"></div><div class="h">Left rail <span class="key">A</span></div><div class="d">Keep the filter rail. The empty message sits in the list column.</div><div class="cr"><span class="chip">cost: none</span><span class="chip">risk: low</span></div><div class="links"><span>open in pane</span><span>open full</span></div></div>
+    <div class="optp"><div class="img b"></div><div class="h">Top bar <span class="key">B</span></div><div class="d">Collapse the rail into a bar. One column at every width.</div><div class="cr"><span class="chip">cost: 1 day</span><span class="chip">risk: moves the filters</span></div><div class="links"><span>open in pane</span><span>open full</span></div></div>
+  </div>
+  <div class="sect">ladder</div>
+  <div class="ladder"><div class="av r">P</div><div>@product recommends <b>B</b> · "one column matches the phone"</div></div>
+  <div class="ladder"><div class="av h">A</div><div>Ashot · holder</div></div>
+  <div class="sect">answer</div>
+  <div class="optrow"><span><span class="key">A</span>Left rail</span><span class="btn">pick</span></div>
+  <div class="optrow"><span><span class="key">B</span>Top bar</span><span class="btn on">pick</span></div>
+</div></div>
+<div class="cap">The page is the one the queue card and the transcript card link to. The transcript card and the stepper carry kind, form, body, cost, risk, evidence, category and page slug, and render the right controls.</div>
+</div>
+
+<h3 id="s-queue">4.3 The queue, with a stack and a gate card</h3>
+<p style="max-width:var(--maxw)">Gate decisions are ordinary cards with a run chip. The queue groups by stack, then by role, then by scope. A stack shows progress and its due time on the header; overdue stacks sort first. Keys 1 to 9 answer the open card. This is the phone browser at 390 pixels.</p>
+<div class="fig">
+<div class="mock phone"><div class="bar"><span>/decisions · 2 open</span></div>
+<div class="body" style="padding:12px">
+  <div class="queue-group">
+    <div class="gh"><span>Empty state <span class="chip stack">1 of 2</span></span><span class="due over">due 09:30 · overdue</span></div>
+    <div class="qi answered"><span class="n">1</span><div><div class="q">Criteria as written?</div><div class="m"><span class="chip done"><i></i>answered A</span><span>sd-380</span></div></div></div>
+    <div class="qi"><span class="n">2</span><div><div class="q">Which layout ships?</div><div class="m"><span class="chip run"><i></i>design · pick</span><span class="chip held"><i></i>holds ct-50210</span><span>sd-402</span></div><div class="keys"><span class="on">1 · Left rail</span><span>2 · Top bar</span></div></div></div>
+  </div>
+  <div class="queue-group">
+    <div class="gh" style="background:var(--paper-2);color:var(--ink)"><span>@infra</span><span class="due" style="background:var(--rule)">1 open</span></div>
+    <div class="qi"><span class="n">3</span><div><div class="q">Retry class for the backup window?</div><div class="m"><span class="chip">recommends 2</span><span>sd-391</span><span>ct-49001</span></div></div></div>
+  </div>
+</div></div>
+<div class="cap">The stack's policy carries a due time. "answer all defaults" applies to advisory members only; a blocking member never answers itself.</div>
+</div>
+
+<h3 id="s-scope">4.4 The scope page, Line tab</h3>
+<p style="max-width:var(--maxw)">One column per station. Each card carries the run's current node, the hand's state stripe, a held marker and an evidence count. Settings holds the line picker. The feed renders run rows. The Decisions tab lists stacks and the role's ladder rows.</p>
+<div class="fig">
+<div class="mock"><div class="bar"><span class="dots"><i></i><i></i><i></i></span><span>/org/or-12 · Product lead · @product</span></div>
+<div class="body">
+  <div class="tabs"><span>Feed</span><span>Tasks</span><span class="on">Line</span><span>Plans</span><span>Docs</span><span>Sessions</span><span>Decisions</span><span>Brief</span><span>Settings</span></div>
+  <div class="board">
+    <div class="col"><div class="ch"><span>backlog</span><span>1</span></div>
+      <div class="card"><div class="t">Stack page keyboard help</div><div class="f"><span>ct-50219</span><span>no run</span></div></div>
+    </div>
+    <div class="col"><div class="ch"><span>open</span><span>2</span></div>
+      <div class="card"><div class="t">Palette entry for stacks</div><div class="f"><span>ct-50214</span><span>no run</span></div></div>
+      <div class="card"><div class="t">Sort overdue first</div><div class="f"><span>ct-50215</span><span>no run</span></div></div>
+    </div>
+    <div class="col"><div class="ch"><span>in progress</span><span>2</span></div>
+      <div class="card working"><div class="t">Run chip on task list <span class="chip working"><i></i>implement</span></div><div class="f"><span>ct-50211</span><span>visit 2 of 3</span><span>1 page</span></div></div>
+      <div class="card working"><div class="t">Line picker in settings <span class="chip working"><i></i>analyze</span></div><div class="f"><span>ct-50212</span><span>0 evidence</span></div></div>
+    </div>
+    <div class="col"><div class="ch"><span>in review</span><span>1</span></div>
+      <div class="card held"><div class="t">Empty state for the queue <span class="chip held"><i></i>held sd-402</span></div><div class="f"><span>ct-50210</span><span>gate: pick</span><span>4 evidence</span></div></div>
+    </div>
+    <div class="col"><div class="ch"><span>done</span><span>3</span></div>
+      <div class="card done"><div class="t">Evidence section</div><div class="f"><span>ct-50201</span><span>approve</span><span>3 evidence</span></div></div>
+      <div class="card done"><div class="t">Runs tab</div><div class="f"><span>ct-50202</span><span>approve</span></div></div>
+      <div class="card done"><div class="t">One nav entry</div><div class="f"><span>ct-50203</span><span>approve</span></div></div>
+    </div>
+    <div class="col"><div class="ch"><span>dropped</span><span>0</span></div></div>
+  </div>
+</div></div>
+<div class="cap">The columns are the team's statuses in their configured order, so a custom status is a column too. The board scrolls sideways on a phone.</div>
+</div>
+
+<h3 id="s-routines">4.5 Routines, Runs tab</h3>
+<p style="max-width:var(--maxw)"><code>/routines</code> gains a Runs tab across every workflow: status, task, current node and gate. Its gate panel renders the decision card. One Workflows entry in the sidebar and the user menu points here; a Dynamic tab hosts the old <code>/workflows</code> dashboard. Chain runs list here like any run.</p>
+<div class="fig">
+<div class="mock"><div class="bar"><span class="dots"><i></i><i></i><i></i></span><span>/routines</span></div>
+<div class="body">
+  <div class="tabs"><span>Routines</span><span class="on">Runs</span><span>Dynamic</span></div>
+  <div class="tbl-wrap" style="margin:0"><table class="runs">
+    <thead><tr><th>workflow</th><th>task</th><th>nodes</th><th>status</th><th>started</th></tr></thead>
+    <tbody>
+    <tr><td class="t">design</td><td class="mono">ct-50210</td><td><div class="node-run"><span class="past">analyze</span><span class="past">approve</span><span class="past">implement</span><span class="past">verify</span><span class="gate">pick · sd-402</span></div></td><td><span class="chip held"><i></i>paused at gate</span></td><td class="mono">63 min ago</td></tr>
+    <tr><td class="t">line</td><td class="mono">ct-50211</td><td><div class="node-run"><span class="past">analyze</span><span class="now">implement</span><em>2 of 3</em></div></td><td><span class="chip working"><i></i>running</span></td><td class="mono">21 min ago</td></tr>
+    <tr><td class="t">chain-triage</td><td class="mono">pl-531</td><td><div class="node-run"><span class="past">reader</span><span class="past">sorter</span><span class="now">writer</span></div></td><td><span class="chip working"><i></i>running</span></td><td class="mono">3 min ago</td></tr>
+    <tr><td class="t">line</td><td class="mono">ct-50201</td><td><div class="node-run"><span class="past">analyze</span><span class="past">implement</span><span class="past">verify</span><span class="past">review</span></div></td><td><span class="chip done"><i></i>completed</span></td><td class="mono">2 h ago</td></tr>
+    <tr><td class="t">line</td><td class="mono">ct-49990</td><td><div class="node-run"><span class="past">analyze</span><span class="past">implement</span><span class="past">verify</span><span class="past">implement</span><em>reject · sd-377</em></div></td><td><span class="chip dormant"><i></i>failed</span></td><td class="mono">1 d ago</td></tr>
+    </tbody></table></div>
+</div></div>
+<div class="cap">One list, <code>workflow_runs.listRuns</code>, feeds this tab, the scope feed and the task page. Access is the run's workspace key, so a teammate sees the runs on the tasks they can read.</div>
+</div>
+
+<h3 id="s-cli">4.6 The CLI</h3>
+<p style="max-width:var(--maxw)">The same model from the terminal. <code>cast task show</code> prints decisions with id, status and station, runs with status, node and gate, and evidence. The rest are small verbs on rows that already exist.</p>
+<pre><span class="c"># the line</span>
+cast workflow run --task ct-50210          <span class="c"># no file: the caller's role line, else `line`</span>
+cast role line @product --set design       <span class="c"># a scope edit: human only, logged, wakes the role</span>
+cast workflow runs --task ct-50210
+
+<span class="c"># stations</span>
+cast task handoff ct-50210 --status done --evidence - --files a,b --pr &lt;url&gt; --page &lt;slug|url&gt;   <span class="c"># --page attaches a page published without --task</span>
+cast task verdict ct-50210 approve --note -
+cast task show ct-50210                    <span class="c"># decisions, runs, evidence</span>
+
+<span class="c"># evidence</span>
+cast publish two.html --task ct-50210      <span class="c"># attaches at the task's current station</span>
+cast decide "Which layout?" -o "Left rail :: keep the filter rail" -o "Top bar :: one column" --option-page 1=rail.html --option-page 2=bar.html
+
+<span class="c"># stacks and the queue</span>
+cast stack policy ds-17 --due "tomorrow 9am"
+cast stack reorder ds-17 sd-402,sd-380
+cast stack remove ds-17 sd-380
+cast decide ls --mine
+cast decide edit sd-402 --category review   <span class="c"># every ask field</span>
+
+<span class="c"># chains</span>
+cast exec --chain triage --plan pl-531     <span class="c"># records a run: chain-triage, one box node per step</span>
+cast org feed                              <span class="c"># prints run rows</span></pre>
+</section>
+
+<section id="mechanics">
+<h2><span class="num">5</span>Mechanics</h2>
+
+<h3 id="m-gate">5.1 Gate to decision to hold to release</h3>
+<div class="flow">
+  <div class="step"><span class="n">1</span><b>The run reaches a hexagon</b><p>The runner calls <code>pauseAtGate</code> with the node id, the prompt, the choices from the edges, the doc body, the category and the graph's stack name.</p></div>
+  <div class="step"><span class="n">2</span><b>The asker is chosen</b><p>The session that started the run, or the role's standing session, so the ladder and grants apply. Else the run's primary session.</p></div>
+  <div class="step"><span class="n">3</span><b>askCore inserts one row</b><p>Task and station from the bound task, options from the choices, context from the prompt, blocking, with <code>workflow_run_id</code> and <code>gate_node_id</code>. The run stores the decision id and pauses.</p></div>
+  <div class="step"><span class="n">4</span><b>The task is held</b><p>A pending blocking row with the task's current status holds it. A session that tries to move the status is refused with the decision's id. A person on the web may move it; a note comment names what they moved past.</p></div>
+  <div class="step"><span class="n">5</span><b>Any path answers</b><p>The queue, the page, the card, <code>cast decide answer</code>, a role under a grant, a stack policy. All end in <code>finalizeAnswer</code>, which writes <code>gate_response</code> and sets the run running. The run consumes the answer; the asker is not messaged.</p></div>
+  <div class="step"><span class="n">6</span><b>Release</b><p>The row is no longer pending, so nothing holds the task. The runner's poll reads the response as before and follows the chosen edge. Nothing was written to the task for the hold.</p></div>
+</div>
+<p>Free text still works. The run panel's <code>respondToGate</code> answers the same decision: a message that starts with a key picks that option; anything else is <code>answer_text</code> and routes the run on its unconditional edge. Withdraw goes both ways through <code>settleResolution</code>: cancelling the run withdraws its open gate; withdrawing a gate fails the run with the reason "gate withdrawn". Ladder roles receive either as a passive fact. The runner's existing decisions for a reject verdict and for exhausted retries carry <code>workflow_run_id</code> too, so the run panel and the task page show them as the run's decisions.</p>
+
+<h3 id="m-evidence">5.2 Evidence binding</h3>
+<p>Evidence is never copied. It is a pointer on the row that already carries the thing, and one query that gathers the pointers.</p>
+<ul>
+  <li><code>cast publish --task ct-N</code> and <code>--plan pl-N</code> set the task, plan and station on the artifact. Without a flag, a publish from a session bound to a task attaches to that task at its current status.</li>
+  <li><code>cast task handoff --page &lt;slug|url&gt;</code> attaches an existing page: it patches <code>task_id</code> and <code>station</code>.</li>
+  <li>A decision option may carry a page in <code>options[i].page_slug</code>. <code>cast decide --option-page n=file.html</code> publishes the file through the same path <code>--report</code> uses and sets it.</li>
+  <li>Images from <code>cast image</code> have no row. They attach through the message that carries them: a bound session's images are the task's images.</li>
+  <li><code>tasks.evidence({ task_id })</code> returns one object: pages by station with thumbnail urls, docs with the task in <code>task_ids</code>, images from bound sessions, files changed, verification text, the PR, and the review verdict. The task page and <code>cast task show</code> render it.</li>
+</ul>
+
+<h3 id="m-sweep">5.3 The sweep and caps</h3>
+<p><code>orgLine.sweep</code> runs every two minutes. For each active role with trust <code>direct</code> it reads the tasks in the role's scope that are assigned to <code>agent:&lt;handle&gt;</code>, at status open, not blocked, and without a run. Each one gets a run while <code>counters.hands</code> is below <code>caps.hands_per_day</code>. The run is created as the role's host user with the role's project path; the spawner is the role's standing session; a <code>daemon_commands</code> row of kind <code>run_workflow</code> reaches the host's daemon. The sweep bumps the hand counter, comments once on the task, and skips paused roles. When the host has never pushed the line's slug, the run carries the slug as its workflow name and the daemon resolves the graph from the shipped template, as <code>cast workflow run &lt;name&gt;</code> does. The run's primary session is a hand of the role, and it is the one that counts against the daily cap.</p>
+<p>The sweep is idempotent because the task row is the record: a task with a <code>workflow_run_id</code> is never started twice. A role at <code>understand</code> or <code>decide</code> trust starts nothing; a person types the command. Hands the run starts are unattended principals: reversible actions run, and anything in a protected category goes through <code>cast decide</code>, which pins the holder to a person. A stalled hand is killed by the runner's timeout and the task returns to open with a comment. Two implement cycles, then the task goes to in review blocked with a decision to the person.</p>
+
+<h3 id="m-chain">5.4 Chain compile</h3>
+<p>A chain is definitions in order; each step's output feeds the next prompt. <code>cast exec --chain &lt;name&gt;</code> and <code>cast agent run &lt;name&gt;</code> compile it into a linear workflow with slug <code>chain-&lt;name&gt;</code>: one <code>box</code> node per step carrying the step's prompt template and <code>definition=</code> the step's agent. The CLI upserts it, creates a run with <code>createFromCli</code> bound to the task or plan when given and with the current session as spawner, reports each step with <code>updateProgress</code> using the output's head as the preview, and completes or fails the run. <code>cast exec -j N</code> records one run with a <code>component</code> fanout node and one node per input. Output still prints to stdout and to <code>--json</code>. The run therefore shows on <code>/routines</code>, on the task page and in the scope feed like any other.</p>
+</section>
+
+<section id="data">
+<h2><span class="num">6</span>Data model</h2>
+<p>Every field below is in the schema today. No table is added. Each field is a pointer between two rows that exist, or a copy of an attribute a run used to lose.</p>
+
+<h4>session_decisions</h4>
+<div class="fields">
+<div class="row"><b>options[i].page_slug?</b>  string          <span class="c">a published page for this option (L6)</span></div>
+<div class="row"><b>workflow_run_id?</b>       Id&lt;workflow_runs&gt;  <span class="c">the run this gate belongs to (L4)</span></div>
+<div class="row"><b>gate_node_id?</b>          string          <span class="c">the hexagon node in that run (L4)</span></div>
+</div>
+<h4>workflow_runs</h4>
+<div class="fields">
+<div class="row"><b>gate_decision_id?</b>      Id&lt;session_decisions&gt;  <span class="c">the open gate; gate_prompt and gate_choices stay as a mirror (L4)</span></div>
+<div class="row"><b>gate_node_id?</b>          string</div>
+<div class="row"><b>workspace</b>              string          <span class="c">the ACCESS key, from computeWorkspaceKey at create, createFromCli, ingestSnapshot (L8)</span></div>
+<div class="row"><b>team_id?</b>               Id&lt;teams&gt;       <span class="c">routing only (L8)</span></div>
+<div class="row"><b>indexes</b>               by_workspace_updated, by_task, by_plan</div>
+</div>
+<h4>artifacts</h4>
+<div class="fields">
+<div class="row"><b>task_id?</b>               Id&lt;tasks&gt;       <span class="c">the task this page is evidence for (L6)</span></div>
+<div class="row"><b>plan_id?</b>               Id&lt;plans&gt;</div>
+<div class="row"><b>station?</b>               string          <span class="c">the task's status when it attached</span></div>
+<div class="row"><b>indexes</b>               by_task, by_plan</div>
+</div>
+<h4>workflows.nodes[]</h4>
+<div class="fields">
+<div class="row"><b>definition?</b>  <b>reviewer?</b>  <b>timeout?</b>  <b>temperature?</b>   <span class="c">persisted, so a stored graph runs as a local one (L8)</span></div>
+<div class="row"><b>doc?</b>  <b>category?</b>                                   <span class="c">gate attributes: the decision body and its proposed category (L4)</span></div>
+</div>
+<h4>decision_stacks</h4>
+<div class="fields">
+<div class="row"><b>policy.due_at?</b>         number          <span class="c">cast stack policy --due; the queue shows it and sorts overdue first (L10)</span></div>
+</div>
+<h4>org_roles</h4>
+<div class="fields">
+<div class="row"><b>line_workflow_slug?</b>    string          <span class="c">default "line"; a path, the caller's workflow by slug, or a shipped template (L2)</span></div>
+</div>
+<p>Two things are deliberately not stored. A hold is derived from the open decisions by task, so it can never go stale. A station is the task's status, so a run adds no state to a task and the board keeps one source of truth.</p>
+</section>
+
+<section id="guardrails">
+<h2><span class="num">7</span>Guardrails</h2>
+<p>The contract prevents a short list of things. Everything else it makes visible and leaves to a person. The split matters: a refusal costs a round trip, so it is spent only where the alternative is a silent wrong state.</p>
+<div class="two">
+  <div class="box stop"><h4>Prevented</h4><ul>
+    <li>A session moving a held task's status. The error names the decision and the command that answers it.</li>
+    <li>A role's session closing its own task without an approve verdict from a session outside the role.</li>
+    <li>A session changing a scope's line. The picker is human only, logged to role history, and wakes the role.</li>
+    <li>The sweep starting a task twice, or starting past the role's daily hand cap, or for a paused role.</li>
+    <li>A hand inside a run taking a protected action. Protected categories stay human held; <code>cast decide</code> pins the holder to a person.</li>
+    <li>A blocking stack member answering itself. Auto default applies to advisory members only.</li>
+    <li>A run asking a person by any rail but <code>session_decisions</code>.</li>
+    <li>A teammate reading a run on a task they cannot read. Access is the run's workspace key.</li>
+  </ul></div>
+  <div class="box see"><h4>Visible, not prevented</h4><ul>
+    <li>A person on the web moving a held task. The decision stays open; a note comment names the decision they moved past.</li>
+    <li>A hand that stalls. The runner's timeout kills it; the task returns to open with a comment.</li>
+    <li>A third implement cycle. The task goes to in review blocked, with a decision to the person.</li>
+    <li>A withdrawn gate. The run fails with "gate withdrawn"; ladder roles receive the fact.</li>
+    <li>A page published with no task flag from an unbound session. It stays a session's page and attaches to nothing.</li>
+    <li>An image with no artifact row. It is the task's image only while the session that carries it is bound.</li>
+    <li>A stack past its due time. It sorts first and the header says overdue.</li>
+  </ul></div>
+</div>
+</section>
+
+<section id="rollout">
+<h2><span class="num">8</span>Rollout</h2>
+<p>Three waves. Wave 1 is server and CLI, in parallel slices that touch separate files. Wave 2 is the web. Wave 3 is what makes it feel finished. Convex deploys before the web push in every wave, so the live site never asks for a function that is not there.</p>
+<div class="wave"><div class="wh"><b>Wave 1 · Server and CLI</b><span>parallel slices</span></div><div class="wb">
+<p>The contract rewritten clean. Gates are decisions: <code>pauseAtGate</code> creates the row, <code>finalizeAnswer</code> releases the run. Station holding and decision hygiene: the hold rule in the two status mutations, <code>cast decide edit</code> with every field, withdraw through <code>settleResolution</code>, <code>cast stack remove</code> and <code>reorder</code>. Workflow fidelity and team visibility: nodes keep their attributes, runs carry workspace and team, one runs list. Chains are runs. Evidence attaches: the artifact fields, <code>--task</code> and <code>--option-page</code>, <code>tasks.evidence</code>. Scopes own the line and start it: <code>line_workflow_slug</code>, <code>cast role line</code>, the sweep.</p>
+<p><strong>Accept when:</strong> a gate in a run appears in the queue, is answered there, and the run resumes; a hand that tries to move a held task is refused by name; a chain run appears in <code>cast workflow runs</code>; a page published from a bound session shows in <code>cast task show</code> at the right station; a task assigned to a direct role gets a run within two minutes and never a second one.</p>
+</div></div>
+<div class="wave"><div class="wh"><b>Wave 2 · Web</b><span>three surfaces</span></div><div class="wb">
+<p>The task page as the line: the strip, the held marker, decision cards, evidence by station, the run panel reading the decision card. Decisions with option pages, gate cards and stacks: the comparison row, the run chip, due on the header, overdue first. The scope Line tab, the Routines Runs tab, one Workflows entry with a Dynamic tab.</p>
+<p><strong>Accept when:</strong> the day in section 3 runs end to end from the phone browser at 390 pixels and from a laptop at 1280 pixels, and every held marker, chip and thumbnail on the page is derived from the rows, with no field written for display.</p>
+</div></div>
+<div class="wave"><div class="wh"><b>Wave 3 · Polish</b><span>until it disappears</span></div><div class="wb">
+<p><code>cast task show</code> and <code>cast org feed</code> print the same model. This page. A review wave over every slice. Polish rounds with browser verification and a Convex deploy.</p>
+<p><strong>Accept when:</strong> a teammate who was not on the project reads a task page and can say where the work is, who holds it, and what it produced, without opening the run or the transcript.</p>
+</div></div>
+</section>
+
+<section id="not">
+<h2><span class="num">9</span>What we do not build</h2>
+<ul class="not">
+  <li><strong>A mobile queue and a mobile task line this round.</strong> The web queue and the task page read well in a phone browser, and that is what the scenario uses. Native surfaces come in a later plan.</li>
+  <li><strong>Dollars.</strong> Tokens stay the unit on the role page and in the brief. A price table is a later layer on the same counters.</li>
+  <li><strong>Roles for labels or paths.</strong> A scope is projects and plans. A label is personal filing and a path is a machine detail.</li>
+  <li><strong>A second ask rail.</strong> No run, chain or role asks a person by any path but a decision row. The run panel's free text answers the same row.</li>
+  <li><strong>New task states.</strong> Stations are statuses. A run never adds a state the board cannot show.</li>
+  <li><strong>A stored hold.</strong> "Held" is derived from open decisions by task. A stored flag would be a second source of truth that could go stale.</li>
+  <li><strong>Pages on gate edges.</strong> A gate's options come from its edges and carry no page in this round. Option pages ride decisions asked with <code>cast decide</code>; a gate's pages are the station's evidence.</li>
+  <li><strong>Peer negotiation between hands.</strong> Conflicts go up the ladder to the role and, when protected, to a person.</li>
+</ul>
+</section>
+
+<footer>docs/proposals/one-line/index.html · contract: docs/architecture/the-line.md (L1 to L11) · related: decisions-as-documents.md, scopes-and-feed.md, org-roles.md, org-roles-standing.md, agent-definitions.md</footer>
+
+</main>
+<aside class="side">
+  <div class="k">On this page</div>
+  <ol>
+    <li><a href="#summary">Summary</a></li>
+    <li><a href="#why">1 · Why now</a></li>
+    <li><a href="#words">2 · Nine words</a></li>
+    <li><a href="#day">3 · A day on the line</a></li>
+    <li><a href="#surfaces">4 · Surfaces</a></li>
+    <li><a href="#mechanics">5 · Mechanics</a></li>
+    <li><a href="#data">6 · Data model</a></li>
+    <li><a href="#guardrails">7 · Guardrails</a></li>
+    <li><a href="#rollout">8 · Rollout</a></li>
+    <li><a href="#not">9 · Not built</a></li>
+  </ol>
+  <div class="w">scope · line · station · run<br>gate · hold · evidence · stack · hand</div>
+</aside>
+</div>
+</body>
+</html>

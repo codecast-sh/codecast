@@ -15,11 +15,19 @@ import { useState } from "react";
 import { AnchorGlyph } from "./AnchorIdentity";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-export function AnchorConversation({ conversationId, hideHeader }: { conversationId: string; hideHeader?: boolean }) {
-  // Seed ownership so the embedded conversation shows owner UI immediately.
+export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true }: {
+  conversationId: string;
+  hideHeader?: boolean;
+  /** The anchor page owns its anchor by construction, so it seeds `is_own`
+   *  before the row lands and the owner UI paints at once. A thread embedded
+   *  elsewhere (the staffing pane's chief of staff, hosted by whoever hired
+   *  it) passes false and takes ownership from the row itself. */
+  seedOwnership?: boolean;
+}) {
   useWatchEffect(() => {
+    if (!seedOwnership) return;
     useInboxStore.getState().syncRecord("conversations", conversationId, { _id: conversationId, is_own: true });
-  }, [conversationId]);
+  }, [conversationId, seedOwnership]);
 
   const {
     conversation,
@@ -50,7 +58,7 @@ export function AnchorConversation({ conversationId, hideHeader }: { conversatio
         onJumpToStart={jumpToStart}
         onJumpToEnd={jumpToEnd}
         onJumpToTimestamp={jumpToTimestamp}
-        isOwner
+        isOwner={seedOwnership || !!(conversation as { is_own?: boolean }).is_own}
         showMessageInput
         hideHeader={hideHeader}
       />

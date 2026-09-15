@@ -3,8 +3,11 @@
 // The transport is the integrated terminal's loopback endpoint — same port,
 // same per-boot token, one more WS path — so discovery is just
 // getTerminalEndpoint (lib/terminal/endpoint.ts) and this module only speaks
-// the watch protocol: hello, then ready / frame / tab / error / exit. Frames
-// arrive as base64 JPEG, at most ~3 a second, paced daemon-side by CDP acks.
+// the watch protocol: hello, then ready / frame / tab / action / error / exit.
+// Frames arrive as base64 JPEG, at most ~3 a second, paced daemon-side by CDP
+// acks. Action messages ride beside them: where the agent's hand is on the
+// page (packages/cli watchActions.ts), so a viewer can draw the cursor the
+// pixels never show.
 
 import type { TerminalEndpoint } from "./terminal/endpoint";
 
@@ -15,12 +18,37 @@ export interface WatchTabInfo {
   id: string;
 }
 
+export type WatchActionKind = "move" | "down" | "up" | "type" | "nav" | "scroll";
+
+/**
+ * One thing the agent did on the page; mirrors WatchAction in the CLI's
+ * watchActions.ts. `x`/`y` are 0..1 of the page viewport, the same convention
+ * control-mode input goes out in, so mapFromFrame puts the arrow exactly
+ * where mapToFrame would send a click.
+ */
+export interface WatchActionFrame {
+  kind: WatchActionKind;
+  x: number;
+  y: number;
+  /** On `type`: what has been typed into the field so far (already capped). */
+  text?: string;
+  /** On `type` into a password or code field: there is no text, on purpose. */
+  secret?: boolean;
+  /** On `nav`: the main frame's new URL. */
+  url?: string;
+  /** Wall clock ms when the page saw it. */
+  at: number;
+}
+
 export interface WatchHandlers {
   /** `control` is true when the daemon granted two-way input on this socket. */
   onReady: (tab: WatchTabInfo, control: boolean) => void;
   /** A JPEG the driven page just painted, ready for an <img> src. */
   onFrame: (dataUrl: string, w: number, h: number) => void;
   onTab: (tab: WatchTabInfo) => void;
+  /** The agent moved, pressed, typed, scrolled or navigated. Optional: a
+   *  viewer that only wants pixels leaves it out and the frames are unchanged. */
+  onAction?: (action: WatchActionFrame) => void;
   /** Terminal failure: the stream is over and the socket is closing. */
   onError: (code: string, message: string) => void;
   /** Orderly end: tab closed, browser gone, or the daemon's time cap. */
@@ -44,28 +72,82 @@ export type WatchInputEvent =
   | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
   | { kind: "insertText"; text: string };
 
+export interface FrameBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where the video content sits inside an <img> box rendered object-contain:
+ * the frame's aspect fit inside the box and centered, with letterbox bands
+ * on the axis that has room to spare. Null for a box or frame with no size.
+ * The one piece of geometry both directions below share, so the arrow drawn
+ * from an action and the click sent from the control surface agree.
+ */
+export function frameContentRect(box: FrameBox, natural: { width: number; height: number }): FrameBox | null {
+  if (!natural.width || !natural.height || !box.width || !box.height) return null;
+  const scale = Math.min(box.width / natural.width, box.height / natural.height);
+  const width = natural.width * scale;
+  const height = natural.height * scale;
+  return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, width, height };
+}
+
 /**
  * Map a viewer's client point to normalized page coordinates (0..1), given
- * the <img> that renders the frame with object-contain. The video content
- * sits letterboxed inside the img box; a click in the letterbox bands maps
- * to nothing. Pure, so the geometry is testable without a DOM.
+ * the <img> that renders the frame with object-contain. A click in the
+ * letterbox bands maps to nothing. Pure, so the geometry is testable without
+ * a DOM.
  */
 export function mapToFrame(
   clientX: number,
   clientY: number,
-  box: { left: number; top: number; width: number; height: number },
+  box: FrameBox,
   natural: { width: number; height: number },
 ): { nx: number; ny: number } | null {
-  if (!natural.width || !natural.height || !box.width || !box.height) return null;
-  const scale = Math.min(box.width / natural.width, box.height / natural.height);
-  const w = natural.width * scale;
-  const h = natural.height * scale;
-  const left = box.left + (box.width - w) / 2;
-  const top = box.top + (box.height - h) / 2;
-  const nx = (clientX - left) / w;
-  const ny = (clientY - top) / h;
+  const rect = frameContentRect(box, natural);
+  if (!rect) return null;
+  const nx = (clientX - rect.left) / rect.width;
+  const ny = (clientY - rect.top) / rect.height;
   if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
   return { nx, ny };
+}
+
+/**
+ * The other direction: a normalized page point to a pixel offset inside the
+ * box, for drawing the agent's cursor over the frame. A point outside 0..1 is
+ * clamped to the content edge rather than dropped: an arrow that vanished
+ * whenever the agent aimed at the very edge would read as a glitch.
+ */
+export function mapFromFrame(
+  nx: number,
+  ny: number,
+  box: FrameBox,
+  natural: { width: number; height: number },
+): { x: number; y: number } | null {
+  const rect = frameContentRect(box, natural);
+  if (!rect) return null;
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  return { x: rect.left + clamp(nx) * rect.width, y: rect.top + clamp(ny) * rect.height };
+}
+
+const ACTION_KINDS = new Set<WatchActionKind>(["move", "down", "up", "type", "nav", "scroll"]);
+
+/** One `action` message as the socket delivered it, or null if malformed. */
+export function parseWatchAction(msg: any): WatchActionFrame | null {
+  if (!msg || typeof msg.kind !== "string" || !ACTION_KINDS.has(msg.kind)) return null;
+  if (typeof msg.x !== "number" || typeof msg.y !== "number" || !Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return null;
+  const action: WatchActionFrame = {
+    kind: msg.kind,
+    x: msg.x,
+    y: msg.y,
+    at: typeof msg.at === "number" && Number.isFinite(msg.at) ? msg.at : Date.now(),
+  };
+  if (typeof msg.text === "string") action.text = msg.text;
+  if (msg.secret === true) action.secret = true;
+  if (typeof msg.url === "string") action.url = msg.url;
+  return action;
 }
 
 export interface WatchConnection {
@@ -96,6 +178,9 @@ export function connectBrowserWatch(
         ...(session.sessionUuid ? { session_uuid: session.sessionUuid } : {}),
         ...(session.tmuxSession ? { tmux_session: session.tmuxSession } : {}),
         ...(session.control ? { control: true } : {}),
+        // The newest protocol this viewer speaks (the CLI's WATCH_PROTOCOL_VERSION):
+        // 2 adds action messages. Informational; the daemon sends its own in ready.
+        protocol: 2,
         fps: 3,
       }),
     );
@@ -119,6 +204,11 @@ export function connectBrowserWatch(
       case "tab":
         handlers.onTab({ title: msg.title ?? "", url: msg.url ?? "", id: msg.targetId ?? "" });
         break;
+      case "action": {
+        const action = parseWatchAction(msg);
+        if (action) handlers.onAction?.(action);
+        break;
+      }
       case "error":
         done = true;
         handlers.onError(msg.code ?? "error", msg.message ?? "watch failed");
@@ -266,4 +356,8 @@ export type BrowserStreamReport = {
   controlAvailable: boolean;
   /** A frame has painted; a paused or failed stream still shows it. */
   hasFrame: boolean;
+  /** The agent's last navigation, for a host that flashes the address when it
+   *  changes. `tab.url` already carries the new address; this says WHEN, so a
+   *  flash keyed on it restarts per navigation and never on a re-render. */
+  nav: { url: string; at: number } | null;
 };

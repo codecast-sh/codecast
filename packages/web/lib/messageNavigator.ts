@@ -13,7 +13,7 @@ import {
   isSpawnedTaskPrompt,
   type MachineDeliveredKind,
 } from "../components/sessionMessage";
-import { NAV_ROW_SNIPPET_CHARS, stripContextTags } from "@codecast/convex/convex/userMessagesFilter";
+import { NAV_ROW_SNIPPET_CHARS, stripContextTags, filterUserMessages, type FilterableMessage } from "@codecast/convex/convex/userMessagesFilter";
 import type { PromptImage } from "./messagePreview";
 import { formatShortDate } from "./utils";
 
@@ -357,6 +357,104 @@ export function resolveStickyPrompt(
   for (let i = stickyIndices.length - 1; i >= 0; i--) {
     const idx = stickyIndices[i];
     if (idx <= topVisibleIndex) return { index: idx, hidden: visibleIndexSet.has(idx) };
+  }
+  return null;
+}
+
+// Union the complete (but scan-capped) user-message cache with the loaded
+// transcript window. The cache is newest-first capped, so the opening prompts
+// of a long thread can be missing from it while still sitting on screen —
+// those loaded rows have to join the navigator or #1 is a later prompt.
+export function mergeNavigatorSources(
+  cached: NavigatorSourceMessage[] | null | undefined,
+  loaded: Array<{
+    _id: string;
+    role?: string;
+    content?: string;
+    timestamp: number;
+    images?: PromptImage[];
+    tool_results?: FilterableMessage["tool_results"];
+    subtype?: string;
+  }> | null | undefined,
+): NavigatorSourceMessage[] {
+  const byId = new Map<string, NavigatorSourceMessage>();
+  for (const m of cached ?? []) byId.set(m._id, m);
+  const extras: FilterableMessage[] = [];
+  for (const m of loaded ?? []) {
+    if (m.role !== "user") continue;
+    const existing = byId.get(m._id);
+    if (existing) {
+      const loadedContent = m.content ?? "";
+      if (loadedContent.length > (existing.content?.length ?? 0)) {
+        byId.set(m._id, { ...existing, content: loadedContent, images: m.images ?? existing.images });
+      }
+      continue;
+    }
+    extras.push({
+      _id: m._id,
+      role: "user",
+      content: m.content,
+      timestamp: m.timestamp,
+      images: m.images,
+      tool_results: m.tool_results,
+      subtype: m.subtype,
+    });
+  }
+  for (const m of filterUserMessages(extras)) {
+    byId.set(m._id, { _id: m._id, content: m.content, timestamp: m.timestamp, images: m.images });
+  }
+  return [...byId.values()].sort((a, b) => a.timestamp - b.timestamp || a._id.localeCompare(b._id));
+}
+
+export type ViewportRect = { index: number; top: number; bottom: number };
+
+// First timeline row whose box intersects the viewport, plus every intersecting
+// index. Overscan rows above the viewport have bottom <= viewportTop and are
+// not visible. Used by both the sticky banner and the navigator current row.
+export function topVisibleIndexFromRects(
+  items: ViewportRect[],
+  viewportTop: number,
+  viewportBottom: number,
+): { topVisibleIndex: number; visible: Set<number> } {
+  const visible = new Set<number>();
+  let topVisibleIndex = -1;
+  for (const item of items) {
+    if (item.bottom > viewportTop && item.top < viewportBottom) {
+      visible.add(item.index);
+      if (topVisibleIndex < 0) topVisibleIndex = item.index;
+    }
+  }
+  if (topVisibleIndex < 0) {
+    for (const item of items) {
+      if (item.bottom > viewportTop) {
+        topVisibleIndex = item.index;
+        break;
+      }
+    }
+  }
+  return { topVisibleIndex, visible };
+}
+
+// Navigator current = the latest navigator row at or above the top visible
+// timeline row. Unlike the sticky banner, this stays set when that row is
+// itself on screen — the list has to highlight what the reader is looking at,
+// including the opening prompt at scrollTop 0.
+export function resolveNavigatorCurrentId(
+  navigatorIndices: number[],
+  timelineIds: Array<string | null | undefined>,
+  topVisibleIndex: number,
+  fallbackId: string | null,
+): string | null {
+  if (navigatorIndices.length === 0) return fallbackId;
+  const resolved = resolveStickyPrompt(navigatorIndices, topVisibleIndex, new Set());
+  if (resolved) {
+    const id = timelineIds[resolved.index];
+    return typeof id === "string" && id.length > 0 ? id : fallbackId;
+  }
+  if (fallbackId) return fallbackId;
+  if (topVisibleIndex >= 0 && topVisibleIndex < navigatorIndices[0]) {
+    const id = timelineIds[navigatorIndices[0]];
+    return typeof id === "string" && id.length > 0 ? id : null;
   }
   return null;
 }

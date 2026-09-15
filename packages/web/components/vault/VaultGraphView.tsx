@@ -23,7 +23,7 @@ import Graph from "graphology";
 import Sigma from "sigma";
 import { Filter, Loader2, RotateCcw, Waypoints, X } from "lucide-react";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { useTabContext } from "../../lib/tabParams";
+import { useTabActive } from "../../hooks/usePagePresence";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import {
   buildVaultGraph,
@@ -498,8 +498,7 @@ export function VaultGraphView({ activePath, onNavigate, onClose }: VaultGraphVi
   //
   // The tab shell keeps inactive tabs mounted, so a bare window listener would
   // fire this from whatever tab the user is actually looking at.
-  const tabCtx = useTabContext();
-  const isTabActive = (tabCtx as { isActive?: boolean } | null)?.isActive !== false;
+  const isTabActive = useTabActive();
   useEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !isTabActive) return;
     const target = event.target as HTMLElement | null;

@@ -1,9 +1,9 @@
-import { useMutation } from "convex/react";
 import { useWorkflow, useWorkflowRun } from "../hooks/useSyncWorkflows";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
 import { useState } from "react";
+import { useTrackedStore } from "../store/inboxStore";
+import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import {
   ChevronDown,
   ChevronRight,
@@ -15,8 +15,6 @@ import {
   Clock,
   Pause,
 } from "lucide-react";
-
-const api = _api as any;
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "text-sol-text-dim",
@@ -45,24 +43,23 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   // frame instead of popping in a round-trip late.
   const run = useWorkflowRun(workflowRunId);
   const workflow = useWorkflow(run?.workflow_id);
-  const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [expanded, setExpanded] = useState(true);
-  const [responding, setResponding] = useState(false);
+  // A gate is a decision (the-line.md L4, L10): the panel renders the
+  // decision card for the run's gate_decision_id, never its own buttons.
+  // The row rides the sessionDecisions collection; until it lands, a link.
+  const gateDecisionId = run?.gate_decision_id as string | undefined;
+  const s = useTrackedStore([(st) => (gateDecisionId ? st.sessionDecisions[gateDecisionId] : undefined)]);
+  const gateDecision = gateDecisionId ? s.sessionDecisions[gateDecisionId] : undefined;
 
-  if (!run || !workflow) return null;
+  if (!run) return null;
 
   const statusColor = STATUS_COLOR[run.status] || "text-sol-text-dim";
   const doneCount = run.node_statuses.filter((n: any) => n.status === "completed").length;
-  const totalNodes = workflow.nodes.length;
-
-  const handleGateResponse = async (key: string) => {
-    setResponding(true);
-    try {
-      await respondToGate({ id: workflowRunId, response: key });
-    } finally {
-      setResponding(false);
-    }
-  };
+  // A run the sweep started from a shipped template has no stored graph
+  // (L9): its node statuses are the node list then.
+  const nodes: Array<{ id: string; label: string }> = workflow?.nodes ?? run.node_statuses.map((n: any) => ({ id: n.node_id, label: n.label ?? n.node_id }));
+  const totalNodes = nodes.length;
+  const name = workflow?.name ?? run.workflow_name ?? "run";
 
   return (
     <div className="border-b border-sol-border/30 bg-sol-bg-alt/20">
@@ -71,7 +68,7 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
         className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"
       >
         <GitBranch className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
-        <span className="font-medium text-sol-violet truncate">{workflow.name}</span>
+        <span className="font-medium text-sol-violet truncate">{name}</span>
         <span className={`text-[10px] font-medium ml-1 ${statusColor}`}>
           {run.status === "paused" ? (
             <span className="flex items-center gap-1"><Pause className="w-2.5 h-2.5" /> gate</span>
@@ -97,34 +94,32 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
             </p>
           )}
 
-          {run.status === "paused" && run.gate_prompt && (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] text-sol-magenta font-semibold">Gate</span>
-                <span className="text-[10px] text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
-              </div>
-              {!run.gate_response ? (
-                <div className="flex flex-wrap gap-1">
-                  {run.gate_choices?.map((choice: any) => (
-                    <button
-                      key={choice.key}
-                      onClick={() => handleGateResponse(choice.key)}
-                      disabled={responding}
-                      className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 hover:bg-sol-magenta/10 transition-colors disabled:opacity-50"
-                    >
-                      [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
-                    </button>
-                  ))}
-                  <span className="text-[10px] text-sol-text-dim">· reply in conversation</span>
+          {run.status === "paused" && (
+            <div className="space-y-1.5" data-run-gate={gateDecisionId ?? ""}>
+              {gateDecision ? (
+                <DecisionCompactCard decision={gateDecision} showTask={false} />
+              ) : gateDecisionId ? (
+                <Link
+                  href={`/decisions/${run.gate_decision_short_id ?? gateDecisionId}`}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-sol-yellow/40 text-[11px] text-sol-text hover:bg-sol-yellow/10"
+                >
+                  <Pause className="w-3 h-3 text-sol-orange" />
+                  Answer the gate{run.gate_decision_short_id ? ` · ${run.gate_decision_short_id}` : ""}
+                </Link>
+              ) : run.gate_prompt ? (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-sol-magenta font-semibold">Gate</span>
+                  <span className="text-[10px] text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
+                  {run.gate_response
+                    ? <span className="text-[10px] text-sol-green">Responded: {run.gate_response}</span>
+                    : <span className="text-[10px] text-sol-text-dim">· reply in the conversation</span>}
                 </div>
-              ) : (
-                <p className="text-[10px] text-sol-green">Responded: {run.gate_response}</p>
-              )}
+              ) : null}
             </div>
           )}
 
           <div className="space-y-0.5">
-            {workflow.nodes.map((node: any) => {
+            {nodes.map((node: any) => {
               const nodeStatus = run.node_statuses.find((n: any) => n.node_id === node.id);
               const status = nodeStatus?.status || "pending";
               const Icon = NODE_ICON[status] || Circle;

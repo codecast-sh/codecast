@@ -54,6 +54,8 @@ cast decide "<one question>" \
 The reasoning: what you found, the tradeoff, and why you cannot pick alone.
 Write it so they can decide WITHOUT opening the session.
 EOF
+cast decide "<q>" -o … -o … --option-page 2=alt.html   # an option with its own page (a file, a slug, or a url)
+cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorrow   # tend a stack; overdue sorts first
 ```
 
 **The decision is the whole message.** It renders as a card — in the queue and inline in this
