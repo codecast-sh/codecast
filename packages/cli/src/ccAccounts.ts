@@ -766,14 +766,15 @@ export async function matchProfileForCredential(
 /** The identity block to store beside the credential. When the credential has
  *  proved whose it is, that verdict wins over ~/.claude.json's label, which may
  *  still name the account we switched away from. */
-function activeOauthAccountForSave(): Record<string, any> | null {
+function activeOauthAccountForSave(credential: string): Record<string, any> | null {
   const label = readOauthAccount();
-  const verified = verifiedIdentityFor(readActiveOauth()?.accessToken);
-  if (!verified?.uuid) return label;
-  if (label?.accountUuid === verified.uuid) return label;
-  // The label describes a different account: keep only what the credential
-  // itself proved, so nothing downstream reads the stale org/email.
-  return { accountUuid: verified.uuid, emailAddress: verified.email };
+  const verified = verifiedIdentityFor(oauthOf(credential)?.accessToken);
+  if (!verified) return label;
+  return {
+    ...(verified.uuid && normalizeField(label?.accountUuid) === normalizeField(verified.uuid) ? label : {}),
+    ...(verified.uuid ? { accountUuid: verified.uuid } : {}),
+    ...(verified.email ? { emailAddress: verified.email } : {}),
+  };
 }
 
 export function saveProfile(name: string): CcProfileMeta {
@@ -782,6 +783,23 @@ export function saveProfile(name: string): CcProfileMeta {
   if (!cred) {
     throw new CcAccountError(
       "No active Claude Code credential found — run claude and /login first",
+    );
+  }
+  return saveProfileSnapshot(name, cred, activeOauthAccountForSave(cred));
+}
+
+function saveProfileSnapshot(name: string, cred: string, oauthAccount: Record<string, any> | null): CcProfileMeta {
+  assertValidProfileName(name);
+  const existing = readProfileIndex().profiles[name];
+  const identity = identityOfOauthAccount(oauthAccount);
+  const differentAccount = existing?.uuid && identity.uuid
+    ? normalizeField(existing.uuid) !== identity.uuid
+    : existing?.email && identity.email && normalizeField(existing.email) !== identity.email;
+  if (differentAccount) {
+    throw new CcAccountError(
+      `Refusing to save "${name}": the credential identifies a different account ` +
+        `(${identity.email ?? identity.uuid}) than the saved profile (${existing.email ?? existing.uuid}). ` +
+        `Run \`cast accounts verify\` to check the saved identities.`,
     );
   }
   // Never snapshot an unusable credential: a save-on-switch that runs while
@@ -794,7 +812,7 @@ export function saveProfile(name: string): CcProfileMeta {
     );
   }
   assertNotAnotherProfilesCredential(name, cred);
-  const profile = buildProfile(cred, activeOauthAccountForSave(), Date.now());
+  const profile = buildProfile(cred, oauthAccount, Date.now());
   writeProfileSecret(name, JSON.stringify(profile));
   const meta = profileMeta(profile);
   const index = readProfileIndex();
@@ -1790,19 +1808,10 @@ export async function resnapshotIfActiveFresher(
 ): Promise<string | null> {
   const raw = await readActiveCredentialAsync();
   const activeOauth = oauthOf(raw);
-  if (!activeOauth) return null;
-  const label = identityOfOauthAccount(readOauthAccount());
-  const active = activeAccountIdentity(raw);
-  // ~/.claude.json is a label written by another program at another moment. When
-  // the credential itself has proved a DIFFERENT account, the label describes
-  // the one we switched away from — and its organization is stale too. Carrying
-  // that organization would rule out the very profile the uuid names, which is
-  // the 2026-09-02 poisoning shape read from the other end.
-  const labelDescribesUs = !active?.verified || !active.uuid || label.uuid === normalizeField(active.uuid);
+  if (!raw || !activeOauth) return null;
+  const oauthAccount = activeOauthAccountForSave(raw);
   const identity: CredentialIdentity = {
-    uuid: normalizeField(active?.uuid) ?? label.uuid,
-    email: normalizeField(active?.email) ?? label.email,
-    ...(labelDescribesUs ? { organization: label.organization } : {}),
+    ...identityOfOauthAccount(oauthAccount),
     refreshToken: tokenField(activeOauth.refreshToken),
   };
   if (!identity.uuid && !identity.email && !identity.organization && !identity.refreshToken) return null;
@@ -1840,7 +1849,7 @@ export async function resnapshotIfActiveFresher(
   const rotatedAndNotOlder = refreshTokenRotated && activeExpiry >= storedExpiry;
   if (!fresher && !rotatedAndNotOlder) return null;
   try {
-    saveProfile(name);
+    saveProfileSnapshot(name, raw, oauthAccount);
     return name;
   } catch (err) {
     // assertNotAnotherProfilesCredential refuses a credential a second profile
