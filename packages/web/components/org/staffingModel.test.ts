@@ -1,0 +1,286 @@
+import { describe, expect, test } from "bun:test";
+import { ORG_FIXTURE } from "./orgFixture";
+import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
+import {
+  bottleneckRoles,
+  changeLine,
+  changeNodeId,
+  collectHealthFlags,
+  findChiefOfStaff,
+  groupChanges,
+  pickProposal,
+  proposalParam,
+  proposalProgress,
+  remainingChanges,
+  spanOfControl,
+  staffingMode,
+} from "./staffingModel";
+import type { OrgTree } from "./orgTypes";
+
+const P = ORG_STAFFING_FIXTURE_PROPOSAL;
+const H = ORG_STAFFING_FIXTURE_HEALTH;
+
+describe("proposal progress and grouping", () => {
+  test("N of M decided counts every change no longer decidable", () => {
+    expect(proposalProgress(P)).toEqual({ decided: 2, total: 6, remaining: 4, applied: 0, skipped: 1, failed: 0, fromCounts: false });
+  });
+
+  test("a failed change is still to decide, as the server sees it", async () => {
+    const { isDecidable } = await import("./staffingModel");
+    expect(["proposed", "failed"].map(isDecidable)).toEqual([true, true]);
+    expect(["accepted", "applied", "skipped"].map(isDecidable)).toEqual([false, false, false]);
+    // One failed row among the six: the header says 2 of 6, and the failed
+    // row is in the remaining list so Accept all retries it.
+    const withFailed = { ...P, changes: P.changes.map((c) => c._id === "fixture-change-4" ? { ...c, status: "failed" as const, applied_note: "handle clash" } : c) };
+    expect(proposalProgress(withFailed)).toMatchObject({ decided: 2, total: 6, remaining: 4, failed: 1 });
+    expect(remainingChanges(withFailed).map((c) => c._id)).toContain("fixture-change-4");
+    // Every row failed: nothing is decided, everything remains.
+    const allFailed = { ...P, changes: P.changes.map((c) => ({ ...c, status: "failed" as const })) };
+    expect(proposalProgress(allFailed)).toMatchObject({ decided: 0, remaining: 6, failed: 6 });
+  });
+
+  test("before the change rows land, the list row's counts stand in and the failed ones come back out", () => {
+    const listRow = { changes: [], counts: { total: 12, decided: 3, applied: 1, failed: 1, skipped: 1 } };
+    expect(proposalProgress(listRow)).toEqual({ decided: 2, total: 12, remaining: 10, applied: 1, skipped: 1, failed: 1, fromCounts: true });
+    expect(proposalProgress({ changes: [] })).toEqual({ decided: 0, total: 0, remaining: 0, applied: 0, skipped: 0, failed: 0, fromCounts: false });
+  });
+
+  test("remaining changes come back in apply order, not seq order", () => {
+    // seq order is role, role, projects, budget, routine, project_meta; the
+    // accepted projects change and the skipped routine drop out, and the
+    // shared apply order puts roles, then charters (they name an owner role),
+    // then budget.
+    expect(remainingChanges(P).map((c) => c.change.kind)).toEqual(["role", "role", "project_meta", "budget"]);
+  });
+
+  test("groups follow the apply order with projects first and one group per kind", () => {
+    const groups = groupChanges(P.changes);
+    expect(groups.map((g) => `${g.kind}:${g.changes.length}`)).toEqual(["projects:1", "role:2", "project_meta:1", "budget:1", "routine:1"]);
+    expect(groups[1].label).toBe("Roles");
+  });
+
+  test("every kind reads as one line", () => {
+    // The words are the shared describer's (the CLI walk and the ghost chips
+    // read the same line); the pane only sentence cases them.
+    expect(changeLine(P.changes[0].change)).toBe("Create role Head of Platform @platform reporting to me over Platform");
+    expect(changeLine(P.changes[2].change)).toBe("Create project Platform");
+    expect(changeLine(P.changes[3].change)).toBe("Budget @growth tokens 800000/day");
+    expect(changeLine(P.changes[4].change)).toBe("Routine on @growth: Weekly growth review every 7d");
+    expect(changeLine(P.changes[5].change)).toBe("Charter Growth owner @growth p1: Double organic signups by December");
+    expect(changeLine({ kind: "move", handle: "content", reports_to: "@growth" })).toBe("Move @content under @growth");
+    expect(changeLine({ kind: "retire", handle: "ops" })).toBe("Retire @ops");
+    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("Trust @growth to decide");
+  });
+
+  test("a change on an existing role focuses that node; a ghost has no node", () => {
+    expect(changeNodeId(P.changes[3].change, ORG_FIXTURE)).toBe("role:fixture-role-growth");
+    expect(changeNodeId(P.changes[0].change, ORG_FIXTURE)).toBeNull();
+    expect(changeNodeId(P.changes[2].change, ORG_FIXTURE)).toBeNull();
+  });
+});
+
+describe("pane mode", () => {
+  const withChief: OrgTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff" }] };
+
+  test("an open proposal wins over everything", () => {
+    expect(staffingMode(ORG_FIXTURE, P)).toBe("proposal");
+    expect(staffingMode(withChief, P)).toBe("proposal");
+  });
+
+  test("no proposal and a chief of staff shows the health summary", () => {
+    expect(findChiefOfStaff(withChief)?.short_id).toBe("or-9");
+    expect(staffingMode(withChief, null)).toBe("health");
+  });
+
+  test("no proposal and no chief of staff shows the hire buttons", () => {
+    expect(findChiefOfStaff(ORG_FIXTURE)).toBeNull();
+    expect(staffingMode(ORG_FIXTURE, null)).toBe("no_chief");
+    expect(staffingMode(null, null)).toBe("no_chief");
+  });
+
+  test("a retired chief of staff does not count", () => {
+    const retired: OrgTree = { ...withChief, roles: withChief.roles.map((r) => r.handle === "chief-of-staff" ? { ...r, status: "retired" as const } : r) };
+    expect(staffingMode(retired, null)).toBe("no_chief");
+  });
+});
+
+describe("health summary", () => {
+  test("flags come back worst first, each pointing at its node", () => {
+    const rows = collectHealthFlags(H, ORG_FIXTURE);
+    expect(rows.map((r) => r.flag.severity)).toEqual(["blocker", "warn", "warn", "warn", "info"]);
+    expect(rows[0].subject).toEqual({ kind: "company" });
+    const growth = rows.find((r) => r.subject.kind === "role");
+    expect(growth?.subject).toMatchObject({ kind: "role", handle: "growth", nodeId: "role:fixture-role-growth" });
+  });
+
+  test("span of control reads every person against the model's limit", () => {
+    const span = spanOfControl(H, ORG_FIXTURE);
+    expect(span.map((s) => [s.name, s.direct_roles, s.wide])).toEqual([["Ashot Petrosian", 1, false], ["Samvit Jain", 0, false]]);
+    expect(span[0].limit).toBe(7);
+    const wide = spanOfControl({ ...H, people: [{ ...H.people[0], direct_roles: 9 }, H.people[1]] }, ORG_FIXTURE);
+    expect(wide[0].wide).toBe(true);
+  });
+
+  test("span falls back to the tree when health has no row for a person", () => {
+    const span = spanOfControl(null, ORG_FIXTURE);
+    expect(span[0]).toMatchObject({ name: "Ashot Petrosian", direct_roles: 1 });
+  });
+
+  test("bottleneck roles carry only their warn and blocker flags", () => {
+    const rows = bottleneckRoles(H);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ handle: "growth", worst: "warn" });
+    expect(rows[0].flags.map((f) => f.code)).toEqual(["overloaded", "cap_hit"]);
+    expect(bottleneckRoles(null)).toEqual([]);
+  });
+});
+
+describe("the ?proposal= parameter", () => {
+  test("reads op-N in either case and rejects anything else", () => {
+    expect(proposalParam("?proposal=op-7")).toBe("op-7");
+    expect(proposalParam("proposal=OP-12&x=1")).toBe("op-12");
+    expect(proposalParam("?proposal=ds-3")).toBeNull();
+    expect(proposalParam("")).toBeNull();
+    expect(proposalParam(null)).toBeNull();
+  });
+
+  test("picks the named proposal, never another one in its place; unnamed, the newest open one", () => {
+    const older = { ...P, _id: "p-old", short_id: "op-3", created_at: P.created_at - 1000 };
+    const resolved = { ...P, _id: "p-res", short_id: "op-5", status: "resolved" as const, created_at: P.created_at + 5000 };
+    expect(pickProposal([older, P, resolved], "op-3")?.short_id).toBe("op-3");
+    // A link to a proposal outside these rows (another workspace, or beyond
+    // the list cap) opens nothing: the link line names where it is.
+    expect(pickProposal([older, P, resolved], "op-99")).toBeNull();
+    expect(pickProposal([older, P, resolved], null)?.short_id).toBe("op-7");
+    expect(pickProposal([resolved], null)).toBeNull();
+  });
+});
+
+describe("flags a proposal addresses", () => {
+  test("only role flags on a handle some change touches, subject or named parent", async () => {
+    const { relatedFlags, changeHandles } = await import("./staffingModel");
+    const flags = collectHealthFlags(H, ORG_FIXTURE);
+    // The fixture's changes budget and routine @growth and charter Growth with owner @growth.
+    expect(relatedFlags(flags, P.changes).map((r) => `${r.flag.code}@${(r.subject as any).handle}`)).toEqual(["overloaded@growth", "cap_hit@growth", "review_stall@growth"]);
+    expect(relatedFlags(flags, [])).toEqual([]);
+    expect(relatedFlags(flags, [P.changes[2]])).toEqual([]); // a projects change names no role
+    expect(changeHandles({ kind: "move", handle: "content", reports_to: "@growth" })).toEqual(["content", "growth"]);
+    expect(changeHandles({ kind: "role", name: "X", handle: "x", reports_to: "me" })).toEqual(["x"]);
+  });
+});
+
+describe("what a list answer is authoritative for", () => {
+  test("a team's rows by team_id; the personal list is every row with no team", async () => {
+    const { proposalListScope } = await import("./staffingModel");
+    const team = proposalListScope("team-a");
+    expect(team({ team_id: "team-a" })).toBe(true);
+    expect(team({ team_id: "team-b" })).toBe(false);
+    expect(team({})).toBe(false);
+    const personal = proposalListScope(undefined);
+    expect(personal({})).toBe(true);
+    expect(personal({ team_id: "team-a" })).toBe(false);
+  });
+
+  test("both feeders prune what their answer no longer carries", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "..", "..", "hooks", "useSyncOrgProposals.ts"), "utf8");
+    expect(src).toMatch(/pruneAbsentScope: proposalListScope\(teamId\)/);
+    expect(src).toMatch(/"orgProposalChanges", changes \?\? \[\], \{ pruneAbsentScope/);
+  });
+});
+
+describe("the ?compose= parameter", () => {
+  test("reads the decoded text and ignores an empty one", async () => {
+    const { composeParam } = await import("./staffingModel");
+    expect(composeParam("?compose=draft%20a%20charter%20for%20Growth")).toBe("draft a charter for Growth");
+    expect(composeParam("proposal=op-7&compose=hello")).toBe("hello");
+    expect(composeParam("?compose=%20%20")).toBeNull();
+    expect(composeParam("?proposal=op-7")).toBeNull();
+    expect(composeParam(null)).toBeNull();
+  });
+});
+
+describe("inline edit of a change", () => {
+  test("fields flatten one level and edits come back nested, only where changed", async () => {
+    const { changeEdits, changeFields } = await import("./staffingModel");
+    const budget = P.changes[3].change;
+    const fields = changeFields(budget);
+    expect(fields).toEqual([
+      { key: "handle", label: "handle", kind: "text", value: "growth" },
+      { key: "caps.tokens_per_day", label: "caps tokens per day", kind: "number", value: "800000" },
+    ]);
+    expect(changeEdits(budget, fields)).toEqual({});
+    expect(changeEdits(budget, fields.map((f) => f.key === "caps.tokens_per_day" ? { ...f, value: "600000" } : f))).toEqual({ caps: { tokens_per_day: 600000 } });
+    const meta = P.changes[5].change;
+    const metaFields = changeFields(meta);
+    expect(metaFields.find((f) => f.key === "success_metrics")).toEqual({ key: "success_metrics", label: "success metrics", kind: "list", value: "organic signups per week, AI citation count" });
+    expect(changeEdits(meta, metaFields.map((f) => f.key === "success_metrics" ? { ...f, value: "signups, citations" } : f))).toEqual({ success_metrics: ["signups", "citations"] });
+  });
+});
+
+describe("the hire dialog as an edit form for a role change", () => {
+  test("the dialog's output round trips into the contract's shape and stays a valid change", async () => {
+    const { roleChangeEdits, roleChangeInitial, orgParentRefAsProposal } = await import("./staffingModel");
+    const { editedOrgChange, orgChangeError } = await import("@codecast/shared/contracts/orgProposal");
+    const change = { kind: "role" as const, name: "Head of Platform", handle: "platform", reports_to: "Samvit Jain", scope: { projects: ["Platform"] }, caps: { tokens_per_day: 400_000 } };
+    const row = { _id: "c1", proposal_id: "p", seq: 1, change, rationale: "r", evidence: [], status: "proposed" as const };
+    // The prefill resolves the proposal's parent against the tree and hands
+    // the scope refs through for the form to tick.
+    expect(roleChangeInitial(row, ORG_FIXTURE)).toEqual({ name: "Head of Platform", handle: "platform", caps: { tokens_per_day: 400_000 }, scope: { projects: ["Platform"] }, reports_to: { kind: "user", user_id: "fixture-user-sam" } });
+    // Edits already made ride into the prefill.
+    expect(roleChangeInitial({ ...row, edits: { name: "Platform Lead", reports_to: "@growth" } }, ORG_FIXTURE)).toMatchObject({ name: "Platform Lead", reports_to: { kind: "role", role_id: "fixture-role-growth" } });
+    // Submit: ids and parent refs become refs and a string.
+    const edits = roleChangeEdits({ name: "Platform Lead", handle: "platform-lead", charter: "Owns the platform.", caps: { hands_per_day: 4, wakes_per_day: 40, tokens_per_day: 800_000 }, scope: { project_ids: ["projects_abc"], plan_ids: ["plans_xyz"] }, reports_to: { kind: "role", role_id: "fixture-role-growth" } }, ORG_FIXTURE, "fixture-user-me");
+    expect(edits).toEqual({ name: "Platform Lead", handle: "platform-lead", charter: "Owns the platform.", caps: { hands_per_day: 4, wakes_per_day: 40, tokens_per_day: 800_000 }, scope: { projects: ["projects_abc"], plans: ["plans_xyz"] }, reports_to: "@growth" });
+    const merged = editedOrgChange(change, edits);
+    expect(orgChangeError(merged)).toBeNull();
+    expect(merged).toMatchObject({ kind: "role", scope: { projects: ["projects_abc"], plans: ["plans_xyz"] }, reports_to: "@growth" });
+    // The deciding person is "me"; another member is their id; a role with no live row is its id.
+    expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "user", user_id: "fixture-user-me" }, "fixture-user-me")).toBe("me");
+    expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "user", user_id: "fixture-user-sam" }, "fixture-user-me")).toBe("fixture-user-sam");
+    expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "role", role_id: "chg-9" }, "fixture-user-me")).toBe("chg-9");
+    expect(roleChangeInitial({ ...row, change: { kind: "retire", handle: "growth" } }, ORG_FIXTURE)).toBeUndefined();
+  });
+});
+
+describe("a link into another workspace", () => {
+  test("resolves open, foreign, unreadable and loading", async () => {
+    const { resolveProposalLink, proposalWorkspace, orgPreviewEnabled } = await import("./staffingModel");
+    const codecast = { kind: "team" as const, id: "fixture-team" };
+    const union = { kind: "team" as const, id: "team-union" };
+    expect(proposalWorkspace(P)).toEqual(codecast);
+    expect(proposalWorkspace({ scope_user_id: "u1" })).toEqual({ kind: "user", id: "u1" });
+    expect(resolveProposalLink(null, [P], union, { ready: false, missing: false })).toEqual({ kind: "open" });
+    expect(resolveProposalLink("op-7", [P], codecast, { ready: true, missing: false })).toEqual({ kind: "open" });
+    expect(resolveProposalLink("op-7", [P], union, { ready: true, missing: false })).toMatchObject({ kind: "foreign", shortId: "op-7", workspace: codecast });
+    expect(resolveProposalLink("op-7", [P], { kind: "user", id: "me" }, { ready: true, missing: false })).toMatchObject({ kind: "foreign" });
+    expect(resolveProposalLink("op-99", [P], union, { ready: true, missing: true })).toEqual({ kind: "unreadable", shortId: "op-99" });
+    expect(resolveProposalLink("op-99", [P], union, { ready: false, missing: false })).toEqual({ kind: "loading", shortId: "op-99" });
+    expect(resolveProposalLink("op-99", [P], union, { ready: true, missing: false })).toEqual({ kind: "loading", shortId: "op-99" });
+  });
+
+  test("the DEV preview needs the flag in the live URL", async () => {
+    const { orgPreviewEnabled } = await import("./staffingModel");
+    expect(orgPreviewEnabled("?preview=1", true)).toBe(true);
+    expect(orgPreviewEnabled("?proposal=op-4", true)).toBe(false);
+    expect(orgPreviewEnabled("?preview=1", false)).toBe(false);
+    expect(orgPreviewEnabled("", true)).toBe(false);
+  });
+});
+
+describe("the org feeders follow the workspace pointer", () => {
+  // A workspace switch (hooks/useSwitchWorkspace) writes clientState.ui
+  // .active_team_id; every org feeder must key its query on that pointer so
+  // /org re-scopes in the same tick. A feeder that read anything else would
+  // keep the old team after a switch.
+  test("tree, health and proposals feeders read clientState.ui.active_team_id", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    for (const file of ["useSyncOrgTree.ts", "useSyncOrgHealth.ts", "useSyncOrgProposals.ts"]) {
+      const src = readFileSync(join(import.meta.dir, "..", "..", "hooks", file), "utf8");
+      expect(src).toMatch(/clientState\.ui\?\.active_team_id/);
+      expect(src).toMatch(/team_id: activeTeamId/);
+    }
+  });
+});

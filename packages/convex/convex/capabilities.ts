@@ -11,3 +11,4 @@
 export * from "./capabilityState";
 export * from "./capabilityBindings";
 export * from "./capabilityCatalog";
+export * from "./capabilityContent";

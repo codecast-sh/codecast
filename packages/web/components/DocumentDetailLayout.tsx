@@ -24,6 +24,7 @@ import { isMac } from "../shortcuts";
 import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useTabActive } from "../hooks/usePagePresence";
 // The reading view uses the EDITOR's type scale (editor.css), not chat's
 // compact one, so toggling edit mode doesn't reflow the whole document.
 // MD_COMPONENTS stays the base — entity pills, code blocks, images and the
@@ -132,8 +133,9 @@ export function DocumentDetailLayout({
 
   // Cmd/Ctrl+E toggles edit mode from anywhere on the surface — including
   // while the editor itself has focus (a modifier chord is never typing).
+  const paneActive = useTabActive();
   useWatchEffect(() => {
-    if (!initialEditable) return;
+    if (!initialEditable || !paneActive) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
@@ -142,7 +144,7 @@ export function DocumentDetailLayout({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [initialEditable]);
+  }, [initialEditable, paneActive]);
   const getContextBody = useCallback(
     () => getMarkdownRef.current?.() ?? markdownContent,
     [markdownContent]

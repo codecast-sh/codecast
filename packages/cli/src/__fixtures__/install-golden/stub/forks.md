@@ -1,7 +1,7 @@
 
 ## Forks & Sessions
 
-Branch or spawn sessions into the inbox, or run a harness in print mode. Adds `cast fork` and `cast spawn` so a session can hand work to your inbox. `fork` branches the current conversation N ways from a message point; `spawn` starts fresh sessions. Both land in your inbox as independent threads — unlike subagents, which report back to the agent that launched them. `spawn --subagent` makes such a worker explicitly: the new session nests under its parent as a subagent row, on any agent backend. `cast exec` is print mode for every harness: run a prompt, print the result, exit. `cast switch` continues this session under a different agent or model, without forking.
+Delegate nested workers, hand off independent inbox threads, or run a prompt. For delegated implementers, reviewers and audits that report back to you, use `cast spawn --subagent -- "<task>"`: workers nest under this session on any agent backend. Watch their returned IDs with `cast sessions <id> -w --json`. Plain `cast spawn` and `cast fork` create independent inbox threads: use them only when the human asks for threads they will steer separately. A label or plan binding does not nest a worker. `cast exec` is print mode for every harness: run a prompt, print the result, exit. `cast switch` continues this session under a different agent or model, without forking.
 
 Run `cast guide forks` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->

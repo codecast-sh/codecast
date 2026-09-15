@@ -6,6 +6,7 @@ import { ArrowUpRight, Layers, ShieldCheck } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
 import { decisionHref, ladderRecommendation } from "../../lib/decisionLinks";
+import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
@@ -35,6 +36,7 @@ export function DecisionCompactCard({
     (st) => decision.stack_id ? st.decisionStacks[decision.stack_id]?.title : undefined,
   ]);
   const answerDecision = useInboxStore((st) => st.answerDecision);
+  const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
   const session = s.sessions[decision.conversation_id];
   const task = decision.task_id ? s.tasks[decision.task_id] : undefined;
   const stack = decision.stack_id ? s.decisionStacks[decision.stack_id] : undefined;
@@ -56,8 +58,16 @@ export function DecisionCompactCard({
             <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
           )}
           <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${decision.blocking ? "bg-sol-yellow animate-pulse" : "bg-sol-blue"}`} />
-          <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-text-muted hover:text-sol-blue truncate max-w-[16rem]">
-            {session?.title || decision.session_title || "Session"}
+          <Link
+            href={`/conversation/${decision.conversation_id}`}
+            className="text-sol-text-muted hover:text-sol-blue truncate max-w-[16rem]"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              void jumpToAsk();
+            }}
+          >
+            {session?.title || decision.session_title || "See the conversation"}
           </Link>
           {(session?.project_path || decision.project_path) && <span className="truncate">{getProjectName(session?.project_path || decision.project_path!)}</span>}
           <span>· asked {formatTimeAgo(decision.created_at, now)}</span>

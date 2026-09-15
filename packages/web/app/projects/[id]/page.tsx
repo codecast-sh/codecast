@@ -54,10 +54,21 @@ import {
 } from "lucide-react";
 import { DocDates } from "../../../components/DocDates";
 import { HireRoleDialog } from "../../../components/org/HireRoleDialog";
-import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
+import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
+import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { Briefcase } from "lucide-react";
+import { CharterBlock } from "../../../components/charter/CharterBlock";
+import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 
 const api = _api as any;
+
+/** The hire form reads the whole org tree (reports-to choices, caps), so it
+ *  subscribes to it only while open: the page around it reads the roles. */
+function HireLeadDialog(props: Omit<React.ComponentProps<typeof HireRoleDialog>, "tree">) {
+  const tree = useInboxStore((s) => s.orgTree);
+  if (!tree) return null;
+  return <HireRoleDialog tree={tree} {...props} />;
+}
 
 const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string }> = {
   backlog: { icon: CircleDotDashed, color: "text-sol-text-dim" },
@@ -260,14 +271,35 @@ function ProjectDetailContent() {
   const updateProject = useInboxStore((s) => s.updateProject);
 
   // "Add a lead" (org-init.md O3): the hire form with this project preselected.
-  // The org tree feeds the store per view, the way the org page mounts it.
-  const { tree: orgTree } = useSyncOrgTree();
+  // The org tree feeds the store per view, the way the org page mounts it;
+  // the page reads only the roles (useOrgRoles), never the tree, so a message
+  // under any node does not re-render it. The hire dialog reads the tree
+  // itself while it is open.
+  useSyncOrgTreeFeeder();
+  const { roles: orgRoles, workspace: orgWorkspace } = useOrgRoles();
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const createOrgRole = useInboxStore((s) => s.createOrgRole);
   const [hireOpen, setHireOpen] = useState(false);
   // A role lives in one workspace and its scope must sit inside it: the button
   // shows only when the org tree on screen is the project's own workspace.
-  const canHire = !!orgTree && !!meId && !!project && (orgTree.workspace.kind === "team" ? project.team_id === orgTree.workspace.id : !project.team_id);
+  const treeIsProjectWorkspace = !!orgWorkspace && !!project && (orgWorkspace.kind === "team" ? project.team_id === orgWorkspace.id : !project.team_id);
+  const canHire = treeIsProjectWorkspace && !!meId;
+  // The owner chip offers only roles from the project's own workspace (the
+  // server refuses any other); when the tree on screen is another
+  // workspace's, the chip is disabled and says why instead of listing seats
+  // the server would reject.
+  const charterRoles = treeIsProjectWorkspace ? orgRoles : null;
+  const ownerBlockedReason = orgWorkspace && project && !treeIsProjectWorkspace ? "Switch to the project's workspace to assign an owner" : undefined;
+
+  // The charter (org-staffing.md S7) reads the STORE row first: updateProject
+  // patches it in the same tick, while webGet's snapshot only moves once the
+  // dispatch lands and the query re-runs. The server row fills what the store
+  // has not cached yet.
+  const charter = useMemo(
+    () => charterOf({ ...(serverProject ?? {}), ...((storeProjects as any)[projectId] ?? {}) }, "project"),
+    [serverProject, storeProjects, projectId],
+  );
+  const handleCharterChange = useCallback((patch: CharterPatch) => updateProject(projectId, patch), [projectId, updateProject]);
 
   // Plans in this project
   const projectPlans = useMemo(() =>
@@ -435,10 +467,9 @@ function ProjectDetailContent() {
           )}
         </div>
         {canHire && hireOpen && (
-          <HireRoleDialog
+          <HireLeadDialog
             open={hireOpen}
             onClose={() => setHireOpen(false)}
-            tree={orgTree}
             meId={meId}
             title={`Add a lead for ${project.title}`}
             initialProjects={[project]}
@@ -536,6 +567,19 @@ function ProjectDetailContent() {
             )}
           </div>
         </div>
+
+        {/* The charter sits above the tabs: the direction every tab serves. */}
+        <CharterBlock
+          kind="project"
+          title={project.title}
+          charter={charter}
+          canEdit
+          onChange={handleCharterChange}
+          roles={charterRoles}
+          onHire={canHire ? () => setHireOpen(true) : undefined}
+          ownerBlockedReason={ownerBlockedReason}
+          className="ml-5 mt-3"
+        />
 
         {/* Tasks is the working surface; Overview is the summary of everything
             filed here — plans, their tasks, and docs. */}

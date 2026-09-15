@@ -18,7 +18,7 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
 import { chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
-import { MessageRow, DayDivider, NewDivider, ChatAvatar, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { MessageRow, DayDivider, NewDivider, ChatAvatar, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
 import { MessageActionsSheet, type MessageAction } from '@/components/chat/MessageActionsSheet';
@@ -284,9 +284,12 @@ export default function ChatChannelScreen() {
     // name, agent identity), with the human as a "via" credit — same rule as
     // web's sessionAuthorFor. The title is the server's send-time snapshot.
     const sessionOrigin = msg.origin === 'agent' && msg.origin_session_id && msg.author_kind !== 'agent';
+    // A Slack-relayed line names the real Slack person, never the bridge.
+    const slack = slackFieldsFor(msg);
     return {
       id: String(msg._id),
-      author: sessionOrigin
+      slack: slack.slack,
+      author: slack.author ?? (sessionOrigin
         ? {
             id: String(msg.user_id),
             name: msg.origin_session_title || 'Agent session',
@@ -298,7 +301,7 @@ export default function ChatChannelScreen() {
             name: humanName || (msg.author_kind === 'agent' ? 'Anchor' : 'Teammate'),
             avatarUrl: member?.github_avatar_url || member?.image || undefined,
             isAgent: msg.author_kind === 'agent' || member?.is_bot,
-          },
+          }),
       content: msg.content,
       createdAt: msg.created_at,
       editedAt: msg.edited_at,

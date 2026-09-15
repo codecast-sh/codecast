@@ -352,8 +352,9 @@ export const sessionsUnder = query({
 // in scope by project, by plan, or by its plan's project; a session by the
 // task or plan it is bound to, by project path, or by the role pointer.
 
-export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit";
-export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit"];
+// "run" (the-line.md L10): a task's or plan's passage along the line.
+export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run";
+export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit", "run"];
 export type FeedActor = { name: string; image?: string; is_bot?: boolean };
 export type FeedRow = {
   kind: FeedKind;
@@ -520,7 +521,7 @@ export async function computeScopeFeed(
   const actor = actorCache(ctx);
   const want = (k: FeedKind) => kinds.has(k);
 
-  const sessions = want("session") || want("artifact") || want("commit") ? await sessionsInScope(ctx, resolved, now) : [];
+  const sessions = want("session") || want("artifact") || want("commit") || want("decision") ? await sessionsInScope(ctx, resolved, now) : [];
   const sessionIds = new Set(sessions.map((s) => s.session._id.toString()));
   const sessionRawById = new Map(sessions.map((s) => [s.session._id.toString(), s.raw]));
 
@@ -594,31 +595,53 @@ export async function computeScopeFeed(
     // Published pages whose owning session is in scope. Artifacts index by
     // publisher, so each member's recent pages are read and filtered.
     const publishers = new Set<string>(sessions.map((s) => (s.raw.user_id ?? "").toString()).filter(Boolean));
-    const rows: FeedRow[] = [];
+    // Pages attached to a task in scope (the-line.md L6) join the session
+    // sourced ones; a page both published from and attached inside the scope
+    // is one row, keyed by slug.
+    const taskShortIds = new Map(resolved.tasks.map((t) => [t._id.toString(), t.short_id]));
+    const pageBySlug = new Map<string, any>();
     for (const uid of publishers) {
       const pages: any[] = await ctx.db.query("artifacts").withIndex("by_user", (q: any) => q.eq("user_id", uid)).order("desc").take(ARTIFACTS_PER_MEMBER);
       for (const a of pages) {
         if (!a.session_conversation_id || !sessionIds.has(a.session_conversation_id.toString())) continue;
-        rows.push({
-          kind: "artifact",
-          id: a._id.toString(),
-          short_id: a.slug,
-          title: a.title,
-          state: a.kind ?? "html",
-          actor: await actor(a.user_id),
-          updated_at: a.updated_at,
-          href: `/a/${a.slug}`,
-          preview: a.session_short_id ? `published by ${a.session_short_id} · v${a.version}` : `v${a.version}`,
-        });
+        pageBySlug.set(a.slug, a);
       }
+    }
+    for (const t of resolved.tasks) {
+      for (const a of await ctx.db.query("artifacts").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) pageBySlug.set(a.slug, a);
+    }
+    const rows: FeedRow[] = [];
+    for (const a of pageBySlug.values()) {
+      const attached = a.task_id ? taskShortIds.get(a.task_id.toString()) : undefined;
+      const origin = a.session_short_id ? `published by ${a.session_short_id} · v${a.version}` : `v${a.version}`;
+      rows.push({
+        kind: "artifact",
+        id: a._id.toString(),
+        short_id: a.slug,
+        title: a.title,
+        state: a.kind ?? "html",
+        actor: await actor(a.user_id),
+        updated_at: a.updated_at,
+        href: `/a/${a.slug}`,
+        preview: attached ? `${origin} · ${attached}${a.station ? ` at ${a.station}` : ""}` : origin,
+      });
     }
     sources.set("artifact", rows);
   }
   if (want("decision")) {
-    const rows: FeedRow[] = [];
+    // Decisions on a task in scope, plus the open ones asked by a session in
+    // scope that name no task (the-line.md L10). One row per decision.
+    const decisionById = new Map<string, any>();
     for (const t of resolved.tasks) {
-      const decisions: any[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect();
-      for (const d of decisions) {
+      for (const d of await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) decisionById.set(d._id.toString(), d);
+    }
+    for (const { session } of sessions) {
+      const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", session._id).eq("status", "pending")).collect();
+      for (const d of pending) if (!d.task_id) decisionById.set(d._id.toString(), d);
+    }
+    const rows: FeedRow[] = [];
+    {
+      for (const d of decisionById.values()) {
         const conv = sessionRawById.get(d.conversation_id.toString()) ?? (await ctx.db.get(d.conversation_id));
         rows.push({
           kind: "decision",
@@ -657,6 +680,43 @@ export async function computeScopeFeed(
       }
     }
     sources.set("update", rows);
+  }
+  if (want("run")) {
+    // Runs (the-line.md L10): every workflow run bound to a task or plan in
+    // scope. The state is the run's status plus its current node's label; the
+    // actor is the session that started it.
+    const runById = new Map<string, any>();
+    for (const t of resolved.tasks) {
+      for (const r of await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) runById.set(r._id.toString(), r);
+    }
+    for (const p of resolved.plans) {
+      for (const r of await ctx.db.query("workflow_runs").withIndex("by_plan", (q: any) => q.eq("plan_id", p._id)).collect()) runById.set(r._id.toString(), r);
+    }
+    const workflowById = new Map<string, any>();
+    const rows: FeedRow[] = [];
+    for (const r of runById.values()) {
+      const wfKey = r.workflow_id ? r.workflow_id.toString() : "";
+      if (wfKey && !workflowById.has(wfKey)) workflowById.set(wfKey, await ctx.db.get(r.workflow_id));
+      const workflow = wfKey ? workflowById.get(wfKey) : null;
+      const node = r.current_node_id
+        ? r.node_statuses?.find((n: any) => n.node_id === r.current_node_id)
+        : undefined;
+      const nodeLabel = node?.label ?? workflow?.nodes?.find((n: any) => n.id === r.current_node_id)?.label ?? r.current_node_id;
+      const spawner = r.spawner_conversation_id
+        ? sessionRawById.get(r.spawner_conversation_id.toString()) ?? (await ctx.db.get(r.spawner_conversation_id))
+        : null;
+      rows.push({
+        kind: "run",
+        id: r._id.toString(),
+        title: r.workflow_name ?? workflow?.name ?? "run",
+        state: nodeLabel ? `${r.status} · ${nodeLabel}` : r.status,
+        actor: spawner ? { name: spawner.title || spawner.short_id || "session", is_bot: true } : await actor(r.user_id),
+        updated_at: r.updated_at,
+        href: `/workflows/runs/${r._id}`,
+        preview: preview(r.fail_reason ?? (r.status === "paused" ? r.gate_prompt : node?.activity ?? node?.result_preview)),
+      });
+    }
+    sources.set("run", rows);
   }
   if (want("commit")) {
     // Repos in scope: the remotes of the sessions in scope, last 7 days.
@@ -740,9 +800,16 @@ export const scopeFeed = query({
 // progress, sessions by work state, decisions open and answered, and sibling
 // overlaps when a role is named. The web scope page and the role's brief read
 // this one shape.
+// A scope project with its charter (org-staffing.md S7): the frame, the brief
+// and the scope page lead with the goal, priority and metrics when present.
+export type ScopeProject = {
+  id: string; title: string; short_id?: string; project_path?: string;
+  goal?: string; priority?: string; success_metrics?: string[]; owner_role_id?: string;
+};
+
 export type ScopeSummary = {
   scope: { project_ids: string[]; plan_ids: string[] };
-  projects: Array<{ id: string; title: string; short_id?: string; project_path?: string }>;
+  projects: ScopeProject[];
   plans: Array<{ id: string; short_id: string; title: string; status: string; updated_at: number; progress: { total: number; done: number; in_progress: number; open: number } }>;
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   sessions: StateCounts & { total: number };
@@ -798,7 +865,10 @@ export async function computeScopeSummary(ctx: Ctx, resolved: ResolvedScope, now
 
   return {
     scope: { project_ids: resolved.scope.project_ids.map(String), plan_ids: resolved.scope.plan_ids.map(String) },
-    projects: resolved.projects.map((p) => ({ id: p._id.toString(), title: p.title, short_id: p.short_id ?? undefined, project_path: p.project_path ?? undefined })),
+    projects: resolved.projects.map((p): ScopeProject => ({
+      id: p._id.toString(), title: p.title, short_id: p.short_id ?? undefined, project_path: p.project_path ?? undefined,
+      goal: p.goal ?? undefined, priority: p.priority ?? undefined, success_metrics: p.success_metrics ?? undefined, owner_role_id: p.owner_role_id ? String(p.owner_role_id) : undefined,
+    })),
     plans,
     tasks: { total: resolved.tasks.length, open, by_status, by_priority },
     sessions: { ...counts, total: sessions.length },
@@ -840,7 +910,7 @@ export type BriefHand = {
 };
 export type BriefChange = { kind: "task" | "plan"; short_id?: string; title: string; status: string; updated_at: number };
 export type BriefFacts = {
-  scope: { projects: { id: string; title: string; short_id?: string }[]; plans: { id: string; short_id: string; title: string }[]; whole_workspace: boolean };
+  scope: { projects: ScopeProject[]; plans: { id: string; short_id: string; title: string }[]; whole_workspace: boolean };
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   plans: ScopeSummary["plans"];
   hands: BriefHand[];
@@ -853,13 +923,16 @@ export type BriefFacts = {
 const BRIEF_CHANGES_MAX = 40;
 const WHOLE_WORKSPACE_TASK_CAP = 2000;
 
-// A role whose scope is the whole workspace owns every task and plan in its
-// boundary; resolveScope answers nothing for that case, so read them here.
-async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ tasks: any[]; plans: any[] }> {
+// A role whose scope is the whole workspace owns every project, plan and task
+// in its boundary; resolveScope answers nothing for that case, so read them
+// here. Projects ride along so a company-wide role (the chief of staff) reads
+// every charter in its frame.
+async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; plans: any[] }> {
   const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
+  const projects: any[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(200);
   const tasks: any[] = await ctx.db.query("tasks").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(WHOLE_WORKSPACE_TASK_CAP);
   const plans: any[] = await ctx.db.query("plans").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(500);
-  return { tasks: tasks.filter((t) => t.status !== "dropped"), plans };
+  return { projects: projects.filter((p) => p.status !== "done"), tasks: tasks.filter((t) => t.status !== "dropped"), plans };
 }
 
 // `viewerId` is whose grants the facts are read with: the caller of
@@ -873,7 +946,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   }
   if (whole) {
     const items = await wholeWorkspaceItems(ctx, role);
-    resolved = { ...resolved, tasks: items.tasks, plans: items.plans };
+    resolved = { ...resolved, projects: items.projects, tasks: items.tasks, plans: items.plans };
   }
   // One org scan serves the summary's sessions and the hands: the same
   // membership (recent, visible, top level) and the same classifier inputs
@@ -969,4 +1042,10 @@ export const brief = query({
 // org.analysisInputs (docs/architecture/org-init.md O1): the evidence `cast
 // org init` reads. Lives in orgInit.ts with the apply path; re-exported here
 // so the CLI route and the web read it as org.*.
-export { analysisInputs } from "./orgInit";
+// It is an action over three bounded query slices (orgInit.analysisPart);
+// the route runs orgInit.analysisInputs directly.
+
+// org.health (docs/architecture/org-staffing.md S3): the flow signals and
+// flags the capacity model raises. Lives in orgHealth.ts; re-exported so the
+// CLI route and the web read it as org.health.
+export { health } from "./orgHealth";

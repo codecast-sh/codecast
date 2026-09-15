@@ -124,8 +124,8 @@ the answer arrives back in this session as a message. Default is blocking:
 post it, then end your turn.
 
 Subcommands:
-  cast decide ls                      This session's decisions, with ids and answers
-  cast decide edit [id] [flags]       Change the open decision in place (question, -o, --context, --report, --advisory/--blocking)
+  cast decide ls [--mine]             This session's decisions, with ids and answers; --mine: every pending decision you hold
+  cast decide edit [id] [flags]       Change the open decision in place; every ask flag applies (question, -o, --context, --report, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory/--blocking)
   cast decide cancel [id]             Withdraw the open decision
   cast decide show <sd>               One decision with its document, ladder and holder
   cast decide recommend <sd> <n>      A role on the ladder recommends option n (within 5 minutes; --note -)
@@ -134,6 +134,7 @@ Subcommands:
 
 Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
   --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md
+  --option-page n=file.html|slug|url   a page per option (a file publishes like --report); spec: "page" per option
 
 Examples:
   cast decide "Which schema wins?" -o "Frontmatter wins" -o "Path wins" --context -  <<'EOF'
@@ -162,7 +163,9 @@ Examples:
   cast stack ls [--all]
   cast stack show ds-N
   cast stack add ds-N sd-N
-  cast stack policy ds-N [--auto-default 24h | --no-auto-default] [--delegate @handle]
+  cast stack remove ds-N sd-N
+  cast stack reorder ds-N sd-a,sd-b      # every member, in the new order
+  cast stack policy ds-N [--auto-default 24h | --no-auto-default] [--delegate @handle] [--due 3h|tomorrow|2026-09-20 | --no-due]
   cast stack delegate ds-N @handle       # the role answers every open category for the stack's members`,
     load: () => import("./stackCommand.js").then((m) => m.registerStackCommand),
   },
