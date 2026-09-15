@@ -772,8 +772,8 @@ export function useConversationMessages(
       // History pages are one-shot fetches keyed by the oldest local
       // timestamp — no live subscription per page (the old usePaginatedQuery
       // kept every loaded page subscribed and re-executing on churn). 200 per
-      // page keeps the walk-back round-trip count low without defeating
-      // virtualization.
+      // page matches MESSAGE_PAGE_MAX on getAllMessages, which ranges the
+      // timestamp index so a long session does not rescan every newer row.
       if (useInboxStore.getState().messages[conversationId]?.[0] === undefined) return;
       setOlderLoading(true);
       fetchOlderPage(convex, conversationId, WARM_DEEP_ROWS).catch((err: unknown) => {

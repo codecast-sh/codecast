@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderMarkdownBody, renderMarkdownDocument, slugify } from "./artifactMarkdown";
+import { mdDocumentHtml, renderMarkdownBody, renderMarkdownDocument, restyleMarkdownDocument, slugify } from "./artifactMarkdown";
 
 describe("artifactMarkdown", () => {
   test("headings get stable GitHub-style ids with a self link", async () => {
@@ -43,5 +43,26 @@ describe("artifactMarkdown", () => {
     expect(html).toContain('<meta name="color-scheme" content="light dark">');
     expect(html).toContain("fonts.googleapis.com/css2?family=Hanken+Grotesk");
     expect(html).toContain('querySelectorAll(".md pre")');
+  });
+
+  test("the theme is chosen in <head>, before the first paint, and the page carries its toggle", async () => {
+    const html = await renderMarkdownDocument("# T", "t");
+    expect(html.indexOf('setAttribute("data-theme"')).toBeLessThan(html.indexOf("</head>"));
+    expect(html).toContain(":root[data-theme=dark]");
+    expect(html).toContain('class="md-theme"');
+    expect(html).toContain('"codecast:theme"');
+  });
+
+  test("a stored page is served in the current shell, with its body untouched", () => {
+    const body = '<h1 id="x">Old</h1>\n<p>kept</p>\n';
+    const old = `<!doctype html><html><head><style>:root{--md-bg:#fbfaf8}</style></head><body>\n<main class="md">\n${body}\n</main>\n<script>old</script></body></html>`;
+    const restyled = restyleMarkdownDocument(old, "New title");
+    expect(restyled).toBe(mdDocumentHtml({ title: "New title", bodyHtml: body }));
+    expect(restyled).not.toContain("#fbfaf8");
+  });
+
+  test("a document that is not in the stored shape is served as it is", () => {
+    const other = "<html><body><main>raw</main></body></html>";
+    expect(restyleMarkdownDocument(other, "t")).toBe(other);
   });
 });

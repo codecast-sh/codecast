@@ -263,7 +263,7 @@ function ShepherdControl({
         {sessionChoices.find((s) => s.id === bound)?.title ?? "session"}
       </Link>
       <Switch
-        checked={pr.shepherd_enabled !== false}
+        checked={pr.shepherd_enabled === true}
         onCheckedChange={(on) => onSetShepherd(bound, on)}
         aria-label="Wake the shepherd session when this PR changes"
       />

@@ -663,6 +663,51 @@ export async function enforceIndependentReview(
 }
 
 /**
+ * The hold (docs/architecture/the-line.md L5). A pending, blocking decision
+ * bound to the task whose station equals the task's current status keeps
+ * the task there. Returns that decision when the write would move the task
+ * (a new category, or a new team status inside the category), else null.
+ * The two status mutations apply the rule before any write: a session actor
+ * is refused, a person moves past it and a note comment names the decision.
+ * Server internal patches (a run's node start and end, pauseAtGate) do not
+ * pass through here and are not held. Nothing is written for a hold: the
+ * task page derives "held at" from the open decisions by_task.
+ */
+export async function holdingDecisionFor(
+  ctx: any,
+  task: any,
+  nextStatus: string | undefined,
+  nextStatusId?: { set: boolean; value?: string },
+): Promise<any | null> {
+  const categoryMoves = !!nextStatus && nextStatus !== task.status;
+  const refinementMoves = !!nextStatusId?.set && (nextStatusId.value ?? undefined) !== (task.status_id ?? undefined);
+  if (!categoryMoves && !refinementMoves) return null;
+  const station = task.status_id ?? task.status;
+  const pending: any[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending"))
+    .collect();
+  return pending.find((d) => d.blocking && d.station === station) ?? null;
+}
+
+// The refusal a session actor gets (L5); the text names the release path.
+export function heldError(hold: any): Error {
+  const ref = hold.short_id ?? hold._id;
+  return new Error(`Held at ${hold.station} by ${ref}: answer it first (cast decide answer ${ref} <n>)`);
+}
+
+// The note a person leaves when moving a held task past its open decision (L5).
+async function noteMovedPastHold(ctx: any, task: any, hold: any, nextStatus: string, author: string, actorId?: Id<"users">) {
+  const ref = hold.short_id ?? hold._id;
+  await insertTaskComment(
+    ctx,
+    task._id,
+    { author, text: `Moved past ${ref} (held at ${hold.station}) to ${nextStatus}; the decision stays open.`, comment_type: "note" },
+    actorId,
+  );
+}
+
+/**
  * Cascade-close the subtree ids guardParentClose returned. `parent` scopes the
  * writes: only same-workspace descendants are touched (a pre-guard row could
  * carry a cross-workspace edge — `create` once wrote parent_id raw — and a
@@ -1646,6 +1691,10 @@ export const update = mutation({
     // Refuses before any write, like the close-guard below. Runs before the
     // linking block so the bound sessions are read as they stand.
     await enforceIndependentReview(ctx, task, conv, nextStatus, updates.review_verdict);
+    // The hold (the-line.md L5): a session is refused; a person moves past it
+    // and the note below names the decision.
+    const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
+    if (hold && conv) throw heldError(hold);
     if (conv) {
       // A conversation in another workspace may still drive the write (an agent
       // working a cross-workspace task); only the conversation↔task linkage is
@@ -1741,6 +1790,7 @@ export const update = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+    if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, actor.name || "unknown", auth.userId);
     // blocked_by/blocks are raw overwrites; reflect the delta onto each
     // referenced task's other side so the stored mirror stays coherent.
     for (const [field, mirrorField] of [["blocked_by", "blocks"], ["blocks", "blocked_by"]] as const) {
@@ -2999,6 +3049,9 @@ export const webUpdate = mutation({
     // The board is held to the same independent review rule as the CLI
     // (the-line.md L3); the caller is a person, so its verdict is outside.
     await enforceIndependentReview(ctx, task, null, nextStatus, updates.review_verdict);
+    // A person on the board moves past a hold (the-line.md L5); the note
+    // after the write names the decision it moved past.
+    const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
     for (const id of cascadeIds) {
       const child = await ctx.db.get(id);
       if (child) await enforceIndependentReview(ctx, child, null, nextStatus, undefined);
@@ -3030,6 +3083,7 @@ export const webUpdate = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+    if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, (await ctx.db.get(userId))?.name || "unknown", userId);
     if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, userId, task);
     await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);
     if (parentChanged) {

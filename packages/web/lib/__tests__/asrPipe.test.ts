@@ -118,7 +118,10 @@ const TRACK = { readyState: "live" } as unknown as MediaStreamTrack;
  *  append out of the same size — the test can then read the ORDER off sizes. */
 const frame = (n: number): Frame => new Float32Array(n).fill(0.5);
 
-function open(events?: Parameters<typeof openAsrPipe>[0]["events"]) {
+function open(
+  events?: Parameters<typeof openAsrPipe>[0]["events"],
+  languages: string[] = ["en"],
+) {
   let settleMint: (v: any) => void = () => {};
   const minted = new Promise((resolve) => {
     settleMint = resolve;
@@ -129,6 +132,7 @@ function open(events?: Parameters<typeof openAsrPipe>[0]["events"]) {
     track: TRACK,
     clock: () => 0,
     events,
+    languages,
   });
   return {
     pipe,
@@ -332,5 +336,40 @@ describe("asrPipe: words while they are still being said", () => {
     // A second sentence starts from empty rather than from the first one's tail.
     delta("item_2", "actually");
     expect(partials.at(-1)).toBe("actually");
+  });
+
+  test("a line in a script the allowlist did not name is not shown", async () => {
+    const partials: string[] = [];
+    const heard: string[] = [];
+    const h = open({ onPartial: (t) => partials.push(t), onUtterance: (u) => heard.push(u.text) });
+    const ws = await h.connect();
+    ws.open();
+
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_1",
+      delta: "위위위",
+    });
+    expect(partials.at(-1)).toBe("");
+
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_1",
+      transcript: "アショット, サムビット, エージェントレイヤー。",
+    });
+    expect(heard).toEqual([]);
+  });
+
+  test("Japanese is kept when Japanese is on the allowlist", async () => {
+    const heard: string[] = [];
+    const h = open({ onUtterance: (u) => heard.push(u.text) }, ["ja", "en"]);
+    const ws = await h.connect();
+    ws.open();
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_1",
+      transcript: "アショット, サムビット, エージェントレイヤー。",
+    });
+    expect(heard).toEqual(["アショット, サムビット, エージェントレイヤー。"]);
   });
 });

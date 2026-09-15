@@ -27,6 +27,10 @@
 // commits the buffer and waits, bounded, for the transcription to come back.
 // `close()` remains what it always was: the abandon path.
 import { api } from "@codecast/convex/convex/_generated/api";
+import {
+  isUnexpectedTranscript,
+  normalizeTranscribeLanguages,
+} from "@codecast/shared/contracts";
 
 type AsrConvexHandle = {
   action: (fn: any, args: any) => Promise<any>;
@@ -120,8 +124,16 @@ export function openAsrPipe(opts: {
   /** Timeline clock for utterance offsets, in ms. */
   clock: () => number;
   events?: AsrPipeEvents;
+  /** Languages this pipe may emit. Defaults to the browser's list. */
+  languages?: string[];
 }): AsrPipe {
   const { convex, roomKey, track, clock, events } = opts;
+  const languages = normalizeTranscribeLanguages(
+    opts.languages ??
+      (typeof navigator !== "undefined" && Array.isArray(navigator.languages)
+        ? [...navigator.languages]
+        : []),
+  );
   let closed = false;
   let speaking = false;
   let utteranceStart = 0;
@@ -277,9 +289,9 @@ export function openAsrPipe(opts: {
   startCapture();
 
   void (async () => {
-    const minted = await convex.action(api.transcripts.mintAsrToken, { room_key: roomKey }).catch(
-      (err: any) => ({ error: String(err?.message ?? "Could not start transcription") }),
-    );
+    const minted = await convex
+      .action(api.transcripts.mintAsrToken, { room_key: roomKey, languages })
+      .catch((err: any) => ({ error: String(err?.message ?? "Could not start transcription") }));
     if (closed) return;
     if (minted?.error || !minted?.client_secret) {
       hopeless = true;
@@ -343,7 +355,9 @@ export function openAsrPipe(opts: {
           partialText = "";
         }
         partialText += msg.delta;
-        events?.onPartial?.(partialText);
+        // A script nobody on the allowlist writes is the language-lock bug;
+        // show nothing rather than a flash of the wrong one.
+        events?.onPartial?.(isUnexpectedTranscript(partialText, languages) ? "" : partialText);
       } else if (msg.type === "conversation.item.input_audio_transcription.completed") {
         // Whatever the words turn out to be, the commit has been answered.
         transcribedSinceCommit = true;
@@ -351,7 +365,7 @@ export function openAsrPipe(opts: {
         partialText = "";
         events?.onPartial?.("");
         const text = typeof msg.transcript === "string" ? msg.transcript.trim() : "";
-        if (!text) return;
+        if (!text || isUnexpectedTranscript(text, languages)) return;
         const t1 = clock();
         events?.onUtterance?.({ text, t0: utteranceStart || Math.max(0, t1 - 2000), t1 });
       } else if (msg.type === "conversation.item.input_audio_transcription.failed") {

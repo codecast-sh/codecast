@@ -24,7 +24,7 @@ import {
   diffPage,
   editorPage,
 } from "./artifactPages";
-import { renderMarkdownDocument } from "./artifactMarkdown";
+import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,6 +37,19 @@ const CORS = {
 };
 
 type ActionCtx = Parameters<Parameters<typeof httpAction>[0]>[0];
+
+// historyBySlug's return is `any` across the generated `internal` cycle, so
+// the version rows have to be named here or every `.map` is an implicit any.
+type HistoryVersion = {
+  version: number;
+  title: string;
+  size: number;
+  published_at: number;
+  edited_by: string | null;
+  storage_id: Id<"_storage">;
+  source_storage_id?: Id<"_storage">;
+  kind?: string;
+};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -234,7 +247,7 @@ async function buildAccessSet(
 export const publish = httpAction(async (ctx, request) => {
   try {
     const body = await request.json();
-    const { api_token, content, title, source_path, force_new, kind: rawKind, files, session_ref, access, thumb_b64 } = body;
+    const { api_token, content, title, source_path, force_new, kind: rawKind, files, session_ref, access, thumb_b64, task, plan } = body;
     if (!api_token || !title) return json({ error: "Missing api_token or title" }, 400);
     const kind = rawKind === "markdown" || rawKind === "bundle" ? rawKind : "html";
     if (kind !== "bundle" && typeof content !== "string") return json({ error: "Missing content" }, 400);
@@ -357,6 +370,18 @@ export const publish = httpAction(async (ctx, request) => {
       }
     }
 
+    // Evidence (the-line.md L6): --task / --plan, else the publishing
+    // session's active task. Resolved before the blobs so a bad ref costs
+    // nothing; a bad ref is the caller's mistake, not a server error.
+    const evidence = await ctx.runQuery(internal.artifacts.resolveEvidence, {
+      user_id: who.user_id,
+      task: typeof task === "string" && task ? task : undefined,
+      plan: typeof plan === "string" && plan ? plan : undefined,
+      session_conversation_id: sessionConversationId as never,
+    });
+    if (evidence.error || !evidence.binding) return json({ error: evidence.error ?? "Could not resolve task" }, 404);
+    const binding = evidence.binding;
+
     // --- Store blobs ---
     const storageId = await ctx.storage.store(new Blob([docHtml], { type: "text/html; charset=utf-8" }));
     const sourceStorageId =
@@ -395,8 +420,17 @@ export const publish = httpAction(async (ctx, request) => {
       access: accessSet as never,
       assets: assets as never,
       thumb_storage_id: thumbStorageId,
+      task_id: binding.task_id,
+      plan_id: binding.plan_id,
+      station: binding.station,
     });
-    return json({ ...result, manage_url: result.owner_key ? `${result.url}#o=${result.owner_key}` : result.url });
+    return json({
+      ...result,
+      manage_url: result.owner_key ? `${result.url}#o=${result.owner_key}` : result.url,
+      ...(binding.task_id || binding.plan_id
+        ? { evidence: { task: binding.task_short_id ?? null, plan: binding.plan_short_id ?? null, station: binding.station ?? null } }
+        : {}),
+    });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Internal error" }, 500);
   }
@@ -852,7 +886,7 @@ export const serve = httpAction(async (ctx, request) => {
         comments: art.comments_disabled ? [] : artifact.open_comments,
         session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
-        versions: art.versions.map((x) => ({
+        versions: (art.versions as HistoryVersion[]).map((x) => ({
           version: x.version,
           title: x.title,
           size: x.size,
@@ -931,8 +965,8 @@ export const serve = httpAction(async (ctx, request) => {
     const [a, b] = [parseInt(m[1], 10), parseInt(m[2], 10)];
     const art = await withHistory();
     if (!art) return notFound("Artifact not found");
-    const va = art.versions.find((x) => x.version === a);
-    const vb = art.versions.find((x) => x.version === b);
+    const va = (art.versions as HistoryVersion[]).find((x) => x.version === a);
+    const vb = (art.versions as HistoryVersion[]).find((x) => x.version === b);
     if (!va || !vb) return notFound("One of those versions is no longer available (history keeps the last 20)");
     const load = async (row: typeof va) => {
       // Diff the meaningful source: raw markdown for markdown artifacts.
@@ -962,7 +996,7 @@ export const serve = httpAction(async (ctx, request) => {
   };
   if (wanted !== null && wanted !== artifact.version) {
     const art = await withHistory();
-    const past = art?.versions.find((x) => x.version === wanted);
+    const past = (art?.versions as HistoryVersion[] | undefined)?.find((x) => x.version === wanted);
     if (!past) return notFound(`Version ${wanted} of this artifact is no longer available`);
     doc = {
       storage_id: past.storage_id,
@@ -1026,7 +1060,7 @@ export const serve = httpAction(async (ctx, request) => {
   // --- the document itself ---
   const raw = await loadText(doc.storage_id);
   if (raw === null) return notFound("Artifact content missing");
-  let html = raw;
+  let html = kind === "markdown" ? restyleMarkdownDocument(raw, doc.title) : raw;
   if (kind === "bundle") {
     html = injectBase(html, doc.version < artifact.version ? `_v/${doc.version}/` : "./");
   }

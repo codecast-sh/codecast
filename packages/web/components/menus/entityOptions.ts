@@ -10,6 +10,7 @@ import {
   PauseCircle,
   XCircle,
 } from "lucide-react";
+import { DOC_TYPES, DOC_TYPE_LABELS } from "@codecast/shared/docs";
 
 // The one place status/priority/type vocabularies live. The command palette's
 // drill-in submenus and the right-click context menus both render from these
@@ -47,14 +48,7 @@ export const PLAN_STATUS_OPTIONS: EntityOption[] = [
   { key: "abandoned", icon: XCircle, label: "Abandoned", color: "text-neutral-500" },
 ];
 
-export const DOC_TYPE_OPTIONS: EntityOption[] = [
-  { key: "note", label: "Note" },
-  { key: "plan", label: "Plan" },
-  { key: "design", label: "Design" },
-  { key: "spec", label: "Spec" },
-  { key: "investigation", label: "Investigation" },
-  { key: "handoff", label: "Handoff" },
-  { key: "decision", label: "Decision" },
-  { key: "charter", label: "Charter" },
-  { key: "brief", label: "Brief" },
-];
+// Derived from the shared DOC_TYPES tuple, so the palette and context menus
+// list exactly the types the schema accepts, in the same order as the docs
+// page tabs and the create modal.
+export const DOC_TYPE_OPTIONS: EntityOption[] = DOC_TYPES.map((key) => ({ key, label: DOC_TYPE_LABELS[key] }));

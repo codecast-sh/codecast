@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
-import { takeStamp, takeWake, WAKE_ONCE_MS } from "./realChrome.js";
+import { takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -23,15 +23,17 @@ test("one wake per outage: the same outage never gets a second, a reconnect open
   expect(await takeWake("seen:100", t0 + 1_000)).toBe(false);
   expect(await takeWake("seen:100", t0 + 3 * WAKE_ONCE_MS)).toBe(false);
   // A new outage (the extension reconnected in between, then dropped again),
-  // but within the race window of the last wake: not yet.
-  expect(await takeWake("seen:200", t0 + WAKE_ONCE_MS - 1)).toBe(false);
-  expect(await takeWake("seen:200", t0 + 3 * WAKE_ONCE_MS)).toBe(true);
-  expect(await takeWake("seen:200", t0 + 4 * WAKE_ONCE_MS)).toBe(false);
+  // but inside the minimum gap since the last wake: not yet. A worker that
+  // dies every minute must not earn a wake tab every minute.
+  expect(await takeWake("seen:200", t0 + WAKE_ONCE_MS)).toBe(false);
+  expect(await takeWake("seen:200", t0 + WAKE_MIN_GAP_MS - 1)).toBe(false);
+  expect(await takeWake("seen:200", t0 + WAKE_MIN_GAP_MS)).toBe(true);
+  expect(await takeWake("seen:200", t0 + 2 * WAKE_MIN_GAP_MS)).toBe(false);
 });
 
 test("a wake stamp written ahead of now is a hold (the manual kill switch)", async () => {
   const t0 = 1_000_000;
-  expect(await takeWake("seen:1", t0 + 10 * WAKE_ONCE_MS)).toBe(true);
+  expect(await takeWake("seen:1", t0 + 10 * WAKE_MIN_GAP_MS)).toBe(true);
   expect(await takeWake("seen:2", t0)).toBe(false);
 });
 

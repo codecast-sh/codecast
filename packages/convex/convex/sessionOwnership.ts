@@ -11,7 +11,7 @@ import {
   listSessionOwnerIds,
   syncPrimaryOwnerCache,
 } from "./sessionOwners";
-import { notifySessionAssigned } from "./notifications";
+import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 
 // Session OWNERS — the humans whose inboxes a session appears in and who may
 // reply into it from the web composer. This is ONE of a session's three
@@ -396,6 +396,7 @@ export const setSessionOwner = mutation({
       owners: ownerRef ? [ownerRef] : [],
     });
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId);
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return { ok: true as const, short_id: result.short_id, owner: result.owners[0] ?? null };
   },
 });
@@ -416,6 +417,7 @@ export const setSessionOwners = mutation({
       note: args.note?.trim() || undefined,
     });
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
   },
 });
@@ -436,6 +438,7 @@ export const addSessionOwner = mutation({
       note: args.note?.trim() || undefined,
     });
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
   },
 });
@@ -468,10 +471,12 @@ export const removeSessionOwner = mutation({
   },
   handler: async (ctx, args) => {
     const authUserId = await requireAuth(ctx, args.api_token);
-    return performRemoveSessionOwner(ctx, authUserId, {
+    const result = await performRemoveSessionOwner(ctx, authUserId, {
       session_id: args.session_id,
       owner: args.owner?.trim() || "me",
     });
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
+    return result;
   },
 });
 

@@ -35,6 +35,8 @@ import {
   Target,
 } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
+import { OwnerRoleChip, PriorityPill } from "../../components/charter/CharterChips";
 
 type ProjectStatus = "active" | "planning" | "paused" | "done";
 
@@ -97,6 +99,7 @@ function ProjectCard({
   const status = STATUS_CONFIG[project.status as ProjectStatus] || STATUS_CONFIG.active;
   const StatusIcon = status.icon;
   const totalItems = project.task_counts.total + project.plan_count + project.doc_count;
+  const orgTree = useInboxStore((s) => s.orgTree);
 
   return (
     <button
@@ -120,6 +123,15 @@ function ProjectCard({
             </span>
           )}
         </div>
+
+        {/* The charter's pill and owner (org-staffing.md S7); nothing when the
+            project has neither, so uncharted rows stay as quiet as before. */}
+        {(project.priority || project.owner_role_id) && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <PriorityPill priority={project.priority} size="xs" />
+            <OwnerRoleChip tree={orgTree} ownerRoleId={project.owner_role_id} size="xs" />
+          </div>
+        )}
 
         {/* Description */}
         {project.description && (
@@ -247,6 +259,8 @@ function ProjectListContent() {
   const router = useRouter();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   useSyncProjects();
+  // The org tree names the owner chip on each card (charter, org-staffing S7).
+  useSyncOrgTree();
 
   const projects = useInboxStore((s) => s.projects);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);

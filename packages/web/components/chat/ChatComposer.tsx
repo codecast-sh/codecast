@@ -1,5 +1,6 @@
 import { memo, useCallback, useRef, useState } from "react";
 import { Headphones, ImagePlus } from "lucide-react";
+import { SlackLogo } from "../SlackLogo";
 import { WalkiePttButton } from "../calls/WalkiePtt";
 import { MessageInput } from "../ConversationView";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -51,6 +52,7 @@ export const ChatComposer = memo(function ChatComposer({
   dropFilesRef,
   walkieRoomKey,
   walkieRing,
+  slackChannelName,
 }: {
   channelId: string;
   threadRootId?: string;
@@ -62,7 +64,10 @@ export const ChatComposer = memo(function ChatComposer({
   /** Names the "Also send to #channel" checkbox — offered only in a thread
    *  (Slack's broadcast). Absent = no checkbox. */
   channelName?: string;
-  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => void;
+  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean; syncLocalOnly?: boolean }) => void;
+  /** The channel mirrors to a Slack channel of this name: offer the per-line
+   *  "keep this out of Slack" switch. Absent = no switch. */
+  slackChannelName?: string;
   autoFocus?: boolean;
   /** The thread panel is narrower and sits under its own scroll region. */
   compact?: boolean;
@@ -91,6 +96,10 @@ export const ChatComposer = memo(function ChatComposer({
   // send, because broadcasting is a choice about ONE message, not a mode.
   const [broadcast, setBroadcast] = useState(false);
   const offerBroadcast = !!threadRootId && !!channelName;
+  // Per line, like broadcast: the mirror is the channel's rule, and this is
+  // one person deciding that ONE line stays home. Resets after the send.
+  const [localOnly, setLocalOnly] = useState(false);
+  const offerSlack = !!slackChannelName;
   return (
     <div
       className="ch-composer"
@@ -128,12 +137,16 @@ export const ChatComposer = memo(function ChatComposer({
           // Every upload failed and nothing was typed — uploadImage already
           // toasted each failure; there is nothing real to send.
           if (!content && attachments.length === 0) return;
+          const sendOpts: { broadcast?: boolean; syncLocalOnly?: boolean } = {};
+          if (offerBroadcast && broadcast) sendOpts.broadcast = true;
+          if (offerSlack && localOnly) sendOpts.syncLocalOnly = true;
           onSend(
             content,
             attachments.length ? attachments : undefined,
-            offerBroadcast && broadcast ? { broadcast: true } : undefined,
+            Object.keys(sendOpts).length > 0 ? sendOpts : undefined,
           );
           setBroadcast(false);
+          setLocalOnly(false);
         }}
       />
       <div className="ch-composer-foot">
@@ -196,6 +209,24 @@ export const ChatComposer = memo(function ChatComposer({
               onChange={(e) => setBroadcast(e.target.checked)}
             />
             Also send to #{channelName}
+          </label>
+        )}
+        {offerSlack && (
+          // The same control as "Also send to #channel" beside it: one grammar
+          // for "where else does this line go". Checked = it crosses to Slack.
+          <label
+            className={`ch-composer-broadcast ch-composer-slack ${localOnly ? "ch-composer-slack-off" : "ch-composer-broadcast-on"}`}
+            title={localOnly
+              ? `This line stays here. Tick to also send it to Slack #${slackChannelName}.`
+              : `This line also appears in Slack #${slackChannelName}. Untick to keep it here only.`}
+          >
+            <input
+              type="checkbox"
+              checked={!localOnly}
+              onChange={(e) => setLocalOnly(!e.target.checked)}
+            />
+            <SlackLogo className="w-3 h-3" muted={localOnly} />
+            <span>to #{slackChannelName}</span>
           </label>
         )}
         <TypingIndicator members={typists} />

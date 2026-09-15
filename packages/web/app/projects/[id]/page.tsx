@@ -56,6 +56,8 @@ import { DocDates } from "../../../components/DocDates";
 import { HireRoleDialog } from "../../../components/org/HireRoleDialog";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { Briefcase } from "lucide-react";
+import { CharterBlock } from "../../../components/charter/CharterBlock";
+import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 
 const api = _api as any;
 
@@ -268,6 +270,16 @@ function ProjectDetailContent() {
   // A role lives in one workspace and its scope must sit inside it: the button
   // shows only when the org tree on screen is the project's own workspace.
   const canHire = !!orgTree && !!meId && !!project && (orgTree.workspace.kind === "team" ? project.team_id === orgTree.workspace.id : !project.team_id);
+
+  // The charter (org-staffing.md S7) reads the STORE row first: updateProject
+  // patches it in the same tick, while webGet's snapshot only moves once the
+  // dispatch lands and the query re-runs. The server row fills what the store
+  // has not cached yet.
+  const charter = useMemo(
+    () => charterOf({ ...(serverProject ?? {}), ...((storeProjects as any)[projectId] ?? {}) }, "project"),
+    [serverProject, storeProjects, projectId],
+  );
+  const handleCharterChange = useCallback((patch: CharterPatch) => updateProject(projectId, patch), [projectId, updateProject]);
 
   // Plans in this project
   const projectPlans = useMemo(() =>
@@ -536,6 +548,18 @@ function ProjectDetailContent() {
             )}
           </div>
         </div>
+
+        {/* The charter sits above the tabs: the direction every tab serves. */}
+        <CharterBlock
+          kind="project"
+          title={project.title}
+          charter={charter}
+          canEdit
+          onChange={handleCharterChange}
+          tree={orgTree}
+          onHire={canHire ? () => setHireOpen(true) : undefined}
+          className="ml-5 mt-3"
+        />
 
         {/* Tasks is the working surface; Overview is the summary of everything
             filed here — plans, their tasks, and docs. */}
