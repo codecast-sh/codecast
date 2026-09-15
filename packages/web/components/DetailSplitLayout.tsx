@@ -3,7 +3,7 @@ import { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { hasOpenModal } from "../shortcuts/registry";
-import { useTabContext } from "../lib/tabParams";
+import { useTabActive } from "../hooks/usePagePresence";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // List, then detail — each taking the full stage:
@@ -27,9 +27,7 @@ export function DetailSplitLayout({
   const router = useRouter();
   // Background tab panes stay mounted (display:none) — a hidden pane must not
   // run the document-level Esc listener, which would navigate the ACTIVE tab.
-  // Null context = outside the tab shell.
-  const tabCtx = useTabContext();
-  const isTabActive = (tabCtx as { isActive?: boolean } | null)?.isActive !== false;
+  const isTabActive = useTabActive();
   const hasDetail = children != null && children !== false;
   const active = hasDetail && isTabActive;
 

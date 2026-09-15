@@ -6,6 +6,7 @@
 import { type InboxSession } from "../../store/inboxStore";
 import { fleetBandFor, type FleetBandOpts } from "../fleetBands";
 import { memberDisplayName as liveMemberDisplayName } from "../../lib/liveEntities";
+import { matchScore } from "../../lib/mentionRanking";
 
 export type PresenceState = "active" | "idle" | "away" | "offline";
 /** What a badge draws. "busy" is the manual status, not a heartbeat state. */
@@ -214,7 +215,7 @@ export function compareMembersByPresence(a: any, b: any): number {
   return (a.name || a.email || "").localeCompare(b.name || b.email || "");
 }
 
-function compactDuration(ms: number): string {
+export function compactDuration(ms: number): string {
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 1) return "now";
   if (minutes < 60) return `${minutes}m`;
@@ -443,4 +444,85 @@ export function presenceActivityLine(member: any, ctx: PresenceActivityCtx): str
   return typeof seen === "number"
     ? `last seen ${compactDuration(ctx.now - seen)} ago`
     : "offline";
+}
+
+/**
+ * Where a teammate is right now, as one row for the palette and the hover
+ * card: the session they have open (teams.getTeamMembers
+ * viewing_conversation_id), when the server showed it to this viewer.
+ *
+ * The server withholds the id of any session the CALLER cannot open and
+ * clears it off a stale row, so a row here is always one the viewer can
+ * follow; the client adds only the presence gate (an offline teammate is
+ * nowhere) and drops the viewer's own row.
+ */
+export interface TeammateWhereabouts {
+  member: any;
+  /** The member's user id. */
+  id: string;
+  name: string;
+  /** The session they have open, or null when they are around but not in one. */
+  conversationId: string | null;
+  /** The session's title when the store holds the row; the caller fetches otherwise. */
+  title: string | undefined;
+  inStore: boolean;
+  /** When they arrived there (bucketed to the minute server side). */
+  since: number | undefined;
+  /** Lower ranks first; the palette's own scale (lib/mentionRanking). */
+  score: number;
+}
+
+/** The words a typed query is matched against for a teammate in a session:
+ *  the row's own label plus the verbs people reach for. */
+export function teammateRowText(name: string): string {
+  return `go where ${name} is follow jump`;
+}
+
+/**
+ * One row per online teammate. A teammate in a session always makes the
+ * list (ranked by how well the query names them or the gesture); a teammate
+ * who is around but in no session appears only when the query names them,
+ * so the group stays as small as the team's activity. Offline teammates and
+ * the viewer never appear.
+ */
+export function teammateWhereabouts(
+  members: any[],
+  viewerId: string | null,
+  query: string,
+  sessions: Record<string, { title?: string } | undefined> = {},
+): TeammateWhereabouts[] {
+  const q = query.trim();
+  const rows: TeammateWhereabouts[] = [];
+  for (const m of members ?? []) {
+    const id = m?._id ? String(m._id) : "";
+    if (!id || id === viewerId) continue;
+    if (memberPresenceState(m) === "offline") continue;
+    const name = memberDisplayName(m);
+    const conversationId = m.viewing_conversation_id ? String(m.viewing_conversation_id) : null;
+    let score: number;
+    if (conversationId) {
+      score = matchScore(teammateRowText(name), q);
+    } else {
+      if (!q) continue;
+      score = matchScore(name, q);
+    }
+    if (score === Infinity) continue;
+    const row = conversationId ? sessions[conversationId] : undefined;
+    rows.push({
+      member: m,
+      id,
+      name,
+      conversationId,
+      title: row?.title,
+      inStore: !!row,
+      since: typeof m.viewing_since === "number" ? m.viewing_since : undefined,
+      score,
+    });
+  }
+  return rows.sort(
+    (a, b) =>
+      a.score - b.score ||
+      Number(!a.conversationId) - Number(!b.conversationId) ||
+      a.name.localeCompare(b.name),
+  );
 }

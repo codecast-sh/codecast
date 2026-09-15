@@ -166,7 +166,23 @@ function shouldHideCallWindow({ ended, quitting, host }) {
   return true;
 }
 
+// What the voice window is called in window switchers (Mission Control, the
+// Window menu, AltTab), by the shape it is in. One window wears every shape,
+// so its name has to follow the shape or a ring reads as "Codecast Faces".
+const VOICE_WINDOW_TITLES = {
+  ring: "Codecast Ring",
+  walkie: "Codecast Walkie",
+  wall: "Codecast People",
+  faces: "Codecast Faces",
+};
+
+function callWindowTitle(size) {
+  if (isCallSize(size)) return "Codecast Call";
+  return VOICE_WINDOW_TITLES[size] || "Codecast Voice";
+}
+
 module.exports = {
+  callWindowTitle,
   shouldHandBackCall,
   shouldHideCallWindow,
   callWindowChrome,

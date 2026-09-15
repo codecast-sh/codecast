@@ -253,11 +253,14 @@ export function keepEmbedFlagOnUrl(history?: HistoryLike): void {
 // embedded document: PANE_EMBED is false in the app, in a test and on a server.
 if (PANE_EMBED) keepEmbedFlagOnUrl();
 
-/** The document title a route writes. A pane's page gives the bare title: the
- *  pane strip reads it, and the strip already says which app it is in. */
-export function appDocumentTitle(title: string | null, embedded: boolean = PANE_EMBED): string {
-  if (embedded) return title ?? "";
-  return title ? `codecast | ${title}` : "codecast";
+/** A window's document title: the surface it is on, then the thing it shows,
+ *  "Codecast Inbox | Fix the auth race". Window switchers list windows by this
+ *  title, so it names what the window shows. A pane's page gives the bare
+ *  thing: the pane strip reads it, and the strip already says which app it is
+ *  in. */
+export function appDocumentTitle(surface: string, thing: string | null, embedded: boolean = PANE_EMBED): string {
+  if (embedded) return thing || surface;
+  return thing && thing !== surface ? `Codecast ${surface} | ${thing}` : `Codecast ${surface}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -130,9 +130,10 @@ cast sessions --state needs-input # narrow to one state (also --team, -m <name>;
 cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
 cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
 cast sessions <id> --messages -w  # …focused on one session
-# ORCHESTRATE a fleet: spawn workers under a label, run the watch in the background, act on events.
-#   cast spawn --label fleet "task A" "task B"
-#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"done",…}
+# ORCHESTRATE a fleet: nest workers under this session, then watch their returned IDs.
+#   cast spawn --subagent --label fleet "task A" "task B"
+#   cast sessions <worker-id> <worker-id> -w --json     ← emits {"event":"transition","to":"done",…}
+# Nested workers are omitted from top-level lists, including label filters; name their IDs to watch them.
 #   worker flips to done = finished, needs_input = blocked → cast read <id>, then cast send <id> "next step"
 # The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
 # Event states use underscores ("needs_input"); the --state flag accepts either form.
@@ -305,6 +306,7 @@ cast task create "Title" --project "<name>" # File a new task under a project
 cast task update <id> --project "<name>"    # File an existing task (--project '' unfiles it)
 cast task start/done/comment <id>           # Task lifecycle
 cast task start <id> --spawn                # Claim it AND hand it to a fresh agent session
+cast task handoff <id> --status done --evidence - --page <slug|url>   # Hand off with evidence; the page attaches to the task
 cast integrations ls|sources|import <provider> <ref>  # Linear teams/projects and GitHub repos as codecast projects; their issues are tasks, synced both ways
 cast task update <id> -t "..." -d "..."     # Keep title/description matching what you're actually doing (-s for status)
 cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
@@ -358,6 +360,8 @@ cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
 cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
 cast workflow list                          # Available templates
 cast workflow push                          # Push workflow to web UI
+cast workflow runs [--task ct-N|--plan pl-N] # Runs across workflows: status, task, current node, gate
+cast role line @handle [--set <slug>]       # Read or set the workflow a role's tasks run on (default: line)
 \`\`\`
 
 Workflow nodes can be: agent sessions (\`backend=claude\`), shell commands, human approval gates, or conditionals. The web dashboard shows workflow progress and gate buttons.
@@ -417,15 +421,18 @@ export const FORKS_SNIPPET_END = "<!-- /codecast-forks -->";
 export const FORKS_SNIPPET = `
 ## Forks & Sessions
 
-You can spin work off into your human's inbox as independent sessions — not hidden subagents. The difference is ownership: a subagent (Task tool) reports back to you and you keep its result; a fork or a spawned session lands in the human's inbox for them to review, steer, and continue on their own. Reach for these when the work is theirs to own, or when several directions are worth running at once and seeing side by side. Launch them when the human asks; if spinning them up is your idea, propose it first.
+Choose by who owns the result. **For work you delegate and report back on, use \`cast spawn --subagent\`.** This includes implementers, reviewers, parallel audits, and workers under a plan you are driving. They nest under this session; you manage them and deliver the combined result. A request to build a feature or run work in parallel does not by itself ask for separate inbox threads.
+
+Plain \`cast spawn\` and \`cast fork\` create independent threads in the human's inbox, for the human to steer separately. Use them when the human explicitly asks for those independent threads; if that handoff is your idea, propose it first. Parallelism, a fresh context, a different agent, a label, and an isolated worktree do not decide ownership. If the brief says "report back to me", the session is your worker: include \`--subagent\`.
 
 \`\`\`bash
-cast fork "<direction>" ["<direction>" ...]   # N directions: you take the first, the rest become branches
-cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
-cast spawn --subagent --agent codex "<task>"  # subagent row nested under THIS session — yours to manage
+cast spawn --subagent -- "<task>"             # worker under THIS session; -- keeps the prompt out of [parent]
+cast spawn --subagent --agent codex "<task>"  # worker on a different backend, still yours to manage
+cast spawn "<independent thread>"             # only for a human-requested inbox handoff
+cast fork "<direction>" ["<direction>" ...]   # human-requested branches; you take the first direction
 cast exec --agent grok "review this diff"     # run now, print the result, exit (no inbox card)
 cast switch --agent codex                     # continue THIS session under a different agent
-cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
+cast spawn --subagent -- - <<'EOF'            # multi-line worker briefing via stdin
 …goal, numbered steps, constraints — exact newlines preserved…
 EOF
 \`\`\`
@@ -446,11 +453,11 @@ With two or more directions, THIS thread is one of them: you take the first dire
 
 A branch receives its direction as its human's next message, exactly as if the person had typed it there. It does not know it is a fork, it has nobody to report back to, and it must not be treated as a worker: do not message, monitor, or wait on a branch, and do not build coordination between branches. Write each direction as a complete, self-contained instruction for a thread that will read it cold. The branches run independently and the human steers them from the inbox.
 
-\`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
+Both spawn modes start fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Plain \`cast spawn\` defaults to an inbox card even when called by an agent. A label or a task/plan binding does not nest it; \`--subagent\` does.
 
-\`cast spawn --subagent\` inverts the ownership: the new session nests in the UI as a subagent row under this session instead of landing as a first-class inbox card, and it is YOURS to manage — brief it, watch it, \`cast send <id>\` it follow-ups, \`cast read <id>\` its results, and fold what it finds back into your own work. Unlike a Task-tool subagent it is a full session on any agent backend, so \`--subagent --agent codex\` runs a codex worker under a claude parent. Bare \`--subagent\` nests under the session running the command; pass a value (\`--subagent <session>\`) to nest under another of your sessions. To block on it, watch it by id — \`cast sessions <id> -w --json\` emits a \`transition\` to \`needs_input\` when the worker finishes its turn (a subagent row is hidden from the top-level list, but always answers when named), then \`cast read <id>\` for its result. Tell the human what you delegated, and report the results yourself — a subagent row is your worker, not a handoff to their inbox.
+\`cast spawn --subagent\` creates a full session on any agent backend, nested under its parent. Brief it, watch it, \`cast send <id>\` it follow-ups, \`cast read <id>\` its results, and fold what it finds back into your own work. Bare \`--subagent\` uses the session running the command; pass \`--subagent <session>\` to name a parent explicitly. When the prompt comes immediately after the bare flag, separate it with \`--\`: \`cast spawn --subagent -- "<task>"\`. Watch the returned IDs with \`cast sessions <id> [<id>…] -w --json\`, then read their results. Workers are omitted from top-level lists, including label filters, but always answer when named. A \`done\` transition means delivered; \`needs_input\` requires reading whether the worker finished or is blocked. Tell the human what you delegated, and report the results yourself.
 
-\`cast exec\` is the other verb. It runs a prompt on any harness, prints the result, and exits. There is no inbox card: the process is the session. Use it when you need the answer in this turn. Use spawn when the work belongs in the inbox.
+\`cast exec\` runs a prompt on any harness, prints the result, and exits. There is no inbox card: the process is the session. Use it when you need a result directly from the command; use \`spawn --subagent\` for a worker you will manage across turns.
 
 \`\`\`bash
 cast exec "summarize this repo"
@@ -458,9 +465,9 @@ cast exec --agent grok --model grok-4.6 --effort high "review the diff"
 git diff | cast exec --agent claude --model sonnet "write a commit message"
 \`\`\`
 
-Fork and spawn start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human in one line what runs where, then get on with your own direction.
+Every launch starts working immediately. Nested workers stay under their parent; independent spawns and fork branches appear in the human's inbox. A session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human in one line what runs where, then continue your work.
 
-Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass \`--label <name>\` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a \`spawn\` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: \`cast spawn --label rollout "<task>" "<task>"\`, then \`cast sessions --label rollout\` to see the whole fan-out as a group.
+Labels carry across a fork by default: a branch inherits the label you'd filed the parent under. Pass \`--label <name>\` to override it, or to label a spawn, which starts with no label. The label is created if it doesn't exist: \`cast spawn --subagent --label rollout "<task>" "<task>"\`. A label groups work; it does not change inbox visibility. Watch nested workers by their returned IDs; \`cast sessions --label rollout\` lists independent sessions with that label.
 
 Stay on THIS session when you need a different agent or model. Do not fork unless you want a parallel branch the human will steer separately.
 
@@ -535,7 +542,7 @@ export const MESSAGING_SNIPPET = `
 
 \`cast send <session_id> "<text>"\` starts a turn in another session and can interrupt work. Send to change the recipient's next action, answer a question, prevent a concrete conflict, or deliver finished work. Keep routine progress, hypotheses, and passing checks in your own session or task.
 
-Use \`cast read <id>\` and \`cast diff <id>\` before asking for updates. Ask only for missing information; send tasks or redirects when work needs to change.
+Every message costs the recipient a turn over its whole context. A session that has not run for more than an hour, or was killed, has also lost its prompt cache, so your message makes it reload everything it did before it reads a word, and it rarely knows more than its transcript already shows. Read before you write: \`cast read <id>\` and \`cast diff <id>\` answer what a session did at no cost to it. Sessions that search or the feed turn up are history to read, not colleagues to ask. Message an old session only when it still owns work that has to change; \`cast send\` holds that send and names the cost, and \`--wake\` delivers it when the answer is still yes. Ask only for missing information; send tasks or redirects when work needs to change.
 
 After accepting work from another session, send one result: commit or artifact, verification, caveats, and required action. Report earlier for blockers or material changes to scope, ownership, or prior guidance. Honor explicit requests for more frequent reports.
 
@@ -583,6 +590,7 @@ cast publish report.html          # → https://codecast.sh/a/<slug>  (stable pe
 cast publish notes.md             # markdown renders as a clean reading page
 cast publish dist/                # directory bundle (needs index.html; assets keep relative paths)
 cast publish app.html --watch     # republish on every save; viewers on <url>?live=1 auto-reload
+cast publish report.html --task ct-N   # the page attaches to the task as evidence at its current station
 cast publish ls | rm <target> | open <target>
 \`\`\`
 
@@ -901,6 +909,8 @@ cast decide "<one question>" \\
 The reasoning: what you found, the tradeoff, and why you cannot pick alone.
 Write it so they can decide WITHOUT opening the session.
 EOF
+cast decide "<q>" -o … -o … --option-page 2=alt.html   # an option with its own page (a file, a slug, or a url)
+cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorrow   # tend a stack; overdue sorts first
 \`\`\`
 
 **The decision is the whole message.** It renders as a card — in the queue and inline in this
@@ -996,13 +1006,13 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "forks",
     aliases: ["fork", "spawn", "sessions", "exec", "switch"],
     name: "Forks & Sessions",
-    desc: "Branch or spawn sessions into the inbox, or run a harness in print mode",
+    desc: "Delegate nested workers, hand off independent inbox threads, or run a prompt",
     detail:
-      "Adds `cast fork` and `cast spawn` so a session can hand work to your inbox. `fork` " +
-      "branches the current conversation N ways from a message point; `spawn` starts fresh " +
-      "sessions. Both land in your inbox as independent threads — unlike subagents, which " +
-      "report back to the agent that launched them. `spawn --subagent` makes such a worker " +
-      "explicitly: the new session nests under its parent as a subagent row, on any agent backend. " +
+      "For delegated implementers, reviewers and audits that report back to you, use " +
+      "`cast spawn --subagent -- \"<task>\"`: workers nest under this session on any agent backend. " +
+      "Watch their returned IDs with `cast sessions <id> -w --json`. Plain `cast spawn` and " +
+      "`cast fork` create independent inbox threads: use them only when the human asks for " +
+      "threads they will steer separately. A label or plan binding does not nest a worker. " +
       "`cast exec` is print mode for every harness: run a prompt, print the result, exit. " +
       "`cast switch` continues this session under a different agent or model, without forking.",
     writesTo: "CLAUDE.md — a ## Forks & Sessions section",

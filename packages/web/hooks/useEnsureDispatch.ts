@@ -7,6 +7,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 import { recordHibernationDispatchError } from "../lib/hibernation";
+import { toast } from "sonner";
 
 // Sync-log ack opt-in latch: flips false (for the session) the first time the
 // server rejects the ack_positions arg — see the fallback in bindDispatch.
@@ -63,13 +64,16 @@ export function useEnsureDispatch() {
         return;
       }
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
-      // An org edit the rail rejected has no echo coming: stop replaying its
-      // intent onto the tree, or the optimistic shape outlives the refusal.
-      dropRejectedOrgIntent(useInboxStore.getState(), action, args);
       // A permanent rejection is dropped from the outbox (no re-drive will
       // land it), so it's the user's only chance to hear their action didn't
       // take — record it for the platform's feedback surface to render.
       if (isPermanentDispatchError(error)) {
+        // An org edit the rail rejected for good has no echo coming: stop
+        // replaying its intent, put the draft back, and say so. Only here: a
+        // transient exhaustion (a backend timeout) leaves the parked outbox
+        // row to re-drive, so its intent stays open and the echo settles it;
+        // reverting it would put a ghost back while the accept still lands.
+        for (const text of dropRejectedOrgIntent(useInboxStore.getState(), action, args)) toast.error(text);
         if (action === "hibernateSession" && Array.isArray(args) && typeof args[0] === "string") {
           recordHibernationDispatchError(args[0], error);
         }

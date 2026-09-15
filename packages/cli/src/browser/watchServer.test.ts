@@ -10,6 +10,7 @@ import type { CdpConnection, CdpEvent, CdpTarget } from "./cdp.js";
 import type { InstanceState } from "./instance.js";
 import { attachWatchServer, ownerCandidates, resolveWatchTarget, type WatchServerDeps } from "./watchServer.js";
 import { cdpWatchEngine, pollingWatchEngine, type CdpEngineDeps } from "./watchSource.js";
+import { ACTION_BINDING, WATCH_PROTOCOL_VERSION } from "./watchActions.js";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 const ORIGIN = "http://localhost:3000";
@@ -75,11 +76,15 @@ class FakeCdp {
   nextSession = 1;
   /** When set, Page.captureScreenshot answers with this JPEG (base64). */
   screenshotData: string | null = null;
+  /** What the page answers when the action observer is installed: the ring
+   *  a previous viewer's script left behind (JSON), see watchActions.ts. */
+  pageRecent: string = "[]";
 
   send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
     this.calls.push({ method, params, sessionId });
     if (method === "Target.attachToTarget") return Promise.resolve({ sessionId: `cdp-${this.nextSession++}` });
     if (method === "Page.captureScreenshot" && this.screenshotData) return Promise.resolve({ data: this.screenshotData });
+    if (method === "Runtime.evaluate") return Promise.resolve({ result: { value: this.pageRecent } });
     return Promise.resolve({});
   }
 
@@ -489,6 +494,130 @@ describe("control mode", () => {
     c.ws.send(JSON.stringify({ type: "input", events: [{ kind: "insertText", text: "nope" }] }));
     await new Promise((r) => setTimeout(r, 100));
     expect(cdp.calls.filter((x) => x.method.startsWith("Input.")).length).toBe(before);
+    c.ws.close();
+    await c.closed;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The action channel: what the page reports about the agent's hand reaches
+// the viewer as `action` frames, normalized to the viewport.
+
+describe("action channel", () => {
+  const sessionOf = () => cdp.calls.filter((call) => call.method === "Page.startScreencast").pop()!.sessionId!;
+  const report = (cdpSession: string, raw: Record<string, unknown>) =>
+    cdp.emit({ method: "Runtime.bindingCalled", params: { name: ACTION_BINDING, payload: JSON.stringify(raw), executionContextId: 1 }, sessionId: cdpSession });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+
+  test("ready names the protocol, the observer is installed, and a report becomes a normalized action frame", async () => {
+    const c = connect({ session_uuid: "u1" });
+    const ready = await c.waitFor("ready");
+    expect(ready.protocol).toBe(WATCH_PROTOCOL_VERSION);
+    const cdpSession = sessionOf();
+    await settle();
+    const onSession = cdp.calls.filter((x) => x.sessionId === cdpSession).map((x) => x.method);
+    expect(onSession).toContain("Runtime.addBinding");
+    expect(cdp.calls.find((x) => x.method === "Runtime.addBinding" && x.sessionId === cdpSession)!.params).toEqual({ name: ACTION_BINDING });
+    expect(onSession).toContain("Page.addScriptToEvaluateOnNewDocument");
+    expect(onSession).toContain("Runtime.evaluate");
+
+    const at = Date.now();
+    report(cdpSession, { kind: "down", x: 400, y: 150, w: 800, h: 600, at });
+    const action = await c.waitFor("action");
+    expect(action).toEqual({ type: "action", kind: "down", x: 0.5, y: 0.25, at });
+
+    // Text is a caption, and a secret field never carries one.
+    report(cdpSession, { kind: "type", x: 100, y: 100, w: 800, h: 600, at: at + 1, text: "hello" });
+    report(cdpSession, { kind: "type", x: 100, y: 100, w: 800, h: 600, at: at + 2, secret: true, text: "leak" });
+    await settle();
+    const typed = c.messages.filter((m) => m.type === "action" && m.kind === "type");
+    expect(typed[0]).toMatchObject({ text: "hello" });
+    expect(typed[1]).toMatchObject({ secret: true });
+    expect(typed[1].text).toBeUndefined();
+
+    // A report from another CDP session, or under another binding name, is not ours.
+    cdp.emit({ method: "Runtime.bindingCalled", params: { name: "other", payload: JSON.stringify({ kind: "up", x: 1, y: 1, w: 2, h: 2 }) }, sessionId: cdpSession });
+    cdp.emit({ method: "Runtime.bindingCalled", params: { name: ACTION_BINDING, payload: JSON.stringify({ kind: "up", x: 1, y: 1, w: 2, h: 2 }) }, sessionId: "cdp-elsewhere" });
+    await settle();
+    expect(c.messages.filter((m) => m.type === "action" && m.kind === "up").length).toBe(0);
+
+    c.ws.close();
+    await c.closed;
+  });
+
+  test("a main frame navigation is an action with the url, at the last known cursor", async () => {
+    const c = connect({ session_uuid: "u1" });
+    await c.waitFor("ready");
+    const cdpSession = sessionOf();
+    report(cdpSession, { kind: "move", x: 200, y: 300, w: 800, h: 600, at: Date.now() });
+    await c.waitFor("action");
+    cdp.emit({ method: "Page.frameNavigated", params: { frame: { id: "child", parentId: "main", url: "https://ad.example/" } }, sessionId: cdpSession });
+    cdp.emit({ method: "Page.frameNavigated", params: { frame: { id: "main", url: "https://example.com/next" } }, sessionId: cdpSession });
+    await settle();
+    const navs = c.messages.filter((m) => m.type === "action" && m.kind === "nav");
+    expect(navs.length).toBe(1);
+    expect(navs[0]).toMatchObject({ url: "https://example.com/next", x: 0.25, y: 0.5 });
+    c.ws.close();
+    await c.closed;
+  });
+
+  test("a viewer who connects mid flow gets the recent actions right after ready", async () => {
+    const first = connect({ session_uuid: "u1" });
+    await first.waitFor("ready");
+    const at = Date.now();
+    report(sessionOf(), { kind: "down", x: 80, y: 60, w: 800, h: 600, at });
+    await first.waitFor("action");
+
+    const second = connect({ session_uuid: "u1" });
+    await second.waitFor("ready");
+    await settle();
+    const idx = second.messages.findIndex((m) => m.type === "ready");
+    const replayed = second.messages.slice(idx + 1).filter((m) => m.type === "action");
+    expect(replayed.some((m) => m.kind === "down" && m.x === 0.1 && m.y === 0.1 && m.at === at)).toBe(true);
+    // Nothing arrived before ready.
+    expect(second.messages.slice(0, idx).some((m) => m.type === "action")).toBe(false);
+
+    first.ws.close();
+    second.ws.close();
+    await Promise.all([first.closed, second.closed]);
+  });
+
+  test("what the page already saw before any viewer came is replayed from its own ring", async () => {
+    const at = Date.now();
+    cdp.pageRecent = JSON.stringify([
+      { kind: "move", x: 8, y: 6, w: 80, h: 60, at: at - 60_000 }, // too old to be the cursor now
+      { kind: "up", x: 40, y: 30, w: 80, h: 60, at },
+    ]);
+    try {
+      const c = connect({ session_uuid: "u1" });
+      await c.waitFor("ready");
+      const deadline = Date.now() + 2000;
+      while (!c.messages.some((m) => m.type === "action" && m.at === at) && Date.now() < deadline) await settle();
+      const mine = c.messages.filter((m) => m.type === "action" && (m.at === at || m.at === at - 60_000));
+      expect(mine).toEqual([{ type: "action", kind: "up", x: 0.5, y: 0.5, at }]);
+      c.ws.close();
+      await c.closed;
+    } finally {
+      cdp.pageRecent = "[]";
+    }
+  });
+
+  test("the page's echo of a viewer's own input is not an agent action", async () => {
+    const c = connect({ session_uuid: "u1", control: true });
+    await c.waitFor("ready");
+    const cdpSession = sessionOf();
+    cdp.emit({
+      method: "Page.screencastFrame",
+      params: { data: "aGVsbG8=", metadata: { deviceWidth: 800, deviceHeight: 600 }, sessionId: 9 },
+      sessionId: cdpSession,
+    });
+    await c.waitFor("frame");
+    c.ws.send(JSON.stringify({ type: "input", events: [{ kind: "mouse", type: "mousePressed", nx: 0.5, ny: 0.5, button: "left", clickCount: 1 }] }));
+    await settle();
+    const at = Date.now();
+    report(cdpSession, { kind: "down", x: 400, y: 300, w: 800, h: 600, at });
+    await settle();
+    expect(c.messages.some((m) => m.type === "action" && m.at === at)).toBe(false);
     c.ws.close();
     await c.closed;
   });

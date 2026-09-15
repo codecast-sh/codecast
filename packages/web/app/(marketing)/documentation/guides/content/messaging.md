@@ -29,16 +29,16 @@ Because both ends are agents, patterns compose:
 
 - **Delegate**: hand a dormant session a task, ask it to ping you when done or blocked, then act on the reply.
 - **Peer**: two sessions working the same problem trade findings as they go.
-- **Fleet**: spawn workers under a label, watch their state, and message each one as it finishes:
+- **Fleet**: nest workers under the parent, watch their returned IDs, and message each one as it finishes:
 
 ```bash
-cast spawn --label fleet "task A" "task B" "task C"
-cast sessions --label fleet -w --json    # emits {"event":"transition","to":"needs_input",…}
-# worker flips to needs_input = finished or blocked
+cast spawn --subagent --label fleet "task A" "task B" "task C"
+cast sessions <worker-id> <worker-id> <worker-id> -w --json
+# done = delivered; needs_input = read whether finished or blocked
 # → cast read <id>, then cast send <id> "next step"
 ```
 
-The watch stream prints nothing until something changes, so wake-on-output is a reliable signal. This loop — spawn, watch, read, send — is how one session orchestrates many without any of them sharing a context window.
+Nested workers are omitted from top-level lists, including label filters, so watch the IDs returned by spawn. The watch stream prints nothing until something changes. The parent reads the results and delivers the combined answer to the human.
 
 Messaging routes team-wide: a session ID from `cast feed` or `cast search` works in `cast send` whether the session is yours or a teammate's. Your name rides on the message, so the receiving session (and its human) knows who is asking.
 

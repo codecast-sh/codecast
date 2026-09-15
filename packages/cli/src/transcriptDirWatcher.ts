@@ -92,7 +92,7 @@ export class TranscriptDirWatcher extends EventEmitter {
       scanPolicy: this.cfg.scanPolicy,
       filter: this.cfg.watchFilter,
       dirFilter: this.cfg.dirFilter,
-      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      callback: (filePath, eventType) => { if (eventType !== "unlink") this.handleFileEvent(filePath, eventType); },
       onExisting: (files) => this.emitExistingFilesSorted(files),
       maxDepth: this.cfg.maxDepth,
       debounceMs: this.cfg.debounceMs,

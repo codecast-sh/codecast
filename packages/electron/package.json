@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
-    "electron": "^33.0.0",
+    "electron": "^44.3.0",
     "electron-builder": "^25.0.0"
   },
   "build": {
@@ -45,7 +45,11 @@
       "native/notifications.node",
       "assets/icon.png",
       "assets/trayTemplate.png",
-      "assets/trayTemplate@2x.png"
+      "assets/trayTemplate@2x.png",
+      "assets/trayAttention.png",
+      "assets/trayAttention@2x.png",
+      "assets/trayColor.png",
+      "assets/trayColorAttention.png"
     ],
     "asarUnpack": [
       "native/*.node"
@@ -62,7 +66,7 @@
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
-      "minimumSystemVersion": "10.15",
+      "minimumSystemVersion": "13.0",
       "identity": "Ashot Petrosian (WRG9THCK9Q)",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -70,7 +74,8 @@
       "entitlementsInherit": "entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Codecast uses the microphone for team huddles.",
-        "NSCameraUsageDescription": "Codecast uses the camera for team huddles."
+        "NSCameraUsageDescription": "Codecast uses the camera for team huddles.",
+        "NSAudioCaptureUsageDescription": "Codecast records system audio when you record a meeting or share your screen with sound."
       }
     },
     "dmg": {

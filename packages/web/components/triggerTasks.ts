@@ -525,3 +525,38 @@ export function groupSessionsByTrigger(
   });
   return { triggerGroups, rest: items.filter((s) => !claimed.has(s._id)) };
 }
+
+// The dock roster's reading order: triggers grouped under the session they
+// fire into, so the roster answers "which sessions have machinery, and what"
+// instead of listing forty rows that each name their home in a truncated
+// footnote. Inject triggers and loops group by home conversation; spawn
+// triggers (no home — every run is a fresh session) group per project under a
+// synthetic key. Group order follows the roster order of each group's FIRST
+// row, so the group holding the soonest fire still sits at the top, and rows
+// keep their roster order inside a group.
+export interface TriggerHomeGroup {
+  key: string;
+  // The home conversation for inject/loop rows; absent for a spawn group.
+  homeId?: string;
+  // The spawn group's project (rows are grouped per project so the header
+  // can name where the fresh sessions land).
+  projectPath?: string;
+  rows: TriggerRow[];
+}
+
+export function groupTriggerRowsByHome(rows: TriggerRow[]): TriggerHomeGroup[] {
+  const groups: TriggerHomeGroup[] = [];
+  const byKey = new Map<string, TriggerHomeGroup>();
+  for (const row of rows) {
+    const homeId = row.task.originating_conversation_id;
+    const key = homeId ?? `spawn:${row.task.project_path ?? ""}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = homeId ? { key, homeId, rows: [] } : { key, projectPath: row.task.project_path, rows: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.rows.push(row);
+  }
+  return groups;
+}

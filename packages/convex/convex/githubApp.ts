@@ -893,7 +893,7 @@ export const backfillInstallationPulls = internalAction({
       });
       repositories = args.repositories
         ?? (installation.repository_selection === "selected" && installation.repositories
-          ? installation.repositories.map((r) => r.full_name)
+          ? installation.repositories.map((r: InstallationRepository) => r.full_name)
           : (await fetchInstallationRepositories(token)).map((r) => r.full_name));
       repositories = repositories.slice(0, INSTALLATION_REPOS_CAP).map(normalizeRepository);
 

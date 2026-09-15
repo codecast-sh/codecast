@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, type RunOptions } from "./runner.js";
+import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, type RunOptions } from "./runner.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -459,6 +459,114 @@ describe("workflow/runner (goal-gate retry)", () => {
     expect(outcome).toBe("completed");
     expect(fetched.some(u => u.includes("/cli/workflow-runs/gate"))).toBe(true);
   }, 20000);
+});
+
+// ── Gates are decisions (the-line.md L4) ─────────────────────────────────────
+
+describe("workflow/runner (gate payload)", () => {
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let calls: Array<{ route: string; body: any }>;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    calls = [];
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      calls.push({ route, body: JSON.parse(init?.body || "{}") });
+      const body = route === "/cli/workflow-runs/poll-gate" ? { status: "running", gate_response: "A: fine" } : { ok: true };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test("an edge label parses into key, label and description", () => {
+    expect(parseGateEdgeLabel("[A] Approve :: ships now")).toEqual({ key: "A", label: "[A] Approve", description: "ships now" });
+    expect(parseGateEdgeLabel("[R] Revise")).toEqual({ key: "R", label: "[R] Revise" });
+  });
+
+  test("the gate route receives the choice descriptions, the expanded doc, the category and the graph stack", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      graph [stack="Launch checklist"]
+      start  [shape=Mdiamond]
+      plan   [shape=parallelogram, script="echo the plan"]
+      review [shape=hexagon, label="Review", prompt="Ship it?\nPlan: $plan.output", doc="# Plan\n\n$plan.output", category="review"]
+      fix    [shape=parallelogram, script="true"]
+      exit   [shape=Msquare]
+      start  -> plan -> review
+      review -> exit [label="[A] Approve :: ships now"]
+      review -> fix  [label="[R] Revise :: another round"]
+      fix    -> exit
+    }`);
+    const outcome = await runWorkflow(g, { cwd: tmpDir, runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
+    expect(outcome).toBe("completed");
+    const gate = calls.find((c) => c.route === "/cli/workflow-runs/gate")!;
+    expect(gate.body).toMatchObject({
+      run_id: "run-1",
+      node_id: "review",
+      prompt: "Ship it?\nPlan: the plan",
+      doc_md: "# Plan\n\nthe plan",
+      category: "review",
+      stack: "Launch checklist",
+      choices: [
+        { key: "A", label: "[A] Approve", description: "ships now", target: "exit" },
+        { key: "R", label: "[R] Revise", description: "another round", target: "fix" },
+      ],
+    });
+    // The answer routed on the key and left the note for the next node.
+    expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "fix")).toBe(false);
+  });
+});
+
+// ── Node fidelity (the-line.md L8) ───────────────────────────────────────────
+
+describe("workflow/graphToPushPayload", () => {
+  test("the push payload carries definition, reviewer, timeout, temperature, doc and category", () => {
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      impl   [label="Implement", prompt="do it", definition="coder", timeout=30, temperature=0.2, max_visits=2]
+      review [label="Review", prompt="check it", reviewer=true]
+      gate   [shape=hexagon, prompt="Ship?", doc="$review.output", category="review"]
+      exit   [shape=Msquare]
+      start -> impl -> review -> gate
+      gate -> exit [label="[A] Approve :: ships"]
+    }`);
+    const { nodes, edges } = graphToPushPayload(g);
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+    expect(byId.impl).toMatchObject({ definition: "coder", timeout: 30, temperature: 0.2, max_visits: 2, prompt: "do it" });
+    expect(byId.review).toMatchObject({ reviewer: true });
+    expect(byId.gate).toMatchObject({ doc: "$review.output", category: "review" });
+    expect(byId.start.definition).toBeUndefined();
+    expect(edges.find((e) => e.from === "gate")).toEqual({ from: "gate", to: "exit", label: "[A] Approve :: ships" });
+  });
+
+  test("the push payload carries the graph stack, and omits it when the graph has none", () => {
+    const withStack = parseWorkflowSource(`digraph g {
+      graph [stack="Release gates"]
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      start -> exit
+    }`);
+    expect(graphToPushPayload(withStack).stack).toBe("Release gates");
+    const without = parseWorkflowSource(`digraph g { start [shape=Mdiamond]; exit [shape=Msquare]; start -> exit }`);
+    expect("stack" in graphToPushPayload(without)).toBe(false);
+  });
+
+  test("every workflow push in the CLI goes through graphToPushPayload", () => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../index.ts"), "utf-8");
+    const pushes = src.split("/cli/workflows/upsert").length - 1;
+    expect(pushes).toBeGreaterThanOrEqual(2);
+    expect(src.split("graphToPushPayload(graph)").length - 1).toBe(pushes);
+    expect(src).not.toContain("...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {})");
+  });
 });
 
 // ── plan-to-polish workflow file ──────────────────────────────────────────────

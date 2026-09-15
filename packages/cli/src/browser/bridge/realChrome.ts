@@ -12,11 +12,13 @@
  * to the instance holding the default profile and exits, or becomes that
  * instance when none is running.
  *
- * A launch opens no window on macOS (`--no-startup-window`): Chrome runs,
- * loads its extensions, and the bridge connects, all behind whatever the
- * human is doing. The extension makes a window the first time a session
- * needs a tab (background.js createTab). On Linux a windowless Chrome quits
- * at once, so a window it is.
+ * A launch opens Chrome's normal window. A windowless launch
+ * (`--no-startup-window`) was tried first and looked right on a throwaway
+ * profile, but in a real profile Chrome ended the extension's service
+ * worker seconds after every start and refused tab creation ("Tabs cannot
+ * be edited right now"), so the bridge never worked in that state
+ * (2026-09-15). One window appearing once is the price of a Chrome that
+ * runs extensions.
  *
  * Every URL travels as the path of a 0600 file whose script forwards to it
  * (protocol.ts bridgePairingPage): the command line is readable by every user
@@ -107,12 +109,20 @@ export const LAUNCH_ONCE_MS = 60_000;
  * Two sessions racing on a fresh outage are held apart by WAKE_ONCE_MS.
  */
 export const WAKE_ONCE_MS = 60_000;
+/**
+ * And never more often than this, whatever the outage key says. A worker
+ * that Chrome ends every minute proves itself every minute, which moves
+ * extensionSeenAt and would earn a wake tab per minute (seen 2026-09-15 in
+ * a windowless Chrome). The worker's own alarm carries a dying worker; the
+ * visible wake is for a worker that is not coming back at all.
+ */
+export const WAKE_MIN_GAP_MS = 10 * 60_000;
 
 export function takeWake(outage: string, now = Date.now()): Promise<boolean> {
   return claim((current) => {
     if (current.wokeForOutage === outage) return null;
-    // Not twice within the window either, and a stamp in the future is a hold.
-    if (now - (Number(current.wokeAt) || 0) < WAKE_ONCE_MS) return null;
+    // Not twice within the gap either, and a stamp in the future is a hold.
+    if (now - (Number(current.wokeAt) || 0) < WAKE_MIN_GAP_MS) return null;
     return { ...current, wokeAt: now, wokeForOutage: outage };
   });
 }
@@ -123,7 +133,7 @@ export function takeWake(outage: string, now = Date.now()): Promise<boolean> {
  */
 export async function launchRealChrome(): Promise<boolean> {
   if (!(await takeStamp("launchedAt", LAUNCH_ONCE_MS))) return true;
-  return spawnChrome(process.platform === "darwin" ? ["--no-startup-window"] : []);
+  return spawnChrome([]);
 }
 
 /** The forwarding page `setup` leaves for Chrome to open; removed once pairing settles. */

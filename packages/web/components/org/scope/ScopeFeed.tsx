@@ -6,7 +6,7 @@
 // sessionsUnder: a loader reports its rows once and unmounts.
 import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckSquare, FileText, GitCommitHorizontal, Image as ImageGlyph, Layers, Megaphone, MessageCircleQuestionMark, Terminal } from "lucide-react";
+import { CheckSquare, FileText, GitCommitHorizontal, Image as ImageGlyph, Layers, Megaphone, MessageCircleQuestionMark, Terminal, Workflow } from "lucide-react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useScopeFeedPage, type ScopeRef } from "../../../hooks/useScopeQueries";
@@ -28,6 +28,7 @@ const KIND_ICON: Record<FeedKind, any> = {
   decision: MessageCircleQuestionMark,
   update: Megaphone,
   commit: GitCommitHorizontal,
+  run: Workflow,
 };
 
 /** One page of the feed: fires the query for its cursor, reports once, stays mounted so the row stays live. */

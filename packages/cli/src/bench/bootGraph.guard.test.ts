@@ -149,8 +149,16 @@ describe("command groups stay off the boot graph", () => {
     // 218 after the third 2026-09-15 cut: orgTemplate.ts, the org template
     // registrar (its verb bodies load inside each action, like orgInit), and the
     // unattended contract the shared barrel now exports.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(218);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3018);
+    //
+    // 3,032 KB at the same 218 files after ct-51367: the `cast chat slack`
+    // verbs (the two way Slack mirror of team chat) are 11 KB of code in
+    // index.ts itself, reaching nothing new. Code, not reach, again.
+    //
+    // 219 after ct-51435: triggerLifecycle.ts, the run completion vocabulary
+    // the scheduler and the Convex writer both state. A leaf of pure strings
+    // through the barrel, importing nothing; no subsystem arrived with it.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(219);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3032);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -180,7 +188,9 @@ describe("command groups stay off the boot graph", () => {
     // 305 after the third 2026-09-15 cut: escapeInterrupt.ts (the daemon decides
     // an Escape itself), desktopPaneRegistry.ts and realChrome.ts under the watch
     // source that feeds desktop panes, and the unattended contract via the barrel.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(305);
+    // 306 after ct-51435: triggerLifecycle.ts, the same run completion leaf,
+    // reached through taskScheduler.ts which already sat on this graph.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(306);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

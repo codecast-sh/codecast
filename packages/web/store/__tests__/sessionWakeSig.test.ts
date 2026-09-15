@@ -45,6 +45,18 @@ describe("sessionStructuralSig — heartbeat churn is inert", () => {
     const newPreview = session("a", { last_user_message: "a much longer reply" });
     expect(sessionStructuralSig(newPreview)).toBe(sessionStructuralSig(base));
   });
+
+  // The activity line ("editing chat.ts") is stamped on every tool call and
+  // rides the liveness overlay. It must NOT wake the list: each card subscribes
+  // to its own row's field (lib/sessionActivity activitySig) instead.
+  it("ignores the activity line: a tool call stamp wakes one card, never the list", () => {
+    const base = session("a", { activity: { text: "editing chat.ts", tool: "Edit", at: 1_000 } });
+    const nextTool = session("a", { activity: { text: "running npx tsc", tool: "Bash", at: 2_000 } });
+    const cleared = session("a", { activity: null });
+    expect(sessionStructuralSig(nextTool)).toBe(sessionStructuralSig(base));
+    expect(sessionStructuralSig(cleared)).toBe(sessionStructuralSig(base));
+    expect(sessionsWakeSig({ a: nextTool })).toBe(sessionsWakeSig({ a: base }));
+  });
 });
 
 describe("sessionStructuralSig — real bucket/order changes flip it", () => {
