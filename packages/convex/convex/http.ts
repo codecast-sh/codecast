@@ -1543,7 +1543,7 @@ http.route({
             headers: { "Content-Type": "application/json", ...corsHeaders },
           });
         }
-        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id, stack: body.stack, task: body.task });
+        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id, stack: body.stack, task: body.task, mine: body.mine });
       } else if (action === "edit" || action === "cancel") {
         if (!body.decision_id) {
           return new Response(JSON.stringify({ error: "Missing decision_id" }), {
@@ -1565,6 +1565,14 @@ http.route({
                 blocking,
                 default_option,
                 clear_default: body.clear_default,
+                // Every ask field (the-line.md L10).
+                kind: body.kind,
+                form: body.form,
+                doc_md: body.doc_md,
+                task: body.task,
+                station: body.station,
+                stack: body.stack,
+                category: body.category,
               });
       } else {
         if (!session_id || !question || !Array.isArray(options)) {
@@ -1590,6 +1598,9 @@ http.route({
           task: body.task,
           station: body.station,
           stack: body.stack,
+          // the-line.md L4: the runner's failure gates bind to their run.
+          workflow_run_id: body.workflow_run_id,
+          gate_node_id: body.gate_node_id,
         });
       }
 
@@ -1700,6 +1711,8 @@ cliRoute("/cli/stack/policy", (ctx, body) =>
     auto_default_after_ms: body.auto_default_after_ms,
     clear_auto_default: body.clear_auto_default,
     delegate: body.delegate,
+    due_at: body.due_at,
+    clear_due: body.clear_due,
   }),
 );
 
@@ -2885,6 +2898,20 @@ http.route({
         }
       }
 
+      // Skill/command bodies, batched independently of the inventory so a
+      // 5MB skills tree cannot blow the fleet row. Same fire-and-log rule:
+      // a failure here must not fail presence.
+      if (Array.isArray(body.capability_contents) && body.capability_contents.length > 0) {
+        try {
+          await ctx.runMutation(api.capabilities.reportCapabilityContents, {
+            api_token,
+            items: body.capability_contents,
+          });
+        } catch (err) {
+          console.error("capability_contents ingest failed:", err);
+        }
+      }
+
       return new Response(JSON.stringify(result), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -3777,11 +3804,23 @@ http.route({
       // Ignore the bot's own posts on both paths, so an anchor reply that happens
       // to @mention the app can't wake it in a loop (each loop has a new event_id,
       // so dedup wouldn't catch it).
+      // Channel mirroring first (slackSync): a linked channel takes every event
+      // for it, including the mention (the mirrored line's @mention wakes the
+      // anchor through chat). "no_link" leaves the event for the anchor path.
+      let mirrored = false;
+      if (eventId && payload.team_id) {
+        const routed = await ctx.runMutation(internal.slackSync.ingestEvent, {
+          event_id: eventId,
+          workspace: String(payload.team_id),
+          event,
+        });
+        mirrored = routed.status !== "no_link";
+      }
       const isMention =
         event.type === "app_mention" && !event.bot_id && !event.subtype;
       const isDM =
         event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
-      if ((isMention || isDM) && eventId && event.channel) {
+      if (!mirrored && (isMention || isDM) && eventId && event.channel) {
         // One atomic mutation: dedup + resolve channel→anchor + wake. If the wake
         // throws it returns 500 and Slack retries — the dedup row rolls back with
         // it, so a transient failure never silently drops the mention.
@@ -4078,6 +4117,9 @@ cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.se
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
 cliRoute("/cli/role/wakes", async (ctx, body) => ctx.runQuery(api.orgRoles.wakes, body));
 cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
+// The scope's line (the-line.md L2): `cast role line <handle> [--set <slug>]`.
+cliRoute("/cli/role/line", async (ctx, body) => ctx.runQuery(api.orgRoles.line, body));
+cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles.setLine, body));
 cliRoute("/cli/brief/get", async (ctx, body) => ctx.runQuery(api.org.brief, body));
 cliRoute("/cli/brief/edit", async (ctx, body) => ctx.runMutation(api.orgRoles.briefEdit, body));
 // Scopes and the scope feed (docs/architecture/scopes-and-feed.md F1, F2).
@@ -4093,7 +4135,20 @@ cliRoute("/cli/org/scope-summary", async (ctx, body) => {
 // Org init and update (docs/architecture/org-init.md): the analyzer's inputs
 // and the apply path for an answered proposal.
 cliRoute("/cli/org/analysis-inputs", async (ctx, body) => ctx.runQuery(api.org.analysisInputs, body));
+// The chief of staff (docs/architecture/org-staffing.md S6): `cast org staff
+// [--adopt] [--every 7d]` and the "Hire a Chief of Staff" button.
+cliRoute("/cli/org/staff", async (ctx, body) => ctx.runMutation(api.orgRoles.staff, body));
 cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as any).orgInit.applyDecision, body));
+// Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
+// the proposal lifecycle. Decide, accept-all and withdraw refuse a session
+// caller on the server; the CLI passes from_session as on every org verb.
+cliRoute("/cli/org/health", async (ctx, body) => ctx.runQuery((api as any).org.health, body));
+cliRoute("/cli/org/propose", async (ctx, body) => ctx.runMutation((api as any).orgProposals.create, body));
+cliRoute("/cli/org/proposals", async (ctx, body) => ctx.runQuery((api as any).orgProposals.list, body));
+cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).orgProposals.get, body));
+cliRoute("/cli/org/proposal/decide", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decide, body));
+cliRoute("/cli/org/proposal/accept-all", async (ctx, body) => ctx.runMutation((api as any).orgProposals.acceptAll, body));
+cliRoute("/cli/org/proposal/withdraw", async (ctx, body) => ctx.runMutation((api as any).orgProposals.withdraw, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the
@@ -4157,6 +4212,24 @@ cliRoute("/cli/chat/archive", async (ctx, body) => {
 // wake frame and `cast chat read --since`). body: { channel_ids, since, limit? }.
 cliRoute("/cli/chat/lines-since", async (ctx, body) => {
   return await ctx.runQuery(api.chat.linesSince, body);
+});
+// The Slack mirror (`cast chat slack …`): the team's installation and every
+// mirrored pair, the Slack channels the app can see, and link / update /
+// unlink. Each function checks membership and channel management inside.
+cliRoute("/cli/chat/slack/status", async (ctx, body) => {
+  return await ctx.runQuery(api.slackSync.getTeamSlack, body);
+});
+cliRoute("/cli/chat/slack/channels", async (ctx, body) => {
+  return await ctx.runAction(api.slackSync.listSlackChannels, body);
+});
+cliRoute("/cli/chat/slack/link", async (ctx, body) => {
+  return await ctx.runAction(api.slackSync.linkChannel, body);
+});
+cliRoute("/cli/chat/slack/update", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.updateLink, body);
+});
+cliRoute("/cli/chat/slack/unlink", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.unlinkChannel, body);
 });
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }
@@ -4432,6 +4505,8 @@ cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
+// the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.
+cliRoute("/cli/workflow-runs/list", async (ctx, body) => ctx.runQuery(api.workflow_runs.listRunsFromCli, body));
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
@@ -4688,6 +4763,11 @@ cliRoute("/cli/images/url", async (ctx, body) => ({ url: await ctx.runQuery(api.
 
 cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
 cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
+// Evidence (docs/architecture/the-line.md L6): `cast task handoff --page`
+// attaches an existing page to a task; `cast task show` and the task page
+// read one evidence object.
+cliRoute("/cli/artifacts/attach", async (ctx, body) => ctx.runMutation(api.artifacts.attachFromCLI, body));
+cliRoute("/cli/work/evidence", async (ctx, body) => ctx.runQuery(api.taskEvidence.get, body));
 
 // Raw artifact HTML + assets. Lives under /cli/ because the Caddy proxy in
 // front of the self-hosted backend forwards only that prefix (plus

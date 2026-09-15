@@ -11,6 +11,7 @@ import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useTabActive } from "../../hooks/usePagePresence";
 import { hasOpenModal } from "../../shortcuts";
 
 // A stack as a checklist (D5): the members in the stack's order, one of them
@@ -38,8 +39,9 @@ export function StackChecklist({ stack, editable = false, keys = false }: { stac
     toast.success(`Answered ${defaults.length} with their defaults`);
   }, [defaults, answerDecision]);
 
+  const paneActive = useTabActive();
   useWatchEffect(() => {
-    if (!keys) return;
+    if (!keys || !paneActive) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
       const t = e.target as HTMLElement | null;

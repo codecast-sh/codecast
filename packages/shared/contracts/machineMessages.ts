@@ -160,12 +160,46 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
   return !!rawContent && rawContent.trim().startsWith("<task-notification>");
 }
 
+// A `cast send --raw` report from another session: the body was injected as a
+// user-role turn WITHOUT the <session-message> wrapper (the flag exists for
+// slash commands like `/model opus`). The receiving transcript then paints it
+// as something the human typed. Opening-line only, so a 200-char preview still
+// matches; human prompts ("We want to…", a pasted article title) do not.
+//
+//   Backend B (ct-51438) review fixes: all five of mine fixed…
+//   Backend B follow-up: jx71b14 deployed after levelling the tree.
+export function parseUnwrappedSessionReport(
+  rawContent: string | null | undefined,
+): { from: string; body: string; name: string } | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  if (!text || text.startsWith("<")) return null;
+  const first = text.split("\n", 1)[0] ?? "";
+  const named = (raw: string) => raw.replace(/\s+/g, " ").trim();
+  const withTask = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s*\(ct-\d+\)/);
+  if (withTask) {
+    const name = named(withTask[1]);
+    if (name) return { from: "unknown", body: text, name };
+  }
+  const followUp = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s+follow-up\s*:/i);
+  if (followUp) {
+    const name = named(followUp[1]);
+    if (name) return { from: "unknown", body: text, name };
+  }
+  return null;
+}
+
+export function isUnwrappedSessionReport(rawContent: string | null | undefined): boolean {
+  return parseUnwrappedSessionReport(rawContent) !== null;
+}
+
 // Any user-role message delivered by machinery rather than typed by the human:
 // a cross-session `cast send` message, a subagent's report to its parent, an
 // inter-agent teammate broadcast, a scheduled-task injection, a harness task
-// notification, or a team-chat mention waking the anchor.
+// notification, a team-chat mention waking the anchor, or a `cast send --raw`
+// report that lost its session wrapper.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

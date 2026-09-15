@@ -1,101 +1,102 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Search, X } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
-import type { CapabilityBindingRow } from "../../store/inboxStore";
+import { Search, X } from "lucide-react";
+import { SegmentedToggle } from "../SegmentedToggle";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { kindMeta, type CatalogEntry } from "./CapabilityCard";
-import { EquipControl, equipScopeOf, projectChoicesFromSessions, type EquipTarget } from "./EquipControl";
+import { kindMeta, CAPABILITY_KINDS, KIND_META, type CatalogEntry, type CapabilityKind } from "./CapabilityCard";
+import { type EquipTarget } from "./EquipControl";
+import { CapabilityReader } from "./CapabilityReader";
+import type { CapabilityDevice } from "./CapabilityCard";
+import type { FleetGridRow } from "./FleetMatrix";
 
 /**
- * Installed — the simple surface.
+ * Installed — what is actually on your machines.
  *
- * One row per capability the user has said something about, the equip control
- * on every row, and a search that adds from the catalog into a scope with one
- * click. This is the tab a person lives in; the fleet matrix, drift marks and
- * audit trail are still there under Machines for when something is wrong, but
- * they are not the front door.
- *
- * Reads bindings from the store (localFirst: a toggle renders before the
- * round trip) and the catalog the page already loaded — no queries of its own.
+ * The old front door listed only codecast bindings, so a skill sitting in
+ * ~/.claude/skills never appeared. This list is the fleet inventory: one row
+ * per capability any machine reported, click to read the file.
  */
 
 export interface InstalledTabProps {
+  rows: FleetGridRow[];
+  devices: CapabilityDevice[];
   catalog: CatalogEntry[];
-  /** Repos + current session for the equip control's choices. */
   equip: Omit<EquipTarget, "slug">;
-  /** Names a machine has actually reported having this slug on. Not required
-   *  for the tab to work — it renders "not on any machine yet" honestly. */
-  installedOn?: (slug: string) => string[];
+  selectedKey: string | null;
+  onSelect: (key: string | null) => void;
 }
 
-function scopeSummary(rows: CapabilityBindingRow[]): string {
-  const on = rows.filter((r) => r.enabled);
-  if (on.length === 0) return "off";
-  const kinds = new Set(on.map((r) => equipScopeOf(r)));
-  if (kinds.has("everywhere")) return kinds.size === 1 ? "everywhere" : "everywhere + narrower";
-  if (kinds.has("project")) return on.filter((r) => r.scope_kind === "project").length === 1 ? "one project" : `${on.filter((r) => r.scope_kind === "project").length} projects`;
-  return "this session";
+function score(row: FleetGridRow, q: string): number {
+  const name = row.identity.toLowerCase();
+  if (name === q) return 100;
+  if (name.startsWith(q)) return 80;
+  if (name.includes(q)) return 60;
+  if ((row.description ?? "").toLowerCase().includes(q)) return 20;
+  return 0;
 }
 
-export function InstalledTab({ catalog, equip, installedOn }: InstalledTabProps) {
-  const bindings = useInboxStore((s) => s.capabilityBindings);
+export function InstalledTab({ rows, devices, catalog, equip, selectedKey, onSelect }: InstalledTabProps) {
   const [query, setQuery] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  const bySlug = useMemo(() => {
-    const m = new Map<string, CapabilityBindingRow[]>();
-    for (const b of Object.values(bindings)) {
-      const list = m.get(b.capability_slug) ?? [];
-      list.push(b);
-      m.set(b.capability_slug, list);
-    }
-    return m;
-  }, [bindings]);
-
+  const [kind, setKind] = useState<CapabilityKind | string>("all");
   const catalogBySlug = useMemo(() => new Map(catalog.map((c) => [c.slug, c])), [catalog]);
 
-  const rows = useMemo(
-    () =>
-      [...bySlug.entries()]
-        .map(([slug, rowsFor]) => ({ slug, rows: rowsFor, entry: catalogBySlug.get(slug) }))
-        .sort((a, b) => a.slug.localeCompare(b.slug)),
-    [bySlug, catalogBySlug],
-  );
+  const selected = selectedKey ? (rows.find((r) => r.key === selectedKey) ?? null) : null;
 
-  const q = query.trim().toLowerCase();
-  const addable = useMemo(() => {
-    if (!q) return [];
-    return catalog
-      .filter((c) => !bySlug.has(c.slug))
-      .filter((c) => `${c.name} ${c.slug} ${c.description ?? ""}`.toLowerCase().includes(q))
-      .slice(0, 12);
-  }, [catalog, bySlug, q]);
+  const kindItems = useMemo(() => {
+    const present = new Set(rows.map((r) => String(r.kind)));
+    const items = [{ key: "all", label: "All" }];
+    for (const k of CAPABILITY_KINDS) {
+      if (!present.has(k)) continue;
+      items.push({ key: k, label: KIND_META[k].plural });
+    }
+    for (const k of [...present].sort()) {
+      if ((CAPABILITY_KINDS as readonly string[]).includes(k)) continue;
+      items.push({ key: k, label: k });
+    }
+    return items;
+  }, [rows]);
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = rows.filter((r) => {
+      if (kind !== "all" && String(r.kind) !== kind) return false;
+      if (q && score(r, q) === 0) return false;
+      return true;
+    });
+    return [...filtered].sort((a, b) => {
+      if (q) return score(b, q) - score(a, q) || a.identity.localeCompare(b.identity);
+      const ka = String(a.kind);
+      const kb = String(b.kind);
+      const ia = CAPABILITY_KINDS.indexOf(ka as CapabilityKind);
+      const ib = CAPABILITY_KINDS.indexOf(kb as CapabilityKind);
+      const ra = ia === -1 ? 99 : ia;
+      const rb = ib === -1 ? 99 : ib;
+      return ra - rb || a.identity.localeCompare(b.identity);
+    });
+  }, [rows, kind, query]);
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Add bar: search the catalog, equip into a scope in one gesture. */}
-      <div className="relative">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
+      <div className="min-w-0 flex-1 space-y-3">
         <div className="flex items-center gap-2 rounded-lg border border-sol-border bg-sol-card px-3 py-2">
           <Search className="h-4 w-4 text-sol-text-dim" strokeWidth={1.5} />
           <input
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setAdding(true);
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setQuery("");
+              }
             }}
-            onFocus={() => setAdding(true)}
-            placeholder="Add a skill, plugin, or MCP server…"
+            placeholder="Filter skills, commands, plugins…"
             className="flex-1 bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim outline-none"
           />
           {query && (
             <button
               type="button"
-              onClick={() => {
-                setQuery("");
-                setAdding(false);
-              }}
+              onClick={() => setQuery("")}
               className="text-sol-text-dim hover:text-sol-text"
               aria-label="Clear"
             >
@@ -103,79 +104,85 @@ export function InstalledTab({ catalog, equip, installedOn }: InstalledTabProps)
             </button>
           )}
           <span className="hidden items-center gap-1 text-[10px] text-sol-text-dim sm:flex">
-            <KeyCap>/</KeyCap> to focus
+            <KeyCap size="xs">Esc</KeyCap>
+            clears
           </span>
         </div>
-        {adding && q && (
-          <div className="absolute left-0 right-0 z-10 mt-1 overflow-hidden rounded-lg border border-sol-border bg-sol-card shadow-lg">
-            {addable.length === 0 ? (
-              <div className="px-3 py-3 text-xs text-sol-text-muted">
-                Nothing in the catalog matches — try the Library tab for public sources.
-              </div>
-            ) : (
-              addable.map((c) => {
-                const meta = kindMeta(c.kind);
-                return (
-                  <div
-                    key={c.slug}
-                    className="flex items-center gap-3 border-b border-sol-border/60 px-3 py-2 last:border-b-0"
-                  >
-                    {meta && <meta.icon className="h-4 w-4 shrink-0 text-sol-text-muted" strokeWidth={1.5} />}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-sol-text">{c.name}</div>
-                      {c.description && (
-                        <div className="truncate text-[11px] text-sol-text-dim">{c.description}</div>
-                      )}
-                    </div>
-                    <EquipControl target={{ slug: c.slug, ...equip }} />
-                  </div>
-                );
-              })
-            )}
+
+        {kindItems.length > 2 && (
+          <SegmentedToggle value={kind} onChange={setKind} items={kindItems} />
+        )}
+
+        {rows.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-sol-border px-4 py-8 text-center">
+            <div className="text-sm text-sol-text">Nothing reported yet</div>
+            <div className="mt-1 text-xs text-sol-text-muted">
+              The daemon scans the skills on this machine and sends them up. A new
+              file usually shows within a minute. The Library tab is for adding
+              something you do not have.
+            </div>
           </div>
+        ) : shown.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-sol-border px-4 py-8 text-center text-sm text-sol-text-muted">
+            Nothing matches{query ? ` “${query}”` : ""}.
+          </div>
+        ) : (
+          <ul className="divide-y divide-sol-border/60 overflow-hidden rounded-lg border border-sol-border bg-sol-card">
+            {shown.map((row) => {
+              const meta = kindMeta(String(row.kind));
+              const Icon = meta?.icon;
+              const active = selectedKey === row.key;
+              return (
+                <li key={row.key}>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(active ? null : row.key)}
+                    className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors ${
+                      active ? "bg-sol-magenta/10" : "hover:bg-sol-bg-alt"
+                    }`}
+                  >
+                    {Icon ? (
+                      <Icon className="h-4 w-4 shrink-0 text-sol-text-muted" strokeWidth={1.5} />
+                    ) : (
+                      <span className="h-4 w-4 shrink-0" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-sm text-sol-text">{row.identity}</span>
+                        <span className="text-[10px] text-sol-text-dim">{meta?.label ?? String(row.kind)}</span>
+                      </div>
+                      <div className="truncate text-[11px] text-sol-text-dim">
+                        {row.description ||
+                          (row.slug ? catalogBySlug.get(row.slug)?.description : undefined) ||
+                          (row.activeCount > 0
+                            ? `on ${row.activeCount} machine${row.activeCount === 1 ? "" : "s"}`
+                            : "present")}
+                      </div>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
 
-      {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-sol-border px-4 py-8 text-center">
-          <Plus className="mx-auto mb-2 h-5 w-5 text-sol-text-dim" strokeWidth={1.5} />
-          <div className="text-sm text-sol-text">Nothing turned on yet</div>
-          <div className="mt-1 text-xs text-sol-text-muted">
-            Search above to add something, and choose where it applies — everywhere, one project, or just
-            this session.
+      <div className="lg:sticky lg:top-4 lg:w-[min(100%,28rem)] lg:flex-shrink-0">
+        {selected ? (
+          <CapabilityReader
+            row={selected}
+            devices={devices}
+            onClose={() => onSelect(null)}
+            equip={selected.slug ? { slug: selected.slug, ...equip } : undefined}
+          />
+        ) : (
+          <div className="hidden rounded-lg border border-dashed border-sol-border px-4 py-8 text-center text-xs text-sol-text-dim lg:block">
+            Click a skill to read it.
           </div>
-        </div>
-      ) : (
-        <ul className="divide-y divide-sol-border/60 overflow-hidden rounded-lg border border-sol-border bg-sol-card">
-          {rows.map(({ slug, rows: rowsFor, entry }) => {
-            const meta = entry ? kindMeta(entry.kind) : undefined;
-            const on = installedOn?.(slug) ?? [];
-            return (
-              <li key={slug} className="flex items-center gap-3 px-3 py-2.5">
-                {meta ? (
-                  <meta.icon className="h-4 w-4 shrink-0 text-sol-text-muted" strokeWidth={1.5} />
-                ) : (
-                  <span className="h-4 w-4 shrink-0" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="truncate text-sm text-sol-text">{entry?.name ?? slug}</span>
-                    <span className="text-[10px] text-sol-text-dim">{scopeSummary(rowsFor)}</span>
-                  </div>
-                  <div className="truncate text-[11px] text-sol-text-dim">
-                    {on.length > 0
-                      ? `on ${on.length} machine${on.length === 1 ? "" : "s"}`
-                      : "not on any machine yet — the daemon materializes it on its next pass"}
-                  </div>
-                </div>
-                <EquipControl target={{ slug, ...equip }} />
-              </li>
-            );
-          })}
-        </ul>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
-export { projectChoicesFromSessions };
+export { projectChoicesFromSessions } from "./EquipControl";

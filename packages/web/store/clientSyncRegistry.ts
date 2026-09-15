@@ -353,6 +353,27 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     indexes: "_id, channel_id",
   },
+  // Slack mirrors (slack_channel_links): which chat channels mirror a Slack
+  // channel, which way, and with what controls. Rides chat.listChannels, whose
+  // payload is the COMPLETE set for the team, so a plain snapshot sync: an
+  // unlinked row disappears on the next push.
+  chatSlackLinks: {
+    persistence: { kind: "collection", key: "chatSlackLinks" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, chat_channel_id, team_id",
+  },
+  // Who wrote each line, for a reader whose roster does not hold the author:
+  // a community room (chat.listCommunityChannels) is read by visitors and by
+  // members of other teams, and the team roster is the ONLY name source
+  // otherwise, so every line would say "Someone". chat.listMessages and
+  // chat.getThread already return the authors of the page they serve; this
+  // keeps them. Delta: a page names only its own authors and must not evict
+  // the rest. Lookup only — never a mention target or a roster.
+  chatAuthors: {
+    persistence: { kind: "collection", key: "chatAuthors" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+  },
   // Per-session read marks (sessionReads.listMine): where the viewer's
   // attention stopped in each conversation. Unread is DERIVED from the mark
   // against the session's own updated_at (shared isSessionUnread), never
@@ -553,6 +574,32 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
     feeds: ["org.tree"],
+  },
+  // The company's flow signals and flags (org-staffing.md S3): one snapshot
+  // for the active workspace, painted by the staffing pane and the node
+  // badges. Same singleton shape as orgTree; generated_at is stripped.
+  orgHealth: {
+    persistence: { kind: "meta", key: "orgHealth" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "singleton" },
+    feeds: ["org.health"],
+  },
+  // Staffing proposals (org-staffing.md S4): list rows for the active
+  // workspace, capped at 50, and the changes of every proposal the pane has
+  // opened (orgProposals.get). Both are windows, so delta: a workspace switch
+  // or a get for one proposal never prunes the rest.
+  orgProposals: {
+    persistence: { kind: "collection", key: "orgProposals" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["orgProposals.list"],
+  },
+  orgProposalChanges: {
+    persistence: { kind: "collection", key: "orgProposalChanges" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, proposal_id",
+    feeds: ["orgProposals.get"],
   },
   // Timeline lanes. Both queries are windows (commits: 2×limit newest,
   // PRs: 50 by updated_at), so delta overlays accumulate history.
@@ -1004,6 +1051,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   chatMessages: "shared",
   chatReactions: "shared",
   chatReads: "shared",
+  chatSlackLinks: "shared",
+  chatAuthors: "shared",
   // The viewer's read marks are the same in every window of theirs, and the
   // ack that clears a card must clear it everywhere at once.
   sessionReads: "shared",
@@ -1024,6 +1073,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   anchors: "shared",
   sessionThreads: "shared",
   orgTree: "shared",
+  orgHealth: "shared",
+  orgProposals: "shared",
+  orgProposalChanges: "shared",
   commits: "shared",
   pullRequests: "shared",
   codeComments: "shared",

@@ -76,7 +76,12 @@ export default defineSchema({
     // performSetSessionOwner refuses a bot as the owner value (bots may still
     // CALL it to park sessions on humans).
     is_bot: v.optional(v.boolean()),
-    bot_kind: v.optional(v.union(v.literal("anchor"))),
+    // "anchor" is an anchor's synthetic identity. "slack" is the bridge identity
+    // a Slack workspace speaks through when a Slack person has no codecast
+    // account (slackSync): one per installation, named after the workspace, and
+    // every line it authors carries an `external_author` snapshot of the real
+    // Slack person so the UI renders them, not the bridge.
+    bot_kind: v.optional(v.union(v.literal("anchor"), v.literal("slack"))),
     active_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
     last_message_sent_at: v.optional(v.number()),
@@ -828,6 +833,9 @@ export default defineSchema({
       cache_read: v.number(),
       cache_write: v.number(),
       updated_at: v.number(),
+      // Input + cache read + cache write of the latest counted call: the context
+      // the session's next call carries, and so what waking it costs (wakeCost.ts).
+      context_tokens: v.optional(v.number()),
       // The Claude message id last counted, so a turn split across two sync
       // batches counts once (messages.rollUpUsage).
       last_api_message_id: v.optional(v.string()),
@@ -1100,6 +1108,10 @@ export default defineSchema({
     // Chat channels whose lines ride the role's wake frame (agent-channels.md
     // C1/C2 pull mode). Edited by orgChannels.follow/unfollow.
     follow_channel_ids: v.optional(v.array(v.id("chat_channels"))),
+    // Consecutive company reviews at which the role was flagged overloaded
+    // (org-staffing.md S2 STABILITY.split_after_breaches); orgProposals.create
+    // in review mode writes it, org.health reads it as `breaches`.
+    overload_streak: v.optional(v.number()),
     // ── Standing agent (org-roles-standing.md T1 to T4) ──
     // The two documents the seat is run from: the charter (humans own it) and
     // the brief (the role owns it; its first line is the standing session's
@@ -1128,6 +1140,9 @@ export default defineSchema({
     // The agent the line's review station runs on for this role (the-line.md
     // L3): must differ from the role's own agent, checked when the line starts.
     review_backend: v.optional(v.string()),
+    // The workflow this scope's tasks run on (the-line.md L2); absent = the
+    // shipped "line" template. Human only, logged like a scope edit.
+    line_workflow_slug: v.optional(v.string()),
     last_wake_at: v.optional(v.number()),
     // The fact horizon the last delivered frame covered (a change_log seq,
     // i.e. a timestamp); the next frame diffs against it.
@@ -1157,6 +1172,55 @@ export default defineSchema({
     created_at: v.number(),
   }).index("by_role", ["role_id", "created_at"]),
 
+  // Staffing proposals (docs/architecture/org-staffing.md S4): a structured
+  // set of changes to the chart, authored by an agent (the chief of staff, an
+  // analyzer run) or a person, decided change by change. Access is the anchor
+  // rule (lib/orgAccess): team_id / scope_user_id carry the boundary and
+  // created_by is the host. Resolves when every change is applied or skipped.
+  org_proposals: defineTable({
+    short_id: v.string(), // "op-N" from counters.nextShortId
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")),
+    // Who proposed: a role's standing session, an ordinary session, or a
+    // person. `id` is the org_roles / conversations / users id as a string.
+    author: v.object({ kind: v.union(v.literal("role"), v.literal("session"), v.literal("user")), id: v.string() }),
+    created_by: v.id("users"), // the account the author runs under; the host for access
+    title: v.string(),
+    summary_md: v.string(),
+    mode: v.union(v.literal("init"), v.literal("review"), v.literal("request")),
+    status: v.union(v.literal("open"), v.literal("resolved"), v.literal("withdrawn")),
+    evidence_doc_id: v.optional(v.id("docs")),
+    // The advisory decision that put the proposal in the addressed person's queue.
+    decision_id: v.optional(v.id("session_decisions")),
+    created_at: v.number(),
+    updated_at: v.number(),
+    resolved_at: v.optional(v.number()),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"])
+    .index("by_short_id", ["short_id"]),
+
+  org_proposal_changes: defineTable({
+    proposal_id: v.id("org_proposals"),
+    seq: v.number(),
+    // An OrgChange (@codecast/shared/contracts/orgProposal): validated at
+    // create, stored as it was written so an edit is a diff against it.
+    change: v.any(),
+    rationale: v.string(),
+    evidence: v.array(v.object({ label: v.string(), href: v.optional(v.string()) })),
+    expected_effect: v.optional(v.string()),
+    risk: v.optional(v.string()),
+    // proposed → accepted → applied | failed, or proposed → skipped. accepted
+    // is momentary: the accept applies in the same mutation.
+    status: v.union(v.literal("proposed"), v.literal("accepted"), v.literal("skipped"), v.literal("applied"), v.literal("failed")),
+    // The person's edits to the change (an object patch over its keys).
+    edits: v.optional(v.any()),
+    decided_by: v.optional(v.id("users")),
+    decided_at: v.optional(v.number()),
+    applied_note: v.optional(v.string()),
+    applied_at: v.optional(v.number()),
+  }).index("by_proposal", ["proposal_id", "seq"]),
+
   // A Slack workspace connected via the "Add to Slack" OAuth flow. Holds the
   // per-workspace bot token (replaces the single app-level SLACK_BOT_TOKEN env
   // var) so many workspaces can install the one codecast Slack app. Bound to the
@@ -1173,6 +1237,10 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     scope_user_id: v.optional(v.id("users")),
     installed_by_user_id: v.id("users"),
+    // The synthetic identity (users.is_bot, bot_kind "slack") that Slack people
+    // without a codecast account speak through in mirrored channels. Minted on
+    // first need by slackSync.ensureBridgeUser.
+    bridge_user_id: v.optional(v.id("users")),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -1189,6 +1257,95 @@ export default defineSchema({
   })
     .index("by_event_id", ["event_id"])
     .index("by_created_at", ["created_at"]),
+
+  // ── Slack ↔ chat channel mirroring (slackSync) ─────────────────────────────
+  // One row per mirrored pair. A Slack channel mirrors into at most one chat
+  // channel and a chat channel into at most one Slack channel; both uniqueness
+  // rules are enforced on write, not by index shape. `team_id` ROUTES (which
+  // team's chat this belongs to); access to the row follows access to the chat
+  // channel, checked through chatAccess.canAccessChannel on every read.
+  slack_channel_links: defineTable({
+    team_id: v.id("teams"),
+    installation_id: v.id("slack_installations"),
+    workspace_id: v.string(), // Slack team id, so inbound events resolve strictly inside their workspace
+    slack_channel_id: v.string(),
+    slack_channel_name: v.optional(v.string()),
+    slack_channel_private: v.optional(v.boolean()),
+    chat_channel_id: v.id("chat_channels"),
+    // Which way lines flow. Every other flag narrows inside this.
+    direction: v.union(
+      v.literal("both"),
+      v.literal("slack_to_codecast"),
+      v.literal("codecast_to_slack"),
+    ),
+    // Content controls. Absent means the default named in slackSync.LINK_DEFAULTS.
+    options: v.object({
+      threads: v.boolean(), // thread replies (else roots only)
+      reactions: v.boolean(),
+      edits: v.boolean(), // edits and deletes
+      files: v.boolean(), // attachments both ways
+      bot_messages: v.boolean(), // lines other Slack apps and bots post
+      system_messages: v.boolean(), // joins, leaves, topic and pin notices
+      agent_lines: v.boolean(), // codecast agent and session lines out to Slack
+      match_people_by_email: v.boolean(), // a Slack person with a teammate's email IS that teammate
+    }),
+    paused: v.optional(v.boolean()),
+    // Slack ts floor: events older than this are not mirrored (set at link time,
+    // moved back by a backfill).
+    since_ts: v.string(),
+    // Status, for the settings surface. Counters are best effort.
+    last_inbound_at: v.optional(v.number()),
+    last_outbound_at: v.optional(v.number()),
+    inbound_count: v.optional(v.number()),
+    outbound_count: v.optional(v.number()),
+    last_error: v.optional(v.string()),
+    last_error_at: v.optional(v.number()),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_chat_channel", ["chat_channel_id"])
+    .index("by_workspace_channel", ["workspace_id", "slack_channel_id"])
+    .index("by_team", ["team_id"])
+    .index("by_installation", ["installation_id"]),
+
+  // Profile cache for Slack people, one row per (workspace, user). Filled by
+  // users.info on first sight and refreshed when stale or on user_change. The
+  // mapped codecast user is recomputed on refresh so a teammate who joins
+  // codecast later is recognised on their next Slack line.
+  slack_users: defineTable({
+    workspace_id: v.string(),
+    slack_user_id: v.string(),
+    name: v.string(), // best display label: display_name || real_name || name
+    handle: v.optional(v.string()), // Slack @name
+    real_name: v.optional(v.string()),
+    avatar_url: v.optional(v.string()),
+    email: v.optional(v.string()),
+    is_bot: v.optional(v.boolean()),
+    deleted: v.optional(v.boolean()),
+    codecast_user_id: v.optional(v.id("users")),
+    fetched_at: v.number(),
+  })
+    .index("by_workspace_user", ["workspace_id", "slack_user_id"])
+    .index("by_codecast_user", ["codecast_user_id"]),
+
+  // Inbound Slack events queued for processing. The webhook must ack inside
+  // three seconds and the work (profile fetch, file download, several writes)
+  // runs in an action, so the route stores the event and schedules it. Rows are
+  // the retry ledger and are swept once processed.
+  slack_sync_events: defineTable({
+    event_id: v.string(),
+    link_id: v.id("slack_channel_links"),
+    kind: v.string(), // event type + subtype, for the ledger
+    payload: v.any(),
+    status: v.union(v.literal("queued"), v.literal("done"), v.literal("failed"), v.literal("skipped")),
+    attempts: v.number(),
+    error: v.optional(v.string()),
+    created_at: v.number(),
+    processed_at: v.optional(v.number()),
+  })
+    .index("by_status_created", ["status", "created_at"])
+    .index("by_link_created", ["link_id", "created_at"]),
 
   // Large git-diff blobs split off the conversations hot doc. The conversations
   // row is read+patched on every message sync (addMessages) and returned by list
@@ -2991,6 +3148,10 @@ export default defineSchema({
     // One line for the frame's "Why you are awake" section.
     cause: v.string(),
     ref: v.optional(v.object({ table: v.string(), id: v.string(), short_id: v.optional(v.string()) })),
+    // How many events folded into this row: a fold or passive row is one per
+    // (table, id) per window (orgEvents.enqueueRoleEvent), and a work item
+    // moved seven times shows once, with this count. Absent means one.
+    count: v.optional(v.number()),
     // The session whose write produced the row (loop rules key on it).
     actor_conversation_id: v.optional(v.id("conversations")),
     // A person's message already enqueued into the standing session: the
@@ -3157,8 +3318,15 @@ export default defineSchema({
         evidence: v.optional(v.array(v.object({ label: v.string(), url: v.string() }))),
         cost: v.optional(v.string()),
         risk: v.optional(v.string()),
+        // A published page of its own (the-line.md L6): a mockup or a report
+        // the option is judged by; rendered as a comparison row.
+        page_slug: v.optional(v.string()),
       })
     ),
+    // A gate on the line (the-line.md L4): the run this decision pauses and
+    // the node that asked. finalizeAnswer resumes the run.
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+    gate_node_id: v.optional(v.string()),
     form: v.optional(
       v.object({
         fields: v.array(
@@ -3266,7 +3434,10 @@ export default defineSchema({
     .index("by_holder_status", ["holder_key", "status"])
     .index("by_short_id", ["short_id"])
     // Agreement history and grant scope moves: one range read per category.
-    .index("by_category_status_created", ["category", "status", "created_at"]),
+    .index("by_category_status_created", ["category", "status", "created_at"])
+    // org.health and the analyzer inputs: one workspace's week, member by
+    // member, never the deployment's newest rows.
+    .index("by_user_status_created", ["user_id", "status", "created_at"]),
 
   // One row per person a decision is visible to (D2): the queue reads
   // (user, pending) here and joins the decision. `done` once the decision is
@@ -3296,6 +3467,9 @@ export default defineSchema({
       auto_default_after_ms: v.optional(v.number()),
       // This role holds every non protected category for the stack's members.
       delegate_role_id: v.optional(v.id("org_roles")),
+      // When the person means to have cleared it; the queue sorts overdue
+      // stacks first (the-line.md L10).
+      due_at: v.optional(v.number()),
     }),
     status: v.union(v.literal("open"), v.literal("done")),
     // The web's optimistic stub key: "group into a stack" paints a row under
@@ -3647,6 +3821,17 @@ export default defineSchema({
     project_path: v.optional(v.string()),
     target_date: v.optional(v.number()),
     labels: v.optional(v.array(v.string())),
+    // ── Charter (docs/architecture/org-staffing.md S7) ──
+    // The direction a role reads before the task list: the goal, how success
+    // is measured, how urgent, which role owns the line, what it will not do,
+    // what could go wrong, and the daily budget the owner role may spend.
+    goal: v.optional(v.string()),
+    success_metrics: v.optional(v.array(v.string())),
+    priority: v.optional(v.union(v.literal("p0"), v.literal("p1"), v.literal("p2"), v.literal("p3"))),
+    owner_role_id: v.optional(v.id("org_roles")),
+    non_goals: v.optional(v.array(v.string())),
+    risks: v.optional(v.array(v.string())),
+    budget: v.optional(v.object({ tokens_per_day: v.optional(v.number()), hands_per_day: v.optional(v.number()) })),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -3909,6 +4094,13 @@ export default defineSchema({
 
     // Public sharing
     share_token: v.optional(v.string()),
+
+    // ── Charter (docs/architecture/org-staffing.md S7); `goal` above is the
+    // program's goal, these complete it.
+    success_metrics: v.optional(v.array(v.string())),
+    priority: v.optional(v.union(v.literal("p0"), v.literal("p1"), v.literal("p2"), v.literal("p3"))),
+    owner_role_id: v.optional(v.id("org_roles")),
+    non_goals: v.optional(v.array(v.string())),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -4354,12 +4546,20 @@ export default defineSchema({
     // (absent for owner publishes). Carried into artifact_versions when the
     // next bump snapshots this version.
     last_edited_by: v.optional(v.string()),
+    // Evidence (the-line.md L6): the task and station this page was produced
+    // for. Set by cast publish --task/--plan, by a publish from a session
+    // bound to a task, or by cast task handoff --page.
+    task_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
+    station: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_slug", ["slug"])
     .index("by_user", ["user_id"])
-    .index("by_user_path", ["user_id", "source_path"]),
+    .index("by_user_path", ["user_id", "source_path"])
+    .index("by_task", ["task_id"])
+    .index("by_plan", ["plan_id"]),
 
   // Superseded artifact versions: on republish the previous blob is snapshotted
   // here (instead of deleted) so past versions stay openable. Bounded — see
@@ -4919,6 +5119,14 @@ export default defineSchema({
       backend: v.optional(v.string()),
       agent: v.optional(v.string()),
       isolated: v.optional(v.boolean()),
+      // the-line.md L8: a run the daemon executes from this copy must match
+      // a local run, so every attribute the runner reads is stored.
+      definition: v.optional(v.string()),
+      reviewer: v.optional(v.boolean()),
+      timeout: v.optional(v.number()),
+      temperature: v.optional(v.number()),
+      doc: v.optional(v.string()),
+      category: v.optional(v.string()),
     })),
     edges: v.array(v.object({
       from: v.string(),
@@ -4972,6 +5180,14 @@ export default defineSchema({
       target: v.string(),
     }))),
     gate_response: v.optional(v.string()),
+    // the-line.md L4: the decision row the open gate is; gate_prompt and
+    // gate_choices above stay as a mirror for old readers.
+    gate_decision_id: v.optional(v.id("session_decisions")),
+    gate_node_id: v.optional(v.string()),
+    // the-line.md L8: workspace is ACCESS (one equality per read), team_id is
+    // ROUTING. Written at create; older rows are backfilled from user_id.
+    workspace: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
     fail_reason: v.optional(v.string()),
     // "routine" = our DOT-graph runs (default/legacy); "workflow" = Anthropic dynamic workflows
     run_kind: v.optional(v.union(v.literal("routine"), v.literal("workflow"))),
@@ -4986,7 +5202,12 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_workflow_id", ["workflow_id"])
     .index("by_external_run", ["external_run_id"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    // the-line.md L8: one equality per read for the workspace, and the
+    // task page / scope feed lookups.
+    .index("by_workspace_updated", ["workspace", "updated_at"])
+    .index("by_task", ["task_id"])
+    .index("by_plan", ["plan_id"]),
 
   client_state: defineTable({
     user_id: v.id("users"),
@@ -5514,10 +5735,44 @@ export default defineSchema({
     // in that thread again (and that mention flips this back to true).
     anchor_follow: v.optional(v.boolean()),
     fork_conversation_id: v.optional(v.id("conversations")),
+    // Slack provenance (slackSync). "inbound": the line was written in Slack and
+    // mirrored here; `client_id` is then the derived `slack:<workspace>:<channel>:<ts>`
+    // key, so the existing by_channel_client_id index is the lookup for the edit,
+    // delete and reaction events that follow. "outbound": a codecast line the
+    // bridge posted into Slack; `ts` is stamped after the post and is what stops
+    // the echo (the event Slack sends for our own post is dropped by bot identity,
+    // and a replay maps to a row we already hold).
+    external: v.optional(v.object({
+      provider: v.literal("slack"),
+      direction: v.union(v.literal("inbound"), v.literal("outbound")),
+      workspace: v.string(),
+      channel: v.string(),
+      ts: v.string(),
+      thread_ts: v.optional(v.string()),
+      user: v.optional(v.string()),
+      permalink: v.optional(v.string()),
+      synced_at: v.number(),
+    })),
+    // Who really wrote an inbound Slack line, when the author could not be matched
+    // to a codecast account and `user_id` is the workspace's bridge identity. A
+    // snapshot at sync time: the UI shows this name and face, never the bridge's.
+    external_author: v.optional(v.object({
+      name: v.string(),
+      handle: v.optional(v.string()),
+      avatar_url: v.optional(v.string()),
+      is_bot: v.optional(v.boolean()),
+    })),
+    // The author kept this line out of the channel's Slack mirror (composer
+    // toggle). Absent means "follow the link's rules".
+    sync_local_only: v.optional(v.boolean()),
   })
     .index("by_channel_created", ["channel_id", "created_at"])
     .index("by_thread_created", ["thread_root_id", "created_at"])
     .index("by_channel_client_id", ["channel_id", "client_id"])
+    // A Slack event about a line WE posted (a reply under it, a reaction, an
+    // edit) names our stamped ts, not the derived inbound client id, so the
+    // outbound stamp needs its own lookup (slackSync.findMirroredRow).
+    .index("by_channel_external_ts", ["channel_id", "external.ts"])
     // Team-scoped full-text search backs `chat.searchMessages`. A chat nobody can
     // search is a write-only log. The team filter keeps one team's results out of
     // another's; the caller's membership is still checked before the query runs.

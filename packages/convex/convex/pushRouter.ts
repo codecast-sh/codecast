@@ -103,7 +103,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   session_idle: ["session waiting for input", "sessions waiting for input"],
   permission_request: ["permission request", "permission requests"],
   session_error: ["session error", "session errors"],
-  session_assigned: ["session assigned to you", "sessions assigned to you"],
+  session_assigned: ["session ownership update", "session ownership updates"],
   task_completed: ["task completed", "tasks completed"],
   task_failed: ["task failed", "tasks failed"],
   team_session_start: ["teammate session", "teammate sessions"],

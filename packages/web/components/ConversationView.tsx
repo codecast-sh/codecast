@@ -88,6 +88,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
+import { RevealAncestryCtx, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -96,7 +97,7 @@ import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { tryRenderCanvas, tryRenderHtmlMessage } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
 import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./workingStatus";
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
@@ -164,7 +165,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { AssignmentBadge } from "./AssignmentBadge";
+import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
@@ -203,10 +204,10 @@ import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
 import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent } from "../lib/messageNavigator";
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
-import { parseInboundSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -246,8 +247,7 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getToolPatchInputs, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
-import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../lib/desktop";
-import { appDocumentTitle } from "../lib/browserPane";
+import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
@@ -2051,7 +2051,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
     const store = useInboxStore.getState();
     const real = store.getConvexId(convId) ?? convId;
     if (!isConvexId(real)) return;
-    if (convBucketMap(store.bucketAssignments)[real]) return;
+    if (Object.values(store.bucketAssignments).some((row) => row.conversation_id === real)) return;
     store.assignSessionToBucket(real, activeBucketFilter);
   }, [convId, activeBucketFilter, assigned]);
 
@@ -3025,6 +3025,16 @@ function classifyUserMessage(
     if (huddle) return { kind: 'huddle_summary', huddle };
     return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
   }
+  // Truncated wrappers (a preview slice, a torn JSONL line) still carry the
+  // opening tag with `from=`, which is enough to keep them off the human rail.
+  if (isSessionMessage(t)) {
+    const authored = parseAgentAuthoredMessage(t);
+    if (authored) {
+      const huddle = parseHuddleSummaryTag(authored.body);
+      if (huddle) return { kind: 'huddle_summary', huddle };
+      return { kind: 'session_message', from: authored.from, body: authored.body };
+    }
+  }
   // A subagent reporting back to its parent arrives in the same shape under its
   // own tag, so it rides the same rail instead of reading as the human's words.
   if (isAgentMessage(t)) {
@@ -3139,6 +3149,13 @@ function classifyUserMessage(
   }
   if (STICKY_NOISE_PREFIXES.some(p => displayable.startsWith(p))) {
     return { kind: 'noise' };
+  }
+  // `cast send --raw` drops the session-message wrapper (the flag is for
+  // slash commands). The body still arrives as a user-role turn, so without
+  // this it renders under the human's name and avatar.
+  const unwrappedReport = parseUnwrappedSessionReport(t);
+  if (unwrappedReport) {
+    return { kind: 'session_message', from: unwrappedReport.from, body: unwrappedReport.body, name: unwrappedReport.name };
   }
   return { kind: 'normal' };
 }
@@ -3882,8 +3899,9 @@ function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
   // fire), not a transient tool step. A sent file is here for a different
   // reason: it is addressed to the reader. Folding a delivery into a receipt
-  // chip is how the file went unseen in the first place.
-  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  // chip is how the file went unseen in the first place. `cast decide` is the
+  // authored twin of AskUserQuestion — the card is the ask, not a command.
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc));
 }
 
 // A row that is nothing but tool calls: one-line receipts, not prose. The
@@ -6711,15 +6729,15 @@ function ImageBlock({ image }: { image: ImageData }) {
   );
 }
 
-function UserIcon({ avatarUrl }: { avatarUrl?: string | null }) {
+function UserIcon({ avatarUrl, size = "w-6 h-6" }: { avatarUrl?: string | null; size?: string }) {
   return (
     <AvatarImg
       src={avatarUrl}
       alt=""
-      className="w-6 h-6 rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]"
+      className={`${size} rounded shrink-0 object-cover shadow-[0_0_0_0.5px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)]`}
       fallback={
-        <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+        <div className={`${size} rounded bg-sol-blue flex items-center justify-center shrink-0`}>
+          <svg width="70%" height="70%" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
           </svg>
@@ -7054,6 +7072,28 @@ function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { lab
       <div className={lineClass} />
       <span className={textClass}>{label}</span>
       <div className={lineClass} />
+    </div>
+  );
+}
+
+// A bare nudge ("continue") the human typed to keep the agent moving. It carries
+// no ask, so it renders as one slim line instead of a full prompt bubble, and a
+// run of the same nudge shows once with its count.
+function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null }) {
+  const title = count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
+  return (
+    <div data-cc-message="user" id={`msg-${messageId}`} className="my-3 flex items-center gap-3 scroll-mt-20" title={title}>
+      <span className="inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full border border-sol-border/70 bg-sol-bg-alt/60 text-xs text-sol-text-muted">
+        <UserIcon avatarUrl={avatarUrl} size="w-4 h-4" />
+        <svg className="w-3 h-3 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m0 0l-5-5m5 5l-5 5" />
+        </svg>
+        <span className="font-medium">{text}</span>
+        {count > 1 && (
+          <span className="ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-[11px] font-semibold tabular-nums">×{count}</span>
+        )}
+      </span>
+      <span className="text-[11px] text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -13055,8 +13095,8 @@ const ConversationViewInner = (
     };
   }));
   const isSessionLive = !!managedSession?.is_connected;
-  // The simple-view menu's "Copy tmux attach" — the same gesture as the header
-  // pill's copy button, so it copies the same command for the same machine.
+  // The command palette's "Copy tmux attach command" — the same gesture as the
+  // header pill's copy button, so it copies the same command for the same machine.
   const { copyAttach: copyTmuxAttach } = useAttachCopy(managedSession?.tmux_session, conversation?._id?.toString());
 
   // Store-fed (hooks/useSyncWorkflows): the gate banner paints from the cached
@@ -14057,6 +14097,31 @@ const ConversationViewInner = (
     return { byCommand, consumed, bashByInput };
   }, [timeline, userMsgKindMap]);
 
+  // Bare nudges ("continue") render as one compact line, and a run of the same
+  // nudge folds into its first row with a count. Rows that render nothing sit
+  // between two nudges without breaking the run. A nudge still pending or
+  // queued keeps the full bubble, so its delivery state stays visible.
+  const nudgeRuns = useMemo(() => {
+    const HIDDEN_USER_KINDS = new Set(['tool_results_only', 'compaction_prompt', 'noise', 'empty', 'poll_response', 'task_prompt']);
+    const rows: NudgeRow[] = timeline.map((item) => {
+      if (item.type !== 'message') return { id: String(item.data._id), nudge: null };
+      const msg = item.data as Message;
+      if (msg.role === 'system') return { id: msg._id, nudge: null, invisible: isHiddenSystemNotice(msg.content, msg.subtype) };
+      if (msg.role === 'user') {
+        const kind = userMsgKindMap.get(msg._id)?.kind ?? 'normal';
+        const isNudge = kind === 'normal' && !msg._isOptimistic && !msg._isQueued && !msg.images?.length;
+        return {
+          id: msg._id,
+          nudge: isNudge ? nudgeLabel(msg.content) : null,
+          invisible: HIDDEN_USER_KINDS.has(kind) || commandExpansionMap.consumed.has(msg._id),
+        };
+      }
+      const empty = !msg.content?.trim() && !msg.tool_calls?.length && !msg.images?.length && !msg.thinking?.trim();
+      return { id: msg._id, nudge: null, invisible: empty || isHiddenStubMessage(msg) };
+    });
+    return foldNudgeRuns(rows);
+  }, [timeline, userMsgKindMap, commandExpansionMap]);
+
   const sessionSkills = useMemo(() => resolveSessionSkills({
     availableSkills: (currentUser as any)?.available_skills,
     projectPath: conversation?.project_path,
@@ -14576,6 +14641,10 @@ const ConversationViewInner = (
         case 'machine_move': return 34;
         case 'agent_switch': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'continuation': return 30;
+        case 'normal':
+          if (nudgeRuns.folded.has(msg._id)) return 0;
+          if (nudgeRuns.runs.has(msg._id)) return 36;
+          break;
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
@@ -14598,7 +14667,7 @@ const ConversationViewInner = (
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey, rowDensityKey, turnAggregates, expandedGroups]);
+  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, nudgeRuns, getItemKey, rowDensityKey, turnAggregates, expandedGroups]);
 
   // Mirror @tanstack/virtual-core's default measureElement, but persist every
   // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
@@ -15166,19 +15235,28 @@ const ConversationViewInner = (
   }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
+    const jump = jumpRowForMessage(messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
+    if (jump.expandKey) {
+      setExpandedGroups((prev) => {
+        if (prev.has(jump.expandKey!)) return prev;
+        const next = new Set(prev);
+        next.add(jump.expandKey!);
+        return next;
+      });
+    }
     const itemIndex = timeline.findIndex(item =>
-      item.type === 'message' && item.data._id === messageId
+      item.type === 'message' && item.data._id === jump.scrollToId
     );
 
     if (itemIndex >= 0) {
       setUserScrolled(true);
       virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
-      setHighlightedMessageId(messageId);
+      setHighlightedMessageId(jump.scrollToId);
       setTimeout(() => setHighlightedMessageId(null), 2000);
     } else if (conversation?._id) {
       useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: messageId });
     }
-  }, [timeline, virtualizer, conversation?._id]);
+  }, [timeline, virtualizer, conversation?._id, feedDensity, turnAggregates, nudgeRuns]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: scrollToMessageById,
@@ -15635,9 +15713,20 @@ const ConversationViewInner = (
       return;
     }
 
+    const jump = jumpRowForMessage(targetMessageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
+    if (jump.expandKey && !expandedGroups.has(jump.expandKey)) {
+      setExpandedGroups((prev) => {
+        if (prev.has(jump.expandKey!)) return prev;
+        const next = new Set(prev);
+        next.add(jump.expandKey!);
+        return next;
+      });
+      return;
+    }
+
     const itemIndex = timeline.findIndex(item => {
       if (item.type === 'message') {
-        return item.data._id === targetMessageId;
+        return item.data._id === jump.scrollToId;
       }
       return false;
     });
@@ -15649,6 +15738,7 @@ const ConversationViewInner = (
       if (!container) return;
 
       const targetItem = timeline[itemIndex];
+      const scrollToId = jump.scrollToId;
       settleTimelineItemAtOffset(container, virtualizer, itemIndex, 50, {
         // A same-session jump starts on the tail timeline and the target-mode
         // window then replaces it — identity + re-resolution keep the settle
@@ -15656,10 +15746,10 @@ const ConversationViewInner = (
         itemKey: targetItem?.type === "message" ? messageRowKey(targetItem.data as Message) : undefined,
         resolveIndex: () =>
           timelineRef.current.findIndex(
-            (item: any) => item.type === "message" && item.data._id === targetMessageId,
+            (item: any) => item.type === "message" && item.data._id === scrollToId,
           ),
         onSettled: () => {
-          setHighlightedMessageId(targetMessageId);
+          setHighlightedMessageId(scrollToId);
           setTimeout(() => setHighlightedMessageId(null), 3000);
           if (window.location.hash) {
             history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -15667,7 +15757,7 @@ const ConversationViewInner = (
         },
       });
     }
-  }, [targetMessageId, targetNonce, timeline, virtualizer]);
+  }, [targetMessageId, targetNonce, timeline, virtualizer, feedDensity, turnAggregates, expandedGroups, nudgeRuns]);
 
   // Land a branch switch scroll-stable: once the target conversation renders,
   // find the fork-point message (same message_uuid — fork copies preserve it)
@@ -15838,17 +15928,6 @@ const ConversationViewInner = (
     { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
 
-  useWatchEffect(() => {
-    // A detached tab window's OS title is owned by DashboardLayout
-    // (useDetachedWindowTitle) — writing here would clobber its surface prefix.
-    if (isDetachedTabWindow()) return;
-    if (conversation) {
-      document.title = appDocumentTitle(truncatedTitle);
-    }
-    return () => {
-      document.title = appDocumentTitle(null);
-    };
-  }, [truncatedTitle, conversation]);
 
   const toolCallMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -15921,6 +16000,9 @@ const ConversationViewInner = (
   // the session's working directory, and the home it implies for `~/…`.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
   const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository }), [filePathBase, codeRepository]);
+  // What this transcript is nested in, plus itself: the bound a reveal band
+  // in it checks before showing a conversation (lib/revealHost).
+  const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16340,7 +16422,12 @@ const ConversationViewInner = (
         case 'decision_answer':
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
+          if (nudgeRuns.folded.has(msg._id)) return null;
           const msgSender = resolveMsgSender(msg);
+          const nudgeRun = kind.kind === 'normal' ? nudgeRuns.runs.get(msg._id) : undefined;
+          if (nudgeRun) {
+            return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeRun.text} count={nudgeRun.count} timestamp={msg.timestamp} userName={msgSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} />;
+          }
           // A direct send names its sender on the wire, so the bubble is theirs
           // even when the roster can't resolve the row (no from_user_id yet, or
           // a sender outside the viewer's team).
@@ -16548,6 +16635,7 @@ const ConversationViewInner = (
     <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
     <BrowserSessionContext.Provider value={browserSession}>
+    <RevealAncestryCtx.Provider value={revealAncestry}>
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
@@ -16756,32 +16844,7 @@ const ConversationViewInner = (
 
                 <BranchCodeLink session={conversation} />
 
-                {/* Simple view keeps the assignment pill but drops the names —
-                    device icon + dot + avatar still say where it runs and whose
-                    it is; the popover carries the detail. */}
-                {isOwner && (
-                  <AssignmentBadge
-                    conversationId={conversation._id}
-                    ownerDeviceId={(conversation as any).owner_device_id}
-                    compact={simpleViewPref}
-                  />
-                )}
-
-                {!isOwner && conversation.user && (
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/30">
-                    <AvatarImg
-                      src={conversation.user.avatar_url}
-                      alt={conversation.user.name || "User"}
-                      className="w-4 h-4 rounded-full"
-                      fallback={
-                        <span className="w-4 h-4 rounded-full bg-sol-violet/20 flex items-center justify-center text-[8px]">
-                          {(conversation.user.name || conversation.user.email || "?").charAt(0).toUpperCase()}
-                        </span>
-                      }
-                    />
-                    {conversation.user.name || conversation.user.email?.split("@")[0] || "Teammate"}
-                  </span>
-                )}
+                <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
@@ -16993,18 +17056,10 @@ const ConversationViewInner = (
                         Copy ID ({conversation.short_id})
                       </DropdownMenuItem>
                     )}
-                    {/* Simple view strips the header's copy affordances (the
-                        pill's copy sub-button, the branch chip) — resurface
-                        them here so the hamburger stays the full command
-                        surface in that mode. */}
-                    {simpleViewPref && managedSession?.tmux_session && (
-                      <DropdownMenuItem onSelect={() => { setTimeout(() => copyTmuxAttach()); }}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                        Copy tmux attach
-                      </DropdownMenuItem>
-                    )}
+                    {/* Simple view strips the header's branch chip — resurface
+                        its copy here so the hamburger stays the full command
+                        surface in that mode. The tmux pill keeps its own copy
+                        button in both modes. */}
                     {simpleViewPref && conversation?.git_branch && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.git_branch!).then(() => toast.success("Branch copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -17803,6 +17858,7 @@ const ConversationViewInner = (
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
     </ChatWakeContext.Provider>
+    </RevealAncestryCtx.Provider>
     </BrowserSessionContext.Provider>
     </CastBrowserRowContext.Provider>
     </FilePathContext.Provider>

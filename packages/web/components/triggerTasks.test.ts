@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, isTriggerFailing, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, groupTriggerRowsByHome, isTriggerFailing, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, type InboxSession } from "../store/inboxStore";
 import { orderSections } from "../store/__tests__/placeTestHarness";
 
@@ -657,5 +657,34 @@ describe("a merged foreign trigger reaches the inbox partition", () => {
     const withMerged = partitionTriggerInbox(mergeTriggerRosters([], [foreign]), { home });
     expect(withMerged.rows.map((r) => r.task._id)).toEqual(["botTask"]);
     expect(withMerged.rows[0].openId).toBe("home");
+  });
+});
+
+describe("groupTriggerRowsByHome", () => {
+  const row = (id: string, extra: Partial<TaskRow> = {}) => ({ task: task(id, extra), unread: false });
+
+  it("groups inject rows under their home, in the order the first row appears", () => {
+    const rows = [
+      row("a", { originating_conversation_id: "home1" }),
+      row("b", { originating_conversation_id: "home2" }),
+      row("c", { originating_conversation_id: "home1" }),
+    ];
+    const groups = groupTriggerRowsByHome(rows);
+    expect(groups.map((g) => g.homeId)).toEqual(["home1", "home2"]);
+    expect(groups[0].rows.map((r) => r.task._id)).toEqual(["a", "c"]);
+  });
+
+  it("groups spawn rows per project under a synthetic key", () => {
+    const rows = [
+      row("a", { project_path: "/p/one" }),
+      row("b", { originating_conversation_id: "home1" }),
+      row("c", { project_path: "/p/two" }),
+      row("d", { project_path: "/p/one" }),
+    ];
+    const groups = groupTriggerRowsByHome(rows);
+    expect(groups.map((g) => g.key)).toEqual(["spawn:/p/one", "home1", "spawn:/p/two"]);
+    expect(groups[0].homeId).toBeUndefined();
+    expect(groups[0].projectPath).toBe("/p/one");
+    expect(groups[0].rows.map((r) => r.task._id)).toEqual(["a", "d"]);
   });
 });

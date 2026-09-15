@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage } from "./conversationScroll";
 
 describe("shouldFollowStreaming", () => {
   test("follows normally before the user scrolls away", () => {
@@ -182,5 +182,48 @@ describe("shouldAdjustScrollForResize", () => {
 
   test("a held row (in-row disclosure just toggled) leaves scrollTop alone even above the viewport", () => {
     expect(shouldAdjustScrollForResize({ ...above, held: true })).toBe(false);
+  });
+});
+
+describe("jumpRowForMessage", () => {
+  const aggregates = {
+    absorbed: new Set(["absorbed"]),
+    receiptOf: new Map([
+      ["owner", [{ messageId: "owner" }, { messageId: "absorbed" }]],
+    ]),
+    turnKeyOf: new Map([
+      ["absorbed", "turn-1"],
+      ["owner", "turn-1"],
+      ["other", "turn-2"],
+    ]),
+  };
+
+  test("full density scrolls the message itself", () => {
+    expect(jumpRowForMessage("absorbed", "full", aggregates)).toEqual({ scrollToId: "absorbed", expandKey: null });
+  });
+
+  test("condensed expands the owner receipt and scrolls the owner", () => {
+    expect(jumpRowForMessage("absorbed", "condensed", aggregates)).toEqual({ scrollToId: "owner", expandKey: "owner" });
+  });
+
+  test("condensed on the owner itself still opens its receipt", () => {
+    expect(jumpRowForMessage("owner", "condensed", aggregates)).toEqual({ scrollToId: "owner", expandKey: "owner" });
+  });
+
+  test("compact opens the turn containing the message", () => {
+    expect(jumpRowForMessage("absorbed", "compact", aggregates)).toEqual({ scrollToId: "absorbed", expandKey: "turn-1" });
+  });
+
+  test("a folded nudge jumps to the run head in every density", () => {
+    const withNudges = {
+      ...aggregates,
+      nudgeHeadOf: new Map([
+        ["head", "head"],
+        ["later", "head"],
+      ]),
+    };
+    expect(jumpRowForMessage("later", "full", withNudges)).toEqual({ scrollToId: "head", expandKey: null });
+    expect(jumpRowForMessage("later", "condensed", withNudges)).toEqual({ scrollToId: "head", expandKey: null });
+    expect(jumpRowForMessage("head", "full", withNudges)).toEqual({ scrollToId: "head", expandKey: null });
   });
 });

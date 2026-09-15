@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -830,6 +830,14 @@ describe("extractDecideArgs", () => {
 
   test("ls parses to the list verb with nothing else", () => {
     expect(parse("cast decide ls")).toMatchObject({ verb: "ls", options: [] });
+  });
+
+  test("an ask or edit is a decide cast; ls is not", () => {
+    expect(isDecideCastCommand(parseCastCommandString(`cast decide "Q?" -o A -o B --context why`))).toBe(true);
+    expect(isDecideCastCommand(parseCastCommandString("cast decide edit --question Q"))).toBe(true);
+    expect(isDecideCastCommand(parseCastCommandString("cast decide ls"))).toBe(false);
+    expect(isDecideCastCommand(parseCastCommandString("cast send jx7abcd hi"))).toBe(false);
+    expect(isDecideCastCommand(null)).toBe(false);
   });
 
   test("an unquoted question folds the first word back out of the subcommand slot", () => {

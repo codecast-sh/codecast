@@ -541,3 +541,177 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
     expect(roleText).not.toContain("## Roles that report into this workspace");
   });
 });
+
+// ── Chief of staff review: one row per (table, id) per window ────────────────
+
+describe("a task patched many times in one window wakes once with one line (ct-51491)", () => {
+  test("seven fold rows for one ref collapse to one row, one flush, one frame line", async () => {
+    const { ctx, tables, scheduled } = world({ coalesce_ms: 120_000 });
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      const statuses = ["open", "in_progress", "in_progress", "in_review", "in_review", "in_review", "done"];
+      for (const [i, status] of statuses.entries()) {
+        clock = NOW + i * 10_000;
+        await enqueueRoleEvent(ctx, "role1" as any, {
+          kind: "fold",
+          cause: `task ct-5 "Deploy" is ${status}`,
+          ref: { table: "tasks", id: "tasks_5", short_id: "ct-5" },
+        });
+      }
+      const unflushed = tables.role_wake_outbox.filter((r: any) => !r.flushed_at);
+      expect(unflushed).toHaveLength(1);
+      // The surviving row carries the newest cause and keeps the FIRST due
+      // time, so a task that keeps moving cannot push its own wake forever.
+      expect(unflushed[0].cause).toContain("is done");
+      expect(unflushed[0].due_at).toBe(NOW + 120_000);
+      expect(scheduled.filter((s) => s.args?.role_id === "role1")).toHaveLength(1);
+      clock = NOW + 120_000;
+      const out = await performFlush(ctx, "role1" as any);
+      expect(out.outcome).toBe("delivered");
+      const frame = tables.pending_messages[0].content;
+      expect(frame.split("ct-5 \"Deploy\"").length - 1).toBe(1);
+      expect(tables.role_wakes).toHaveLength(1);
+    } finally { Date.now = realNow; }
+  });
+
+  test("two different refs still get their own lines in one frame", async () => {
+    const { ctx, tables } = world({ coalesce_ms: 120_000 });
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task ct-5 moved", ref: { table: "tasks", id: "tasks_5" } });
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task ct-6 moved", ref: { table: "tasks", id: "tasks_6" } });
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task ct-5 moved again", ref: { table: "tasks", id: "tasks_5" } });
+      expect(tables.role_wake_outbox.filter((r: any) => !r.flushed_at)).toHaveLength(2);
+      clock = NOW + 120_000;
+      await performFlush(ctx, "role1" as any);
+      const frame = tables.pending_messages[0].content;
+      expect(frame).toContain("ct-5 moved again");
+      expect(frame).toContain("ct-6 moved");
+      expect(frame).not.toContain("- task ct-5 moved\n");
+    } finally { Date.now = realNow; }
+  });
+});
+
+// ── ct-51491 addendum: the post write hook and the frame count repeats ───────
+
+import { attachOrgWriteCollector, flushOrgWrites, makeOrgWriteTrackedDb, markOrgActor } from "./orgEvents";
+
+// One mutation on the fake db, the way functions.ts runs every mutation: the
+// wrapped db records the task writes and the post write hook fans them out
+// once the handler returns.
+async function mutation(ctx: any, actor: any | null, fn: (db: any) => Promise<void>): Promise<void> {
+  const wrapped: any = { db: ctx.db, scheduler: ctx.scheduler };
+  wrapped.db = makeOrgWriteTrackedDb(ctx.db, attachOrgWriteCollector(wrapped));
+  markOrgActor(wrapped, actor);
+  await fn(wrapped.db);
+  await flushOrgWrites(wrapped);
+}
+
+const TASK = { _id: "task5", short_id: "ct-5", title: "Deploy", status: "open", priority: "high", project_id: "p1", team_id: TEAM, user_id: ME, workspace: `team:${TEAM}`, created_at: NOW - 5, updated_at: NOW - 5 };
+const scopedWorld = (roleExtra: Record<string, any> = {}) => world(
+  { scope: { project_ids: ["p1"], plan_ids: [] }, coalesce_ms: 120_000, ...roleExtra },
+  { projects: [{ _id: "p1", title: "Sync & Reliability", team_id: TEAM, user_id: ME, workspace: `team:${TEAM}`, created_at: 1, updated_at: 1 }], tasks: [{ ...TASK }] },
+);
+const whyLines = (frame: string) => frame.split("## Your scope now")[0].split("\n").filter((l) => l.startsWith("- "));
+const changedLines = (frame: string) => (frame.split("Changed since your last frame:")[1] ?? "").split("\n\n")[0].split("\n").filter((l) => l.startsWith("- "));
+const unflushed = (tables: any) => tables.role_wake_outbox.filter((r: any) => !r.flushed_at);
+
+describe("a task patched seven times across seven mutations is one line with a count (ct-51491)", () => {
+  test("one outbox row, one wake, one why line saying how often, one entry in the changes list", async () => {
+    const { ctx, tables, scheduled } = scopedWorld();
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      const statuses = ["in_progress", "in_progress", "in_review", "in_review", "in_review", "in_review", "done"];
+      for (const [i, status] of statuses.entries()) {
+        clock = NOW + i * 10_000;
+        await mutation(ctx, tables.conversations[2], (db) => db.patch("task5", { status, updated_at: clock }));
+      }
+      expect(unflushed(tables)).toHaveLength(1);
+      expect(unflushed(tables)[0].count).toBe(7);
+      expect(scheduled.filter((s) => s.args?.role_id === "role1")).toHaveLength(1);
+      clock = NOW + 120_000;
+      const out = await performFlush(ctx, "role1" as any);
+      expect(out.outcome).toBe("delivered");
+      const frame = tables.pending_messages[0].content;
+      expect(whyLines(frame)).toEqual([`- task ct-5 "Deploy" is done (changed 7 times)`]);
+      expect(changedLines(frame)).toEqual(["- task ct-5 Deploy → done"]);
+      expect(tables.role_wakes).toHaveLength(1);
+      expect(tables.role_wakes[0].causes).toEqual([`task ct-5 "Deploy" is done (changed 7 times)`]);
+      expect(await performFlush(ctx, "role1" as any)).toEqual({ outcome: "noop", reason: "nothing_due" });
+    } finally { Date.now = realNow; }
+  });
+
+  test("two patches inside one mutation are one change: one row, no count", async () => {
+    const { ctx, tables } = scopedWorld();
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      await mutation(ctx, tables.conversations[2], async (db) => {
+        await db.patch("task5", { status: "in_progress", updated_at: clock });
+        await db.patch("task5", { priority: "low", updated_at: clock });
+      });
+      expect(unflushed(tables)).toHaveLength(1);
+      expect(unflushed(tables)[0].count).toBeUndefined();
+      clock = NOW + 120_000;
+      await performFlush(ctx, "role1" as any);
+      expect(whyLines(tables.pending_messages[0].content)).toEqual([`- task ct-5 "Deploy" is in_progress`]);
+    } finally { Date.now = realNow; }
+  });
+
+  test("a hand's handoff (the status move, then its comment) is one row for the other role, none for its own", async () => {
+    const { ctx, tables } = scopedWorld();
+    tables.org_roles.push({
+      _id: "role2", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth", handle: "growth",
+      scope: { project_ids: ["p1"], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchor2", coalesce_ms: 120_000,
+      created_by: ME, created_at: 1, updated_at: 1,
+    });
+    tables.anchors.push({ _id: "anchor2", scope_type: "team", team_id: TEAM, bot_user_id: "bot2", host_user_id: ME, conversation_id: "standing2", org_role_id: "role2", status: "active", name: "Growth", created_at: 1 });
+    tables.conversations.push(
+      { _id: "standing2", user_id: ME, anchor_id: "anchor2", standing_role_id: "role2", session_id: "s2", short_id: "jxstan2", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 0, team_id: TEAM },
+      { _id: "hand2", user_id: ME, org_role_id: "role2", session_id: "s-hand2", short_id: "jxhand2", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 1, title: "Ship it", team_id: TEAM },
+    );
+    const hand2 = tables.conversations.find((c: any) => c._id === "hand2");
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      await mutation(ctx, hand2, (db) => db.patch("task5", { status: "in_review", execution_status: "done", updated_at: clock }));
+      clock = NOW + 1_000;
+      await mutation(ctx, hand2, (db) => db.patch("task5", { comment_count: 1, updated_at: clock }));
+      const rows = unflushed(tables);
+      expect(rows.map((r: any) => r.role_id)).toEqual(["role1"]);
+      expect(rows[0].count).toBe(2);
+      expect(rows[0].cause).toBe(`task ct-5 "Deploy" is in_review`);
+    } finally { Date.now = realNow; }
+  });
+
+  test("a task in several roles' scopes inserts one row per role", async () => {
+    const { ctx, tables } = scopedWorld();
+    tables.org_roles.push({
+      _id: "role2", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth", handle: "growth",
+      scope: { project_ids: ["p1"], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchor2",
+      created_by: ME, created_at: 1, updated_at: 1,
+    });
+    tables.anchors.push({ _id: "anchor2", scope_type: "team", team_id: TEAM, bot_user_id: "bot2", host_user_id: ME, conversation_id: "standing2", org_role_id: "role2", status: "active", name: "Growth", created_at: 1 });
+    await mutation(ctx, tables.conversations[2], (db) => db.patch("task5", { status: "in_progress", updated_at: NOW }));
+    await mutation(ctx, tables.conversations[2], (db) => db.patch("task5", { status: "in_review", updated_at: NOW + 1 }));
+    const rows = unflushed(tables);
+    expect(rows.map((r: any) => r.role_id).sort()).toEqual(["role1", "role2"]);
+    expect(rows.map((r: any) => r.count)).toEqual([2, 2]);
+  });
+
+  test("a busy agent's reschedule re-inserts nothing; a repeat during the wait folds into the waiting row", async () => {
+    const { ctx, tables, scheduled } = world({ coalesce_ms: 120_000 }, { managed_sessions: [{ _id: "ms1", conversation_id: "standing", user_id: ME, agent_status: "working" }] });
+    const realNow = Date.now; let clock = NOW; Date.now = () => clock;
+    try {
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task ct-5 moved", ref: { table: "tasks", id: "task5" } });
+      clock = NOW + 120_000;
+      expect(await performFlush(ctx, "role1" as any)).toEqual({ outcome: "rescheduled", attempt: 1 });
+      expect(await performFlush(ctx, "role1" as any, 1)).toEqual({ outcome: "rescheduled", attempt: 2 });
+      expect(tables.role_wake_outbox).toHaveLength(1);
+      await enqueueRoleEvent(ctx, "role1" as any, { kind: "fold", cause: "task ct-5 moved again", ref: { table: "tasks", id: "task5" } });
+      expect(tables.role_wake_outbox).toHaveLength(1);
+      expect(tables.role_wake_outbox[0].count).toBe(2);
+      expect(tables.role_wake_outbox[0].due_at).toBe(NOW + 120_000);
+      // The retries are the only flushes armed after the first window.
+      expect(scheduled.filter((s) => s.args?.role_id === "role1").map((s) => s.args.attempt)).toEqual([0, 1, 2]);
+    } finally { Date.now = realNow; }
+  });
+});

@@ -40,7 +40,7 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
-import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
+import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
@@ -4020,7 +4020,8 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
+    [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -4040,6 +4041,7 @@ async function sendHeartbeat(): Promise<void> {
   // hash-gated, with an hourly liveness floor. See capabilities/heartbeat.ts.
   ensureCapabilityInventoryFresh();
   const capabilityPayload = pendingCapabilityPayload();
+  const capabilityContents = pendingCapabilityContents();
 
   try {
     const deviceHostname = await stableHostnameAsync();
@@ -4101,6 +4103,7 @@ async function sendHeartbeat(): Promise<void> {
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
+        capability_contents: capabilityContents,
         ...await syncHealthFields(),
       }),
     });
@@ -4112,6 +4115,7 @@ async function sendHeartbeat(): Promise<void> {
     }
     if (modelInventory) markModelInventorySent(modelInventory.hash);
     if (capabilityPayload) markCapabilityPayloadSent(capabilityPayload.hash);
+    if (capabilityContents) markCapabilityContentsSent(capabilityContents.map((c) => c.hash));
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
@@ -13153,6 +13157,42 @@ function normalizePromptText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+// Claude Code draws its prompt suggestion in an idle composer as faint text
+// (SGR 2). A plain capture drops the attribute, so a suggested "❯ continue"
+// reads exactly like a typed one, and delivery pressed Enter on it for 15 s at
+// a time (ct-51376). Every capture that asks what the composer holds is taken
+// with -e and read through this, which drops faint runs and every other escape.
+export function stripTmuxFaintText(pane: string): string {
+  let faint = false;
+  let out = "";
+  let last = 0;
+  const re = /\x1b\[([0-9;:]*)([A-Za-z])|\x1b[^[]/g;
+  for (let m = re.exec(pane); m; m = re.exec(pane)) {
+    if (!faint) out += pane.slice(last, m.index);
+    last = re.lastIndex;
+    if (m[2] !== "m") continue;
+    const params = (m[1] || "0").split(/[;:]/);
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      // 38/48/58 carry a colour: 5;N or 2;R;G;B. Their arguments are not
+      // attributes, and a truecolor "2" read as faint dropped opencode's and
+      // grok's typed text.
+      if (p === "38" || p === "48" || p === "58") {
+        i += params[i + 1] === "5" ? 2 : params[i + 1] === "2" ? 4 : 0;
+        continue;
+      }
+      if (p === "2") faint = true;
+      else if (p === "" || p === "0" || p === "22") faint = false;
+    }
+  }
+  return faint ? out : out + pane.slice(last);
+}
+
+export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: string, lines: number): Promise<string> {
+  const { stdout } = await exec(["capture-pane", "-p", "-e", "-J", "-t", target, "-S", `-${lines}`]);
+  return stripTmuxFaintText(stdout);
+}
+
 function tmuxComposerRegion(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
@@ -15364,7 +15404,7 @@ export type TmuxSubmitVerifyOpts = {
   prePaste: string;
   pasteConfirmed: boolean;
   contentPrefix: string;
-  multiline?: boolean;
+  bracketedPaste?: boolean;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15477,7 +15517,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.multiline && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15514,7 +15554,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.multiline && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -15628,7 +15668,7 @@ export async function drainTmuxComposer(
     if (cycle % 3 !== 0) continue;
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       break; // capture problems are diagnosed by the Enter gate
     }
@@ -15650,7 +15690,7 @@ export async function tmuxComposerDraft(
 ): Promise<string | null> {
   let pane: string;
   try {
-    ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    pane = await captureTmuxComposerPane(exec, target, 40);
   } catch {
     return null;
   }
@@ -15751,7 +15791,7 @@ export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
   opts: {
-    multiline?: boolean;
+    bracketedPaste?: boolean;
     prePaste?: string;
     rePaste: () => Promise<void>;
     allowRePaste?: boolean;
@@ -15782,7 +15822,7 @@ export async function awaitTmuxComposerPayload(
   while (Date.now() < deadline) {
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       return "unwatchable"; // capture problems are diagnosed by the post-submit verifier
     }
@@ -15804,9 +15844,10 @@ export async function awaitTmuxComposerPayload(
     // second chip or the watched prefix showing up again behind the first, is a
     // re-paste that landed on a composer which had already taken the first, and
     // submitting it sends the message twice (ct-49753).
-    const chips = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
+    const composer = tmuxComposerRegion(pane) ?? "";
+    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && !glyphLine.slice(0, glyphLine.indexOf(chips[0])).trim()
+      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -15976,7 +16017,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let alreadyAtPrompt = false;
   let liveState: TmuxLiveState = "unknown";
   try {
-    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    const stdout = await captureTmuxComposerPane(exec, target, captureLines);
     alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
     liveState = classifyTmuxLiveState(extractTmuxLiveRegion(stdout));
   } catch {}
@@ -16027,7 +16068,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     if (prior.phase === "paste" || settled) {
       try {
         gate = await awaitTmuxComposerPayload(target, sanitized, {
-          multiline: bracketed && sanitized.includes("\n"),
+          bracketedPaste: bracketed,
           rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
           allowRePaste: false,
           budgetMs: opts?.gateBudgetMs,
@@ -16054,8 +16095,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
 
     try {
-      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      prePaste = stdout;
+      prePaste = await captureTmuxComposerPane(exec, target, captureLines);
     } catch {}
 
     // Paste once
@@ -16067,7 +16107,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
     // match doubles as paste confirmation for the post-submit verifier.
     gate = await awaitTmuxComposerPayload(target, sanitized, {
-      multiline: bracketed && sanitized.includes("\n"),
+      bracketedPaste: bracketed,
       prePaste,
       rePaste: delivery ? async () => { throw new TmuxDeliveryUncertainError("the paste has not appeared intact"); } : doPaste,
       allowRePaste: !delivery,
@@ -16092,7 +16132,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     for (let attempt = 0; attempt < 4; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
-        const { stdout: postPaste } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        const postPaste = await captureTmuxComposerPane(exec, target, captureLines);
         if (postPaste !== prePaste) {
           pasteConfirmed = true;
           break;
@@ -16130,8 +16170,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   };
   const verify = await verifyTmuxSubmitAfterPaste(
     {
-      capture: async () =>
-        (await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
+      capture: () => captureTmuxComposerPane(exec, target, captureLines),
       sendEnter,
       rePaste: async () => {
         if (delivery) throw new TmuxDeliveryUncertainError("a submitted paste cannot be repeated");
@@ -16154,7 +16193,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       pasteConfirmed,
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
-      multiline: sanitized.includes("\n"),
+      bracketedPaste: bracketed,
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
@@ -26366,6 +26405,7 @@ async function main(): Promise<void> {
     depth: 0,
   });
   statusWatcher.on("add", handleStatusFile).on("change", handleStatusFile);
+  startCapabilitySourceWatcher(process.env.HOME || require("os").homedir());
 
   // Process existing status files on startup (chokidar ignoreInitial skips
   // them). A live hook that lands first wins: the ts guards in

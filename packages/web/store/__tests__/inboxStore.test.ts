@@ -3180,6 +3180,45 @@ describe("inboxStore local-first state mutations", () => {
     expect(dispatches.find((d) => d.action === "updateProject")?.args).toEqual(["proj1", { status: "archived" }]);
   });
 
+  // A charter clear (null, [] or "") travels on the wire as given, but the
+  // server drops the field and echoes it absent. The draft must store the
+  // clear as undefined so the field lock equals the echo and retires; stored
+  // as null or [] the lock would re-assert the clear over every push.
+  it("updateProject stores a cleared charter field as absent, dispatches the clear verbatim, and the echo retires the lock", () => {
+    useInboxStore.setState({ projects: { proj1: { _id: "proj1", title: "P", status: "active", priority: "p1", success_metrics: ["a"], goal: "g", owner_role_id: "role1", updated_at: 1 } as any }, pending: {} });
+    useInboxStore.getState().updateProject("proj1", { priority: null, success_metrics: [], goal: "", owner_role_id: null, non_goals: ["keep"] });
+    let s = useInboxStore.getState();
+    const row = s.projects.proj1 as any;
+    expect(row.priority).toBeUndefined();
+    expect(row.success_metrics).toBeUndefined();
+    expect(row.goal).toBeUndefined();
+    expect(row.owner_role_id).toBeUndefined();
+    expect(row.non_goals).toEqual(["keep"]);
+    expect(row.updated_at).toBeGreaterThan(1);
+    for (const f of ["priority", "success_metrics", "goal", "owner_role_id"]) {
+      expect(s.pending[`projects:proj1:${f}`]).toMatchObject({ type: "field", value: undefined });
+    }
+    expect(s.pending["projects:proj1:non_goals"]).toMatchObject({ type: "field", value: ["keep"] });
+    expect(dispatches.find((d) => d.action === "updateProject")?.args).toEqual(["proj1", { priority: null, success_metrics: [], goal: "", owner_role_id: null, non_goals: ["keep"] }]);
+    // The server echo: the cleared fields absent, the kept list as stored.
+    useInboxStore.getState().syncRecord("projects", "proj1", { _id: "proj1", title: "P", status: "active", non_goals: ["keep"], updated_at: row.updated_at + 1 });
+    s = useInboxStore.getState();
+    for (const f of ["priority", "success_metrics", "goal", "owner_role_id", "non_goals"]) {
+      expect(s.pending[`projects:proj1:${f}`]).toBeUndefined();
+      if (f !== "non_goals") expect((s.projects.proj1 as any)[f]).toBeUndefined();
+    }
+  });
+
+  it("updatePlan stores a cleared charter field as absent and dispatches the clear verbatim", () => {
+    useInboxStore.setState({ plans: { plan1: { _id: "plan1", short_id: "pl-9", status: "active", priority: "p2", non_goals: ["x"] } as any }, pending: {} });
+    useInboxStore.getState().updatePlan("pl-9", { priority: null, non_goals: [] });
+    const s = useInboxStore.getState();
+    expect((s.plans.plan1 as any).priority).toBeUndefined();
+    expect((s.plans.plan1 as any).non_goals).toBeUndefined();
+    expect(s.pending["plans:plan1:priority"]).toMatchObject({ type: "field", value: undefined });
+    expect(dispatches.find((d) => d.action === "updatePlan")?.args).toEqual(["pl-9", { priority: null, non_goals: [] }]);
+  });
+
   it("convCommand applies the optimistic session patch and dispatches the command verbatim", async () => {
     useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } } });
     await useInboxStore.getState().convCommand(CID, "restartSession", undefined, { status: "starting" } as any);

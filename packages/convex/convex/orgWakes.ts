@@ -14,6 +14,7 @@
 // delivery bumps, and the fake db tests drive the same code.
 
 import { internalMutation, internalQuery } from "./functions";
+import { charterLine } from "./lib/orgCharter";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
@@ -62,6 +63,14 @@ const shortHash = (text: string): string => {
 };
 
 const firstLine = (text: string | undefined | null): string => (text ?? "").split("\n")[0].trim();
+
+// One outbox row is one line, in the frame and in the wake log alike. A row
+// that folded several events (orgEvents: one row per (table, id) per window)
+// says how many, so "task ct-5 is done (changed 7 times)" is the whole story.
+export function causeLine(row: { cause: string; count?: number | null }): string {
+  const cause = row.cause.replace(RESTART_CAUSE, "").trim();
+  return (row.count ?? 1) > 1 ? `${cause} (changed ${row.count} times)` : cause;
+}
 
 // ── Frame ───────────────────────────────────────────────────────────────────
 
@@ -113,7 +122,7 @@ export function buildFrame(input: FrameInput): Frame {
     `Today: ${u.wakes + 1}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens`,
   ].join("\n"));
 
-  const why = rows.map((r) => `- ${r.kind === "passive" ? "(passive) " : ""}${r.cause.replace(RESTART_CAUSE, "").trim()}`);
+  const why = rows.map((r) => `- ${r.kind === "passive" ? "(passive) " : ""}${causeLine(r)}`);
   sections.push([`## Why you are awake`, ...(why.length ? why : ["- (nothing queued)"])].join("\n"));
 
   // Facts: counts always; the changed rows since the last frame as a diff.
@@ -126,8 +135,12 @@ export function buildFrame(input: FrameInput): Frame {
   const planLines = facts.plans.map((p) => `- plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress (${p.status})`);
   const changed = facts.changed.filter((c) => c.updated_at > since);
   const changedLines = changed.map((c) => `- ${c.kind} ${c.short_id ?? ""} ${c.title} → ${c.status}`);
+  // The charters lead (org-staffing.md S7): a role directs its hands toward
+  // each project's goal, not its task list. One line per chartered project.
+  const charterLines = facts.scope.projects.map((p) => charterLine(`- project ${p.title}`, p)).filter((l): l is string => !!l);
   sections.push([
     `## Your scope now`,
+    ...(charterLines.length ? [`Direction:`, ...budgeted(charterLines, budget)] : []),
     ...factLines,
     ...(planLines.length ? [`Plans:`, ...budgeted(planLines, budget)] : []),
     ...(changedLines.length ? [`Changed since your last frame:`, ...budgeted(changedLines, budget)] : [`Nothing in scope changed since your last frame.`]),
@@ -229,7 +242,7 @@ async function logWake(
   const wake_id: Id<"role_wakes"> = await ctx.db.insert("role_wakes", {
     role_id: role._id,
     short_id,
-    causes: rows.map((r) => firstLine(r.cause).slice(0, 200)),
+    causes: rows.map((r) => firstLine(causeLine(r)).slice(0, 200)),
     status,
     frame_chars: frameChars,
     pending_message_id: pendingMessageId,

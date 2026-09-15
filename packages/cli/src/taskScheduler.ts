@@ -12,7 +12,7 @@ import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.
 import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
 import { resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { runTriggerPrecheck } from "./precheckRunner.js";
-import { describeTriggerPrecheckFailure, triggerPrecheckPassed } from "@codecast/shared/contracts";
+import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerLifecycleInstructions } from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -252,7 +252,7 @@ export class TaskScheduler {
         const filingNote = filing === "stashed"
           ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
           : "";
-        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`;
+        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}\n\n${triggerLifecycleInstructions(task)}${filingNote}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
@@ -556,6 +556,7 @@ export class TaskScheduler {
       parts.push(`- Refer to this trigger as ${task.short_id} in anything you write — that renders as a rich trigger reference. Never paste its 32-char id into prose.`);
     }
     parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
+    parts.push(triggerLifecycleInstructions(task));
     parts.push('- To set a follow-up trigger: cast trigger add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id.toString().slice(0, 7)}\` for full original context`);

@@ -94,7 +94,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   // useQueryNoThrow: listOwners is enrichment (chips, the handoff banner). A
   // timeout or auth miss must not unmount ConversationView — that is what
   // useQuery does with a terminal server error.
-  const { data } = useQueryNoThrow(
+  const { data, error } = useQueryNoThrow(
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
   );
@@ -197,7 +197,8 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     }
   };
 
-  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser, handoff, myAssignment, ack };
+  const canManage = error || data === null ? false : data ? true : undefined;
+  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

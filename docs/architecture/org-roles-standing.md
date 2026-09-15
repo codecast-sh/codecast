@@ -200,11 +200,20 @@ one place each event passes through; nothing else inserts outbox rows.
 | A chat mention of the role | `chat.ts` role mention path (replaces the `deliverToAnchor` call) | immediate | the mentioning session is the actor |
 | A restart | `orgRoles.performRestartRole`, cause prefixed `restart:` so the next frame carries the charter and brief in full | immediate | |
 
+Enqueue dedupes per ref: a fold or passive row for a (table, id) that
+already waits unflushed is refreshed in place (newest cause, first due time
+kept), so a task moved seven times by seven mutations is one line in one
+frame and one wake per window (ct-51491). Immediate rows never fold.
+
 Flush: `orgWakes.performFlush` (an internal mutation, scheduled by
 `orgEvents.scheduleFlush`). A due immediate or fold row takes every waiting
 row with it: enqueue arms one flush per coalesce window, so a fold row that
 landed while an earlier one waited rides the frame that is going out anyway
-(delivered up to `coalesce_ms` early, still one wake). Gates in order: paused or retired holds; over `wakes_per_day` or
+(delivered up to `coalesce_ms` early, still one wake). A fold or passive row
+is one per (table, id) per window: a repeat for a ref that already waits
+patches that row's cause and bumps its `count`, keeping the first due time,
+so a task moved seven times is one line ("... (changed 7 times)") and one
+wake, never seven rows (ct-51491). Gates in order: paused or retired holds; over `wakes_per_day` or
 `tokens_per_day` holds system rows (an immediate row still passes) and
 re-arms at the next UTC day; an active agent reschedules in 30s up to 20
 times. A frame with no fact newer than `last_frame_seq` and no immediate row
