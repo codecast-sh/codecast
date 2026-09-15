@@ -517,22 +517,24 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe("limit");
     expect(classifyApiErrorBanner("You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets 7:40pm (America/New_York)")).toBe("limit");
     expect(classifyApiErrorBanner("You've hit your monthly spend limit. Run /usage-credits to manage your limit and keep using Fable 5 or switch models to continue this chat.")).toBe("limit");
-    expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
+    expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("fatal");
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
   });
 
-  test("statusless connection drops classify as connection, retryable statuses stay error", () => {
+  test("statusless connection drops classify as connection, exhausted retryable statuses as fatal", () => {
     // No status code = the provider never replied; the turn died at the
     // prompt and a plain continue resumes it — the blocked/revive set.
     expect(classifyApiErrorBanner("API Error: Connection closed mid-response. The response above may be incomplete.")).toBe("connection");
     expect(classifyApiErrorBanner("API Error: Connection error.")).toBe("connection");
     expect(classifyApiErrorBanner("API Error: Request timed out.")).toBe("connection");
-    // Statuses the CLI retries on its own (408/409/429/5xx) stay out of the
-    // blocked set — badging them paints a mid-retry session as blocked.
-    expect(classifyApiErrorBanner("API Error: 500 Internal server error")).toBe("error");
-    expect(classifyApiErrorBanner('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe("error");
-    expect(classifyApiErrorBanner("API Error: 429 Too many requests")).toBe("error");
-    expect(classifyApiErrorBanner("API Error: 408 Request timeout")).toBe("error");
+    // Claude Code writes the banner only after its own retries of 408/409/
+    // 429/5xx are spent, so these are dead turns that join the blocked set.
+    expect(classifyApiErrorBanner("API Error: 500 Internal server error")).toBe("fatal");
+    expect(classifyApiErrorBanner('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe("fatal");
+    expect(classifyApiErrorBanner("API Error: 429 Too many requests")).toBe("fatal");
+    expect(classifyApiErrorBanner("API Error: 408 Request timeout")).toBe("fatal");
+    expect(BLOCKED_BANNER_KINDS.has(classifyApiErrorBanner("API Error: 500 Internal server error")!)).toBe(true);
+    expect(CONTINUE_BANNER_KINDS).toContain(classifyApiErrorBanner("API Error: 500 Internal server error"));
   });
 
   test("a 429 carrying the subscription exceeded_limit payload is a limit park, not a transient", () => {
@@ -550,9 +552,9 @@ describe("isApiErrorBanner", () => {
     // The marker must be the payload's own quoted key: a bare mention in a
     // transient 429 body, another status, or multi-line prose about the
     // payload never promotes to limit.
-    expect(classifyApiErrorBanner("API Error: 429 exceeded_limit rate limited, retry later")).toBe("error");
-    expect(classifyApiErrorBanner('API Error: 529 {"type":"exceeded_limit"}')).toBe("error");
-    expect(classifyApiErrorBanner('API Error: 429 {"type":"exceeded_limit"}\nSo the account is rationed — here is what I found:')).toBe("error");
+    expect(classifyApiErrorBanner("API Error: 429 exceeded_limit rate limited, retry later")).toBe("fatal");
+    expect(classifyApiErrorBanner('API Error: 529 {"type":"exceeded_limit"}')).toBe("fatal");
+    expect(classifyApiErrorBanner('API Error: 429 {"type":"exceeded_limit"}\nSo the account is rationed — here is what I found:')).toBe("fatal");
     expect(classifyApiErrorBanner('The tool failed with {"type":"exceeded_limit"} — the account hit its five-hour window.')).toBe(null);
   });
 

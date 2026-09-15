@@ -1,10 +1,215 @@
-import { mutation, query } from "./functions";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
+import { askCore, finalizeAnswer, normalizeVerdict, withdrawCore, type AnsweredBy } from "./sessionDecisions";
+import { createStackCore } from "./decisionStacks";
+import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
+import { createDataContext } from "./data";
+
+type Ctx = { db: any };
+
+// ── the-line.md L8: runs belong to the workspace ─────────────────────────────
+//
+// `workspace` is ACCESS (one equality per read), `team_id` is ROUTING. A run
+// bound to a task or plan lives where that work item lives, so a teammate
+// who can read the task can read its run. An unbound run follows the privacy
+// its primary session was created with (the directory rule), which is what
+// computeWorkspaceKey reads for a linked conversation.
+export async function runScope(
+  ctx: Ctx,
+  userId: Id<"users">,
+  opts: { task?: any; plan?: any; conversation?: { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean; team_visibility?: string } | null },
+): Promise<{ workspace: string; team_id: Id<"teams"> | undefined }> {
+  const item = opts.task ?? opts.plan;
+  if (item) return { workspace: await resolveWorkspaceKey(ctx, item), team_id: item.team_id };
+  const conv = opts.conversation ?? null;
+  return {
+    workspace: computeWorkspaceKey({ user_id: userId, team_id: conv?.team_id }, conv),
+    team_id: conv?.team_id,
+  };
+}
+
+// Owner always; otherwise the run's ACCESS key must grant the viewer. The
+// stored key when present, the write-time compute for rows minted before
+// the backfill (they resolve personal to their owner).
+async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
+  if (String(run.user_id) === String(userId)) return true;
+  return workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, run));
+}
+
+// ── the-line.md L4: a gate is a decision ─────────────────────────────────────
+
+// "[A] Approve" → "Approve": the decision numbers its options itself; the
+// gate key lives on the run's gate_choices mirror and maps back by index.
+function stripGateKey(label: string): string {
+  return label.replace(/^\[[^\]]*\]\s*/, "").trim() || label;
+}
+
+// The run panel's free text picks an option when it starts with a gate key
+// (exact, "A:", "A ", "[A]"), the same rule the runner applies to the text.
+export function gateChoiceIndex(choices: Array<{ key: string }> | undefined, response: string): number {
+  const r = response.trim().toUpperCase();
+  return (choices ?? []).findIndex((ch) => {
+    const k = ch.key.toUpperCase();
+    return r === k || r.startsWith(k + ":") || r.startsWith(k + " ") || r.startsWith(`[${k}]`);
+  });
+}
+
+export type GateChoice = { key: string; label: string; description?: string; target: string };
+
+// The graph's `stack="Launch checklist"` attribute (the-line.md L4): one
+// stack per run, created on the first gate and appended to by every later
+// gate. The run's previous gate decision still sits on gate_decision_id when
+// the next gate pauses, and its stack_id names the run's stack. A `ds-N`
+// reference is passed through as an existing stack.
+async function gateStackRef(ctx: Ctx, userId: Id<"users">, run: any, stack: string | undefined): Promise<string | undefined> {
+  if (!stack) return undefined;
+  if (/^ds-\d+$/.test(stack)) return stack;
+  const previous = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+  if (previous?.stack_id) {
+    const existing = await ctx.db.get(previous.stack_id);
+    if (existing) {
+      // The gates come one at a time, so answering the last one closed the
+      // stack; the next gate reopens it, the way a reopened answer does.
+      if (existing.status === "done") await ctx.db.patch(existing._id, { status: "open", updated_at: Date.now() });
+      return existing.short_id;
+    }
+  }
+  const created = await createStackCore(ctx, userId, { title: stack, team_id: run.team_id ?? undefined, client_key: `run:${run._id}` });
+  return created.error ? undefined : created.short_id;
+}
+
+// Pause the run at a gate and ask the person through the one rail every
+// human question uses (the-line.md L4). The asker is the session that
+// started the run (so the ladder and grants apply), else the run's primary
+// conversation. gate_prompt / gate_choices stay on the run as a mirror for
+// old readers and for the key map the answer rides back on.
+export async function pauseAtGateCore(
+  ctx: Ctx,
+  auth: { userId: Id<"users"> },
+  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string },
+) {
+  const run = await ctx.db.get(args.run_id);
+  if (!run || String(run.user_id) !== String(auth.userId)) return { error: "Not found" };
+
+  const now = Date.now();
+  // Resolved before the patch below clears the previous gate's decision id.
+  const stackRef = await gateStackRef(ctx, auth.userId, run, args.stack);
+  // The mirror carries only key, label and target (the stored shape).
+  const mirror = args.choices.map((c) => ({ key: c.key, label: c.label, target: c.target }));
+  await ctx.db.patch(args.run_id, {
+    status: "paused",
+    current_node_id: args.node_id,
+    gate_node_id: args.node_id,
+    gate_prompt: args.prompt,
+    gate_choices: mirror,
+    gate_response: undefined,
+    gate_decision_id: undefined,
+    updated_at: now,
+  });
+
+  // The station the task waits at is the one the gate parks it in: the
+  // decision is bound there so a blocking gate holds the task (L5).
+  if (run.task_id) {
+    await ctx.db.patch(run.task_id, { status: "in_review" as any, updated_at: now });
+  }
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+
+  let decision: { id: Id<"session_decisions">; short_id?: string } | null = null;
+  const askerId = run.spawner_conversation_id ?? run.primary_conversation_id;
+  const asker = askerId ? await ctx.db.get(askerId) : null;
+  if (asker) {
+    const [first, ...rest] = args.prompt.split("\n");
+    const question = first.trim() || args.node_id;
+    const body = rest.join("\n").trim();
+    const asked = await askCore(ctx, auth, {
+      session_id: asker.session_id,
+      question,
+      context_md: body || undefined,
+      options: args.choices.map((c) => ({ label: stripGateKey(c.label), ...(c.description ? { description: c.description } : {}) })),
+      doc_md: args.doc_md,
+      category: args.category,
+      stack: stackRef,
+      blocking: true,
+      task: task?.short_id,
+      station: task ? task.status_id ?? task.status : undefined,
+      workflow_run_id: args.run_id,
+      gate_node_id: args.node_id,
+    });
+    if (asked && !asked.error) {
+      decision = { id: asked.id, short_id: asked.short_id };
+      await ctx.db.patch(args.run_id, { gate_decision_id: asked.id });
+    }
+  }
+
+  // Post gate message to primary conversation
+  if (run.primary_conversation_id) {
+    const primaryConv = await ctx.db.get(run.primary_conversation_id);
+    if (primaryConv) {
+      await ctx.db.insert("messages", {
+        conversation_id: run.primary_conversation_id,
+        role: "assistant",
+        content: JSON.stringify({
+          __wf: "gate",
+          prompt: args.prompt,
+          choices: mirror,
+          run_id: args.run_id,
+          ...(decision ? { decision_id: decision.id, decision_short_id: decision.short_id } : {}),
+        }),
+        subtype: "workflow_event",
+        timestamp: now,
+      });
+      await ctx.db.patch(run.primary_conversation_id, {
+        message_count: (primaryConv.message_count || 0) + 1,
+        updated_at: now,
+        last_message_role: "assistant",
+      });
+    }
+  }
+
+  return { ok: true, decision_id: decision?.id, decision_short_id: decision?.short_id };
+}
+
+// Answer the run's open gate with free text (the-line.md L4): text that
+// starts with a gate key picks that option; anything else is the typed
+// answer and routes the run on its unconditional edge. The answer goes
+// through finalizeAnswer (first writer wins; settleGateRun writes
+// gate_response and status running). A run paused before gates were
+// decisions has no decision row and is patched directly, as before.
+export async function answerGateCore(ctx: Ctx, run: any, response: string, by: AnsweredBy): Promise<{ ok: true } | { error: string }> {
+  if (run.status !== "paused") return { error: "Not paused" };
+  const now = Date.now();
+  const trimmed = response.trim();
+  const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+  if (decision && decision.status === "pending") {
+    const idx = gateChoiceIndex(run.gate_choices, trimmed);
+    const verdict = normalizeVerdict(decision, idx >= 0
+      ? { status: "answered", answer_index: idx, answer_text: trimmed }
+      : { status: "answered", answer_text: trimmed });
+    if ("error" in verdict) return { error: verdict.error };
+    await finalizeAnswer(ctx, decision, verdict, by, { deliver: false, now });
+    return { ok: true };
+  }
+  if (decision) return { error: `Gate already ${decision.status}` };
+  await ctx.db.patch(run._id, { gate_response: trimmed, status: "running", updated_at: now });
+  return { ok: true };
+}
+
+// Cancel a run. Its open gate decision is withdrawn through the shared
+// withdraw path (the-line.md L4) so the queue, the stack and the ladder
+// learn the question is gone.
+export async function cancelCore(ctx: Ctx, run: any, now = Date.now()): Promise<void> {
+  if (run.status === "completed" || run.status === "failed") return;
+  if (run.gate_decision_id) {
+    const decision = await ctx.db.get(run.gate_decision_id);
+    if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
+  }
+  await ctx.db.patch(run._id, { status: "failed", fail_reason: "Cancelled by user", updated_at: now });
+}
 
 export const create = mutation({
   args: {
@@ -23,11 +228,21 @@ export const create = mutation({
     if (!workflow || workflow.user_id !== userId) throw new Error("Not found");
 
     const now = Date.now();
+    // the-line.md L8: the run lives where its task or plan lives, else where
+    // its primary session will (the existing one, or the directory rule).
+    const scope = await runScope(ctx, userId, {
+      task: args.task_id ? await ctx.db.get(args.task_id) : null,
+      plan: args.plan_id ? await ctx.db.get(args.plan_id) : null,
+      conversation: args.existing_conversation_id
+        ? await ctx.db.get(args.existing_conversation_id)
+        : await resolveCreationPrivacy(ctx, userId, args.project_path),
+    });
     const runId = await ctx.db.insert("workflow_runs", {
       user_id: userId,
       workflow_id: args.workflow_id,
       task_id: args.task_id,
       plan_id: args.plan_id,
+      ...scope,
       status: "pending",
       node_statuses: [],
       goal_override: args.goal_override,
@@ -112,6 +327,90 @@ export const create = mutation({
   },
 });
 
+// The one insert shape for a run: the run row, the bound task or plan patched
+// to carry it, the primary conversation the run speaks through, and its
+// "started" message. createFromCli calls it for a run the CLI executes
+// itself; orgLine.startLineRun calls it for a run the sweep hands to the
+// daemon (the-line.md L9). One place, so a field added to runs or to the
+// primary conversation lands on both paths.
+export async function createRunCore(
+  ctx: Ctx,
+  userId: Id<"users">,
+  opts: {
+    workflow_name: string;
+    workflow_goal?: string;
+    workflow_id?: Id<"workflows">;
+    task?: any;
+    plan?: any;
+    goal_override?: string;
+    project_path?: string;
+    spawner_conversation_id?: Id<"conversations">;
+    // The team the primary session routes to when no directory rule names
+    // one (a role's team, for a run the sweep starts).
+    fallback_team_id?: Id<"teams">;
+    now?: number;
+  },
+): Promise<{ run_id: Id<"workflow_runs">; primary_conversation_id: Id<"conversations"> }> {
+  const now = opts.now ?? Date.now();
+  // the-line.md L8: stamp the workspace (access) and team (routing) at
+  // create, from the bound work item or the primary session's privacy.
+  const privacy = await resolveCreationPrivacy(ctx, userId, opts.project_path, opts.fallback_team_id);
+  const scope = await runScope(ctx, userId, { task: opts.task, plan: opts.plan, conversation: privacy });
+  const runId: Id<"workflow_runs"> = await ctx.db.insert("workflow_runs", {
+    user_id: userId,
+    workflow_id: opts.workflow_id,
+    // The name the run started under. When no workflows row backs the run,
+    // `cast workflow run-daemon` resolves a shipped template by it (L9).
+    workflow_name: opts.workflow_name,
+    task_id: opts.task?._id,
+    plan_id: opts.plan?._id,
+    ...scope,
+    ...(opts.spawner_conversation_id ? { spawner_conversation_id: opts.spawner_conversation_id } : {}),
+    status: "pending",
+    node_statuses: [],
+    goal_override: opts.goal_override,
+    project_path: opts.project_path,
+    created_at: now,
+    updated_at: now,
+  });
+
+  if (opts.task) {
+    await ctx.db.patch(opts.task._id, { workflow_run_id: runId, status: "in_progress" as any, updated_at: now });
+  }
+  if (opts.plan) {
+    await ctx.db.patch(opts.plan._id, { workflow_run_id: runId, updated_at: now });
+  }
+
+  const primaryConvId: Id<"conversations"> = await ctx.db.insert("conversations", {
+    user_id: userId,
+    agent_type: "claude_code",
+    session_id: `wf-${runId}`,
+    title: opts.workflow_name,
+    project_path: opts.project_path,
+    started_at: now,
+    updated_at: now,
+    message_count: 0,
+    ...privacy,
+    status: "active",
+    workflow_run_id: runId,
+    is_workflow_primary: true,
+  });
+
+  await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
+
+  await ctx.db.insert("messages", {
+    conversation_id: primaryConvId,
+    role: "assistant",
+    content: JSON.stringify({ __wf: "started", goal: opts.goal_override || opts.workflow_goal || "", workflow_name: opts.workflow_name }),
+    subtype: "workflow_event",
+    timestamp: now,
+  });
+
+  await ctx.db.patch(primaryConvId, { message_count: 1, last_message_role: "assistant" });
+
+  return { run_id: runId, primary_conversation_id: primaryConvId };
+}
+
 export const createFromCli = mutation({
   args: {
     api_token: v.string(),
@@ -133,17 +432,12 @@ export const createFromCli = mutation({
     const now = Date.now();
     const spawner = args.spawner_session ? await findConversationByAnyRef(ctx, args.spawner_session, userId) : null;
 
-    let taskDocId: any = undefined;
-    if (args.task_id) {
-      const tasks = await ctx.db.query("tasks").withIndex("by_short_id", q => q.eq("short_id", args.task_id!)).first();
-      if (tasks) taskDocId = tasks._id;
-    }
-
-    let planDocId: any = undefined;
-    if (args.plan_id) {
-      const plan = await ctx.db.query("plans").withIndex("by_short_id", q => q.eq("short_id", args.plan_id!)).first();
-      if (plan) planDocId = plan._id;
-    }
+    const taskRow: any = args.task_id
+      ? await ctx.db.query("tasks").withIndex("by_short_id", q => q.eq("short_id", args.task_id!)).first()
+      : null;
+    const planRow: any = args.plan_id
+      ? await ctx.db.query("plans").withIndex("by_short_id", q => q.eq("short_id", args.plan_id!)).first()
+      : null;
 
     // Resolve workflow_id — either passed directly or look up by name
     let workflowDocId: any = args.workflow_id ? (args.workflow_id as any) : undefined;
@@ -155,56 +449,18 @@ export const createFromCli = mutation({
       if (match) workflowDocId = match._id;
     }
 
-    const runId = await ctx.db.insert("workflow_runs", {
-      user_id: userId,
-      workflow_id: workflowDocId || (undefined as any),
-      task_id: taskDocId,
-      plan_id: planDocId,
-      ...(spawner ? { spawner_conversation_id: spawner._id } : {}),
-      status: "pending",
-      node_statuses: [],
+    const { run_id } = await createRunCore(ctx, userId, {
+      workflow_name: args.workflow_name,
+      workflow_goal: args.workflow_goal,
+      workflow_id: workflowDocId || undefined,
+      task: taskRow,
+      plan: planRow,
       goal_override: args.goal_override,
       project_path: args.project_path,
-      created_at: now,
-      updated_at: now,
+      spawner_conversation_id: spawner?._id,
+      now,
     });
-
-    if (taskDocId) {
-      await ctx.db.patch(taskDocId, { workflow_run_id: runId, status: "in_progress" as any, updated_at: now });
-    }
-    if (planDocId) {
-      await ctx.db.patch(planDocId, { workflow_run_id: runId, updated_at: now });
-    }
-
-    const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
-    const primaryConvId = await ctx.db.insert("conversations", {
-      user_id: userId,
-      agent_type: "claude_code",
-      session_id: `wf-${runId}`,
-      title: args.workflow_name,
-      project_path: args.project_path,
-      started_at: now,
-      updated_at: now,
-      message_count: 0,
-      ...privacy,
-      status: "active",
-      workflow_run_id: runId,
-      is_workflow_primary: true,
-    });
-
-    await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
-
-    await ctx.db.insert("messages", {
-      conversation_id: primaryConvId,
-      role: "assistant",
-      content: JSON.stringify({ __wf: "started", goal: args.goal_override || args.workflow_goal || "", workflow_name: args.workflow_name }),
-      subtype: "workflow_event",
-      timestamp: now,
-    });
-
-    await ctx.db.patch(primaryConvId, { message_count: 1, last_message_role: "assistant" });
-
-    return { run_id: runId };
+    return { run_id };
   },
 });
 
@@ -271,7 +527,8 @@ export const get = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const run = await ctx.db.get(args.id);
-    if (!run || run.user_id !== userId) return null;
+    // the-line.md L8: a teammate who can read the run's workspace reads the run.
+    if (!run || !(await canReadRun(ctx, userId, run))) return null;
     return await withAgentSessions(ctx, run);
   },
 });
@@ -336,15 +593,13 @@ export const respondToGate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     const run = await ctx.db.get(args.id);
-    if (!run || run.user_id !== userId) throw new Error("Not found");
+    if (!run || !(await canReadRun(ctx, userId, run))) throw new Error("Not found");
     if (run.status !== "paused") throw new Error("Not paused");
 
     const now = Date.now();
-    await ctx.db.patch(args.id, {
-      gate_response: args.response,
-      status: "running",
-      updated_at: now,
-    });
+    // the-line.md L4: the response answers the gate's decision.
+    const answered = await answerGateCore(ctx, run, args.response, { kind: "user", id: String(userId), user_id: userId });
+    if ("error" in answered) throw new Error(answered.error);
 
     // Post the human's response as a user message to the primary conversation
     if (run.primary_conversation_id) {
@@ -372,10 +627,9 @@ export const respondToGateFromCli = mutation({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
     const run = await ctx.db.get(args.run_id);
-    if (!run || run.user_id !== auth.userId) return { error: "Not found" };
-    if (run.status !== "paused") return { error: "Not paused" };
-    await ctx.db.patch(args.run_id, { gate_response: args.response, status: "running", updated_at: Date.now() });
-    return { ok: true };
+    if (!run || !(await canReadRun(ctx, auth.userId, run))) return { error: "Not found" };
+    // the-line.md L4: the same answer path as the run panel.
+    return answerGateCore(ctx, run, args.response, { kind: "user", id: String(auth.userId), user_id: auth.userId });
   },
 });
 
@@ -419,6 +673,8 @@ export const updateProgress = mutation({
     session_id: v.optional(v.string()),
     run_status: v.optional(v.union(v.literal("running"), v.literal("completed"), v.literal("failed"))),
     fail_reason: v.optional(v.string()),
+    // the-line.md L7: a chain step's output head, shown on the run's node.
+    result_preview: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -436,6 +692,7 @@ export const updateProgress = mutation({
       status: args.node_status,
       outcome: args.outcome,
       session_id: args.session_id ?? prev?.session_id,
+      result_preview: args.result_preview ?? prev?.result_preview,
       started_at: args.node_status === "running" ? now : (prev?.started_at ?? now),
       completed_at: args.node_status !== "running" ? now : undefined,
     };
@@ -639,9 +896,13 @@ export const ingestSnapshot = mutation({
       await ctx.db.patch(existing._id, fields);
       runId = existing._id;
     } else {
+      // the-line.md L8: the run lives where its host session lives.
+      const hostConv = primaryConvId ? await ctx.db.get(primaryConvId) : null;
+      const scope = await runScope(ctx, auth.userId, { conversation: hostConv });
       runId = await ctx.db.insert("workflow_runs", {
         user_id: auth.userId,
         ...fields,
+        ...scope,
         created_at: now,
       });
       // Post one inline anchor message so the run shows in its host conversation.
@@ -703,55 +964,23 @@ export const setPrimarySession = mutation({
   },
 });
 
+// the-line.md L4: a gate is a decision. See pauseAtGateCore.
 export const pauseAtGate = mutation({
   args: {
     api_token: v.string(),
     run_id: v.id("workflow_runs"),
     node_id: v.string(),
     prompt: v.string(),
-    choices: v.array(v.object({ key: v.string(), label: v.string(), target: v.string() })),
+    choices: v.array(v.object({ key: v.string(), label: v.string(), description: v.optional(v.string()), target: v.string() })),
+    doc_md: v.optional(v.string()),
+    category: v.optional(v.string()),
+    stack: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
-
-    const run = await ctx.db.get(args.run_id);
-    if (!run || run.user_id !== auth.userId) return { error: "Not found" };
-
-    const now = Date.now();
-    await ctx.db.patch(args.run_id, {
-      status: "paused",
-      current_node_id: args.node_id,
-      gate_prompt: args.prompt,
-      gate_choices: args.choices,
-      gate_response: undefined,
-      updated_at: now,
-    });
-
-    if ((run as any).task_id) {
-      await ctx.db.patch((run as any).task_id, { status: "in_review" as any, updated_at: now });
-    }
-
-    // Post gate message to primary conversation
-    if (run.primary_conversation_id) {
-      const primaryConv = await ctx.db.get(run.primary_conversation_id);
-      if (primaryConv) {
-        await ctx.db.insert("messages", {
-          conversation_id: run.primary_conversation_id,
-          role: "assistant",
-          content: JSON.stringify({ __wf: "gate", prompt: args.prompt, choices: args.choices, run_id: args.run_id }),
-          subtype: "workflow_event",
-          timestamp: now,
-        });
-        await ctx.db.patch(run.primary_conversation_id, {
-          message_count: (primaryConv.message_count || 0) + 1,
-          updated_at: now,
-          last_message_role: "assistant",
-        });
-      }
-    }
-
-    return { ok: true };
+    const { api_token: _t, ...rest } = args;
+    return pauseAtGateCore(ctx, auth, rest);
   },
 });
 
@@ -780,12 +1009,143 @@ export const cancel = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     const run = await ctx.db.get(args.id);
-    if (!run || run.user_id !== userId) throw new Error("Not found");
-    if (run.status === "completed" || run.status === "failed") return;
-    await ctx.db.patch(args.id, {
-      status: "failed",
-      fail_reason: "Cancelled by user",
-      updated_at: Date.now(),
+    if (!run || !(await canReadRun(ctx, userId, run))) throw new Error("Not found");
+    await cancelCore(ctx, run);
+  },
+});
+
+// ── the-line.md L8: the one run list ─────────────────────────────────────────
+
+type ListRunsArgs = { team_id?: Id<"teams">; task_id?: string; plan_id?: string; status?: string; limit?: number };
+
+async function findByRef(ctx: Ctx, table: "tasks" | "plans", ref: string): Promise<any | null> {
+  const byShort = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
+  if (byShort) return byShort;
+  const id = ctx.db.normalizeId(table, ref);
+  return id ? await ctx.db.get(id) : null;
+}
+
+// The one list for the web feeder, the scope feed and the task page. Reads
+// go through the data context: the viewer's workspace key is resolved by
+// createDataContext (team membership is required for a team key), and every
+// row is one equality against it. With task_id or plan_id the rows come off
+// that item's index, still filtered by the key, so a teammate who can read
+// the task can read its run and a stranger reads nothing. Rows minted
+// before the backfill (no stored key) resolve personal to their owner.
+export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRunsArgs) {
+  const db = await createDataContext(ctx, args.team_id
+    ? { userId, workspace: "team", team_id: args.team_id }
+    : { userId, workspace: "personal" });
+  const key = db.workspaceKey;
+  const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
+
+  let rows: any[] = [];
+  if (args.task_id || args.plan_id) {
+    const item = args.task_id ? await findByRef(ctx, "tasks", args.task_id) : await findByRef(ctx, "plans", args.plan_id!);
+    if (!item) return [];
+    const allowed = args.task_id ? await canAccessTask(ctx, userId, item) : await canAccessPlan(ctx, userId, item);
+    if (!allowed) return [];
+    const all = args.task_id
+      ? await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", item._id)).order("desc").take(limit * 4)
+      : await ctx.db.query("workflow_runs").withIndex("by_plan", (q: any) => q.eq("plan_id", item._id)).order("desc").take(limit * 4);
+    for (const r of all) if (await canReadRun(ctx, userId, r)) rows.push(r);
+  } else {
+    rows = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", key))
+      .order("desc")
+      .take(limit * 2);
+    if (!args.team_id) {
+      // Legacy rows (no stored key yet) ride the owner index, same as the
+      // scoped tables' chokepoint does until the backfill retires it.
+      const seen = new Set(rows.map((r) => String(r._id)));
+      const legacy = await ctx.db
+        .query("workflow_runs")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .order("desc")
+        .take(limit * 2);
+      for (const r of legacy) {
+        if (seen.has(String(r._id)) || (typeof r.workspace === "string" && r.workspace)) continue;
+        rows.push(r);
+      }
+    }
+  }
+  const out = rows.filter((r) => !args.status || r.status === args.status);
+  out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+
+  const workflows = new Map<string, any>();
+  const shaped = [];
+  for (const run of out.slice(0, limit)) {
+    let workflow: any = null;
+    if (run.workflow_id) {
+      const wid = String(run.workflow_id);
+      if (!workflows.has(wid)) workflows.set(wid, await ctx.db.get(run.workflow_id));
+      workflow = workflows.get(wid);
+    }
+    const node = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
+    const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+    const plan = run.plan_id ? await ctx.db.get(run.plan_id) : null;
+    const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+    shaped.push({
+      ...run,
+      task_short_id: task?.short_id,
+      task_title: task?.title,
+      plan_short_id: plan?.short_id,
+      workflow_name: run.workflow_name ?? workflow?.name,
+      workflow_slug: workflow?.slug,
+      current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,
+      gate_decision_short_id: decision?.short_id,
+      gate_decision_status: decision?.status,
     });
+  }
+  return shaped;
+}
+
+export const listRuns = query({
+  args: {
+    team_id: v.optional(v.id("teams")),
+    task_id: v.optional(v.string()),
+    plan_id: v.optional(v.string()),
+    status: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return listRunsCore(ctx, userId, args);
+  },
+});
+
+// `cast workflow runs [--task|--plan]` (the-line.md L10) through /cli/workflow-runs/list.
+export const listRunsFromCli = query({
+  args: {
+    api_token: v.string(),
+    team_id: v.optional(v.id("teams")),
+    task_id: v.optional(v.string()),
+    plan_id: v.optional(v.string()),
+    status: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const { api_token: _t, ...rest } = args;
+    return { runs: await listRunsCore(ctx, auth.userId, rest) };
+  },
+});
+
+// the-line.md L8: rows minted before the workspace field are stamped
+// personal to their owner. Run repeatedly until it reports 0.
+export const backfillWorkspace = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("workflow_runs")
+      .filter((q) => q.eq(q.field("workspace"), undefined))
+      .take(args.limit ?? 500);
+    for (const r of rows) {
+      await ctx.db.patch(r._id, { workspace: computeWorkspaceKey({ user_id: r.user_id }, null) });
+    }
+    return { stamped: rows.length };
   },
 });

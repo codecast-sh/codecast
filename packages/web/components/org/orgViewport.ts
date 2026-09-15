@@ -30,12 +30,26 @@ export function computeOrgViewport(
   height: number,
   panelWidth: number,
   focusId: string | null,
+  /** A card to bring to the centre of the free area (a focused ghost), at
+   *  the viewer's current zoom when given, else at the fitted one. The tree
+   *  is not refitted around it: only the pan changes. */
+  focusTarget?: { id: string; zoom?: number } | null,
 ): { x: number; y: number; zoom: number; whole: boolean } | null {
   const all = boundsOf(nodes);
   if (!all || width <= 0 || height <= 0) return null;
   const freeW = Math.max(120, width - panelWidth - FIT_PAD * 2);
   const freeH = Math.max(120, height - FIT_PAD * 2);
   let zoom = Math.min(1, freeW / all.w, freeH / all.h);
+  const focus = focusTarget ? nodes.find((n) => n.id === focusTarget.id) : undefined;
+  if (focus) {
+    const z = focusTarget?.zoom ?? Math.max(zoom, MIN_READABLE_ZOOM);
+    return {
+      x: FIT_PAD + (freeW - focus.w * z) / 2 - focus.x * z,
+      y: FIT_PAD + (freeH - focus.h * z) / 2 - focus.y * z,
+      zoom: z,
+      whole: false,
+    };
+  }
   let target = all;
   let whole = true;
   if (zoom < MIN_READABLE_ZOOM) {

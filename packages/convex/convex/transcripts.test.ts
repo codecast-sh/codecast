@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import {
   appendRecordingSegments,
+  asrTranscriptionSession,
   attachRecording,
   beat,
   finishRecordingTranscript,
@@ -16,6 +17,7 @@ import {
   webGetCall,
   webListCalls,
 } from "./transcripts";
+import { LIVE_TRANSCRIBE_MODEL } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import {
   CALL_MEMBER_STALE_MS,
@@ -192,6 +194,27 @@ describe("parseTranscriptionSegments", () => {
     );
     expect(out[0].t0).toBe(5000);
     expect(out[0].t1).toBe(5000);
+  });
+
+});
+
+// The huddle coming back in Japanese was auto-detect with no allowlist.
+// The mint is the only place the live recognizer is configured, so the
+// languages the room actually uses have to be on this object.
+describe("asrTranscriptionSession", () => {
+  test("sends the allowlist the live recognizer may not leave", () => {
+    const session = asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL, ["en", "ja"]);
+    expect(session.audio.input.transcription).toEqual({
+      model: LIVE_TRANSCRIBE_MODEL,
+      languages: ["en", "ja"],
+    });
+  });
+
+  test("omits languages when the caller did not name any", () => {
+    const session = asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL);
+    expect(session.audio.input.transcription).toEqual({
+      model: LIVE_TRANSCRIBE_MODEL,
+    });
   });
 });
 

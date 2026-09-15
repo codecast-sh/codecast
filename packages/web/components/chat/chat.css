@@ -2803,3 +2803,450 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 @media (prefers-reduced-motion: reduce) {
   .ch-voice-dot { animation: none; opacity: 1; }
 }
+
+/* Where a visitor's composer would be (community page): reading is open,
+   posting needs an account. Same footprint as the composer so the room does
+   not jump when a sign in lands. */
+.ch-guest-post {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 16px 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--sol-border);
+  border-radius: 10px;
+  color: var(--sol-text-muted);
+  font-size: 13px;
+}
+.ch-guest-post-compact { margin: 0 12px 12px; padding: 10px 12px; }
+.ch-guest-post-text { flex: 1; min-width: 12em; }
+.ch-guest-post-alt { color: var(--sol-text-dim); text-decoration: underline; text-underline-offset: 3px; }
+.ch-guest-post-alt:hover { color: var(--sol-text); }
+
+/* ── Slack mirror ─────────────────────────────────────────────────────────────
+ * Every colour a --sol-* token, with two deliberate exceptions: the Slack mark
+ * itself keeps its four brand colours (components/SlackLogo, greyed for a paused
+ * or absent mirror), and the Add to Slack button keeps Slack's own purple
+ * because it opens Slack's own consent screen and must look unmistakably like
+ * Slack. Do not tokenise either. */
+
+/* Header pill. */
+.ch-head-slack {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 7px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sol-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.ch-head-slack:hover {
+  color: var(--sol-text);
+  border-color: color-mix(in srgb, var(--sol-border) 90%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-highlight) 60%, transparent);
+}
+.ch-head-slack-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-head-slack-name::before {
+  content: "#";
+  opacity: 0.55;
+  margin-right: 1px;
+}
+.ch-head-slack-quiet::before { content: none; }
+/* Mirrored: the pill is the mark and a dot, nothing to read twice. */
+.ch-head-slack-live, .ch-head-slack-paused, .ch-head-slack-error { padding: 0 6px; gap: 4px; }
+
+/* The Slack mark as a channel row's label. Sits after the name at the size of
+ * the row's other glyphs; hidden with the names in the narrow strip. */
+.ch-chan-slack { width: 10px; height: 10px; flex: 0 0 auto; }
+.ch-head-slack-none { border-style: dashed; color: var(--sol-text-dim); }
+.ch-head-slack-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sol-green);
+}
+.ch-head-slack-glyph { width: 9px; height: 9px; color: var(--sol-text-dim); }
+.ch-head-slack-glyph-warn { color: var(--sol-orange); }
+
+/* Per-line mark, beside the time. */
+.ch-slack-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* 10.5px in text-muted: this is the one label whose job is provenance, so
+   * it keeps AA contrast where the dim hover time does not need to. */
+  font-size: 10.5px;
+  line-height: 14px;
+  color: var(--sol-text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+a.ch-slack-mark:hover { color: var(--sol-text); text-decoration: underline; }
+.ch-slack-mark-local { color: var(--sol-text-dim); opacity: 0.8; }
+.ch-slack-chip {
+  border-color: color-mix(in srgb, var(--sol-text-muted) 45%, transparent);
+  color: var(--sol-text-muted);
+}
+/* A Slack app's face: the mark in a soft tile, avatar-sized. */
+.ch-slack-face {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+}
+
+/* Composer checkbox: the broadcast control's twin (same class, same size). */
+.ch-composer-slack svg { flex: 0 0 auto; }
+.ch-composer-slack-off span { color: var(--sol-text-dim); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--sol-text-dim) 60%, transparent); }
+@container ch-composer (max-width: 460px) {
+  .ch-composer-foot:has(.ch-composer-slack) .ch-composer-hint { display: none; }
+}
+
+/* Slack quotes and cards (attachments arrive as blockquotes). */
+.ch-msg-body blockquote {
+  margin: 4px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
+  color: var(--sol-text-secondary);
+}
+.ch-msg-body blockquote p { margin: 2px 0; }
+.ch-msg-body blockquote img { max-height: 200px; border-radius: 4px; }
+
+/* The dialog. */
+.ch-slack-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 9vh;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  animation: ch-slack-fade 140ms ease-out;
+}
+@keyframes ch-slack-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ch-slack-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.ch-slack-dialog {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 12vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--sol-bg);
+  border: 1px solid var(--sol-border);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--sol-text);
+  animation: ch-slack-rise 180ms ease-out;
+  overflow: hidden;
+}
+.ch-slack-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+}
+.ch-slack-title { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
+.ch-slack-sub {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ch-slack-arrow { margin: 0 4px; color: var(--sol-text-dim); }
+.ch-slack-ws { color: var(--sol-text-dim); font-weight: 400; }
+.ch-slack-close {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--sol-text-dim);
+  font-size: 16px;
+  line-height: 1;
+}
+.ch-slack-close:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
+.ch-slack-body { padding: 12px 16px 14px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.ch-slack-lede { font-size: 12px; line-height: 1.55; color: var(--sol-text-secondary); margin: 0; }
+.ch-slack-fine { font-size: 10.5px; line-height: 1.5; color: var(--sol-text-dim); margin: 0; }
+.ch-slack-quiet { font-size: 11px; color: var(--sol-text-dim); padding: 8px 2px; }
+.ch-slack-section { display: flex; flex-direction: column; gap: 7px; }
+.ch-slack-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--sol-text-dim);
+}
+.ch-slack-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: flex-start;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 7px;
+  background: #4A154B;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ch-slack-add:disabled { opacity: 0.6; }
+.ch-slack-err {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sol-red);
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sol-red) 9%, transparent);
+}
+.ch-slack-err-inline { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 10%, transparent); }
+
+.ch-slack-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
+  border-radius: 6px;
+  background: var(--sol-bg-inset, var(--sol-bg-alt));
+  color: var(--sol-text-dim);
+}
+.ch-slack-search:focus-within { border-color: var(--sol-cyan); }
+.ch-slack-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12px; color: var(--sol-text); }
+.ch-slack-list {
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 6px;
+}
+.ch-slack-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  text-align: left;
+  color: var(--sol-text-secondary);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+.ch-slack-row:last-child { border-bottom: 0; }
+.ch-slack-row:hover:not(:disabled) { background: var(--sol-bg-highlight); color: var(--sol-text); }
+.ch-slack-row:disabled { opacity: 0.5; cursor: not-allowed; }
+.ch-slack-row-on { background: color-mix(in srgb, var(--sol-cyan) 12%, transparent); color: var(--sol-text); }
+.ch-slack-row-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-slack-row-meta { margin-left: auto; font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
+.ch-slack-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sol-cyan);
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 45%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 13px;
+}
+.ch-slack-check { color: var(--sol-cyan); }
+
+.ch-slack-dirs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.ch-slack-dir {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  border-radius: 6px;
+  text-align: left;
+  color: var(--sol-text-muted);
+  background: transparent;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.ch-slack-dir:hover { border-color: var(--sol-border); color: var(--sol-text); }
+.ch-slack-dir-on { border-color: var(--sol-cyan); background: color-mix(in srgb, var(--sol-cyan) 9%, transparent); color: var(--sol-text); }
+.ch-slack-dir-label { font-size: 11.5px; font-weight: 600; }
+.ch-slack-dir-hint { font-size: 10px; line-height: 1.4; color: var(--sol-text-dim); }
+@media (max-width: 520px) { .ch-slack-dirs { grid-template-columns: 1fr; } }
+
+.ch-slack-opts { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); border-radius: 6px; }
+.ch-slack-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+.ch-slack-opt:last-child { border-bottom: 0; }
+.ch-slack-opt-dim { opacity: 0.5; }
+.ch-slack-opt-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ch-slack-opt-label { font-size: 11.5px; color: var(--sol-text); }
+.ch-slack-opt-hint { font-size: 10px; line-height: 1.4; color: var(--sol-text-dim); }
+
+.ch-slack-seg { display: inline-flex; border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); border-radius: 6px; overflow: hidden; align-self: flex-start; }
+.ch-slack-seg-item { height: 26px; padding: 0 10px; font-size: 11px; color: var(--sol-text-muted); border-right: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
+.ch-slack-seg-item:last-child { border-right: 0; }
+.ch-slack-seg-item:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
+.ch-slack-seg-on { color: var(--sol-text); background: color-mix(in srgb, var(--sol-cyan) 12%, transparent); }
+
+.ch-slack-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 4px; }
+.ch-slack-foot-split { justify-content: flex-start; }
+.ch-slack-foot-split > :last-child { margin-left: auto; }
+.ch-slack-primary {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  background: var(--sol-cyan);
+  color: var(--sol-bg);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ch-slack-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.ch-slack-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+}
+.ch-slack-secondary:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
+.ch-slack-secondary-danger:hover { color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 50%, transparent); }
+.ch-slack-danger { height: 28px; padding: 0 10px; border-radius: 6px; background: var(--sol-red); color: #fff; font-size: 11.5px; font-weight: 600; }
+.ch-slack-confirm { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; color: var(--sol-text-muted); }
+
+.ch-slack-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--sol-green) 35%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--sol-green) 6%, transparent);
+}
+.ch-slack-status-paused { border-color: color-mix(in srgb, var(--sol-border) 80%, transparent); background: color-mix(in srgb, var(--sol-bg-alt) 60%, transparent); }
+.ch-slack-status-row { display: flex; align-items: center; gap: 8px; }
+.ch-slack-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sol-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 18%, transparent); }
+.ch-slack-dot-paused { background: var(--sol-text-dim); box-shadow: none; }
+.ch-slack-dot-err { background: var(--sol-orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-orange) 18%, transparent); }
+.ch-slack-status-text { font-size: 12px; font-weight: 600; }
+.ch-slack-open { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-muted); }
+.ch-slack-open:hover { color: var(--sol-text); text-decoration: underline; }
+.ch-slack-facts { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 18px; margin: 0; }
+.ch-slack-facts dt { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sol-text-dim); }
+.ch-slack-facts dd { margin: 1px 0 0; font-size: 11.5px; color: var(--sol-text-secondary); font-variant-numeric: tabular-nums; }
+
+.ch-slack-ledger { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); border-radius: 6px; max-height: 150px; overflow: auto; }
+.ch-slack-ledger-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 4px 9px; font-size: 10.5px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 25%, transparent); color: var(--sol-text-muted); }
+.ch-slack-ledger-row:last-child { border-bottom: 0; }
+.ch-slack-ledger-kind { color: var(--sol-text-secondary); }
+.ch-slack-ledger-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.ch-slack-ledger-done .ch-slack-ledger-status { color: var(--sol-green); }
+.ch-slack-ledger-failed .ch-slack-ledger-status { color: var(--sol-red); }
+.ch-slack-ledger-time { color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
+
+/* "More" behind the four everyday switches. */
+.ch-slack-more { margin-top: -6px; }
+.ch-slack-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 10.5px;
+  color: var(--sol-text-muted);
+  padding: 4px 2px;
+  user-select: none;
+}
+.ch-slack-more > summary::-webkit-details-marker { display: none; }
+.ch-slack-more > summary::before { content: "▸"; font-size: 9px; color: var(--sol-text-dim); }
+.ch-slack-more[open] > summary::before { content: "▾"; }
+.ch-slack-more > summary:hover { color: var(--sol-text); }
+.ch-slack-more-count { font-size: 9.5px; color: var(--sol-cyan); }
+.ch-slack-more > .ch-slack-opts { margin-top: 6px; }
+.ch-slack-summary { padding: 6px 8px; border-left: 2px solid color-mix(in srgb, var(--sol-border) 90%, transparent); }
+
+/* Phone width: stack what was a row. */
+@media (max-width: 520px) {
+  .ch-slack-seg { display: flex; flex-wrap: wrap; align-self: stretch; }
+  .ch-slack-seg-item { flex: 1 1 45%; }
+  .ch-slack-ledger-row { grid-template-columns: 1fr auto; }
+  .ch-slack-ledger-status { grid-column: 1 / -1; max-width: none; white-space: normal; }
+  .ch-slack-facts { grid-template-columns: 1fr 1fr; }
+  .ch-slack-foot, .ch-slack-foot-split { flex-wrap: wrap; }
+}
+
+/* The standalone community page: a slim header over the three column shell. */
+.ch-community-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--sol-bg);
+}
+.ch-community-page > .ch-shell { flex: 1 1 auto; min-height: 0; }
+.ch-community-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--sol-border);
+  color: var(--sol-text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+.ch-community-brand { display: inline-flex; align-items: center; color: var(--sol-text); }
+.ch-community-where { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.ch-community-slash { color: var(--sol-text-dim); font-weight: 400; }
+.ch-community-links { display: flex; gap: 14px; margin-left: 10px; }
+.ch-community-links a { color: var(--sol-text-muted); text-decoration: none; }
+.ch-community-links a:hover { color: var(--sol-text); }
+.ch-community-spacer { flex: 1; }
+.ch-community-cta {
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: var(--sol-text);
+  color: var(--sol-bg);
+  font-weight: 600;
+  text-decoration: none;
+}
+.ch-community-cta:hover { opacity: 0.9; }
+@media (max-width: 640px) { .ch-community-links { display: none; } }

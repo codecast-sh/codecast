@@ -56,6 +56,8 @@ import { DocDates } from "../../../components/DocDates";
 import { HireRoleDialog } from "../../../components/org/HireRoleDialog";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { Briefcase } from "lucide-react";
+import { CharterBlock } from "../../../components/charter/CharterBlock";
+import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 
 const api = _api as any;
 
@@ -267,7 +269,24 @@ function ProjectDetailContent() {
   const [hireOpen, setHireOpen] = useState(false);
   // A role lives in one workspace and its scope must sit inside it: the button
   // shows only when the org tree on screen is the project's own workspace.
-  const canHire = !!orgTree && !!meId && !!project && (orgTree.workspace.kind === "team" ? project.team_id === orgTree.workspace.id : !project.team_id);
+  const treeIsProjectWorkspace = !!orgTree && !!project && (orgTree.workspace.kind === "team" ? project.team_id === orgTree.workspace.id : !project.team_id);
+  const canHire = treeIsProjectWorkspace && !!meId;
+  // The owner chip offers only roles from the project's own workspace (the
+  // server refuses any other); when the tree on screen is another
+  // workspace's, the chip is disabled and says why instead of listing seats
+  // the server would reject.
+  const charterTree = treeIsProjectWorkspace ? orgTree : null;
+  const ownerBlockedReason = orgTree && project && !treeIsProjectWorkspace ? "Switch to the project's workspace to assign an owner" : undefined;
+
+  // The charter (org-staffing.md S7) reads the STORE row first: updateProject
+  // patches it in the same tick, while webGet's snapshot only moves once the
+  // dispatch lands and the query re-runs. The server row fills what the store
+  // has not cached yet.
+  const charter = useMemo(
+    () => charterOf({ ...(serverProject ?? {}), ...((storeProjects as any)[projectId] ?? {}) }, "project"),
+    [serverProject, storeProjects, projectId],
+  );
+  const handleCharterChange = useCallback((patch: CharterPatch) => updateProject(projectId, patch), [projectId, updateProject]);
 
   // Plans in this project
   const projectPlans = useMemo(() =>
@@ -536,6 +555,19 @@ function ProjectDetailContent() {
             )}
           </div>
         </div>
+
+        {/* The charter sits above the tabs: the direction every tab serves. */}
+        <CharterBlock
+          kind="project"
+          title={project.title}
+          charter={charter}
+          canEdit
+          onChange={handleCharterChange}
+          tree={charterTree}
+          onHire={canHire ? () => setHireOpen(true) : undefined}
+          ownerBlockedReason={ownerBlockedReason}
+          className="ml-5 mt-3"
+        />
 
         {/* Tasks is the working surface; Overview is the summary of everything
             filed here — plans, their tasks, and docs. */}

@@ -47,7 +47,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { VAULT_SORT_OPTIONS, ancestorDirs, type VaultSortMode } from "../../lib/vault/explorerModel";
-import { useTabContext } from "../../lib/tabParams";
+import { useTabActive } from "../../hooks/usePagePresence";
 import { useShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";
@@ -545,8 +545,7 @@ function VaultContent() {
   // Ctrl/Cmd+Shift+F focuses vault search — but only while the vault is the
   // visible tab; declining leaves the chord to the conversation's favorite
   // binding, which shares it.
-  const tabCtx = useTabContext();
-  const isTabActive = (tabCtx as { isActive?: boolean } | null)?.isActive !== false;
+  const isTabActive = useTabActive();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   useShortcutAction("vault.search", () => {
     if (!isTabActive) return false;

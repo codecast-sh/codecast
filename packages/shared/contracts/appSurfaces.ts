@@ -98,6 +98,8 @@ export const APP_SURFACE_EXCLUDED_PATHS = new Set<string>([
   "settings/team/join",
   "settings/integrations/github-app",
   "review/batch",
+  // Slack's OAuth return leg: needs ?code&state from Slack, then bounces away.
+  "slack/connect",
 ]);
 
 export function findAppSurface(nameOrPath: string): AppSurface | undefined {

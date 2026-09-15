@@ -16,6 +16,7 @@ import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
 import { ladderRecommendation } from "../../lib/decisionLinks";
+import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import "./decisions.css";
 
@@ -59,6 +60,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const meId = String(s.currentUser?._id ?? "");
   const answerDecision = useInboxStore((st) => st.answerDecision);
   const reopenDecision = useInboxStore((st) => st.reopenDecision);
+  const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
   const grant = useMutation(api.sessionDecisions.grant);
   const now = useCoarseNow(30_000);
   const pending = decision.status === "pending";
@@ -128,7 +130,15 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           <dl className="mt-4 decision-meta text-[12px]">
             <dt>asked by</dt>
             <dd>
-              <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-blue hover:underline">{session?.title || decision.session_title || "the session"}</Link>
+              <Link
+                href={`/conversation/${decision.conversation_id}`}
+                className="text-sol-blue hover:underline"
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                  e.preventDefault();
+                  void jumpToAsk();
+                }}
+              >{session?.title || decision.session_title || "See the conversation"}</Link>
               {(session?.project_path || decision.project_path) && <span className="text-sol-text-dim"> · {getProjectName(session?.project_path || decision.project_path!)}</span>}
             </dd>
             {(detail.task || decision.task_id) && (

@@ -1,3 +1,5 @@
+import { SlackLogo } from "./SlackLogo";
+import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -118,8 +120,13 @@ type SectionRowSpec = {
   icon?: React.ReactNode;
   /** Highlighted as the row you are currently looking at. */
   active?: boolean;
-  /** Rendered at the row's end — a shared marker, an owner avatar. */
+  /** Rendered at the row's end — a shared marker, an owner avatar. Markers
+   *  are information, so they step aside for the hover actions. */
   trailing?: React.ReactNode;
+  /** An interactive control at the row's end — the join button of a live
+   *  huddle. It stays put while the row is hovered, because a control the
+   *  pointer erases on its way to it can never be clicked. */
+  control?: React.ReactNode;
   /** A suggestion rather than a live object — rendered quieter until hover. */
   dim?: boolean;
   /** Hover text when it should say more than the name ("Message Sam"). */
@@ -156,6 +163,9 @@ function SectionRow({ row, className }: { row: SectionRowSpec; className?: strin
         {row.icon}
         <span className={`truncate text-[13px] min-w-0 ${row.active ? "text-sol-text" : ""}`}>{row.name}</span>
       </button>
+      {/* A control is the point of the row it sits on, so it survives the
+          hover swap below and shares the width with the actions. */}
+      {row.control && <span className="flex flex-shrink-0">{row.control}</span>}
       {/* Marker and actions trade places on hover rather than competing for the
           row's width — otherwise the name of the row you are pointing at is the
           first thing to truncate. */}
@@ -404,29 +414,44 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
 // a dot, and only a mention gets a number. A count of ordinary chatter teaches
 // people to ignore counts, and then the one that matters is invisible inside it.
 /** The live signals a chat row wears wherever it lives — the Chat sublist and
- *  the pinned rail render this same component, so the rules can't drift: a
- *  huddle you can walk into first, then a mention count, then the unread dot. */
-function ChannelSignals({
-  channel,
-  viewer,
-  teamMembers,
-}: {
-  channel: import("../store/chatSlice").ChatRailChannel;
-  viewer: string;
-  teamMembers: import("../lib/chatViews").ChatMember[];
-}) {
-  return (
-    <>
+ *  the pinned rail spread this same pair, so the rules can't drift: a huddle
+ *  you can walk into first, then a mention count, then the unread dot.
+ *
+ *  The huddle chip goes in `control` and the counts in `trailing`, because the
+ *  two answer to different rules on hover. The counts are information and give
+ *  the row's width to the hover actions; the chip is the join button, and
+ *  hiding it on hover meant the pointer wiped it out on the way to clicking
+ *  it — the one gesture on the row you could never complete with a mouse. */
+function channelSignals(
+  channel: import("../store/chatSlice").ChatRailChannel,
+  viewer: string,
+  teamMembers: import("../lib/chatViews").ChatMember[],
+): { control: React.ReactNode; trailing: React.ReactNode } {
+  return {
+    control: (
       <Suspense fallback={null}>
         <OccupancyChip roomKey={chatViewRoomKey(channel, viewer, teamMembers)} className="flex-shrink-0" />
       </Suspense>
-      {(channel.mentionCount ?? 0) > 0 ? (
-        <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-orange text-sol-bg" small />
-      ) : (channel.unreadCount ?? 0) > 0 ? (
-        <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
-      ) : null}
-    </>
-  );
+    ),
+    trailing: (
+      <span className="flex items-center gap-1.5">
+        {/* A mirrored channel wears the Slack mark as its label: its name is
+            the Slack channel's name, so the mark says where the name is from. */}
+        {channel.slack && (
+          <SlackLogo
+            className="w-2.5 h-2.5 flex-shrink-0"
+            muted={channel.slack.state !== "live"}
+            title={`${MIRROR_STATE_LABEL[channel.slack.state]} · #${channel.slack.name}`}
+          />
+        )}
+        {(channel.mentionCount ?? 0) > 0 ? (
+          <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-orange text-sol-bg" small />
+        ) : (channel.unreadCount ?? 0) > 0 ? (
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
+        ) : null}
+      </span>
+    ),
+  };
 }
 
 const ChatNavRow = memo(function ChatNavRow({
@@ -499,7 +524,7 @@ const ChatNavRow = memo(function ChatNavRow({
       : c.isPrivate ? <Lock className="w-3 h-3 flex-shrink-0 opacity-60" />
       : <Hash className="w-3 h-3 flex-shrink-0 opacity-60" />,
     active: pathname === `/chat/${c.id}`,
-    trailing: <ChannelSignals channel={c} viewer={String(viewer)} teamMembers={teamMembers} />,
+    ...channelSignals(c, String(viewer), teamMembers),
     actions: [
       {
         key: "pin",
@@ -770,9 +795,7 @@ function PinnedRail({
           : live?.isPrivate
           ? <Lock className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />
           : <Hash className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
-        trailing: live
-          ? <ChannelSignals channel={live} viewer={String(viewer)} teamMembers={teamMembers} />
-          : null,
+        ...(live ? channelSignals(live, String(viewer), teamMembers) : {}),
         // The URL can hold either id — the stub from an old link, the real one
         // from a fresh navigation — and both mean this row.
         active: pathname === `/chat/${id}` || pathname === `/chat/${pin.id}`,

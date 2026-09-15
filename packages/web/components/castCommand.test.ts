@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -26,6 +26,24 @@ describe("stripEnvPrefix", () => {
     expect(stripEnvPrefix("cast config browser_capture=off")).toBe(
       "cast config browser_capture=off",
     );
+  });
+
+  // A bare assignment segment (`T="'a','b',…"` with nothing after it, which is
+  // what the `;` split leaves of `T="…"; ./xrun sql "… IN ($T)"`) cannot be
+  // stripped, so the regex must fail. That failure used to backtrack through
+  // every way of reading each quote, doubling with every list item; the 27-item
+  // list an agent really ran hung the conversation view.
+  test("fails fast on a quoted list assignment with no command after it", () => {
+    const list = Array.from({ length: 40 }, (_, i) => `'event_${i}'`).join(",");
+    const segment = `T="${list}"`;
+    const t0 = performance.now();
+    expect(stripEnvPrefix(segment)).toBe(segment);
+    expect(performance.now() - t0).toBeLessThan(50);
+  });
+
+  test("still strips a quoted list assignment that has a command after it", () => {
+    const list = Array.from({ length: 40 }, (_, i) => `'event_${i}'`).join(",");
+    expect(stripEnvPrefix(`T="${list}" cast task ready`)).toBe("cast task ready");
   });
 });
 
@@ -830,6 +848,14 @@ describe("extractDecideArgs", () => {
 
   test("ls parses to the list verb with nothing else", () => {
     expect(parse("cast decide ls")).toMatchObject({ verb: "ls", options: [] });
+  });
+
+  test("an ask or edit is a decide cast; ls is not", () => {
+    expect(isDecideCastCommand(parseCastCommandString(`cast decide "Q?" -o A -o B --context why`))).toBe(true);
+    expect(isDecideCastCommand(parseCastCommandString("cast decide edit --question Q"))).toBe(true);
+    expect(isDecideCastCommand(parseCastCommandString("cast decide ls"))).toBe(false);
+    expect(isDecideCastCommand(parseCastCommandString("cast send jx7abcd hi"))).toBe(false);
+    expect(isDecideCastCommand(null)).toBe(false);
   });
 
   test("an unquoted question folds the first word back out of the subcommand slot", () => {

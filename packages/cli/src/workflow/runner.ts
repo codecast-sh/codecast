@@ -555,6 +555,62 @@ async function executeHumanGate(
   return first.key.toLowerCase();
 }
 
+// An edge out of a gate is an option (the-line.md L4): "[A] Approve :: what
+// happens if chosen". The key is the bracketed letter, the label follows,
+// the description follows "::". The label keeps its key so the run's
+// gate_choices mirror reads as before; the server strips it for the option.
+export function parseGateEdgeLabel(label: string): { key: string; label: string; description?: string } {
+  const sep = label.indexOf("::");
+  const head = (sep >= 0 ? label.slice(0, sep) : label).trim();
+  const description = sep >= 0 ? label.slice(sep + 2).trim() : "";
+  return { key: extractKey(head), label: head, ...(description ? { description } : {}) };
+}
+
+// The gate's question and document (the-line.md L4): the node's prompt
+// (first line the question, the rest the context) and its doc attribute,
+// both expanded with the same $vars a node prompt reads.
+export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>) {
+  return {
+    prompt: node.prompt ? expandPromptVars(node.prompt, graph, context) : node.label,
+    ...(node.doc ? { doc_md: expandPromptVars(node.doc, graph, context) } : {}),
+    ...(node.category ? { category: node.category } : {}),
+    ...(graph.stack ? { stack: graph.stack } : {}),
+  };
+}
+
+// the-line.md L8 node fidelity: the one serializer for a workflow push. Every
+// node attribute the daemon needs to run the stored graph as a local run
+// would (definition, reviewer, timeout, temperature, and the gate's doc and
+// category) rides here, so a second push site cannot drop one.
+export function graphToPushPayload(graph: WorkflowGraph) {
+  const nodes = [...graph.nodes.values()].map((n) => ({
+    id: n.id, label: n.label, shape: n.shape, type: n.type,
+    ...(n.prompt ? { prompt: n.prompt } : {}),
+    ...(n.script ? { script: n.script } : {}),
+    ...(n.model ? { model: n.model } : {}),
+    ...(n.backend ? { backend: n.backend } : {}),
+    ...(n.agent ? { agent: n.agent } : {}),
+    ...(n.isolated !== undefined ? { isolated: n.isolated } : {}),
+    ...(n.reasoning_effort ? { reasoning_effort: n.reasoning_effort } : {}),
+    ...(n.max_visits !== undefined ? { max_visits: n.max_visits } : {}),
+    ...(n.max_retries !== undefined ? { max_retries: n.max_retries } : {}),
+    ...(n.retry_target ? { retry_target: n.retry_target } : {}),
+    ...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {}),
+    ...(n.definition ? { definition: n.definition } : {}),
+    ...(n.reviewer !== undefined ? { reviewer: n.reviewer } : {}),
+    ...(n.timeout !== undefined ? { timeout: n.timeout } : {}),
+    ...(n.temperature !== undefined ? { temperature: n.temperature } : {}),
+    ...(n.doc ? { doc: n.doc } : {}),
+    ...(n.category ? { category: n.category } : {}),
+  }));
+  const edges = graph.edges.map((e) => ({
+    from: e.from, to: e.to,
+    ...(e.label ? { label: e.label } : {}),
+    ...(e.condition ? { condition: e.condition } : {}),
+  }));
+  return { nodes, edges };
+}
+
 async function executeRemoteHumanGate(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -564,18 +620,19 @@ async function executeRemoteHumanGate(
   const outEdges = graph.edges.filter(e => e.from === node.id);
   const choices = outEdges
     .filter(e => e.label)
-    .map((e) => ({ key: extractKey(e.label!), label: e.label!, target: e.to }));
+    .map((e) => ({ ...parseGateEdgeLabel(e.label!), target: e.to }));
+  const payload = gatePayload(node, graph, context);
 
   console.log(`\n${c.bold}${c.magenta}  Human gate: ${node.label} (waiting for web response)${c.reset}`);
 
   if (choices.length === 0) {
-    const response = await reportGate(options, node.id, node.label, [
+    const response = await reportGate(options, node.id, payload, [
       { key: "ok", label: "Continue", target: "" },
     ]);
     return response ? "success" : "failure";
   }
 
-  const response = await reportGate(options, node.id, node.label, choices);
+  const response = await reportGate(options, node.id, payload, choices);
   if (!response) return "failure";
 
   // Always store the human's message as context for the next agent
@@ -630,6 +687,19 @@ async function waitForEnter(label: string): Promise<void> {
 
 // ─── Prompt building ──────────────────────────────────────
 
+// Expand $goal and context variables. Unfilled vars are removed (not left as $var).
+// `$scout.output` names a prior node's result (the runner stores every
+// node's output under `<id>.output`), so a chain of nodes can hand work on.
+// Shared by node prompts and gate prompts and documents (the-line.md L4).
+export function expandPromptVars(template: string, graph: WorkflowGraph, context: Record<string, string>): string {
+  const goal = graph.goal || "";
+  return template.replace(/\$(\w+(?:\.\w+)*)/g, (_, key) => {
+    if (key === "goal") return goal;
+    if (key === "human_message") return context["human.message"] || "";
+    return context[key] ?? "";
+  });
+}
+
 function buildNodePrompt(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -643,15 +713,7 @@ function buildNodePrompt(
   }
 
   if (node.prompt) {
-    // Expand $goal and context variables. Unfilled vars are removed (not left as $var).
-    // `$scout.output` names a prior node's result (the runner stores every
-    // node's output under `<id>.output`), so a chain of nodes can hand work on.
-    const expanded = node.prompt.replace(/\$(\w+(?:\.\w+)*)/g, (_, key) => {
-      if (key === "goal") return goal;
-      if (key === "human_message") return context["human.message"] || "";
-      return context[key] ?? "";
-    });
-    parts.push(`# Task: ${node.label}\n${expanded}`);
+    parts.push(`# Task: ${node.label}\n${expandPromptVars(node.prompt, graph, context)}`);
   } else {
     parts.push(`# Task: ${node.label}\n${goal ? `Complete this step of the goal: ${goal}` : node.label}`);
   }
@@ -784,12 +846,14 @@ function detectDefaultBranch(cwd: string): string {
 // retries exhausted queues a blocking decision from the session that started
 // the run. Without one (a daemon run with no spawner) the comment says so.
 export type TaskDecisionKind = "reject" | "exhausted";
-async function queueTaskDecision(options: RunOptions, context: Record<string, string>, kind: TaskDecisionKind, note: string): Promise<boolean> {
+async function queueTaskDecision(options: RunOptions, context: Record<string, string>, kind: TaskDecisionKind, note: string, nodeId?: string): Promise<boolean> {
   if (!options.taskId || !options.spawnerSession) return false;
   const title = context["task_title"] || options.taskId;
   const result = await cliCall(options, "/cli/decide", {
     session_id: options.spawnerSession,
     task: options.taskId,
+    // A failure gate is the run's decision too (the-line.md L4).
+    ...(options.runId ? { workflow_run_id: options.runId, gate_node_id: nodeId ?? kind } : {}),
     question: `${title}: ${kind === "reject" ? "review rejected" : "retries exhausted"}. What next?`,
     options: [
       { label: "Reopen for another implement round" },
@@ -825,7 +889,7 @@ async function returnTaskOnFailure(options: RunOptions, state: WorkflowRunState)
     text = `Workflow failed (${reason}); task returned to open.${detail}`;
   }
   if (parkedByHand || exhausted) {
-    const queued = await queueTaskDecision(options, state.context, "exhausted", text);
+    const queued = await queueTaskDecision(options, state.context, "exhausted", text, state.currentNodeId);
     if (!queued) text += "\n\nNo decision queued: the run has no owning session.";
   }
   await cliCall(options, "/cli/work/comment", { short_id: options.taskId, comment_type: "blocker", text });
@@ -870,8 +934,8 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
 async function reportGate(
   options: RunOptions,
   nodeId: string,
-  prompt: string,
-  choices: Array<{ key: string; label: string; target: string }>
+  payload: { prompt: string; doc_md?: string; category?: string; stack?: string },
+  choices: Array<{ key: string; label: string; description?: string; target: string }>
 ): Promise<string | null> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
   try {
@@ -882,7 +946,7 @@ async function reportGate(
         api_token: options.apiToken,
         run_id: options.runId,
         node_id: nodeId,
-        prompt,
+        ...payload,
         choices,
       }),
     });
@@ -1029,7 +1093,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     // blocked until a person decides (the-line.md L4).
     if (options.taskId && state.context["review_verdict"] === "reject") {
       const note = state.context["review_note"] ? `Reviewer note:\n${state.context["review_note"]}` : "The reviewer rejected the branch.";
-      const queued = await queueTaskDecision(options, state.context, "reject", note);
+      const queued = await queueTaskDecision(options, state.context, "reject", note, current.id);
       await cliCall(options, "/cli/work/comment", {
         short_id: options.taskId,
         comment_type: "blocker",

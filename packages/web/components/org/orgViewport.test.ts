@@ -50,3 +50,22 @@ describe("computeOrgViewport", () => {
     expect(after.left.some((n) => n.id === personNodeId("fixture-user-me"))).toBe(true);
   });
 });
+
+describe("computeOrgViewport focus target", () => {
+  it("centres the target card in the free area at the current zoom, panning only", () => {
+    const me = nodes.find((n) => n.id === personNodeId("fixture-user-me"))!;
+    const vp = computeOrgViewport(nodes, 1600, 1000, 380, null, { id: me.id, zoom: 1.2 })!;
+    expect(vp.zoom).toBe(1.2);
+    expect(vp.whole).toBe(false);
+    const freeW = 1600 - 380 - 48;
+    const freeH = 1000 - 48;
+    expect(me.x * 1.2 + vp.x).toBeCloseTo(24 + (freeW - me.w * 1.2) / 2, 5);
+    expect(me.y * 1.2 + vp.y).toBeCloseTo(24 + (freeH - me.h * 1.2) / 2, 5);
+  });
+
+  it("falls back to the fit when the target is not on the chart", () => {
+    const plain = computeOrgViewport(nodes, 1600, 1000, 0, null)!;
+    const missing = computeOrgViewport(nodes, 1600, 1000, 0, null, { id: "role:nope" })!;
+    expect(missing).toEqual(plain);
+  });
+});

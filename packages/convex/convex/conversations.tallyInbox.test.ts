@@ -211,3 +211,29 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
     expect(counts.total).toBe(2);
   });
 });
+
+describe("tallyInboxRows — the activity line", () => {
+  const NOW = Date.now();
+  const activity = { text: "editing chat.ts", tool: "Edit", at: NOW - 10_000 };
+  const working = (over: Record<string, any> = {}) =>
+    session({ agent_status: "working", is_idle: false, is_connected: true, agent_status_updated_at: NOW, last_heartbeat: NOW, ...over });
+
+  test("a working row with a fresh stamp carries it", () => {
+    const { rows } = tallyInboxRows([working({ activity })].map(stamped), { showAll: false, stateFilter: null, labelByConv, now: NOW });
+    expect(rows[0].work_state).toBe("working");
+    expect(rows[0].activity).toEqual(activity);
+  });
+
+  test("a stale stamp on a working row is hidden, never shown as current", () => {
+    const stale = { ...activity, at: NOW - 10 * 60 * 1000 };
+    const { rows } = tallyInboxRows([working({ activity: stale })].map(stamped), { showAll: false, stateFilter: null, labelByConv, now: NOW });
+    expect(rows[0].work_state).toBe("working");
+    expect(rows[0].activity).toBeNull();
+  });
+
+  test("a row that is not working carries null even with a fresh stamp", () => {
+    const { rows } = tallyInboxRows([session({ activity })].map(stamped), { showAll: false, stateFilter: null, labelByConv, now: NOW });
+    expect(rows[0].work_state).not.toBe("working");
+    expect(rows[0].activity).toBeNull();
+  });
+});
