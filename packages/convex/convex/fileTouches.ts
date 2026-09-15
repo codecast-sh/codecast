@@ -1,6 +1,7 @@
 import { mutation, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
+import { cliSessionClassifier } from "./conversations";
 import { Doc, Id } from "./_generated/dataModel";
 
 export const recordTouch = internalMutation({
@@ -101,16 +102,20 @@ export const findSimilar = mutation({
         conversationIds.slice(0, limit).map((id) => ctx.db.get(id))
       );
 
-      const results = conversations.filter(Boolean).map((c) => ({
+      // Same liveness fields as a feed or search row, so `cast context` can
+      // show whether a file match is live, done, or long gone.
+      const classifier = cliSessionClassifier(ctx, Date.now());
+      const results = await Promise.all(conversations.filter(Boolean).map(async (c) => ({
         conversation_id: c!._id,
         session_id: c!.session_id,
         title: c!.title || "Untitled",
         project_path: c!.project_path,
         updated_at: new Date(c!.updated_at).toISOString(),
         message_count: c!.message_count,
+        ...(await classifier.rowFields(c!)),
         match_type: "file",
         match_detail: args.file_path,
-      }));
+      })));
 
       return { sessions: results, count: results.length };
     }

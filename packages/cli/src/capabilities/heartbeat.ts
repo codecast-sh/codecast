@@ -10,8 +10,10 @@
 // difference being real.
 
 import * as crypto from "crypto";
+import * as fs from "fs";
 import * as os from "os";
-import { readInventory, readInventoryAsync, type Inventory } from "./inventory.js";
+import { watch as chokidarWatch, type FSWatcher } from "chokidar";
+import { capabilityWatchDirs, readInventory, readInventoryAsync, type Inventory, type InventoryItem } from "./inventory.js";
 
 export interface CapabilityHeartbeatPayload {
   hash: string;
@@ -20,11 +22,25 @@ export interface CapabilityHeartbeatPayload {
   marketplaces: Inventory["marketplaces"];
 }
 
+/** One markdown body, hashed so an unchanged skill stops riding. */
+export interface CapabilityContentItem {
+  kind: string;
+  name: string;
+  hash: string;
+  body: string;
+}
+
 // Rescan cadence. The scan is tens of file reads, not free; ten minutes keeps
 // the mirror honest without the daemon grinding disks on every 30s beat.
 const REFRESH_MS = 10 * 60 * 1000;
 // The liveness floor: resend even an unchanged inventory this often.
 const RESEND_MS = 60 * 60 * 1000;
+/** Longest body we will ship. The biggest skill on a loaded machine is ~36KB;
+ *  past this the reader still opens, it just says the rest was cut. */
+export const MAX_CONTENT_BODY_CHARS = 64 * 1024;
+/** Bytes of bodies one beat will carry. A 5MB skills tree cannot ride at once,
+ *  and the heartbeat is presence — it must stay small. */
+export const CONTENT_BATCH_CHARS = 96 * 1024;
 
 let cached: CapabilityHeartbeatPayload | undefined;
 let lastCollectedAt = 0;
@@ -33,25 +49,93 @@ let lastSentAt = 0;
 let inFlight = false;
 let collectionHome: string | undefined;
 let collectionGeneration = 0;
+let cachedContents: CapabilityContentItem[] = [];
+let sentContentHashes = new Set<string>();
+let sourceWatcher: FSWatcher | undefined;
+
+const MARKDOWN_KINDS = new Set(["skill", "command", "subagent", "snippet"]);
+
+function attachMissingBodiesSync(items: InventoryItem[]): void {
+  for (const item of items) {
+    if (item.body || !item.source || !MARKDOWN_KINDS.has(item.kind)) continue;
+    try {
+      item.body = fs.readFileSync(item.source, "utf-8");
+    } catch {
+      // Same rule as the scanner: an unreadable file is not a body.
+    }
+  }
+}
 
 /** Scan now, synchronously. Exported for tests and `cast doctor`. */
 export function collectCapabilityInventory(home = os.homedir(), projectPath?: string): CapabilityHeartbeatPayload {
-  return payloadFrom(readInventory(home, projectPath), Date.now());
+  const inventory = readInventory(home, projectPath);
+  attachMissingBodiesSync(inventory.items);
+  return payloadFrom(inventory, Date.now());
 }
 
 /** The daemon's scan: yields between directory reads, so the heartbeat's
  *  background collection never holds the loop for the whole tree. */
+async function attachMissingBodies(items: InventoryItem[]): Promise<void> {
+  for (const item of items) {
+    if (item.body || !item.source || !MARKDOWN_KINDS.has(item.kind)) continue;
+    try {
+      item.body = fs.readFileSync(item.source, "utf-8");
+    } catch {
+      // Same rule as the scanner: an unreadable file is not a body.
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 export async function collectCapabilityInventoryAsync(home = os.homedir(), projectPath?: string): Promise<CapabilityHeartbeatPayload> {
   const started = Date.now();
   const inventory = await readInventoryAsync(home, projectPath);
   if (inventory.unreadable.length) throw new Error("capability inventory unavailable");
+  // The worker path strips bodies so pages stay small. Fill them from
+  // `source` here, one file per loop turn.
+  await attachMissingBodies(inventory.items);
   return payloadFrom(inventory, started);
 }
 
+function hashBody(body: string): string {
+  return crypto.createHash("sha1").update(body).digest("hex").slice(0, 16);
+}
+
+function stripBody(item: InventoryItem): InventoryItem {
+  if (item.body === undefined) return item;
+  const { body: _body, ...rest } = item;
+  return rest;
+}
+
+function extractContents(items: InventoryItem[]): { items: InventoryItem[]; contents: CapabilityContentItem[] } {
+  const stripped: InventoryItem[] = [];
+  const contents: CapabilityContentItem[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (item.body) {
+      const key = `${item.kind}\0${item.name}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        const body =
+          item.body.length > MAX_CONTENT_BODY_CHARS
+            ? item.body.slice(0, MAX_CONTENT_BODY_CHARS - 1) + "…"
+            : item.body;
+        // Hash later, when the body actually rides — hashing hundreds of
+        // skills in the scan's last tick would hold the daemon loop.
+        contents.push({ kind: item.kind, name: item.name, hash: "", body });
+      }
+    }
+    stripped.push(item.body === undefined ? item : stripBody(item));
+  }
+  return { items: stripped, contents };
+}
+
 function payloadFrom(inv: Inventory, started: number): CapabilityHeartbeatPayload {
+  const { items, contents } = extractContents(inv.items);
+  cachedContents = contents;
   const hash = crypto
     .createHash("sha1")
-    .update(JSON.stringify({ items: inv.items, marketplaces: inv.marketplaces }))
+    .update(JSON.stringify({ items, marketplaces: inv.marketplaces }))
     .digest("hex")
     .slice(0, 16);
   const elapsed = Date.now() - started;
@@ -60,7 +144,37 @@ function payloadFrom(inv: Inventory, started: number): CapabilityHeartbeatPayloa
   if (elapsed > 250) {
     console.log(`[perf] capability scan: ${inv.items.length} items in ${elapsed}ms`);
   }
-  return { hash, collected_at: Date.now(), items: inv.items, marketplaces: inv.marketplaces };
+  return { hash, collected_at: Date.now(), items, marketplaces: inv.marketplaces };
+}
+
+/** Watch user-scope skill/command/agent dirs. A new SKILL.md then shows up
+ *  on the next beat instead of after the 10-minute fallback. Called once
+ *  from daemon boot — not from the per-beat ensure, so tests that scan a
+ *  temp tree do not pay for a watcher. */
+export function startCapabilitySourceWatcher(home = os.homedir()): void {
+  if (sourceWatcher) return;
+  const dirs = capabilityWatchDirs(home).filter((dir) => {
+    try {
+      return fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (dirs.length === 0) return;
+  sourceWatcher = chokidarWatch(dirs, {
+    ignoreInitial: true,
+    depth: 3,
+    persistent: true,
+    ignorePermissionErrors: true,
+    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+  });
+  const kick = () => {
+    lastCollectedAt = 0;
+    ensureCapabilityInventoryFresh(home);
+  };
+  sourceWatcher.on("add", kick);
+  sourceWatcher.on("change", kick);
+  sourceWatcher.on("unlink", kick);
 }
 
 /** Kick a background rescan when stale. Called per beat; the result rides the
@@ -103,6 +217,28 @@ export function markCapabilityPayloadSent(hash: string): void {
   lastSentAt = Date.now();
 }
 
+/** Bodies that have not been acked yet, up to the per-beat budget.
+ *  Independent of the inventory hash: a body-only edit still ships, and a
+ *  first scan's 5MB of skills fills across a handful of beats rather than
+ *  one giant payload. */
+export function pendingCapabilityContents(): CapabilityContentItem[] | undefined {
+  if (cachedContents.length === 0) return undefined;
+  const batch: CapabilityContentItem[] = [];
+  let used = 0;
+  for (const item of cachedContents) {
+    if (!item.hash) item.hash = hashBody(item.body);
+    if (sentContentHashes.has(item.hash)) continue;
+    if (used + item.body.length > CONTENT_BATCH_CHARS && batch.length > 0) break;
+    batch.push(item);
+    used += item.body.length;
+  }
+  return batch.length > 0 ? batch : undefined;
+}
+
+export function markCapabilityContentsSent(hashes: string[]): void {
+  for (const hash of hashes) sentContentHashes.add(hash);
+}
+
 /** Test seam: reset module state between cases. */
 export function resetCapabilityHeartbeatState(): void {
   collectionGeneration++;
@@ -112,6 +248,8 @@ export function resetCapabilityHeartbeatState(): void {
   lastSentHash = undefined;
   lastSentAt = 0;
   inFlight = false;
+  cachedContents = [];
+  sentContentHashes = new Set();
 }
 
 /* ==========================================================================

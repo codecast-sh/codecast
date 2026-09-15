@@ -34,8 +34,10 @@ import {
   STALE_FLAG_AFTER_MS,
   type CcUsage,
   pickThrottleContinueBatch,
+  throttleContinueAttemptKey,
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_BATCH,
+  THROTTLE_CONTINUE_BACKOFF_CAP_MS,
 } from "./ccAccountsShared";
 import { codexErrorKind } from "@codecast/shared/contracts";
 
@@ -703,6 +705,47 @@ describe("decideAutoSwitch", () => {
     expect(d).toEqual({ action: "switch", profile: "b" });
   });
 
+  test("a re-park after continue is not another continue without new evidence (jx7dnat)", () => {
+    // The continue itself bumps conversation.updated_at, which is what
+    // autoSwitchCheck passes as parkedAt. Old gate `lastContinue < parkedAt`
+    // then retried every cooldown while the quota was still spent.
+    const continuedAt = parkedAt + 1_000;
+    const d = decideAutoSwitch({
+      now,
+      parkedAt: continuedAt + 30_000,
+      activeParkedAt: null,
+      activeEmail: "a@x.com",
+      profiles: [
+        {
+          name: "a",
+          email: "a@x.com",
+          usage: {
+            fetched_at: parkedAt + 30_000,
+            session: { percent: 63, resets_at: now + 3 * 3600_000 },
+            weekly: { percent: 33, resets_at: now + 6 * 86_400_000 },
+          },
+        },
+        { name: "b", email: "b@x.com", usage: mkUsage(10) },
+      ],
+      attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: continuedAt }],
+      allowSwitch: false,
+    });
+    expect(d.action).toBe("exhausted");
+  });
+
+  test("a session window that rolls after the last continue is worth another continue", () => {
+    const continuedAt = parkedAt - 60_000;
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [{ name: "a", email: "a@x.com", usage: mkUsage(100, { sessionResetAt: parkedAt + 60_000 }) }],
+      attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: continuedAt }],
+      allowSwitch: false,
+    });
+    expect(d).toEqual({ action: "continue" });
+  });
+
   test("a settled probe showing headroom proves the window rolled even after the snapshot re-probed to 0%", () => {
     // After a reset the usage endpoint reports the session window as
     // {percent: 0} with NO resets_at, so the rolled-since-park proof is gone
@@ -985,6 +1028,26 @@ describe("pickThrottleContinueBatch", () => {
     expect(pick.batch.map((r) => r._id)).toEqual(["conn", "thr"]);
     expect(pick.waiting).toBe(1);
     expect(pick.nextDueAt).toBe(now - 10_000 + THROTTLE_CONTINUE_DELAY_MS);
+  });
+
+  test("a session we already continued waits longer the next time, first try stays at 60s", () => {
+    const now = 8_000_000;
+    const parked = row("s", "throttle", 5 * 60_000, now);
+    expect(pickThrottleContinueBatch([parked], now).batch.map((r) => r._id)).toEqual(["s"]);
+    const afterOne = pickThrottleContinueBatch(
+      [parked],
+      now,
+      [{ profile: throttleContinueAttemptKey("s"), at: now - 30_000 }],
+    );
+    expect(afterOne.batch).toEqual([]);
+    expect(afterOne.waiting).toBe(1);
+    expect(afterOne.nextDueAt).toBe(now - 30_000 + 2 * THROTTLE_CONTINUE_DELAY_MS);
+    const afterFour = pickThrottleContinueBatch(
+      [parked],
+      now,
+      [1, 2, 3, 4].map((n) => ({ profile: throttleContinueAttemptKey("s"), at: now - n * 60_000 })),
+    );
+    expect(afterFour.nextDueAt).toBe(now - 60_000 + THROTTLE_CONTINUE_BACKOFF_CAP_MS);
   });
 });
 

@@ -192,6 +192,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Threads", path: "/threads", icon: "message", keywords: "threads replies comments conversations unread mentions dms" },
   { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms", feature: "chat" },
+  { label: "Community", path: "/community", icon: "message", keywords: "public rooms codecast users support questions" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
   { label: "Calls", path: "/calls", icon: "phone", keywords: "huddle call transcript recording meeting summary voice", feature: "calls" },
@@ -858,11 +859,9 @@ export function ActionSubmenu({
     }
     if (mode === "bucket") {
       const store = useInboxStore.getState();
-      // Sessions mid-create carry stub ids the server can't act on — resolve to
-      // the real conversation id and skip (with a hint) if it hasn't landed yet.
       const resolveConvId = (t: any): string | null => {
         const real = store.getConvexId(t._id) ?? t._id;
-        return isConvexId(real) ? real : null;
+        return isConvexId(real) || store.sessions[real] || store.conversations[real] ? real : null;
       };
       const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
         let applied = 0;
@@ -873,7 +872,7 @@ export function ActionSubmenu({
           applied++;
         }
         if (!applied) {
-          toast.error("Session is still being created — try again in a moment");
+          toast.error("Session is no longer available");
           return;
         }
         toast.success(bucketId ? `Labeled ${bucketLabel}` : "Label removed");
@@ -1763,13 +1762,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // in a pane"); anything else leaves it as the blank-pane row.
   const browserPaneUrl = useMemo(() => typedAddress(query), [query]);
 
+  // A staffing proposal (`op-7`, org-staffing.md S4) opens the org page with
+  // its pane, the same way: it has no pill of its own either.
   const decisionRef = useMemo(() => {
-    const m = /^(sd|ds)-(\d+)$/i.exec(query.trim());
+    const m = /^(sd|ds|op)-(\d+)$/i.exec(query.trim());
     if (!m) return null;
     const id = `${m[1].toLowerCase()}-${m[2]}`;
     return m[1].toLowerCase() === "ds"
       ? { kind: "stack" as const, id, href: `/decisions/stacks/${id}` }
-      : { kind: "decision" as const, id, href: `/decisions/${id}` };
+      : m[1].toLowerCase() === "op"
+        ? { kind: "proposal" as const, id, href: `/org?proposal=${id}` }
+        : { kind: "decision" as const, id, href: `/decisions/${id}` };
   }, [query]);
 
   // Hand the current query off to the full /search page — the palette shows a
@@ -2703,17 +2706,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {!picking && decisionRef && (
-          <CommandPrimitive.Group heading={decisionRef.kind === "stack" ? "Decision stack" : "Decision"} className={groupClass}>
+          <CommandPrimitive.Group heading={decisionRef.kind === "stack" ? "Decision stack" : decisionRef.kind === "proposal" ? "Staffing proposal" : "Decision"} className={groupClass}>
             <CommandPrimitive.Item
               value={`__entity__ ${decisionRef.id}|||${decisionRef.id}`}
-              data-palette-type={decisionRef.kind === "stack" ? "decision_stack" : "decision"}
+              data-palette-type={decisionRef.kind === "stack" ? "decision_stack" : decisionRef.kind === "proposal" ? "org_proposal" : "decision"}
               data-palette-short-id={decisionRef.id}
               onSelect={() => navigate(decisionRef.href)}
               className={itemClass}
             >
               <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
               <span className="font-mono text-sol-text-dim">{decisionRef.id}</span>
-              <span className="flex-1 truncate">{decisionRef.kind === "stack" ? "open the stack" : "open the decision page"}</span>
+              <span className="flex-1 truncate">{decisionRef.kind === "stack" ? "open the stack" : decisionRef.kind === "proposal" ? "open it on the org page" : "open the decision page"}</span>
               <KeyCap size="xs">→</KeyCap>
             </CommandPrimitive.Item>
           </CommandPrimitive.Group>

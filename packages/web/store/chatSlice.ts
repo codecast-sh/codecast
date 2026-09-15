@@ -41,6 +41,7 @@ import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxR
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { dmKeyFor, dmOtherIds, isLiveVoiceRow, mentionUserIds, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
+import { mergeLinkOptions, type SlackDirection, type SlackLinkOptions } from "@codecast/convex/convex/lib/slackMirror";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
@@ -88,6 +89,52 @@ export type ChatChannelRow = {
   client_id?: string;
 };
 
+/** One mirrored pair: a chat channel and the Slack channel it mirrors, with the
+ *  direction and every content control (convex slack_channel_links). */
+export type ChatSlackLinkRow = {
+  _id: string;
+  team_id: string;
+  installation_id: string;
+  workspace_id: string;
+  slack_channel_id: string;
+  slack_channel_name?: string;
+  slack_channel_private?: boolean;
+  chat_channel_id: string;
+  direction: SlackDirection;
+  options: SlackLinkOptions;
+  paused?: boolean;
+  since_ts: string;
+  last_inbound_at?: number;
+  last_outbound_at?: number;
+  inbound_count?: number;
+  outbound_count?: number;
+  last_error?: string;
+  last_error_at?: number;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+};
+
+/** Slack provenance on a line (convex chat_messages.external). */
+export type ChatExternalRef = {
+  provider: "slack";
+  direction: "inbound" | "outbound";
+  workspace: string;
+  channel: string;
+  ts: string;
+  thread_ts?: string;
+  user?: string;
+  permalink?: string;
+  synced_at: number;
+};
+
+export type ChatExternalAuthor = {
+  name: string;
+  handle?: string;
+  avatar_url?: string;
+  is_bot?: boolean;
+};
+
 export type ChatMessageRow = {
   _id: string;
   team_id?: string;
@@ -128,6 +175,14 @@ export type ChatMessageRow = {
   agent_anchor_id?: string;
   anchor_follow?: boolean;
   fork_conversation_id?: string;
+  // Slack mirror provenance. "inbound" rows were written in Slack: `user_id` is
+  // then a mapped teammate or the workspace's bridge identity, and
+  // `external_author` carries the real name and face to render. "outbound"
+  // rows are ours, posted into Slack; `external.permalink` opens them there.
+  external?: ChatExternalRef;
+  external_author?: ChatExternalAuthor;
+  /** The author kept this line out of the channel's Slack mirror. */
+  sync_local_only?: boolean;
   // Local only. Set when delivery gave up, cleared when the user retries, and
   // gone for good the moment the server row supersedes the stub.
   _failedAt?: number;
@@ -306,6 +361,7 @@ export type ChatSliceData = {
   chatMessages: Record<string, ChatMessageRow>;
   chatReactions: Record<string, ChatReactionRow>;
   chatReads: Record<string, ChatReadRow>;
+  chatSlackLinks: Record<string, ChatSlackLinkRow>;
   chatRail: ChatRailRow[];
   chatThreadSummaries: Record<string, ChatThreadSummaryRow>;
   /** The Threads inbox (threads.listMine): one row per thread the viewer is
@@ -319,6 +375,12 @@ export type ChatSliceData = {
   pageThreads: Record<string, PageThreadRow>;
 };
 
+export type ChatSlackLinkPatch = {
+  direction?: ChatSlackLinkRow["direction"];
+  options?: Partial<ChatSlackLinkRow["options"]>;
+  paused?: boolean;
+};
+
 export type ChatSendOptions = {
   threadRootId?: string;
   /** Slack's "also send to #channel": the reply stays in its thread and shows
@@ -328,6 +390,8 @@ export type ChatSendOptions = {
   /** Set by an agent session posting through the web client. Only ever takes
    *  privilege away (chat.ts refuses to wake an anchor for a machine's line). */
   origin?: "agent";
+  /** Keep this one line out of the channel's Slack mirror. */
+  syncLocalOnly?: boolean;
   /** Hears the server's answer to THIS send — which roles and sessions the
    *  line woke (`mention_wakes`) — so the surface can say so. Never journaled:
    *  it is stripped before the args reach the outbox, and a re-driven send
@@ -412,6 +476,13 @@ export type ChatSliceActions = {
   /** Rename or re-topic a channel. Optimistic: the rail and header rename the
    *  moment you confirm; the server enforces creator-or-admin and reconciles. */
   updateChatChannel: (channelId: string, fields: { name?: string; topic?: string }) => void;
+  /** Slack mirror controls: direction, content toggles, pause. Optimistic on
+   *  the link row; the server's manager check reconciles. */
+  updateChatSlackLink: (linkId: string, patch: ChatSlackLinkPatch) => void;
+  /** Drop the mirror. The row leaves the store at once. */
+  unlinkChatSlack: (linkId: string) => void;
+  /** Send one line that was kept local (or predates the link) into Slack. */
+  shareChatMessageToSlack: (messageId: string) => void;
   /** Archive (or restore) a channel. Optimistic: the row leaves the rail at
    *  once. Restore writes null, the tombstone a delta sync can see. */
   archiveChatChannel: (channelId: string, archived: boolean) => void;
@@ -525,6 +596,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatMessages: {},
     chatReactions: {},
     chatReads: {},
+    chatSlackLinks: {},
     chatRail: [],
     chatThreadSummaries: {},
     threadInbox: {},
@@ -587,6 +659,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         content,
         attachments: opts?.attachments,
         origin: opts?.origin,
+        sync_local_only: opts?.syncLocalOnly ? true : undefined,
         created_at: now,
         updated_at: now,
       };
@@ -602,6 +675,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         broadcast: row.broadcast,
         attachments: row.attachments,
         origin: row.origin,
+        syncLocalOnly: row.sync_local_only,
       });
     },
 
@@ -909,6 +983,36 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       return { channelId, fields };
     }),
 
+    updateChatSlackLink: action(function (this: ChatDraft, linkId: string, patch: ChatSlackLinkPatch) {
+      const link = this.chatSlackLinks[linkId];
+      if (!link) return;
+      if (patch.direction) link.direction = patch.direction;
+      if (patch.options) link.options = mergeLinkOptions(link.options, patch.options);
+      if (typeof patch.paused === "boolean") {
+        link.paused = patch.paused;
+        if (!patch.paused) {
+          delete link.last_error;
+          delete link.last_error_at;
+        }
+      }
+      link.updated_at = Date.now();
+      return { linkId, patch };
+    }),
+
+    unlinkChatSlack: action(function (this: ChatDraft, linkId: string) {
+      if (!this.chatSlackLinks[linkId]) return;
+      delete this.chatSlackLinks[linkId];
+      return { linkId };
+    }),
+
+    shareChatMessageToSlack: action(function (this: ChatDraft, messageId: string) {
+      const row = this.chatMessages[messageId];
+      if (!row) return;
+      delete row.sync_local_only;
+      row.updated_at = Date.now();
+      return { messageId };
+    }),
+
     archiveChatChannel: action(function (this: ChatDraft, channelId: string, archived: boolean) {
       const channel = this.chatChannels[channelId];
       if (!channel) return;
@@ -1068,6 +1172,9 @@ export const CHAT_SYNC_REGISTRY = {
   // One row per (viewer, channel), so the channel is the natural key — the same
   // shape bucketAssignments uses for its per-conversation row.
   chatReads: { isDelta: true, altKey: "channel_id" },
+  // The complete set for the team rides every listChannels push: snapshot, so
+  // an unlink prunes.
+  chatSlackLinks: { isDelta: false },
   // Server thread rollups (listMessages.threads): a derived snapshot cache,
   // transient — overlaid at render, the local rows winning when fresher.
   // Delta: each page contributes its roots without pruning other channels'.

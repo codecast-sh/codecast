@@ -5,8 +5,7 @@ import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { canAccessProject } from "./projects";
-import { canAccessTask, canAccessPlan, canAccessDoc } from "./lib/access";
+import { canAccessProject, canAccessTask, canAccessPlan, canAccessDoc, requireAccessibleProject } from "./lib/access";
 import { nextShortId } from "./counters";
 
 // Project updates: posts on a project's Updates tab (human status posts and
@@ -14,7 +13,7 @@ import { nextShortId } from "./counters";
 // merged, time-ordered view of everything that happened in a project.
 //
 // Access model: every read and write here resolves the parent project and runs
-// projects.canAccessProject (owner or team member). Child rows carry no
+// lib/access.canAccessProject (the workspace stamp). Child rows carry no
 // workspace stamp, so they can never disagree with the project's scope.
 //
 // Sync model: both tables are untracked (same trade as task_comments). Every
@@ -26,13 +25,6 @@ const MAX_BODY = 20_000;
 const MAX_COMMENT = 4_000;
 const MAX_TITLE = 200;
 
-async function requireProject(ctx: any, userId: Id<"users">, projectId: Id<"projects">) {
-  const project = await ctx.db.get(projectId);
-  if (!project || !(await canAccessProject(ctx, userId, project))) {
-    throw new Error("Project not found");
-  }
-  return project;
-}
 
 async function requireUpdate(ctx: any, userId: Id<"users">, updateId: Id<"project_updates">) {
   const update = await ctx.db.get(updateId);
@@ -412,7 +404,7 @@ export const webPost = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     if (!args.body.trim()) throw new Error("Update body is empty");
-    const project = await requireProject(ctx, userId, args.project_id);
+    const project = await requireAccessibleProject(ctx, userId, args.project_id);
     const user = await ctx.db.get(userId);
     return insertUpdate(ctx, project, {
       user_id: userId,
@@ -508,7 +500,7 @@ export const post = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     if (!args.body.trim()) throw new Error("Update body is empty");
-    const project = await requireProject(ctx, auth.userId, args.id);
+    const project = await requireAccessibleProject(ctx, auth.userId, args.id);
     const user = await ctx.db.get(auth.userId);
 
     let conversation_id: Id<"conversations"> | undefined;

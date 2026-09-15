@@ -6,7 +6,7 @@
 import { memo, type ReactNode } from "react";
 import Link from "next/link";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
-import { ChevronDown, ChevronRight, GitFork, Layers, Anchor as AnchorGlyph, Shield, Crown } from "lucide-react";
+import { ChevronDown, ChevronRight, GitFork, Layers, Anchor as AnchorGlyph, Shield, Crown, Check, Pencil, X, Clock, Sparkles } from "lucide-react";
 import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { compactAge } from "../../lib/threadState";
@@ -14,8 +14,11 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
 import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
-import { ORG_STATE_META, standingLineOf } from "./orgMeta";
+import { GHOST, ORG_STATE_META, SEVERITY_COLOR, standingLineOf } from "./orgMeta";
 import type { OrgStandingState } from "./orgTypes";
+import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
+import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
+import { FLAG_LABEL } from "./staffingModel";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
 export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
@@ -71,7 +74,163 @@ type CardData = {
   onExpandCluster?: (parentId: string) => void;
   onCollapseCluster?: (parentId: string) => void;
   loadingCluster?: boolean;
+  /** org.health's flags on this node (org-staffing.md S3): a dot each. */
+  flags?: HealthFlag[];
+  // Ghosts (S5): what an open proposal draws on this card, from the layout.
+  ghost?: OrgGhostStub;
+  retire?: OrgGhostMeta;
+  move?: OrgGhostMove;
+  chips?: OrgGhostChip[];
+  /** The change the chart is focused on: its action row shows on its card. */
+  focusChangeId?: string | null;
+  onFocusChange?: (changeId: string) => void;
+  onDecideChange?: (changeId: string, verdict: "accept" | "skip") => void;
+  /** Edit: the graph opens the hire dialog (a role) or an inline form (the rest) at the click. */
+  onEditChange?: (changeId: string, at: { x: number; y: number }) => void;
 };
+
+// ---------------------------------------------------------------- ghosts + flags
+
+/** One dot per flag, worst first, the code and detail on hover. Sits on the
+ *  card's top right so it never competes with the name. */
+function FlagDots({ flags }: { flags?: HealthFlag[] }) {
+  if (!flags?.length) return null;
+  const rank = { blocker: 0, warn: 1, info: 2 } as const;
+  const sorted = [...flags].sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return (
+    <span className="absolute -top-[5px] right-2.5 flex items-center gap-[3px]" data-flags={sorted.map((f) => f.code).join(",")}>
+      {sorted.map((f, i) => (
+        <span
+          key={`${f.code}:${i}`}
+          className="w-[9px] h-[9px] rounded-full border-2"
+          style={{ background: SEVERITY_COLOR[f.severity], borderColor: "var(--sol-card)" }}
+          title={`${FLAG_LABEL[f.code]} (${f.severity}): ${f.detail}`}
+          aria-label={`${FLAG_LABEL[f.code]}: ${f.detail}`}
+        />
+      ))}
+    </span>
+  );
+}
+
+const CHIP_STATUS: Record<OrgChangeStatus, { border: string; color: string }> = {
+  proposed: { border: GHOST.border, color: GHOST.color },
+  accepted: { border: "1.5px solid color-mix(in srgb, var(--sol-cyan) 60%, transparent)", color: "var(--sol-cyan)" },
+  applied: { border: "1.5px solid color-mix(in srgb, var(--sol-green) 60%, transparent)", color: "var(--sol-green)" },
+  skipped: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
+  failed: { border: "1.5px dashed color-mix(in srgb, var(--sol-red) 70%, transparent)", color: "var(--sol-red)" },
+};
+
+/** A small dashed tag: "proposed", "retire", "this session", "accepted". */
+function GhostTag({ label, status = "proposed", className }: { label: string; status?: OrgChangeStatus; className?: string }) {
+  const m = CHIP_STATUS[status];
+  return (
+    <span className={cn("inline-flex items-center h-[16px] px-1 rounded-sm text-[9.5px] font-medium uppercase tracking-[0.06em] whitespace-nowrap", className)} style={{ border: m.border, color: m.color }} data-ghost-tag={label}>
+      {label}
+    </span>
+  );
+}
+
+/** Dashed chips, one per change on this card, three shown then "+N". A click
+ *  focuses the change (the pane shows its rationale, the card its actions). */
+function GhostChips({ chips, focusChangeId, onFocusChange }: { chips?: OrgGhostChip[]; focusChangeId?: string | null; onFocusChange?: (id: string) => void }) {
+  if (!chips?.length) return null;
+  const shown = chips.slice(0, 3);
+  const rest = chips.slice(3);
+  return (
+    <div className="mt-1.5 flex items-center gap-1 min-w-0 overflow-hidden" data-ghost-chips={chips.length}>
+      {shown.map((c) => {
+        const m = CHIP_STATUS[c.status];
+        const focused = c.change_id === focusChangeId;
+        return (
+          <button
+            key={c.change_id}
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onFocusChange?.(c.change_id); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="nodrag inline-flex items-center gap-1 text-[10px] px-1.5 h-[18px] rounded-md truncate max-w-[120px] transition-[box-shadow]"
+            style={{ border: m.border, color: m.color, background: focused ? `color-mix(in srgb, ${m.color} 14%, transparent)` : GHOST.fill, boxShadow: focused ? `0 0 0 1.5px ${m.color}` : undefined }}
+            title={c.line}
+            data-ghost-chip={c.change_id}
+            aria-pressed={focused}
+          >
+            {c.kind === "routine" && <Clock className="w-2.5 h-2.5 shrink-0" />}
+            <span className="truncate">{c.line}</span>
+          </button>
+        );
+      })}
+      {rest.length > 0 && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onFocusChange?.(rest[0].change_id); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="nodrag text-[10px] shrink-0"
+          style={{ color: GHOST.color }}
+          title={rest.map((c) => c.line).join("\n")}
+        >
+          +{rest.length}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Accept, Edit, Skip: a pill strip hanging off the bottom edge of the card.
+ *  Accepted and applied changes show their word instead; a failed one keeps
+ *  its actions (it stays decidable). */
+function GhostActions({ meta, data }: { meta: OrgGhostMeta; data: CardData }) {
+  const decided = meta.status === "accepted" || meta.status === "applied";
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  const btn = "nodrag inline-flex items-center gap-1 h-[22px] px-2 text-[10.5px] font-semibold transition-colors hover:brightness-110";
+  // Straddling the bottom edge on a plain card; fully below one that ends in
+  // a chips row, so the strip never covers the chips (the level gap is 56px).
+  const below = !!data.chips?.length;
+  return (
+    <div
+      className={cn("absolute left-1/2 -translate-x-1/2 flex items-center rounded-full border overflow-hidden shadow-sm", below ? "-bottom-[27px]" : "-bottom-[13px]")}
+      style={{ background: "var(--sol-card)", borderColor: `color-mix(in srgb, ${decided ? "var(--sol-cyan)" : "var(--sol-violet)"} 45%, transparent)` }}
+      onPointerDown={stop}
+      onClick={stop}
+      data-ghost-actions={meta.change_id}
+    >
+      {decided ? (
+        <span className="inline-flex items-center gap-1 h-[22px] px-2.5 text-[10.5px] font-semibold" style={{ color: meta.status === "applied" ? "var(--sol-green)" : "var(--sol-cyan)" }}>
+          <Check className="w-3 h-3" /> {meta.status}
+        </span>
+      ) : (
+        <>
+          {meta.status === "failed" && <span className="h-[22px] px-2 inline-flex items-center text-[10px] font-medium" style={{ color: "var(--sol-red)" }}>failed</span>}
+          <button type="button" className={btn} style={{ color: "var(--sol-cyan)" }} onClick={() => data.onDecideChange?.(meta.change_id, "accept")} aria-label="Accept" title={meta.line}>
+            <Check className="w-3 h-3" /> Accept
+          </button>
+          <button type="button" className={btn} style={{ color: "var(--sol-text-muted)", borderLeft: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)" }} onClick={(e) => data.onEditChange?.(meta.change_id, { x: e.clientX, y: e.clientY })} aria-label="Edit">
+            <Pencil className="w-3 h-3" /> Edit
+          </button>
+          <button type="button" className={btn} style={{ color: "var(--sol-text-dim)", borderLeft: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)" }} onClick={() => data.onDecideChange?.(meta.change_id, "skip")} aria-label="Skip">
+            <X className="w-3 h-3" /> Skip
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The change whose action row this card shows: its own stub always, else
+ *  the retire, move or chip the chart is focused on. */
+function actionMetaOf(data: CardData): OrgGhostMeta | null {
+  if (data.ghost) return data.ghost;
+  const id = data.focusChangeId;
+  if (!id) return null;
+  if (data.retire?.change_id === id) return data.retire;
+  if (data.move?.change_id === id) return data.move;
+  return data.chips?.find((c) => c.change_id === id) ?? null;
+}
+
+/** The frame styling of a ghost stub: dashed violet, no plate, 55% content. */
+function ghostFrameStyle(stub: OrgGhostStub): React.CSSProperties {
+  return stub.solid
+    ? { borderTopWidth: 3, borderTopColor: "var(--sol-cyan)", background: "var(--sol-card)" }
+    : { border: GHOST.border, borderTopWidth: 1.5, background: GHOST.fill };
+}
 
 function Ports() {
   // Edges need handles; the cards hide them so the tree reads as plain lines.
@@ -184,9 +343,12 @@ const PRESENCE: Record<NonNullable<OrgPerson["presence"]>, string> = {
 
 export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<PersonNodeData>>) {
   const { person: p, collapsed, hidden, overflow } = data;
+  const action = actionMetaOf(data);
   return (
     <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5">
       <Ports />
+      <FlagDots flags={data.flags} />
+      {action && <GhostActions meta={action} data={data} />}
       <div className="flex items-center gap-2.5">
         <div className="relative shrink-0">
           <div className="rounded-full p-[2px]" style={{ background: p.is_me ? "linear-gradient(135deg, var(--sol-cyan), var(--sol-blue))" : "color-mix(in srgb, var(--sol-border) 45%, transparent)" }}>
@@ -218,6 +380,7 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
         <StateBar counts={p.counts} className="flex-1" />
         <OverflowTally overflow={overflow} counts={p.counts} />
       </div>
+      <GhostChips chips={data.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} />
     </Frame>
   );
 });
@@ -238,6 +401,12 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
   // one; the hand tally below stays a proportion, never the seat's colour.
   const standing = standingLineOf(r.standing);
   const plate = standing?.color ?? "var(--sol-violet)";
+  // A ghost (org-staffing.md S5): a proposed role, dashed and translucent
+  // until accepted, then solid until org.tree echoes the real row. A retire
+  // proposal hatches the card. Neither takes a state stripe or a plate.
+  const ghost = data.ghost;
+  const dim = !!ghost && !ghost.solid;
+  const action = actionMetaOf(data);
   return (
     <Frame
       selected={data.selected}
@@ -245,7 +414,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       dragging={data.dragging}
       accent="var(--sol-violet)"
       className="px-3 pt-3 pb-2.5"
-      style={{
+      style={ghost ? ghostFrameStyle(ghost) : {
         // A seat: a double rule at the top, like a name plate on a desk.
         borderTopWidth: 3,
         borderTopColor: paused ? `color-mix(in srgb, ${plate} 40%, transparent)` : plate,
@@ -254,15 +423,28 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       }}
     >
       <Ports />
-      <Link
-        href={`/org/${r.short_id}`}
-        onClick={(e) => e.stopPropagation()}
-        className="nodrag absolute -top-[11px] left-3 flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium hover:brightness-110"
-        style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}
-        title="Open the scope page"
-      >
-        @{r.handle}
-      </Link>
+      {data.retire && <div aria-hidden className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: GHOST.hatch }} data-ghost-retire={data.retire.change_id} />}
+      <FlagDots flags={data.flags} />
+      {action && <GhostActions meta={action} data={data} />}
+      {ghost ? (
+        <span
+          className="absolute -top-[11px] left-3 flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium"
+          style={{ border: dim ? GHOST.border : "1.5px solid var(--sol-cyan)", background: "var(--sol-card)", color: dim ? GHOST.color : "var(--sol-cyan)", fontFamily: "var(--font-mono)", opacity: dim ? GHOST.opacity : 1 }}
+        >
+          @{r.handle}
+        </span>
+      ) : (
+        <Link
+          href={`/org/${r.short_id}`}
+          onClick={(e) => e.stopPropagation()}
+          className="nodrag absolute -top-[11px] left-3 flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium hover:brightness-110"
+          style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}
+          title="Open the scope page"
+        >
+          @{r.handle}
+        </Link>
+      )}
+      <div style={{ opacity: dim ? GHOST.opacity : 1 }}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>
@@ -271,11 +453,17 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           <div className="mt-[3px] text-[10.5px] flex items-center gap-1.5 whitespace-nowrap overflow-hidden" style={{ color: "var(--sol-text-dim)" }}>
             <span>role</span>
             {paused && <span className="px-1 rounded-sm" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
-            <span aria-hidden>·</span>
-            <span className="tabular-nums">{r.total} session{r.total === 1 ? "" : "s"}</span>
+            {ghost && <GhostTag label={ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} />}
+            {data.retire && <GhostTag label="retire" status={data.retire.status} />}
+            {!ghost && (
+              <>
+                <span aria-hidden>·</span>
+                <span className="tabular-nums">{r.total} session{r.total === 1 ? "" : "s"}</span>
+              </>
+            )}
           </div>
         </div>
-        <CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />
+        {!ghost && <CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />}
       </div>
       <StandingLine standing={r.standing} className="mt-1.5" />
       <div className="mt-2 flex items-center gap-1 min-w-0 overflow-hidden">
@@ -303,10 +491,14 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           </>
         )}
       </div>
-      <div className="mt-2 flex items-center gap-2">
-        <StateBar counts={r.counts} className="flex-1" />
-        <OverflowTally overflow={overflow} counts={r.counts} />
+      {!ghost && (
+        <div className="mt-2 flex items-center gap-2">
+          <StateBar counts={r.counts} className="flex-1" />
+          <OverflowTally overflow={overflow} counts={r.counts} />
+        </div>
+      )}
       </div>
+      <GhostChips chips={data.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} />
     </Frame>
   );
 });
@@ -356,6 +548,30 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
   const s = data.session;
   const st = ORG_STATE_META[s.state] ?? ORG_STATE_META.idle;
   const now = useCoarseNow(30_000);
+  // An adopt ghost (org-staffing.md S5): the session offered as the role's
+  // standing session. Dashed, no state stripe; "this session" when it is the
+  // one the viewer is looking from.
+  const ghost = data.ghost;
+  const dim = !!ghost && !ghost.solid;
+  if (ghost) {
+    return (
+      <Frame selected={data.selected} accent="var(--sol-violet)" className="pl-3 pr-2.5 py-1.5 flex items-center gap-2" style={{ borderRadius: 10, ...ghostFrameStyle(ghost), borderTopWidth: 1.5 }}>
+        <Ports />
+        <GhostActions meta={ghost} data={data} />
+        <div className="flex items-center gap-2 min-w-0 flex-1" style={{ opacity: dim ? GHOST.opacity : 1 }}>
+          <span className="inline-flex items-center justify-center w-6 h-6 rounded-md shrink-0" style={{ background: GHOST.fill, color: GHOST.color }}>
+            <Sparkles className="w-3.5 h-3.5" />
+          </span>
+          {/* One row: the action strip straddles the bottom edge, so a second line would sit under it. */}
+          <div className="min-w-0 flex-1 flex items-baseline gap-1.5 whitespace-nowrap overflow-hidden" title={ghost.line}>
+            <span className="truncate text-[13px] leading-[1.25] font-medium" style={{ color: "var(--sol-text)" }}>{s.title}</span>
+            <span className="shrink-0 text-[9.5px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{s.short_id}</span>
+          </div>
+          <GhostTag label={ghost.this_session ? "this session" : ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} />
+        </div>
+      </Frame>
+    );
+  }
   return (
     <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-1.5 flex items-center gap-2 overflow-hidden" style={{ borderRadius: 10 }}>
       <Ports />

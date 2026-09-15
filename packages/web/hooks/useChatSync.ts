@@ -31,6 +31,7 @@ import {
   chatSendState,
   type ChatMessageRow,
   type ChatChannelRow,
+  type ChatSlackLinkRow,
   type ChatReactionRow,
   type ChatReadRow,
   type ChatRailRow,
@@ -118,7 +119,11 @@ export const messagesSig = makeCollectionSig<ChatMessageRow>(
     `|${m._failedAt ?? 0}|${m.mention_scope ?? ""}|${(m.mentions ?? []).map(mentionKey).join(",")}|${m.mention_folded ? 1 : 0}` +
     `|${m.content.length}:${hash(m.content)}` +
     `|${m.voice ? `${m.voice.status}:${m.voice.duration_ms ?? 0}:${m.voice.room_key ?? ""}:${m.voice.transcribing ? 1 : 0}` : ""}` +
-    `|${(m.attachments ?? []).map((a) => a.storage_id).join(",")}`,
+    `|${(m.attachments ?? []).map((a) => a.storage_id).join(",")}` +
+    // The Slack mark: direction + permalink arrive after the post, on their own
+    // patch, so they must wake the row that shows them.
+    `|${m.external ? `${m.external.direction}:${m.external.ts}:${m.external.permalink ? 1 : 0}` : ""}` +
+    `|${m.sync_local_only ? 1 : 0}|${m.external_author?.name ?? ""}:${m.external_author?.avatar_url ?? ""}`,
 );
 
 /** What the RAIL counts, and nothing else.
@@ -150,6 +155,14 @@ export const railMessagesSig = makeCollectionSig<ChatMessageRow>(
  *  appears. */
 const sessionOriginSig = makeCollectionSig<any>(
   (s) => `${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}`,
+);
+
+/** Slack mirrors: everything the header pill and the settings dialog branch on. */
+export const slackLinksSig = makeCollectionSig<ChatSlackLinkRow>(
+  (l) =>
+    `${l._id}|${l.chat_channel_id}|${l.slack_channel_id}|${l.slack_channel_name ?? ""}|${l.direction}|${l.paused ? 1 : 0}` +
+    `|${Object.entries(l.options ?? {}).map(([k, val]) => `${k}=${val ? 1 : 0}`).join(",")}` +
+    `|${l.last_inbound_at ?? 0}|${l.last_outbound_at ?? 0}|${l.inbound_count ?? 0}|${l.outbound_count ?? 0}|${l.last_error ?? ""}`,
 );
 
 const channelsSig = makeCollectionSig<ChatChannelRow>(
@@ -216,6 +229,7 @@ export function useChatChannelsSync(): { error?: Error } {
         if (!data) return;
         syncTable("chatChannels", data.channels ?? []);
         syncTable("chatReads", data.reads ?? []);
+        syncTable("chatSlackLinks", data.slack_links ?? []);
         syncChatRail(syncTable, data.rail ?? [], "team");
         // This rail came from the server, not from IndexedDB. Only now is a
         // change in it evidence that something ARRIVED — see lib/chatLive.
@@ -260,9 +274,9 @@ function syncChatRail(
  * community page mounts it, nothing else does — so it runs in follower
  * windows too and never gates on the sync host.
  */
-export function useCommunityChannelsSync(): { error?: Error; loading: boolean } {
+export function useCommunityChannelsSync(enabled: boolean): { error?: Error; loading: boolean } {
   const syncTable = useInboxStore((s) => s.syncTable);
-  const { data: result, error } = useQueryNoThrow(api.chat.listCommunityChannels, {});
+  const { data: result, error } = useQueryNoThrow(api.chat.listCommunityChannels, enabled ? {} : "skip");
   useConvexSync(
     result,
     useCallback(
@@ -276,7 +290,7 @@ export function useCommunityChannelsSync(): { error?: Error; loading: boolean } 
       [syncTable],
     ),
   );
-  return { error, loading: result === undefined && !error };
+  return { error, loading: enabled && result === undefined && !error };
 }
 
 // ── One channel's messages ──────────────────────────────────────────────────
@@ -337,6 +351,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         if (!data) return;
         const messages: ChatMessageRow[] = data.messages ?? [];
         syncTable("chatMessages", messages);
+        syncTable("chatAuthors", data.authors ?? []);
         syncTable(
           "chatReactions",
           data.reactions ?? [],
@@ -438,6 +453,7 @@ export function useThreadSync(rootId: string | undefined): { loading: boolean; e
         if (!data) return;
         const rows: ChatMessageRow[] = [...(data.root ? [data.root] : []), ...(data.replies ?? [])];
         if (rows.length) syncTable("chatMessages", rows);
+        syncTable("chatAuthors", data.authors ?? []);
         syncTable(
           "chatReactions",
           data.reactions ?? [],
@@ -464,11 +480,13 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     (s: any) => s.currentUser?.name,
     (s: any) => s.currentUser?.image,
     (s: any) => anchorBotsSig(s.anchors),
+    (s: any) => s.chatAuthors,
   ]);
   const viewerId = String(s.currentUser?._id ?? "");
   const roster: any[] = s.teamMembers ?? [];
   const sig = memberListSig(roster);
   const botsSig = anchorBotsSig((s as any).anchors);
+  const authors = (s as any).chatAuthors as Record<string, ChatMember> | undefined;
   const me = s.currentUser;
   return useMemo(() => {
     const byId = new Map<string, ChatMember>();
@@ -487,10 +505,16 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     for (const bot of anchorBots((s as any).anchors)) {
       if (!byId.has(bot._id)) byId.set(bot._id, bot);
     }
+    // Last: the authors the message pages themselves named, for lines by
+    // people outside the roster (a community room's public). The roster wins
+    // when both know a person — it carries the face, the page carries a name.
+    for (const id in authors ?? {}) {
+      if (!byId.has(id)) byId.set(id, authors![id]);
+    }
     return { members, byId, viewerId, handles };
     // The signatures are the deps, not the arrays: both collections re-push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, botsSig, viewerId, me]);
+  }, [sig, botsSig, viewerId, me, authors]);
 }
 
 function anchorBots(anchors: Record<string, any> | undefined): ChatMember[] {

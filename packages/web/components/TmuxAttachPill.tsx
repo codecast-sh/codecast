@@ -134,7 +134,6 @@ export function TmuxAttachPill({
               pointer events the tooltip needs, and in the foreign-machine case
               that tooltip is the entire explanation for why nothing copies. */}
           <button
-            data-simple-hide
             onClick={copyAttach}
             aria-disabled={!attach}
             className={`cq-sq1 inline-flex items-center pl-1 pr-1.5 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}

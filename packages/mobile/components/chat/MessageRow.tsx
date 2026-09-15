@@ -1,11 +1,12 @@
 import { memo } from 'react';
-import { StyleSheet, TouchableOpacity, View as RNView, Image, useWindowDimensions } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Image, Linking, useWindowDimensions } from 'react-native';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
+import { SlackLogo } from '@/components/SlackLogo';
 
 // One chat message on mobile. The same rules as the web row, in RN idiom:
 // a fixed avatar gutter that keeps its width when a message is grouped under
@@ -45,11 +46,17 @@ export type ChatAuthorLite = {
    *  personifies the session (name is the session title, agent identity for the
    *  face) and credits the human in a dim "via". Mirrors web's ChatAuthor. */
   session?: { agentType?: string; via?: string };
+  /** The author is a Slack person or app the bridge relayed (the row carries
+   *  `external_author`). An app with no face gets the Slack mark as its tile. */
+  slack?: { isBot: boolean };
 };
 
 export type MobileChatMessage = {
   id: string;
   author: ChatAuthorLite;
+  /** The line exists in a mirrored Slack channel too: "From Slack" for one
+   *  the bridge pulled in, "Also in Slack" for one it posted out. */
+  slack?: { direction: 'inbound' | 'outbound'; permalink?: string };
   content: string;
   createdAt: number;
   editedAt?: number;
@@ -88,6 +95,51 @@ function clock(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+/** The author and Slack fields a mirrored chat_messages row carries, in row
+ *  shape. Both chat screens fold this into their view mapping so the rule
+ *  lives once: an `external_author` snapshot names the real Slack person and
+ *  the bridge identity behind `user_id` is never shown (web: slackAuthorFor). */
+export function slackFieldsFor(row: {
+  user_id: unknown;
+  external?: { provider: string; direction: 'inbound' | 'outbound'; permalink?: string } | null;
+  external_author?: { name: string; avatar_url?: string; is_bot?: boolean } | null;
+}): { author?: ChatAuthorLite; slack?: MobileChatMessage['slack'] } {
+  const ext = row.external_author;
+  return {
+    author: ext
+      ? {
+          id: String(row.user_id),
+          name: ext.name || 'Someone',
+          avatarUrl: ext.avatar_url || undefined,
+          isAgent: false,
+          slack: { isBot: !!ext.is_bot },
+        }
+      : undefined,
+    slack: row.external?.provider === 'slack'
+      ? { direction: row.external.direction, permalink: row.external.permalink }
+      : undefined,
+  };
+}
+
+/** "From Slack" / "Also in Slack" beside the time. Tapping opens the line in
+ *  Slack when the bridge minted a permalink. */
+function SlackMark({ slack }: { slack: NonNullable<MobileChatMessage['slack']> }) {
+  const label = slack.direction === 'inbound' ? 'From Slack' : 'Also in Slack';
+  const inner = (
+    <>
+      <SlackLogo size={9} muted={slack.direction === 'outbound'} />
+      <RNText style={styles.slackMarkText}>{label}</RNText>
+    </>
+  );
+  return slack.permalink ? (
+    <TouchableOpacity style={styles.slackMark} hitSlop={6} onPress={() => Linking.openURL(slack.permalink!)}>
+      {inner}
+    </TouchableOpacity>
+  ) : (
+    <RNView style={styles.slackMark}>{inner}</RNView>
+  );
+}
+
 export function ChatAvatar({ author, size = 26 }: { author: ChatAuthorLite; size?: number }) {
   const Theme = useTheme();
   if (author.isAgent) {
@@ -99,6 +151,13 @@ export function ChatAvatar({ author, size = 26 }: { author: ChatAuthorLite; size
   }
   if (author.avatarUrl) {
     return <Image source={{ uri: author.avatarUrl }} style={[styles.avatar, { width: size, height: size }]} />;
+  }
+  if (author.slack?.isBot) {
+    return (
+      <RNView style={[styles.avatar, styles.avatarSlack, { width: size, height: size }]}>
+        <SlackLogo size={size * 0.55} />
+      </RNView>
+    );
   }
   return (
     <RNView style={[styles.avatar, { width: size, height: size, backgroundColor: hueFor(author.name) }]}>
@@ -173,6 +232,12 @@ export const MessageRow = memo(function MessageRow({
             {!!author.session?.via && (
               <RNText style={styles.time} numberOfLines={1}>via {author.session.via}</RNText>
             )}
+            {author.slack?.isBot && (
+              <RNView style={styles.agentChip}>
+                <RNText style={styles.agentChipText}>APP</RNText>
+              </RNView>
+            )}
+            {message.slack && <SlackMark slack={message.slack} />}
             <RNText style={styles.time}>{clock(message.createdAt)}</RNText>
           </RNView>
         )}
@@ -293,6 +358,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderWidth: 1,
     borderColor: Theme.violet + '55',
   },
+  avatarSlack: {
+    backgroundColor: Theme.bgAlt,
+    borderWidth: 1,
+    borderColor: Theme.border + '80',
+  },
   avatarInitials: { fontWeight: '700', color: Theme.bg },
   mdBase: { fontSize: 13.5, lineHeight: 20, color: Theme.textSecondary },
   row: {
@@ -324,6 +394,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   agentChipText: { fontSize: 7.5, fontWeight: '700', color: Theme.violet, letterSpacing: 0.8 },
   time: { fontSize: 10, color: Theme.textMuted0 },
+  slackMark: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  slackMarkText: { fontSize: 10, color: Theme.textMuted0 },
   deleted: { fontSize: 12.5, fontStyle: 'italic', color: Theme.textMuted0 },
   edited: { fontSize: 10, color: Theme.textMuted0, marginTop: -4, marginBottom: 2 },
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
