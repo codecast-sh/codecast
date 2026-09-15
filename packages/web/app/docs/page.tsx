@@ -37,11 +37,15 @@ const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: strin
   spec: { label: "Spec", color: "text-sol-cyan", dot: "bg-sol-cyan" },
   investigation: { label: "Investigation", color: "text-sol-yellow", dot: "bg-sol-yellow" },
   handoff: { label: "Handoff", color: "text-sol-orange", dot: "bg-sol-orange" },
+  decision: { label: "Decision", color: "text-sol-red", dot: "bg-sol-red" },
   charter: { label: "Charter", color: "text-sol-magenta", dot: "bg-sol-magenta" },
   brief: { label: "Brief", color: "text-sol-green", dot: "bg-sol-green" },
 };
 
-const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff", "decision", "charter", "brief"];
+// Derived, so a type added to the config can never be missing from it (a
+// hand-kept second list crashed the whole docs page when "decision" was in
+// the list but not the config).
+const DOC_TYPES = Object.keys(DOC_TYPE_CONFIG);
 
 export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
