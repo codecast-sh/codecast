@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisInputs, performApplyDecision } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, mergeAnalysisInputs, performApplyDecision } from "./orgInit";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
@@ -113,6 +113,44 @@ describe("org.analysisInputs", () => {
     expect(r.org.projects_without_role.map((p) => p.title).sort()).toEqual(["Billing", "Growth"]);
     expect(r.window_days).toBe(30);
     expect(r.caps).toBe(ANALYSIS_CAPS);
+  });
+
+  test("the three slices merge to the one process read, and the org slice never reads tasks", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const whole = await computeAnalysisInputs(ctx, ME as any, TEAM, NOW);
+    const work = await computeAnalysisWork(ctx, ME as any, TEAM);
+    const signals = await computeAnalysisSignals(ctx, ME as any, TEAM, NOW);
+    const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
+    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW)).toEqual(whole);
+    expect(work.handoff.latest_event).toBe(NOW - H);
+    expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks"]);
+  });
+
+  test("every list at its cap still answers, and each floor is reported", async () => {
+    const many = (n: number, f: (i: number) => any) => Array.from({ length: n }, (_, i) => f(i));
+    const db = fixtures({
+      projects: many(ANALYSIS_CAPS.projects + 5, (i) => ({ _id: `projects_c${i}`, user_id: ME, team_id: TEAM, workspace: WS, title: `P${i}`, status: "active", created_at: 1, updated_at: NOW - i })),
+      plans: many(ANALYSIS_CAPS.plans + 5, (i) => ({ _id: `plans_c${i}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: `projects_c${i % 10}`, short_id: `pl-${i}`, title: `Plan ${i}`, status: "active", created_at: 1, updated_at: NOW - i })),
+      tasks: many(ANALYSIS_CAPS.tasks + 5, (i) => ({ _id: `tasks_c${i}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: `projects_c${i % 10}`, plan_id: `plans_c${i % 20}`, short_id: `ct-${i}`, title: `T${i}`, task_type: "task", status: i % 3 ? "open" : "done", priority: "medium", created_at: 1, updated_at: NOW - i })),
+      docs: many(ANALYSIS_CAPS.docs + 5, (i) => ({ _id: `docs_c${i}`, user_id: ME, team_id: TEAM, workspace: WS, title: `D${i}`, content: "x".repeat(2000), doc_type: i % 2 ? "note" : "design", created_at: 1, updated_at: NOW - i })),
+      session_insights: many(ANALYSIS_CAPS.insights + 5, (i) => ({ _id: `si_c${i}`, conversation_id: S1, team_id: TEAM, actor_user_id: ME, source: "idle", generated_at: NOW - i * 1000, summary: "x", outcome_type: "shipped", themes: ["t"] })),
+      chat_channels: many(ANALYSIS_CAPS.channels + 5, (i) => ({ _id: `chat_channels_c${i}`, team_id: TEAM, name: `c${i}`, created_at: 1 })),
+      chat_messages: many(ANALYSIS_CAPS.messages_per_channel + 5, (i) => ({ _id: `cm_c${i}`, channel_id: "chat_channels_c0", user_id: ME, content: "hi", created_at: NOW - i * 1000 })),
+      session_decisions: many(ANALYSIS_CAPS.decisions + 5, (i) => ({ _id: `sd_c${i}`, conversation_id: S1, session_id: "s1", user_id: ME, short_id: `sd-${i}`, question: "?", options: [{ label: "a" }, { label: "b" }], blocking: true, status: "pending", category: "approach", created_at: NOW - i * 1000 })),
+      bucket_assignments: many(ANALYSIS_CAPS.assignments + 5, (i) => ({ _id: `ba_c${i}`, user_id: ME, conversation_id: S1, bucket_id: "inbox_buckets_1" })),
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.truncated).toEqual({ projects: true, plans: true, tasks: true, docs: true, insights: true });
+    expect(r.projects.length).toBe(ANALYSIS_CAPS.projects);
+    expect(r.plans.length).toBe(ANALYSIS_CAPS.plans);
+    expect(r.tasks.total).toBe(ANALYSIS_CAPS.tasks);
+    expect(Object.values(r.docs_by_type).reduce((a, b) => a + b, 0)).toBe(ANALYSIS_CAPS.docs);
+    expect(r.insights.total).toBe(ANALYSIS_CAPS.insights);
+    expect(r.channels.length).toBe(ANALYSIS_CAPS.channels);
+    expect(r.channels.find((c) => c.name === "c0")!.messages_30d).toBe(ANALYSIS_CAPS.messages_per_channel);
+    expect(r.decisions_open_by_category.approach).toBe(ANALYSIS_CAPS.decisions);
+    expect(r.labels).toEqual([{ name: "growth", count: ANALYSIS_CAPS.assignments }]);
   });
 
   test("the per list caps hold", async () => {

@@ -19,6 +19,7 @@ import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { fromConvexAgentType, findModelOption } from "@codecast/shared/contracts";
 import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch";
+import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -805,6 +806,7 @@ export async function performReparentSessionToDevice(
   if (!device) throw new Error("Unknown device (you can only reparent onto your own device)");
 
   const crossUser = !isRunner; // account actually changes hands
+  const previousConversation = { ...conv };
 
   // Facts for the destination's reorientation notice (sessionMoveNotice.ts).
   // The destination composes that notice from what it can verify locally — its
@@ -909,6 +911,7 @@ export async function performReparentSessionToDevice(
     });
   }
 
+  if (crossUser) await notifySessionExecutionTaken(ctx, previousConversation, userId, device.label, priorDevice?.label, !!priorDeviceId && deviceChanged);
   return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label, cross_user: crossUser };
 }
 

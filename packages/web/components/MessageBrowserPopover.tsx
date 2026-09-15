@@ -18,6 +18,7 @@ import {
   navigatorHeaderLabels,
   countCommentsByMessage,
   navigatorRowBody,
+  mergeNavigatorSources,
   MACHINE_KIND_LABEL,
   type HiddenKind,
   type NavigatorRow,
@@ -216,18 +217,30 @@ function NavDropdown({
   const currentItemRef = useRef<HTMLDivElement>(null);
   useMountEffect(() => setMounted(true));
 
-  // On open, default to the latest message (bottom). The current message stays
-  // highlighted via currentItemRef, but we don't scroll to center on it —
-  // newest-first is what's most relevant when the browser pops.
+  // Keep the highlighted row in view so the list lines up with the prompt
+  // at the top of the transcript. On first open with no current row yet,
+  // park at the newest message.
+  const alignedOnceRef = useRef(false);
   useEffect(() => {
-    if (mounted) {
-      requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
-      });
+    if (!mounted) {
+      alignedOnceRef.current = false;
+      return;
     }
-  }, [mounted]);
+    requestAnimationFrame(() => {
+      const current = currentItemRef.current;
+      const sc = scrollRef.current;
+      if (current && sc) {
+        const row = current.getBoundingClientRect();
+        const box = sc.getBoundingClientRect();
+        if (row.top < box.top || row.bottom > box.bottom) {
+          current.scrollIntoView({ block: alignedOnceRef.current ? "nearest" : "center" });
+        }
+        alignedOnceRef.current = true;
+        return;
+      }
+      if (sc && !alignedOnceRef.current) sc.scrollTop = sc.scrollHeight;
+    });
+  }, [mounted, currentMessageId]);
 
   const { humanCount, hiddenCount: machineCount, chipLabel } = navigatorHeaderLabels(messages);
   const filtered = filterNavigatorRows(messages, { search, showHidden: showMachine });
@@ -553,11 +566,13 @@ export function MessageNavButton({
   currentMessageId,
   scrollProgress = 1,
   onScrollToMessage,
+  loadedMessages,
 }: {
   conversationId: string;
   currentMessageId: string | null;
   scrollProgress?: number;
   onScrollToMessage?: (messageId: string) => void;
+  loadedMessages?: Parameters<typeof mergeNavigatorSources>[1];
 }) {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -585,7 +600,11 @@ export function MessageNavButton({
       ? { conversation_id: conversationId as Id<"conversations">, ...shareTokenArg(conversationId) }
       : "skip"
   );
-  const messages = cachedUserMessages ?? queryUserMessages;
+  const rawUserMessages = cachedUserMessages ?? queryUserMessages;
+  const messages = useMemo(
+    () => mergeNavigatorSources(rawUserMessages, loadedMessages),
+    [rawUserMessages, loadedMessages],
+  );
   const loadedImages = useInboxStore(useShallow((s) => Object.fromEntries(
     (s.messages[conversationId] ?? [])
       .filter(message => message.images !== undefined)
@@ -674,7 +693,7 @@ export function MessageNavButton({
     return () => window.removeEventListener("keydown", handler);
   }, [open, handleClose]);
 
-  const isLoading = messages === undefined && isConvexId(conversationId);
+  const isLoading = rawUserMessages === undefined && messages.length === 0 && isConvexId(conversationId);
 
   // Skeleton: query in flight on a conversation with multiple messages.
   // Reserves space + gives a subtle pulse so the indicator doesn't pop in

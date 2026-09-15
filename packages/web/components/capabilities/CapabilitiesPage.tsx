@@ -81,6 +81,7 @@ type ObservedEntry = {
   enabled?: unknown;
   installed?: unknown;
   scope?: unknown;
+  source?: unknown;
   /** Kind-specific extras. The version, the commit and the marketplace live in
    *  here, not at the top level — that is where the daemon's reader puts them
    *  (`inventory.ts`, the `meta` folding at the end of `readInventory`). */
@@ -122,6 +123,10 @@ function toInventoryItem(raw: ObservedEntry, rowScopeKey: string): FleetInventor
     version: str(meta.version),
     sha: str(meta.sha),
     marketplace: str(meta.marketplace),
+    source: str(raw.source),
+    command: str(meta.command),
+    url: str(meta.url),
+    event: str(meta.event),
     cost: (raw.cost ?? undefined) as FleetInventoryItem["cost"],
   };
 }
@@ -464,9 +469,9 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
             <h1 className="text-lg font-serif text-sol-text">Capabilities</h1>
             <p className="text-sm text-sol-text-muted mt-1 max-w-2xl leading-relaxed">
               {tab === "installed"
-                ? "What your agents can do, and where. Turn things on everywhere, in one project, or just for this session."
+                ? "Everything on your machines. Click a skill to read it."
                 : tab === "library"
-                  ? "Skills, plugins and MCP servers you could add — cross-referenced against what your machines already have."
+                  ? "Things you could add, cross-referenced against what you already have."
                   : tab === "apps"
                     ? "Services agents act through. Connect once; tokens stay server-side."
                     : "Every machine side by side. Drift first — the skill your laptop is missing is the thing no single-machine tool can tell you."}
@@ -486,28 +491,13 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
 
         {tab === "installed" ? (
           <InstalledTab
+            rows={rows}
+            devices={devices}
             catalog={catalog ?? []}
             equip={equipTarget}
-            installedOn={(slug) => {
-              // A binding names a slug; the mirror names a (kind, identity).
-              // builtin/memory is the row whose identity is "memory"; a
-              // marketplace plugin's row identity is "name@marketplace". Match
-              // on the slug's leaf so a row is found however it was keyed.
-              const leaf = slug.split("/").pop()?.toLowerCase() ?? slug.toLowerCase();
-              return rows
-                .filter(
-                  (r) =>
-                    r.slug === slug ||
-                    r.key === slug ||
-                    r.identity.toLowerCase() === leaf ||
-                    r.identity.toLowerCase().startsWith(`${leaf}@`),
-                )
-                .flatMap((r) =>
-                  r.cells
-                    .filter((c) => c.status === "same" || c.status === "pin_differs" || c.status === "disabled")
-                    .map((c) => c.deviceId),
-                );
-            }}
+            selectedKey={selectedKey}
+            onSelect={setSelectedKey}
+            loading={loading}
           />
         ) : tab === "machines" ? (
           loading ? (

@@ -28,6 +28,7 @@ import {
   type OrgSession,
   type OrgTree,
 } from "../components/org/orgTypes";
+import { CHIEF_OF_STAFF_HANDLE, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
 import { isConvexId } from "../lib/entityLinks";
 
 /** An optimistic edit awaiting the server's echo (see the header). */
@@ -44,6 +45,29 @@ export type OrgSliceData = {
   orgTree: OrgTree | null;
   /** Open optimistic edits, replayed onto every incoming org.tree push. */
   orgIntents: OrgIntent[];
+  /** The company's flow signals and flags (org-staffing.md S3), fed by
+   *  hooks/useSyncOrgHealth from org.health. */
+  orgHealth: OrgHealth | null;
+  /** Staffing proposals (S4): list rows and the changes of opened proposals,
+   *  fed by hooks/useSyncOrgProposals; joined by joinProposals at render. */
+  orgProposals: Record<string, OrgProposalListRow>;
+  orgProposalChanges: Record<string, OrgProposalChange>;
+  /** The change the chart is focused on: a ghost click or a change row click
+   *  sets it, the pane and the ghosts read it. Ephemeral, never replicated. */
+  orgFocusChangeId: string | null;
+};
+
+/** "Hire a Chief of Staff" (org-staffing.md S6): the one role with the
+ *  reserved handle, scoped to the whole company, reporting to the hirer. */
+export type OrgStaffInput = {
+  team_id?: string;
+  host_user_id: string;
+  /** The project the provisioned standing session starts in; the same
+   *  resolution every session the web starts uses. Absent when adopting. */
+  project_path?: string;
+  /** Stub id: the row is re-keyed when org.tree echoes the real one. */
+  client_id: string;
+  adopt_conversation_id?: string;
 };
 
 export type OrgCreateRoleInput = {
@@ -92,6 +116,19 @@ export type OrgSliceActions = {
   followOrgChannel: (roleShortId: string, channelId: string, follow: boolean) => void;
   /** Drop an intent the dispatch rail rejected, so the tree stops replaying it. */
   dropOrgIntent: (intentId: string) => void;
+  /** Hire the chief of staff (org-staffing.md S6): an optimistic role stub
+   *  under the hirer; dispatch runs orgRoles.staff, which provisions the
+   *  standing session, arms the review routine and runs the first review. */
+  staffChiefOfStaff: (input: OrgStaffInput) => void;
+  /** "Accept all remaining" (org-staffing.md S4): every proposed change flips
+   *  to accepted on the draft; dispatch runs orgProposals.acceptAll, which
+   *  applies them in order and echoes applied or failed per change. */
+  acceptAllOrgProposal: (proposalId: string) => void;
+  /** Accept or skip one change (S5). Accept is optimistic: the row flips to
+   *  accepted and dispatch runs orgProposals.decide, which applies it and
+   *  echoes applied or failed. Edits ride along as the patch decide takes. */
+  decideOrgProposalChange: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
+  setOrgFocusChangeId: (changeId: string | null) => void;
 };
 
 export type OrgSliceState = OrgSliceData & OrgSliceActions;
@@ -288,6 +325,15 @@ export const ORG_SYNC_REGISTRY = {
       return merged.tree;
     },
   },
+  // Same stamp, same reason: a no-op health push must not wake the pane.
+  orgHealth: {
+    kind: "singleton" as const,
+    normalize: (v: any) => {
+      if (!v || typeof v !== "object") return v;
+      const { generated_at: _g, ...rest } = v;
+      return rest;
+    },
+  },
 };
 
 export function createOrgSlice(): OrgSliceState {
@@ -295,6 +341,14 @@ export function createOrgSlice(): OrgSliceState {
     orgTree: null,
 
     orgIntents: [],
+
+    orgHealth: null,
+
+    orgProposals: {},
+
+    orgProposalChanges: {},
+
+    orgFocusChangeId: null,
 
     // `row` is the session when the page holds it outside the tree's top N
     // (loaded through org.sessionsUnder); the slice cannot find it otherwise.
@@ -386,6 +440,57 @@ export function createOrgSlice(): OrgSliceState {
 
     dropOrgIntent: sync(function (this: OrgDraft, intentId: string) {
       this.orgIntents = this.orgIntents.filter((i) => i.id !== intentId);
+    }),
+
+    staffChiefOfStaff: action(function (this: OrgDraft, input: OrgStaffInput) {
+      const tree = this.orgTree;
+      if (!tree) return;
+      // Idempotent per company (S6): a second click while the first is in
+      // flight, or on a company that already has one, adds nothing.
+      if (tree.roles.some((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired")) return;
+      const now = Date.now();
+      const team = tree.workspace.kind === "team";
+      tree.roles.push({
+        _id: input.client_id,
+        short_id: "or-…",
+        scope_type: team ? "team" : "user",
+        ...(team ? { team_id: tree.workspace.id } : { scope_user_id: input.host_user_id }),
+        host_user_id: input.host_user_id,
+        name: "Chief of Staff",
+        handle: CHIEF_OF_STAFF_HANDLE,
+        scope: { project_ids: [], plan_ids: [] },
+        reports_to: { kind: "user", user_id: input.host_user_id },
+        status: "active",
+        trust: "understand",
+        created_by: input.host_user_id,
+        created_at: now,
+        updated_at: now,
+        counts: countStates([]),
+        sessions: [],
+        total: 0,
+        scope_names: { projects: [], plans: [] },
+      });
+    }),
+
+    acceptAllOrgProposal: action(function (this: OrgDraft, proposalId: string) {
+      const now = Date.now();
+      for (const c of Object.values(this.orgProposalChanges)) {
+        if (c.proposal_id !== proposalId || c.status !== "proposed") continue;
+        c.status = "accepted";
+        c.decided_at = now;
+      }
+    }),
+
+    decideOrgProposalChange: action(function (this: OrgDraft, changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) {
+      const c = this.orgProposalChanges[changeId];
+      if (!c || c.status !== "proposed") return;
+      c.status = verdict === "accept" ? "accepted" : "skipped";
+      c.decided_at = Date.now();
+      if (edits && Object.keys(edits).length > 0) c.edits = edits;
+    }),
+
+    setOrgFocusChangeId: sync(function (this: OrgDraft, changeId: string | null) {
+      this.orgFocusChangeId = changeId;
     }),
 
     retireOrgRole: action(function (this: OrgDraft, roleId: string) {

@@ -9,7 +9,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
-import { docOrigin, docOriginClass, isOnHumanShelf } from "@codecast/shared/docs";
+import { docOrigin, docOriginClass, isOnHumanShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel, type DocType } from "@codecast/shared/docs";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
@@ -30,25 +30,23 @@ import { DocDates } from "../../components/DocDates";
 
 const api = _api as any;
 
-const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
-  note: { label: "Note", color: "text-gray-400", dot: "bg-gray-400" },
-  plan: { label: "Plan", color: "text-sol-blue", dot: "bg-sol-blue" },
-  design: { label: "Design", color: "text-sol-violet", dot: "bg-sol-violet" },
-  spec: { label: "Spec", color: "text-sol-cyan", dot: "bg-sol-cyan" },
-  investigation: { label: "Investigation", color: "text-sol-yellow", dot: "bg-sol-yellow" },
-  handoff: { label: "Handoff", color: "text-sol-orange", dot: "bg-sol-orange" },
-  decision: { label: "Decision", color: "text-sol-red", dot: "bg-sol-red" },
-  charter: { label: "Charter", color: "text-sol-magenta", dot: "bg-sol-magenta" },
-  brief: { label: "Brief", color: "text-sol-green", dot: "bg-sol-green" },
+// Styling only; the type list and labels come from @codecast/shared/docs.
+// Typed by DocType so a type added there without a style here fails to compile.
+const DOC_TYPE_STYLE: Record<DocType, { color: string; dot: string }> = {
+  note: { color: "text-gray-400", dot: "bg-gray-400" },
+  plan: { color: "text-sol-blue", dot: "bg-sol-blue" },
+  design: { color: "text-sol-violet", dot: "bg-sol-violet" },
+  spec: { color: "text-sol-cyan", dot: "bg-sol-cyan" },
+  investigation: { color: "text-sol-yellow", dot: "bg-sol-yellow" },
+  handoff: { color: "text-sol-orange", dot: "bg-sol-orange" },
+  decision: { color: "text-sol-red", dot: "bg-sol-red" },
+  charter: { color: "text-sol-magenta", dot: "bg-sol-magenta" },
+  brief: { color: "text-sol-green", dot: "bg-sol-green" },
 };
-
-// Derived, so a type added to the config can never be missing from it (a
-// hand-kept second list crashed the whole docs page when "decision" was in
-// the list but not the config).
-const DOC_TYPES = Object.keys(DOC_TYPE_CONFIG);
+const docTypeStyle = (docType: string) => DOC_TYPE_STYLE[docType as DocType] ?? DOC_TYPE_STYLE.note;
 
 export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
-  const cfg = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
+  const cfg = docTypeStyle(doc.doc_type);
   const title = (doc as any).display_title || doc.title || "Untitled";
 
   return (
@@ -97,7 +95,7 @@ export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
           })}
         </div>
       )}
-      <span className="text-[10px] text-gray-500 flex-shrink-0 tabular-nums cq-hide-minimal">{cfg.label}</span>
+      <span className="text-[10px] text-gray-500 flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
       <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
     </>
   );
@@ -366,11 +364,10 @@ export function DocListContent() {
   const listGroups = useMemo((): ListGroup<DocItem>[] | null => {
     if (group === "type" && typeGroups) {
       return typeGroups.map((g) => {
-        const cfg = DOC_TYPE_CONFIG[g.type] || DOC_TYPE_CONFIG.note;
         return {
           key: g.type,
-          label: cfg.label,
-          icon: <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />,
+          label: docTypeLabel(g.type),
+          icon: <span className={`w-2 h-2 rounded-full ${docTypeStyle(g.type).dot}`} />,
           items: g.docs,
         };
       });
@@ -404,7 +401,7 @@ export function DocListContent() {
         { key: "", label: "All", count: sourceFilteredDocs.length },
         ...DOC_TYPES.map((t) => ({
           key: t,
-          label: DOC_TYPE_CONFIG[t].label,
+          label: DOC_TYPE_LABELS[t],
           count: typeCounts[t] || 0,
         })),
       ]}

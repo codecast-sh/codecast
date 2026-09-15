@@ -21,6 +21,10 @@ export type ChatAuthor = {
    *  logo as the face, its title as the name — with the human as a dim "via"
    *  credit. `id` is the session id, for opening it where the client can. */
   session?: { id: string; agentType: string; via?: string };
+  /** A Slack person (or Slack app) with no codecast account: the row's author
+   *  is the workspace's bridge identity and this is the snapshot of who really
+   *  wrote it. Renders their face, never the bridge's, plus the Slack mark. */
+  slack?: { isBot?: boolean };
 };
 
 export type ChatReaction = {
@@ -50,6 +54,11 @@ export type ChatAttachmentView = {
 export type ChatMessageView = {
   id: string;
   author: ChatAuthor;
+  /** Slack provenance: "inbound" was written in Slack and mirrored here,
+   *  "outbound" is ours and also lives in Slack. `permalink` opens it there. */
+  slack?: { direction: "inbound" | "outbound"; permalink?: string };
+  /** The author kept this line out of the channel's Slack mirror. */
+  localOnly?: boolean;
   /** Markdown. */
   content: string;
   /** Uploaded images, rendered as a grid under the text. */
