@@ -1,0 +1,2 @@
+{ "extends": "./tsconfig.json", "compilerOptions": { "noEmit": true, "incremental": false, "composite": false }, "include": [],
+  "files": ["components/org/OrgPage.tsx", "components/org/OrgGraph.tsx", "components/org/OrgNodeCards.tsx", "components/org/OrgScopePanel.tsx", "components/org/HireRoleDialog.tsx", "components/org/orgLayout.ts", "components/org/staffingModel.ts", "app/projects/[id]/page.tsx"] }

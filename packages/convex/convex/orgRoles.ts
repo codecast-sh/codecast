@@ -1,5 +1,6 @@
 import { mutation, query } from "./functions";
-import { cancelTasksOriginatingFrom } from "./agentTasks";
+import { cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
+import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -334,6 +335,11 @@ export async function performUpdateRole(
   }
   if (args.handle !== undefined) {
     const handle = requireHandle(args.handle);
+    // The trust ceiling and the one seat per company rule both key on the
+    // handle (org-staffing.md S6), so the seat keeps it: retire or hire.
+    if (handle !== role.handle && (role.handle === CHIEF_OF_STAFF_HANDLE || handle === CHIEF_OF_STAFF_HANDLE)) {
+      throw new Error("The chief of staff seat keeps its handle: retire it with cast role retire, or hire one with cast org staff");
+    }
     if (handle !== role.handle && (await handleTaken(ctx, role, handle, role._id))) {
       throw new Error(`Handle @${handle} is already taken in this workspace`);
     }
@@ -402,7 +408,26 @@ export async function performReparentRole(
       await refuseOutside(ctx, outside, `Outside the scope of @${parent.handle}`);
     }
   }
-  await ctx.db.patch(role._id, { reports_to, updated_at: Date.now() });
+  const now = Date.now();
+  // The move lands in the role's history: org.health reads the newest row as
+  // last_move_at for the stability cooldown. A no-op reparent logs nothing,
+  // so it does not restart the clock. Read the old value before the patch.
+  const before = role.reports_to;
+  const same = before?.kind === reports_to.kind
+    && String(reports_to.kind === "role" ? before.role_id : before.user_id) === String(reports_to.kind === "role" ? reports_to.role_id : reports_to.user_id);
+  await ctx.db.patch(role._id, { reports_to, updated_at: now });
+  if (!same) {
+    await ctx.db.insert("org_role_history", {
+      role_id: role._id,
+      user_id: userId,
+      actor_type: "user",
+      action: "move",
+      field: "reports_to",
+      old_value: JSON.stringify(before),
+      new_value: JSON.stringify(reports_to),
+      created_at: now,
+    });
+  }
   return await ctx.db.get(role._id);
 }
 
@@ -429,6 +454,11 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
   }
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor);
+  // The seat's markers come off the session here, the one site that knows the
+  // row was a role's seat (a plain workspace anchor keeps anchor_id so its
+  // history still renders under the bot). Without this an adopted session
+  // stays "another role's standing session" forever (org-staffing.md S6).
+  if (standing) await ctx.db.patch(standing._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
   for (const row of await unflushedRowsFor(ctx, role._id)) await ctx.db.delete(row._id);
   const filed: any[] = await ctx.db
     .query("conversations")
@@ -541,6 +571,68 @@ export const setScope = mutation({
     from_session: v.optional(v.string()),
   },
   handler: async (ctx, { api_token, ...args }) => performSetRoleScope(ctx, await requireCaller(ctx, api_token), args),
+});
+
+// ── Line (the-line.md L2) ────────────────────────────────────────────────────
+// A scope owns one workflow; absent means the shipped "line" template. The
+// sweep that starts it lives in orgLine.ts.
+export const DEFAULT_LINE_SLUG = "line";
+export const LINE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function lineSlugOf(role: { line_workflow_slug?: string | null }): string {
+  return role.line_workflow_slug || DEFAULT_LINE_SLUG;
+}
+
+export function normalizeLineSlug(raw: string): string {
+  const slug = raw.trim().toLowerCase().replace(/\.cast$/, "");
+  if (!LINE_SLUG_RE.test(slug)) throw new Error("A line slug is 1 to 64 characters of a-z, 0-9 and -, like line or feature");
+  return slug;
+}
+
+// Changing the line is a scope edit: human only, logged to org_role_history,
+// and the role wakes at once so its next frame reads it.
+export async function performSetLine(
+  ctx: any,
+  userId: Id<"users">,
+  args: { role_id: string; slug: string; from_session?: string; api_token?: string; human_decision?: string },
+): Promise<any> {
+  await refuseUnlessHuman(ctx, args, "Line");
+  const role = await requireRole(ctx, userId, args.role_id, "admin");
+  if (role.status === "retired") throw new Error("That role is retired");
+  const slug = normalizeLineSlug(args.slug);
+  const previous = lineSlugOf(role);
+  const now = Date.now();
+  if (slug !== previous) {
+    await ctx.db.patch(role._id, { line_workflow_slug: slug, updated_at: now });
+    await ctx.db.insert("org_role_history", {
+      role_id: role._id,
+      user_id: userId,
+      actor_type: "user",
+      action: "line",
+      field: "line_workflow_slug",
+      old_value: previous,
+      new_value: slug,
+      created_at: now,
+    });
+    await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `line changed: your scope's tasks now run on the "${slug}" workflow (was "${previous}"); re-read cast brief` });
+  }
+  const updated = await ctx.db.get(role._id);
+  return { ...updated, line_workflow_slug: lineSlugOf(updated), previous_line_workflow_slug: previous };
+}
+
+export async function lineOfRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
+  const role = await requireRole(ctx, userId, args.role_id, "access");
+  return { role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name, line_workflow_slug: lineSlugOf(role) };
+}
+
+// `cast role line <handle> [--set <slug>]` (L2).
+export const line = query({
+  args: { api_token: v.optional(v.string()), role_id: v.string() },
+  handler: async (ctx, { api_token, ...args }) => lineOfRole(ctx, await requireCaller(ctx, api_token), args),
+});
+export const setLine = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), slug: v.string(), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performSetLine(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 
 export const reparent = mutation({
@@ -664,16 +756,36 @@ async function insertRoleDoc(ctx: Ctx, userId: Id<"users">, role: any, docType: 
   });
 }
 
+// The conversation an adopt names must be the caller's own plain session: not
+// a hand (it reports to a seat already) and not another role's standing
+// session. The role's own standing session is accepted, so a repeat is a no-op.
+async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: string): Promise<any> {
+  const conv = await findConversationByAnyRefWhere(ctx, ref, async (c: any) => (await checkConversationAccess(ctx, userId, c)) === "owner");
+  if (!conv) throw new Error("Session not found, or you are not one of its owners");
+  if (conv.org_role_id) throw new Error("That session is a hand of a role; a hand cannot become a standing session");
+  // A pointer at a live role refuses; one left by a seat retired before
+  // retire learned to clear it is stale and the row is free.
+  if (conv.standing_role_id && String(conv.standing_role_id) !== String(role._id)) {
+    const holder = await ctx.db.get(conv.standing_role_id);
+    if (holder && holder.status !== "retired") throw new Error("That session is already another role's standing session");
+  }
+  if (role.team_id && (conv.team_id?.toString() ?? null) !== role.team_id.toString()) throw new Error("That session is not in the role's team");
+  return conv;
+}
+
 // provision — the role becomes a live agent: charter and brief docs, a bot
 // identity, an anchors row with org_role_id, and a persistent session
-// carrying standing_role_id. Idempotent per role.
+// carrying standing_role_id. Idempotent per role. With `adopt_conversation_id`
+// (org-staffing.md S6) the given session becomes the standing session instead
+// of a new one being started.
 export async function performProvisionRole(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; model?: string; project_path?: string; agent_type?: string },
+  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
+  const adopt = args.adopt_conversation_id ? await requireAdoptable(ctx, userId, role, args.adopt_conversation_id) : undefined;
   const scopeNames = await scopeNamesOf(ctx, role);
   const parentName = await parentNameOf(ctx, role);
   const patch: Record<string, any> = { updated_at: Date.now() };
@@ -687,14 +799,14 @@ export async function performProvisionRole(
     scope_type: role.scope_type,
     team_id: role.team_id ?? undefined,
     name: role.name,
-    project_path: args.project_path,
+    project_path: args.project_path ?? adopt?.project_path ?? undefined,
     model: args.model,
     agent_type: agentType as any,
-    role: { _id: role._id, bootstrap },
+    role: { _id: role._id, bootstrap, adopt },
   });
   patch.anchor_id = provisioned.anchor_id;
   await ctx.db.patch(role._id, patch);
-  return { ...provisioned, role_id: role._id, role_short_id: role.short_id, handle: role.handle };
+  return { ...provisioned, role_id: role._id, role_short_id: role.short_id, handle: role.handle, adopted: !!adopt && !provisioned.already_existed };
 }
 
 export const provision = mutation({
@@ -704,8 +816,132 @@ export const provision = mutation({
     model: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    adopt_conversation_id: v.optional(v.string()),
   },
   handler: async (ctx, { api_token, ...args }) => performProvisionRole(ctx, await requireCaller(ctx, api_token), args),
+});
+
+// ── The Chief of Staff (docs/architecture/org-staffing.md S6) ────────────────
+//
+// One role per company, handle `chief-of-staff`, scope the whole company,
+// trust understand and never above: it reads how work flows, proposes the
+// chart, and applies nothing. `performStaff` creates it, provisions or adopts
+// its standing session, arms the weekly company review on that session and
+// queues the first review as an immediate wake. Idempotent per company.
+
+export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
+export const COMPANY_REVIEW_TITLE = "Company review";
+export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const CHIEF_OF_STAFF_CHARTER = [
+  `You are the chief of staff of this company. The executives decide; you propose. Your job is to see how work actually flows, between people, roles and hands, and to propose the organization that lets it flow better.`,
+  ``,
+  `Read before you touch the chart. Every proposal rests on what \`cast org health\`, \`cast org inputs\` and the roles' briefs show: who is overloaded, who is idle, where decisions wait, where reviews stall, which projects have no owner and which work has no home. What you cannot verify you say you could not verify; you never invent tasks to justify a role.`,
+  ``,
+  `Size every scope against the capacity model: one role holds one context window, and a person answers for only so many roles. Respect the stability rules: a chart that moves every review never settles, so a recent move gets time to work, an overload is a pattern before it is a split, and an idle role is retired only when the company around it is busy.`,
+  ``,
+  `Propose the smallest change that removes a bottleneck, and say what you expect it to change and how you will know. Staffing is budgeting: a change that moves scope or people moves budget with it, and the budgets under a person must add up to what that person allowed.`,
+  ``,
+  `Every change carries evidence a person can click: counts, session and task short ids, commits. You never apply a change yourself; a person accepts, edits or skips each one on the org page or at a shell. Anything about budget or people goes to the person you report to, with your recommendation attached.`,
+  ``,
+  `Write for a founder reading on a phone: the summary first, one idea per sentence, no jargon of your own making.`,
+  ``,
+  `## The capacity model`,
+  renderCapacityModel(),
+].join("\n");
+
+// The routine's prompt: the standing session runs the review and proposes only
+// when the stability rules warrant it.
+export const COMPANY_REVIEW_PROMPT = [
+  `Company review. Run \`cast org review\` (it reads \`cast org health --json\` and the inputs) and read each role's brief.`,
+  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. When nothing warrants a change, say so in one line in your brief and end the turn; a quiet review is a good review.`,
+  `Every proposed change carries evidence a person can click. You apply nothing.`,
+].join("\n");
+
+// The review routine on the standing session, once. Keyed on its title so a
+// repeat staff call, or a re-provision, never arms a second one.
+async function ensureCompanyReview(ctx: any, standing: any, everyMs: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
+  const rows: any[] = await ctx.db
+    .query("agent_tasks")
+    .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id))
+    .collect();
+  const live = rows.find((t) => t.title === COMPANY_REVIEW_TITLE && (t.status === "scheduled" || t.status === "running"));
+  if (live) return { id: live._id, short_id: live.short_id, created: false };
+  const interval = Math.max(60_000, Math.round(everyMs || COMPANY_REVIEW_EVERY_MS));
+  const created = await insertTask(ctx, standing.user_id, {
+    title: COMPANY_REVIEW_TITLE,
+    prompt: COMPANY_REVIEW_PROMPT,
+    originating_conversation_id: String(standing._id),
+    project_path: standing.project_path ?? undefined,
+    schedule_type: "recurring",
+    interval_ms: interval,
+    run_at: Date.now() + interval,
+    mode: "apply",
+  });
+  return { ...created, created: true };
+}
+
+export async function performStaff(
+  ctx: any,
+  userId: Id<"users">,
+  args: { team_id?: Id<"teams">; reports_to?: Id<"users">; adopt_conversation_id?: string; every_ms?: number; project_path?: string },
+): Promise<{
+  role: { _id: Id<"org_roles">; short_id: string; handle: string; name: string };
+  standing: { conversation_id: Id<"conversations">; short_id?: string } | null;
+  routine: { id: Id<"agent_tasks">; short_id?: string } | null;
+  created: boolean;
+  adopted: boolean;
+  already_existed: boolean;
+}> {
+  const boundary = args.team_id ? { team_id: args.team_id } : { scope_user_id: userId };
+  const existing = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === CHIEF_OF_STAFF_HANDLE);
+  const role = existing ?? await performCreateRole(ctx, userId, {
+    name: CHIEF_OF_STAFF_NAME,
+    handle: CHIEF_OF_STAFF_HANDLE,
+    team_id: args.team_id,
+    reports_to: { kind: "user", user_id: args.reports_to ?? userId },
+    charter: CHIEF_OF_STAFF_CHARTER,
+  });
+  const created = !existing;
+  // A seat that already stands is left as it is: the standing session, its
+  // routine and its first review happened once. Only a seat with no session
+  // yet (created earlier without provisioning) is provisioned now.
+  const already_existed = !!existing && !!existing.anchor_id;
+  const provisioned = already_existed
+    ? null
+    : await performProvisionRole(ctx, userId, { role_id: String(role._id), adopt_conversation_id: args.adopt_conversation_id, project_path: args.project_path });
+  const fresh = await ctx.db.get(role._id);
+  const standing = await standingConversationOf(ctx, fresh);
+  let routine: { id: Id<"agent_tasks">; short_id?: string } | null = null;
+  if (standing) {
+    const ensured = await ensureCompanyReview(ctx, standing, args.every_ms ?? COMPANY_REVIEW_EVERY_MS);
+    routine = { id: ensured.id, short_id: ensured.short_id };
+    // The first review runs at once: an immediate wake carrying the prompt,
+    // the same rail a fired routine rides (org-roles-standing.md T3).
+    if (provisioned) await enqueueRoleEvent(ctx, fresh._id, { kind: "immediate", cause: `first ${COMPANY_REVIEW_TITLE.toLowerCase()}:\n${COMPANY_REVIEW_PROMPT}` });
+  }
+  return {
+    role: { _id: fresh._id, short_id: fresh.short_id, handle: fresh.handle, name: fresh.name },
+    standing: standing ? { conversation_id: standing._id, short_id: standing.short_id ?? undefined } : null,
+    routine,
+    created,
+    adopted: !!provisioned?.adopted,
+    already_existed,
+  };
+}
+
+export const staff = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    reports_to: v.optional(v.id("users")),
+    adopt_conversation_id: v.optional(v.string()),
+    every_ms: v.optional(v.number()),
+    project_path: v.optional(v.string()),
+    from_session: v.optional(v.string()),
+  },
+  handler: async (ctx, { api_token, from_session: _from, ...args }) => performStaff(ctx, await requireCaller(ctx, api_token), args),
 });
 
 // The standing session behind a role, or null when none was provisioned.
@@ -769,11 +1005,14 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
 }
 
 // trust — human only, logged on the charter as a doc entry.
-export async function performSetTrust(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string; api_token?: string }): Promise<any> {
+export async function performSetTrust(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
   await refuseUnlessHuman(ctx, args, "Trust stage");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const trust = args.trust.trim().toLowerCase();
   if (!(TRUST_STAGES as readonly string[]).includes(trust)) throw new Error(`Unknown trust stage "${args.trust}"; use understand, decide or direct`);
+  // The chief of staff proposes and applies nothing (org-staffing.md S6): its
+  // trust never rises above understand.
+  if (role.handle === CHIEF_OF_STAFF_HANDLE && trust !== "understand") throw new Error("The chief of staff stays at understand: it proposes, a person applies");
   const previous = trustOf(role);
   const now = Date.now();
   await ctx.db.patch(role._id, { trust, updated_at: now });
@@ -942,6 +1181,8 @@ export async function roleForSession(ctx: Ctx, userId: Id<"users">, sessionRef: 
     status: role.status,
     trust: trustOf(role),
     review_backend: role.review_backend ?? null,
+    // the-line.md L2: `cast workflow run` with no file runs this slug.
+    line_workflow_slug: lineSlugOf(role),
     own_agent: conv.agent_type,
     is_standing: String(conv.standing_role_id ?? "") === String(role._id),
     review_conflict: reviewBackendConflict(role, conv.agent_type),

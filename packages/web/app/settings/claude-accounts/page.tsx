@@ -37,6 +37,8 @@ import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../compon
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
+import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
+import { machineSwitchBlock, profileIsCurrentLogin } from "../../../lib/machineAccountSwitch";
 
 type DeviceAccounts = {
   device_id: string;
@@ -262,30 +264,17 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
 }
 
 function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
-  const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const removeProfile = useMutation(api.accountSwitch.removeAccountProfile);
   const now = useCoarseNow(30_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const sw = useMachineAccountSwitch({ deviceId: device.device_id, activeEmail: device.active_email });
 
   const online = device.online !== false;
-  const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
+  const activeProfile = device.profiles.find((p) => profileIsCurrentLogin(p, device.active_email));
   // Suggest the email's local part as the profile name (claude2@almostcandid.com -> claude2).
   const suggested = (device.active_email?.split("@")[0] ?? "work").toLowerCase();
-
-  const handleSwitch = async (profile: string) => {
-    setBusy(profile);
-    try {
-      // Pure swap: running sessions are untouched; new/resumed ones adopt the
-      // account. Reviving blocked sessions stays with the inbox banner / CLI.
-      await requestSwitch({ profile, device_id: device.device_id, continue_blocked: false });
-      toast.success(`Switching to "${profile}" — new and resumed sessions will use it`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Switch failed");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const rowBusy = busy ?? sw.switching;
 
   const handleRemove = async (profile: string) => {
     setBusy(profile);
@@ -331,7 +320,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       )}
 
       {device.profiles.map((p) => {
-          const isActive = !!p.email && p.email === device.active_email;
+          const isActive = profileIsCurrentLogin(p, device.active_email);
           const plan = planLabel(p);
           return (
             <div
@@ -348,7 +337,15 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   </span>
                 )}
                 <LoginExpiredBadge profile={p} />
-                <ProfileSignInButton device={device} profile={p} />
+                <ProfileSignInButton
+                  device={device}
+                  profile={p}
+                  force={
+                    sw.outcome?.kind === "error" &&
+                    sw.outcome.profile === p.name &&
+                    /sign in again/i.test(sw.outcome.message)
+                  }
+                />
                 <SetupTokenBadge profile={p} now={now} />
                 <MintTokenButton device={device} profile={p} />
                 {(() => {
@@ -359,7 +356,19 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     </span>
                   ) : null;
                 })()}
-                {isActive ? (
+                {sw.switching === p.name ? (
+                  <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-sol-cyan">
+                    <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-sol-cyan/30 border-t-sol-cyan" aria-hidden />
+                    Switching…
+                    <button
+                      type="button"
+                      onClick={sw.cancel}
+                      className="text-[11px] font-medium text-current/80 underline-offset-2 hover:underline"
+                    >
+                      cancel
+                    </button>
+                  </span>
+                ) : isActive ? (
                   <span className="shrink-0 text-[11px] font-medium text-sol-green">active</span>
                 ) : confirmRemove === p.name ? (
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -367,7 +376,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     <Button
                       size="sm"
                       variant="destructive"
-                      disabled={busy !== null}
+                      disabled={rowBusy !== null}
                       onClick={() => handleRemove(p.name)}
                       className="h-6 px-2 text-[11px]"
                     >
@@ -376,7 +385,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={busy !== null}
+                      disabled={rowBusy !== null}
                       onClick={() => setConfirmRemove(null)}
                       className="h-6 px-2 text-[11px]"
                     >
@@ -385,18 +394,34 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   </div>
                 ) : (
                   <>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy !== null || device.is_remote || !online}
-                      onClick={() => handleSwitch(p.name)}
-                      className="h-6 px-2 text-[11px]"
-                    >
-                      {busy === p.name ? "Switching…" : "Switch"}
-                    </Button>
+                    {(() => {
+                      const blocked = machineSwitchBlock({
+                        isActive: false,
+                        online,
+                        isRemote: device.is_remote,
+                        loginExpired: !!p.login_expired_at,
+                        thisProfile: p.name,
+                      });
+                      if (blocked?.block === "login_expired") return null;
+                      return (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!!blocked}
+                          onClick={() => void sw.switchTo(p.name, p.email)}
+                          title={
+                            blocked?.label ??
+                            `Switch this machine to "${p.name}". Running sessions keep the account they started on.`
+                          }
+                          className="h-6 px-2 text-[11px]"
+                        >
+                          Switch
+                        </Button>
+                      );
+                    })()}
                     <button
                       onClick={() => setConfirmRemove(p.name)}
-                      disabled={busy !== null || !online}
+                      disabled={rowBusy !== null || !online}
                       aria-label="Remove this profile from the machine"
                       title="Remove this profile from the machine"
                       className="shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red"
@@ -406,6 +431,14 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   </>
                 )}
               </div>
+              {sw.outcome?.kind === "error" && sw.outcome.profile === p.name && (
+                <div className="mt-1.5 pl-[18px] text-[11px] text-sol-red">{sw.outcome.message}</div>
+              )}
+              {sw.outcome?.kind === "success" && sw.outcome.profile === p.name && (
+                <div className="mt-1.5 pl-[18px] text-[11px] text-sol-green">
+                  Now using {p.name}. Running sessions keep the account they started on.
+                </div>
+              )}
               <div className="mt-2 pl-[18px]">
                 <AccountUsageBars usage={p.usage} now={now} />
               </div>

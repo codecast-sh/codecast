@@ -4,7 +4,7 @@
       "memory_enabled": true,
       "memory_version": "14"
     },
-    "stdout": "* Memory — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -22,7 +22,7 @@
       "forks_enabled": true,
       "forks_version": "8"
     },
-    "stdout": "* Forks & Sessions — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },

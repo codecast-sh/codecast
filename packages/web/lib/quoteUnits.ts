@@ -24,6 +24,9 @@ export function getQuoteUnits(content: HTMLElement | null): HTMLElement[] {
 
 function collectUnits(container: HTMLElement, units: HTMLElement[]) {
   for (const child of Array.from(container.children) as HTMLElement[]) {
+    // An open reveal band's slot (lib/revealHost) is chrome under a line, not
+    // a line: skipping it keeps every unit after it at its index.
+    if (child.hasAttribute("data-reveal-slot")) continue;
     if (child.tagName === "OL" || child.tagName === "UL") {
       const items = (Array.from(child.children) as HTMLElement[]).filter((li) => li.tagName === "LI");
       if (items.length) {

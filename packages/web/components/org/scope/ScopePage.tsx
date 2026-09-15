@@ -11,7 +11,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Anchor as AnchorGlyph, Archive, ArrowLeft, Bell, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal } from "lucide-react";
+import { Anchor as AnchorGlyph, Archive, ArrowLeft, Bell, BellRing, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal, Workflow } from "lucide-react";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -23,6 +23,7 @@ import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { useIsPhone } from "../../../hooks/useIsPhone";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
+import { ScopeWakesTab } from "./ScopeWakesTab";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
@@ -30,7 +31,7 @@ import { TaskListContent } from "../../../app/tasks/page";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { KeyCap, ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { isMac } from "../../../shortcuts/registry";
-import { queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
+import { canEditRole, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { StateTally } from "../OrgNodeCards";
 import { parentName } from "../orgMeta";
@@ -39,20 +40,24 @@ import { ScopeFeed } from "./ScopeFeed";
 import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopeSettings } from "./ScopeSettings";
+import { ScopeLineTab } from "./ScopeLineTab";
 import { DEFAULT_CAPS, TRUST_META, briefFirstLine, type TrustStage } from "./scopeTypes";
 
 const api = _api as any;
 
-type TabKey = "feed" | "tasks" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "settings";
+type TabKey = "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
 const TABS: { key: TabKey; label: string; icon: any; roleOnly?: boolean }[] = [
   { key: "feed", label: "Feed", icon: Rss },
   { key: "tasks", label: "Tasks", icon: ListChecks },
+  // The line (the-line.md L10): the scope's tasks by station.
+  { key: "line", label: "Line", icon: Workflow },
   { key: "plans", label: "Plans", icon: Layers },
   { key: "docs", label: "Docs", icon: FileText },
   { key: "sessions", label: "Sessions", icon: Terminal },
   { key: "decisions", label: "Decisions", icon: MessageCircleQuestionMark },
   { key: "brief", label: "Brief", icon: ScrollText, roleOnly: true },
   { key: "charter", label: "Charter", icon: CheckSquare, roleOnly: true },
+  { key: "wakes", label: "Wakes", icon: BellRing, roleOnly: true },
   { key: "settings", label: "Settings", icon: Settings2, roleOnly: true },
 ];
 
@@ -107,8 +112,7 @@ export function ScopePageInner({ id }: { id: string }) {
 
   // -------- permissions: admins and the host reshape; the parent also edits the brief
   const me = tree?.people.find((p) => p.is_me) ?? (meId ? tree?.people.find((p) => p.user_id === meId) : undefined);
-  const isAdmin = !!tree && (me?.role === "admin" || me?.role === "owner" || tree.workspace.kind === "user");
-  const canEdit = !!role && (isAdmin || role.host_user_id === (me?.user_id ?? meId));
+  const canEdit = canEditRole(tree, role, meId);
   const isParent = !!role && role.reports_to.kind === "user" && role.reports_to.user_id === (me?.user_id ?? meId);
   const canEditBrief = canEdit || isParent;
 
@@ -333,11 +337,13 @@ export function ScopePageInner({ id }: { id: string }) {
       {tab !== "feed" && tab !== "tasks" && (
         <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", phone ? "px-2 py-3" : "px-5 py-4")}>
           <div>
+            {tab === "line" && <ScopeLineTab ids={scopeIds} teamId={tree.workspace.kind === "team" ? tree.workspace.id : undefined} />}
             {tab === "plans" && <ScopePlansTab ids={scopeIds} />}
             {tab === "docs" && <ScopeDocsTab ids={scopeIds} />}
             {tab === "sessions" && <ScopeSessionsTab tree={tree} role={role} scope={scopeRef} />}
-            {tab === "decisions" && <ScopeDecisionsTab ids={scopeIds} />}
+            {tab === "decisions" && <ScopeDecisionsTab ids={scopeIds} roleId={role?._id ?? null} />}
             {tab === "brief" && role && <ScopeBriefTab role={role} facts={brief?.facts ?? null} factsProblem={briefProblem} narrative={brief?.narrative ?? ""} canEdit={canEditBrief} backHref={backHref} />}
+            {tab === "wakes" && role && <ScopeWakesTab role={role} highlight={searchParams.get("wake")} now={now} />}
             {tab === "charter" && role && <ScopeCharterTab role={role} charter={brief?.charter ?? role.charter ?? ""} canEdit={canEdit} backHref={backHref} onUpdateCharter={(v) => update({ charter: v })} />}
             {tab === "settings" && role && (
               <ScopeSettings tree={tree} role={role} canEdit={canEdit} overlaps={summary?.overlaps ?? []} hostName={hostName} model={model} counters={counters} armRetire={retireArmed} onUpdate={update} onReparent={reparent} onRetire={retire} />

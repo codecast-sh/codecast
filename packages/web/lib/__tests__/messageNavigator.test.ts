@@ -11,6 +11,9 @@ import {
   pickStickyFallback,
   pickStickyFallbackFromLoaded,
   resolveStickyPrompt,
+  mergeNavigatorSources,
+  topVisibleIndexFromRects,
+  resolveNavigatorCurrentId,
   navigatorHeaderLabels,
   countCommentsByMessage,
   matchIndex,
@@ -342,6 +345,105 @@ describe("resolveStickyPrompt", () => {
   test("null when the reader is above every prompt", () => {
     expect(resolveStickyPrompt(sticky, 1, new Set([1]))).toBeNull();
     expect(resolveStickyPrompt([], 5, new Set([5]))).toBeNull();
+  });
+});
+
+describe("huddles-thread screenshot: opening prompt vs capped cache", () => {
+  test("the transcript-top prompt becomes list #1 and the current row", () => {
+    const cached = [
+      msg("go", "go", 200),
+      msg("e2e", "run the two-account livekt e2e - need to verify invites", 300),
+    ];
+    const loaded = [
+      { _id: "startup", role: "user" as const, content: "there was this startup about 5 years ago", timestamp: 100 },
+      { _id: "go", role: "user" as const, content: "go", timestamp: 200 },
+      { _id: "e2e", role: "user" as const, content: "run the two-account livekt e2e - need to verify invites", timestamp: 300 },
+    ];
+    const sources = mergeNavigatorSources(cached, loaded);
+    const rows = buildNavigatorRows(sources);
+    expect(rows.filter((r) => r.kind === "user").map((r) => [r._id, r.originalIndex + 1])).toEqual([
+      ["startup", 1],
+      ["e2e", 2],
+    ]);
+    const timelineIds = ["startup", "reply", "go", "e2e"];
+    const navIndices = [0, 2, 3];
+    expect(resolveNavigatorCurrentId(navIndices, timelineIds, 0, null)).toBe("startup");
+  });
+});
+
+describe("mergeNavigatorSources", () => {
+  test("keeps cached order and prepends loaded prompts the scan cap dropped", () => {
+    const cached = [
+      msg("p2", "later prompt", 200),
+      msg("p3", "newest prompt", 300),
+    ];
+    const loaded = [
+      { _id: "p1", role: "user" as const, content: "opening prompt", timestamp: 100 },
+      { _id: "p2", role: "user" as const, content: "later prompt", timestamp: 200 },
+      { _id: "a1", role: "assistant" as const, content: "reply", timestamp: 150 },
+    ];
+    expect(mergeNavigatorSources(cached, loaded).map((m) => m._id)).toEqual(["p1", "p2", "p3"]);
+  });
+
+  test("prefers the loaded body when it is longer than the cached snippet", () => {
+    const cached = [msg("p1", "opening", 100)];
+    const loaded = [
+      { _id: "p1", role: "user" as const, content: "opening prompt with the rest of the body", timestamp: 100 },
+    ];
+    expect(mergeNavigatorSources(cached, loaded)[0].content).toBe("opening prompt with the rest of the body");
+  });
+
+  test("does not admit tool-result echoes from the loaded window", () => {
+    const cached = [msg("p1", "opening prompt", 100)];
+    const loaded = [
+      { _id: "tr", role: "user" as const, content: "", timestamp: 120, tool_results: [{ tool_use_id: "t1", content: "ok" }] },
+    ];
+    expect(mergeNavigatorSources(cached, loaded).map((m) => m._id)).toEqual(["p1"]);
+  });
+});
+
+describe("topVisibleIndexFromRects", () => {
+  const rows = [
+    { index: 0, top: -80, bottom: -10 },
+    { index: 1, top: -10, bottom: 90 },
+    { index: 2, top: 90, bottom: 180 },
+  ];
+
+  test("the first row that intersects the viewport is current, even when it is the opening prompt", () => {
+    const { topVisibleIndex, visible } = topVisibleIndexFromRects(rows, 0, 400);
+    expect(topVisibleIndex).toBe(1);
+    expect([...visible]).toEqual([1, 2]);
+  });
+
+  test("a row fully above the viewport is not visible", () => {
+    const { topVisibleIndex, visible } = topVisibleIndexFromRects(rows, 100, 400);
+    expect(topVisibleIndex).toBe(2);
+    expect(visible.has(0)).toBe(false);
+    expect(visible.has(1)).toBe(false);
+  });
+});
+
+describe("resolveNavigatorCurrentId", () => {
+  const ids = ["sys", "u1", "a1", "u2", "a2"];
+  const nav = [1, 3];
+
+  test("highlights the user prompt on screen at the top, not the previous one", () => {
+    expect(resolveNavigatorCurrentId(nav, ids, 1, null)).toBe("u1");
+    expect(resolveNavigatorCurrentId(nav, ids, 2, null)).toBe("u1");
+    expect(resolveNavigatorCurrentId(nav, ids, 3, null)).toBe("u2");
+  });
+
+  test("uses the prompt above the loaded window when nothing in this window sits at or above the top", () => {
+    expect(resolveNavigatorCurrentId([], ids, 0, "fallback")).toBe("fallback");
+    expect(resolveNavigatorCurrentId(nav, ids, 0, "fallback")).toBe("fallback");
+  });
+
+  test("at the conversation start, content above the first prompt still highlights that prompt", () => {
+    expect(resolveNavigatorCurrentId(nav, ids, 0, null)).toBe("u1");
+  });
+
+  test("stays on the opening prompt at scrollTop 0", () => {
+    expect(resolveNavigatorCurrentId([0, 2], ["u1", "a1", "u2"], 0, null)).toBe("u1");
   });
 });
 

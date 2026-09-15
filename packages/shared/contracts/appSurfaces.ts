@@ -38,6 +38,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("search", "search across sessions, docs, tasks and people"),
   dash("notifications", "notification list"),
   dash("questions", "agent questions waiting for an answer"),
+  dash("decisions/stacks", "decision stacks: open first with progress and due, done ones folded"),
   dash("threads", "thread list"),
   dash("docs", "documents index"),
   dash("capabilities", "capability registry"),
@@ -98,6 +99,8 @@ export const APP_SURFACE_EXCLUDED_PATHS = new Set<string>([
   "settings/team/join",
   "settings/integrations/github-app",
   "review/batch",
+  // Slack's OAuth return leg: needs ?code&state from Slack, then bounces away.
+  "slack/connect",
 ]);
 
 export function findAppSurface(nameOrPath: string): AppSurface | undefined {

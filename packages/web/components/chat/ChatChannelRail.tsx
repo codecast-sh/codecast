@@ -17,6 +17,8 @@ import {
 import { hueFor, initials } from "../../lib/avatarInitials";
 import { useInboxStore } from "../../store/inboxStore";
 import { memberAvatarUrl } from "../../lib/liveEntities";
+import { SlackLogo } from "../SlackLogo";
+import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import "./chat.css";
 
 // The channel rail.
@@ -137,6 +139,11 @@ function RailRow({
         )}
       </span>
       <span className="ch-chan-name">{name}</span>
+      {c.slack && (
+        // The label of a mirrored channel: the name IS the Slack channel's
+        // name, so the mark says where it comes from and the tooltip the rest.
+        <SlackLogo className="ch-chan-slack" muted={c.slack.state !== "live"} title={MIRROR_STATE_LABEL[c.slack.state]} />
+      )}
       <OccupancyChip roomKey={roomKey} className="shrink-0 ch-chan-occ" />
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
       {mentions > 0 ? (
@@ -161,10 +168,14 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   onNewMessage,
   onOpenDm,
   onChannelContextMenu,
+  showDms = true,
 }: {
   channels: ChatChannelView[];
   activeChannelId?: string;
   onSelect: (channelId: string) => void;
+  /** The direct messages section. Off for a rail whose rooms have no roster
+   *  to message (the community page). */
+  showDms?: boolean;
   onCreate?: () => void;
   /** Opens the new-message modal. */
   onNewMessage?: () => void;
@@ -209,6 +220,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
           />
         ))}
       </div>
+      {showDms && (<>
       <div className="ch-rail-head ch-rail-head-dms">
         <span className="ch-rail-title">Direct messages</span>
         {onNewMessage && (
@@ -253,6 +265,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
           <div className="ch-rail-empty-dms">Messages with teammates land here.</div>
         )}
       </div>
+      </>)}
     </nav>
     </TooltipProvider>
   );

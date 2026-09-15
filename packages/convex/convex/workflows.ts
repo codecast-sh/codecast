@@ -21,6 +21,13 @@ const nodeV = v.object({
   backend: v.optional(v.string()),
   agent: v.optional(v.string()),
   isolated: v.optional(v.boolean()),
+  // the-line.md L8: every attribute the runner reads survives the push.
+  definition: v.optional(v.string()),
+  reviewer: v.optional(v.boolean()),
+  timeout: v.optional(v.number()),
+  temperature: v.optional(v.number()),
+  doc: v.optional(v.string()),
+  category: v.optional(v.string()),
 });
 
 const edgeV = v.object({
@@ -40,6 +47,11 @@ export const upsert = mutation({
     nodes: v.array(nodeV),
     edges: v.array(edgeV),
     model_stylesheet: v.optional(v.string()),
+    // The graph attribute stack (the-line.md L4). Accepted so the push does
+    // not fail; the row has no stack column yet, so a daemon run reads it
+    // back from `source` (daemonGraph.ts). Store it here once
+    // `workflows.stack` exists in the schema.
+    stack: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);

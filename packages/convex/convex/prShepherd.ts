@@ -1,23 +1,10 @@
-// The PR shepherd.
-//
-// A pull request that a session opened stays that session's job until it
-// merges. The shepherd is how: one standing trigger per pull request, woken
-// with a prompt rebuilt from the pull request's current state every time
-// something happens to it — a review, a failing check, a base branch that moved
-// on, a merge.
-//
-// The prompt is always rebuilt, never appended to. A wake that arrives while
-// the agent is mid-run therefore cannot deliver a stale picture: the retry
-// below waits for the run to finish and then builds the prompt from whatever
-// is true by then.
-
 import { v } from "convex/values";
 import { internalMutation, internalQuery, internalAction, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessConversation, canAccessPullRequest } from "./lib/access";
-import { insertTask, refreshArmedTriggerKind } from "./agentTasks";
+import { insertTask, patchTask } from "./agentTasks";
 import { recordExternalEvent } from "./externalEvents";
 import { foldChecksState, foldShepherdState, prUrl, shortSha } from "./lib/gitRefs";
 import { checkLabel, inlineForeignText } from "@codecast/shared/contracts";
@@ -96,6 +83,9 @@ export async function patchPullRequest(
 
   if (after.shepherd_conversation_id) {
     await refreshConversationPrStatus(ctx, after.shepherd_conversation_id);
+  }
+  if (after.state === "merged" || after.state === "closed") {
+    await closeOutShepherd(ctx, after, after.state);
   }
 
   return { pr: after, previousState, stateChanged: state !== previousState };
@@ -262,6 +252,15 @@ const WAKE_SEVERITY = [
 // The pull request is over. Nothing else is worth leading with, and if both
 // somehow arrive the later one is the truth.
 const TERMINAL_REASONS = new Set(["merged", "closed"]);
+const QUIET_REASONS = new Set(["bound", "opened", "behind", "checks_green", "ready", "synchronize", "review_requested"]);
+
+function isCurrentWakeReason(pr: PR, reason: string): boolean {
+  if (QUIET_REASONS.has(reason) || TERMINAL_REASONS.has(reason)) return false;
+  if (reason === "check_failed") return pr.checks_state === "failure";
+  if (reason === "conflict") return pr.mergeable === false || pr.mergeable_state === "dirty";
+  if (reason === "changes_requested") return pr.review_decision === "changes_requested";
+  return true;
+}
 
 /** The headline reason, plus the rest in the order they happened. */
 export function pickWakeReason(reasons: string[]): { headline: string; others: string[] } {
@@ -380,8 +379,8 @@ export function buildWakePrompt(input: WakePromptInput): string {
   lines.push("");
   lines.push("## Your job");
   if (input.reason === "merged") {
-    lines.push("This pull request has merged, so close the work out: mark the linked tasks done,");
-    lines.push("say what shipped, and end with `cast state --status done`.");
+    lines.push("This pull request has merged. Save the verified outcome and retire its trigger.");
+    lines.push("Do not close linked tasks unless their own acceptance criteria are verified complete.");
   } else if (input.reason === "closed") {
     lines.push("This pull request was closed without merging. Say what happened and what remains,");
     lines.push("then end with `cast state --status done` unless something still needs a person.");
@@ -390,8 +389,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
     lines.push("in one pass: fix the failing checks, answer the review comments, and push to the same");
     lines.push("branch. When you have addressed a reviewer's point, say so on GitHub in reply to");
     lines.push("their comment (`gh` or `cast pr comment`) so the thread shows the resolution rather");
-    lines.push("than going quiet. If the branch is behind, bring it up to date; if it conflicts,");
-    lines.push("resolve the conflicts yourself. Do not merge the pull request unless a human asked");
+    lines.push("than going quiet. Being behind alone is not a reason to rebase or push. Update the");
+    lines.push("branch only for a verified merge blocker or an explicit request; resolve real conflicts.");
+    lines.push("Do not merge the pull request unless a human asked");
     lines.push("you to. Keep `cast state` current so the card says where the PR actually stands.");
   }
 
@@ -409,12 +409,12 @@ export function buildWakePrompt(input: WakePromptInput): string {
  * request it belongs to.
  */
 export async function ensureShepherdTask(ctx: Ctx, pr: PR): Promise<Id<"agent_tasks"> | null> {
-  if (!pr.shepherd_conversation_id) return null;
+  if (!pr.shepherd_enabled || !pr.shepherd_conversation_id || pr.state !== "open") return null;
 
   if (pr.shepherd_task_id) {
     const existing = await ctx.db.get(pr.shepherd_task_id);
-    if (existing && existing.status !== "completed" && existing.status !== "failed") {
-      return pr.shepherd_task_id;
+    if (existing) {
+      return existing.status === "scheduled" || existing.status === "running" ? pr.shepherd_task_id : null;
     }
   }
 
@@ -437,14 +437,14 @@ export async function ensureShepherdTask(ctx: Ctx, pr: PR): Promise<Id<"agent_ta
 }
 
 /** Stand the trigger down. Used when the PR ends and when a person turns it off. */
-export async function retireShepherdTask(ctx: Ctx, pr: PR): Promise<void> {
+export async function retireShepherdTask(ctx: Ctx, pr: PR, summary?: string): Promise<void> {
   if (!pr.shepherd_task_id) return;
   const task = await ctx.db.get(pr.shepherd_task_id);
-  if (!task || task.status === "completed") return;
-  await ctx.db.patch(task._id, { status: "completed", run_at: undefined });
-  if (task.originating_conversation_id) {
-    await refreshArmedTriggerKind(ctx as any, task.originating_conversation_id);
-  }
+  if (!task || task.status === "completed" || task.status === "cancelled") return;
+  await patchTask(ctx, task, {
+    status: "completed", run_at: undefined, lease_holder: undefined, lease_expires_at: undefined,
+    ...(summary ? { last_run_summary: summary } : {}),
+  });
 }
 
 /** What the agent still has to answer for: unresolved comments and real reviews. */
@@ -554,6 +554,8 @@ export async function wakeShepherd(
   const pr = (await ctx.db.get(prId)) as PR | null;
   if (!pr) return { woken: false, reason: "no_pr" };
   if (!pr.shepherd_enabled || !pr.shepherd_conversation_id) return { woken: false, reason: "disabled" };
+  if (pr.state !== "open") return { woken: false, reason: "terminal" };
+  if (QUIET_REASONS.has(reason) || TERMINAL_REASONS.has(reason)) return { woken: false, reason: "not_actionable" };
 
   const taskId = await ensureShepherdTask(ctx, pr);
   if (!taskId) return { woken: false, reason: "no_task" };
@@ -564,8 +566,12 @@ export async function wakeShepherd(
   // Remember this reason whether or not the wake lands now. A shepherd that is
   // mid-run collects several before it is free, and the newest is rarely the
   // most urgent one to lead with.
-  const pending = [...(pr.shepherd_pending_reasons ?? [])];
-  if (!pending.includes(reason)) pending.push(reason);
+  const pending = (pr.shepherd_pending_reasons ?? []).filter((r) => isCurrentWakeReason(pr, r));
+  if (!pending.includes(reason) && (attempt === 0 || isCurrentWakeReason(pr, reason))) pending.push(reason);
+  if (pending.length === 0) {
+    await ctx.db.patch(prId, { shepherd_pending_reasons: [] });
+    return { woken: false, reason: "not_actionable" };
+  }
 
   if (task.status === "running") {
     await ctx.db.patch(prId, { shepherd_pending_reasons: pending });
@@ -596,7 +602,7 @@ export async function wakeShepherd(
     other_reasons: others,
   });
 
-  await ctx.db.patch(taskId, {
+  await patchTask(ctx, task, {
     prompt,
     status: "scheduled",
     run_at: Date.now(),
@@ -640,6 +646,7 @@ export const retire = internalMutation({
   handler: async (ctx, args): Promise<{ retired: boolean }> => {
     const pr = await ctx.db.get(args.pr_id);
     if (!pr?.shepherd_task_id) return { retired: false };
+    if (pr.state === "open" && pr.shepherd_enabled) return { retired: false };
     const task = await ctx.db.get(pr.shepherd_task_id);
     if (!task || task.status === "completed") return { retired: false };
 
@@ -664,12 +671,16 @@ export async function bindShepherd(
   conversationId: Id<"conversations"> | undefined,
   enabled: boolean,
 ): Promise<void> {
-  const patch: Record<string, any> = { shepherd_enabled: enabled };
+  const patch: Record<string, any> = { shepherd_enabled: enabled && pr.state === "open", shepherd_pending_reasons: [] };
+  if (enabled && pr.shepherd_task_id) {
+    const task = await ctx.db.get(pr.shepherd_task_id);
+    if (task && task.status !== "scheduled" && task.status !== "running") patch.shepherd_task_id = undefined;
+  }
   if (conversationId) patch.shepherd_conversation_id = conversationId;
   await ctx.db.patch(pr._id, patch);
 
   const updated = (await ctx.db.get(pr._id)) as PR;
-  if (enabled && updated.shepherd_conversation_id) {
+  if (updated.shepherd_enabled && updated.shepherd_conversation_id) {
     await ensureShepherdTask(ctx, updated);
   } else {
     await retireShepherdTask(ctx, updated);
@@ -688,7 +699,14 @@ export const bindPRToConversation = internalMutation({
   handler: async (ctx, args) => {
     const pr = await ctx.db.get(args.pr_id);
     if (!pr) return { ok: false };
-    await bindShepherd(ctx, pr, args.conversation_id, args.enabled ?? true);
+    if (args.enabled === undefined) {
+      await patchPullRequest(ctx, pr._id, {
+        shepherd_conversation_id: args.conversation_id,
+        shepherd_enabled: pr.shepherd_enabled ?? false,
+      });
+    } else {
+      await bindShepherd(ctx, pr, args.conversation_id, args.enabled);
+    }
     return { ok: true };
   },
 });
@@ -909,12 +927,8 @@ export const tokenForPR = internalAction({
   },
 });
 
-/** Wake the shepherd one last time on a merge or close, then stand it down. */
 export async function closeOutShepherd(ctx: Ctx, pr: PR, reason: "merged" | "closed"): Promise<void> {
-  await wakeShepherd(ctx, pr._id, reason);
-  await ctx.db.patch(pr._id, { shepherd_enabled: false });
-  await ctx.scheduler?.runAfter(SHEPHERD_MAX_RUNTIME_MS + 60 * 1000, internal.prShepherd.retire, {
-    pr_id: pr._id,
-    attempt: 0,
-  });
+  await ctx.db.patch(pr._id, { shepherd_enabled: false, shepherd_pending_reasons: [] });
+  await retireShepherdTask(ctx, pr,
+    `Verified ${prUrl(pr.repository, pr.number)} ${reason}; retired PR shepherding. This does not verify completion of an in-flight run or linked tasks.`);
 }

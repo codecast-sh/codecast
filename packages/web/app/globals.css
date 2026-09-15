@@ -20,6 +20,32 @@
 @container (max-width: 600px) {
   .cq-hide-compact { display: none !important; }
 }
+
+/* Capabilities Installed: list + reader. Viewport `lg:` would fire inside a
+   280px split pane because the window is still wide — the reader column then
+   takes 28rem and crushes the list. The query container is the tab itself. */
+.cap-installed {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+/* Stacked: the open reader sits above the list so a click is not a scroll
+   to the bottom of a thousand skills. */
+.cap-installed-reader { order: -1; }
+@container (min-width: 720px) {
+  .cap-installed {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 1.25rem;
+  }
+  .cap-installed-reader {
+    order: 0;
+    position: sticky;
+    top: 1rem;
+    width: min(100%, 28rem);
+    flex-shrink: 0;
+  }
+}
 @container (max-width: 350px) {
   .cq-hide-minimal { display: none !important; }
 }
@@ -4098,74 +4124,162 @@ pre[class*="language-"] {
 /* ---------------------------------------------------------------------------
    The inline reveal (components/ObjectReveal): an object reference opens its
    full page as a band across the whole scrolling surface. Width, left pull
-   and height are measured inline by the component. The band IS the page's
-   surface: no frame inside it, the page runs edge to edge under the strip
-   and paints its own ground exactly as it does on the stage. The band never
-   restyles what it holds: a page's plain background is also what its
-   overlays (a detail covering an inert list) rely on to hide what is under
-   them. Two rules and a strip are the whole frame.
+   and height are measured inline by the component; the grow and fold motion
+   is driven there too. The band is a different layer set INTO the transcript,
+   and reads as one: a hatched gutter around a framed page, the frame's edge
+   in the object's own colour (the pill's), a strip that stays pinned while
+   the read scrolls through the band so close is always in reach. The frame
+   never restyles what it holds: the page runs edge to edge under the strip
+   and paints its own ground exactly as it does on the stage.
    --------------------------------------------------------------------------- */
 .object-reveal {
+  --reveal-accent: var(--sol-cyan);
   position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  margin: 12px 0;
-  border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
-  background-color: var(--sol-bg);
+  margin: 14px 0;
+  padding: 10px 14px 18px;
+  overflow: clip;
   cursor: auto;
   text-align: left;
   font-size: 1rem;
   line-height: 1.5;
-  animation: object-reveal-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  background-color: var(--sol-bg-alt);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--sol-border) 70%, transparent) 5px 6px
+  );
+  border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
+  border-bottom: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
+}
+/* overflow: clip, not hidden: the corners round without the frame becoming
+   a scrollport, so the strip's sticky still measures against the transcript. */
+.object-reveal__frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: clip;
+  border: 1px solid color-mix(in srgb, var(--reveal-accent) 28%, var(--sol-border));
+  border-left: 3px solid var(--reveal-accent);
+  border-radius: 10px;
+  background: var(--sol-bg);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--sol-text) 4%, transparent),
+    0 16px 36px -20px color-mix(in srgb, var(--sol-text) 45%, transparent);
 }
 .object-reveal__strip {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 4px 0 8px;
+  gap: 8px;
+  height: 30px;
+  padding: 0 6px 0 10px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--cc-panel-rule, var(--sol-border));
-  background: var(--cc-panel-head-bg, var(--sol-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--reveal-accent) 18%, var(--sol-border));
+  background: color-mix(in srgb, var(--reveal-accent) 7%, var(--sol-bg));
   user-select: none;
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms;
 }
+.object-reveal__strip:hover,
+.object-reveal__strip:focus-visible {
+  background: color-mix(in srgb, var(--reveal-accent) 14%, var(--sol-bg));
+}
+.object-reveal__strip:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reveal-accent) 60%, transparent);
+}
+.object-reveal__icon { color: var(--reveal-accent); }
+/* The close hint shows once the reader is on the strip: the word and the key. */
+.object-reveal__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--sol-text-dim);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.object-reveal__strip:hover .object-reveal__hint,
+.object-reveal__strip:focus-visible .object-reveal__hint { opacity: 1; }
 .object-reveal__body {
   position: relative;
   flex: 1;
   min-height: 0;
 }
-/* The bottom edge is the resize handle: a hit strip straddling the border,
-   with a short bar that shows on hover so the affordance is discoverable
-   without being drawn all the time. */
+/* The slot lib/revealHost places under the reference's block: a plain block
+   the band fills; it never narrows the band (the band measures its own
+   width) and never adds a measure of its own. */
+.object-reveal-slot {
+  display: block;
+  min-width: 0;
+  max-width: none;
+}
+/* The foot is the other close: the whole strip. Pinned to the bottom of the
+   view while the read scrolls through a tall band (the frame is a clip, not
+   a scrollport, so sticky measures against the transcript). */
+.object-reveal__foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 30px;
+  flex-shrink: 0;
+  border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 18%, var(--sol-border));
+  background: color-mix(in srgb, var(--reveal-accent) 7%, var(--sol-bg));
+  color: var(--sol-text-muted);
+  font-size: 11px;
+  user-select: none;
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms, color 120ms;
+}
+.object-reveal__foot:hover,
+.object-reveal__foot:focus-visible {
+  background: color-mix(in srgb, var(--reveal-accent) 14%, var(--sol-bg));
+  color: var(--sol-text);
+}
+.object-reveal__foot:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reveal-accent) 60%, transparent);
+}
+/* The grip is only a grip: a full-width hit strip in the gutter under the
+   frame, with the rounded bar always drawn in the object's colour so the
+   resize reads before the pointer finds it, and brighter under the pointer. */
 .object-reveal__grip {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: -5px;
-  height: 10px;
+  bottom: 0;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: row-resize;
   z-index: 2;
   touch-action: none;
 }
-.object-reveal__grip::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 3px;
-  width: 44px;
-  height: 4px;
-  transform: translateX(-50%);
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--sol-text-dim) 45%, transparent);
-  opacity: 0;
-  transition: opacity 120ms;
+.object-reveal__grip-bar {
+  width: 48px;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--reveal-accent) 45%, var(--sol-bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--reveal-accent) 25%, transparent);
+  transition: background 120ms, transform 120ms, width 120ms;
 }
-.object-reveal__grip:hover::after,
-.object-reveal__grip:active::after {
-  opacity: 1;
+.object-reveal__grip:hover .object-reveal__grip-bar,
+.object-reveal[data-resizing] .object-reveal__grip-bar {
+  width: 64px;
+  background: var(--reveal-accent);
 }
+.object-reveal[data-resizing] { cursor: row-resize; user-select: none; }
 /* The pill's reveal caret: hidden until hover, always shown while its band
    is open, and rotated to point up so the same glyph reads open and close.
    The space is reserved either way so a hover never reflows the sentence. */
@@ -4181,10 +4295,8 @@ pre[class*="language-"] {
   opacity: 1;
   transform: rotate(180deg);
 }
-@keyframes object-reveal-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .object-reveal { animation: none; }
+/* The pressed pill is the band's handle: filled in its colour and underlined
+   in it, the one reference on the page that says "open below". */
+.entity-ref[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 35%, transparent);
 }
