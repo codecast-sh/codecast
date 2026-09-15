@@ -21,6 +21,13 @@ const nodeV = v.object({
   backend: v.optional(v.string()),
   agent: v.optional(v.string()),
   isolated: v.optional(v.boolean()),
+  // the-line.md L8: every attribute the runner reads survives the push.
+  definition: v.optional(v.string()),
+  reviewer: v.optional(v.boolean()),
+  timeout: v.optional(v.number()),
+  temperature: v.optional(v.number()),
+  doc: v.optional(v.string()),
+  category: v.optional(v.string()),
 });
 
 const edgeV = v.object({

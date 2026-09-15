@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, type DecisionRow } from "./decideCommand.js";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, type DecideOption, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -176,5 +179,70 @@ describe("cast decide answer parsing (W2)", () => {
   it("--option-body takes n=file", () => {
     expect(parseOptionBodyArg("2=why.md")).toEqual({ index: 1, file: "why.md" });
     expect(() => parseOptionBodyArg("why.md")).toThrow(/n=file/);
+  });
+});
+
+// Option pages (the-line.md L6): `--option-page n=file|slug|url` and `page`
+// on a spec option. A file publishes through the report path, once per
+// option; an existing slug or url attaches as its slug.
+describe("cast decide option pages (the-line.md L6)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "decide-pages-"));
+  const fileA = path.join(dir, "mockup-a.html");
+  fs.writeFileSync(fileA, "<h1>A</h1>");
+
+  it("--option-page takes n=file, like --option-body", () => {
+    expect(parseOptionPageArg("2=mockup-b.html")).toEqual({ index: 1, file: "mockup-b.html" });
+    expect(() => parseOptionPageArg("mockup.html")).toThrow(/--option-page expects n=file/);
+  });
+
+  it("a codecast page url or a bare slug is an existing page; a file on disk is not", () => {
+    expect(pageRefToSlug("https://codecast.sh/a/abc123xyz")).toBe("abc123xyz");
+    expect(pageRefToSlug("https://codecast.sh/a/abc123xyz?v=2")).toBe("abc123xyz");
+    expect(pageRefToSlug("abc123xyz")).toBe("abc123xyz");
+    expect(pageRefToSlug("mockup-b.html")).toBeNull();
+    expect(pageRefToSlug(fileA)).toBeNull();
+  });
+
+  it("publishes a file once per option through the given publish path, keeps a slug ref, and strips spec `page`", async () => {
+    const published: string[] = [];
+    const publish = async (file: string) => {
+      published.push(file);
+      return { slug: `slug-${published.length}`, url: `https://codecast.sh/a/slug-${published.length}` };
+    };
+    const optionList: DecideOption[] = [{ label: "A" }, { label: "B", page: "https://codecast.sh/a/existing1" }, { label: "C" }];
+    const urls = await attachOptionPages(optionList, [`1=${fileA}`], publish);
+    expect(published).toEqual([fileA]);
+    expect(optionList[0]).toEqual({ label: "A", page_slug: "slug-1" });
+    expect(optionList[1]).toEqual({ label: "B", page_slug: "existing1" });
+    expect(optionList[2]).toEqual({ label: "C" });
+    expect(urls).toEqual({ 0: "https://codecast.sh/a/slug-1" });
+    // The wire shape carries page_slug only: no `page`, no `page_url`.
+    for (const o of optionList) expect(Object.keys(o).every((k) => k !== "page" && k !== "page_url")).toBe(true);
+  });
+
+  it("a flag names the option by number and refuses one that does not exist or a file that is missing", async () => {
+    const publish = async () => ({ slug: "x", url: "u" });
+    await expect(attachOptionPages([{ label: "A" }, { label: "B" }], ["3=" + fileA], publish)).rejects.toThrow(/no option 3/);
+    await expect(attachOptionPages([{ label: "A" }, { label: "B" }], ["1=" + path.join(dir, "missing.html")], publish)).rejects.toThrow(/no such file or page/);
+  });
+
+  it("a flag wins over the spec's page for the same option", async () => {
+    const publish = async (file: string) => ({ slug: "fromfile", url: `u:${file}` });
+    const optionList: DecideOption[] = [{ label: "A", page: "specslug1" }, { label: "B" }];
+    await attachOptionPages(optionList, [`1=${fileA}`], publish);
+    expect(optionList[0].page_slug).toBe("fromfile");
+  });
+
+  it("ls prints an option's page url, and --mine has its own empty line", () => {
+    const out = formatDecisionList([row({ options: [{ label: "A", page_slug: "s1", page_url: "https://codecast.sh/a/s1" }, { label: "B" }] })], 1);
+    expect(out).toContain("1. A");
+    expect(out).toContain("page: https://codecast.sh/a/s1");
+    expect(out.split("page:").length).toBe(2);
+    expect(formatDecisionList([], 1, "No pending decisions held by you.")).toBe("No pending decisions held by you.");
+  });
+
+  it("a spec option may carry page", () => {
+    const spec = parseDecideSpec(JSON.stringify({ options: [{ label: "A", page: "mockup-a.html" }, "B"] }));
+    expect(spec.options?.[0].page).toBe("mockup-a.html");
   });
 });

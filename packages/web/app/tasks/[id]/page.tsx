@@ -4,6 +4,7 @@ import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl, formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useTabActive } from "../../../hooks/usePagePresence";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds } from "../../../lib/liveEntities";
@@ -692,8 +693,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     openPalette({ targets: [data as unknown as TaskItem], targetType: 'task', mode });
   }, [data, openPalette]);
 
+  const paneActive = useTabActive();
   useWatchEffect(() => {
-    if (paletteOpen) return;
+    if (!paneActive || paletteOpen) return;
     if (shortcutsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -726,7 +728,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
+  }, [paneActive, paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
     // directData === null: webGetTaskDetail resolved but the id is not a task

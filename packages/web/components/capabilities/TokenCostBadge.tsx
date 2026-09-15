@@ -3,6 +3,8 @@
 import { useMemo } from "react";
 import { Gauge, Zap } from "lucide-react";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { formatTokens } from "@codecast/convex/convex/wakeCost";
+export { formatTokens };
 
 /**
  * Context cost, split the way it is actually paid.
@@ -37,21 +39,6 @@ export interface TokenCost {
   source?: "claude-plugin-details" | "measured" | "estimated";
   /** When the number was produced, epoch ms. */
   measuredAt?: number;
-}
-
-export function formatTokens(n: number, underBound?: boolean): string {
-  if (!Number.isFinite(n) || n < 0) return "—";
-  // Round before choosing the bucket, not after. Rounding inside the small
-  // branch is how 999.6 prints as "1000" — a four-digit number in a column whose
-  // whole point is that everything past three digits reads as k.
-  const v = Math.round(n);
-  const body =
-    v === 0
-      ? "0"
-      : v < 1000
-        ? String(v)
-        : `${v / 1000 < 10 ? (v / 1000).toFixed(1).replace(/\.0$/, "") : Math.round(v / 1000)}k`;
-  return underBound ? `<${body}` : body;
 }
 
 /** Sum of the rent across a set — a machine's whole inventory, or a loadout. */

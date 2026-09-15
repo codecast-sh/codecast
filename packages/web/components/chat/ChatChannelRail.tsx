@@ -161,10 +161,14 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   onNewMessage,
   onOpenDm,
   onChannelContextMenu,
+  showDms = true,
 }: {
   channels: ChatChannelView[];
   activeChannelId?: string;
   onSelect: (channelId: string) => void;
+  /** The direct messages section. Off for a rail whose rooms have no roster
+   *  to message (the community page). */
+  showDms?: boolean;
   onCreate?: () => void;
   /** Opens the new-message modal. */
   onNewMessage?: () => void;
@@ -209,6 +213,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
           />
         ))}
       </div>
+      {showDms && (<>
       <div className="ch-rail-head ch-rail-head-dms">
         <span className="ch-rail-title">Direct messages</span>
         {onNewMessage && (
@@ -253,6 +258,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
           <div className="ch-rail-empty-dms">Messages with teammates land here.</div>
         )}
       </div>
+      </>)}
     </nav>
     </TooltipProvider>
   );

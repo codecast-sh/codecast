@@ -454,11 +454,14 @@ describe("gestures from a pane's page", () => {
 });
 
 describe("appDocumentTitle", () => {
-  it("prefixes the app in a window, and gives a pane's strip the bare title", () => {
-    expect(appDocumentTitle("Fix the auth race", false)).toBe("codecast | Fix the auth race");
-    expect(appDocumentTitle(null, false)).toBe("codecast");
-    expect(appDocumentTitle("Fix the auth race", true)).toBe("Fix the auth race");
-    // Empty, so the strip falls back to its own label rather than showing "codecast".
-    expect(appDocumentTitle(null, true)).toBe("");
+  it("names the surface, then the thing the window shows", () => {
+    expect(appDocumentTitle("Inbox", "Fix the auth race", false)).toBe("Codecast Inbox | Fix the auth race");
+    expect(appDocumentTitle("Tasks", null, false)).toBe("Codecast Tasks");
+    expect(appDocumentTitle("Tasks", "Tasks", false)).toBe("Codecast Tasks");
+  });
+
+  it("gives a pane's page the bare thing, for the strip that reads it", () => {
+    expect(appDocumentTitle("Inbox", "Fix the auth race", true)).toBe("Fix the auth race");
+    expect(appDocumentTitle("Tasks", null, true)).toBe("Tasks");
   });
 });

@@ -153,6 +153,22 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
   return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
 }
 
+// A standing role's wake frame (convex/orgWakes.ts buildFrame; docs/architecture/
+// org-roles-standing.md T3): the opening tag names the role and the time, and
+// once delivered the wake's short id and the cause counts.
+//
+//   <role-wake or-8 wake="rw-12" at="2026-09-15T04:01:55.078Z" causes="9" held="2">
+//   ## You
+//   …
+//   </role-wake>
+export const ROLE_WAKE_OPEN_RE = /^<role-wake\s+(or-\d+)((?:\s+[a-z_]+="[^"]*")*)\s*>/;
+
+// Keys off the tag's start only: a preview slice (getUserMessages cuts content
+// at 500 chars) can tear the tag itself, and it must still stay off the human rail.
+export function isRoleWakeFrame(rawContent: string | null | undefined): boolean {
+  return !!rawContent && /^<role-wake\s+or-\d+\b/.test(stripInjectionNoise(rawContent).trim());
+}
+
 // A harness <task-notification> — a background task / Monitor / Workflow
 // completion the harness injected as a user turn. Keys off the opening tag
 // only, same truncated-preview rule as isSessionMessage.
@@ -160,12 +176,46 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
   return !!rawContent && rawContent.trim().startsWith("<task-notification>");
 }
 
+// A `cast send --raw` report from another session: the body was injected as a
+// user-role turn WITHOUT the <session-message> wrapper (the flag exists for
+// slash commands like `/model opus`). The receiving transcript then paints it
+// as something the human typed. Opening-line only, so a 200-char preview still
+// matches; human prompts ("We want to…", a pasted article title) do not.
+//
+//   Backend B (ct-51438) review fixes: all five of mine fixed…
+//   Backend B follow-up: jx71b14 deployed after levelling the tree.
+export function parseUnwrappedSessionReport(
+  rawContent: string | null | undefined,
+): { from: string; body: string; name: string } | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  if (!text || text.startsWith("<")) return null;
+  const first = text.split("\n", 1)[0] ?? "";
+  const named = (raw: string) => raw.replace(/\s+/g, " ").trim();
+  const withTask = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s*\(ct-\d+\)/);
+  if (withTask) {
+    const name = named(withTask[1]);
+    if (name) return { from: "unknown", body: text, name };
+  }
+  const followUp = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s+follow-up\s*:/i);
+  if (followUp) {
+    const name = named(followUp[1]);
+    if (name) return { from: "unknown", body: text, name };
+  }
+  return null;
+}
+
+export function isUnwrappedSessionReport(rawContent: string | null | undefined): boolean {
+  return parseUnwrappedSessionReport(rawContent) !== null;
+}
+
 // Any user-role message delivered by machinery rather than typed by the human:
 // a cross-session `cast send` message, a subagent's report to its parent, an
 // inter-agent teammate broadcast, a scheduled-task injection, a harness task
-// notification, or a team-chat mention waking the anchor.
+// notification, a team-chat mention waking the anchor, or a `cast send --raw`
+// report that lost its session wrapper.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isRoleWakeFrame(rawContent) || isUnwrappedSessionReport(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

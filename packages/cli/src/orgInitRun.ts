@@ -1,144 +1,197 @@
-// The bodies of `cast org inputs`, `cast org init` / `update` and `cast org
-// apply`, and the analyzer prompt they build (docs/architecture/org-init.md).
-// orgInit.ts registers the verbs and loads this module inside each action, so
-// the proposal contract, the worked examples and the analyzer spawn stay off
-// the CLI boot graph (bench/bootGraph.guard.test.ts).
+// The bodies of the `cast org` staffing verbs and the analyzer prompt they
+// build (docs/architecture/org-staffing.md S8; org-init.md O1, O2). orgInit.ts
+// registers the verbs and loads this module inside each action, so the
+// prompt, the capacity model and the proposal contract stay off the CLI boot
+// graph (bench/bootGraph.guard.test.ts).
 import * as fs from "fs";
+import * as path from "path";
 import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
-import { ORG_PROPOSAL_FENCE, ORG_PROPOSAL_OPTIONS, extractOrgProposal, orgProposalBlock, type OrgProposal } from "@codecast/shared/contracts/orgProposal";
-import { ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
+import {
+  ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeError, orderOrgChanges, parseOrgProposalSpec,
+  type OrgChange, type OrgProposalMode,
+} from "@codecast/shared/contracts/orgProposal";
+import { formatRelative } from "@codecast/shared/time";
+import { formatDuration, parseDuration } from "./stackCommand.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
-const EXAMPLE_ROLE = orgProposalBlock({
-  kind: "role",
-  name: "Head of Growth",
-  handle: "growth",
-  scope: { projects: ["pr-12"], plans: ["pl-40"] },
-  reports_to: "me",
-  charter: "One paragraph: what the seat owns, what it reports, what it raises.",
-  trust: "understand",
-  caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400000 },
-  evidence: ["14 sessions on ~/src/growth in 30 days", "pl-40 is 3 of 9 done"],
-});
-const EXAMPLE_PROJECTS = orgProposalBlock({ kind: "projects", changes: [{ op: "create", title: "Platform", description: "Shared infra the other projects lean on", project_path: "/abs/path/if/known" }, { op: "merge", from: "pr-3", into: "pr-12" }] });
-const EXAMPLE_MOVE = orgProposalBlock({ kind: "move", handle: "growth", scope_add: ["pr-15"], scope_remove: [], reports_to: "@product", reason: "pr-15 has no owner and its sessions run on growth's repo" });
-const EXAMPLE_RETIRE = orgProposalBlock({ kind: "retire", handle: "ops", reason: "no scope event in 21 days, no hands, no wakes" });
+// ── The prompt (S8) ──────────────────────────────────────────────────────────
+//
+// Principle level: the company model, what to read, the capacity model and
+// how to reason with it, how to design or review, how to write, what never
+// to invent, and the one offer. The one prescriptive part is the spec shape,
+// because `cast org propose` has to parse it.
 
-// The stack title the analyzer is told to create. One builder for the prompt
-// and the guard in runAnalyzer, so a second init finds the first one's stack.
-export function orgStackTitle(mode: OrgInitMode, workspace: string): string {
-  return mode === "init" ? `Adopt the org for ${workspace}` : `Org update for ${workspace}`;
+/** The company model (S1), the words every surface and every prompt uses. */
+export const COMPANY_MODEL = `A company is a workspace. Its executives are people: they own the budget, answer decisions and hire roles. A manager is a role: a standing agent with a scope, a charter, a brief and a daily budget of hands, wakes and tokens. A contributor is a hand: a session doing one piece of work, transient, reporting to a role or a person. A business line is a project, a lasting area of work with a charter; a program is a plan, a bounded effort under a project with a goal and success criteria. Staffing is which roles exist, what each owns, who each reports to and what each may spend. A proposal moves scope, people and budget together: staffing is budgeting.`;
+
+/** The change kinds a proposal may carry and what each field means. */
+function changeKindsReference(): string {
+  return [
+    `- role: { name, handle, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter?, trust?: "understand", caps?: { hands_per_day, wakes_per_day, tokens_per_day }, evidence?: [string] }. A new seat. Scope refs are a project's short id (pr-N), id or a title that matches one project; a plan's pl-N.`,
+    `- projects: { changes: [{ op: "create", title, description?, project_path? } | { op: "merge", from, into }] }. Business lines the chart needs and does not have, or two that are one thing.`,
+    `- file: { plan: ref, project: ref }. A plan filed under a project, so the role that owns the project sees it; the smallest change there is, and the one that answers an unfiled_plan flag.`,
+    `- move: { handle, reports_to?, scope_add?: [ref], scope_remove?: [ref], reason? }. A role under a different parent, or with a different scope, in one change.`,
+    `- scope: { handle, add?: [ref], remove?: [ref] }. Only the scope.`,
+    `- budget: { handle, caps: { hands_per_day?, wakes_per_day?, tokens_per_day? } }. Only the budget; say what it comes from.`,
+    `- trust: { handle, trust: "understand" | "decide" | "direct" }. Propose it only with evidence the role has earned it; a person unlocks it.`,
+    `- routine: { handle, title, prompt, every: "7d" | "1d" | ... }. Work the role should do on a cadence.`,
+    `- project_meta: { project: ref, goal?, success_metrics?: [string], priority?: "p0".."p3", owner?: "@handle", non_goals?: [string], risks?: [string] }. A charter for a business line; only fields you can ground in the project's own tasks and docs.`,
+    `- retire: { handle, reason? }. Last in the order; say where its work goes.`,
+    `- adopt: { handle, conversation }. This session becomes the named role's standing session.`,
+  ].join("\n");
 }
 
-// An open org stack for this workspace, from the rows /cli/stack/ls returns
-// (open stacks in every boundary the caller belongs to). Init and update block
-// each other: two analyzers proposing the same org would post duplicate role
-// decisions, and applying both is safe only by accident of the handle clash.
-export function findOpenOrgStack(
-  stacks: Array<{ short_id: string; title: string; team_id?: string | null; scope_user_id?: string | null; status?: string; pending?: number; total?: number }> | null | undefined,
-  boundary: { team_id?: string },
-  workspace: string,
-): { short_id: string; title: string; pending: number; total: number } | null {
-  const titles = new Set([orgStackTitle("init", workspace), orgStackTitle("update", workspace)]);
-  const hit = (stacks ?? []).find((s) =>
-    (s.status ?? "open") === "open" &&
-    titles.has(s.title) &&
-    (boundary.team_id ? s.team_id === boundary.team_id : !s.team_id));
-  return hit ? { short_id: hit.short_id, title: hit.title, pending: hit.pending ?? 0, total: hit.total ?? 0 } : null;
+const SPEC_EXAMPLE = JSON.stringify({
+  title: "Staffing for <company>",
+  summary_md: "The decision you ask for, then the evidence.",
+  mode: "init",
+  changes: [
+    {
+      change: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-12"] }, reports_to: "me", charter: "One paragraph: what the seat owns, what it reports, what it raises." },
+      rationale: "Why this change, in the reader's words.",
+      evidence: [{ label: "14 sessions on ~/src/growth in 30 days", href: "https://codecast.sh/org?scope=pr-12" }],
+      expected_effect: "What should be different at the next review, and how you will know.",
+      risk: "What could go wrong, and what you would watch.",
+    },
+  ],
+}, null, 2);
+
+export function orgProposalTitle(mode: OrgInitMode, workspace: string): string {
+  return mode === "init" ? `Staffing for ${workspace}` : `Company review: ${workspace}`;
 }
 
-// Apply order: a role may own a project the same stack proposes to create, so
-// project changes go first; roles keep the stack's order (the prompt posts a
-// parent before its children); moves and retirements act on roles that exist
-// by then. The sort is stable, so ties keep their stack order.
-const APPLY_RANK: Record<OrgProposal["kind"], number> = { projects: 0, role: 1, move: 2, retire: 3 };
-export function orderForApply<T extends { context_md?: string | null }>(decisions: T[]): T[] {
-  const rank = (d: T) => { const p = extractOrgProposal(d.context_md); return p ? APPLY_RANK[p.kind] : 4; };
-  return decisions.map((d, i) => ({ d, i, r: rank(d) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.d);
-}
+export type PromptFacts = {
+  mode: OrgInitMode;
+  workspace: string;
+  teamFlag?: string;
+  summary: OrgInitSummary;
+  /** The session the analyzer runs in, when known: the adopt change names it. */
+  session?: string;
+  /** A proposal of this kind still open: the review reads, it does not repost. */
+  open?: { short_id: string; title: string; decided: number; total: number; url: string };
+};
 
-export function buildOrgAnalyzerPrompt(opts: { mode: OrgInitMode; workspace: string; teamFlag?: string; apply: boolean; summary: OrgInitSummary }): string {
+export function buildOrgAnalyzerPrompt(opts: PromptFacts): string {
   const { mode, workspace, summary } = opts;
   const team = opts.teamFlag ? ` --team ${JSON.stringify(opts.teamFlag)}` : "";
-  const stackTitle = orgStackTitle(mode, workspace);
   const roots = summary.git_roots.length ? summary.git_roots.map((r) => `  - ${r}`).join("\n") : "  (no git roots seen on recent sessions)";
 
   const purpose = mode === "init"
-    ? `# Propose an organization for ${workspace}
+    ? `# Propose the organization for ${workspace}
 
-You are proposing the first org chart for this workspace: the roles that would own its work, what each owns, who each reports to, and why. A role here is a standing agent seat with a scope (projects and plans), a charter, a trust stage and daily caps; people sit above roles. The person who runs this workspace answers your proposal one role at a time; nothing exists until they do.`
-    : `# Propose org changes for ${workspace}
+You are designing the first staffing of this company: which roles own its work, what each owns, who each reports to, and what each may spend. The executives decide; you propose. Every change you post is a ghost on the org page until a person accepts, edits or skips it, and nothing is applied by you.`
+    : `# Review the company: ${workspace}
 
-You are reviewing the org chart this workspace already has against what its people actually did in the last 30 days, and proposing moves. The person who runs this workspace answers each move; nothing changes until they do.`;
+You are reviewing how work flows through this company against the capacity model, and proposing the smallest changes that remove a bottleneck. The executives decide; you propose. Every change you post is a ghost on the org page until a person accepts, edits or skips it, and nothing is applied by you.`;
 
-  const goodOrg = `## What a good org for this workspace is
+  const model = `## The company model
 
-- Few roles, each with a scope a person could describe in one sentence, that together cover the work that is actually happening. A role earns its seat from evidence: sessions, tasks, plans and commits that already exist in its scope.
-- Scopes follow the real seams: a repo or package boundary, a project with its own plans, a stream of sessions one person keeps returning to. A role whose scope you cannot point at in the inputs is not a role.
-- The reporting line is shallow. Roles report to the person closest to the work, or to one coordinating role when several roles share a repo; never a chain built for symmetry.
-- Every role starts at trust "understand" (read and report). Higher stages are a person's later act, not a proposal.
-- Caps stay at the defaults unless the evidence says a scope is unusually busy or unusually quiet.
-- The right size for a small workspace is often one or two roles. Proposing none is a valid answer when there is nothing to own yet; say so in the doc and post one intake decision instead.`;
+${COMPANY_MODEL}`;
 
-  const evidence = `## What counts as evidence
+  const glance = `## The company at a glance
 
-Counts and names from the inputs: sessions per person per path, tasks and plans per project, insight themes and outcomes, labels, channels with activity, open decisions by category, and the repo layout you read yourself. Cite them by short id and title in each role's section. A session title is evidence; a guess about what a title implies is not.`;
+${summary.projects} projects, ${summary.plans} plans, ${summary.tasks_open} open tasks, ${summary.members} members, ${summary.sessions_30d} sessions in 30 days, ${summary.roles} existing roles${summary.chief_of_staff ? ", a chief of staff" : ", no chief of staff"}.`;
 
-  const honesty = `## What not to invent
+  const read = `## What to read, before you form a view
+
+1. \`cast org inputs${team} --json\`: projects with task counts, plans with progress, members with their sessions by path, git roots, insight themes, channels, existing roles and anchors, open decisions. Read it whole.
+2. \`cast org health${team} --json\`: per role, per person and for the company, the load, spend and flow signals the capacity model needs, and the flags it raises. Every flag names its evidence.
+3. Each git root's layout: \`ls\` the root and the package names one level down. This is the only reading outside codecast; do not walk the tree.
+${roots}
+4. The project charters (\`cast project show <ref>${team}\`: goal, metrics, priority, owner, non goals, risks) and the roles' briefs (\`cast brief @handle${team}\`), where they exist. A charter that is missing is itself a finding. \`cast role wakes @handle${team}\` shows what woke a role and how big each frame was, which is where a cap hit explains itself.`;
+
+  const capacity = `## The capacity model
+
+${renderCapacityModel()}
+
+Which numbers to use. The flags in \`cast org health\` are the model's own reading: load counts the tasks and plans filed under the role's projects and named plans, active plans are the plans marked active, and wake load is the seven day average against the cap. A role's brief counts more (every plan under its projects, whatever its status) and a wake log shows single days; cite the health numbers as the breach and the brief's as context, and say which is which.
+
+How to size with it. A scope is right when one agent can hold all of it in its head between wakes: the open tasks it must watch, the plans it directs, the hands it reads, the reports whose brief lines it reads. Count these from the inputs before you draw a seat. Every role and every scope change states, in its rationale, the seat's resulting open tasks, in-flight tasks and active plans against the model, counted from the projects and plans it will own after the file changes in the same proposal; when any count is over the model, the rationale argues the exception or the change is split along a seam so each seat fits. A role needs a report when its own scope holds a seam (a repo, a package, a project with its own plans) that would fit one agent and is past the thresholds when held together. A person needs a layer when the roles reporting straight to them pass the span. A role should be split when it has breached the model in consecutive reviews, along a seam its own work shows; it should be merged with a sibling when both are idle or both watch the same scope and talk to each other more than they ship. A project needs an owner when it has sessions, tasks or plans and no role's scope covers it. Budget: \`cast org health\` reports \`company.caps_total\`, the daily hands, wakes and tokens the active roles may spend today. Every role and budget change states its caps with the evidence behind each number (a role's wakes over seven days, its tokens, its hands), and the summary states the company total after the proposal next to the total today; the person allows or trims that total, so never write it as unchanged when a seat is added.
+
+What a scope is made of. A role's scope is projects plus plans, and everything filed under a project follows the project: its tasks, its plans, their tasks. A scope change adds or removes refs a role names; it cannot take one plan out of a project the role owns. Work moves between roles by moving the plan: a file change puts a plan under another project, and the role that owns that project sees it from then on. When a seam inside one project should become its own seat, file its plans under the project the new role owns, in the same proposal, ahead of the role; naming the same plans in two roles' scopes leaves both watching the work and the overlap flag says so.`;
+
+  const design = mode === "init" ? `## How to design from scratch
+
+Start from the business lines and their goals, not from the people or the tools. For each line, ask what would have to be true in a month for it to be going well; that is the charter you propose when the project has none. Name one owner per line, then check the span of the person the owners report to. Allocate budget from the company total health reports. Explain every role with evidence a person can click: counts, session titles, commits, short ids. Where a line has no evidence of work, propose an intake draft instead of a role that owns nothing. Few roles with plain scopes beat a complete chart; proposing one role, or none, is a valid answer for a small company, and the summary should say why.` : `## How to review
+
+Read the flags first, then the evidence behind each: the chatter graph (who sends to whom, against what they ship), decision latency, review stalls, unowned projects, unfiled plans and tasks, idle roles, roles at their caps. For each bottleneck, propose the smallest change that removes it, and say what you expect to change by the next review and how you will know. A plan with open work and no project is a file change, not a finding: its goal and title say which business line it belongs to, and the role that owns that project sees it once filed. When a role you propose needs plans that are unfiled today, propose their file changes first in the same proposal, so the scope is real the moment the role is accepted. Respect the stability rules as \`cast org health\` reports them: a role moved inside the cooldown (\`last_move_at\`) is left alone; a split waits for the second breach unless the scope is structurally too big: \`overload_ratio\` is the busiest load count divided by the model's line, and at or above the split_on_first_breach_ratio the overloaded flag says "split now" and the split goes in this proposal; below it, the flag says which breach this is (\`breaches\` counts the consecutive earlier reviews that flagged the role), a first breach on record is not a split, and you propose what does not split and let the next review decide. A split names the seam its own work shows, files the plans of each side first, and shows each resulting seat's open tasks, in-flight tasks and active plans against the model, so the reader sees that every seat fits and the parent's load falls under the line; a retirement waits for the idle window. A quiet role in a quiet company is not a problem to fix; a chart that changes every week never settles. When nothing needs to change, post a proposal with no changes only if the summary carries a finding worth reading; otherwise say so in your state and end.`;
+
+  const write = `## How to write
+
+The output is one proposal, posted with \`cast org propose${team} --spec proposal.json\` (or \`--spec -\` with the JSON on stdin). It prints op-N and the page link. The spec:
+
+\`\`\`json
+${SPEC_EXAMPLE}
+\`\`\`
+
+Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so a project comes before the role that owns it and a parent before its child; a retirement goes last. The summary is what a founder reads on a phone before opening anything. Lead with the decision you are asking for (the changes, in one sentence each), then the evidence behind it, one line per finding with the numbers that matter. Keep it under two hundred words. What you could not verify and the findings that are not changes go after it, as a short list, so the ask stays on top.
+
+The change kinds:
+
+${changeKindsReference()}`;
+
+  const honesty = `## What not to invent, and what to escalate
 
 - ${ORG_INIT_HONESTY_RULES.empty_yields_intake}
 - ${ORG_INIT_HONESTY_RULES.unreadable_is_unverified}
 - ${ORG_INIT_HONESTY_RULES.no_manufactured_work}
-- Do not name people as owners of anything the inputs do not show them working on. Do not propose roles for people who are not members.`;
+- Do not name people as owners of anything the inputs do not show them working on, and do not propose roles for people who are not members.
+- Never invent a metric a project's own tasks and docs cannot ground; a charter with a goal and no metrics is honest.
+- Escalate, in the summary and as a decision to the person you report to, anything that changes what they spend or who does what: a budget past the defaults, a trust stage above understand, a retirement, a move of a person's direct report.`;
 
-  const updateSignals = mode === "update" ? `
-## Signals to read in update mode
+  const adopt = `## The offer
 
-The inputs carry an \`org\` block per role: idle (no event in its scope for 14 days), wakes per day against the wake cap, sibling overlaps, hands, and the projects no role covers. Also read \`tasks.unfiled_open\` and \`sessions.unfiled\`. Propose a move only where the evidence is plain: a project with sessions but no role, a role idle across the whole window, a role at its wake cap on most days, two siblings watching the same project. A quiet role in a quiet workspace is not a problem to fix.` : "";
+${ORG_ADOPT_RULE}${opts.session ? ` This session is \`${opts.session}\`; that is the adopt change's conversation.` : " This run is not inside a session it can name, so skip the offer and say so."} A chief of staff never rises above trust understand: it proposes and never applies.`;
 
-  const steps = `## Steps
+  const standing = opts.open ? `## A proposal is still open
 
-1. Read the inputs: \`cast org inputs${team} --json\`. Read them whole before forming a view.
-2. For each git root below, read its top level: \`ls\` the root, and the package names (package.json, pyproject, go.mod, Cargo.toml, or the equivalent) one level down. This is the only reading outside codecast you need; do not walk the tree.
-${roots}
-3. Write the proposal doc: \`cast doc create "${mode === "init" ? "Org proposal" : "Org update"}: ${workspace}" -t design --content-file -\` with the body on stdin. One section per proposed ${mode === "init" ? "role" : "change"} with: name, handle, scope, reports to, charter paragraph, why (the evidence: counts and session titles), suggested trust stage (understand), caps. ${mode === "init" ? "A section for project changes when the inputs show work that has no project, or two projects that are one thing." : "A section for each move, retirement, or new role, and one for project changes when needed."} End with what you could not verify.
-4. Create the stack: \`cast stack create "${stackTitle}"\` and note the ds-N it prints.
-5. Post one decision per ${mode === "init" ? "proposed role" : "proposed change"} with \`cast decide\`, in an order where a role's parent comes before the role: \`cast decide "<question>" --kind single --stack ds-N --no-task -o "<option 1> :: <what happens>" -o "<option 2> :: <what happens>" -o "Skip :: nothing is created" --context - <<'EOF'\` and the context on stdin. The context is the doc section's reasoning in a few lines, then the block described below. Post one more decision for the project changes when you proposed any.
-6. ${opts.apply
-    ? "End your turn. The answers arrive here as messages. When every decision of the stack is answered, run `cast org apply ds-N` and report what it created."
-    : "End your turn with `cast state --status done` naming the doc and the stack. The person runs `cast org apply ds-N` after answering."}`;
+${opts.open.short_id} "${opts.open.title}" waits on a person: ${opts.open.decided} of ${opts.open.total} changes decided, at ${opts.open.url}. Do not post a second proposal while it is open, and do not withdraw it: a person decides or withdraws it. Read the flags and the briefs, and compare them with what ${opts.open.short_id} claimed. If nothing material changed, say so in one line in your brief and end the turn. If something did (a flag cleared, a new blocker, a change of ${opts.open.short_id} that is now wrong), send that to the person you report to in one short message with the evidence, and end the turn.` : "";
 
-  const options = mode === "init"
-    ? `The three options, in this order, for a role: ${ORG_PROPOSAL_OPTIONS.role.map((o) => `"${o}"`).join(", ")}. For project changes: ${ORG_PROPOSAL_OPTIONS.projects.map((o) => `"${o}"`).join(", ")}.`
-    : `The three options, in this order: for a new role ${ORG_PROPOSAL_OPTIONS.role.map((o) => `"${o}"`).join(", ")}; for a move ${ORG_PROPOSAL_OPTIONS.move.map((o) => `"${o}"`).join(", ")}; for a retirement ${ORG_PROPOSAL_OPTIONS.retire.map((o) => `"${o}"`).join(", ")}; for project changes ${ORG_PROPOSAL_OPTIONS.projects.map((o) => `"${o}"`).join(", ")}.`;
+  const end = `## When you are done
 
-  const block = `## The block \`cast org apply\` reads
+End your turn with \`cast state --status done\` naming op-N and the page link. The person decides on the org page; that page is the only door, and nothing you run applies a change.`;
 
-Each decision's context ends with one fenced block tagged \`${ORG_PROPOSAL_FENCE}\`. \`cast org apply\` reads it back and acts on the answer, so the option order is fixed. ${options} The second option carries the person's text as changes: JSON with the same keys overrides fields, prose is folded into the charter.
+  return [purpose, model, glance, standing, read, capacity, design, write, honesty, adopt, end].filter(Boolean).join("\n\n") + "\n";
+}
 
-Project refs are a project's short id (pr-N), id, or a title that matches one project; plan refs are pl-N. \`reports_to\` is "@handle" for a role, "me" or a member's name for a person.
+// ── Guards and helpers ───────────────────────────────────────────────────────
 
-A role:
+/** An open analyzer proposal for the workspace, from the rows
+ *  /cli/org/proposals returns (already scoped to the boundary). Init and
+ *  review block each other: two analyzers proposing the same chart would post
+ *  duplicate ghosts, and accepting both is safe only by accident of the
+ *  handle clash. A person's own request does not block. */
+export function findOpenOrgProposal(
+  proposals: Array<{ short_id: string; title: string; mode?: OrgProposalMode; status?: string; decided?: number; total?: number; changes?: any[]; counts?: { decided?: number; total?: number } }> | null | undefined,
+): { short_id: string; title: string; decided: number; total: number } | null {
+  const hit = (proposals ?? []).find((p) => (p.status ?? "open") === "open" && (p.mode === "init" || p.mode === "review"));
+  if (!hit) return null;
+  return { short_id: hit.short_id, title: hit.title, ...decidedCount(hit) };
+}
 
-${EXAMPLE_ROLE}
+/** Stacks (ds-N) keep the older apply order; one sort for both. */
+export function orderForApply<T extends { context_md?: string | null }>(decisions: T[]): T[] {
+  return orderOrgChanges(decisions, (d) => extractOrgProposal(d.context_md));
+}
 
-Project changes:
+export function summarizeInputs(inputs: any): OrgInitSummary {
+  const roles: any[] = inputs?.org?.roles ?? [];
+  return {
+    projects: inputs?.projects?.length ?? 0,
+    plans: inputs?.plans?.length ?? 0,
+    tasks_open: Object.entries(inputs?.tasks?.by_status ?? {}).filter(([k]) => k !== "done" && k !== "dropped").reduce((n, [, v]) => n + Number(v), 0),
+    members: inputs?.members?.length ?? 0,
+    sessions_30d: inputs?.sessions?.total ?? 0,
+    roles: roles.length,
+    git_roots: (inputs?.git_roots ?? []).map((g: any) => g.git_root).filter(Boolean),
+    chief_of_staff: roles.some((r) => r?.handle === CHIEF_OF_STAFF_HANDLE),
+  };
+}
 
-${EXAMPLE_PROJECTS}${mode === "update" ? `
-
-A move (any of reports_to, scope_add, scope_remove):
-
-${EXAMPLE_MOVE}
-
-A retirement:
-
-${EXAMPLE_RETIRE}` : ""}`;
-
-  const counts = `## The workspace at a glance
-
-${summary.projects} projects, ${summary.plans} plans, ${summary.tasks_open} open tasks, ${summary.members} members, ${summary.sessions_30d} sessions in 30 days, ${summary.roles} existing roles.`;
-
-  return [purpose, counts, goodOrg, evidence, honesty, updateSignals, steps, block].filter(Boolean).join("\n\n") + "\n";
+export function proposalUrl(deps: OrgInitDeps, shortId: string): string {
+  return `${deps.webUrl().replace(/\/$/, "")}/org?proposal=${shortId}`;
 }
 
 // The `cast` this process is: a script under bun (execPath + the script), or
@@ -164,23 +217,16 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-
-export function summarizeInputs(inputs: any): OrgInitSummary {
-  return {
-    projects: inputs?.projects?.length ?? 0,
-    plans: inputs?.plans?.length ?? 0,
-    tasks_open: Object.entries(inputs?.tasks?.by_status ?? {}).filter(([k]) => k !== "done" && k !== "dropped").reduce((n, [, v]) => n + Number(v), 0),
-    members: inputs?.members?.length ?? 0,
-    sessions_30d: inputs?.sessions?.total ?? 0,
-    roles: inputs?.org?.roles?.length ?? 0,
-    git_roots: (inputs?.git_roots ?? []).map((g: any) => g.git_root).filter(Boolean),
-  };
+async function membership(deps: OrgInitDeps, options: any): Promise<{ ws: any; args: { team_id?: string } }> {
+  const ws = await deps.readWorkspace(options.team);
+  return { ws, args: deps.workspaceArgs(ws) };
 }
 
+// ── inputs ───────────────────────────────────────────────────────────────────
 
 export async function showInputs(deps: OrgInitDeps, options: any): Promise<void> {
-  const ws = await deps.readWorkspace(options.team);
-  const inputs = await deps.cliPost("/cli/org/analysis-inputs", deps.workspaceArgs(ws));
+  const { ws, args } = await membership(deps, options);
+  const inputs = await deps.cliPost("/cli/org/analysis-inputs", args);
   if (!inputs) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
   if (options.json) { console.log(JSON.stringify(inputs, null, 2)); return; }
   const s = summarizeInputs(inputs);
@@ -197,37 +243,121 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
   console.log(fmt.muted("  --json for the full payload"));
 }
 
-export async function runAnalyzer(deps: OrgInitDeps, mode: OrgInitMode, options: any): Promise<void> {
-  const ws = await deps.readWorkspace(options.team);
-  const inputs = await deps.cliPost("/cli/org/analysis-inputs", deps.workspaceArgs(ws));
+// ── init / update / review ───────────────────────────────────────────────────
+
+export async function runAnalyzer(deps: OrgInitDeps, mode: OrgInitMode, options: { team?: string; spawn?: boolean }): Promise<void> {
+  const { ws, args } = await membership(deps, options);
+  const inputs = await deps.cliPost("/cli/org/analysis-inputs", args);
   if (!inputs) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
   const workspace = inputs.workspace.name || deps.workspaceLabel(ws);
-  // One proposal at a time per workspace. An analyzer parked on a usage limit
-  // after `cast stack create` looks dead from the queue; it is not, and a
-  // second run would mint a second stack. --here mints one too, so it is
-  // guarded the same way.
-  const listed = await deps.cliPost("/cli/stack/ls", {});
-  const open = findOpenOrgStack(listed?.stacks, deps.workspaceArgs(ws), workspace);
-  if (open) {
+  // One proposal at a time per company. An analyzer parked on a usage limit
+  // after posting looks dead from the queue; it is not, and a second run
+  // would post a second set of ghosts. Printing the prompt is guarded the
+  // same way, because the agent that reads it posts too.
+  const listed = await deps.cliPost("/cli/org/proposals", { ...args, status: "open" });
+  const open = findOpenOrgProposal(listed?.proposals);
+  // Init refuses: two first charts would post duplicate ghosts. A review
+  // with last week's proposal still open is the routine's ordinary Monday: the
+  // prompt tells the reviewer to read what changed and add nothing until the
+  // person has decided. Withdrawing is the person's act, never a hint here.
+  if (open && mode === "init") {
     fail(
-      `${open.short_id} "${open.title}" is still open (${open.pending} of ${open.total} unanswered), so a second proposal is not started.\n` +
-      `Answer it, then \`cast org apply ${open.short_id}\`; or close it with \`cast stack show ${open.short_id}\` and \`cast decide cancel\` on its members before running this again.`,
+      `${open.short_id} "${open.title}" is still open (${open.decided} of ${open.total} decided), so a second proposal is not started.\n` +
+      `Decide it on the org page (${proposalUrl(deps, open.short_id)}) before running this again.`,
     );
   }
-  const prompt = buildOrgAnalyzerPrompt({
-    mode,
-    workspace,
-    teamFlag: options.team,
-    apply: !!options.apply,
-    summary: summarizeInputs(inputs),
-  });
-  if (options.here) { process.stdout.write(prompt); return; }
+  const prompt = buildOrgAnalyzerPrompt({ mode, workspace, teamFlag: options.team, summary: summarizeInputs(inputs), session: deps.callingSession(), open: open ? { ...open, url: proposalUrl(deps, open.short_id) } : undefined });
+  if (!options.spawn) { process.stdout.write(prompt); return; }
   const code = await spawnAnalyzer(prompt, ORG_INIT_LABEL);
   if (code !== 0) process.exit(code);
 }
 
+// ── propose / proposals ──────────────────────────────────────────────────────
+
+function readSpecText(spec: string): string {
+  if (spec === "-") return fs.readFileSync(0, "utf8");
+  if (!fs.existsSync(spec)) fail(`No such file: ${spec}`);
+  return fs.readFileSync(spec, "utf8");
+}
+
+export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
+  const text = readSpecText(options.spec);
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch (e: any) { fail(`The spec is not JSON: ${e?.message ?? e}`); }
+  const parsed = parseOrgProposalSpec(raw);
+  if (!parsed.spec) fail(`The spec has ${parsed.errors.length} fault${parsed.errors.length === 1 ? "" : "s"}:\n${parsed.errors.map((e) => `  - ${e}`).join("\n")}\nChange kinds: ${ORG_CHANGE_KINDS.join(", ")}.`);
+  const { ws, args } = await membership(deps, options);
+  const result = await deps.cliPost("/cli/org/propose", { ...args, ...parsed.spec, from_session: deps.callingSession() });
+  if (!result || result.error) fail(result?.error ?? `You are not a member of ${deps.workspaceLabel(ws)}.`);
+  if (options.json) { console.log(JSON.stringify({ ...result, url: proposalUrl(deps, result.short_id) }, null, 2)); return; }
+  const n = result.changes?.length ?? parsed.spec.changes.length;
+  console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${parsed.spec.mode}`)}`);
+  console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
+}
+
+/** The list carries `counts`, the get carries the change rows; one reading. */
+function decidedCount(p: any): { decided: number; total: number } {
+  if (p.counts && typeof p.counts.total === "number") return { decided: p.counts.decided ?? 0, total: p.counts.total };
+  const changes: any[] = p.changes ?? [];
+  return { decided: p.decided ?? changes.filter((c) => c.status && c.status !== "proposed").length, total: p.total ?? changes.length };
+}
+
+export async function listProposals(deps: OrgInitDeps, options: any): Promise<void> {
+  const { ws, args } = await membership(deps, options);
+  if (options.withdraw) {
+    if (!/^op-\d+$/.test(options.withdraw)) fail(`--withdraw wants a proposal id like op-12 (got ${options.withdraw})`);
+    const r = await deps.cliPost("/cli/org/proposal/withdraw", { proposal: options.withdraw, from_session: deps.callingSession() });
+    if (r?.error) fail(r.error);
+    if (options.json) { console.log(JSON.stringify(r, null, 2)); return; }
+    console.log(`${fmt.success("✓")} withdrew ${options.withdraw}`);
+    return;
+  }
+  const listed = await deps.cliPost("/cli/org/proposals", options.all ? args : { ...args, status: "open" });
+  if (!listed) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
+  if (options.json) { console.log(JSON.stringify(listed, null, 2)); return; }
+  const rows: any[] = listed.proposals ?? [];
+  if (!rows.length) { console.log(fmt.muted(options.all ? "No proposals." : "No open proposals. cast org review proposes one; --all lists resolved ones.")); return; }
+  const now = Date.now();
+  for (const p of rows) {
+    const { decided, total } = decidedCount(p);
+    const author = p.author?.kind === "user" ? "a person" : p.author?.kind === "role" ? "a role" : "a session";
+    console.log(`  ${fmt.highlight(p.short_id)} ${p.title} ${fmt.muted(`· ${p.status ?? "open"} · ${p.mode ?? ""} · ${decided}/${total} decided · ${author} · ${formatRelative(p.created_at ?? now, now)}`)}`);
+  }
+}
+
+// ── apply ────────────────────────────────────────────────────────────────────
+
+export async function apply(deps: OrgInitDeps, ref: string, options: any): Promise<void> {
+  if (/^ds-\d+$/.test(ref)) return applyStack(deps, ref, options);
+  if (!/^op-\d+$/.test(ref)) fail(`Usage: cast org apply op-N (or ds-N for a template stack); got ${ref}`);
+  return showProposal(deps, ref, options);
+}
+
+/** A proposal is decided on the org page and nowhere else (S4): the server
+ *  refuses a decide from any token or session. The shell prints what the page
+ *  will show, the counts, and the link. */
+export async function showProposal(deps: OrgInitDeps, ref: string, options: any): Promise<void> {
+  const shown = await deps.cliPost("/cli/org/proposal", { proposal: ref });
+  if (!shown || shown.error) fail(shown?.error ?? `No proposal ${ref}.`);
+  const p = shown.proposal ?? shown;
+  const changes: any[] = orderOrgChanges(shown.changes ?? p.changes ?? [], (c: any) => c.change as OrgChange);
+  const url = proposalUrl(deps, ref);
+  if (options.json) { console.log(JSON.stringify({ ...p, changes, url }, null, 2)); return; }
+  const { decided, total } = decidedCount({ changes });
+  console.log(`${fmt.highlight(p.short_id ?? ref)} ${p.title ?? ""} ${fmt.muted(`· ${p.status ?? "open"} · ${decided} of ${total} decided`)}`);
+  if (p.summary_md) for (const line of String(p.summary_md).split("\n")) console.log(`  ${fmt.muted(line)}`);
+  for (const row of changes) {
+    console.log(`  ${statusTag(row.status)} ${fmt.muted(`#${row.seq}`)} ${describeOrgChange(row.change as OrgChange)}${row.applied_note ? ` ${fmt.muted(row.applied_note)}` : ""}`);
+  }
+  console.log(`${fmt.muted("Decide it on the org page:")} ${fmt.accent(url)}`);
+}
+
+function statusTag(status?: string): string {
+  return status === "applied" ? fmt.success("applied") : status === "failed" ? fmt.error("failed") : status === "accepted" ? fmt.success("accepted") : status === "skipped" ? fmt.muted("skipped") : fmt.muted(status ?? "proposed");
+}
+
+/** Template stacks (ds-N) keep the decision stack path. */
 export async function applyStack(deps: OrgInitDeps, stackRef: string, options: any): Promise<void> {
-  if (!/^ds-\d+$/.test(stackRef)) fail(`Usage: cast org apply ds-N (got ${stackRef})`);
   const shown = await deps.cliPost("/cli/stack/show", { stack: stackRef });
   if (shown?.error) fail(shown.error);
   const decisions: any[] = orderForApply(shown.decisions ?? []);
@@ -247,4 +377,78 @@ export async function applyStack(deps: OrgInitDeps, stackRef: string, options: a
   const pending = results.filter((r) => r.status === "unanswered").length;
   const errors = results.filter((r) => r.status === "error").length;
   console.log(`${fmt.success(`${applied} applied`)}${pending ? `, ${pending} unanswered` : ""}${errors ? `, ${fmt.error(`${errors} failed`)}` : ""} of ${results.length} in ${shown.stack?.short_id ?? stackRef}${pending || errors ? fmt.muted(` — rerun cast org apply ${shown.stack?.short_id ?? stackRef} after ${pending ? "the rest are answered" : ""}${pending && errors ? " and " : ""}${errors ? "the failed ones are answered again with changes" : ""}`) : ""}`);
+}
+
+// ── staff ────────────────────────────────────────────────────────────────────
+
+export async function staff(deps: OrgInitDeps, options: any): Promise<void> {
+  const { ws, args } = await membership(deps, options);
+  const session = deps.callingSession();
+  if (options.adopt && !session) fail("--adopt makes THIS session the chief of staff's standing session, so it runs inside a session. At a shell, run it without --adopt to provision one.");
+  let every_ms: number;
+  try { every_ms = parseDuration(String(options.every ?? "7d")); } catch (e: any) { fail(`--every: ${e?.message ?? e}`); }
+  // A provisioned standing session needs a project path, like every other
+  // provisioning verb; an adopted session keeps its own.
+  const project_path = options.adopt ? undefined : options.dir ? path.resolve(String(options.dir).replace(/^~/, process.env.HOME || "~")) : deps.realCwd();
+  const r = await deps.cliPost("/cli/org/staff", { ...args, every_ms, ...(options.adopt ? { adopt_conversation_id: session } : { project_path }), from_session: session });
+  if (!r || r.error) fail(r?.error ?? `You are not a member of ${deps.workspaceLabel(ws)}.`);
+  if (options.json) { console.log(JSON.stringify(r, null, 2)); return; }
+  const role = r.role ?? {};
+  console.log(`${fmt.success("✓")} ${r.already_existed ? "already staffed" : r.adopted ? "adopted" : "hired"} ${fmt.highlight(role.name ?? "Chief of Staff")} ${fmt.muted(`@${role.handle ?? CHIEF_OF_STAFF_HANDLE}${role.short_id ? ` · ${role.short_id}` : ""}`)}`);
+  if (r.standing?.short_id) console.log(`  ${fmt.muted("standing session:")} ${r.standing.short_id}${r.adopted ? fmt.muted(" (this session)") : ""}`);
+  if (r.routine?.short_id) console.log(`  ${fmt.muted("company review:")} every ${formatDuration(every_ms)} ${fmt.muted(`(${r.routine.short_id})`)}`);
+  if (!r.already_existed) console.log(`  ${fmt.muted("first review: running now; cast org proposals lists it when posted")}`);
+}
+
+// ── health ───────────────────────────────────────────────────────────────────
+
+const SEVERITY_TAG: Record<string, (s: string) => string> = { blocker: fmt.error, warn: fmt.warning, info: fmt.muted };
+function flagLine(f: any, indent: string): string {
+  const tag = (SEVERITY_TAG[f.severity] ?? fmt.muted)(String(f.severity ?? "info").padEnd(7));
+  return `${indent}${tag} ${f.code}${f.detail ? ` ${fmt.muted(String(f.detail))}` : ""}`;
+}
+const k = (n?: number | null) => n == null ? "?" : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+
+export async function health(deps: OrgInitDeps, options: any): Promise<void> {
+  const { ws, args } = await membership(deps, options);
+  const h = await deps.cliPost("/cli/org/health", args);
+  if (!h) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
+  if (options.json) { console.log(JSON.stringify(h, null, 2)); return; }
+  const now = Date.now();
+  const roles: any[] = h.roles ?? [];
+  const people: any[] = h.people ?? [];
+  const company = h.company ?? {};
+  const flags = (xs: any[] | undefined) => xs ?? [];
+  const total = roles.reduce((n, r) => n + flags(r.flags).length, 0) + people.reduce((n, p) => n + flags(p.flags).length, 0) + flags(company.flags).length;
+  console.log(`${fmt.highlight(h.workspace?.name ?? deps.workspaceLabel(ws))} ${fmt.muted(`· ${roles.length} roles · ${people.length} people · ${total} flag${total === 1 ? "" : "s"}${h.generated_at ? ` · ${formatRelative(h.generated_at, now)}` : ""}`)}`);
+  for (const r of roles) {
+    const l = r.load ?? {}; const s = r.spend ?? {}; const f = r.flow ?? {};
+    console.log(`  ${fmt.accent(`@${r.handle}`)}${r.short_id ? ` ${fmt.muted(r.short_id)}` : ""}${r.idle_days != null ? ` ${fmt.muted(`· ${r.idle_days}d since a scope event`)}` : ""}`);
+    console.log(`    ${fmt.muted("load")}  ${l.open_tasks ?? 0} open · ${l.in_flight ?? 0} in flight · ${l.active_plans ?? 0} plans · ${l.live_hands ?? 0} hands · ${l.direct_reports ?? 0} reports`);
+    console.log(`    ${fmt.muted("spend")} ${s.wakes_today ?? 0}/${s.wakes_cap ?? "?"} wakes today (${k(s.wakes_7d_avg)}/d over 7d) · ${k(s.tokens_today)}/${k(s.tokens_cap)} tokens${s.cap_hits_7d ? ` · ${s.cap_hits_7d} cap hits/7d` : ""}`);
+    console.log(`    ${fmt.muted("flow")}  ${f.decisions_7d ?? 0} decisions/7d${f.median_recommend_min != null ? ` · ${f.median_recommend_min}m to recommend` : ""} · ${f.escalations_7d ?? 0} escalated · ${f.done_7d ?? 0} done/7d · ${f.review_stalls ?? 0} review stalls${f.sends_7d ? ` · sends ${(f.sends_7d.to ?? []).reduce((n: number, x: any) => n + (x.n ?? 0), 0)} out / ${(f.sends_7d.from ?? []).reduce((n: number, x: any) => n + (x.n ?? 0), 0)} in` : ""}`);
+    for (const fl of flags(r.flags)) console.log(flagLine(fl, "    "));
+  }
+  for (const p of people) {
+    const dw = p.decisions_waiting ?? {};
+    console.log(`  ${fmt.accent(p.name ?? p.user_id)} ${fmt.muted(`· ${p.direct_roles ?? 0} direct roles · ${dw.n ?? 0} decisions waiting${dw.oldest_min ? ` (oldest ${dw.oldest_min}m)` : ""}`)}`);
+    for (const fl of flags(p.flags)) console.log(flagLine(fl, "    "));
+  }
+  const unowned: any[] = company.unowned_projects ?? [];
+  const noGoal: any[] = company.plans_without_goal ?? [];
+  const noCharter: any[] = company.projects_without_charter ?? [];
+  const unfiledPlans: any[] = company.unfiled_plans ?? [];
+  console.log(`  ${fmt.accent("company")} ${fmt.muted(`· ${unowned.length} unowned project${unowned.length === 1 ? "" : "s"}${unowned.length ? ` (${unowned.map((x) => x.title ?? x.id).join(", ")})` : ""} · ${company.unfiled_tasks ?? 0} unfiled tasks · ${unfiledPlans.length} unfiled plan${unfiledPlans.length === 1 ? "" : "s"} with open work · ${noCharter.length} without a charter · ${noGoal.length} plan${noGoal.length === 1 ? "" : "s"} without a goal`)}`);
+  // Warnings and blockers print one per line; info flags (a charter missing on
+  // each of forty plans) collapse to one line per code with a few examples,
+  // and --json keeps every row.
+  const info = flags(company.flags).filter((f) => f.severity === "info");
+  for (const fl of flags(company.flags).filter((f) => f.severity !== "info")) console.log(flagLine(fl, "    "));
+  const byCode = new Map<string, any[]>();
+  for (const fl of info) byCode.set(fl.code, [...(byCode.get(fl.code) ?? []), fl]);
+  for (const [code, rows] of byCode) {
+    const shown = rows.slice(0, 3).map((f) => String(f.detail ?? "")).filter(Boolean);
+    console.log(`    ${fmt.muted("info   ")} ${code} ${fmt.muted(`× ${rows.length}: ${shown.join("; ")}${rows.length > shown.length ? `; +${rows.length - shown.length} more (--json)` : ""}`)}`);
+  }
+  if (!total) console.log(fmt.muted("  no flags"));
 }

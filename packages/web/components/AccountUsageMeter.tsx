@@ -49,11 +49,11 @@ export function UsageMeterRow({
     : null;
   return (
     <div
-      className="flex items-center gap-2"
+      className="flex items-center gap-2.5 py-0.5"
       title={rolledNote ?? title ?? `${label}: ${Math.round(percent)}% used${resetNote ? ` — ${resetNote}` : ""}`}
     >
-      <span className="w-12 shrink-0 text-[10px] uppercase tracking-wider text-sol-text-dim">{label}</span>
-      <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-sol-bg-inset">
+      <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-sol-text-dim">{label}</span>
+      <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-sol-bg-inset">
         <div
           className="h-full rounded-full transition-[width] duration-500"
           style={{
@@ -91,7 +91,7 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
   }
   const stale = now - usage.fetched_at > STALE_AFTER_MS;
   return (
-    <div className="space-y-0.5">
+    <div className="space-y-2">
       {usage.session && (
         <UsageMeterRow label="Session" percent={usage.session.percent} resetsAt={usage.session.resets_at} now={now} />
       )}
@@ -174,15 +174,19 @@ export function ProfileSignInButton({
   device,
   profile,
   className,
+  force = false,
 }: {
   device: { device_id: string; online?: boolean; is_remote?: boolean; login_flow?: ProfileLoginFlow | null };
   profile: { name: string; email?: string; login_expired_at?: number | null };
   className?: string;
+  // A failed machine switch that found a dead snapshot should still offer
+  // sign-in even if the heartbeat has not yet stamped login_expired_at.
+  force?: boolean;
 }) {
   const requestLogin = useMutation(api.accountSwitch.requestLoginFlow);
   const [launching, setLaunching] = useState(false);
   const now = useCoarseNowLocal();
-  if (!profile.login_expired_at || device.is_remote || device.online === false) return null;
+  if ((!force && !profile.login_expired_at) || device.is_remote || device.online === false) return null;
   const flow = device.login_flow?.profile === profile.name ? device.login_flow : null;
   const pending = launching || (flow?.status === "pending" && now - flow.started_at < PROFILE_LOGIN_STALE_MS);
   const rejected = flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 10 * 60 * 1000;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisInputs, performApplyDecision } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, mergeAnalysisInputs, performApplyDecision } from "./orgInit";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
@@ -113,6 +113,18 @@ describe("org.analysisInputs", () => {
     expect(r.org.projects_without_role.map((p) => p.title).sort()).toEqual(["Billing", "Growth"]);
     expect(r.window_days).toBe(30);
     expect(r.caps).toBe(ANALYSIS_CAPS);
+  });
+
+  test("the three slices merge to the one process read, and the org slice never reads tasks", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const whole = await computeAnalysisInputs(ctx, ME as any, TEAM, NOW);
+    const work = await computeAnalysisWork(ctx, ME as any, TEAM);
+    const signals = await computeAnalysisSignals(ctx, ME as any, TEAM, NOW);
+    const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
+    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW)).toEqual(whole);
+    expect(work.handoff.latest_event).toBe(NOW - H);
+    expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks"]);
   });
 
   test("the per list caps hold", async () => {

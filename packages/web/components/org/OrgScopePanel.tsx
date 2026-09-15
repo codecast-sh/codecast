@@ -22,6 +22,8 @@ import type { OrgLayoutNode } from "./orgLayout";
 import { parentNodeId } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
 import type { OrgUpdateRoleInput } from "../../store/orgSlice";
+import { useInboxStore } from "../../store/inboxStore";
+import { OwnerRoleChip, PriorityPill } from "../charter/CharterChips";
 
 export type OrgSessionsSource = {
   sessionsUnder: (parentId: string) => OrgSession[];
@@ -30,9 +32,15 @@ export type OrgSessionsSource = {
   loadMore: (parentId: string) => void;
 };
 
+/** The panel's two modes (org-staffing.md S5): the selected node, or the
+ *  staffing pane. Both tabs show whenever both exist; the sheet opens in
+ *  staffing mode with no node selected. */
+export type OrgPanelMode = "node" | "staffing";
+
 export type OrgScopePanelProps = {
   tree: OrgTree;
-  node: OrgLayoutNode;
+  /** Null when the sheet is open in staffing mode with nothing selected. */
+  node: OrgLayoutNode | null;
   sessions: OrgSessionsSource;
   canEdit: boolean;
   onClose: () => void;
@@ -41,6 +49,12 @@ export type OrgScopePanelProps = {
   onUpdateRole: (roleId: string, fields: OrgUpdateRoleInput) => void;
   onRetireRole: (roleId: string) => void;
   onSelectNode: (id: string) => void;
+  mode: OrgPanelMode;
+  onMode: (mode: OrgPanelMode) => void;
+  /** The staffing pane, rendered in the body when mode is "staffing". */
+  staffing: React.ReactNode;
+  /** Changes still to decide on the open proposal, shown on the tab. */
+  staffingCount?: number;
 };
 
 type FeedRow =
@@ -151,6 +165,7 @@ export function ScopeEditor({ role, canEdit, onChange }: { role: OrgRole; canEdi
   const plans = useWorkspaceCollection<PlanItem>("plans");
   const projectById = useMemo(() => new Map(projects.map((p) => [p._id, p])), [projects]);
   const planById = useMemo(() => new Map(plans.map((p) => [p._id, p])), [plans]);
+  const orgTree = useInboxStore((s) => s.orgTree);
   const nameOfProject = (id: string) => projectById.get(id)?.title ?? role.scope_names.projects.find((p) => p.id === id)?.title ?? "project";
   const nameOfPlan = (id: string) => planById.get(id)?.title ?? role.scope_names.plans.find((p) => p.id === id)?.title ?? "plan";
   const shortOfPlan = (id: string) => planById.get(id)?.short_id ?? role.scope_names.plans.find((p) => p.id === id)?.short_id;
@@ -176,7 +191,12 @@ export function ScopeEditor({ role, canEdit, onChange }: { role: OrgRole; canEdi
           </span>
         )}
         {role.scope.project_ids.map((id) => (
-          <Chip key={`p:${id}`} tone="blue" href={`/projects/${id}`} onRemove={canEdit ? () => remove("project", id) : undefined}>{nameOfProject(id)}</Chip>
+          <span key={`p:${id}`} className="inline-flex items-center gap-1">
+            <Chip tone="blue" href={`/projects/${id}`} onRemove={canEdit ? () => remove("project", id) : undefined}>{nameOfProject(id)}</Chip>
+            {/* The project's charter at a glance (org-staffing.md S7): its priority and which role owns it. */}
+            <PriorityPill priority={projectById.get(id)?.priority} size="xs" />
+            <OwnerRoleChip tree={orgTree} ownerRoleId={projectById.get(id)?.owner_role_id} size="xs" />
+          </span>
         ))}
         {role.scope.plan_ids.map((id) => (
           <Chip key={`l:${id}`} tone="magenta" mono href={`/plans/${id}`} onRemove={canEdit ? () => remove("plan", id) : undefined}>{shortOfPlan(id) ?? nameOfPlan(id)}</Chip>
@@ -467,25 +487,55 @@ function AnchorPanel({ tree, anchor, onOpenSession }: { tree: OrgTree; anchor: O
 
 // ---------------------------------------------------------------- shell
 
+function PanelTab({ active, onClick, children, count }: { active: boolean; onClick: () => void; children: React.ReactNode; count?: number }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn("relative h-10 inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] transition-colors", active ? "text-sol-text" : "text-sol-text-dim hover:text-sol-text-muted")}
+    >
+      {children}
+      {count !== undefined && count > 0 && (
+        <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9.5px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{count}</span>
+      )}
+      {active && <span className="absolute left-0 right-0 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-violet)" }} />}
+    </button>
+  );
+}
+
 export function OrgScopePanel(props: OrgScopePanelProps) {
   const { node, onClose } = props;
   const now = useCoarseNow(30_000);
+  // With nothing selected the node tab has no subject; the sheet is the
+  // staffing pane alone.
+  const mode: OrgPanelMode = node ? props.mode : "staffing";
   return (
     <div className="h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between h-10 px-4 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }}>
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
-          {node.kind === "cluster" ? "sessions" : node.kind}
-        </span>
+        <div className="flex items-center gap-4" role="tablist">
+          {node && (
+            <PanelTab active={mode === "node"} onClick={() => props.onMode("node")}>
+              {node.kind === "cluster" ? "sessions" : node.kind}
+            </PanelTab>
+          )}
+          <PanelTab active={mode === "staffing"} onClick={() => props.onMode("staffing")} count={props.staffingCount}>Staffing</PanelTab>
+        </div>
         <button type="button" onClick={onClose} className="w-7 h-7 -mr-2 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" aria-label="Close panel" style={{ color: "var(--sol-text-dim)" }}>
           <X className="w-4 h-4" />
         </button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-8" data-main-scroll>
-        {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} />}
-        {node.kind === "person" && <PersonPanel tree={props.tree} person={node.person} sessions={props.sessions} onOpenSession={props.onOpenSession} now={now} />}
-        {node.kind === "session" && <SessionPanel tree={props.tree} session={node.session} parent={node.parent} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onSelectNode={props.onSelectNode} now={now} />}
-        {node.kind === "anchor" && <AnchorPanel tree={props.tree} anchor={node.anchor} onOpenSession={props.onOpenSession} />}
-        {node.kind === "cluster" && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Click the card to load more sessions.</p>}
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-8" data-main-scroll data-panel-mode={mode}>
+        {mode === "staffing" ? props.staffing : node && (
+          <>
+            {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} />}
+            {node.kind === "person" && <PersonPanel tree={props.tree} person={node.person} sessions={props.sessions} onOpenSession={props.onOpenSession} now={now} />}
+            {node.kind === "session" && <SessionPanel tree={props.tree} session={node.session} parent={node.parent} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onSelectNode={props.onSelectNode} now={now} />}
+            {node.kind === "anchor" && <AnchorPanel tree={props.tree} anchor={node.anchor} onOpenSession={props.onOpenSession} />}
+            {node.kind === "cluster" && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Click the card to load more sessions.</p>}
+          </>
+        )}
       </div>
     </div>
   );

@@ -105,6 +105,13 @@ export interface InventoryItem {
   client?: AgentClientId | "shared";
   /** Kind-specific extras — a plugin's marketplace, an MCP server's transport. */
   meta?: Record<string, string>;
+  /**
+   * The file's own bytes, when this kind is a markdown document (skill,
+   * command, subagent, snippet). Stripped from the fleet inventory before it
+   * goes on the wire — bodies ride a sidecar so a 5MB skills tree cannot blow
+   * the 256KB row budget and drop the machine from the mirror.
+   */
+  body?: string;
 }
 
 /**
@@ -788,15 +795,6 @@ function readClientItems(
       if (instruction.format === "mdc") {
         out.push(...readMdcRules(target, scope, clientId, sink));
       } else if (fileExists(target, sink)) {
-        out.push({
-          kind: "snippet",
-          name: path.basename(target),
-          scope,
-          enabled: true,
-          source: target,
-          client: clientId,
-          meta: { role: "instructions" },
-        });
         // Plus one entry per BUILTIN section installed inside it. The file's
         // presence says "instructions exist"; the sections say WHICH codecast
         // capabilities are on — the granularity a builtin/<slug> binding needs
@@ -809,6 +807,15 @@ function readClientItems(
         } catch (err) {
           noteUnreadable(sink, target, err);
         }
+        out.push({
+          kind: "snippet",
+          name: path.basename(target),
+          scope,
+          enabled: true,
+          source: target,
+          client: clientId,
+          meta: { role: "instructions" },
+        });
         if (content) {
           for (const entry of SNIPPET_CATALOG) {
             const spec = entry.section?.spec;
@@ -845,6 +852,17 @@ function sharedSkillDirs(home: string): string[] {
     const shared = client.agentFileTargets?.skillsDir?.shared;
     if (shared) dirs.add(fromHomeTemplate(home, shared));
   }
+  return [...dirs];
+}
+
+/** Directories whose add/change/unlink should kick a capability rescan.
+ *  User-scope only: project trees are too many to watch, and the 10-minute
+ *  fallback still covers them. */
+export function capabilityWatchDirs(home: string): string[] {
+  const dirs = new Set<string>(sharedSkillDirs(home));
+  dirs.add(path.join(home, ".claude", "skills"));
+  dirs.add(path.join(home, ".claude", "commands"));
+  dirs.add(path.join(home, ".claude", "agents"));
   return [...dirs];
 }
 

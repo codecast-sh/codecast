@@ -4,31 +4,48 @@
  * Browser → desktop handoff notice.
  *
  * When a browser page auto-hands-off to the desktop while the user is actively
- * working there, DesktopProvider must not yank the view (agent-driven Chrome
- * tabs satisfy every browser-side gate). Instead it raises this card: a
- * persistent toast — it never times out, only Open / dismiss / actually
- * arriving at the session clears it — that previews the session behind the
- * handoff (same card as a session reference hover) so the choice to switch is
- * an informed one.
+ * working there, DesktopProvider must not yank the view. Instead it raises this
+ * card: a persistent corner notice — it never times out, only Open / dismiss /
+ * actually arriving at the session clears it. Not a modal: no backdrop, no
+ * focus trap. Bigger than a hover popover so it can be read from across a
+ * desk, and it shows the same facts an inbox card does (title, live state,
+ * last user line) so the choice to switch is an informed one.
  */
 
 import { useRef } from "react";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { MonitorDown, X } from "lucide-react";
 import { isConvexId } from "../lib/entityLinks";
 import { conversationIdFromPath } from "../lib/desktop";
-import { SessionHoverContent } from "./SessionHoverContent";
-import { useInboxStore } from "../store/inboxStore";
-
+import { sessionCardSummary } from "../lib/sessionSummary";
+import { cleanTitle } from "../lib/conversationProcessor";
+import { cleanUserMessage } from "./sessionMessage";
+import { getLabelColor } from "../lib/labelColors";
+import { abbrevModel, relativeTime } from "../lib/entityDisplay";
+import { imageBytes } from "../lib/imageByteCache";
+import { getProjectName, useInboxStore } from "../store/inboxStore";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
+import { AuthorAvatar } from "./entityDisplay";
+import { FormattedSummary } from "./FormattedSummary";
+import "./browserHandoffToast.css";
+
+const TOAST_STYLE = {
+  width: 460,
+  padding: 0,
+  background: "transparent",
+  border: "none",
+  boxShadow: "none",
+} as const;
+
 // Keyed by path, so a background tab re-firing the same handoff refreshes the
 // one card instead of stacking duplicates.
 export function showBrowserHandoffToast(path: string, onOpen: (path: string) => void) {
   toast.custom(
     (toastId) => <BrowserHandoffToast toastId={toastId} path={path} onOpen={onOpen} />,
-    { id: `browser-handoff:${path}`, duration: Infinity },
+    { id: `browser-handoff:${path}`, duration: Infinity, unstyled: true, style: TOAST_STYLE },
   );
 }
 
@@ -48,14 +65,17 @@ function BrowserHandoffToast({
   onOpen: (path: string) => void;
 }) {
   const convId = conversationIdFromPath(path);
-  const session = useQuery(
+  const { data: fetched, error } = useQueryNoThrow(
     api.conversations.webGet,
     convId ? (isConvexId(convId) ? { id: convId } : { short_id: convId.slice(0, 7).toLowerCase() }) : "skip",
   );
-  // The local row's title bridges the webGet round-trip so the skeleton isn't blank.
-  const storeTitle = useInboxStore((s) => (convId ? s.sessions[convId]?.title : undefined));
-  // Landing on the session by any route resolves the handoff — drop the card
-  // rather than keep offering a page the user is already on.
+  const storeRow = useInboxStore((s) => (convId ? s.sessions[convId] : undefined));
+  const session = (fetched ?? storeRow ?? null) as Record<string, unknown> | null;
+  const loading = !!convId && fetched === undefined && !storeRow && !error;
+  const thumbSrc = imageBytes.useSrc(
+    typeof session?.image_preview_url === "string" ? session.image_preview_url : undefined,
+  );
+
   const arrived = useInboxStore((s) => convId != null && s.currentSessionId === convId);
   useWatchEffect(() => {
     if (arrived) toast.dismiss(toastId);
@@ -65,6 +85,7 @@ function BrowserHandoffToast({
     toast.dismiss(toastId);
     onOpen(path);
   };
+  const dismiss = () => toast.dismiss(toastId);
 
   // Sonner measures a custom toast only when its jsx prop changes, so a card
   // that grows internally (skeleton → loaded preview) leaves sonner's height
@@ -88,44 +109,137 @@ function BrowserHandoffToast({
   }, [path, onOpen]);
 
   return (
-    <div ref={rootRef} className="w-[356px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-sol-cyan/40 bg-sol-bg-alt shadow-xl shadow-sol-cyan/10">
-      <div className="flex items-center gap-2 border-b border-sol-border/60 bg-sol-cyan/5 px-3 py-2">
-        <MonitorDown className="h-3.5 w-3.5 flex-shrink-0 text-sol-cyan" />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-sol-text">
-          Browser handed off {convId ? "a session" : "a page"}
+    <div ref={rootRef}>
+      <BrowserHandoffCard
+        path={path}
+        session={session}
+        loading={loading}
+        thumbSrc={thumbSrc}
+        onOpen={open}
+        onDismiss={dismiss}
+      />
+    </div>
+  );
+}
+
+export function BrowserHandoffCard({
+  path,
+  session,
+  loading = false,
+  thumbSrc,
+  onOpen,
+  onDismiss,
+}: {
+  path: string;
+  session: Record<string, any> | null;
+  loading?: boolean;
+  thumbSrc?: string;
+  onOpen: () => void;
+  onDismiss: () => void;
+}) {
+  const hasSession = !!session && (session.title || session.short_id);
+  const title = hasSession ? cleanTitle(session.title || session.short_id || "Session") : null;
+  const isLive = !!(session?.is_active || session?.status === "active");
+  const summary = session ? sessionCardSummary(session) : "";
+  const userLine = session ? cleanUserMessage(session.last_message_preview) : null;
+  const project = session?.project_path ? getProjectName(undefined, session.project_path) : null;
+  const projectColor = project ? getLabelColor(project) : null;
+  const model = session ? abbrevModel(session.model) : null;
+  const timeAgo = session ? relativeTime(session.updated_at) : null;
+  const agent = session?.agent_type ? formatAgentType(session.agent_type) : null;
+  const isForeign = !!(session?.author_name || session?.author_avatar);
+
+  return (
+    <div className="handoff-toast" role="status" aria-live="polite">
+      <div className="handoff-toast-head">
+        <span className="handoff-toast-glyph" aria-hidden="true">
+          <MonitorDown className="h-4 w-4" />
         </span>
-        <button
-          onClick={open}
-          className="rounded-md bg-sol-cyan px-2.5 py-0.5 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
-        >
-          Open
-        </button>
-        <button
-          onClick={() => toast.dismiss(toastId)}
-          title="Dismiss"
-          className="text-sol-text-dim transition-colors hover:text-sol-text"
-        >
-          <X className="h-3.5 w-3.5" />
+        <span className="handoff-toast-kicker">From the browser</span>
+        <button type="button" className="handoff-toast-x" onClick={onDismiss} title="Dismiss">
+          <X className="h-4 w-4" />
         </button>
       </div>
-      {convId && session ? (
-        <button onClick={open} className="block w-full p-3 text-left transition-colors hover:bg-sol-bg-highlight/40">
-          <SessionHoverContent session={session} />
+
+      {hasSession ? (
+        <button type="button" className="handoff-toast-body" onClick={onOpen}>
+          <div className="handoff-toast-row">
+            <div className="handoff-toast-copy">
+              <div className="handoff-toast-title">
+                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="h-[18px] w-[18px]" />
+                <span>{title}</span>
+              </div>
+              <div className="handoff-toast-status">
+                {isLive && (
+                  <span className="relative flex h-2 w-2 flex-shrink-0" title="Live">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
+                  </span>
+                )}
+                <span className={isLive ? "handoff-toast-live" : undefined}>
+                  {isLive ? "Active" : session.status || "Stopped"}
+                </span>
+                {agent && <span>· {agent}</span>}
+                {isForeign && session.author_name && (
+                  <span className="inline-flex min-w-0 items-center gap-1">
+                    <span aria-hidden="true">·</span>
+                    <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={14} />
+                    <span className="truncate">{session.author_name}</span>
+                  </span>
+                )}
+              </div>
+              {summary && (
+                <p className="handoff-toast-summary">
+                  <FormattedSummary text={summary} />
+                </p>
+              )}
+              {userLine && (
+                <p className="handoff-toast-user">
+                  <span>&gt;</span>
+                  {userLine}
+                </p>
+              )}
+            </div>
+            {thumbSrc && <img src={thumbSrc} alt="" className="handoff-toast-thumb" />}
+          </div>
+          <div className="handoff-toast-meta">
+            {project && projectColor && (
+              <span className="handoff-toast-meta-project">
+                <i className={projectColor.dot} />
+                <span className={projectColor.text}>{project}</span>
+              </span>
+            )}
+            <span className="handoff-toast-meta-rest">
+              {session.message_count != null && session.message_count > 0 && (
+                <span>{session.message_count} messages</span>
+              )}
+              {model && <span>{model}</span>}
+              {timeAgo && <span>{timeAgo}</span>}
+            </span>
+          </div>
         </button>
-      ) : convId && session === undefined ? (
-        <div className="space-y-2 p-3">
-          {storeTitle ? (
-            <div className="text-xs font-medium leading-snug text-sol-text">{storeTitle}</div>
-          ) : (
-            <div className="h-3.5 w-2/3 animate-pulse rounded bg-sol-bg-highlight/60" />
-          )}
-          <div className="h-3 w-full animate-pulse rounded bg-sol-bg-highlight/40" />
+      ) : loading ? (
+        <div className="handoff-toast-body">
+          <div className="handoff-toast-skel" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </div>
         </div>
       ) : (
-        <button onClick={open} className="block w-full p-3 text-left transition-colors hover:bg-sol-bg-highlight/40">
-          <span className="font-mono text-[11px] text-sol-text-muted break-all">{path}</span>
+        <button type="button" className="handoff-toast-body" onClick={onOpen}>
+          <span className="handoff-toast-path">{path}</span>
         </button>
       )}
+
+      <div className="handoff-toast-actions">
+        <button type="button" className="handoff-toast-open" onClick={onOpen}>
+          {hasSession ? "Open session" : "Open"}
+        </button>
+        <button type="button" className="handoff-toast-stay" onClick={onDismiss}>
+          Not now
+        </button>
+      </div>
     </div>
   );
 }

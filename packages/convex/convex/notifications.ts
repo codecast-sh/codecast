@@ -427,7 +427,7 @@ const SESSION_STATE_TYPES = new Set<string>([
 // Insert the notification row + push for ONE recipient, honoring their prefs.
 // Shared by the api-token mutation below (daemon-driven permission/error
 // notifications) and the server-side needs-input check.
-async function deliverSessionNotification(
+export async function deliverSessionNotification(
   ctx: any,
   recipientId: any,
   conversationId: any,
@@ -512,47 +512,6 @@ export async function deliverSessionNotificationToParties(
     if (await deliverSessionNotification(ctx, ownerId, conversation._id, type, title, message)) {
       delivered = true;
     }
-  }
-  return delivered;
-}
-
-// "X assigned you this session" — fired when users are ADDED to a session's
-// owner set. Their inbox already surfaces the session (the owner scan does that
-// on its own); this is what actually TELLS them it landed there, which is the
-// difference between a handoff and a silent reassignment.
-//
-// Never notifies the actor about their own action: claiming a session for
-// yourself shouldn't ping you.
-export async function notifySessionAssigned(
-  ctx: any,
-  conversationId: any,
-  recipientIds: any[],
-  actorUserId: any,
-  note?: string,
-): Promise<number> {
-  if (recipientIds.length === 0) return 0;
-  const conversation = await ctx.db.get(conversationId);
-  if (!conversation) return 0;
-
-  const actor = await ctx.db.get(actorUserId);
-  const actorName = actor?.name || actor?.email || "A teammate";
-  const label =
-    (conversation.title || "").trim() ||
-    conversation.short_id ||
-    "a session";
-
-  let delivered = 0;
-  for (const recipientId of recipientIds) {
-    if (recipientId.toString() === actorUserId.toString()) continue;
-    const ok = await deliverSessionNotification(
-      ctx,
-      recipientId,
-      conversationId,
-      "session_assigned",
-      "Session assigned to you",
-      `${actorName} assigned you "${label}"${note ? ` — “${note}”` : ""}`,
-    );
-    if (ok) delivered++;
   }
   return delivered;
 }

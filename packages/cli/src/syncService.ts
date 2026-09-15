@@ -376,10 +376,11 @@ export interface CreateConversationParams {
 export class SyncService {
   private client: ConvexHttpClient;
   // Lazy: ConvexClient opens its websocket at construction and reconnects
-  // forever. Only the daemon's live-subscription path (one call site) needs
-  // it — creating it eagerly meant every SyncService a TEST constructs leaked
-  // an immortal ws://…:0 reconnect loop that outlived the test file and
-  // spammed the suite (and bun's exit code) long after.
+  // forever. The daemon opens it twice in spirit — once at the start of boot
+  // so `cast status` can track the socket during the tmux warm restart, and
+  // once for the live query subscriptions — both go through this getter.
+  // Creating it in the constructor leaked an immortal ws://…:0 reconnect
+  // loop from every SyncService a TEST constructs.
   private subscriptionClient?: ConvexClient;
   private convexUrl: string;
   private userId?: string;

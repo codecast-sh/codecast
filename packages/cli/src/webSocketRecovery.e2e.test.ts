@@ -3,6 +3,7 @@ import net from "node:net";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import { recoveringWebSocket } from "@codecast/shared/network";
+import { bindConvexConnectionState } from "./convexConnectionState.js";
 
 test("stalled handshakes close and a retained subscription recovers without replacing the client", async () => {
   let attempts = 0;
@@ -47,6 +48,8 @@ test("stalled handshakes close and a retained subscription recovers without repl
   const client = new ConvexClient(`http://127.0.0.1:${port}`, {
     webSocketConstructor: recoveringWebSocket({ timeoutMs: 500, completeMissingClose: true }), logger: false,
   });
+  const connectedWrites: boolean[] = [];
+  bindConvexConnectionState(client, { saveConnected: (c) => connectedWrites.push(c) });
   let unsubscribe: (() => void) | undefined;
   try {
     const query = makeFunctionReference<"query", Record<string, never>, string>("test:recovery");
@@ -55,6 +58,7 @@ test("stalled handshakes close and a retained subscription recovers without repl
     expect(attempts).toBe(3);
     expect(stalledClosed).toBe(2);
     expect(client.connectionState().isWebSocketConnected).toBe(true);
+    expect(connectedWrites.at(-1)).toBe(true);
     await Bun.sleep(600);
     expect(client.connectionState().isWebSocketConnected).toBe(true);
   } finally {

@@ -16,6 +16,7 @@ import { armedTriggerKindFor } from "./dormancy";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueRoleEvent } from "./orgEvents";
+import { triggerLifecycleInstructions } from "@codecast/shared/contracts";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -48,7 +49,7 @@ export async function refreshArmedTriggerKind(
 }
 
 // Patch a trigger and keep its home's armed_trigger_kind in step.
-async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: Record<string, any>) {
+export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: Record<string, any>) {
   await ctx.db.patch(task._id, patch);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
 }
@@ -587,6 +588,7 @@ export const dispatchCloudTriggers = internalMutation({
         ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
         : "";
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
+      const prompt = `${task.prompt}\n\n${triggerLifecycleInstructions(task)}`;
       const updates = completedTaskRunFields(task, now, { conversation_id: conversation._id });
       // A routine on a role's standing session rides the wake rail: an
       // immediate outbox row with the prompt as cause, so the frame carries
@@ -596,12 +598,12 @@ export const dispatchCloudTriggers = internalMutation({
       const outboxRowId = conversation.standing_role_id
         ? await enqueueRoleEvent(ctx, conversation.standing_role_id, {
           kind: "immediate",
-          cause: `routine "${task.title}" (${task.short_id ?? task._id}) fired:\n${task.prompt}`,
+          cause: `routine "${task.title}" (${task.short_id ?? task._id}) fired:\n${prompt}`,
           ref: { table: "agent_tasks", id: String(task._id), short_id: task.short_id ?? undefined },
         })
         : null;
       const pendingMessageId = outboxRowId ?? await enqueuePendingMessage(ctx, conversation, task.user_id, {
-        content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}${filingNote}</scheduled-task>`,
+        content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${prompt}${filingNote}</scheduled-task>`,
         origin: "scheduler",
         client_id: clientId,
       });

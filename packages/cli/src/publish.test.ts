@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildPublishPayload, findChrome, thumbArgs, walkBundleDir } from "./publish";
+import { buildPublishPayload, describeEvidence, findChrome, publishRequestBody, thumbArgs, walkBundleDir } from "./publish";
 
 let dir: string;
 
@@ -131,5 +131,35 @@ describe("thumbArgs", () => {
     } finally {
       process.env.HOME = saved;
     }
+  });
+});
+
+// Evidence (docs/architecture/the-line.md L6): --task and --plan ride the
+// publish body, and the result names where the page attached.
+describe("publishRequestBody", () => {
+  const payload = { title: "Report", source_path: "/tmp/report.html", content: "<h1>x</h1>", kind: undefined, files: undefined, entryHtmlPath: "/tmp/report.html" } as any;
+
+  it("carries --task and --plan only when given", () => {
+    expect(publishRequestBody(payload, { task: "ct-12", plan: "pl-3", sessionRef: "jx1" })).toMatchObject({
+      title: "Report", source_path: "/tmp/report.html", content: "<h1>x</h1>", task: "ct-12", plan: "pl-3", session_ref: "jx1",
+    });
+    const bare = publishRequestBody(payload, {});
+    expect(bare).not.toHaveProperty("task");
+    expect(bare).not.toHaveProperty("plan");
+    expect(bare).not.toHaveProperty("session_ref");
+    expect(bare).not.toHaveProperty("force_new");
+  });
+
+  it("keeps the older flags in the same body", () => {
+    expect(publishRequestBody(payload, { forceNew: true, access: { password: "p" }, thumbB64: "AAAA" })).toMatchObject({ force_new: true, access: { password: "p" }, thumb_b64: "AAAA" });
+  });
+});
+
+describe("describeEvidence", () => {
+  it("names the task and station, the plan alone, or nothing", () => {
+    expect(describeEvidence({ task: "ct-12", station: "in_progress" })).toBe("attached to ct-12 at in_progress");
+    expect(describeEvidence({ task: null, plan: "pl-3", station: null })).toBe("attached to pl-3");
+    expect(describeEvidence({ task: null, plan: null })).toBeNull();
+    expect(describeEvidence(undefined)).toBeNull();
   });
 });

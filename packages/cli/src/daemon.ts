@@ -40,7 +40,7 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
-import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
+import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
@@ -109,6 +109,7 @@ import {
   removeAccountToken,
 } from "./ccAccounts.js";
 import { STATUSLINE_HOOK_PATH, STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
+import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
@@ -4020,7 +4021,8 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
+    [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -4040,6 +4042,7 @@ async function sendHeartbeat(): Promise<void> {
   // hash-gated, with an hourly liveness floor. See capabilities/heartbeat.ts.
   ensureCapabilityInventoryFresh();
   const capabilityPayload = pendingCapabilityPayload();
+  const capabilityContents = pendingCapabilityContents();
 
   try {
     const deviceHostname = await stableHostnameAsync();
@@ -4101,6 +4104,7 @@ async function sendHeartbeat(): Promise<void> {
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
+        capability_contents: capabilityContents,
         ...await syncHealthFields(),
       }),
     });
@@ -4112,6 +4116,7 @@ async function sendHeartbeat(): Promise<void> {
     }
     if (modelInventory) markModelInventorySent(modelInventory.hash);
     if (capabilityPayload) markCapabilityPayloadSent(capabilityPayload.hash);
+    if (capabilityContents) markCapabilityContentsSent(capabilityContents.map((c) => c.hash));
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
@@ -12361,10 +12366,13 @@ const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|
 // and spinner, so any of these BELOW a candidate menu is structural proof the
 // "menu" is scrolled conversation content, not a live dialog. The caret regex
 // exempts "❯ 1." cursor-on-option rows and the cursor parked on a synthetic row.
-const SPINNER_ROW = /^[✻✶✢✳✽·]\s+\S/;
+// "✻ Waiting for API response · will retry in 2m 40s" carries the same glyph
+// but is painted UNDER a blocking dialog (the safeguards "Session paused"
+// menu, 2026-09-15), so it proves nothing about the composer.
+const SPINNER_ROW = /^[✻✶✢✳✽·]\s+(?!Waiting for API response)\S/;
 const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
 
-function machineComposerBelow(lines: string[], fromIdx: number): boolean {
+function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
   const caret = /^\s?[❯›](?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
   const footerAfter = (idx: number) => lines.slice(idx + 1).some(line =>
     isMenuFooterRow(line) || /(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)/i.test(line));
@@ -12384,8 +12392,8 @@ function machineComposerBelow(lines: string[], fromIdx: number): boolean {
 // True when any live-composer row sits below `fromIdx` — the pane is not blocked
 // on a dialog there. Box-art rows are skipped (a dialog's right-hand preview box
 // can contain arbitrary text, including hint-like glyphs).
-function liveComposerBelow(lines: string[], fromIdx: number, machineInput = false): boolean {
-  if (machineInput) return machineComposerBelow(lines, fromIdx);
+function liveComposerBelow(lines: string[], fromIdx: number, structural = false): boolean {
+  if (structural) return structuralComposerBelow(lines, fromIdx);
   for (let i = fromIdx + 1; i < lines.length; i++) {
     if (BOX_DRAWING_CHARS.test(lines[i])) continue;
     if (COMPOSER_BAR.test(lines[i]) || SPINNER_ROW.test(lines[i]) || COMPOSER_CARET_ROW.test(lines[i])) return true;
@@ -12401,9 +12409,9 @@ function liveComposerBelow(lines: string[], fromIdx: number, machineInput = fals
 // hint-like text from the composer/status region dozens of rows further down. Walk
 // down only while rows stay dialog-shaped; anything else (an assistant ⏺ bullet,
 // the ❯ composer, a shell prompt) means we left the dialog without meeting a footer.
-export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number, machineInput = false): boolean {
+export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number, structural = false): boolean {
   for (let i = lastOptionIdx + 1, cap = Math.min(lines.length, lastOptionIdx + 41); i < cap; i++) {
-    if (!machineInput && COMPOSER_BAR.test(lines[i])) return false;
+    if (!structural && COMPOSER_BAR.test(lines[i])) return false;
     if (isMenuFooterRow(lines[i])) return true;
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
@@ -12444,7 +12452,7 @@ function extractPromptHeading(lines: string[], firstOptionIdx: number): { header
   return { header, question };
 }
 
-export function parseInteractivePrompt(text: string, machineInput = false): InteractivePrompt | null {
+export function parseInteractivePrompt(text: string, structural = false): InteractivePrompt | null {
   const lines = text.split("\n");
   // '›' (U+203A) belongs here alongside '❯': codex draws its menu cursor with it.
   // Without it the cursor ROW of a codex menu fails to parse, so a three-option
@@ -12522,8 +12530,8 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
   // proves the pane is NOT blocked on a dialog — the "menu"/"hint" is scrolled
   // conversation content. Content checks alone can't make this call (prose here
   // routinely contains literal key-hint text).
-  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx, machineInput)) {
-    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx, machineInput);
+  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx, structural)) {
+    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx, structural);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
       return { question, options, firstOptionIdx, ...(header ? { header } : {}), ...(hasCheckbox ? { multiSelect: true } : {}) };
@@ -12535,7 +12543,7 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
   const joined = tailLines.join("\n");
   const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
   const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
-  if (enterMatch && !(machineInput ? machineComposerBelow(lines, -1) : tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l)))) {
+  if (enterMatch && !(structural ? structuralComposerBelow(lines, -1) : tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l)))) {
     // Question extraction: real interstitials (the usage-limit dialog, trust
     // prompts) draw a rule as their top edge with the question right below it.
     // Search only BELOW the last rule in the tail — the old "topmost non-hint
@@ -13153,6 +13161,42 @@ function normalizePromptText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+// Claude Code draws its prompt suggestion in an idle composer as faint text
+// (SGR 2). A plain capture drops the attribute, so a suggested "❯ continue"
+// reads exactly like a typed one, and delivery pressed Enter on it for 15 s at
+// a time (ct-51376). Every capture that asks what the composer holds is taken
+// with -e and read through this, which drops faint runs and every other escape.
+export function stripTmuxFaintText(pane: string): string {
+  let faint = false;
+  let out = "";
+  let last = 0;
+  const re = /\x1b\[([0-9;:]*)([A-Za-z])|\x1b[^[]/g;
+  for (let m = re.exec(pane); m; m = re.exec(pane)) {
+    if (!faint) out += pane.slice(last, m.index);
+    last = re.lastIndex;
+    if (m[2] !== "m") continue;
+    const params = (m[1] || "0").split(/[;:]/);
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      // 38/48/58 carry a colour: 5;N or 2;R;G;B. Their arguments are not
+      // attributes, and a truecolor "2" read as faint dropped opencode's and
+      // grok's typed text.
+      if (p === "38" || p === "48" || p === "58") {
+        i += params[i + 1] === "5" ? 2 : params[i + 1] === "2" ? 4 : 0;
+        continue;
+      }
+      if (p === "2") faint = true;
+      else if (p === "" || p === "0" || p === "22") faint = false;
+    }
+  }
+  return faint ? out : out + pane.slice(last);
+}
+
+export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: string, lines: number): Promise<string> {
+  const { stdout } = await exec(["capture-pane", "-p", "-e", "-J", "-t", target, "-S", `-${lines}`]);
+  return stripTmuxFaintText(stdout);
+}
+
 function tmuxComposerRegion(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
@@ -13469,6 +13513,14 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // it must be recognized before the idle rule below: a paste lands in no
   // composer there, and no key of ours is safe to press.
   if (parseSelectDialog(region.split("\n"))) return "menu";
+  // A numbered dialog whose cursor sits on an option: the AskUserQuestion menu
+  // and the safeguards "Session paused" interstitial ("❯ 1. Switch to Opus
+  // 4.8"). The cursor glyph is the same ❯ the idle rule reads as a composer,
+  // and it read so on 2026-09-15: the daemon pasted a message into the
+  // interstitial, minted a paste receipt for it, and every later message to
+  // the pane waited hours behind that receipt. Only a card answer (a poll)
+  // moves this cursor; everything else holds.
+  if (numberedCursorRow) return "menu";
   const promptVisible = region.includes("❯") || region.includes("›");
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
@@ -15075,28 +15127,32 @@ export async function selectHighlightedOption(target: string, isTarget: (line: s
   return false;
 }
 
-class MachineInputBlockedError extends Error {
+class InputBlockedError extends Error {
   constructor(reason: string) {
-    super(`AGENT_STDIN_NOT_READY: ${reason}; machine message remains pending`);
+    super(`AGENT_STDIN_NOT_READY: ${reason}; message remains pending`);
   }
 }
 
-function assertMachinePromptAbsent(pane: string): void {
-  if (!pane.trim()) throw new MachineInputBlockedError("terminal capture is empty");
-  if (parseInteractivePrompt(pane, true)) throw new MachineInputBlockedError("terminal is waiting for a human answer");
+function assertPromptAbsent(pane: string): void {
+  if (!pane.trim()) throw new InputBlockedError("terminal capture is empty");
+  if (parseInteractivePrompt(pane, true)) throw new InputBlockedError("terminal is waiting for a human answer");
 }
 
-function machineInputGuard(content: string, capture: () => Promise<string>): (() => Promise<void>) | undefined {
-  if (!isMachineDeliveredMessage(content)) return undefined;
-  let blocked: MachineInputBlockedError | undefined;
+// The check every paste runs before it touches the pane, whoever wrote the
+// message: a person in the composer or a session's cast send. The pane does
+// not care who is typing, and keying this on the author is how a typed
+// message pasted into a dialog that had just refused a session message
+// (2026-09-15). Card answers (polls) never reach this: they answer the dialog.
+function inputGuard(capture: () => Promise<string>): () => Promise<void> {
+  let blocked: InputBlockedError | undefined;
   return async () => {
     if (blocked) throw blocked;
     try {
-      assertMachinePromptAbsent(await capture());
+      assertPromptAbsent(await capture());
     } catch (err) {
-      blocked = err instanceof MachineInputBlockedError
+      blocked = err instanceof InputBlockedError
         ? err
-        : new MachineInputBlockedError(`terminal capture failed: ${err instanceof Error ? err.message : String(err)}`);
+        : new InputBlockedError(`terminal capture failed: ${err instanceof Error ? err.message : String(err)}`);
       throw blocked;
     }
   };
@@ -15134,7 +15190,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     try {
       ({ stdout, region, state } = await captureTmuxLiveState(target, glyphlessPattern, captureLines));
     } catch (err) {
-      if (inspectPane) throw new MachineInputBlockedError(`terminal capture failed: ${String(err)}`);
+      if (inspectPane) throw new InputBlockedError(`terminal capture failed: ${String(err)}`);
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
     inspectPane?.(stdout);
@@ -15364,7 +15420,7 @@ export type TmuxSubmitVerifyOpts = {
   prePaste: string;
   pasteConfirmed: boolean;
   contentPrefix: string;
-  multiline?: boolean;
+  bracketedPaste?: boolean;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15477,7 +15533,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.multiline && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15514,7 +15570,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.multiline && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -15628,7 +15684,7 @@ export async function drainTmuxComposer(
     if (cycle % 3 !== 0) continue;
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       break; // capture problems are diagnosed by the Enter gate
     }
@@ -15650,7 +15706,7 @@ export async function tmuxComposerDraft(
 ): Promise<string | null> {
   let pane: string;
   try {
-    ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    pane = await captureTmuxComposerPane(exec, target, 40);
   } catch {
     return null;
   }
@@ -15751,7 +15807,7 @@ export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
   opts: {
-    multiline?: boolean;
+    bracketedPaste?: boolean;
     prePaste?: string;
     rePaste: () => Promise<void>;
     allowRePaste?: boolean;
@@ -15782,7 +15838,7 @@ export async function awaitTmuxComposerPayload(
   while (Date.now() < deadline) {
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       return "unwatchable"; // capture problems are diagnosed by the post-submit verifier
     }
@@ -15804,9 +15860,10 @@ export async function awaitTmuxComposerPayload(
     // second chip or the watched prefix showing up again behind the first, is a
     // re-paste that landed on a composer which had already taken the first, and
     // submitting it sends the message twice (ct-49753).
-    const chips = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
+    const composer = tmuxComposerRegion(pane) ?? "";
+    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && !glyphLine.slice(0, glyphLine.indexOf(chips[0])).trim()
+      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -15833,7 +15890,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
   try {
     return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
   } catch (error) {
-    if (!opts?.delivery || error instanceof MachineInputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
+    if (!opts?.delivery || error instanceof InputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
     throw new TmuxDeliveryUncertainError(String(error));
   }
 }
@@ -15943,16 +16000,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
-  const beforeInput = machineInputGuard(content, async () =>
+  const beforeInput = inputGuard(async () =>
     (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout);
-  const exec: typeof tmuxExec = beforeInput ? async (args, opts) => {
+  const exec: typeof tmuxExec = async (args, opts) => {
     if (args[0] === "send-keys" || args[0] === "paste-buffer") await beforeInput();
     return tmuxExec(args, opts);
-  } : tmuxExec;
+  };
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
-  await ensureTmuxReady(target, agentType, beforeInput ? assertMachinePromptAbsent : undefined, beforeInput ? captureLines : undefined);
+  await ensureTmuxReady(target, agentType, assertPromptAbsent, captureLines);
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text
@@ -15976,7 +16033,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let alreadyAtPrompt = false;
   let liveState: TmuxLiveState = "unknown";
   try {
-    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    const stdout = await captureTmuxComposerPane(exec, target, captureLines);
     alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
     liveState = classifyTmuxLiveState(extractTmuxLiveRegion(stdout));
   } catch {}
@@ -16027,7 +16084,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     if (prior.phase === "paste" || settled) {
       try {
         gate = await awaitTmuxComposerPayload(target, sanitized, {
-          multiline: bracketed && sanitized.includes("\n"),
+          bracketedPaste: bracketed,
           rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
           allowRePaste: false,
           budgetMs: opts?.gateBudgetMs,
@@ -16054,8 +16111,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
 
     try {
-      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      prePaste = stdout;
+      prePaste = await captureTmuxComposerPane(exec, target, captureLines);
     } catch {}
 
     // Paste once
@@ -16067,7 +16123,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
     // match doubles as paste confirmation for the post-submit verifier.
     gate = await awaitTmuxComposerPayload(target, sanitized, {
-      multiline: bracketed && sanitized.includes("\n"),
+      bracketedPaste: bracketed,
       prePaste,
       rePaste: delivery ? async () => { throw new TmuxDeliveryUncertainError("the paste has not appeared intact"); } : doPaste,
       allowRePaste: !delivery,
@@ -16092,7 +16148,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     for (let attempt = 0; attempt < 4; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
-        const { stdout: postPaste } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        const postPaste = await captureTmuxComposerPane(exec, target, captureLines);
         if (postPaste !== prePaste) {
           pasteConfirmed = true;
           break;
@@ -16130,8 +16186,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   };
   const verify = await verifyTmuxSubmitAfterPaste(
     {
-      capture: async () =>
-        (await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
+      capture: () => captureTmuxComposerPane(exec, target, captureLines),
       sendEnter,
       rePaste: async () => {
         if (delivery) throw new TmuxDeliveryUncertainError("a submitted paste cannot be repeated");
@@ -16154,7 +16209,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       pasteConfirmed,
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
-      multiline: sanitized.includes("\n"),
+      bracketedPaste: bracketed,
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
@@ -16379,7 +16434,8 @@ async function injectViaAppleScript(
   const poll = keystrokes ? null : parsePollMessage(content);
 
   const app: "iTerm2" | "Terminal" = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
-  const beforeInput = keystrokes ? undefined : machineInputGuard(content, () => captureAppleScriptPane(app, normalizedTty));
+  // A card answer (a poll) answers the dialog; everything else is a paste the dialog would refuse.
+  const beforeInput = keystrokes || poll ? undefined : inputGuard(() => captureAppleScriptPane(app, normalizedTty));
   const write = async (text: string, keys: boolean, submit = true) => {
     const { script, args } = buildAppleScript(app, normalizedTty, text, poll, keys, bracketed, submit);
     const tmpFile = writeTerminalInjectionScript(script);
@@ -16463,7 +16519,7 @@ async function kittySendText(match: string, text: string, bracketed: boolean, be
       await beforeInput?.();
       await execAsync(`kitty @ send-text ${match}${pasteFlag} --from-file '${tmpFile}'`);
     } catch (err) {
-      if (err instanceof MachineInputBlockedError) throw err;
+      if (err instanceof InputBlockedError) throw err;
       log(`kitty bracketed paste failed (${err instanceof Error ? err.message : String(err)}), sending flattened`);
       // Keep the fallback file-based too: putting arbitrary prompt text in the
       // shell command leaks it through process listings and reintroduces escape
@@ -16542,7 +16598,7 @@ async function injectViaKitty(
     return;
   }
 
-  const beforeInput = machineInputGuard(content, async () =>
+  const beforeInput = inputGuard(async () =>
     (await execAsync(`kitty @ get-text ${match} --extent screen`)).stdout);
   await pasteAndSubmitText({
     paste: () => kittySendText(match, content, bracketed, beforeInput),
@@ -16644,7 +16700,7 @@ async function injectViaWezTerm(
     return;
   }
 
-  const beforeInput = machineInputGuard(content, async () =>
+  const beforeInput = inputGuard(async () =>
     (await execAsync(`wezterm cli get-text --pane-id ${paneId}`)).stdout);
   await pasteAndSubmitText({
     paste: async () => {
@@ -21564,7 +21620,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
     } catch (err) {
-      if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+      if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -21972,8 +22028,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         await new Promise(resolve => setTimeout(resolve, 250));
         try {
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
-          if (isMachineDeliveredMessage(content) && parseInteractivePrompt(paneContent, true)) {
-            throw new MachineInputBlockedError("terminal is waiting for a human answer");
+          if (!parsePollMessage(content) && parseInteractivePrompt(paneContent, true)) {
+            throw new InputBlockedError("terminal is waiting for a human answer");
           }
           // Scan only output below the echoed launch command — shell rc noise
           // above it must not read as an agent crash (see paneContentAfterLaunchEcho).
@@ -22016,7 +22072,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             break;
           }
       } catch (err) {
-        if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       }
     }
     if (!ready) {
@@ -22049,8 +22105,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         const { stdout: preInjectPane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-15"]);
         const warningPatterns = /⚠|recorded with model|weekly limit|Update available|Press enter to continue/;
         if (warningPatterns.test(preInjectPane)) {
-          await machineInputGuard(content, async () =>
-            (await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-80"])).stdout)?.();
+          if (!parsePollMessage(content)) await inputGuard(async () =>
+            (await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-80"])).stdout)();
           logDelivery(`Clearing startup warnings for ${shortId} before injection`);
           await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
           await new Promise(resolve => setTimeout(resolve, 300));
@@ -22064,7 +22120,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           }
         }
       } catch (err) {
-        if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       }
     }
 
@@ -22078,7 +22134,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     return true;
   } catch (err) {
-    if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+    if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
     logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
@@ -22796,12 +22852,14 @@ async function deliverMessage(
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
 
+  // This message reached delivery past the hold (a card answer, or the hold
+  // lapsed): whatever it does to the prompt, the next scan looks again.
+  releasePromptHold(conversationId);
+  // A person's typed text can answer the scraped card by naming an option;
+  // a session message carries its wrapper and is never an answer.
   if (!isMachineDeliveredMessage(content)) {
     const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
     pendingInteractivePrompts.delete(sessionId || conversationId);
-    // A person is answering the terminal: machine messages held behind the
-    // prompt may go after this one.
-    releasePromptHold(conversationId);
 
     // If there's an active poll and the message is plain text (not already a poll response),
     // check if it matches one of the poll options and convert to a poll response
@@ -22872,7 +22930,8 @@ async function deliverMessage(
         const startTime = Date.now();
         for (let i = 0; i < 60; i++) {
           await new Promise(resolve => setTimeout(resolve, 250));
-          const probe = await probeStartedPane(entry, isMachineDeliveredMessage(content) ? assertMachinePromptAbsent : undefined);
+          // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
+          const probe = await probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent);
           if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
           if (probe.state === "fatal") {
             log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
@@ -23086,7 +23145,7 @@ async function deliverMessage(
     if (!live.proc.tty) {
       // No terminal to address. The injectors below can only fail inside their
       // capture, and for a machine message that failure reads as a held terminal
-      // (MachineInputBlockedError), not an unreachable process — which is how
+      // (InputBlockedError), not an unreachable process — which is how
       // every wake to one session retried into an empty osascript for hours on
       // 2026-09-07. Fall through to the resume paths instead.
       logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
@@ -23104,7 +23163,7 @@ async function deliverMessage(
         return true;
       } catch (err) {
         if (err instanceof PendingDeliveryHeldError) throw err;
-        if (err instanceof MachineInputBlockedError) throw err;
+        if (err instanceof InputBlockedError) throw err;
         logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -25635,6 +25694,26 @@ async function main(): Promise<void> {
   // registers at the end of boot (setHookStatusSink).
   hookServer = startHookServer();
 
+  // Open the Convex WebSocket now, before the tmux warm restart. That scan
+  // awaits every managed pane (133s for 135 sessions on 2026-09-15) and used
+  // to be the first moment ConvexClient was constructed, so `cast status`
+  // read connected:false for the whole blackout even while HTTP heartbeats
+  // succeeded. Tracking here lets the socket come up in parallel with the
+  // scan; the live query subscriptions still attach later, once their
+  // handlers exist.
+  try {
+    bindConvexConnectionState(syncService.getSubscriptionClient(), {
+      saveConnected: (connected) => saveDaemonState({ connected }),
+      onChange: (connected) => log(`Convex WebSocket ${connected ? "connected" : "disconnected"}`),
+      onRestored: () => {
+        retryQueueRef?.notifyConnectionRestored();
+        sendHeartbeat().catch(() => {});
+      },
+    });
+  } catch (err) {
+    logWarn(`Could not subscribe to Convex connection state: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // Now that the port answers, sweep any daemon that is running without the
   // pid file. Off the loop and off the boot path: it spawns `ps`.
   void sweepOrphanDaemons();
@@ -26366,6 +26445,7 @@ async function main(): Promise<void> {
     depth: 0,
   });
   statusWatcher.on("add", handleStatusFile).on("change", handleStatusFile);
+  startCapabilitySourceWatcher(process.env.HOME || require("os").homedir());
 
   // Process existing status files on startup (chokidar ignoreInitial skips
   // them). A live hook that lands first wins: the ts guards in
@@ -27814,10 +27894,8 @@ async function main(): Promise<void> {
         // The terminal is waiting for a human answer: a paste would answer it,
         // so the conversation is skipped until the prompt closes or the hold
         // window lapses (see pendingPromptHold). Not a retry, not an attempt.
-        // A human's answer to the card is never held: it is what closes the
-        // prompt. A human's typed message is held only when one was already
-        // refused (a dialog no text can answer); see pendingPromptHold.
-        const holdMs = parsePollMessage(msg.content) ? 0 : promptHoldRemainingMs(msg.conversation_id, !isMachineDeliveredMessage(msg.content));
+        // Only a card answer goes through: it is what closes the prompt.
+        const holdMs = parsePollMessage(msg.content) ? 0 : promptHoldRemainingMs(msg.conversation_id);
         if (holdMs > 0) {
           logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - conv=${msg.conversation_id.slice(0, 12)} is waiting for a human answer (next try in ${Math.ceil(holdMs / 1000)}s)`);
           continue;
@@ -27980,13 +28058,13 @@ async function main(): Promise<void> {
           injectedMessageTs.delete(msg._id);
           if (err instanceof PendingDeliveryHeldError) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} no longer admitted; preserving it without retry`);
-          } else if (err instanceof MachineInputBlockedError || /terminal is waiting for a human answer/.test(errMsg)) {
+          } else if (err instanceof InputBlockedError || /terminal is waiting for a human answer/.test(errMsg)) {
             // Not a failed attempt: the pane shows a menu or confirmation a
             // human must answer, and a paste would answer it. Re-pend without
             // spending the retry budget, skip the conversation for a short
             // hold, and re-drive when the prompt closes.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
-            holdConversationForPrompt(msg.conversation_id, { humans: !isMachineDeliveredMessage(msg.content) });
+            holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
@@ -28053,9 +28131,8 @@ async function main(): Promise<void> {
       // Registering a subscription does NOT prove the WebSocket is up:
       // onUpdate() returns synchronously and silently queues on a dead socket,
       // so asserting connected:true here lies whenever the socket later dies
-      // mid-run (e.g. after a sleep) — the flag stays true through real
-      // outages. The truthful connected/disconnected flag is driven below by
-      // subscribeToConnectionState off the live WebSocket state instead.
+      // mid-run (e.g. after a sleep). The persisted flag is driven at boot by
+      // bindConvexConnectionState off the live WebSocket state instead.
       if (reconnectAttempt > 0) {
         sendLogImmediate("info", `[LIFECYCLE] connection_restored: after ${reconnectAttempt} attempts`, { error_code: "connection_restored" });
       }
@@ -28063,7 +28140,6 @@ async function main(): Promise<void> {
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       logError("Subscription error", error);
-      saveDaemonState({ connected: false });
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
@@ -28304,41 +28380,6 @@ async function main(): Promise<void> {
   };
 
   setupCommandSubscription();
-
-  // Keep the persisted `connected` flag (what `cast status` shows as
-  // "Convex: connected/disconnected") honest by driving it off the live Convex
-  // WebSocket state. Without this the flag was set once at subscription
-  // registration and only cleared on startup/shutdown, so it couldn't tell a
-  // live socket from one that silently died after a sleep — reading "connected"
-  // straight through a sync outage. subscribeToConnectionState fires on every
-  // transition; ConnectionState also changes on inflight-request counts, so
-  // dedupe to socket up/down edges to avoid churning daemon.state on every
-  // mutation. Seed from the current state so we don't wait for the first change.
-  let lastConnectedWritten: boolean | undefined;
-  const publishConnectionState = (cs: { isWebSocketConnected: boolean }) => {
-    if (cs.isWebSocketConnected === lastConnectedWritten) return;
-    // A genuine false→true edge (not the initial seed from `undefined`) means
-    // the socket just came back after an outage — most commonly a laptop wake.
-    // Recover gracefully instead of letting the UI sit on scary states: drain
-    // the retry backlog now (otherwise queued ops wait out a backoff scheduled
-    // against the dead socket — up to 5 min — and surface as "sync stalled"),
-    // and refresh the heartbeat immediately so `daemon_last_seen` is current and
-    // the web "daemon offline" banner clears at once rather than after the next
-    // 30s tick.
-    const restored = lastConnectedWritten === false && cs.isWebSocketConnected;
-    lastConnectedWritten = cs.isWebSocketConnected;
-    saveDaemonState({ connected: cs.isWebSocketConnected });
-    if (restored) {
-      retryQueueRef?.notifyConnectionRestored();
-      sendHeartbeat().catch(() => {});
-    }
-  };
-  try {
-    publishConnectionState(subscriptionClient.connectionState());
-    subscriptionClient.subscribeToConnectionState(publishConnectionState);
-  } catch (err) {
-    logWarn(`Could not subscribe to Convex connection state: ${err instanceof Error ? err.message : String(err)}`);
-  }
 
   const shutdown = async () => {
     closeDaemonWorkers();

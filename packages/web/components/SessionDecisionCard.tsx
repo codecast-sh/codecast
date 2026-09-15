@@ -136,7 +136,11 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const jumpToDecisionAsk = useJumpToDecisionAsk(item.conversationId, item.decisionId, item.question);
   const jumpToAsk = useCallback(async () => {
     if (!canJumpToAsk) return;
-    if (await jumpToDecisionAsk()) stepper?.onExit?.();
+    if (!(await jumpToDecisionAsk())) return;
+    // The card may be covering the thread (full size). Hand the pane back
+    // so the jump is visible. Do not leave the queue for the list — the
+    // jump already opened the session at the ask.
+    if (!stepper) setSize((s) => (s === "full" ? "dock" : s));
   }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
 
   // The session title is WHO is asking, never WHAT. A poll-sourced card

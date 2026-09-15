@@ -1533,7 +1533,7 @@ export const deliverRoutes = internalAction({
     const { transcript, segments } = data;
     for (const route of transcript.routes) {
       if (route.mode === "after" && !args.include_after_routes) continue;
-      const unsent = segments.filter((s) => s.seq > route.sent_seq);
+      const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
       if (unsent.length === 0) continue;
       const chunk = formatChunk(unsent);
       const maxSeq = unsent[unsent.length - 1].seq;

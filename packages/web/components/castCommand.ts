@@ -474,6 +474,15 @@ export function normalizeCastCategory(category: string): string {
   return CAST_CATEGORY_ALIASES[category] || category;
 }
 
+// `cast decide` (not `ls`) is the authored twin of AskUserQuestion: the
+// human needs to see the card in a condensed feed, not a "ran 1 command"
+// receipt they have to open.
+export function isDecideCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
+  if (!cast) return false;
+  if (normalizeCastCategory(cast.category) !== "decide") return false;
+  return extractDecideArgs(cast.subcommand, cast.args).verb !== "ls";
+}
+
 export interface CastBodyPart {
   label?: string;
   text: string;
