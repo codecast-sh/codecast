@@ -281,14 +281,16 @@ export function DeviceBadge({
 export function RunOnDeviceItems({
   conversationId,
   ownerDeviceId,
+  allowRemoteMove = true,
 }: {
   conversationId: string;
   ownerDeviceId?: string | null;
+  allowRemoteMove?: boolean;
 }) {
-  const { byId, locals, remotes, loaded } = useDevices();
+  const { byId, locals, remotes } = useDevices();
   const foreignOwner = useForeignOwnerDevice(
     conversationId,
-    loaded && !!ownerDeviceId && !byId.get(ownerDeviceId),
+    !!ownerDeviceId && !byId.get(ownerDeviceId),
   );
   const move = useMoveSessionToDevice();
   const runHere = (d: Device) => move(conversationId, { device_id: d.device_id, is_remote: false, label: deviceDisplayName(d) });
@@ -329,8 +331,8 @@ export function RunOnDeviceItems({
           </DropdownMenuItem>
         );
       })}
-      {remotes.length > 0 && <DropdownMenuSeparator />}
-      {remotes.map((d) => {
+      {allowRemoteMove && remotes.length > 0 && <DropdownMenuSeparator />}
+      {allowRemoteMove && remotes.map((d) => {
         const isOwner = d.device_id === ownerDeviceId;
         // An asleep cloud box is still a valid destination — the move wakes
         // it. Only a remote that CANNOT wake (a remote Mac gone dark) is dead.

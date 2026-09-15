@@ -96,6 +96,8 @@ describe("safety stop survives transcript ingestion and delivery recovery", () =
   test("ordinary transient errors still clear when a real turn arrives", async () => {
     const ctx = setup();
     await ingest(ctx, true, [{ role: "assistant", content: "API Error: 500 temporary failure", timestamp: 10 }]);
+    // Claude Code writes the banner once its retries are spent, so the row parks as blocked.
+    expect(await ctx.db.get(CONVERSATION)).toMatchObject({ pending_api_error: true, pending_api_error_kind: "fatal", pending_api_error_at: 10 });
     await ingest(ctx, true, [{ role: "user", content: "Continue", timestamp: 20 }]);
     expect((await ctx.db.get(CONVERSATION)).pending_api_error).toBe(false);
     const id = await enqueuePendingMessage(ctx, await ctx.db.get(CONVERSATION), USER, { content: "Next task" });

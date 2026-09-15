@@ -29,6 +29,9 @@ import { EntryTimeline } from "../../../components/EntryTimeline";
 import { PlanGraphView } from "../../../components/PlanGraphView";
 import { LivenessDot } from "../../../components/LivenessDot";
 import { mergeLiveTasks, computePlanProgress, findEntityInStore } from "../../../lib/liveEntities";
+import { CharterBlock } from "../../../components/charter/CharterBlock";
+import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
+import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import {
   Clock,
   CheckCircle2,
@@ -155,13 +158,20 @@ export default function PlanDetailPage() {
     if (!Array.isArray(liveTasks)) return (plan as any)?.progress;
     return { ...((plan as any)?.progress || {}), ...computePlanProgress(liveTasks) };
   }, [liveTasks, plan]);
-  const liveStatus = useMemo(() => {
+  const storePlan = useMemo(() => {
     if (!plan) return undefined;
-    const storePlan = Object.values(storePlans).find(
+    return Object.values(storePlans).find(
       (p: any) => p.short_id === plan.short_id || p._id === plan._id
     ) as any;
-    return storePlan?.status ?? plan.status;
   }, [plan, storePlans]);
+  const liveStatus = storePlan?.status ?? plan?.status;
+
+  // The charter (org-staffing.md S7): the store row first, so an inline edit
+  // paints in the same tick; the query snapshot fills the rest. The org tree
+  // feeds the owner chip and the chief of staff link, per view as /org does.
+  const { tree: orgTree } = useSyncOrgTree();
+  const charter = useMemo(() => charterOf({ ...(plan ?? {}), ...(storePlan ?? {}) }, "plan"), [plan, storePlan]);
+  const handleCharterChange = useCallback((patch: CharterPatch) => { if (plan) webUpdate(plan.short_id, patch); }, [plan, webUpdate]);
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -230,7 +240,7 @@ export default function PlanDetailPage() {
           leadContent={
             <>
               <RepositoryLinks planId={plan._id} sessions={plan.sessions || []} conversationIds={plan.conversation_ids || []} />
-              {plan.goal && <p className="text-base text-sol-text-muted leading-relaxed">{plan.goal}</p>}
+              <CharterBlock kind="plan" title={plan.title} charter={charter} canEdit onChange={handleCharterChange} tree={orgTree} className="mt-2" />
             </>
           }
           topBarLeft={

@@ -20,6 +20,8 @@ test("the classifier routes a subagent report onto the session-message rail", ()
   expect(classifier).toContain("isAgentMessage(t)");
   expect(classifier).toContain("parseAgentAuthoredMessage(t)");
   expect(classifier).toMatch(/kind: 'session_message',[^\n]*variant: 'agent'/);
+  expect(classifier).toContain("parseUnwrappedSessionReport(t)");
+  expect(classifier).toContain("isSessionMessage(t)");
 });
 
 test("the card gets the agent variant and the sender's session when it resolves", () => {

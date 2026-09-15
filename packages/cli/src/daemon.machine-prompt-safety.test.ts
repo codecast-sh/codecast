@@ -194,9 +194,9 @@ function fixture(transport = "tmux", cached = true) {
     const names = [
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
-      "assertMachinePromptAbsent", "machineInputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
-      "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
+      "captureTmuxComposerPane", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
@@ -235,7 +235,7 @@ function fixture(transport = "tmux", cached = true) {
     };
     const code = [
       source.slice(parserStart, parserEnd),
-      blockAt(source, source.indexOf("class MachineInputBlockedError")).text,
+      blockAt(source, source.indexOf("class InputBlockedError")).text,
       blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
       "class UndeliverableMessageError extends Error {}",
       source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
@@ -249,7 +249,7 @@ function fixture(transport = "tmux", cached = true) {
       blockAt(source, source.indexOf("  const handlePendingMessagesUpdate = async")).text,
     ].join("\n").replace(/^export /gm, "");
     fixtureFactory = new Function(...Object.keys(deps), new Bun.Transpiler({ loader: "ts" }).transformSync(code) +
-      "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, machineInputGuard, assertMachinePromptAbsent, MachineInputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3] };") as (...args: any[]) => any;
+      "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, inputGuard, assertPromptAbsent, InputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3] };") as (...args: any[]) => any;
   }
   const api = fixtureFactory(...Object.values(deps));
   return {
@@ -489,12 +489,49 @@ describe("machine prompt delivery safety", () => {
     await f.scan([{ _id: "typed", content: "please continue" }]);
     expect(f.bodies).toEqual([]);
     expect(f.events).toEqual(["hold:typed"]);
-    expect(promptHoldRemainingMs("conv", true)).toBeGreaterThan(0);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
     // The re-pended row re-fires the scan at once; the hold keeps it off the pane.
     const captures = f.state.captures;
     await f.scan([{ _id: "typed", content: "please continue" }]);
     expect(f.state.captures).toBe(captures);
     expect(f.events).toEqual(["hold:typed"]);
+  });
+
+  // The safeguards "Session paused" interstitial (2026-09-15). A typed
+  // message and a cast send are the same paste to the pane, so the dialog
+  // refuses and holds both; only a card answer moves its cursor.
+  const sessionPaused = [
+    " Session paused",
+    "",
+    "  Fable 5.1's safeguards flagged this message.",
+    "",
+    "  Details: `[cyber]`",
+    "",
+    "  ❯ 1. Switch to Opus 4.8",
+    "    2. Edit prompt and retry with Fable 5.1",
+    "",
+    "✻ Waiting for API response · will retry in 2m 40s · check your network",
+  ].join("\n");
+
+  test.each([["typed", "please continue"], ["sent", session("please continue")]])("a %s message is held behind the safeguards interstitial, and a card answer goes through", async (_kind, content) => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = sessionPaused;
+    await f.scan([{ _id: "msg", content }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:msg"]);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    const captures = f.state.captures;
+    await f.scan([{ _id: "msg", content }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:msg"]);
+    // The card answer is never held; it closes the dialog and releases the hold.
+    f.pendingInteractivePrompts.set("sid", { ...f.prompt, options: [{ label: "Switch to Opus 4.8" }, { label: "Edit prompt and retry with Fable 5.1" }] });
+    await f.scan([{ _id: "answer", content: poll }]);
+    expect(f.state.menu).toBeNull();
+    expect(promptHoldRemainingMs("conv")).toBe(0);
+    await f.scan([{ _id: "msg", content }]);
+    expect(f.bodies).toEqual([content]);
   });
 
   test("a card answer walks the highlight of an unnumbered select dialog, then confirms", async () => {
@@ -546,11 +583,11 @@ describe("machine prompt delivery safety", () => {
     const f = fixture();
     let captures = 0;
     const capture = async () => captures++ === 0 ? menu : box();
-    const guard = f.machineInputGuard(session("context"), capture);
+    const guard = f.inputGuard(capture);
     await expect(guard()).rejects.toThrow("human answer");
     await expect(guard()).rejects.toThrow("human answer");
     expect(captures).toBe(1);
-    await expect(f.machineInputGuard(session("context"), capture)()).resolves.toBeUndefined();
+    await expect(f.inputGuard(capture)()).resolves.toBeUndefined();
     expect(captures).toBe(2);
   });
 
@@ -567,7 +604,7 @@ describe("machine prompt delivery safety", () => {
 
   test.each([0, 1, 2, 3])("resume propagation catch %s rethrows the exact hold and preserves ordinary fallback", async index => {
     const f = fixture();
-    const error = new f.MachineInputBlockedError("fixture menu");
+    const error = new f.InputBlockedError("fixture menu");
     await expect(f.propagation[index](error)).rejects.toBe(error);
     await expect(f.propagation[index](new Error("ordinary failure"))).resolves.toBe(index === 3 ? false : "fallback");
     expect(f.events).toEqual([]);
@@ -617,7 +654,7 @@ describe("machine prompt delivery safety", () => {
     const entry = f.deps.startedSessionTmux.get("conv");
     f.state.menu = menu;
     await expect(f.probeStartedPane(entry)).resolves.toMatchObject({ state: "ready" });
-    await expect(f.probeStartedPane(entry, f.assertMachinePromptAbsent)).rejects.toThrow("human answer");
+    await expect(f.probeStartedPane(entry, f.assertPromptAbsent)).rejects.toThrow("human answer");
   });
 
   for (const transport of ["kitty", "WezTerm", "iTerm.app", "Apple_Terminal"]) {

@@ -40,6 +40,25 @@ describe("tmuxWatchablePrefix", () => {
 });
 
 describe("awaitTmuxComposerPayload", () => {
+  test("a long single-line bracketed paste can collapse into a chip", async () => {
+    expect(await awaitTmuxComposerPayload("t:0.0", PAYLOAD.repeat(25), {
+      bracketedPaste: true,
+      allowRePaste: false,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: BOX("[Pasted text #98]") }) as any,
+    })).toBe("matched");
+  });
+
+  test.each(["[Pasted text #98] foreign", "[Pasted text #98]\nforeign", "[Pasted text #98]\n[Pasted text #99]"])("a paste chip with residue is refused: %s", async composer => {
+    await expect(awaitTmuxComposerPayload("t:0.0", PAYLOAD.repeat(25), {
+      bracketedPaste: true,
+      allowRePaste: false,
+      budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: BOX(composer) }) as any,
+    })).rejects.toThrow("INJECT_UNVERIFIED");
+  });
+
   test("matches when the composer shows the payload, without any keys sent", async () => {
     const sends: string[] = [];
     const exec = async (args: Args): Promise<{ stdout: string }> => {
@@ -163,7 +182,7 @@ describe("awaitTmuxComposerPayload", () => {
       return { stdout: "" };
     };
     const out = await awaitTmuxComposerPayload("t:0.0", "one\ntwo\n\nthree", {
-      multiline: true,
+      bracketedPaste: true,
       rePaste: async () => { rePastes++; composer = "[Pasted text #1 +3 lines]"; },
       exec: exec as any,
     });
@@ -233,7 +252,7 @@ describe("awaitTmuxComposerPayload", () => {
       return { stdout: "" };
     };
     const out = await awaitTmuxComposerPayload("t:0.0", "line one\nline two", {
-      multiline: true,
+      bracketedPaste: true,
       rePaste: async () => { throw new Error("must not re-paste on a clean chip"); },
       exec: exec as any,
     });
@@ -249,7 +268,7 @@ describe("awaitTmuxComposerPayload", () => {
       return { stdout: "" };
     };
     const out = await awaitTmuxComposerPayload("t:0.0", "line one\nline two", {
-      multiline: true,
+      bracketedPaste: true,
       rePaste: async () => { rePastes++; composer = "[Pasted text #1 +13 lines]"; },
       exec: exec as any,
     });
@@ -342,7 +361,7 @@ describe("awaitTmuxComposerPayload — real client composers", () => {
       return { stdout: "" };
     };
     return awaitTmuxComposerPayload("t:0.0", payload, {
-      multiline: payload.includes("\n"),
+      bracketedPaste: payload.includes("\n"),
       rePaste: async () => { throw new Error("must not re-paste a composer that holds the payload"); },
       budgetMs: 2_000,
       exec: exec as any,

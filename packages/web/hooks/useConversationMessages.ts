@@ -8,7 +8,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { rowSigExcluding } from "../store/wakeSig";
 import { shareTokenArg } from "../lib/shareTokenScope";
-import { deepenConversation, fetchOlderPage, WARM_DEEP_ROWS } from "./inboxWarm";
+import { deepenConversation, fetchMessagesAround, fetchOlderMessages, fetchOlderPage, WARM_DEEP_ROWS } from "./inboxWarm";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
@@ -185,8 +185,10 @@ export function useConversationMessages(
   const targetKeyRef = useRef(targetKey);
   targetKeyRef.current = targetKey;
   const dismissedTargetKeyRef = useRef<string | null>(null);
+  const jumpGenRef = useRef(0);
 
   if (trackedConvId !== conversationId) {
+    jumpGenRef.current++;
     setTrackedConvId(conversationId);
     dismissedTargetKeyRef.current = null;
     setTargetMode(!!(effectiveTargetMessageId || cleanedHighlightQuery));
@@ -593,6 +595,7 @@ export function useConversationMessages(
   const targetReqKey = `${targetNonce ?? ""}:${effectiveTargetMessageId ?? ""}`;
   const [trackedTargetReqKey, setTrackedTargetReqKey] = useState(targetReqKey);
   if (trackedTargetReqKey !== targetReqKey) {
+    jumpGenRef.current++;
     setTrackedTargetReqKey(targetReqKey);
     if (effectiveTargetMessageId) {
       targetInitializedRef.current = false;
@@ -602,14 +605,18 @@ export function useConversationMessages(
     }
   }
 
+  // Bookmark / deep-link only: subscribe so a Sidebar prefetch of the same
+  // 50/50 window paints from the Convex cache on the first frame. Jump-to-start
+  // and jump-to-timestamp are one-shots (jumpToStart / jumpToTimestamp) — a live
+  // subscription on a long session re-runs the whole window on every heartbeat.
   const aroundData = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    canQuery && targetMode && !targetInitializedRef.current && (targetTimestampReady || jumpTimestamp !== null)
+    canQuery && targetMode && !targetInitializedRef.current && jumpMode === null && targetTimestampReady
       ? {
           conversation_id: convId,
-          center_timestamp: jumpTimestamp ?? effectiveTargetTimestamp!,
-          limit_before: jumpMode === "start" ? 0 : 50,
-          limit_after: jumpMode === "start" ? 100 : 50,
+          center_timestamp: effectiveTargetTimestamp!,
+          limit_before: 50,
+          limit_after: 50,
           ...shareArg,
         }
       : "skip"
@@ -630,61 +637,69 @@ export function useConversationMessages(
   const [targetIsLoadingOlder, setTargetIsLoadingOlder] = useState(false);
   const [targetIsLoadingNewer, setTargetIsLoadingNewer] = useState(false);
 
-  const olderInTarget = useQuery(
-    api.conversations.getAllMessages,
-    canQuery && targetMode && targetLoadOlderTs !== undefined
-      ? { conversation_id: convId, limit: 50, before_timestamp: targetLoadOlderTs, ...shareArg }
-      : "skip"
-  );
-
-  const newerInTarget = useQuery(
-    api.conversations.getMessagesAroundTimestamp,
-    canQuery && targetMode && targetLoadNewerTs !== undefined
-      ? { conversation_id: convId, center_timestamp: targetLoadNewerTs, limit_before: 0, limit_after: 50, ...shareArg }
-      : "skip"
-  );
-
-  // eslint-disable-next-line no-restricted-syntax -- merge older messages into target local state
+  // eslint-disable-next-line no-restricted-syntax -- one-shot older page into the transient target window
   useEffect(() => {
-    if (olderInTarget && olderInTarget.messages?.length >= 0) {
-      setTargetAroundData((prev: any) => {
-        if (!prev) return prev;
-        const existingIds = new Set(prev.messages.map((m: Message) => m._id));
-        const fresh = olderInTarget.messages.filter((m: Message) => !existingIds.has(m._id));
-        if (fresh.length === 0) return { ...prev, has_more_above: olderInTarget.has_more_above ?? false };
-        return {
-          ...prev,
-          messages: [...fresh, ...prev.messages].sort((a: Message, b: Message) => a.timestamp - b.timestamp),
-          has_more_above: olderInTarget.has_more_above ?? false,
-          oldest_timestamp: olderInTarget.oldest_timestamp,
-        };
+    if (!canQuery || !targetMode || targetLoadOlderTs === undefined) return;
+    let cancelled = false;
+    fetchOlderMessages(convex, conversationId, targetLoadOlderTs, 50)
+      .then((res: any) => {
+        if (cancelled || !res?.messages) return;
+        setTargetAroundData((prev: any) => {
+          if (!prev) return prev;
+          const existingIds = new Set(prev.messages.map((m: Message) => m._id));
+          const fresh = res.messages.filter((m: Message) => !existingIds.has(m._id));
+          if (fresh.length === 0) return { ...prev, has_more_above: res.has_more_above ?? false };
+          return {
+            ...prev,
+            messages: [...fresh, ...prev.messages].sort((a: Message, b: Message) => a.timestamp - b.timestamp),
+            has_more_above: res.has_more_above ?? false,
+            oldest_timestamp: res.oldest_timestamp,
+          };
+        });
+        setTargetHasMoreAbove(res.has_more_above ?? false);
+      })
+      .catch((err: unknown) => {
+        console.warn("[useConversationMessages] target loadOlder failed", { conversationId, err });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setTargetIsLoadingOlder(false);
+        setTargetLoadOlderTs(undefined);
       });
-      setTargetHasMoreAbove(olderInTarget.has_more_above ?? false);
-      setTargetIsLoadingOlder(false);
-      setTargetLoadOlderTs(undefined);
-    }
-  }, [olderInTarget]);
+    return () => { cancelled = true; };
+  }, [canQuery, targetMode, targetLoadOlderTs, convex, conversationId]);
 
-  // eslint-disable-next-line no-restricted-syntax -- merge newer messages into target local state
+  // eslint-disable-next-line no-restricted-syntax -- one-shot newer page into the transient target window
   useEffect(() => {
-    if (newerInTarget && newerInTarget.messages?.length >= 0) {
-      setTargetAroundData((prev: any) => {
-        if (!prev) return prev;
-        const existingIds = new Set(prev.messages.map((m: Message) => m._id));
-        const fresh = newerInTarget.messages.filter((m: Message) => !existingIds.has(m._id));
-        if (fresh.length === 0) return { ...prev, has_more_below: newerInTarget.has_more_below ?? false };
-        return {
-          ...prev,
-          messages: [...prev.messages, ...fresh].sort((a: Message, b: Message) => a.timestamp - b.timestamp),
-          has_more_below: newerInTarget.has_more_below ?? false,
-          last_timestamp: newerInTarget.last_timestamp,
-        };
+    if (!canQuery || !targetMode || targetLoadNewerTs === undefined) return;
+    let cancelled = false;
+    fetchMessagesAround(convex, conversationId, targetLoadNewerTs, 0, 50)
+      .then((res: any) => {
+        if (cancelled || !res?.messages) return;
+        setTargetAroundData((prev: any) => {
+          if (!prev) return prev;
+          const existingIds = new Set(prev.messages.map((m: Message) => m._id));
+          const fresh = res.messages.filter((m: Message) => !existingIds.has(m._id));
+          if (fresh.length === 0) return { ...prev, has_more_below: res.has_more_below ?? false };
+          return {
+            ...prev,
+            messages: [...prev.messages, ...fresh].sort((a: Message, b: Message) => a.timestamp - b.timestamp),
+            has_more_below: res.has_more_below ?? false,
+            last_timestamp: res.last_timestamp,
+          };
+        });
+        setTargetHasMoreBelow(res.has_more_below ?? false);
+      })
+      .catch((err: unknown) => {
+        console.warn("[useConversationMessages] target loadNewer failed", { conversationId, err });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setTargetIsLoadingNewer(false);
+        setTargetLoadNewerTs(undefined);
       });
-      setTargetHasMoreBelow(newerInTarget.has_more_below ?? false);
-      setTargetIsLoadingNewer(false);
-      setTargetLoadNewerTs(undefined);
-    }
-  }, [newerInTarget]);
+    return () => { cancelled = true; };
+  }, [canQuery, targetMode, targetLoadNewerTs, convex, conversationId]);
 
   // =============================================
   // Unified message list: store for normal mode, local state for target mode
@@ -772,8 +787,8 @@ export function useConversationMessages(
       // History pages are one-shot fetches keyed by the oldest local
       // timestamp — no live subscription per page (the old usePaginatedQuery
       // kept every loaded page subscribed and re-executing on churn). 200 per
-      // page keeps the walk-back round-trip count low without defeating
-      // virtualization.
+      // page matches MESSAGE_PAGE_MAX on getAllMessages, which ranges the
+      // timestamp index so a long session does not rescan every newer row.
       if (useInboxStore.getState().messages[conversationId]?.[0] === undefined) return;
       setOlderLoading(true);
       fetchOlderPage(convex, conversationId, WARM_DEEP_ROWS).catch((err: unknown) => {
@@ -794,6 +809,7 @@ export function useConversationMessages(
   }, [targetMode, targetAroundData, targetHasMoreBelow, targetIsLoadingNewer]);
 
   const jumpToStart = useCallback(() => {
+    const gen = ++jumpGenRef.current;
     targetInitializedRef.current = false;
     setTargetAroundData(null);
     setJumpTimestamp(0);
@@ -803,11 +819,29 @@ export function useConversationMessages(
     setTargetHasMoreBelow(true);
     setTargetLoadOlderTs(undefined);
     setTargetLoadNewerTs(undefined);
-    setTargetIsLoadingOlder(false);
+    setTargetIsLoadingOlder(true);
     setTargetIsLoadingNewer(false);
-  }, []);
+    void fetchMessagesAround(convex, conversationId, 0, 0, 50)
+      .then((res: any) => {
+        if (gen !== jumpGenRef.current) return;
+        if (!res?.messages) return;
+        setTargetAroundData(res);
+        setTargetHasMoreAbove(res.has_more_above ?? false);
+        setTargetHasMoreBelow(res.has_more_below ?? false);
+      })
+      .catch((err: unknown) => {
+        if (gen !== jumpGenRef.current) return;
+        console.warn("[useConversationMessages] jumpToStart failed", { conversationId, err });
+      })
+      .finally(() => {
+        if (gen !== jumpGenRef.current) return;
+        targetInitializedRef.current = true;
+        setTargetIsLoadingOlder(false);
+      });
+  }, [convex, conversationId]);
 
   const jumpToEnd = useCallback(() => {
+    jumpGenRef.current++;
     dismissedTargetKeyRef.current = targetKeyRef.current;
     setTargetMode(false);
     targetInitializedRef.current = false;
@@ -821,6 +855,7 @@ export function useConversationMessages(
   }, []);
 
   const jumpToTimestamp = useCallback((ts: number) => {
+    const gen = ++jumpGenRef.current;
     targetInitializedRef.current = false;
     setTargetAroundData(null);
     setJumpTimestamp(ts);
@@ -830,9 +865,26 @@ export function useConversationMessages(
     setTargetHasMoreBelow(true);
     setTargetLoadOlderTs(undefined);
     setTargetLoadNewerTs(undefined);
-    setTargetIsLoadingOlder(false);
+    setTargetIsLoadingOlder(true);
     setTargetIsLoadingNewer(false);
-  }, []);
+    void fetchMessagesAround(convex, conversationId, ts, 50, 50)
+      .then((res: any) => {
+        if (gen !== jumpGenRef.current) return;
+        if (!res?.messages) return;
+        setTargetAroundData(res);
+        setTargetHasMoreAbove(res.has_more_above ?? false);
+        setTargetHasMoreBelow(res.has_more_below ?? false);
+      })
+      .catch((err: unknown) => {
+        if (gen !== jumpGenRef.current) return;
+        console.warn("[useConversationMessages] jumpToTimestamp failed", { conversationId, err });
+      })
+      .finally(() => {
+        if (gen !== jumpGenRef.current) return;
+        targetInitializedRef.current = true;
+        setTargetIsLoadingOlder(false);
+      });
+  }, [convex, conversationId]);
 
   // =============================================
   // Compaction count + loaded_start_index

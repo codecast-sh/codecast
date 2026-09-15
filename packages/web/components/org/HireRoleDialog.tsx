@@ -17,6 +17,7 @@ import { SelectBox } from "../ui/select-box";
 import { parentNodeId, parentRefOfNodeId } from "./orgLayout";
 import type { OrgTree } from "./orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type TrustStage } from "./scope/scopeTypes";
+import { OrgTemplateHire } from "./orgTemplateHire";
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
@@ -42,7 +43,11 @@ function proposeCharter(name: string, projects: Array<{ title: string; descripti
   return `${who} owns ${owns}.${activity} It keeps the scope's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`;
 }
 
-export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role" }: {
+/** Prefill for "Edit" on a proposed role (org-staffing.md S5): the analyzer's
+ *  fields land in the form and the submit reads as accepting with edits. */
+export type HireRoleInitial = { name?: string; handle?: string; charter?: string; caps?: Partial<RoleCaps> };
+
+export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initial, submitLabel = "Create and start" }: {
   open: boolean;
   onClose: () => void;
   tree: OrgTree;
@@ -55,16 +60,19 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   /** The cwd the standing session starts in (the project's path when known). */
   projectPath?: string;
   title?: string;
+  initial?: HireRoleInitial;
+  submitLabel?: string;
 }) {
-  const [name, setName] = useState("");
-  const [handle, setHandle] = useState("");
-  const [handleTouched, setHandleTouched] = useState(false);
+  const [mode, setMode] = useState<"manual" | "template">("manual");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [handle, setHandle] = useState(initial?.handle ?? "");
+  const [handleTouched, setHandleTouched] = useState(!!initial?.handle);
   const [reportsTo, setReportsTo] = useState<string>(meId ? parentNodeId({ kind: "user", user_id: meId }) : "");
-  const [charter, setCharter] = useState("");
-  const [charterTouched, setCharterTouched] = useState(false);
+  const [charter, setCharter] = useState(initial?.charter ?? "");
+  const [charterTouched, setCharterTouched] = useState(!!initial?.charter);
   const [projectIds, setProjectIds] = useState<string[]>(() => initialProjects.map((p) => p._id));
   const [planIds, setPlanIds] = useState<string[]>([]);
-  const [caps, setCaps] = useState<RoleCaps>({ ...DEFAULT_CAPS });
+  const [caps, setCaps] = useState<RoleCaps>({ ...DEFAULT_CAPS, ...(initial?.caps ?? {}) });
   const wsProjects = useWorkspaceCollection<ProjectItem>("projects");
   const plans = useWorkspaceCollection<PlanItem>("plans");
   // Preset rows lead the list, then the rest of the workspace.
@@ -77,7 +85,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   // The scope preview: what the seat will read. A whole-workspace scope reads
   // everything, so the query is skipped and the hint says so.
   const { data: summary } = useScopeSummary(
-    open && !wholeWorkspace
+    open && mode === "manual" && !wholeWorkspace
       ? { scope: { project_ids: projectIds, plan_ids: planIds }, ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}) }
       : "skip",
   );
@@ -95,7 +103,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   // set one, so it is read loosely.
   const cwd: string | undefined = projectPath ?? (picked[0] as { project_path?: string } | undefined)?.project_path ?? undefined;
   const submit = () => {
-    if (!valid) return;
+    if (mode !== "manual" || !valid) return;
     const ref = parentRefOfNodeId(reportsTo) ?? { kind: "user" as const, user_id: meId };
     onCreate({
       name: name.trim(),
@@ -123,9 +131,17 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       <DialogContent className="max-w-[520px] grid-cols-1 max-h-[92vh] overflow-y-auto" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
         <DialogHeader>
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists.</DialogDescription>
+          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{mode === "manual" ? "A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists." : "Bring a complete job template into one project, with your approval before setup."}</DialogDescription>
         </DialogHeader>
-        <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" role="group" aria-label="Role setup">
+          {([["manual", "Write a role"], ["template", "From a folder"]] as const).map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className="rounded-md px-3 py-2 text-[12px] font-semibold transition-colors focus-visible:outline focus-visible:outline-sol-cyan" style={{ background: mode === value ? "var(--sol-card)" : undefined, color: mode === value ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{label}</button>
+          ))}
+        </div>
+        <div hidden={mode !== "template"}>
+          <OrgTemplateHire projects={projects} workspace={tree.workspace} initialProjectId={initialProjects.length === 1 ? initialProjects[0]._id : undefined} projectPath={initialProjects.length === 1 ? projectPath : undefined} onClose={onClose} />
+        </div>
+        <form className={mode === "manual" ? "flex flex-col gap-3" : "hidden"} onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <div className="grid grid-cols-[1fr_auto] gap-3">
             <Field label="Name">
               <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Head of Growth" className={INPUT} style={INPUT_STYLE} />
@@ -203,7 +219,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
 
           <div className="flex items-center justify-end gap-2 pt-1">
             <button type="button" onClick={onClose} className="h-8 px-3 rounded-lg text-[12.5px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-            <button type="submit" disabled={!valid} className="h-8 px-3.5 rounded-lg text-[12.5px] font-semibold disabled:opacity-50" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Create and start</button>
+            <button type="submit" disabled={!valid} className="h-8 px-3.5 rounded-lg text-[12.5px] font-semibold disabled:opacity-50" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{submitLabel}</button>
           </div>
         </form>
       </DialogContent>

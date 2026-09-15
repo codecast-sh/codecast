@@ -27,6 +27,13 @@
 // commits the buffer and waits, bounded, for the transcription to come back.
 // `close()` remains what it always was: the abandon path.
 import { api } from "@codecast/convex/convex/_generated/api";
+import {
+  LIVE_TRANSCRIBE_MODEL,
+  asrTranscriptionSession,
+  isUnexpectedTranscript,
+  localTranscribeLanguages,
+  normalizeTranscribeLanguages,
+} from "@codecast/shared/contracts";
 
 type AsrConvexHandle = {
   action: (fn: any, args: any) => Promise<any>;
@@ -120,8 +127,13 @@ export function openAsrPipe(opts: {
   /** Timeline clock for utterance offsets, in ms. */
   clock: () => number;
   events?: AsrPipeEvents;
+  /** Languages this pipe may emit. Defaults to the browser's list. */
+  languages?: string[];
 }): AsrPipe {
   const { convex, roomKey, track, clock, events } = opts;
+  let languages = normalizeTranscribeLanguages(
+    opts.languages ?? localTranscribeLanguages(),
+  );
   let closed = false;
   let speaking = false;
   let utteranceStart = 0;
@@ -277,9 +289,26 @@ export function openAsrPipe(opts: {
   startCapture();
 
   void (async () => {
-    const minted = await convex.action(api.transcripts.mintAsrToken, { room_key: roomKey }).catch(
-      (err: any) => ({ error: String(err?.message ?? "Could not start transcription") }),
-    );
+    const tryMint = (args: { room_key: string; languages?: string[] }) =>
+      convex
+        .action(api.transcripts.mintAsrToken, args)
+        .catch((err: any) => ({ error: String(err?.message ?? "Could not start transcription") }));
+    // An older mint rejects the languages field. Retry without it so a huddle
+    // still transcribes; the socket update below is what then applies the list.
+    let minted = await tryMint({
+      room_key: roomKey,
+      ...(languages.length ? { languages } : {}),
+    });
+    if (closed) return;
+    // Only retry when the mint rejected the new field itself. Auth failures
+    // and "not configured" must not spend a second round trip.
+    if (
+      languages.length &&
+      typeof minted?.error === "string" &&
+      /languages|ArgumentValidation|Unexpected argument|extra field/i.test(minted.error)
+    ) {
+      minted = await tryMint({ room_key: roomKey });
+    }
     if (closed) return;
     if (minted?.error || !minted?.client_secret) {
       hopeless = true;
@@ -296,6 +325,12 @@ export function openAsrPipe(opts: {
       events?.onFailed?.(reason);
       return;
     }
+    // The mint unions this device with everyone already seated, so a Japanese
+    // speaker in an English-scribed room is on the allowlist the filter uses.
+    // An empty list from the mint must not wipe the list this device already has.
+    if (Array.isArray(minted.languages) && minted.languages.length) {
+      languages = normalizeTranscribeLanguages(minted.languages);
+    }
 
     // Browser websockets cannot set headers; the Realtime API accepts the
     // ephemeral secret as a subprotocol.
@@ -309,10 +344,17 @@ export function openAsrPipe(opts: {
 
     socket.onopen = () => {
       if (closed) return;
-      // The session arrives fully configured from the mint (model, pcm 24k,
-      // server VAD) — no session.update needed, and the beta-era
-      // transcription_session.update event no longer exists.
-      //
+      // The mint bakes the allowlist when it can. This update is the same
+      // object, sent again, so a mint that could not take `languages` (an
+      // older server) still ends up constrained before any audio is flushed.
+      if (languages.length) {
+        socket.send(
+          JSON.stringify({
+            type: "session.update",
+            session: asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL, languages),
+          }),
+        );
+      }
       // What was said while this was connecting goes first, in order, so the
       // server hears one continuous take rather than the tail of one.
       flush();
@@ -343,7 +385,9 @@ export function openAsrPipe(opts: {
           partialText = "";
         }
         partialText += msg.delta;
-        events?.onPartial?.(partialText);
+        // A script nobody on the allowlist writes is the language-lock bug;
+        // show nothing rather than a flash of the wrong one.
+        events?.onPartial?.(isUnexpectedTranscript(partialText, languages) ? "" : partialText);
       } else if (msg.type === "conversation.item.input_audio_transcription.completed") {
         // Whatever the words turn out to be, the commit has been answered.
         transcribedSinceCommit = true;
@@ -351,7 +395,7 @@ export function openAsrPipe(opts: {
         partialText = "";
         events?.onPartial?.("");
         const text = typeof msg.transcript === "string" ? msg.transcript.trim() : "";
-        if (!text) return;
+        if (!text || isUnexpectedTranscript(text, languages)) return;
         const t1 = clock();
         events?.onUtterance?.({ text, t0: utteranceStart || Math.max(0, t1 - 2000), t1 });
       } else if (msg.type === "conversation.item.input_audio_transcription.failed") {

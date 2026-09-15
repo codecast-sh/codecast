@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link, ArrowUpRight, ChevronsUpDown, Columns2 } from "lucide-react";
+import { Link, Link2, ArrowUpRight, ChevronsUpDown, Columns2 } from "lucide-react";
+import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useFrameTheme } from "../hooks/useFrameTheme";
 import { CONVEX_URL } from "../lib/localAuth";
+import { copyToClipboard } from "../lib/utils";
 import { openBrowserPane } from "../lib/stage";
 
 const api = _api as any;
@@ -26,6 +29,32 @@ function pageShareUrl(slug: string): string {
  */
 function openPageInPane(slug: string) {
   openBrowserPane({ kind: "url", url: pageFrameSrc(slug) });
+}
+
+const HEADER_ACTION =
+  "flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-blue transition-colors";
+
+/** Copy the public share URL (`codecast.sh/a/<slug>`), not the serving origin
+ *  the iframe uses. Same URL "open" already points at. */
+function CopyPageLinkButton({ slug, className }: { slug: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void copyToClipboard(pageShareUrl(slug)).then(
+          () => toast.success("Link copied"),
+          () => toast.error("Couldn't copy link"),
+        );
+      }}
+      className={className}
+      title="Copy link to published page"
+      aria-label="Copy link to published page"
+    >
+      <Link2 className="h-3 w-3" />
+    </button>
+  );
 }
 
 /** "Open in a pane", in the two sizes this file needs: a strip button in the
@@ -74,6 +103,12 @@ const EMBED_HEIGHT_EXPANDED = "70vh";
 export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: string }) {
   const meta = usePageMeta(slug);
   const [expanded, setExpanded] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const { theme, onLoad } = useFrameTheme(frameRef);
+  // The theme at mount rides the address so the first paint already matches;
+  // later changes arrive as messages, because a new src would reload the page.
+  const [mountTheme] = useState(theme);
+  const src = `${pageFrameSrc(slug)}?theme=${mountTheme}`;
 
   // Deleted or never existed: a full-height frame of a 404 reads as breakage.
   // Degrade to a compact note carrying the link.
@@ -100,18 +135,16 @@ export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: 
         <span className="flex items-center gap-2 border-b border-sol-border bg-sol-bg-alt px-3 py-1.5">
           <PageFavicon className="h-4 w-4" />
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-sol-text">{title}</span>
-          <OpenInPaneButton
-            slug={slug}
-            className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-blue transition-colors"
-          />
+          <CopyPageLinkButton slug={slug} className={HEADER_ACTION} />
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-blue transition-colors"
+            className={HEADER_ACTION}
             title={expanded ? "Collapse" : "Expand"}
           >
             <ChevronsUpDown className="h-3 w-3" />
           </button>
+          <OpenInPaneButton slug={slug} className={HEADER_ACTION} />
           <a
             href={pageShareUrl(slug)}
             target="_blank"
@@ -123,7 +156,9 @@ export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: 
           </a>
         </span>
         <iframe
-          src={pageFrameSrc(slug)}
+          ref={frameRef}
+          src={src}
+          onLoad={onLoad}
           className="w-full bg-sol-card"
           style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : EMBED_HEIGHT }}
           sandbox="allow-scripts allow-popups"

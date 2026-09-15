@@ -30,7 +30,7 @@ describe("session send command", () => {
     await cli.run(body);
     expect(cli.requests).toEqual([{
       path: "/cli/messages/send",
-      body: { to: "jx7c6zk", from: "native-thread-uuid", body },
+      body: { to: "jx7c6zk", from: "native-thread-uuid", body, wake: false },
     }]);
     expect(cli.output.join("\n")).not.toContain("without resolving");
   });
@@ -40,6 +40,18 @@ describe("session send command", () => {
     await expect(cli.run("routine update")).rejects.toThrow("Nothing was sent. Pass --from");
     expect(cli.requests).toEqual([]);
     expect(cli.output).toEqual([]);
+  });
+
+  test("a send asks the server to hold a stale target unless --wake is passed", async () => {
+    const plain = command({ CODEX_THREAD_ID: "t" });
+    await plain.run("update");
+    expect(plain.requests[0].body.wake).toBe(false);
+    const woken = command({ CODEX_THREAD_ID: "t" });
+    await woken.run("update", "--wake");
+    expect(woken.requests[0].body.wake).toBe(true);
+    const raw = command({ CODEX_THREAD_ID: "t" });
+    await raw.run("/model opus", "--raw");
+    expect("wake" in raw.requests[0].body).toBe(false);
   });
 
   test("a detached script can carry an explicit sender", async () => {
@@ -71,6 +83,14 @@ describe("session send command", () => {
     await cli.run("/model opus", "--raw");
     expect(cli.requests[0].body).toEqual({ to: "jx7c6zk", body: "/model opus", from: undefined, raw: true });
     expect(cli.output).toHaveLength(1);
+  });
+
+  test("raw refuses a report body so it cannot land as the human's words", async () => {
+    const cli = command({ CODEX_THREAD_ID: "t" });
+    await expect(cli.run("Backend B (ct-51438) review fixes: all five of mine fixed.", "--raw")).rejects.toThrow(
+      /only for slash commands/,
+    );
+    expect(cli.requests).toEqual([]);
   });
 
   test("an older server's unresolved result is reported as already queued", async () => {
