@@ -1,6 +1,7 @@
 import { memo, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall } from "lucide-react";
+import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall, EyeOff, ExternalLink } from "lucide-react";
+import { SlackLogo } from "../SlackLogo";
 import { parseHuddleDigestContent } from "@codecast/shared/contracts";
 import { mentionRoles, mentionSessions, type ChatRoleMention } from "@codecast/shared/chat";
 import { openForwardToChat } from "../../lib/forwardToChat";
@@ -167,6 +168,10 @@ export type ChatMessageProps = {
   /** Hides the thread affordance and hover tools — used inside the thread panel,
    *  where a nested thread would be meaningless. */
   inThread?: boolean;
+  /** The channel mirrors a Slack channel that accepts our lines, so a line kept
+   *  local can be shared and the "not in Slack" mark means something. */
+  slackOutbound?: boolean;
+  onShareToSlack?: (messageId: string) => void;
 };
 
 export const ChatMessage = memo(function ChatMessage({
@@ -185,6 +190,8 @@ export const ChatMessage = memo(function ChatMessage({
   onRetryAgent,
   onRetrySend,
   inThread,
+  slackOutbound,
+  onShareToSlack,
 }: ChatMessageProps) {
   const { author, agentStatus } = message;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -315,6 +322,12 @@ export const ChatMessage = memo(function ChatMessage({
           <span className="ch-msg-hovertime" aria-hidden="true">
             {clockTime(message.createdAt)}
           </span>
+        ) : author.slack && !author.avatarUrl ? (
+          // A Slack app or a bridge notice with no face of its own: the mark IS
+          // the face, so the gutter says where the line came from at a glance.
+          <span className="ch-slack-face" title={author.name}>
+            <SlackLogo className="w-3.5 h-3.5" />
+          </span>
         ) : (
           <CommentAvatar
             name={author.name}
@@ -363,6 +376,8 @@ export const ChatMessage = memo(function ChatMessage({
             ) : (
               author.isAgent && <span className="ch-agent-chip">agent</span>
             )}
+            {author.slack?.isBot && !author.isAgent && <span className="ch-agent-chip ch-slack-chip">app</span>}
+            <SlackMark message={message} slackOutbound={slackOutbound} />
             <a
               className="ch-msg-time"
               // The permalink the server mints, not a DOM fragment: a fragment
@@ -459,7 +474,7 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         ) : (
           <div className="ch-msg-body">
-            <RevealHost>
+            <RevealHost persistKey={message.id}>
               <ReactMarkdown
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={MESSAGE_MD_REHYPE}
@@ -595,7 +610,7 @@ export const ChatMessage = memo(function ChatMessage({
           {/* Rendered only when it can do something, the way the retry buttons
               already are. An overflow button that opens nothing is worse than
               no overflow button. */}
-          {(permalink || canEdit || canDelete) && (
+          {(permalink || canEdit || canDelete || message.slack?.permalink || (slackOutbound && !message.slack && onShareToSlack)) && (
             <button
               type="button"
               className="ch-tool"
@@ -662,6 +677,33 @@ export const ChatMessage = memo(function ChatMessage({
                   Forward to…
                 </button>
               )}
+              {message.slack?.permalink && (
+                <a
+                  className="ch-menu-item"
+                  role="menuitem"
+                  href={message.slack.permalink}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <SlackLogo className="w-3 h-3" />
+                  Open in Slack
+                </a>
+              )}
+              {slackOutbound && !message.slack && onShareToSlack && (mine || canDelete) && (
+                <button
+                  type="button"
+                  className="ch-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onShareToSlack(message.id);
+                  }}
+                >
+                  <SlackLogo className="w-3 h-3" />
+                  Share to Slack
+                </button>
+              )}
               {canEdit && (
                 <button
                   type="button"
@@ -698,6 +740,39 @@ export const ChatMessage = memo(function ChatMessage({
     </div>
   );
 });
+
+/** Where this line stands with Slack. "From Slack" for a mirrored-in line,
+ *  "Also in Slack" for ours that crossed over (both open the Slack copy), and a
+ *  muted "not in Slack" for a line its author kept local in a channel that
+ *  otherwise mirrors. Nothing at all in a channel with no mirror. */
+function SlackMark({ message, slackOutbound }: { message: ChatMessageView; slackOutbound?: boolean }) {
+  const s = message.slack;
+  if (s) {
+    const label = s.direction === "inbound" ? "From Slack" : "Also in Slack";
+    const inner = (
+      <>
+        <SlackLogo className="w-2.5 h-2.5" muted={s.direction === "outbound"} />
+        <span>{label}</span>
+      </>
+    );
+    return s.permalink ? (
+      <a className="ch-slack-mark" href={s.permalink} target="_blank" rel="noreferrer" title={`${label} · open there`}>
+        {inner}
+      </a>
+    ) : (
+      <span className="ch-slack-mark" title={label}>{inner}</span>
+    );
+  }
+  if (slackOutbound && message.localOnly) {
+    return (
+      <span className="ch-slack-mark ch-slack-mark-local" title="Kept out of Slack by its author">
+        <EyeOff className="w-2.5 h-2.5" />
+        <span>not in Slack</span>
+      </span>
+    );
+  }
+  return null;
+}
 
 // ── Dividers ────────────────────────────────────────────────────────────────
 

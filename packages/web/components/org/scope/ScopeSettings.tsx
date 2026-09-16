@@ -8,7 +8,11 @@ import { useMemo, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
 import { TriangleAlert, Hash, Trash2 } from "lucide-react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { useWorkflows } from "../../../hooks/useSyncWorkflows";
+import { lineOptions } from "./lineBoard";
 import { orgRoleReparentMakesCycle, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
 import { cn } from "../../../lib/utils";
@@ -16,6 +20,8 @@ import { InlineEdit, ScopeEditor } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
+
+const api = _api as any;
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -74,6 +80,15 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
   const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? id.slice(0, 8) })), [role.follow_channel_ids, channels]);
 
+  // The line (the-line.md L2). The org tree does not carry the slug, so the
+  // tab reads it once per view from orgRoles.line; the store's optimistic
+  // patch (setRoleLine) wins until the server echoes.
+  const { data: lineRow } = useQueryNoThrow(api.orgRoles.line, { role_id: role._id });
+  const { workflows } = useWorkflows();
+  const lineSlug: string = (role as any).line_workflow_slug ?? lineRow?.line_workflow_slug ?? "line";
+  const lineChoices = useMemo(() => lineOptions(workflows, lineSlug), [workflows, lineSlug]);
+  const setRoleLine = useInboxStore((s) => (s as any).setRoleLine as (roleId: string, slug: string) => void);
+
   const projectName = (id: string) => role.scope_names.projects.find((p) => p.id === id)?.title ?? "a project";
   const planName = (id: string) => role.scope_names.plans.find((p) => p.id === id)?.short_id ?? "a plan";
 
@@ -104,6 +119,24 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
       <Section title="Scope" hint="What this seat owns: projects and plans. Empty means the whole workspace. Human only; a change wakes the role.">
         <ScopeEditor role={role} canEdit={canEdit} onChange={(scope) => onUpdate({ scope })} />
         <OverlapWarning overlaps={overlaps} projectName={projectName} planName={planName} />
+      </Section>
+
+      <Section title="The line" hint="The workflow this scope's tasks run on. A shipped template, or a workflow you pushed with cast workflow push. Human only; a change wakes the role.">
+        <div className="flex items-center gap-2 flex-wrap">
+          {!canEdit && <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{lineSlug}</span>}
+          {canEdit && (
+            <SelectBox
+              value={lineSlug}
+              onChange={(e) => { const next = e.target.value; if (next && next !== lineSlug) setRoleLine(role._id, next); }}
+              className="text-[12px]"
+              aria-label="The line"
+              data-line-picker
+            >
+              {lineChoices.map((o) => <option key={o.slug} value={o.slug}>{o.label}</option>)}
+            </SelectBox>
+          )}
+          <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>cast role line @{role.handle} --set {lineSlug}</span>
+        </div>
       </Section>
 
       <Section title="Reports to" hint="Where the role's decisions escalate and whose brief reads its state line.">

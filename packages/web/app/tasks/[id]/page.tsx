@@ -4,6 +4,7 @@ import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl, formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useTabActive } from "../../../hooks/usePagePresence";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds } from "../../../lib/liveEntities";
@@ -23,6 +24,8 @@ import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
+import { StationStrip } from "../../../components/tasks/StationStrip";
+import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
 import { DocEditor } from "../../../components/editor/DocEditor";
 import "../../../components/editor/editor.css";
 import { toast } from "sonner";
@@ -30,12 +33,10 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
-import { FeedCard } from "../../../components/ActivityFeed";
-import { AgentIcon } from "../../../components/ConversationList";
 import { Avatar, TaskCommentComposer, TaskCommentItem, TimeAgo, UserBadge } from "../../../components/tasks/TaskCommentStream";
+import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
 import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
-import { TaskStatusBadge } from "../../../components/TaskStatusBadge";
 import { getLabelColor } from "../../../lib/labelColors";
 import Link from "next/link";
 import { projectDotClass } from "../../../lib/projectColors";
@@ -54,13 +55,10 @@ import {
   Zap,
   Bot,
   ChevronDown,
-  Radio,
-  FileCode,
   ListChecks,
   ShieldCheck,
   MessageSquare,
   X,
-  ExternalLink,
   MoreHorizontal,
   Plus,
   CornerDownRight,
@@ -274,9 +272,12 @@ function HistoryItem({ entry }: { entry: any }) {
   );
 }
 
+// The plan of the work: estimates, concerns, criteria and steps. What the
+// work PRODUCED (files, verification, status, PR, pages) is evidence and
+// renders in TaskEvidence (the-line.md L6), never here a second time.
 function ExecutionDetailsSection({ data }: { data: any }) {
-  const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
-    data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
+  const hasExecution = data.steps?.length || data.acceptance_criteria?.length ||
+    data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
   if (!hasExecution) return null;
 
   return (
@@ -284,9 +285,6 @@ function ExecutionDetailsSection({ data }: { data: any }) {
       <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
         <Zap className="w-3.5 h-3.5" />
         Execution
-        {data.execution_status && (
-          <TaskStatusBadge status={data.execution_status} type="execution" className="normal-case tracking-normal" />
-        )}
       </h2>
       <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 p-4 space-y-4 border-l-2 border-l-sol-cyan/30">
         {(data.estimated_minutes != null || data.actual_minutes != null) && (
@@ -345,35 +343,6 @@ function ExecutionDetailsSection({ data }: { data: any }) {
           </div>
         )}
 
-        {data.files_changed && data.files_changed.length > 0 && (
-          <div>
-            <div className="flex items-center gap-1.5 text-xs font-medium text-sol-text-dim mb-2">
-              <FileCode className="w-3.5 h-3.5" />
-              Files Changed ({data.files_changed.length})
-            </div>
-            <div className="space-y-0.5 pl-1 border-l-2 border-sol-border/20">
-              {data.files_changed.map((f: string) => {
-                const parts = f.split("/");
-                const fileName = parts.pop();
-                const dirPath = parts.join("/");
-                return (
-                  <div key={f} className="flex items-center gap-1.5 text-xs font-mono py-0.5 pl-2 hover:bg-sol-bg-alt/20 rounded-r transition-colors group">
-                    <FileText className="w-3 h-3 text-sol-text-dim/50 flex-shrink-0" />
-                    {dirPath && <span className="text-sol-text-dim/50 truncate">{dirPath}/</span>}
-                    <span className="text-sol-text-muted">{fileName}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {data.verification_evidence && (
-          <div>
-            <div className="text-xs font-medium text-sol-text-dim mb-1.5">Verification Evidence</div>
-            <div className="text-sm text-sol-text-muted whitespace-pre-wrap">{data.verification_evidence}</div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -692,8 +661,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     openPalette({ targets: [data as unknown as TaskItem], targetType: 'task', mode });
   }, [data, openPalette]);
 
+  const paneActive = useTabActive();
   useWatchEffect(() => {
-    if (paletteOpen) return;
+    if (!paneActive || paletteOpen) return;
     if (shortcutsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -726,7 +696,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
+  }, [paneActive, paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
     // directData === null: webGetTaskDetail resolved but the id is not a task
@@ -908,6 +878,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </button>
           </div>
 
+          {/* The line (the-line.md L3): stations, the current one, its hold and its run */}
+          <StationStrip task={data as any} />
+
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">
             {/* Provider twin (issue-sync S1.1): where the task came from and how
@@ -1042,20 +1015,11 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           {/* Subtasks — Linear's sub-issue section, always present */}
           <SubtasksSection task={data} requestClose={requestClose} onNavigate={(tid) => router.push(`/tasks/${tid}`)} />
 
-          {/* Source session */}
-          {(data.source === "agent" || data.source === "insight") && data.created_from_conversation && (
-            <Link
-              href={`/conversation/${linkedConversations[0]?.session_id || ""}`}
-              className="flex items-center gap-2.5 text-xs text-sol-text-dim mb-5 px-3 py-2 rounded-lg border border-sol-border/20 bg-sol-bg-alt/20 hover:bg-sol-bg-alt/40 hover:border-sol-violet/30 transition-colors group"
-            >
-              <Zap className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
-              <span>Created from</span>
-              <span className="text-sol-cyan group-hover:underline truncate">
-                {linkedConversations[0]?.title || linkedConversations[0]?.headline || "session"}
-              </span>
-              <ExternalLink className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 transition-opacity ml-auto flex-shrink-0" />
-            </Link>
-          )}
+          <TaskSessionList
+            sessions={linkedConversations}
+            originId={data.created_from_conversation}
+            onOpen={openLinkedSession}
+          />
 
           {/* Description */}
           <div className="mb-6">
@@ -1075,17 +1039,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             />
           </div>
 
-          {/* Open decisions bound to this task (D3) */}
+          {/* Decisions bound to this task (D3): open cards, settled ones folded */}
           <TaskDecisions taskId={data._id} />
 
-          {/* Workflow Progress */}
+          {/* Evidence at the station (the-line.md L6) */}
+          <TaskEvidence task={data as any} />
+
+          {/* The run (L10): its gate renders the decision card */}
           {data.workflow_run_id && (
             <div className="mb-6">
               <WorkflowContextPanel workflowRunId={data.workflow_run_id as any} />
             </div>
           )}
 
-          {/* Execution Details */}
+          {/* The plan of the work: criteria, steps, estimates */}
           <ExecutionDetailsSection data={data} />
 
           {/* Source Insight */}
@@ -1185,36 +1152,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} />
 
         </div>
-        {!isInline && linkedConversations.length > 0 && (
-          <div className="max-w-4xl mx-auto px-6 pb-4 w-full">
-            <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
-              <Radio className="w-3.5 h-3.5" />
-              Sessions ({linkedConversations.length})
-              {linkedConversations.some((c: any) => c.is_active) && (
-                <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {linkedConversations.filter((c: any) => c.is_active).length} active
-                </span>
-              )}
-            </h2>
-            <div className="space-y-1.5">
-              {[...linkedConversations]
-                .sort((a: any, b: any) => {
-                  if (a.is_active && !b.is_active) return -1;
-                  if (!a.is_active && b.is_active) return 1;
-                  return (b.updated_at || 0) - (a.updated_at || 0);
-                })
-                .map((conv: any) => (
-                  <FeedCard
-                    key={conv._id}
-                    conv={conv as any}
-                    showActor={false}
-                    onNavigate={() => openLinkedSession(conv)}
-                  />
-                ))}
-            </div>
-          </div>
-        )}
         {!isInline && (
           <ContextChatInput
             contextType="task"

@@ -10,7 +10,7 @@ import { dmOtherIds } from "@codecast/shared/chat";
 // components: a helper export next to a component breaks React Fast Refresh
 // for the file, and TabBar sits directly under DashboardLayout.
 
-/** "design" for /chat/<id>, once the store knows the channel. pathLabel can
+/** "design" for /chat/<id> or /community/<id>, once the store knows the channel. pathLabel can
  *  only say "Chat", which turns three open channels into three identical tabs;
  *  the name is knowable, and this is where the store is in reach. No "#"
  *  prefix: the tab's PageIcon is already a hash. A DM tab wears the other
@@ -21,7 +21,7 @@ export function chatTabTitle(
   members?: any[],
   viewerId?: string,
 ): string | null {
-  const m = path.match(/^\/chat\/([^/?#]+)/);
+  const m = path.match(/^\/(?:chat|community)\/([^/?#]+)/);
   const channel = m ? channels?.[m[1]] : undefined;
   if (!channel) return null;
   if (channel.kind === "dm") {

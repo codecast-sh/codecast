@@ -26,10 +26,13 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
-import { layoutOrgTree, parentRefOfNodeId, type OrgLayoutNode, type OrgLayoutView } from "./orgLayout";
+import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget } from "./orgLayout";
 import { AnchorCard, ClusterCard, PersonCard, RoleCard, SessionCard } from "./OrgNodeCards";
 import { computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
+import { changeLine, GHOST, healthFlagsByNode } from "./orgMeta";
+import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
+import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 
 const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, anchor: AnchorCard, session: SessionCard, cluster: ClusterCard };
@@ -60,9 +63,30 @@ export type OrgGraphProps = {
   /** Width of the panel overlaying the right edge of the canvas (0 = closed).
    *  The fit uses the canvas left of it. */
   panelWidth?: number;
+  /** The share of the canvas height the phone sheet covers at the bottom (0
+   *  to 1): the fit and a focus pan keep to what stays free above it. */
+  panelHeightFraction?: number;
+  /** What to pan to, last ask wins (orgLayout.OrgFocusTarget): a change's
+   *  ghost or a node. `seq` re-pans on a repeat ask. The highlight scalar
+   *  (`focusChangeId`) is separate: it marks rows and chips, it does not pan. */
+  focusTarget?: OrgFocusTarget | null;
   /** Which cards may be picked up. A card the page would refuse on drop is
    *  not draggable at all, so nothing ever snaps back silently. */
   canDrag?: (node: OrgLayoutNode) => boolean;
+  // Staffing (org-staffing.md S5): the open proposal's changes are drawn into
+  // the tree as ghosts; org.health's flags as dots on the nodes.
+  changes?: readonly OrgProposalChange[];
+  health?: OrgHealth | null;
+  /** The session the viewer is looking from, for an adopt ghost's "this session". */
+  viewerSession?: OrgGhostOptions["viewerSession"];
+  /** The change the chart is focused on (the orgFocusChangeId scalar): the
+   *  canvas pans to its ghost and the card shows its action row. */
+  focusChangeId?: string | null;
+  onFocusChange?: (changeId: string | null) => void;
+  onDecideChange?: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
+  /** Edit on a role change opens the hire dialog prefilled (the page owns
+   *  it); every other kind gets the inline form here on the canvas. */
+  onEditRoleChange?: (change: OrgProposalChange) => void;
 };
 
 const DRAGGABLE = new Set(["session", "role"]);
@@ -78,27 +102,45 @@ function titleOf(n: OrgLayoutNode): string {
   }
 }
 
+type GhostHandlers = {
+  focusChangeId: string | null;
+  onFocusChange: (changeId: string) => void;
+  onDecideChange: (changeId: string, verdict: "accept" | "skip") => void;
+  onEditChange: (changeId: string, at: { x: number; y: number }) => void;
+};
+
+/** A stable key for the flags on the chart: node, code and severity of each,
+ *  so the cards re-render on a flag change and never on a spend counter. */
+function flagsSigOf(flags: Record<string, OrgHealth["roles"][number]["flags"]>): string {
+  return Object.keys(flags).sort().map((id) => `${id}:${flags[id].map((f) => `${f.code}/${f.severity}`).join(",")}`).join("|");
+}
+
 function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTargetId: string | null, draggingId: string | null, loading: ReadonlySet<string>, handlers: {
   onToggleCollapse: (id: string) => void; onExpandCluster: (id: string) => void; onCollapseCluster: (id: string) => void;
-}, canDrag?: (node: OrgLayoutNode) => boolean): Node[] {
+}, canDrag: ((node: OrgLayoutNode) => boolean) | undefined, ghosts: GhostHandlers, flags: Record<string, OrgHealth["roles"][number]["flags"]>): Node[] {
   return layout.map((n) => {
+    // A ghost stub is not a card the page can move: nothing to reparent yet.
+    const stub = n.kind === "person" || n.kind === "role" || n.kind === "session" ? n.ghost : undefined;
     const base = {
       id: n.id,
       type: n.kind,
       position: { x: n.x, y: n.y },
       width: n.w,
       height: n.h,
-      draggable: DRAGGABLE.has(n.kind) && (canDrag ? canDrag(n) : true),
+      draggable: !stub && DRAGGABLE.has(n.kind) && (canDrag ? canDrag(n) : true),
       selectable: true,
       connectable: false,
       zIndex: n.id === draggingId ? 1000 : n.kind === "session" || n.kind === "cluster" ? 1 : 2,
     };
-    const common = { selected: n.id === selectedId, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers };
+    const common = { selected: n.id === selectedId, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
+    const decor = n.kind === "person" || n.kind === "role" || n.kind === "session"
+      ? (n.ghost || n.retire || n.move || n.chips ? { ghost: n.ghost, retire: n.retire, move: n.move, chips: n.chips, ...ghosts } : {})
+      : {};
     switch (n.kind) {
-      case "person": return { ...base, data: { ...common, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
-      case "role": return { ...base, data: { ...common, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
+      case "person": return { ...base, data: { ...common, ...decor, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
+      case "role": return { ...base, data: { ...common, ...decor, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
       case "anchor": return { ...base, data: { ...common, anchor: n.anchor } };
-      case "session": return { ...base, data: { ...common, session: n.session, parent: n.parent } };
+      case "session": return { ...base, data: { ...common, ...decor, session: n.session, parent: n.parent } };
       case "cluster": {
         const parentId = n.id.slice("cluster:".length);
         return { ...base, data: { ...common, parent: n.parent, parentId, remaining: n.remaining, loaded: n.loaded, total: n.total, counts: n.counts, fullyLoaded: n.fullyLoaded, loadingCluster: loading.has(parentId) } };
@@ -108,20 +150,45 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, canDrag } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
-  const layout = useMemo(() => layoutOrgTree(tree, view), [tree, view]);
+  // Ghosts merge into the tree before layout (org-staffing.md S5), so a
+  // proposed role takes a real slot under its proposed parent.
+  const ghosts = useMemo<OrgGhostPlan | undefined>(
+    () => (changes?.length ? ghostsFor(tree, changes, { viewerSession }) : undefined),
+    [tree, changes, viewerSession?.id, viewerSession?.short_id], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const layout = useMemo(() => layoutOrgTree(tree, view, ghosts), [tree, view, ghosts]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
+  // Flags reach the cards by identity, so they are rebuilt only when a flag
+  // changes (the signature), not on every health push (spend counters move).
+  const flagsSig = useMemo(() => flagsSigOf(healthFlagsByNode(health)), [health]);
+  const flagsByNode = useMemo(() => healthFlagsByNode(health), [flagsSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The inline edit form for a non-role change, at the Edit click.
+  const [editing, setEditing] = useState<{ change: OrgProposalChange; at: { x: number; y: number } } | null>(null);
 
   const handlers = useMemo(() => ({ onToggleCollapse, onExpandCluster, onCollapseCluster }), [onToggleCollapse, onExpandCluster, onCollapseCluster]);
+  const changeById = useMemo(() => new Map((changes ?? []).map((c) => [c._id, c])), [changes]);
+  const ghostHandlers = useMemo<GhostHandlers>(() => ({
+    focusChangeId,
+    onFocusChange: (id) => onFocusChange?.(id),
+    onDecideChange: (id, verdict) => { setEditing(null); onDecideChange?.(id, verdict); },
+    onEditChange: (id, at) => {
+      const c = changeById.get(id);
+      if (!c) return;
+      onFocusChange?.(id);
+      if (c.change.kind === "role") onEditRoleChange?.(c);
+      else setEditing({ change: c, at });
+    },
+  }), [focusChangeId, onFocusChange, onDecideChange, onEditRoleChange, changeById]);
   const flowNodes = useMemo(
-    () => toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag),
-    [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag],
+    () => toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode),
+    [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode],
   );
   const flowEdges = useMemo<Edge[]>(
     () => layout.edges.map((e) => ({
@@ -133,7 +200,10 @@ function OrgGraphInner(props: OrgGraphProps) {
       focusable: false,
       style: e.kind === "stack"
         ? { stroke: "color-mix(in srgb, var(--sol-border) 45%, transparent)", strokeWidth: 1.25, strokeDasharray: "3 4" }
-        : { stroke: "color-mix(in srgb, var(--sol-border) 70%, transparent)", strokeWidth: 1.5 },
+        : e.kind === "ghost"
+          // A proposal's edge: the page's violet, dashed, at the ghost's opacity.
+          ? { stroke: GHOST.color, strokeWidth: 1.5, strokeDasharray: "6 4", opacity: GHOST.opacity }
+          : { stroke: "color-mix(in srgb, var(--sol-border) 70%, transparent)", strokeWidth: 1.5, opacity: e.faded ? 0.3 : 1 },
       pathOptions: e.kind === "stack" ? undefined : { borderRadius: 14 },
     } as Edge)),
     [layout],
@@ -172,13 +242,13 @@ function OrgGraphInner(props: OrgGraphProps) {
   const fit = useCallback((animate: boolean): boolean => {
     const el = wrapRef.current;
     if (!el || el.clientWidth === 0) return false;
-    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId);
+    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction);
     if (!vp) return false;
     // Animated viewport moves ride frame timers, which a hidden tab never gets.
     rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: animate && !document.hidden ? 280 : 0 });
     recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
     return true;
-  }, [layout, panelWidth, focusId, rf, recomputeCue]);
+  }, [layout, panelWidth, panelHeightFraction, focusId, rf, recomputeCue]);
   const panTo = useCallback((n: OrgLayoutNode, side: "left" | "right") => {
     const el = wrapRef.current;
     if (!el) return;
@@ -201,14 +271,22 @@ function OrgGraphInner(props: OrgGraphProps) {
   // controller is attached, so a fit before that would stamp the key and
   // leave the tree at the identity transform.
   const viewportReady = rf.viewportInitialized;
+  // The focused change (a change row click in the pane, a ghost click here)
+  // or the node the pane asked for (a flag row): computed here because the
+  // fit below stands down while one is set, and the focus pan re-centres on
+  // a panel change instead. Without that, the first ghost click with the
+  // pane closed was panned to, then refit over as the panel opened.
+  const focusNodeId = useMemo(() => focusTargetNodeId(ghosts, focusTarget), [ghosts, focusTarget]);
+  const focusSeq = focusTarget?.seq ?? 0;
   useWatchEffect(() => {
     if (!viewportReady || layout.nodes.length === 0) return;
-    const key = `${rootSig}|${panelWidth}`;
+    const key = `${rootSig}|${panelWidth}|${panelHeightFraction}`;
     if (fitted.current === key) return;
     const first = fitted.current === null;
+    if (!first && focusNodeId) { fitted.current = key; return; }
     if (!first) userMoved.current = false;
     if (fit(!first)) fitted.current = key;
-  }, [viewportReady, rootSig, panelWidth, layout.nodes.length, fit]);
+  }, [viewportReady, rootSig, panelWidth, panelHeightFraction, layout.nodes.length, fit, focusNodeId]);
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -217,16 +295,34 @@ function OrgGraphInner(props: OrgGraphProps) {
     return () => ro.disconnect();
   }, [fit, viewportReady]);
 
+  // The focus target pans to the centre of the free canvas (left of the
+  // panel, above the phone sheet) at the current zoom, and again when the
+  // panel opens or closes around it. A programmatic move, so the cue
+  // recomputes from the target viewport.
+  useWatchEffect(() => {
+    const el = wrapRef.current;
+    if (!focusNodeId || !el || !viewportReady) return;
+    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction);
+    if (!vp) return;
+    userMoved.current = true;
+    rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: document.hidden ? 0 : 280 });
+    recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
+  }, [focusNodeId, focusSeq, viewportReady, panelWidth, panelHeightFraction]);
+
   // Escape clears the selection unless the user is typing somewhere.
   useEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const el = document.activeElement as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (editing) { setEditing(null); return; }
     if (selectedId) onSelect(null);
   });
 
   const findDropTarget = useCallback((node: Node): OrgLayoutNode | null => {
-    const hits = rf.getIntersectingNodes(node).filter((n) => DROP_TARGETS.has(n.type ?? "") && n.id !== node.id);
+    // A ghost stub has the type of a role but is a change, not a seat: a drop
+    // on it would confirm a move to a change id, so it never lights up.
+    const isStub = (id: string) => { const n = byId.get(id); return !!n && (n.kind === "person" || n.kind === "role" || n.kind === "session") && !!n.ghost; };
+    const hits = rf.getIntersectingNodes(node).filter((n) => DROP_TARGETS.has(n.type ?? "") && n.id !== node.id && !isStub(n.id));
     if (hits.length === 0) return null;
     // A role dropped on its own subtree is not a move.
     const subject = byId.get(node.id);
@@ -284,8 +380,13 @@ function OrgGraphInner(props: OrgGraphProps) {
 
   const onNodeClick: NodeMouseHandler = useCallback((_e, node) => {
     if (node.type === "cluster") return;
+    // A ghost stub is a change, not a node the page holds: a click focuses the
+    // change (the pane opens on its rationale) instead of selecting.
+    const n = byId.get(node.id);
+    const stub = n && (n.kind === "person" || n.kind === "role" || n.kind === "session") ? n.ghost : undefined;
+    if (stub) { onFocusChange?.(stub.change_id === focusChangeId ? null : stub.change_id); return; }
     onSelect(node.id === selectedId ? null : node.id);
-  }, [onSelect, selectedId]);
+  }, [onSelect, selectedId, byId, onFocusChange, focusChangeId]);
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_e, node) => {
     const n = byId.get(node.id);
     if (n?.kind === "session") onOpenSession?.(n.session._id);
@@ -339,6 +440,35 @@ function OrgGraphInner(props: OrgGraphProps) {
     </ReactFlow>
     <EdgeCue side="left" hidden={edgeCue.left} onPan={panTo} offset={0} />
     <EdgeCue side="right" hidden={edgeCue.right} onPan={panTo} offset={panelWidth} />
+    {editing && (
+      <EditChangePopover
+        change={editing.change}
+        at={editing.at}
+        wrap={wrapRef.current}
+        onCancel={() => setEditing(null)}
+        onAccept={(edits) => { setEditing(null); onDecideChange?.(editing.change._id, "accept", edits); }}
+      />
+    )}
+    </div>
+  );
+}
+
+/** The inline edit for a non-role change (org-staffing.md S5), floated next
+ *  to the Edit click and kept inside the canvas. The pane's own form. */
+function EditChangePopover({ change, at, wrap, onCancel, onAccept }: { change: OrgProposalChange; at: { x: number; y: number }; wrap: HTMLDivElement | null; onCancel: () => void; onAccept: (edits: Record<string, unknown>) => void }) {
+  const W = 300;
+  const box = wrap?.getBoundingClientRect() ?? { left: 0, top: 0, width: W + 32, height: 600 };
+  const left = Math.max(8, Math.min(at.x - box.left - W / 2, box.width - W - 8));
+  const top = Math.max(8, Math.min(at.y - box.top + 12, box.height - 260));
+  return (
+    <div
+      className="absolute z-30 rounded-xl border shadow-xl org-pop-in"
+      style={{ left, top, width: W, background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)" }}
+      data-edit-popover={change._id}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div className="px-3 pt-2.5 pb-1 text-[12px] font-medium leading-snug" style={{ color: "var(--sol-text)" }}>{changeLine(change.change)}</div>
+      <EditChangeForm change={change} onCancel={onCancel} onAccept={onAccept} />
     </div>
   );
 }

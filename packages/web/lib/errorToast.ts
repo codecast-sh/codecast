@@ -1,7 +1,7 @@
 import { toast } from "sonner";
 import { copyToClipboard } from "./utils";
 import { useInboxStore, resolveComposeProjectPath, findProjectPathByName } from "../store/inboxStore";
-import { isParkedDispatchError } from "../store/mutativeMiddleware";
+import { spawnSessionWithPrompt } from "./spawnSession";
 
 // The one error toast. Every surface that reports a caught error to the user
 // (ErrorBoundary crashes, window "error", unhandledrejection) renders through
@@ -52,28 +52,11 @@ function spawnFixSession(errorText: string) {
         recentProjects: store.recentProjects,
         machineRoster: store.machineRoster,
       }) ?? composePath);
-  const agentType = conv.agentType || "claude_code";
-  const { stubId } = store.beginOptimisticSession({
-    agentType,
+  spawnSessionWithPrompt({
+    prompt: `please investigate and fix:\n\n${errorText}`,
+    agentType: conv.agentType || "claude_code",
     projectPath: path,
-    gitRoot: path || undefined,
-    create: (stubId) =>
-      store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined }),
+    failureLabel: "Failed to start fix session",
   });
-  const prompt = `please investigate and fix:\n\n${errorText}`;
-  const clientId = store.addOptimisticMessage(stubId, prompt);
   toast.success("Fix session started");
-  void store
-    .awaitConvexId(stubId)
-    .then((convexId) => {
-      store.sendMessage(convexId, prompt, undefined, clientId);
-    })
-    .catch((error) => {
-      // Parked = the write is safe in the outbox and delivers on the next
-      // drain; anything else means the send is gone — surface the failure on
-      // the optimistic bubble instead of silently dropping it.
-      if (isParkedDispatchError(error)) return;
-      store.markOptimisticAsFailed(stubId, clientId);
-      console.error("Failed to start fix session", error);
-    });
 }

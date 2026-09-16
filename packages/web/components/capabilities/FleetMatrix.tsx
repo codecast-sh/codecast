@@ -96,6 +96,10 @@ export interface FleetInventoryItem {
   sha?: string;
   marketplace?: string;
   cost?: TokenCost;
+  source?: string;
+  command?: string;
+  url?: string;
+  event?: string;
 }
 
 /**
@@ -116,6 +120,10 @@ export interface FleetGridRow extends FleetDiffRow {
   slug?: string;
   marketplace?: string;
   cost?: TokenCost;
+  source?: string;
+  command?: string;
+  url?: string;
+  event?: string;
   /** `FleetDiffRow.cells` keyed by device instead of positional. The array is
    *  right for computing and serialising; a column needs a lookup. Derived, so
    *  the two can never say different things. */
@@ -251,6 +259,10 @@ interface RowDisplay {
   slug?: string;
   marketplace?: string;
   cost?: TokenCost;
+  source?: string;
+  command?: string;
+  url?: string;
+  event?: string;
 }
 
 /**
@@ -304,7 +316,15 @@ export function buildFleetRows(
       const key = fleetRowKey(item.kind, identity);
       const prev = display.get(key);
       if (!prev) {
-        display.set(key, { slug: item.slug, marketplace: item.marketplace, cost: item.cost });
+        display.set(key, {
+          slug: item.slug,
+          marketplace: item.marketplace,
+          cost: item.cost,
+          source: item.source,
+          command: item.command,
+          url: item.url,
+          event: item.event,
+        });
         continue;
       }
       // First non-empty wins — machines report the same capability, so a later
@@ -312,6 +332,10 @@ export function buildFleetRows(
       prev.slug ??= item.slug;
       prev.marketplace ??= item.marketplace;
       prev.cost ??= item.cost;
+      prev.source ??= item.source;
+      prev.command ??= item.command;
+      prev.url ??= item.url;
+      prev.event ??= item.event;
     }
   }
 

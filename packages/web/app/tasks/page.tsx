@@ -30,6 +30,7 @@ import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
 import { IssueLink } from "../../components/tasks/IssueLink";
 import { TaskDecisionChip } from "../../components/decisions/TaskDecisions";
+import { TaskLineChip } from "../../components/tasks/StationStrip";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -179,6 +180,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
       {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       <TaskDecisionChip taskId={task._id} />
+      <TaskLineChip task={task as any} className="cq-hide-compact" />
       {state.isEditing ? (
         <input
           autoFocus

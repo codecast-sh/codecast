@@ -43,6 +43,7 @@ import { useCallback, useRef, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useEventListener } from "../../../hooks/useEventListener";
+import { useFrameTheme } from "../../../hooks/useFrameTheme";
 import {
   isLoopbackUrl,
   paneSrc,
@@ -69,6 +70,8 @@ function blockedAsMixedContent(url: string): boolean {
 export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: BackendProps) {
   const url = source.kind === "url" ? source.url : "";
   const frameRef = useRef<HTMLIFrameElement>(null);
+  // A published page in a pane follows the codecast light or dark setting.
+  const { onLoad: postFrameTheme } = useFrameTheme(frameRef);
   const nothingAnswered = useRef(false);
   const titleWatch = useRef<MutationObserver | null>(null);
   // Nothing answered, so a poll is asking again. `revival` is bumped when one
@@ -210,7 +213,10 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
       // Not `url`: a codecast route is asked to render as a pane's page
       // rather than as the whole app (paneSrc in lib/browserPane).
       src={paneSrc(url)}
-      onLoad={handleLoad}
+      onLoad={() => {
+        postFrameTheme();
+        handleLoad();
+      }}
       title={url}
       referrerPolicy="no-referrer"
       allow="clipboard-read; clipboard-write"

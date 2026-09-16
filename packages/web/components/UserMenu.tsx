@@ -248,7 +248,7 @@ export function UserMenu() {
             <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />
             <MenuItem icon={FileText} label="Documents" onClick={() => go("/docs")} />
             <MenuItem icon={FolderGit2} label="Projects" onClick={() => go("/projects")} />
-            <MenuItem icon={CalendarClock} label="Routines" onClick={() => go("/routines")} />
+            <MenuItem icon={CalendarClock} label="Workflows" onClick={() => go("/routines")} />
           </div>
 
           {isAdmin && (

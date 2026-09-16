@@ -103,6 +103,43 @@ const inFlight = new Set<string>();
 // every pass for any conversation holding a partial window.
 const syncedCount = new Map<string, number>();
 
+/** One-shot older page. History walks must not subscribe: a live query on a
+ *  long session re-runs on every conversation heartbeat and OCC-retries
+ *  against a hot row. */
+export async function fetchOlderMessages(
+  convex: ConvexClient,
+  conversationId: string,
+  before: number,
+  limit: number,
+): Promise<any> {
+  return convex.query(api.conversations.getAllMessages, {
+    conversation_id: conversationId as Id<"conversations">,
+    limit,
+    before_timestamp: before,
+    ...shareTokenArg(conversationId),
+  });
+}
+
+/** One-shot around-window. Jump-to-start / jump-to-timestamp use this instead
+ *  of useQuery so a 50-row window is not a live subscription. Bookmark hover
+ *  already prefetches the same args, so a cached click still resolves from
+ *  memory. */
+export async function fetchMessagesAround(
+  convex: ConvexClient,
+  conversationId: string,
+  center: number,
+  limitBefore: number,
+  limitAfter: number,
+): Promise<any> {
+  return convex.query(api.conversations.getMessagesAroundTimestamp, {
+    conversation_id: conversationId as Id<"conversations">,
+    center_timestamp: center,
+    limit_before: limitBefore,
+    limit_after: limitAfter,
+    ...shareTokenArg(conversationId),
+  });
+}
+
 /** Prepend up to `limit` older rows before the oldest cached one. The one
  *  history fetch behind scroll-up (useConversationMessages.loadOlder), the
  *  deepen tier and the open-path backfill. Resolves false when there was
@@ -110,12 +147,7 @@ const syncedCount = new Map<string, number>();
 export async function fetchOlderPage(convex: ConvexClient, conversationId: string, limit: number): Promise<boolean> {
   const oldest = useInboxStore.getState().messages[conversationId]?.[0]?.timestamp;
   if (oldest === undefined) return false;
-  const res: any = await convex.query(api.conversations.getAllMessages, {
-    conversation_id: conversationId as Id<"conversations">,
-    limit,
-    before_timestamp: oldest,
-    ...shareTokenArg(conversationId),
-  });
+  const res: any = await fetchOlderMessages(convex, conversationId, oldest, limit);
   if (!res?.messages) return false;
   useInboxStore.getState().mergeMessages(conversationId, res.messages, "prepend", {
     hasMoreAbove: res.has_more_above ?? false,

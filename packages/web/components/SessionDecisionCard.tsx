@@ -6,7 +6,10 @@ import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { openQuestionFromMessages, lastAssistantText, visibleOptions, type DecisionStepper } from "../hooks/useDecisionQueue";
-import { queueTier, routeQueueKey, messagesSinceAsk, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { decisionHref } from "../lib/decisionLinks";
+import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
+import { OptionPages } from "./decisions/OptionPages";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { formatTimeAgo } from "../lib/messageNavigator";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -15,7 +18,7 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
-import { ChevronUp, ChevronDown } from "lucide-react";
+import { ChevronUp, ChevronDown, ArrowUpRight } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The decision card lives INSIDE the conversation — it is how a session asks
@@ -136,7 +139,11 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const jumpToDecisionAsk = useJumpToDecisionAsk(item.conversationId, item.decisionId, item.question);
   const jumpToAsk = useCallback(async () => {
     if (!canJumpToAsk) return;
-    if (await jumpToDecisionAsk()) stepper?.onExit?.();
+    if (!(await jumpToDecisionAsk())) return;
+    // The card may be covering the thread (full size). Hand the pane back
+    // so the jump is visible. Do not leave the queue for the list — the
+    // jump already opened the session at the ask.
+    if (!stepper) setSize((s) => (s === "full" ? "dock" : s));
   }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
 
   // The session title is WHO is asking, never WHAT. A poll-sourced card
@@ -155,6 +162,17 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // must never put under your finger. Rendered un-answerable (no digits, no
   // option buttons); skip or dismiss it, or open the session to handle it.
   const isInfraDialog = item.source !== "decide" && isUsageLimitDialog(options.map((o) => o.label));
+
+  // The kinds beyond a single choice (the-line.md L10: multi, rank, form)
+  // answer through DecisionAnswerControls on the live store row, which
+  // carries the form and takes the digit and Enter keys itself; the card's
+  // own digits stand down for them. Anything with a document or option pages
+  // links to the decision page, where there is room to read.
+  const decisionRow = useInboxStore((s) => (item.source === "decide" && item.decisionId ? s.sessionDecisions[item.decisionId] : undefined));
+  const kind = item.source === "decide" ? (item.kind ?? "single") : "single";
+  const richControls = kind !== "single" && !!decisionRow;
+  const pageSlugs = item.source === "decide" ? optionPageSlugs(item.options) : [];
+  const documentHref = item.source === "decide" && item.decisionId && needsDocumentPage(item) ? decisionHref({ _id: item.decisionId, short_id: item.shortId }) : null;
 
   const onDone = stepper?.onDone;
   const answer = useCallback((index: number) => {
@@ -212,8 +230,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         editing: !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable),
         inOwnFreeTextBox: !!target && target === otherRef.current,
         isPermissionCard,
-        // An infra dialog's options commit money — no digit may reach them.
-        optionCount: isInfraDialog ? 0 : options.length,
+        // An infra dialog's options commit money — no digit may reach them;
+        // a multi, rank or form takes its own digits in its controls.
+        optionCount: isInfraDialog || richControls ? 0 : options.length,
         sheet: full ? "full" : "peek",
       });
       if (!action) return;
@@ -231,7 +250,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         case "open-session": if (stepper) openSession(); break;
         case "skip": onSkip?.(); break;
         case "dismiss": dismiss(); break;
-        case "open-free-text": if (!isPermissionCard && !isInfraDialog) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
+        case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
         case "peek": shrink(); break;
         case "full": grow(); break;
         case "restore-question": grow(); break;
@@ -244,7 +263,13 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, isPermissionCard, isInfraDialog, shrink, grow]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, isPermissionCard, isInfraDialog, richControls, shrink, grow]);
+
+  const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
+    if (!item.decisionId) return;
+    answerDecision(item.decisionId, input);
+    onDone?.();
+  }, [item.decisionId, answerDecision, onDone]);
 
   const tier = queueTier(item);
   const session = item.session;
@@ -273,6 +298,12 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       {askedLabel}
       {sinceAsk > 0 && <> · {sinceAsk} message{sinceAsk === 1 ? "" : "s"} since</>}
     </button>
+  );
+
+  const documentLink = documentHref && (
+    <a href={documentHref} data-decision-document className="inline-flex items-center gap-1 text-[11px] text-sol-blue hover:underline" title="The decision page: the document, the pages, the ladder">
+      read the full decision<ArrowUpRight className="w-3 h-3" />
+    </a>
   );
 
   const whoIsAsking = (
@@ -363,8 +394,11 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           This is a usage prompt from the agent's harness, not a decision — open the session to handle it.
         </div>
       )}
-      <div className="flex flex-wrap gap-2">
-        {!isInfraDialog && options.map((o, n) => (
+      {richControls && decisionRow && (
+        <DecisionAnswerControls decision={decisionRow} onAnswer={answerRich} keys={!!stepper || full} size="compact" />
+      )}
+      <div className={`flex flex-wrap gap-2 ${richControls ? "hidden" : ""}`}>
+        {!isInfraDialog && !richControls && options.map((o, n) => (
           <button
             key={o.index}
             onClick={() => answer(o.index)}
@@ -382,7 +416,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         ))}
         {/* A permission prompt is answered by Approve/Deny only; an infra
             dialog is handled in the session. Neither takes typed answers. */}
-        {!isPermissionCard && !isInfraDialog && (
+        {!isPermissionCard && !isInfraDialog && !richControls && (
           <button
             onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }}
             className="flex items-center gap-2 px-3 py-2 rounded border border-sol-border text-sm text-sol-text-muted hover:text-sol-text transition-colors"
@@ -393,7 +427,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         )}
       </div>
 
-      {full && !isInfraDialog && options.some((o) => o.description) && (
+      {full && !isInfraDialog && !richControls && options.some((o) => o.description) && (
         <div className="mt-3 space-y-1">
           {options.filter((o) => o.description).map((o) => (
             <div key={o.index} className="text-[12px] text-sol-text-dim">
@@ -464,7 +498,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </div>
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
           {whoIsAsking}
-          {askedLine && <div className="-mt-2 mb-3">{askedLine}</div>}
+          {(askedLine || documentLink) && <div className="-mt-2 mb-3 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
           {question && <h1 className="text-xl text-sol-text leading-snug mb-4">{question}</h1>}
           {poll?.question.detail && (
             <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3 whitespace-pre-line">{poll.question.detail}</div>
@@ -487,6 +521,12 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           )}
           {item.reportSlug && (
             <div className="mb-4"><PublishedPageEmbed slug={item.reportSlug} /></div>
+          )}
+          {pageSlugs.length > 0 && (
+            <div className="mb-4">
+              <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">the options, as pages</div>
+              <OptionPages decision={decisionRow ?? { options: item.options, status: "pending" }} answerable={kind === "single"} onAnswer={answer} />
+            </div>
           )}
           {isPermissionCard && (
             <div className="mb-4">
@@ -524,7 +564,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       </div>
       <div className="px-6 shrink-0">
         <div className="text-sm text-sol-text leading-snug line-clamp-2" title={question}>{question || "Waiting on you"}</div>
-        {(!item.blocking || askedLine) && (
+        {(!item.blocking || askedLine || documentLink) && (
           <div className="text-[11px] text-sol-text-dim mt-1 flex items-center gap-1.5 flex-wrap">
             {!item.blocking && (
               <span>
@@ -533,6 +573,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
               </span>
             )}
             {askedLine}
+            {documentLink && <span className="mx-0.5">·</span>}
+            {documentLink}
           </div>
         )}
       </div>

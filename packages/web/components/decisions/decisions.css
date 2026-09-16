@@ -69,3 +69,35 @@
 @media (prefers-reduced-motion: reduce) {
   .decision-doc .decision-footer { animation: none; }
 }
+
+/* Option pages (the-line.md L6): one card per option that carries a
+   published page, side by side where the width allows and one under the
+   other on a phone. Unscoped: the transcript card renders the same row. */
+.decision-option-pages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+}
+.decision-option-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--sol-card) 40%, transparent);
+  overflow: hidden;
+  transition: border-color 120ms ease;
+}
+.decision-option-page:hover { border-color: var(--sol-border); }
+.decision-option-page[data-picked="true"] { border-color: color-mix(in srgb, var(--sol-green) 50%, transparent); }
+.decision-option-page-thumb {
+  display: block;
+  aspect-ratio: 1.91 / 1;
+  width: 100%;
+  background: var(--sol-bg-alt);
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+  overflow: hidden;
+  cursor: pointer;
+}
+.decision-option-page-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }

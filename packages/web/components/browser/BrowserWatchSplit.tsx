@@ -120,9 +120,11 @@ function SplitBody({
     tab: null,
     controlAvailable: false,
     hasFrame: false,
+    nav: null,
   });
   const [dragHeight, setDragHeight] = useState<number | null>(null);
-  // Control: the daemon grants it on ready; the toggle is the human's choice.
+  // The wheel: the daemon offers it on ready; taking it is the human's choice,
+  // and the button reads as a handoff, not a setting.
   const [controlOn, setControlOn] = useState(false);
   // Bumped to force a reconnect; BrowserStream redials on every change.
   const [attempt, setAttempt] = useState(0);
@@ -201,7 +203,13 @@ function SplitBody({
           <>
             <span className="text-[10px] font-mono text-sol-text-muted truncate">{tab.title || "untitled"}</span>
             {tab.url && (
-              <span className="text-[10px] font-mono text-sol-text-dim/70 truncate" title={tab.url}>
+              // Keyed on the navigation time so the flash restarts per
+              // navigation and never on an unrelated re-render.
+              <span
+                key={report.nav?.at ?? 0}
+                className={`text-[10px] font-mono text-sol-text-dim/70 truncate rounded px-0.5 -mx-0.5 ${report.nav ? "cc-nav-flash" : ""}`}
+                title={tab.url}
+              >
                 {tab.url}
               </span>
             )}
@@ -223,11 +231,13 @@ function SplitBody({
         <span className="flex-1" />
         {live && report.controlAvailable && (
           <button
+            data-sv-wheel
+            aria-pressed={controlOn}
             onClick={() => setControlOn((v) => !v)}
             title={
               controlOn
-                ? "Stop controlling — back to watch-only (Esc)"
-                : "Take control: click and type into this page (for sign-ins the agent can't do)"
+                ? "Hand the page back to the agent (Esc)"
+                : "Take the wheel: your clicks and typing go to this page, for a sign-in the agent cannot do"
             }
             className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono tracking-wider transition-colors ${
               controlOn
@@ -236,7 +246,7 @@ function SplitBody({
             }`}
           >
             <MousePointerClick className="w-3 h-3" />
-            {controlOn ? "CONTROLLING" : "CONTROL"}
+            {controlOn ? "HAND BACK" : "TAKE THE WHEEL"}
           </button>
         )}
         {failed?.canRetry && (

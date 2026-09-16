@@ -3,11 +3,14 @@ import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight, ArrowRight } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useOpenSession } from "../hooks/useOpenSession";
+import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
+import { cleanTitle } from "../lib/conversationProcessor";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import {
@@ -17,6 +20,7 @@ import {
   memberDisplayName,
   presenceLine,
   teamBarSig,
+  teammateWhereabouts,
 } from "./presence/memberPresence";
 import { MemberFace } from "./presence/MemberFace";
 import { TeamBarFace } from "./presence/TeamBarFace";
@@ -317,6 +321,22 @@ export function MemberHoverCard({
     joinedRoom: faces.joinedRoom,
   });
 
+  // Where they are: the session they have open, by the same rule the
+  // palette's Teammates group uses (teammateWhereabouts), so the two surfaces
+  // cannot disagree about who is followable. Opened through the app's one
+  // session path (useOpenSession), which fetches a row the store lacks; the
+  // title is read the same way for the line, and only the title is
+  // subscribed, never the row (a teammate's session streams).
+  const where = useMemo(
+    () => teammateWhereabouts([member], currentUserId, "")[0]?.conversationId ?? null,
+    [member, currentUserId],
+  );
+  const openSession = useOpenSession();
+  const storedWhereTitle = useInboxStore((s) => (where ? s.sessions[where]?.title : undefined));
+  const whereInStore = useInboxStore((s) => !!(where && s.sessions[where]));
+  const fetchedWhere = useMissingSessionRow(where && !whereInStore ? where : null);
+  const whereTitle = storedWhereTitle ?? fetchedWhere?.title;
+
   // Local-first: the store action flips the roster row in the same tick (the
   // pill must not wait on a server round-trip) and dispatches the
   // authoritative updateProfile through the outbox.
@@ -383,6 +403,23 @@ export function MemberHoverCard({
               real names. The name's cyan shift + this slide say "profile". */}
           <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center text-sol-text-dim transition-all group-hover:translate-x-0.5 group-hover:text-sol-cyan" />
         </button>
+
+        {where && (
+          <button
+            type="button"
+            onClick={() => openSession(where)}
+            title="Open the session they have open"
+            className="group mt-2.5 flex w-full items-center gap-2 rounded-md border border-sol-cyan/25 bg-sol-cyan/[0.07] px-2 py-1.5 text-left transition-colors hover:bg-sol-cyan/15"
+          >
+            <ArrowRight className="h-3.5 w-3.5 shrink-0 text-sol-cyan transition-transform group-hover:translate-x-0.5" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12px] font-medium text-sol-cyan">Go where they are</span>
+              <span className="block truncate text-[11px] text-sol-text-dim">
+                {whereTitle ? cleanTitle(whereTitle) : fetchedWhere === null ? "a session that no longer opens" : "a session"}
+              </span>
+            </span>
+          </button>
+        )}
 
         {fleet && (fleet.working > 0 || fleet.needsYou > 0) && (
           <div className="mt-2.5 border-t border-sol-border/60 pt-2">

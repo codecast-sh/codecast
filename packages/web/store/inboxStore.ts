@@ -122,7 +122,7 @@ export {
 } from "./inboxOverlays";
 export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
-import type { OpenTaskReport } from "@codecast/shared/contracts";
+import type { OpenTaskReport, SessionActivity } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
@@ -234,6 +234,7 @@ export type {
   ChatMessageRow,
   ChatReadRow,
   ChatReactionRow,
+  ChatSlackLinkRow,
   ChatRailRow,
   ChatRailChannel,
   ChatRailScope,
@@ -395,6 +396,11 @@ export type PlanItem = {
   short_id: string;
   title: string;
   goal?: string;
+  // The charter (docs/architecture/org-staffing.md S7; components/charter).
+  success_metrics?: string[];
+  priority?: "p0" | "p1" | "p2" | "p3";
+  owner_role_id?: string;
+  non_goals?: string[];
   status: string;
   source: string;
   // Workspace: set = that team's plan, unset = personal (lib/workspaceScope).
@@ -411,6 +417,21 @@ export type PlanItem = {
 
 // The collections the cross-entity change feed can upsert/prune. Keep in sync
 // with hooks/useSyncChangeFeed's ENTITY_COLLECTION map.
+/** Write a field patch onto a draft row the way the server will echo it. A
+ *  clear travels on the wire as null, "" or [] (the dispatch args stay as
+ *  given), but the server drops the field, so the echo carries it ABSENT. The
+ *  field lock the middleware records takes the draft value; storing the clear
+ *  as undefined makes that lock equal to the echo and lets it retire. Stored
+ *  as null or [] it would re-assert the clear over every push until the
+ *  settle window. Skips undefined (not part of the patch); bumps updated_at. */
+export function writeAsServerShape(row: Record<string, any>, fields: Record<string, any>): void {
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) continue;
+    row[k] = v === null || v === "" || (Array.isArray(v) && v.length === 0) ? undefined : v;
+  }
+  row.updated_at = Date.now();
+}
+
 export type FeedCollection =
   | "sessions"
   | "tasks"
@@ -434,6 +455,14 @@ export type ProjectItem = {
   icon?: string;
   target_date?: number;
   labels?: string[];
+  // The charter (docs/architecture/org-staffing.md S7; components/charter).
+  goal?: string;
+  success_metrics?: string[];
+  priority?: "p0" | "p1" | "p2" | "p3";
+  owner_role_id?: string;
+  non_goals?: string[];
+  risks?: string[];
+  budget?: { tokens_per_day?: number; hands_per_day?: number };
   task_counts: { total: number; done: number; in_progress: number };
   plan_count: number;
   doc_count: number;
@@ -561,6 +590,12 @@ export type InboxSession = {
   // rows which watches the daemon found dead.
   open_tasks?: OpenTaskReport[] | null;
   open_tasks_at?: number | null;
+  // What the agent is doing right now ("editing chat.ts"), overlay borne
+  // (conversations.activity). Read it through isSessionActivityFresh: a card
+  // shows it only while the row is working and the stamp is fresh, and
+  // subscribes to its text and stamp, never the object (each overlay push
+  // hands back a new object).
+  activity?: SessionActivity | null;
   is_deferred?: boolean;
   // The user's own rest verdict — where they filed the row (Needs Input, Done,
   // Dormant) — current per the server's inbox_rest_at >= updated_at rule, the
@@ -625,6 +660,8 @@ export type InboxSession = {
   // When the block landed (the newest banner message's timestamp) — renders
   // the ticking "Xm ago" on the blocked-sessions banner and its rows.
   pending_api_error_at?: number | null;
+  context_tokens?: number | null;
+  last_model_call_at?: number | null;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
@@ -1113,6 +1150,9 @@ export type DecisionOption = {
   evidence?: Array<{ label: string; url: string }>;
   cost?: string;
   risk?: string;
+  // A published page the option is judged by (the-line.md L6): the document
+  // page renders these as a comparison row above the option list.
+  page_slug?: string;
 };
 export type DecisionKind = "single" | "multi" | "rank" | "form";
 // What the web hands answerDecision: one index (single), a typed answer, a
@@ -1134,6 +1174,9 @@ export type SessionDecisionItem = {
   report_slug?: string;
   blocking: boolean;
   default_option?: number;
+  /** A pointer card (a staffing proposal's): answering clears it and
+   *  delivers nothing into the session. */
+  silent?: boolean;
   // withdrawn: the agent took its question back (`cast decide cancel`).
   status: "pending" | "answered" | "dismissed" | "withdrawn";
   answer_index?: number;
@@ -1150,6 +1193,9 @@ export type SessionDecisionItem = {
   task_id?: string;
   station?: string;
   stack_id?: string;
+  // A gate on the line (the-line.md L4): the run this question pauses.
+  workflow_run_id?: string;
+  gate_node_id?: string;
   holder?: { kind: "user" | "role"; id: string };
   holder_key?: string;
   asked_user_ids?: string[];
@@ -1170,6 +1216,15 @@ export type SessionDecisionItem = {
   project_path?: string;
 };
 
+// What the stack page hands setStackPolicy: the mutation's own argument names.
+export type StackPolicyPatch = {
+  auto_default_after_ms?: number;
+  clear_auto_default?: boolean;
+  due_at?: number;
+  clear_due?: boolean;
+  delegate?: string;
+};
+
 // A decision stack (decisionStacks.listStacks row): an ordered set of
 // decisions one person clears in one sitting, with its progress counted
 // server side so the queue groups without loading every member.
@@ -1181,7 +1236,9 @@ export type DecisionStackItem = {
   scope_user_id?: string;
   owner_user_id: string;
   role_id?: string;
-  policy: { auto_default_after_ms?: number; delegate_role_id?: string };
+  // due_at (the-line.md L10): when the person means to have cleared it; the
+  // queue shows it on the group header and sorts overdue stacks first.
+  policy: { auto_default_after_ms?: number; delegate_role_id?: string; due_at?: number };
   status: "open" | "done";
   decision_ids: string[];
   // The optimistic stub's key; the list feed's altKey supersedes onto it.
@@ -5138,6 +5195,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   // Stack verbs (D5): the draft moves first, named side effects follow.
   reorderStack: (stackId: string, decisionIds: string[]) => void;
   removeFromStack: (stackId: string, decisionId: string) => void;
+  // The stack's policy (D5, the-line.md L10): auto default, due, delegate.
+  // One write path for the stack page's controls; the draft paints the
+  // policy the server will write, the setStackPolicy side effect writes it.
+  setStackPolicy: (stackId: string, args: StackPolicyPatch) => void;
   // "Group into a stack": a stub row keyed by client_key (altKey supersedes
   // when the server row syncs) and stack_id stamped on the members.
   createStackWith: (input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) => void;
@@ -5377,8 +5438,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
   moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
-  updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }> }) => void;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null }) => void;
+  // Charter fields (components/charter/charterMeta CharterPatch): null clears
+  // a scalar, an empty array is a value.
+  updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
@@ -5871,7 +5934,7 @@ function keepLocalIfEqual<T>(local: T, merged: T): T {
 // into value-identical no-ops, so the roster/user refs stay stable and their
 // subscribers stop re-rendering at idle.
 const PRESENCE_QUANTUM_MS = 60_000;
-const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated", "presence_input_at"];
+const PRESENCE_FIELDS = ["daemon_last_seen", "last_heartbeat", "last_seen", "recent_session_updated", "presence_input_at", "viewing_since"];
 // Streaming counters shown only in hover tooltips (a teammate's message count
 // ticks up on every agent turn); step them so the roster ref doesn't churn on
 // each increment.
@@ -6182,6 +6245,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
 // overrides survive the stub-to-Convex ID transition.
 function rekeyPending(pending: Record<string, any>, oldId: string, newId: string): void {
   for (const key of Object.keys(pending)) {
+    const entry = pending[key];
+    if (entry.type === "field" && entry.value === oldId &&
+      (key.endsWith(":bucket_id") || key.endsWith(":_postCreateBucketId"))) {
+      pending[key] = { ...entry, value: newId };
+    }
     const newKey = key.replace(`:${oldId}`, `:${newId}`);
     if (newKey !== key) {
       pending[newKey] = pending[key];
@@ -6299,6 +6367,59 @@ function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void
   }
 }
 
+function assignSessionBucketDraft(draft: Draft, conversationId: string, bucketId: string | null, deferred = !isConvexId(conversationId)) {
+  const now = Date.now();
+  if (deferred) {
+    for (const row of [draft.sessions[conversationId], draft.conversations[conversationId]] as any[]) {
+      if (!row) continue;
+      if (bucketId) row._postCreateBucketId = bucketId;
+      else delete row._postCreateBucketId;
+    }
+  }
+  // A create-time focused-bucket marker is only a fallback until the first
+  // authoritative filing. A later explicit move/unfile is newer user intent
+  // and must survive reload; clear the old marker in the same local commit.
+  // Assigning the marker's own bucket keeps it until server echo, preserving
+  // crash-after-enqueue recovery for the automatic filing.
+  const clearSupersededIntent = (row: any) => {
+    if (
+      row?._postCreateBucketId &&
+      row._postCreateBucketId !== bucketId
+    ) {
+      delete row._postCreateBucketId;
+    }
+  };
+  clearSupersededIntent(draft.sessions[conversationId]);
+  clearSupersededIntent(draft.conversations[conversationId]);
+  const existing = (Object.values(draft.bucketAssignments) as BucketAssignmentItem[])
+    .find(a => a.conversation_id === conversationId);
+  const previous = existing
+    ? {
+        rowId: String(existing._id),
+        bucketId: existing.bucket_id ?? null,
+        updatedAt: existing.updated_at,
+      }
+    : null;
+  if (existing) {
+    existing.bucket_id = bucketId ?? undefined;
+    existing.updated_at = now;
+  } else {
+    const stubId = `bucketassign-${conversationId}`;
+    draft.bucketAssignments[stubId] = {
+      _id: stubId,
+      conversation_id: conversationId,
+      bucket_id: bucketId ?? undefined,
+      updated_at: now,
+    };
+  }
+  return {
+    conversationId,
+    bucketId,
+    previous,
+    optimisticRowId: String(existing?._id ?? `bucketassign-${conversationId}`),
+  };
+}
+
 function resumePostCreateBucketIntentFor(
   convexId: string,
   explicitBucketId?: string,
@@ -6308,6 +6429,7 @@ function resumePostCreateBucketIntentFor(
   const bucketId = store.sessions[convexId]?._postCreateBucketId
     ?? (store.conversations[convexId] as any)?._postCreateBucketId;
   if (!bucketId) return;
+  if (!isConvexId(bucketId)) return;
   // A Promise continuation captured when the session was first summoned can
   // run after the user has moved it elsewhere (or a later summon superseded
   // the focused bucket). The persisted marker is the current intent; never let
@@ -6488,6 +6610,12 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   // ungroup the session AND orphan as an immortal stub.
   for (const row of Object.values(draft.bucketAssignments || {}) as BucketAssignmentItem[]) {
     if (row.conversation_id === oldId) row.conversation_id = newId;
+    if (row.bucket_id === oldId) row.bucket_id = newId;
+  }
+  if (draft.buckets[oldId]) {
+    for (const row of [...Object.values(draft.sessions), ...Object.values(draft.conversations)] as any[]) {
+      if (row._postCreateBucketId === oldId) row._postCreateBucketId = newId;
+    }
   }
   // A tab persists its session as a `?s=<id>` path (and AppTab.sessionId). Left
   // pointing at the dead stub, the inbox's re-assert effect would chase a session
@@ -6810,7 +6938,7 @@ function evictFocusOutsideOrderInDraft(draft: Draft, focusKind: SessionFocusKind
 // usePathname() reports inside the shell; outside tab routing (a detached
 // window) it is the real location. Lets the chip setters evict focus without
 // every caller threading a pathname through.
-function mountedPathname(draft: Draft): string | undefined {
+export function mountedPathname(draft: { activeTabId: string | null; tabs: Pick<AppTab, "id" | "path">[] }): string | undefined {
   const tab = draft.activeTabId ? draft.tabs.find((t) => t.id === draft.activeTabId) : undefined;
   // Tab paths keep their query (/inbox?s=…); the surface helpers want the bare
   // pathname, as usePathname reports it.
@@ -7690,9 +7818,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
     // the decision and its question, so the bubble can render the answer
     // against its ask and link back to the `cast decide` call.
-    const content = answerText ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
+    // A silent card (a staffing proposal's pointer, org-staffing.md S4) is
+    // cleared by the answer and delivers nothing: the author is not woken.
+    const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
     const convId = row.conversation_id;
-    if (content) {
+    // A decision bound to a run (the-line.md L4) is the server's to deliver:
+    // its run consumes the answer as the open gate, or, when the run is past
+    // it, the server sends the same message (settleClientResolution).
+    if (content && !row.workflow_run_id) {
       queueMicrotask(() => {
         const s = useInboxStore.getState();
         const clientId = s.addOptimisticMessage(convId, content);
@@ -7727,6 +7860,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!stack) return;
     stack.decision_ids = decisionIds;
     stack.updated_at = Date.now();
+  }),
+  setStackPolicy: action(function (this: Draft, stackId: string, args: StackPolicyPatch) {
+    const stack = this.decisionStacks[stackId];
+    if (!stack) return;
+    // Built the way decisionStacks.setStackPolicy builds it (spread, then
+    // assign), so the optimistic object and the server's echo stringify the
+    // same and the field lock retires on the first push. A delegate is a
+    // handle the server resolves, so it paints only from the echo.
+    const policy = { ...stack.policy };
+    if (args.clear_auto_default) policy.auto_default_after_ms = undefined;
+    else if (args.auto_default_after_ms !== undefined) policy.auto_default_after_ms = args.auto_default_after_ms;
+    if (args.clear_due) policy.due_at = undefined;
+    else if (args.due_at !== undefined) policy.due_at = args.due_at;
+    stack.policy = policy;
   }),
   removeFromStack: action(function (this: Draft, stackId: string, decisionId: string) {
     const stack = this.decisionStacks[stackId];
@@ -9306,6 +9453,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
           if (field === "chatChannels" && isConvexId(match._id)) {
             scheduleResolvedChatChannelSends(match._id);
           }
+          if (field === "buckets" && isConvexId(match._id)) {
+            setTimeout(() => useInboxStore.getState().resumePostCreateSessionIntents(), 0);
+          }
         } else if (!table[oldId]) {
           mutTable()[oldId] = old as any;
         }
@@ -10534,12 +10684,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Keyed by short_id to match the server mutation and the picker call sites.
   updatePlan: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
     const plan = Object.values(this.plans).find((p: any) => p.short_id === shortId || p._id === shortId) as any;
-    if (plan) Object.assign(plan, fields, { updated_at: Date.now() });
+    if (plan) writeAsServerShape(plan, fields);
   }),
 
   updateProject: action(function (this: Draft, id: string, fields: Record<string, any>) {
     const project = (this.projects as any)[id] ?? Object.values(this.projects).find((p: any) => p._id === id);
-    if (project) Object.assign(project, fields, { updated_at: Date.now() });
+    if (project) writeAsServerShape(project, fields);
   }),
 
   // ── Issue sync sources (docs/architecture/issue-sync.md S1.3, S9) ────────
@@ -10729,6 +10879,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
       created_at: now,
       updated_at: now,
     };
+    if (continuation?.kind === "assignBucket") {
+      const conversationIds: string[] = [];
+      const deferredAssignments: ReturnType<typeof assignSessionBucketDraft>[] = [];
+      for (const id of continuation.conversationIds) {
+        const conversationId = get().getConvexId(id) ?? id;
+        if (isConvexId(conversationId)) {
+          conversationIds.push(conversationId);
+        } else if (this.sessions[conversationId] || this.conversations[conversationId]) {
+          deferredAssignments.push(assignSessionBucketDraft(this, conversationId, stubId));
+        }
+      }
+      return {
+        stubId,
+        deferredAssignments,
+        ...(conversationIds.length ? { continuation: { ...continuation, conversationIds } } : {}),
+      };
+    }
     return { stubId, ...(continuation ? { continuation } : {}) };
   }),
 
@@ -10851,12 +11018,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const bucket = this.buckets[id] as any;
     if (!bucket) return;
     const previous: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(fields)) {
-      if (v === undefined) continue;
-      previous[k] = bucket[k];
-      bucket[k] = v === null ? undefined : v;
-    }
-    bucket.updated_at = Date.now();
+    for (const [k, v] of Object.entries(fields)) if (v !== undefined) previous[k] = bucket[k];
+    writeAsServerShape(bucket, fields);
     return { bucketId: id, fields, previous };
   }),
 
@@ -10867,49 +11030,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the server reaches the same assignment on its own (fork label inheritance):
   // the dispatch no-ops there, and rekeyId carries the local row to the real id.
   assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
-    const now = Date.now();
-    // A create-time focused-bucket marker is only a fallback until the first
-    // authoritative filing. A later explicit move/unfile is newer user intent
-    // and must survive reload; clear the old marker in the same local commit.
-    // Assigning the marker's own bucket keeps it until server echo, preserving
-    // crash-after-enqueue recovery for the automatic filing.
-    const clearSupersededIntent = (row: any) => {
-      if (
-        row?._postCreateBucketId &&
-        row._postCreateBucketId !== bucketId
-      ) {
-        delete row._postCreateBucketId;
-      }
-    };
-    clearSupersededIntent(this.sessions[conversationId]);
-    clearSupersededIntent(this.conversations[conversationId]);
-    const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
-      .find(a => a.conversation_id === conversationId);
-    const previous = existing
-      ? {
-          rowId: String(existing._id),
-          bucketId: existing.bucket_id ?? null,
-          updatedAt: existing.updated_at,
-        }
-      : null;
-    if (existing) {
-      existing.bucket_id = bucketId ?? undefined;
-      existing.updated_at = now;
-    } else {
-      const stubId = `bucketassign-${conversationId}`;
-      this.bucketAssignments[stubId] = {
-        _id: stubId,
-        conversation_id: conversationId,
-        bucket_id: bucketId ?? undefined,
-        updated_at: now,
-      };
-    }
-    return {
-      conversationId,
-      bucketId,
-      previous,
-      optimisticRowId: String(existing?._id ?? `bucketassign-${conversationId}`),
-    };
+    return assignSessionBucketDraft(this, conversationId, bucketId);
   }),
 
   // -- Teammate comments --
@@ -11103,9 +11224,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (actionName === "createBucket") {
       const stubId = localResult.stubId;
       if (typeof stubId !== "string") return false;
+      for (const assignment of localResult.deferredAssignments ?? []) {
+        const conversationId = get().getConvexId(assignment.conversationId) ?? assignment.conversationId;
+        const current = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
+          .find((row) => row.conversation_id === conversationId);
+        if (current?.bucket_id === stubId) {
+          assignSessionBucketDraft(this, conversationId, assignment.previous?.bucketId ?? null, true);
+          setTimeout(() => resumePostCreateBucketIntentFor(conversationId), 0);
+        }
+      }
       delete this.buckets[stubId];
       delete this.pending[`buckets:${stubId}`];
-      return ["buckets", "pending"];
+      for (const [key, entry] of Object.entries(this.pending)) {
+        if (entry.type === "field" && entry.value === stubId &&
+          (key.endsWith(":bucket_id") || key.endsWith(":_postCreateBucketId"))) {
+          delete this.pending[key];
+        }
+      }
+      return ["buckets", "bucketAssignments", "sessions", "conversations", "pending"];
     }
 
     if (actionName === "updateBucket") {

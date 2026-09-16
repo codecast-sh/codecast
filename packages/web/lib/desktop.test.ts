@@ -94,6 +94,8 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/auth/callback")).toBe(false);
     expect(isHandoffEligiblePath("/oauth/github")).toBe(false);
     expect(isHandoffEligiblePath("/share/abc")).toBe(false);
+    expect(isHandoffEligiblePath("/community")).toBe(false);
+    expect(isHandoffEligiblePath("/community/abc")).toBe(false);
     expect(isHandoffEligiblePath("/a/wbYnhK4Qv9zw")).toBe(false);
     expect(isHandoffEligiblePath("/r")).toBe(false);
     expect(isHandoffEligiblePath("/r/union-ai/union-mobile/commits/HEAD")).toBe(false);

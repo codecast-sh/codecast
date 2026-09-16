@@ -28,6 +28,7 @@ import {
   isScheduledTaskMessage,
   isChatWakePrompt,
   isMachineDeliveredMessage,
+  parseUnwrappedSessionReport,
   CHAT_WAKE_HEADER,
 } from "@codecast/shared/contracts";
 export type { HuddleSummaryTag } from "@codecast/shared/contracts";
@@ -47,6 +48,8 @@ export {
   isScheduledTaskMessage,
   isChatWakePrompt,
   isMachineDeliveredMessage,
+  parseUnwrappedSessionReport,
+  isUnwrappedSessionReport,
   isToolResultCarrier,
 } from "@codecast/shared/contracts";
 
@@ -269,6 +272,8 @@ export function parseMachineDeliveredMessage(
     const body = chat.entries.map((e) => `${e.name}: ${e.content}`).join("\n");
     return { kind: "chat", source: `#${chat.channelName}`, body };
   }
+  const unwrapped = parseUnwrappedSessionReport(rawContent);
+  if (unwrapped) return { kind: "session", source: unwrapped.name, body: unwrapped.body };
   return null;
 }
 
@@ -371,6 +376,51 @@ const BARE_NUDGE_RE = /^(?:continue|go(?: on| ahead)?|keep going|carry on|procee
 
 export function isBareNudge(display: string | null | undefined): boolean {
   return !!display && BARE_NUDGE_RE.test(display.trim());
+}
+
+// The text a nudge row folds under: the words without trailing punctuation, in
+// lower case, so "Continue" and "continue." land in the same run.
+export function nudgeLabel(display: string | null | undefined): string | null {
+  if (!isBareNudge(display)) return null;
+  return display!.trim().replace(/[\s.!…]+$/, "").toLowerCase();
+}
+
+export type NudgeRow = {
+  id: string;
+  // The folded label when this row is a bare nudge the human typed, else null.
+  nudge: string | null;
+  // True when the row renders nothing at all (a tool-result carrier, a hidden
+  // stub). Such a row sits between two nudges without separating them.
+  invisible?: boolean;
+};
+
+export type NudgeRun = { text: string; count: number };
+
+// Collapse each run of identical consecutive nudges into its first row. The
+// head carries the run's count ("continue ×5"); every later row in the run is
+// folded away. A run of one still gets a head, so every nudge renders the same
+// compact line whether or not it repeats.
+export function foldNudgeRuns(rows: NudgeRow[]): { runs: Map<string, NudgeRun>; folded: Set<string>; headOf: Map<string, string> } {
+  const runs = new Map<string, NudgeRun>();
+  const folded = new Set<string>();
+  const headOf = new Map<string, string>();
+  let head: { id: string; text: string } | null = null;
+  for (const row of rows) {
+    if (row.nudge) {
+      if (head && head.text === row.nudge) {
+        folded.add(row.id);
+        headOf.set(row.id, head.id);
+        runs.get(head.id)!.count += 1;
+      } else {
+        head = { id: row.id, text: row.nudge };
+        runs.set(row.id, { text: row.nudge, count: 1 });
+        headOf.set(row.id, row.id);
+      }
+      continue;
+    }
+    if (!row.invisible) head = null;
+  }
+  return { runs, folded, headOf };
 }
 
 export function cleanUserMessage(raw: string | null | undefined): string | null {

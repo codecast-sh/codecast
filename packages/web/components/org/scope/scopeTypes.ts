@@ -5,8 +5,9 @@
 import type { WorkState } from "@codecast/shared/contracts";
 import type { OrgReportsTo, StateCounts } from "../orgTypes";
 
-export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit";
-export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit"];
+// "run" (docs/architecture/the-line.md L10): a task's or plan's passage along the line.
+export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run";
+export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit", "run"];
 
 export type FeedActor = { name: string; image?: string; is_bot?: boolean };
 
@@ -112,4 +113,5 @@ export const FEED_KIND_META: Record<FeedKind, { label: string; plural: string; c
   decision: { label: "decision", plural: "Decisions", color: "var(--sol-yellow)" },
   update: { label: "update", plural: "Updates", color: "var(--sol-violet)" },
   commit: { label: "commit", plural: "Commits", color: "var(--sol-text-muted)" },
+  run: { label: "run", plural: "Runs", color: "var(--sol-green)" },
 };

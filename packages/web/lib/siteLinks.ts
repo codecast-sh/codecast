@@ -5,7 +5,7 @@
 export const SITE_LINKS = {
   // The public community chat: codecast's own channels, readable by anyone
   // and open to every signed-in user (app/chat in community scope).
-  community: "https://codecast.sh/community",
+  community: "/community",
   githubOrg: "https://github.com/codecast-sh",
   githubRepo: "https://github.com/codecast-sh/codecast",
   githubIssues: "https://github.com/codecast-sh/codecast/issues",

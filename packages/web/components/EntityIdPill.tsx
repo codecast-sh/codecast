@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect, useContext } from "react";
+import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
 import Link from "next/link";
 import {
   Target,
@@ -11,6 +11,7 @@ import {
   GitPullRequest,
   GitCommitHorizontal,
   ChevronDown,
+  PanelBottomOpen,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
@@ -18,6 +19,7 @@ import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
   parsePublishedPageUrl,
+  parseMessageRefUrl,
   isEntityId,
   entityMentionRegex,
   MESSAGE_REF_PREFIX,
@@ -28,6 +30,7 @@ import {
   repoObjectGitHubUrl,
   type EntityType,
 } from "../lib/entityLinks";
+import { isOnThreadRoute, openSessionAtMessage } from "../lib/openSessionAtMessage";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
 import { AuthorAvatar, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
 import {
@@ -57,7 +60,7 @@ import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
-import { useRevealHost } from "../lib/revealHost";
+import { useRevealRef } from "../lib/revealHost";
 
 export { SessionHoverContent };
 
@@ -574,6 +577,37 @@ function contextualPrReference(payload: string, repository: string | null | unde
   );
 }
 
+// Custom-text `/conversation/<id>#msg-<id>` link: jump to that message in
+// the thread when we are already on it; otherwise the href is the same
+// deep link RedirectToInbox reads.
+function MessageDeepLink({
+  conversationId,
+  messageId,
+  className,
+  children,
+}: {
+  conversationId: string;
+  messageId: string;
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  const dest = `/conversation/${conversationId}#msg-${messageId}`;
+  return (
+    <Link
+      href={dest}
+      className={className}
+      onClick={(e) => {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        if (!isOnThreadRoute()) return;
+        e.preventDefault();
+        openSessionAtMessage(conversationId, messageId);
+      }}
+    >
+      {children}
+    </Link>
+  );
+}
+
 export function EntityAwareLink({ href, children, ...allProps }: any) {
   const { mention, rest: props } = takeMentionProps(allProps);
   // The conversation this link sits in, when there is one: its repository is
@@ -684,6 +718,21 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
         fallback={href ? <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a> : <>{children}</>}
       />
     );
+  }
+  // A conversation URL with a #msg- fragment and the author's own words
+  // ("See the conversation") is a jump, not a session pill. parseEntityUrl
+  // drops the hash, so this has to win first. Bare URLs are promoted to a
+  // message card by remarkEntityIds; custom text stays the words they wrote.
+  const msgRef = parseMessageRefUrl(href);
+  if (msgRef?.kind === "message") {
+    const session = parseEntityUrl(href);
+    if (session?.type === "session") {
+      return (
+        <MessageDeepLink conversationId={session.id} messageId={msgRef.id} className={(props as any).className}>
+          {children}
+        </MessageDeepLink>
+      );
+    }
   }
   // A pasted/linked codecast object URL (e.g. https://codecast.sh/tasks/<id>)
   // becomes a rich, in-app pill instead of an external link.
@@ -951,10 +1000,15 @@ export function EntityIdPill({
     [closeNow, isSession, entity, openLinkedSession],
   );
   // A plain click on the pill opens the object's full page right here (the
-  // reveal band after the message) and clicks it closed again; the hover
+  // reveal band under this line) and clicks it closed again; the hover
   // card's own link, and any modified click, still go to the page. Without
   // a reveal host the pill is the link it always was.
-  const revealHost = useRevealHost();
+  const linkRef = useRef<HTMLAnchorElement>(null);
+  const revealTarget = useMemo(
+    () => ({ href, title: `${type ? TYPE_LABEL[type] : ""}: ${fullLabel}`, onOpen: handleOpen }),
+    [href, type, fullLabel, handleOpen],
+  );
+  const { host: revealHost, open: revealOpen, toggle: toggleReveal } = useRevealRef(revealTarget, linkRef);
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (!revealHost || !entity || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
@@ -963,11 +1017,10 @@ export function EntityIdPill({
       }
       e.preventDefault();
       closeNow();
-      revealHost.toggle({ href, title: `${TYPE_LABEL[type!]}: ${fullLabel}`, onOpen: handleOpen });
+      toggleReveal();
     },
-    [revealHost, entity, handleOpen, closeNow, href, type, fullLabel],
+    [revealHost, entity, handleOpen, closeNow, toggleReveal],
   );
-  const revealOpen = !!revealHost?.isOpen(href);
 
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
   useEffect(() => cancelHover, [cancelHover]);
@@ -995,9 +1048,12 @@ export function EntityIdPill({
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
       <PopoverAnchor asChild>
         <Link
+          ref={linkRef}
           href={href}
           onClick={handleClick}
-          onMouseEnter={openSoon}
+          // While its band is open the full page is right below: no hover
+          // card over it, and a stale timer never brings one back.
+          onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           aria-pressed={revealHost ? revealOpen : undefined}
           className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
@@ -1067,6 +1123,15 @@ export function EntityIdPill({
             >
               Open on GitHub <ArrowUpRight className="w-2.5 h-2.5" />
             </a>
+          </div>
+        )}
+        {/* The card is the preview; the pill itself opens the full page in
+            place. Said once here, where a reader hovering for the first time
+            is looking, so the band that follows a click is no surprise. */}
+        {revealHost && entity && (
+          <div className="flex items-center gap-1.5 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
+            <PanelBottomOpen className="h-3 w-3" />
+            Click to open here, under this line
           </div>
         )}
       </PopoverContent>

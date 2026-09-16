@@ -20,6 +20,7 @@ import {
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
 import { useShallow } from "zustand/react/shallow";
+import { UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import {
   useDevices,
@@ -34,6 +35,32 @@ import {
   RunOnDeviceItems,
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
+
+type Runner = { id?: string; name: string; image?: string | null };
+
+function RunnerBadge({ runner, compact, title }: { runner: Runner; compact: boolean; title: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] text-sol-text-dim border border-sol-border/40" title={title}>
+      <OwnerAvatar name={runner.name} image={runner.image ?? undefined} />
+      {!compact && runner.name}
+    </span>
+  );
+}
+
+export function ConversationAssignmentBadge({ conversation, isOwner, guest, compact }: {
+  conversation: { _id: string; user_id?: string; owner_device_id?: string | null; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null };
+  isOwner: boolean;
+  guest: boolean;
+  compact: boolean;
+}) {
+  const runner = conversation.user ? {
+    id: conversation.user_id,
+    name: conversation.user.name || conversation.user.email?.split("@")[0] || "Teammate",
+    image: conversation.user.avatar_url,
+  } : undefined;
+  if (guest) return runner ? <RunnerBadge runner={runner} compact={compact} title="Shared session · read-only access" /> : null;
+  return <AssignmentBadge key={conversation._id} conversationId={conversation._id} ownerDeviceId={conversation.owner_device_id} runner={runner} isOwner={isOwner} compact={compact} />;
+}
 
 /**
  * Where this session runs, beyond the device: the worktree it was given, and
@@ -71,12 +98,16 @@ export function AssignmentBadge({
   conversationId,
   ownerDeviceId,
   compact = false,
+  isOwner = true,
+  runner,
 }: {
   conversationId: string;
   ownerDeviceId?: string | null;
   /** Icon-only pill (device icon + dot, avatar — no names) for dense headers
    *  like simple view. The popover keeps the full detail. */
   compact?: boolean;
+  isOwner?: boolean;
+  runner?: Runner;
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
@@ -87,7 +118,7 @@ export function AssignmentBadge({
   const own = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
   const foreign = useForeignOwnerDevice(
     conversationId,
-    loaded && !!ownerDeviceId && !own,
+    !!ownerDeviceId && !own,
   );
   const d = own ?? (foreign || undefined);
   const { ownerList, displayFor, currentUser } = owners;
@@ -96,8 +127,9 @@ export function AssignmentBadge({
   // renders CONDENSED: avatar only, no name, no "Assign" text. Full names are
   // reserved for the interesting case: the thread living in someone else's inbox.
   const meId = currentUser?._id?.toString?.();
+  const isRunner = runner?.id ? runner.id === meId : isOwner;
   const selfOnly =
-    ownerList.length === 0 || (ownerList.length === 1 && ownerList[0] === meId);
+    (ownerList.length === 0 && isRunner) || (ownerList.length === 1 && ownerList[0] === meId);
   const selfDisp = currentUser
     ? {
         name: currentUser.name || currentUser.email?.split("@")[0] || "You",
@@ -116,7 +148,11 @@ export function AssignmentBadge({
       + `${cloudHost ? "" : ` — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}`
       + `${worktree ? `\nWorktree ${worktree}` : ""}`
       + `${preparing ? "\nPreparing the host — its worktree is being made now." : ""}`
-    : "No device assigned yet — the next message routes to your most-recently-active machine.";
+    : "No machine recorded for this session.";
+
+  if (!(owners.canManage ?? isOwner)) {
+    return runner ? <RunnerBadge runner={runner} compact={compact} title={owners.canManage === false ? "Shared session · read-only access" : "Checking assignment permissions"} /> : null;
+  }
 
   return (
     <DropdownMenu>
@@ -126,7 +162,7 @@ export function AssignmentBadge({
           title={`${deviceTitle}\nOwners — whose inboxes this session appears in.`}
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
-          {loaded && (
+          {(loaded || d || owners.canManage) && (
             <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>
@@ -150,7 +186,7 @@ export function AssignmentBadge({
               ) : (
                 <>
                   <DeviceDot online={false} />
-                  {!compact && <span className="cq-sq1">Unassigned</span>}
+                  {!compact && <span className="cq-sq1">{ownerDeviceId ? foreign === undefined ? "Loading machine" : "Unknown machine" : "Unassigned"}</span>}
                 </>
               )}
             </span>
@@ -165,6 +201,7 @@ export function AssignmentBadge({
               selfDisp && <OwnerAvatar name={selfDisp.name} image={selfDisp.image} />
             ) : (
               <>
+                {ownerList.length === 0 && <UserCheck className="w-3.5 h-3.5" />}
                 <span className="flex -space-x-1.5">
                   {ownerList.slice(0, 3).map((id) => {
                     const disp = displayFor(id);
@@ -173,7 +210,7 @@ export function AssignmentBadge({
                 </span>
                 {!compact && (
                   <span className="truncate cq-sq1">
-                    {ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
+                    {ownerList.length === 0 ? "Take ownership" : ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
                   </span>
                 )}
               </>
@@ -183,7 +220,9 @@ export function AssignmentBadge({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="min-w-[16rem] max-w-[24rem]">
-        <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} />
+        {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
+        {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
+        <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
         <DropdownMenuSeparator />
         <OwnerMenuItems owners={owners} conversationId={conversationId} />
       </DropdownMenuContent>

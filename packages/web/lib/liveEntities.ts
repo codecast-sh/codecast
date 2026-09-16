@@ -230,8 +230,8 @@ export function taskLinkedConversationIds(
  * cold open), but the sessions those ids name are usually in the store already
  * — the inbox syncs them — and the list sync fetches an origin badge for every
  * task's source conversation. Build the same row shape from those so the
- * "Created from" chip and the Sessions list paint on the first frame; the
- * detail snapshot, once cached, wins (it carries the insight enrichment).
+ * Sessions list paints on the first frame; the detail snapshot, once cached,
+ * wins (it carries the insight enrichment).
  */
 export function resolveTaskLinkedConversations(
   task: { linked_conversations?: any[]; created_from_conversation?: string | null; conversation_ids?: string[] | null } | null | undefined,
@@ -259,6 +259,34 @@ export function resolveTaskLinkedConversations(
     });
   }
   return out;
+}
+
+/**
+ * Conversation page href for a linked session. Always the Convex conversation
+ * id — `session_id` is the daemon handle and 404s at /conversation/<session_id>.
+ */
+export function taskSessionHref(conv: { _id?: string | null } | null | undefined): string | null {
+  return conv?._id ? `/conversation/${conv._id}` : null;
+}
+
+/**
+ * Origin session first, then live, then most recently updated. The server
+ * snapshot walks conversation_ids in write order, which is not origin-first.
+ */
+export function sortTaskLinkedConversations<T extends { _id: string; is_active?: boolean; updated_at?: number }>(
+  convs: T[],
+  originId?: string | null,
+): T[] {
+  return [...convs].sort((a, b) => {
+    if (originId) {
+      const ao = a._id === originId ? 0 : 1;
+      const bo = b._id === originId ? 0 : 1;
+      if (ao !== bo) return ao - bo;
+    }
+    if (a.is_active && !b.is_active) return -1;
+    if (!a.is_active && b.is_active) return 1;
+    return (b.updated_at || 0) - (a.updated_at || 0);
+  });
 }
 
 /**

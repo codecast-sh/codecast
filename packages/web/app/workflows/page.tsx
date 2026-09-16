@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { useSyncWorkflowRuns, useWorkflowRun, useWorkflowRuns, useWorkflows } from "../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -10,8 +11,15 @@ import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ContextChatInput } from "../../components/ContextChatInput";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
-import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square, Timer, AlertCircle } from "lucide-react";
+import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square, Timer, AlertCircle, CheckSquare, ListChecks, MessageCircleQuestionMark, Workflow } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../hooks/useSyncRuns";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useTrackedStore } from "../../store/inboxStore";
+import { DecisionCompactCard } from "../../components/decisions/DecisionCompactCard";
+import { compactAge } from "../../lib/threadState";
+import { cn } from "../../lib/utils";
+import { WorkflowsDashboardContent } from "./dashboard";
 
 const api = _api as any;
 
@@ -66,6 +74,8 @@ interface WorkflowRun {
   gate_prompt?: string;
   gate_choices?: Array<{ key: string; label: string; target: string }>;
   gate_response?: string;
+  // the-line.md L4: the gate is a decision; the panel renders its card.
+  gate_decision_id?: string;
   fail_reason?: string;
   created_at: number;
   updated_at: number;
@@ -238,6 +248,11 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const cancelRun = useMutation(api.workflow_runs.cancel);
   const [responding, setResponding] = useState(false);
+  // The gate's decision row, when the queue feed holds it (the-line.md L4).
+  // Subscribed by status only, so an unrelated decision edit does not repaint.
+  const gateId = run.gate_decision_id;
+  const gs = useTrackedStore([(x) => (gateId ? x.sessionDecisions[gateId]?.status : undefined)]);
+  const gateDecision = gateId ? gs.sessionDecisions[gateId] : undefined;
 
   const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
   const StatusIcon = st.icon;
@@ -293,7 +308,13 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
         </div>
       )}
 
-      {run.status === "paused" && run.gate_prompt && (
+      {run.status === "paused" && gateDecision && (
+        <div data-run-gate-card className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-2 py-2">
+          <div className="px-1 pb-1 text-[9px] text-sol-magenta font-semibold uppercase tracking-widest">Gate</div>
+          <DecisionCompactCard decision={gateDecision} showTask={false} />
+        </div>
+      )}
+      {run.status === "paused" && run.gate_prompt && !gateDecision && (
         <div className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-3 py-2 flex items-center gap-2 flex-wrap">
           <span className="text-[9px] text-sol-magenta font-semibold uppercase tracking-widest shrink-0">Gate</span>
           <span className="text-[10px] text-sol-text-muted truncate flex-1 min-w-0">{run.gate_prompt}</span>
@@ -618,11 +639,141 @@ function WorkflowsContent() {
   );
 }
 
+// ---------------------------------------------------------------- runs across workflows (the-line.md L8, L10)
+
+const RUN_TONE: Record<string, string> = {
+  pending: "var(--sol-text-dim)", running: "var(--sol-cyan)", paused: "var(--sol-yellow)", completed: "var(--sol-green)", failed: "var(--sol-red)",
+};
+
+function RunRow({ run, now, onOpen }: { run: LineRun; now: number; onOpen: () => void }) {
+  const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
+  const StatusIcon = st.icon;
+  const tone = RUN_TONE[run.status] ?? RUN_TONE.pending;
+  const node = run.status === "completed" || run.status === "failed" ? null : (run.current_node_label || run.current_node_id || null);
+  const gateOpen = !!run.gate_decision_short_id && run.status === "paused";
+  return (
+    <li>
+      <div
+        role="link"
+        tabIndex={0}
+        data-run-row={run._id}
+        onClick={onOpen}
+        onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
+        className="group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-colors hover:bg-sol-bg-highlight/70 cursor-pointer"
+      >
+        <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: tone }} aria-hidden />
+        <StatusIcon className={`w-3.5 h-3.5 shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 min-w-0">
+            <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{run.workflow_name || run.workflow_slug || "workflow"}</span>
+            <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border capitalize" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{run.status}</span>
+            {node && <span className="truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>· {node}</span>}
+          </span>
+          <span className="mt-[2px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
+            {run.task_short_id ? (
+              <Link href={`/tasks/${run.task_short_id}`} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 min-w-0 truncate hover:underline" style={{ color: "var(--sol-text-muted)" }}>
+                <CheckSquare className="w-3 h-3 shrink-0" /><span style={{ fontFamily: "var(--font-mono)" }}>{run.task_short_id}</span>{run.task_title && <span className="truncate">{run.task_title}</span>}
+              </Link>
+            ) : run.plan_short_id ? (
+              <Link href={`/plans/${run.plan_short_id}`} onClick={(e) => e.stopPropagation()} className="hover:underline" style={{ fontFamily: "var(--font-mono)" }}>{run.plan_short_id}</Link>
+            ) : (
+              <span style={{ fontFamily: "var(--font-mono)" }}>{run._id.slice(-8)}</span>
+            )}
+            {run.gate_decision_short_id && (
+              <Link href={`/decisions/${run.gate_decision_short_id}`} onClick={(e) => e.stopPropagation()} data-run-gate className="inline-flex items-center gap-1 shrink-0 px-1.5 h-[16px] rounded-md hover:underline" style={{ background: gateOpen ? "color-mix(in srgb, var(--sol-magenta) 14%, transparent)" : "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: gateOpen ? "var(--sol-magenta)" : "var(--sol-text-dim)" }}>
+                <MessageCircleQuestionMark className="w-3 h-3" /> gate · {run.gate_decision_short_id}
+              </Link>
+            )}
+          </span>
+        </span>
+        <span className="text-[10.5px] tabular-nums shrink-0 self-start mt-[3px]" style={{ color: "var(--sol-text-dim)" }} title={new Date(run.created_at).toLocaleString()}>{compactAge(now - run.created_at)}</span>
+      </div>
+    </li>
+  );
+}
+
+export function RunsTab() {
+  const router = useRouter();
+  const now = useCoarseNow(30_000);
+  const { ready } = useSyncRuns(useMemo(() => ({ limit: 100 }), []));
+  const runs = useWorkspaceRuns();
+  const titlebarRef = useTitlebarHead<HTMLDivElement>();
+  if (!ready && runs.length === 0) return <AppLoader className="min-h-[16rem] h-full" />;
+  return (
+    <div className="h-full overflow-y-auto bg-sol-bg">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-5">
+        <div ref={titlebarRef} className="flex items-baseline gap-2 mb-3">
+          <Workflow className="w-4 h-4 text-sol-cyan self-center" />
+          <h1 className="text-lg font-semibold text-sol-text">Runs</h1>
+          <span className="text-xs text-sol-text-dim">every passage along a line, newest first</span>
+          <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
+        </div>
+        {runs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
+            <Workflow className="w-8 h-8 text-sol-text-dim" />
+            <p className="text-sm text-sol-text-muted">No runs yet</p>
+            <p className="text-xs text-sol-text-dim max-w-xs">A run starts when a role's sweep picks up a task, or with <code className="font-mono text-sol-text-muted">cast workflow run</code>.</p>
+          </div>
+        ) : (
+          <ul className="space-y-1">
+            {runs.map((r) => <RunRow key={r._id} run={r} now={now} onOpen={() => router.push(`/workflows/runs/${r._id}`)} />)}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- the page: three tabs
+
+type RoutinesTab = "routines" | "runs" | "dynamic";
+const ROUTINES_TABS: { key: RoutinesTab; label: string; icon: any }[] = [
+  { key: "routines", label: "Routines", icon: GitBranch },
+  { key: "runs", label: "Runs", icon: ListChecks },
+  { key: "dynamic", label: "Dynamic", icon: Workflow },
+];
+
+function RoutinesContent() {
+  const searchParams = useSearchParams();
+  const initial = searchParams?.get("tab") as RoutinesTab | null;
+  const [tab, setTab] = useState<RoutinesTab>(initial && ROUTINES_TABS.some((t) => t.key === initial) ? initial : "routines");
+  return (
+    <div className="h-full flex flex-col bg-sol-bg">
+      <nav className="shrink-0 flex items-center gap-1 px-3 border-b border-sol-border/20 overflow-x-auto cq-no-scrollbar" aria-label="Workflow sections">
+        {ROUTINES_TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              data-routines-tab={t.key}
+              onClick={() => setTab(t.key)}
+              className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-9 px-2.5 text-[12.5px] transition-colors", active ? "font-semibold" : "hover:bg-sol-bg-highlight/60")}
+              style={{ color: active ? "var(--sol-text)" : "var(--sol-text-muted)" }}
+              aria-current={active ? "page" : undefined}
+            >
+              <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-cyan)" : undefined }} />
+              {t.label}
+              {active && <span className="absolute left-2 right-2 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-cyan)" }} />}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="flex-1 min-h-0">
+        {tab === "routines" && <WorkflowsContent />}
+        {tab === "runs" && <RunsTab />}
+        {tab === "dynamic" && <WorkflowsDashboardContent />}
+      </div>
+    </div>
+  );
+}
+
 export default function WorkflowsPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <WorkflowsContent />
+        <RoutinesContent />
       </DashboardLayout>
     </AuthGuard>
   );

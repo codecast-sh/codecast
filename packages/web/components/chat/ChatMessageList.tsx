@@ -87,6 +87,10 @@ export type ChatMessageListProps = {
   onDelete?: (messageId: string) => void;
   onRetryAgent?: (messageId: string) => void;
   onRetrySend?: (messageId: string) => void;
+  /** The channel mirrors to Slack: rows show their Slack standing and offer
+   *  "Share to Slack" for a line that stayed local. */
+  slackOutbound?: boolean;
+  onShareToSlack?: (messageId: string) => void;
   /** Suppresses day separators and the thread affordance. */
   inThread?: boolean;
   /** A permalink landing (/chat/<channel>?m=<id>): scroll that row into view and
@@ -116,6 +120,8 @@ export const ChatMessageList = memo(function ChatMessageList({
   onDelete,
   onRetryAgent,
   onRetrySend,
+  slackOutbound,
+  onShareToSlack,
   inThread,
   targetMessageId,
 }: ChatMessageListProps) {
@@ -319,6 +325,8 @@ export const ChatMessageList = memo(function ChatMessageList({
                     onDelete={onDelete}
                     onRetryAgent={onRetryAgent}
                     onRetrySend={onRetrySend}
+                    slackOutbound={slackOutbound}
+                    onShareToSlack={onShareToSlack}
                   />
                 )}
               </div>

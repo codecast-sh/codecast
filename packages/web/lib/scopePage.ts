@@ -6,6 +6,17 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { isNonTabRoute } from "./tabRoutes";
 import { ORG_STATE_META } from "../components/org/orgMeta";
 import type { FeedKind } from "../components/org/scope/scopeTypes";
+import type { OrgRole, OrgTree } from "../components/org/orgTypes";
+
+/** Who may reshape a role: an admin of the workspace (every personal
+ *  workspace is its owner's), or the role's host. The same rule gates the
+ *  scope page's header and settings and the wake card's pause control. */
+export function canEditRole(tree: OrgTree | null, role: OrgRole | null | undefined, meId: string | null | undefined): boolean {
+  if (!tree || !role) return false;
+  const me = tree.people.find((p) => p.is_me) ?? (meId ? tree.people.find((p) => p.user_id === meId) : undefined);
+  const isAdmin = me?.role === "admin" || me?.role === "owner" || tree.workspace.kind === "user";
+  return isAdmin || role.host_user_id === (me?.user_id ?? meId);
+}
 
 /** A standing agent is never "done": between wakes it stands by. The chip
  *  and the stripe say so in role words; the colour is the one work state

@@ -15,7 +15,10 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
+import { GateRunChip } from "./DecisionCompactCard";
+import { OptionPages } from "./OptionPages";
 import { ladderRecommendation } from "../../lib/decisionLinks";
+import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import "./decisions.css";
 
@@ -59,6 +62,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const meId = String(s.currentUser?._id ?? "");
   const answerDecision = useInboxStore((st) => st.answerDecision);
   const reopenDecision = useInboxStore((st) => st.reopenDecision);
+  const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
   const grant = useMutation(api.sessionDecisions.grant);
   const now = useCoarseNow(30_000);
   const pending = decision.status === "pending";
@@ -123,12 +127,22 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             </span>
             <span>asked {formatTimeAgo(decision.created_at, now)}</span>
             {decision.resolved_at && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
+            {/* A gate on the line (the-line.md L4): the run this question pauses. */}
+            {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
           </div>
           <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
           <dl className="mt-4 decision-meta text-[12px]">
             <dt>asked by</dt>
             <dd>
-              <Link href={`/conversation/${decision.conversation_id}`} className="text-sol-blue hover:underline">{session?.title || decision.session_title || "the session"}</Link>
+              <Link
+                href={`/conversation/${decision.conversation_id}`}
+                className="text-sol-blue hover:underline"
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                  e.preventDefault();
+                  void jumpToAsk();
+                }}
+              >{session?.title || decision.session_title || "See the conversation"}</Link>
               {(session?.project_path || decision.project_path) && <span className="text-sol-text-dim"> · {getProjectName(session?.project_path || decision.project_path!)}</span>}
             </dd>
             {(detail.task || decision.task_id) && (
@@ -185,6 +199,16 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* ── Options ── */}
         <section className="mt-8">
           <h2 className="decision-kicker">Options{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
+          {/* Option pages (L6) compare side by side above the list; a card's
+              number answers on a single kind, where one option is the answer. */}
+          <div className="mt-3 empty:hidden">
+            <OptionPages
+              decision={decision}
+              answerable={pending && answerable && (decision.kind ?? "single") === "single"}
+              onAnswer={(index) => onAnswer({ index })}
+              chosen={chosen}
+            />
+          </div>
           <ol className="mt-3 space-y-3">
             {decision.options.map((o, i) => {
               const picked = chosen.has(i);

@@ -141,11 +141,16 @@ export function useAppConnection(
           `Couldn't start the ${descriptor.name} connection`,
         );
       } else {
-        // Slack's "Add to Slack": the popup lands back on /anchor authenticated.
-        // The install binds to an anchor of the same scope, so a personal
-        // connection needs a personal anchor first — the server says so.
+        // Slack's "Add to Slack": the popup lands on /slack/connect
+        // authenticated and comes back here. A team install binds to the team
+        // (admins only); a personal one needs a personal anchor first — the
+        // server says so.
         await openMinted(
-          () => getSlackUrl({ scope_type: scope === "team" ? "team" : "user" }),
+          () => getSlackUrl({
+            scope_type: scope === "team" ? "team" : "user",
+            return_to: "/settings/integrations",
+            origin: window.location.origin,
+          } as any),
           "Couldn't start the Slack connection",
         );
       }

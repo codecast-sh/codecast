@@ -204,3 +204,47 @@ describe("date mention pills (@[label date:iso])", () => {
     expect(html).not.toContain("Mon,");
   });
 });
+
+describe("authored conversation message deep links", () => {
+  const CONV = "jx84qtvpbmmrmwcjqmhzawejsx8bq9gm";
+  const MSG = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
+  const href = `https://codecast.sh/conversation/${CONV}#msg-${MSG}`;
+
+  test("custom link text stays the words and keeps the message hash", () => {
+    const html = render(`[See the conversation](${href})`);
+    expect(html).toContain("See the conversation");
+    expect(html).toContain(`href="/conversation/${CONV}#msg-${MSG}"`);
+    // Not a session pill — those drop the hash and open the conversation, not the message.
+    expect(html).not.toContain("entity-ref");
+  });
+
+  test("clicking the link on a thread jumps to the message", async () => {
+    const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: `https://codecast.test/inbox?s=${CONV}` });
+    const restore = replaceGlobals({
+      window: Object.assign(dom.window, { innerWidth: 1400 }),
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    const { pendingNavigateId, pendingScrollToMessageId } = useInboxStore.getState();
+    const container = dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    try {
+      await act(() => root.render(
+        <MemoryRouter>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS}>
+            {`[See the conversation](${href})`}
+          </ReactMarkdown>
+        </MemoryRouter>,
+      ));
+      await act(() => container.querySelector<HTMLAnchorElement>("a")!.click());
+      const s = useInboxStore.getState();
+      expect(s.pendingNavigateId).toBe(CONV);
+      expect(s.pendingScrollToMessageId).toBe(MSG);
+    } finally {
+      await act(() => root.unmount());
+      useInboxStore.setState({ pendingNavigateId, pendingScrollToMessageId });
+      restore();
+      dom.window.close();
+    }
+  }, 15_000);
+});

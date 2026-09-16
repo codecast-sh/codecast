@@ -90,7 +90,10 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 // (/r/<owner>/<name>/…: code links pasted into chat, guest readable, meant to
 // stay in the browser like a GitHub link), the in-app palette popup, downloads,
 // and API routes.
-const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/a\//, /^\/r(\/|$)/, /^\/palette/, /^\/download/, /^\/api\//];
+// The community rooms (/community) are a public page too: a link from the
+// marketing site or a search result opens them in the browser, whether or not
+// the reader owns the desktop app.
+const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/a\//, /^\/r(\/|$)/, /^\/community(\/|$)/, /^\/palette/, /^\/download/, /^\/api\//];
 
 export function isHandoffEligiblePath(path: string): boolean {
   if (!path) return false;

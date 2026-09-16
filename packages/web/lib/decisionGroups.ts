@@ -26,12 +26,42 @@ function oldestFirst(a: SessionDecisionItem, b: SessionDecisionItem): number {
   return Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at;
 }
 
+// A stack's due (the-line.md L10): the policy's due_at against now. Overdue
+// is red on the group header and sorts the stack first; open stacks with no
+// due keep the server's order.
+export type StackDue = { text: string; overdue: boolean; at: number };
+
+export function stackDue(policy: Pick<DecisionStackItem["policy"], "due_at"> | undefined, now: number): StackDue | null {
+  const at = policy?.due_at;
+  if (!at) return null;
+  const diff = Math.abs(at - now);
+  const minutes = Math.floor(diff / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const span = minutes < 1 ? "now" : minutes < 60 ? `${minutes}m` : hours < 48 ? `${hours}h` : `${days}d`;
+  if (at <= now) return { text: span === "now" ? "due now" : `overdue ${span}`, overdue: true, at };
+  return { text: `due in ${span}`, overdue: false, at };
+}
+
+// Overdue stacks first (the longest overdue first), then the rest in the
+// order given (the server's: open first, newest first).
+export function sortStacksByDue<T extends { policy: DecisionStackItem["policy"] }>(stacks: T[], now: number): T[] {
+  const overdue = (s: T) => stackDue(s.policy, now)?.overdue ?? false;
+  return [...stacks].sort((a, b) => {
+    const oa = overdue(a), ob = overdue(b);
+    if (oa !== ob) return oa ? -1 : 1;
+    if (oa && ob) return (a.policy.due_at ?? 0) - (b.policy.due_at ?? 0);
+    return 0;
+  });
+}
+
 export function groupDecisions(
   pending: SessionDecisionItem[],
   stacks: Record<string, DecisionStackItem> | DecisionStackItem[],
+  now: number = Date.now(),
 ): DecisionGroup[] {
   const stackById = new Map<string, DecisionStackItem>();
-  for (const s of Array.isArray(stacks) ? stacks : Object.values(stacks)) stackById.set(s._id, s);
+  for (const s of sortStacksByDue(Array.isArray(stacks) ? stacks : Object.values(stacks), now)) stackById.set(s._id, s);
 
   const inStack = new Map<string, SessionDecisionItem[]>();
   const byRole = new Map<string, SessionDecisionItem[]>();
@@ -49,8 +79,8 @@ export function groupDecisions(
   }
 
   const out: DecisionGroup[] = [];
-  // Stacks in the order the server lists them (open first, newest first);
-  // members in the stack's own order, unknown members last by age.
+  // Overdue stacks first, then the order the server lists them (open first,
+  // newest first); members in the stack's own order, unknown members last by age.
   for (const stack of stackById.values()) {
     const items = inStack.get(stack._id);
     if (!items?.length) continue;

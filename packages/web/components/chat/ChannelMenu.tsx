@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Archive, Bell, Pencil, Text } from "lucide-react";
+import { SlackLogo } from "../SlackLogo";
+import { SlackSyncDialog, slackLinkForChannel } from "./SlackSyncDialog";
 import {
   ContextMenu,
   CtxCheckItem,
@@ -49,6 +51,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
     x: number;
     y: number;
   } | null>(null);
+  const [slackFor, setSlackFor] = useState<string | null>(null);
 
   return (
     <>
@@ -61,6 +64,10 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
           // in it, so the menu offers exactly what remains — how loudly it may
           // interrupt. The header wears the same live-derived name as the rail.
           const isDm = channel.kind === "dm";
+          // A mirrored channel takes its name from Slack (the server refuses
+          // a rename), so the menu does not offer one; the Slack item is
+          // where the name is explained.
+          const slackLink = slackLinkForChannel(s.chatSlackLinks as any, p.channelId);
           const title = isDm
             ? channelDisplayName(
                 { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, (s as any).currentUser?._id ?? "") },
@@ -82,7 +89,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
                 </CtxCheckItem>
               ))}
               {!isDm && <CtxSeparator />}
-              {!isDm && <CtxItem
+              {!isDm && !slackLink && <CtxItem
                 icon={Pencil}
                 onSelect={(e: Event) => {
                   // The menu closes; the editor opens at the same anchor.
@@ -103,6 +110,16 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
               >
                 {channel.topic ? "Edit topic" : "Set topic"}
               </CtxItem>}
+              {!isDm && channel.kind !== "community" && <CtxItem
+                icon={SlackLogo as any}
+                onSelect={(e: Event) => {
+                  e.preventDefault();
+                  state.close();
+                  setSlackFor(p.channelId);
+                }}
+              >
+                {slackLink ? "Slack mirror settings" : "Mirror with Slack…"}
+              </CtxItem>}
               {!isDm && <CtxSeparator />}
               {!isDm && <CtxItem
                 icon={Archive}
@@ -119,6 +136,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
         }}
       </ContextMenu>
       {editor && <ChannelFieldEditor {...editor} onClose={() => setEditor(null)} />}
+      {slackFor && <SlackSyncDialog channelId={slackFor} onClose={() => setSlackFor(null)} />}
     </>
   );
 }

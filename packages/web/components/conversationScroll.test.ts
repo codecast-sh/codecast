@@ -1,5 +1,7 @@
 import { test, expect, describe } from "bun:test";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize } from "./conversationScroll";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
 
 describe("shouldFollowStreaming", () => {
   test("follows normally before the user scrolls away", () => {
@@ -8,6 +10,26 @@ describe("shouldFollowStreaming", () => {
 
   test("never follows new chunks after the user scrolls away", () => {
     expect(shouldFollowStreaming(true)).toBe(false);
+  });
+
+  test("unsigned share-link visitors never follow the tail on open", () => {
+    expect(shouldFollowStreaming(false, true)).toBe(false);
+    expect(shouldFollowStreaming(true, true)).toBe(false);
+  });
+});
+
+describe("initialScrollEdge", () => {
+  test("signed-in viewers open at the live tail", () => {
+    expect(initialScrollEdge({ guest: false, hasExplicitTarget: false })).toBe("bottom");
+  });
+
+  test("unsigned share-link visitors open at the top", () => {
+    expect(initialScrollEdge({ guest: true, hasExplicitTarget: false })).toBe("top");
+  });
+
+  test("a message hash or highlight keeps ownership of the landing spot", () => {
+    expect(initialScrollEdge({ guest: true, hasExplicitTarget: true })).toBe(null);
+    expect(initialScrollEdge({ guest: false, hasExplicitTarget: true })).toBe(null);
   });
 });
 
@@ -182,5 +204,65 @@ describe("shouldAdjustScrollForResize", () => {
 
   test("a held row (in-row disclosure just toggled) leaves scrollTop alone even above the viewport", () => {
     expect(shouldAdjustScrollForResize({ ...above, held: true })).toBe(false);
+  });
+});
+
+describe("jumpRowForMessage", () => {
+  const aggregates = {
+    absorbed: new Set(["absorbed"]),
+    receiptOf: new Map([
+      ["owner", [{ messageId: "owner" }, { messageId: "absorbed" }]],
+    ]),
+    turnKeyOf: new Map([
+      ["absorbed", "turn-1"],
+      ["owner", "turn-1"],
+      ["other", "turn-2"],
+    ]),
+  };
+
+  test("full density scrolls the message itself", () => {
+    expect(jumpRowForMessage("absorbed", "full", aggregates)).toEqual({ scrollToId: "absorbed", expandKey: null });
+  });
+
+  test("condensed expands the owner receipt and scrolls the owner", () => {
+    expect(jumpRowForMessage("absorbed", "condensed", aggregates)).toEqual({ scrollToId: "owner", expandKey: "owner" });
+  });
+
+  test("condensed on the owner itself still opens its receipt", () => {
+    expect(jumpRowForMessage("owner", "condensed", aggregates)).toEqual({ scrollToId: "owner", expandKey: "owner" });
+  });
+
+  test("compact opens the turn containing the message", () => {
+    expect(jumpRowForMessage("absorbed", "compact", aggregates)).toEqual({ scrollToId: "absorbed", expandKey: "turn-1" });
+  });
+
+  test("a folded nudge jumps to the run head in every density", () => {
+    const withNudges = {
+      ...aggregates,
+      nudgeHeadOf: new Map([
+        ["head", "head"],
+        ["later", "head"],
+      ]),
+    };
+    expect(jumpRowForMessage("later", "full", withNudges)).toEqual({ scrollToId: "head", expandKey: null });
+    expect(jumpRowForMessage("later", "condensed", withNudges)).toEqual({ scrollToId: "head", expandKey: null });
+    expect(jumpRowForMessage("head", "full", withNudges)).toEqual({ scrollToId: "head", expandKey: null });
+  });
+});
+
+describe("unsigned share-link wiring", () => {
+  const view = readFileSync(join(import.meta.dir, "ConversationView.tsx"), "utf8");
+  const page = readFileSync(join(import.meta.dir, "../app/conversation/[id]/ConversationPageClient.tsx"), "utf8");
+
+  test("ConversationView asks initialScrollEdge and holds guests at the top", () => {
+    expect(view).toContain("initialScrollEdge");
+    expect(view).toContain("guestStayAtTop");
+    expect(view).toContain("shouldFollowStreaming(userScrolled, guestStayAtTop)");
+  });
+
+  test("the unauthenticated share path marks the view as guest", () => {
+    const guestView = page.slice(page.indexOf("function GuestConversationView"), page.indexOf("function ConversationLoadingSkeleton"));
+    expect(guestView).toMatch(/^\s*guest$/m);
+    expect(page).toContain("if (!treatAsAuthed)");
   });
 });

@@ -6,7 +6,7 @@ import { FilterDropdown } from "../FilterDropdown";
 import { SegmentedToggle, type SegmentedItem } from "../SegmentedToggle";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useShortcutAction, useShortcutContext } from "../../shortcuts";
-import { useTabContext } from "../../lib/tabParams";
+import { useTabActive } from "../../hooks/usePagePresence";
 import {
   CapabilityCard,
   CAPABILITY_KINDS,
@@ -107,8 +107,7 @@ export function LibraryBrowse({
   // dispatcher walks handlers until one returns true — so an invisible grid that
   // answered `j` would steal the key from the list the user is actually looking
   // at. Returning false passes it on.
-  const tabCtx = useTabContext();
-  const visible = tabCtx ? tabCtx.isActive : true;
+  const visible = useTabActive();
   useShortcutContext("list", visible);
   useShortcutAction("list.search", () => {
     if (!visible) return false;

@@ -13,7 +13,13 @@ import type { ScopeRef } from "../../../hooks/useScopeQueries";
 import { ScopeFeed } from "./ScopeFeed";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
-import { useInboxStore, type DocItem, type PlanItem, type SessionDecisionItem, type TaskItem } from "../../../store/inboxStore";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore, type DecisionStackItem, type DocItem, type PlanItem, type SessionDecisionItem, type TaskItem } from "../../../store/inboxStore";
+import { useCollectionRows } from "../../../hooks/useCollectionRows";
+import { useSyncDecisionStacks } from "../../../hooks/useSyncDecisionStacks";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { StackChecklist } from "../../decisions/StackChecklist";
+import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
 import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { DocumentDetailLayout } from "../../DocumentDetailLayout";
@@ -24,6 +30,8 @@ import { ORG_TOP_N, sortOrgSessions, type OrgRole, type OrgSession, type OrgTree
 import type { BriefFacts } from "./scopeTypes";
 import { inScope, useScopeIds, type ScopeIds } from "../../../hooks/useScopeIds";
 import { decisionHref } from "../../../lib/decisionLinks";
+
+const api = _api as any;
 
 export function Empty({ title, hint }: { title: string; hint?: string }) {
   return (
@@ -180,20 +188,37 @@ export function ScopeSessionsTab({ tree, role, scope }: { tree: OrgTree; role: O
 
 const DECISION_TONE: Record<string, string> = { pending: "var(--sol-yellow)", answered: "var(--sol-cyan)", dismissed: "var(--sol-text-dim)", withdrawn: "var(--sol-text-dim)" };
 
-export function ScopeDecisionsTab({ ids }: { ids: ScopeIds }) {
+const stackSig = (st: DecisionStackItem) => `${st.status}|${st.title}|${st.decision_ids.join(",")}|${(st as any).policy?.due_at ?? ""}`;
+
+/** Stacks that hold at least one decision bound to a task in scope (the-line.md L10). */
+export function stacksInScope(stacks: DecisionStackItem[], decisionIds: Set<string>): DecisionStackItem[] {
+  return stacks.filter((st) => st.status === "open" && st.decision_ids.some((id) => decisionIds.has(id)));
+}
+
+export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: string | null }) {
   const tasks = useWorkspaceCollection<TaskItem>("tasks");
   const decisions = useInboxStore((s) => s.sessionDecisions);
   const now = useCoarseNow(30_000);
-  const { open, answered } = useMemo(() => {
+  // Stacks (D5) paint from the store; the feeder is the same one the queue
+  // mounts. The role's ladder rows are a per view enrichment: pending
+  // decisions the role sits on the ladder of, read once for this tab.
+  useSyncDecisionStacks();
+  const stackRows = useCollectionRows<DecisionStackItem>("decisionStacks", { sig: stackSig });
+  const { data: ladderRows } = useQueryNoThrow(api.sessionDecisions.listForRole, roleId ? { role_id: roleId } : "skip");
+  const { open, answered, stacks, ladder } = useMemo(() => {
     const taskIds = new Set(tasks.filter((t) => inScope(ids, t as any)).map((t) => t._id));
     const rows = (Object.values(decisions) as Array<SessionDecisionItem & { short_id?: string; task_id?: string }>)
       .filter((d) => d.task_id && taskIds.has(d.task_id));
-    const open = rows.filter((d) => d.status === "pending").sort((a, b) => b.created_at - a.created_at);
+    const stacks = stacksInScope(stackRows, new Set(rows.map((d) => d._id)));
+    const stacked = new Set(stacks.flatMap((st) => st.decision_ids));
+    const ladder = ((ladderRows ?? []) as SessionDecisionItem[]).filter((d) => d.status === "pending" && !stacked.has(d._id)).sort((a, b) => b.created_at - a.created_at);
+    const shown = new Set([...stacked, ...ladder.map((d) => d._id)]);
+    const open = rows.filter((d) => d.status === "pending" && !shown.has(d._id)).sort((a, b) => b.created_at - a.created_at);
     const answered = rows.filter((d) => d.status !== "pending").sort((a, b) => (b.resolved_at ?? b.created_at) - (a.resolved_at ?? a.created_at));
-    return { open, answered };
-  }, [tasks, decisions, ids]);
+    return { open, answered, stacks, ladder };
+  }, [tasks, decisions, ids, stackRows, ladderRows]);
   const taskById = useMemo(() => new Map(tasks.map((t) => [t._id, t])), [tasks]);
-  if (open.length === 0 && answered.length === 0) return <Empty title="No decisions on tasks in this scope." hint="A cast decide raised from a session bound to a task in scope shows here, open first." />;
+  if (open.length === 0 && answered.length === 0 && stacks.length === 0 && ladder.length === 0) return <Empty title="No decisions on tasks in this scope." hint="A cast decide raised from a session bound to a task in scope shows here, open first." />;
   const Row = ({ d }: { d: SessionDecisionItem & { short_id?: string; task_id?: string } }) => {
     const tone = DECISION_TONE[d.status] ?? "var(--sol-text-dim)";
     const task = d.task_id ? taskById.get(d.task_id) : undefined;
@@ -220,6 +245,18 @@ export function ScopeDecisionsTab({ ids }: { ids: ScopeIds }) {
   };
   return (
     <div className="space-y-5">
+      {stacks.length > 0 && (
+        <section data-scope-stacks>
+          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Stacks · {stacks.length}</h3>
+          <div className="space-y-3">{stacks.map((st) => <StackChecklist key={st._id} stack={st} />)}</div>
+        </section>
+      )}
+      {ladder.length > 0 && (
+        <section data-scope-ladder>
+          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>On this role's ladder · {ladder.length}</h3>
+          <div className="space-y-2">{ladder.map((d) => <DecisionCompactCard key={d._id} decision={d} />)}</div>
+        </section>
+      )}
       <section>
         <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Open · {open.length}</h3>
         {open.length === 0 ? <p className="px-2.5 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Nothing waiting on a person.</p> : <ul className="space-y-1">{open.map((d) => <Row key={d._id} d={d} />)}</ul>}

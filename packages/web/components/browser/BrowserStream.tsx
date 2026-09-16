@@ -15,14 +15,22 @@
 // agent's Chrome real encoding work, so a pane in a background tab, or a
 // window the reader minimized, keeps its last frame dimmed and dials again
 // when it comes back.
+//
+// Over the frame sits the agent's cursor (GhostCursor): the pixels never
+// show where Chrome dispatched the last click, so the daemon sends each
+// action beside the frames and the arrow glides there, rings on a press and
+// captions what is typed. It hides while the human has the wheel: one hand on
+// the page at a time, and the human's is the real pointer.
 
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { deviceDisplayName } from "../DeviceBadge";
+import { KeyCap } from "../KeyboardShortcutsHelp";
 import type { SessionMachine } from "../tmuxAttach";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import {
   connectBrowserWatch,
+  mapFromFrame,
   mapToFrame,
   watchErrorStatus,
   watchExitStatus,
@@ -33,6 +41,8 @@ import {
   type WatchStatus,
   type WatchTabInfo,
 } from "../../lib/browserWatch";
+import { createGhostStore, ghostView, type GhostStore } from "../../lib/browserGhost";
+import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
@@ -76,8 +86,18 @@ export function BrowserStream({
   const [tab, setTab] = useState<WatchTabInfo | null>(null);
   const [frame, setFrame] = useState<string | null>(null);
   const [controlAvailable, setControlAvailable] = useState(false);
+  // The frame's own pixel size, from the daemon: the overlay scales the
+  // agent's normalized points into the letterboxed content rect with it.
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
+  const [nav, setNav] = useState<{ url: string; at: number } | null>(null);
   const connRef = useRef<WatchConnection | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  // One cursor memory per stream. Actions from the socket go straight in and
+  // only the overlay listens, so a burst of moves never re-renders the stream.
+  const ghostRef = useRef<GhostStore | null>(null);
+  if (!ghostRef.current) ghostRef.current = createGhostStore();
+  const ghost = ghostRef.current;
 
   const machineName = machine ? deviceDisplayName(machine as any) : null;
   const foreign = !!machine && !machine.is_mine;
@@ -116,15 +136,33 @@ export function BrowserStream({
         {
           onReady(t, granted) {
             if (cancelled) return;
+            // A new stream starts with no cursor memory: the daemon replays
+            // the tab's recent actions right after ready, so a cursor that
+            // is still current comes straight back, and a stale one from a
+            // tab this session left does not.
+            ghost.reset();
             setTab(t);
             setControlAvailable(granted);
             setStatus({ kind: "live" });
           },
-          onFrame(dataUrl) {
-            if (!cancelled) setFrame(dataUrl);
+          onFrame(dataUrl, w, h) {
+            if (cancelled) return;
+            setFrame(dataUrl);
+            if (w && h) setFrameSize((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
           },
           onTab(t) {
             if (!cancelled) setTab(t);
+          },
+          onAction(a) {
+            if (cancelled) return;
+            ghost.push(a);
+            if (a.kind === "nav" && a.url) {
+              // The address changes the moment the page does, not on the
+              // daemon's next tab poll; the host flashes it keyed on `at`.
+              const url = a.url;
+              setTab((t) => (t && t.url !== url ? { ...t, url } : t));
+              setNav({ url, at: a.at });
+            }
           },
           onError(code, message) {
             if (!cancelled) setStatus(watchErrorStatus(code, message));
@@ -143,6 +181,7 @@ export function BrowserStream({
     };
   }, [
     convex,
+    ghost,
     sessionUuid,
     tmuxSession,
     machineSettled,
@@ -164,15 +203,15 @@ export function BrowserStream({
   // "still a picture" would be the churn this app has a rule against.
   const hasFrame = !!frame;
   useWatchEffect(() => {
-    onState({ status, tab, controlAvailable, hasFrame });
-  }, [status, tab, controlAvailable, hasFrame, onState]);
+    onState({ status, tab, controlAvailable, hasFrame, nav });
+  }, [status, tab, controlAvailable, hasFrame, nav, onState]);
 
   const live = status.kind === "live";
   const driving = live && control && controlAvailable;
   const paused = status.kind === "paused";
 
   return (
-    <div className="absolute inset-0">
+    <div ref={boxRef} className="absolute inset-0">
       {frame && (
         <img
           ref={imgRef}
@@ -184,14 +223,121 @@ export function BrowserStream({
           draggable={false}
         />
       )}
+      {frame && (
+        <GhostCursor store={ghost} boxRef={boxRef} imgRef={imgRef} frameSize={frameSize} hidden={driving} />
+      )}
       {driving && (
         <ControlSurface imgRef={imgRef} connRef={connRef} onRelease={onReleaseControl} />
+      )}
+      {driving && (
+        <span
+          data-sv-driving-hint
+          className="absolute bottom-2 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sol-bg/90 border border-sol-cyan/40 text-[10px] font-mono text-sol-text-muted whitespace-nowrap pointer-events-none"
+        >
+          <span className="text-sol-cyan">You have the wheel.</span>
+          <span className="truncate">The agent keeps its session; nothing you do here is sent to it.</span>
+          <KeyCap size="xs">Esc</KeyCap>
+          <span>hands back</span>
+        </span>
       )}
       {paused && frame && (
         <span className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-sol-bg/80 border border-sol-border/40 text-[10px] font-mono tracking-wider text-sol-text-dim">
           paused
         </span>
       )}
+    </div>
+  );
+}
+
+// ── The agent's cursor ───────────────────────────────────────────────────────
+// An arrow in the agent's color (violet, the palette's default for an agent;
+// the human's own control surface is cyan) that glides to each action point,
+// rings on a press and captions what is typed, then fades once the agent has
+// been still for a few seconds. Never takes a pointer event: it is a drawing
+// over the frame, not a surface. The 160ms glide and the ring are the same
+// motion as the extension's in page arrow (background.js __castPointer), so
+// the cursor looks the same whether seen in the tab or in the stream.
+//
+// Geometry: the frame renders object-contain, so the content rect is the
+// frame's aspect fit inside this box; mapFromFrame (unit-tested) is the
+// inverse of the control surface's mapToFrame, so the arrow lands where a
+// click sent from the same spot would.
+
+const GHOST_TRANSITION = "transform 160ms cubic-bezier(.2,.7,.2,1), opacity 300ms ease";
+
+function GhostCursor({
+  store,
+  boxRef,
+  imgRef,
+  frameSize,
+  hidden,
+}: {
+  store: GhostStore;
+  boxRef: React.RefObject<HTMLDivElement | null>;
+  imgRef: React.RefObject<HTMLImageElement | null>;
+  /** The frame's pixel size as the daemon reported it; the <img>'s natural
+   *  size stands in when a polling engine sent none. */
+  frameSize: { width: number; height: number } | null;
+  /** The human has the wheel: the arrow hides and keeps its place, so it
+   *  returns where it was when the agent is back. A stream that stopped being
+   *  live is not hidden here: with no actions arriving the arrow freezes where
+   *  it was and fades on the idle window, like an agent that went still. */
+  hidden: boolean;
+}) {
+  const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  // A fade is a question of time, not of a new action: wake exactly when the
+  // view says something changes, and not otherwise.
+  const [, wake] = useReducer((n: number) => n + 1, 0);
+  const view = ghostView(state, Date.now());
+  useWatchEffect(() => {
+    if (view.nextChangeAt === null) return;
+    const t = setTimeout(wake, Math.max(0, view.nextChangeAt - Date.now()) + 16);
+    return () => clearTimeout(t);
+  }, [view.nextChangeAt]);
+  // The box only re-renders this overlay when its rounded size changes.
+  const boxSig = useDerivedSize(boxRef, (w, h) => `${Math.round(w)}x${Math.round(h)}`, () => "0x0");
+  const [boxW, boxH] = boxSig.split("x").map(Number);
+
+  const natural = frameSize ?? (imgRef.current ? { width: imgRef.current.naturalWidth, height: imgRef.current.naturalHeight } : null);
+  const point = state.point && natural ? mapFromFrame(state.point.x, state.point.y, { left: 0, top: 0, width: boxW, height: boxH }, natural) : null;
+  if (!point) return null;
+  const visible = view.visible && !hidden;
+  const captionText = state.caption?.text ?? null;
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+      <div
+        data-sv-ghost-cursor
+        data-visible={visible ? "true" : "false"}
+        className="absolute left-0 top-0 w-7 h-9 will-change-transform"
+        style={{ transform: `translate(${point.x}px, ${point.y}px)`, opacity: visible ? 1 : 0, transition: GHOST_TRANSITION }}
+      >
+        {view.ripple !== null && (
+          <span
+            key={view.ripple}
+            data-sv-ghost-ripple
+            className="absolute -left-[14px] -top-[14px] w-9 h-9 rounded-full border-2 border-sol-violet cc-ghost-ripple"
+          />
+        )}
+        <svg width="28" height="36" viewBox="0 0 28 36" className="absolute left-0 top-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.35)]">
+          <path
+            d="M3 2 L3 27 L9 21 L13 31 L17 29 L13 20 L22 20 Z"
+            fill="var(--sol-violet)"
+            stroke="var(--sol-card)"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+        </svg>
+        {captionText !== null && (
+          <span
+            data-sv-ghost-caption
+            className="absolute left-6 top-7 max-w-[240px] truncate px-1.5 py-0.5 rounded bg-sol-bg/90 border border-sol-violet/40 text-[10px] font-mono text-sol-text whitespace-nowrap"
+            style={{ opacity: view.caption !== null ? 1 : 0, transition: "opacity 300ms ease" }}
+          >
+            {captionText}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -331,8 +477,9 @@ function ControlSurface({
       ref={surfaceRef}
       tabIndex={0}
       role="application"
-      aria-label="Controlling the agent's browser tab — clicks and typing go to the page, Esc hands it back"
-      className="absolute inset-0 cursor-crosshair outline-none ring-1 ring-inset ring-sol-cyan/50 focus:ring-sol-cyan"
+      aria-label="You have the wheel of the agent's browser tab: clicks and typing go to the page, Esc hands it back"
+      className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-sol-cyan/60 focus:ring-sol-cyan"
+      style={{ boxShadow: "inset 0 0 28px color-mix(in srgb, var(--sol-cyan) 18%, transparent)" }}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerMove={onPointerMove}

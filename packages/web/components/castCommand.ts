@@ -474,6 +474,15 @@ export function normalizeCastCategory(category: string): string {
   return CAST_CATEGORY_ALIASES[category] || category;
 }
 
+// `cast decide` (not `ls`) is the authored twin of AskUserQuestion: the
+// human needs to see the card in a condensed feed, not a "ran 1 command"
+// receipt they have to open.
+export function isDecideCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
+  if (!cast) return false;
+  if (normalizeCastCategory(cast.category) !== "decide") return false;
+  return extractDecideArgs(cast.subcommand, cast.args).verb !== "ls";
+}
+
 export interface CastBodyPart {
   label?: string;
   text: string;
@@ -534,8 +543,15 @@ export function extractCastBodyParts(
 // the command the row describes is still cast (agents lean on this constantly,
 // e.g. `CAST_BROWSER_LEGACY=1 cast browser …`). Strip the environment words so
 // the start-anchored `^cast` match below still sees the real command.
+//
+// The value alternatives must be mutually exclusive on their first character:
+// a quote is consumed only by its quoted alternative, never by the bare-word
+// one. With `\S` in the bare alternative every quote could be read two ways,
+// and a segment that fails to match (`T="'a','b',…"` alone, once the `;` split
+// leaves nothing after it) backtracked through 2^quotes combinations — a
+// 27-item SQL list froze the conversation view for good.
 export function stripEnvPrefix(cmd: string): string {
-  const assignment = String.raw`[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S)*`;
+  const assignment = String.raw`[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|[^\s'"])*`;
   const env = cmd.match(
     new RegExp(String.raw`^env(?:\s+-u\s+[A-Za-z_][A-Za-z0-9_]*|\s+--?[A-Za-z-]+|\s+${assignment})*\s+`),
   );

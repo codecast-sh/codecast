@@ -1,6 +1,13 @@
 "use client";
 
-// /chat — team chat.
+// /chat — team chat. /community — the same composition in community scope.
+//
+// SCOPE. The team scope shows the active workspace's rooms and needs a signed
+// in member. The community scope (app/community/page.tsx) shows the product's
+// public rooms (chat_channels.kind "community") to anyone: a visitor reads and
+// is offered a sign in where the composer would be; a signed in user of ANY
+// team posts. What is off in community scope is everything that presumes a
+// team: DMs, huddles, search, the org roles listening, channel creation.
 //
 // The page is a composition, not an implementation. The rail, the transcript,
 // the message row, the thread panel and the composer all already exist and are
@@ -37,6 +44,9 @@ const api = _chatApi as any;
 import { Headphones, Lock, BellOff, Bell, Bot, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
 import { toast } from "sonner";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
+import { linkSendsOutbound } from "@codecast/convex/convex/lib/slackMirror";
+import { SlackMirrorPill } from "../../components/chat/SlackMirrorPill";
+import { useChannelSlackLink } from "../../components/chat/SlackSyncDialog";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
 import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
@@ -46,7 +56,12 @@ import { useShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
 import { channelDisplayName } from "../../lib/chatViews";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
-import { useInboxStore, selectChannelReadMarker, selectNavCollapsed, type ChatNotifyLevel } from "../../store/inboxStore";
+import { useInboxStore, selectChannelReadMarker, selectNavCollapsed, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
+import Link from "next/link";
+import { useAuthGate } from "@platform/auth/web";
+import { useLocalAuth } from "../../lib/localAuth";
+import { isStandaloneCommunityPath } from "../../lib/desktop";
+import { Logo } from "../../components/Logo";
 import type { ChatAttachment } from "../../store/chatSlice";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import {
@@ -54,6 +69,7 @@ import {
   useChannelMessagesSync,
   useChatMembers,
   useChatRail,
+  useCommunityChannelsSync,
   useOpenDm,
   useEnsureChatMessage,
   useChatMessageRow,
@@ -95,13 +111,65 @@ function SearchPill({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-export default function ChatPage() {
+/** Where the composer would be, for a visitor: reading is open, posting needs
+ *  an account. The link comes back to this exact room. */
+function SignInToPost({ compact }: { compact?: boolean }) {
+  const here = typeof window === "undefined" ? "/community" : window.location.pathname + window.location.search;
+  const back = encodeURIComponent(here);
+  return (
+    <div className={`ch-guest-post${compact ? " ch-guest-post-compact" : ""}`}>
+      <span className="ch-guest-post-text">Anyone can read. Sign in to post.</span>
+      <Link href={`/login?return_to=${back}`} className="ch-empty-action">Sign in</Link>
+      <Link href={`/signup?return_to=${back}`} className="ch-guest-post-alt">Create an account</Link>
+    </div>
+  );
+}
+
+/** The community page's own chrome when it stands alone in a browser: who we
+ *  are, where this is, the way back to the site, and the door into the app. */
+function CommunityBar({ isGuest }: { isGuest: boolean }) {
+  const here = typeof window === "undefined" ? "/community" : window.location.pathname + window.location.search;
+  return (
+    <header className="ch-community-bar">
+      <a href="/" className="ch-community-brand" aria-label="Codecast home">
+        <Logo size="sm" className="[--logo-c:currentColor]" />
+      </a>
+      <span className="ch-community-where">
+        <span className="ch-community-slash" aria-hidden="true">/</span>
+        community
+      </span>
+      <nav className="ch-community-links" aria-label="Site">
+        <a href="/documentation">Docs</a>
+        <a href="/changelog">Changelog</a>
+        <a href="/support">Support</a>
+      </nav>
+      <span className="ch-community-spacer" />
+      {isGuest ? (
+        <Link href={`/login?return_to=${encodeURIComponent(here)}`} className="ch-community-cta">Sign in</Link>
+      ) : (
+        <Link href="/inbox" className="ch-community-cta">Open the app</Link>
+      )}
+    </header>
+  );
+}
+
+export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } = {}) {
   const params = useParams<{ channelId?: string }>();
   const search = useSearchParams();
   const router = useRouter();
   const now = useCoarseNow(CLOCK_MS);
+  const community = scope === "community";
+  const base = community ? "/community" : "/chat";
+  // A visitor on the community page: reads, never writes. Elsewhere the shell
+  // has already redirected a guest, so this is false.
+  const isGuest = useAuthGate(useLocalAuth) === "guest";
+  // In a plain browser the community page is a standalone page with its own
+  // header (the layout paints a bare frame from the same rule).
+  const standalone = community && (isGuest || isStandaloneCommunityPath(typeof window === "undefined" ? "" : window.location.pathname));
+  // The public rail's feeder is per view, mounted here and nowhere else.
+  const communityFeed = useCommunityChannelsSync(community);
 
-  const rail = useChatRail();
+  const rail = useChatRail(scope);
   const { members: teamMembers, viewerId, handles } = useChatMembers();
   // The org tree of the active workspace (the singleton the org page paints
   // from): the header's "listening: N roles" and the composer's @role rows
@@ -130,8 +198,8 @@ export default function ChatPage() {
   // rail. The server row carries the stub as its client_id, so it forwards.
   const supersededTo = useSupersededChannelId(urlChannelId);
   useWatchEffect(() => {
-    if (supersededTo) router.replace(`/chat/${supersededTo}`);
-  }, [supersededTo, router]);
+    if (supersededTo) router.replace(`${base}/${supersededTo}`);
+  }, [supersededTo, router, base]);
 
   const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const chatOn = useTeamFeature("chat");
@@ -152,7 +220,10 @@ export default function ChatPage() {
   // so the page's own rail appears only when that sidebar is out of the way —
   // collapsed, zen mode, or a phone-width viewport. Collapsing the sidebar IS
   // the "just Slack" switch; no separate preference to remember.
-  const showInlineRail = navCollapsed || zenMode || narrowViewport;
+  // The app sidebar lists the WORKSPACE's rooms, never the public ones, so
+  // the community page always carries its own rail (and a visitor has no
+  // sidebar at all).
+  const showInlineRail = community || navCollapsed || zenMode || narrowViewport;
   // Switching workspace writes BOTH the local mirror and the canonical
   // users.active_team_id (hooks/useSwitchWorkspace) — one path for every caller.
   const switchWorkspace = useSwitchWorkspace();
@@ -163,7 +234,9 @@ export default function ChatPage() {
   // object fails Object.is on every store notification and re-renders the
   // whole page on writes that have nothing to do with chat.
   const outOfScopeRow = useInboxStore((s) => {
-    if (!urlChannelId) return null;
+    // A community room is routed to the team that manages it, which is not
+    // the viewer's workspace and need not be: no interstitial.
+    if (!urlChannelId || community) return null;
     const row = s.chatChannels[urlChannelId];
     if (!row?.team_id) return null;
     if (activeWorkspaceTeam && String(row.team_id) === String(activeWorkspaceTeam)) return null;
@@ -297,9 +370,9 @@ export default function ChatPage() {
   // ── Actions ───────────────────────────────────────────────────────────────
   const selectChannel = useCallback(
     (channelId: string) => {
-      router.push(`/chat/${channelId}`);
+      router.push(`${base}/${channelId}`);
     },
-    [router],
+    [router, base],
   );
 
   // What a send woke (agent-channels.md C2): the server answers with
@@ -318,9 +391,13 @@ export default function ChatPage() {
   );
 
   const send = useCallback(
-    (content: string, attachments?: ChatAttachment[]) => {
+    (content: string, attachments?: ChatAttachment[], opts?: { syncLocalOnly?: boolean }) => {
       if (!activeChannelId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content, { attachments, onSent: onSent(content) });
+      useInboxStore.getState().sendChatMessage(activeChannelId, content, {
+        attachments,
+        syncLocalOnly: opts?.syncLocalOnly,
+        onSent: onSent(content),
+      });
     },
     [activeChannelId, onSent],
   );
@@ -339,7 +416,8 @@ export default function ChatPage() {
   );
 
   const markRead = useCallback(() => {
-    if (!activeChannelId || !present) return;
+    // A visitor has no read mark to advance (and no identity to write one).
+    if (!activeChannelId || !present || isGuest) return;
     // The newest message in the ROOM, replies included — not the newest row on
     // screen. The transcript shows roots only, while the rail's unread tally
     // counts every row in the channel, so a marker taken from the last root can
@@ -347,7 +425,7 @@ export default function ChatPage() {
     const state = useInboxStore.getState();
     const marker = selectChannelReadMarker(state as any, activeChannelId);
     state.markChannelRead(activeChannelId, marker?._id);
-  }, [activeChannelId, present]);
+  }, [activeChannelId, present, isGuest]);
 
   const react = useCallback((messageId: string, emoji: string) => {
     useInboxStore.getState().toggleChatReaction(messageId, emoji);
@@ -360,6 +438,15 @@ export default function ChatPage() {
   const deleteMessage = useCallback((messageId: string) => {
     useInboxStore.getState().deleteChatMessage(messageId);
   }, []);
+
+  const shareToSlack = useCallback((messageId: string) => {
+    useInboxStore.getState().shareChatMessageToSlack(messageId);
+  }, []);
+
+  // The channel's Slack mirror, if any: the header pill, the per-line marks
+  // and the composer's keep-local switch all read this one row.
+  const slackLink = useChannelSlackLink(activeChannelId);
+  const slackOutbound = !!slackLink && linkSendsOutbound(slackLink);
 
   const retrySend = useCallback((messageId: string) => {
     useInboxStore.getState().retryChatSend(messageId);
@@ -390,7 +477,7 @@ export default function ChatPage() {
     if (!searchParam) return;
     setSearchSeed((prev) => ({ q: searchParam, n: (prev?.n ?? 0) + 1 }));
     setSearchOpen(true);
-    const path = urlChannelId ? `/chat/${urlChannelId}` : "/chat";
+    const path = urlChannelId ? `${base}/${urlChannelId}` : base;
     router.replace(path);
     // urlChannelId is read at consume time only; the effect keys on the request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -406,10 +493,12 @@ export default function ChatPage() {
   useShortcutAction(
     "chat.search",
     useCallback(() => {
-      if (!tabActive) return false;
+      // Search is a team read (chat.searchMessages resolves a team); the
+      // public rooms have none.
+      if (!tabActive || community) return false;
       setSearchOpen(true);
       return true;
-    }, [tabActive]),
+    }, [tabActive, community]),
   );
 
   // A suggested teammate in the rail becomes a room in the same tick.
@@ -460,24 +549,29 @@ export default function ChatPage() {
   const showError = messages.length === 0 && !!feed.error;
   const showSkeleton = messages.length === 0 && feed.loading && !knownEmpty;
 
-  if (!chatOn) return <TeamFeatureOff feature="chat" />;
+  // The per team opt in gates the team's rooms only; the public rooms are
+  // the product's, not a team's.
+  if (!chatOn && !community) return <TeamFeatureOff feature="chat" />;
 
   return (
+    <div className={standalone ? "ch-community-page" : undefined}>
+    {standalone && <CommunityBar isGuest={isGuest} />}
     <div className="ch-shell">
       {showInlineRail && <ChatChannelRail
         channels={rail}
         activeChannelId={activeChannelId}
-        onChannelContextMenu={(e, c) =>
+        onChannelContextMenu={isGuest ? undefined : (e, c) =>
           channelMenu.open(e, {
             channelId: c.id,
             notifyLevel: (c as any).notifyLevel ?? "mentions",
-            onArchived: c.id === activeChannelId ? () => router.replace("/chat") : undefined,
+            onArchived: c.id === activeChannelId ? () => router.replace(base) : undefined,
           })
         }
         onSelect={selectChannel}
-        onCreate={createChannel}
-        onNewMessage={openNewMessage}
-        onOpenDm={openDmWith}
+        onCreate={community ? undefined : createChannel}
+        onNewMessage={community ? undefined : openNewMessage}
+        onOpenDm={community ? undefined : openDmWith}
+        showDms={!community}
       />}
 
       <div
@@ -511,7 +605,10 @@ export default function ChatPage() {
               )}
               {/* Which roles read this room on their next wake, and "follow
                   as @handle" for the viewer's own roles. */}
-              {activeChannel && <ChannelListeners channel={activeChannel} />}
+              {activeChannel && !community && <ChannelListeners channel={activeChannel} />}
+              {activeChannel && activeChannel.kind !== "dm" && !community && !isGuest && (
+                <SlackMirrorPill channelId={activeChannel.id} link={slackLink} />
+              )}
               {activeChannel?.kind !== "dm" && activeChannel?.topic
                 ? <span className="ch-head-topic">{activeChannel.topic}</span>
                 : <span className="ch-head-topic" />}
@@ -543,7 +640,7 @@ export default function ChatPage() {
                   <OccupancyChip roomKey={walkieRoomKey} className="shrink-0" />
                 </>
               )}
-              {activeChannel && activeChannel.kind !== "dm" && (
+              {activeChannel && activeChannel.kind !== "dm" && !community && (
                 <HuddleButton
                   roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)}
                   anchorTitle={`#${activeChannel.name}`}
@@ -552,35 +649,39 @@ export default function ChatPage() {
                   compact={narrowViewport}
                 />
               )}
-              <SearchPill onOpen={() => setSearchOpen(true)} />
-              <button
-                type="button"
-                className="ch-tool"
-                title="New message"
-                aria-haspopup="dialog"
-                onClick={openNewMessage}
-              >
-                <SquarePen className="w-3.5 h-3.5" />
-              </button>
+              {!community && <SearchPill onOpen={() => setSearchOpen(true)} />}
+              {!community && (
+                <button
+                  type="button"
+                  className="ch-tool"
+                  title="New message"
+                  aria-haspopup="dialog"
+                  onClick={openNewMessage}
+                >
+                  <SquarePen className="w-3.5 h-3.5" />
+                </button>
+              )}
               {/* One management surface for everything channel-shaped —
                   notifications, rename, topic, archive — shared verbatim with
                   the sidebar's channel rows (ChannelMenu). */}
-              <button
-                type="button"
-                className="ch-tool"
-                title="Channel settings"
-                aria-haspopup="menu"
-                onClick={(e) => {
-                  if (!activeChannelId) return;
-                  channelMenu.open(e, {
-                    channelId: activeChannelId,
-                    notifyLevel: activeChannel?.notifyLevel ?? "mentions",
-                    onArchived: () => router.replace("/chat"),
-                  });
-                }}
-              >
-                {activeChannel?.muted ? <BellOff className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
-              </button>
+              {!isGuest && (
+                <button
+                  type="button"
+                  className="ch-tool"
+                  title="Channel settings"
+                  aria-haspopup="menu"
+                  onClick={(e) => {
+                    if (!activeChannelId) return;
+                    channelMenu.open(e, {
+                      channelId: activeChannelId,
+                      notifyLevel: activeChannel?.notifyLevel ?? "mentions",
+                      onArchived: () => router.replace(base),
+                    });
+                  }}
+                >
+                  {activeChannel?.muted ? <BellOff className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
+                </button>
+              )}
             </header>
 
             {showSkeleton ? (
@@ -615,7 +716,9 @@ export default function ChatPage() {
               <div className="ch-empty">
                 <div className="ch-empty-title">Nothing here yet</div>
                 <div className="ch-empty-sub">
-                  This channel is empty. Say something — or mention the anchor to bring an agent in.
+                  {community
+                    ? "This room is empty. Be the first to say something."
+                    : "This channel is empty. Say something — or mention the anchor to bring an agent in."}
                 </div>
               </div>
             ) : (
@@ -639,16 +742,20 @@ export default function ChatPage() {
                 onEdit={editMessage}
                 onDelete={deleteMessage}
                 onRetrySend={retrySend}
+                slackOutbound={slackOutbound}
+                onShareToSlack={shareToSlack}
                 targetMessageId={targetRow?.thread_root_id ? undefined : targetId}
               />
             )}
 
-            <ChatComposer
+            {isGuest ? <SignInToPost /> : <ChatComposer
               dropFilesRef={dropFilesRef}
               channelId={activeChannelId}
-              teamId={activeChannel?.teamId}
+              // The @ popup draws on a team roster; the public has none.
+              teamId={community ? undefined : activeChannel?.teamId}
               walkieRoomKey={walkieRoomKey}
               walkieRing={activeChannel?.dmMemberIds}
+              slackChannelName={slackOutbound ? (slackLink?.slack_channel_name ?? slackLink?.slack_channel_id) : undefined}
               placeholder={
                 activeChannel?.kind === "dm"
                   ? `Message ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`
@@ -656,7 +763,7 @@ export default function ChatPage() {
               }
               onSend={send}
               autoFocus
-            />
+            />}
           </>
         ) : outOfScopeChannel ? (
           <div className="ch-empty">
@@ -673,6 +780,13 @@ export default function ChatPage() {
             >
               Switch team and open
             </button>
+          </div>
+        ) : community ? (
+          <div className="ch-empty">
+            <div className="ch-empty-title">{communityFeed.loading ? "Opening the community" : "Nobody has opened a room yet"}</div>
+            <div className="ch-empty-sub">
+              {communityFeed.loading ? "Fetching the public rooms." : "The public rooms will appear here."}
+            </div>
           </div>
         ) : !activeWorkspaceTeam ? (
           <div className="ch-empty">
@@ -717,7 +831,8 @@ export default function ChatPage() {
           knownHandles={handles.known}
           selfHandles={handles.self}
           handleNames={handles.names}
-          teamId={activeChannel?.teamId}
+          teamId={community ? undefined : activeChannel?.teamId}
+          composer={isGuest ? <SignInToPost compact /> : undefined}
           now={now}
           // The link named a reply, and a reply only exists in this panel.
           targetMessageId={targetRow?.thread_root_id ? targetId : undefined}
@@ -729,6 +844,7 @@ export default function ChatPage() {
           onRetrySend={retrySend}
         />
       )}
+    </div>
     </div>
   );
 }

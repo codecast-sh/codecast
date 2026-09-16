@@ -19,9 +19,11 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 export default function DashboardShell() {
   const location = useLocation();
   // Public share links land on conversation routes; that page resolves access
-  // itself (guest read-only view / login redirect / denied). Everything else
-  // in the shell is an authed surface and keeps the redirect-home guard.
-  const guestOk = /^\/conversation\//.test(location.pathname);
+  // itself (guest read-only view / login redirect / denied). The community
+  // rooms are public by design: a visitor reads, the composer offers a sign
+  // in. Everything else in the shell is an authed surface and keeps the
+  // redirect-home guard.
+  const guestOk = /^\/(conversation\/|community(\/|$))/.test(location.pathname);
   return (
     <AuthGuard guestOk={guestOk}>
       <DashboardLayout allowUnhydratedGuest={guestOk}>

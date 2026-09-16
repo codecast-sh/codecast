@@ -10,6 +10,7 @@ import {
   presenceAvatarClass,
   presenceLabel,
   presenceLine,
+  teammateWhereabouts,
 } from "./memberPresence";
 import type { InboxSession } from "../../store/inboxStore";
 
@@ -349,5 +350,61 @@ describe("memberInHuddle", () => {
     // The roster reports in_room_key only when the viewer may see the room;
     // in_huddle survives that redaction, and a chip is all it drives.
     expect(memberInHuddle({ in_huddle: true }, "dm:a:b")).toBe(true);
+  });
+});
+
+describe("teammateWhereabouts", () => {
+  const me = "u-me";
+  const ann = { _id: "u-ann", name: "Ann", presence_state: "active", viewing_conversation_id: "c1", viewing_since: NOW - 120_000 };
+  const bob = { _id: "u-bob", name: "Bob", presence_state: "idle" };
+  const cy = { _id: "u-cy", name: "Cy", presence_state: "offline", viewing_conversation_id: "c2" };
+  const self = { _id: me, name: "Me", presence_state: "active", viewing_conversation_id: "c3" };
+  const roster = [ann, bob, cy, self];
+
+  it("with nothing typed, lists only teammates who are online and in a session", () => {
+    const rows = teammateWhereabouts(roster, me, "");
+    expect(rows.map((r) => r.id)).toEqual(["u-ann"]);
+    expect(rows[0].conversationId).toBe("c1");
+    expect(rows[0].since).toBe(NOW - 120_000);
+  });
+
+  it("never lists the viewer or an offline teammate, even with a session id on the row", () => {
+    const ids = teammateWhereabouts(roster, me, "c").map((r) => r.id);
+    expect(ids).not.toContain(me);
+    expect(ids).not.toContain("u-cy");
+  });
+
+  it("a teammate around but in no session appears only when the query names them", () => {
+    expect(teammateWhereabouts(roster, me, "go").map((r) => r.id)).toEqual(["u-ann"]);
+    const rows = teammateWhereabouts(roster, me, "bo");
+    expect(rows.map((r) => r.id)).toEqual(["u-bob"]);
+    expect(rows[0].conversationId).toBeNull();
+  });
+
+  it("matches the gesture words and the name, and drops a row the query does not name", () => {
+    expect(teammateWhereabouts(roster, me, "where ann").map((r) => r.id)).toEqual(["u-ann"]);
+    expect(teammateWhereabouts(roster, me, "jump").map((r) => r.id)).toEqual(["u-ann"]);
+    expect(teammateWhereabouts(roster, me, "zed")).toEqual([]);
+  });
+
+  it("carries the session title from the store when the row is there", () => {
+    const [row] = teammateWhereabouts(roster, me, "", { c1: { title: "Fix the auth race" } });
+    expect(row.title).toBe("Fix the auth race");
+    expect(row.inStore).toBe(true);
+    const [bare] = teammateWhereabouts(roster, me, "");
+    expect(bare.title).toBeUndefined();
+    expect(bare.inStore).toBe(false);
+  });
+
+  it("ranks a teammate in a session above one who is only around, then by name", () => {
+    const dan = { _id: "u-dan", name: "Dan", presence_state: "active", viewing_conversation_id: "c4" };
+    const rows = teammateWhereabouts([bob, { ...ann, name: "Dab" }, dan], me, "da");
+    // "da" is a prefix of Dab, Dan and a substring of nothing else; Bob drops.
+    expect(rows.map((r) => r.name)).toEqual(["Dab", "Dan"]);
+  });
+
+  it("uses the app's one naming rule, so a nameless row still has a label", () => {
+    const rows = teammateWhereabouts([{ _id: "u-x", github_username: "ghost-dev", presence_state: "active", viewing_conversation_id: "c9" }], me, "");
+    expect(rows[0].name).toBe("ghost-dev");
   });
 });

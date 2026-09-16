@@ -31,6 +31,7 @@ export function pathLabel(path: string): string {
   // A chat tab is titled by the surface, not the channel id — the id is opaque,
   // and the channel's own name is only knowable from the store.
   if (clean.startsWith("/chat/")) return "Chat";
+  if (clean.startsWith("/community/")) return "Community";
   if (clean.startsWith("/tasks/")) return "Task";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
@@ -38,6 +39,14 @@ export function pathLabel(path: string): string {
   // documents.md D4, D5) title by their short id, the handle people quote.
   if (clean.startsWith("/decisions/stacks/")) return clean.split("/")[3] ? `Stack ${clean.split("/")[3]}` : "Stack";
   if (clean.startsWith("/decisions/")) return clean.split("/")[2] ? `Decision ${clean.split("/")[2]}` : "Decision";
+  // The org page with a staffing proposal open (org-staffing.md S5) titles
+  // by the proposal's short id, like a decision; the bare page stays "Org".
+  if (clean === "/org") {
+    try {
+      const op = new URLSearchParams(path.split("?")[1] ?? "").get("proposal");
+      if (op && /^op-\d+$/i.test(op)) return `Proposal ${op.toLowerCase()}`;
+    } catch {}
+  }
   // A Files tab is titled by the open file, not the encoded query string.
   // /vault is the permanent pre-rename alias, so both prefixes title the same.
   if (/^\/(files|vault)[?/]/.test(path)) {
@@ -93,6 +102,7 @@ export function pathLabel(path: string): string {
     "/crosstalk": "Crosstalk",
     "/org": "Org",
     "/chat": "Chat",
+    "/community": "Community",
     "/threads": "Threads",
     "/settings": "Settings",
     "/team/activity": "Activity",

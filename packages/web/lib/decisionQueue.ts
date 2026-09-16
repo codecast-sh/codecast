@@ -39,7 +39,7 @@
 // worse than a list, because a list at least admits it is unsorted.
 import { BLOCKED_BANNER_KINDS } from "@codecast/shared/contracts";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
+import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
 export type QueueItemSource = "decide" | "ask" | "permission";
 
@@ -51,8 +51,20 @@ export type QueueItem = {
   question: string;
   // Authored payload (source "decide") — otherwise recovered context.
   contextMd?: string;
-  options: Array<{ label: string; description?: string }>;
+  // The full option (the-line.md L10): body, cost, risk, evidence and a page
+  // slug ride into the transcript card, which renders the right controls or
+  // links to the document page.
+  options: DecisionOption[];
   reportSlug?: string;
+  // The kind decides the controls: single answers on a digit; multi, rank
+  // and form go through DecisionAnswerControls.
+  kind?: DecisionKind;
+  form?: SessionDecisionItem["form"];
+  category?: string;
+  shortId?: string;
+  // A decision document exists (a doc body) or an option carries a page:
+  // the card links to the document page for those.
+  docId?: string;
   blocking: boolean;
   defaultOption?: number;
   createdAt: number;
@@ -227,6 +239,18 @@ export function messagesSinceAsk(
   return n;
 }
 
+/** Slugs of the pages the options carry, in option order (L6). */
+export function optionPageSlugs(options: ReadonlyArray<Pick<DecisionOption, "page_slug">>): string[] {
+  return options.map((o) => o.page_slug).filter((slug): slug is string => !!slug);
+}
+
+/** The transcript card links to the document page when there is more to
+ *  read than the card shows: a doc body, an option page, or a kind whose
+ *  controls need the page's room. */
+export function needsDocumentPage(item: Pick<QueueItem, "docId" | "options" | "kind">): boolean {
+  return !!item.docId || optionPageSlugs(item.options).length > 0 || (item.kind !== undefined && item.kind !== "single");
+}
+
 /** What a PERSON must answer: the queue minus the rows a lead holds. */
 export function waitingOnPerson(items: readonly QueueItem[]): QueueItem[] {
   return items.filter((i) => !i.heldByRole);
@@ -257,6 +281,11 @@ export function decisionQueueItems(
       contextMd: d.context_md,
       options: d.options,
       reportSlug: d.report_slug,
+      kind: d.kind,
+      form: d.form,
+      category: d.category,
+      shortId: d.short_id,
+      docId: d.doc_id,
       blocking: d.blocking,
       defaultOption: d.default_option,
       createdAt: d.created_at,

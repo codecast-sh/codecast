@@ -97,12 +97,208 @@ describe("org intents", () => {
     let st: OrgSliceData = { orgTree: clone(), orgIntents: [] };
     st = run(st, "reparentOrgRole", ROLE, { kind: "user", user_id: SAM });
     const dropped: string[] = [];
-    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: (id) => dropped.push(id) }, "reparentOrgRole", [ROLE, { kind: "user", user_id: SAM }]);
+    const reverted: string[] = [];
+    const hooks = { dropOrgIntent: (id: string) => dropped.push(id), revertOrgIntent: (id: string) => reverted.push(id) };
+    dropRejectedOrgIntent({ orgIntents: st.orgIntents, ...hooks }, "reparentOrgRole", [ROLE, { kind: "user", user_id: SAM }]);
     expect(dropped).toEqual([st.orgIntents[0].id]);
+    expect(reverted).toEqual([]);
     // A different subject is left alone.
     dropped.length = 0;
-    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: (id) => dropped.push(id) }, "reparentOrgRole", ["other-role", {}]);
+    dropRejectedOrgIntent({ orgIntents: st.orgIntents, ...hooks }, "reparentOrgRole", ["other-role", {}]);
     expect(dropped).toEqual([]);
+  });
+
+  // ---- the staffing kinds (org-staffing.md S5, S6): a verdict flips a change
+  // row, a hire puts a stub on the tree; a refusal or a silent loss puts both
+  // back through the same journal.
+  const CHANGES = () => ({
+    "ch-1": { _id: "ch-1", proposal_id: "p-1", seq: 1, change: { kind: "retire", handle: "ops" }, rationale: "r", evidence: [], status: "proposed" as const },
+    "ch-2": { _id: "ch-2", proposal_id: "p-1", seq: 2, change: { kind: "trust", handle: "growth", trust: "decide" }, rationale: "r", evidence: [], status: "failed" as const, applied_note: "handle clash" },
+    "ch-3": { _id: "ch-3", proposal_id: "p-1", seq: 3, change: { kind: "retire", handle: "qa" }, rationale: "r", evidence: [], status: "applied" as const, decided_by: "u1" },
+    "ch-9": { _id: "ch-9", proposal_id: "p-2", seq: 1, change: { kind: "retire", handle: "x" }, rationale: "r", evidence: [], status: "proposed" as const },
+  });
+  const staffing = (): OrgSliceData => ({ orgTree: clone(), orgIntents: [], orgHealth: null, orgProposals: {}, orgProposalChanges: CHANGES() as any, orgFocusChangeId: null, orgIntentNotice: null });
+
+  it("a verdict flips a proposed or failed row, keeps the edits, and reverts on refusal", () => {
+    let st = staffing();
+    st = run(st, "decideOrgProposalChange", "ch-1", "accept", { reason: "now" });
+    st = run(st, "decideOrgProposalChange", "ch-2", "skip");
+    // An applied row is not decidable: no flip, no intent.
+    st = run(st, "decideOrgProposalChange", "ch-3", "skip");
+    expect(st.orgProposalChanges["ch-1"]).toMatchObject({ status: "accepted", edits: { reason: "now" } });
+    expect(st.orgProposalChanges["ch-2"].status).toBe("skipped");
+    expect(st.orgProposalChanges["ch-3"].status).toBe("applied");
+    expect(st.orgIntents.map((i) => i.kind === "decideChange" && [i.change_id, i.from, i.to])).toEqual([["ch-1", "proposed", "accepted"], ["ch-2", "failed", "skipped"]]);
+
+    // The rail refuses the accept: the row goes back to proposed, edits kept.
+    const reverted: string[] = [];
+    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "decideOrgProposalChange", ["ch-1", "accept"]);
+    expect(reverted).toEqual([st.orgIntents[0].id]);
+    st = run(st, "revertOrgIntent", reverted[0]);
+    expect(st.orgProposalChanges["ch-1"]).toMatchObject({ status: "proposed", edits: { reason: "now" } });
+    expect(st.orgProposalChanges["ch-1"].decided_at).toBeUndefined();
+    expect(st.orgIntents.map((i) => i.kind === "decideChange" && i.change_id)).toEqual(["ch-2"]);
+    // The failed row went back to failed, not proposed.
+    st = run(st, "revertOrgIntent", st.orgIntents[0].id);
+    expect(st.orgProposalChanges["ch-2"].status).toBe("failed");
+  });
+
+  it("accept all flips every decidable row of that proposal, and a refusal reverts them all", () => {
+    let st = staffing();
+    st = run(st, "acceptAllOrgProposal", "p-1");
+    expect(st.orgProposalChanges["ch-1"].status).toBe("accepted");
+    expect(st.orgProposalChanges["ch-2"].status).toBe("accepted");
+    expect(st.orgProposalChanges["ch-3"].status).toBe("applied");
+    expect(st.orgProposalChanges["ch-9"].status).toBe("proposed");
+    expect(st.orgIntents).toHaveLength(2);
+    const reverted: string[] = [];
+    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "acceptAllOrgProposal", ["p-1"]);
+    expect(reverted).toHaveLength(2);
+    for (const id of reverted) st = run(st, "revertOrgIntent", id);
+    expect(st.orgProposalChanges["ch-1"].status).toBe("proposed");
+    expect(st.orgProposalChanges["ch-2"].status).toBe("failed");
+    expect(st.orgIntents).toEqual([]);
+  });
+
+  it("the server's decided_by stamp is the echo; a stale push is replayed with its edits; an aged verdict reverts and says so", async () => {
+    const { pruneOrgIntents, applyOrgChangeIntent } = await import("../orgSlice");
+    let st = staffing();
+    st = run(st, "decideOrgProposalChange", "ch-1", "accept", { reason: "now" });
+    const intent = st.orgIntents[0] as Extract<OrgIntent, { kind: "decideChange" }>;
+    expect(intent.edits).toEqual({ reason: "now" });
+    expect(intent.line).toBe("retire @ops");
+    // A push that predates the mutation replaced the row with the server's
+    // copy (proposed, no edits): the replay flips it back, edits included.
+    const stale = { ...st.orgProposalChanges, "ch-1": { ...CHANGES()["ch-1"] } } as any;
+    applyOrgChangeIntent(stale, intent);
+    expect(stale["ch-1"]).toMatchObject({ status: "accepted", edits: { reason: "now" } });
+    // A refusal after that stale push still shows the typed edits.
+    const refused = mutate({ ...st, orgProposalChanges: stale }, (d) => { d.orgIntents = []; });
+    const back = run(refused as OrgSliceData, "revertOrgIntent", intent.id);
+    expect(back.orgProposalChanges["ch-1"].edits).toEqual({ reason: "now" });
+    // The echo carries decided_by: satisfied, dropped, and the server's status stands.
+    const echoed = mutate(st, (d) => { d.orgProposalChanges["ch-1"] = { ...d.orgProposalChanges["ch-1"], status: "applied", decided_by: "u1" } as any; pruneOrgIntents(d); });
+    expect(echoed.orgIntents).toEqual([]);
+    expect(echoed.orgProposalChanges["ch-1"].status).toBe("applied");
+    expect(echoed.orgIntentNotice).toBeNull();
+    // Silence past the TTL: the row goes back to proposed, and the page is told.
+    const later = Date.now() + ORG_INTENT_TTL_MS + 1;
+    const aged = mutate(st, (d) => { pruneOrgIntents(d, later); });
+    expect(aged.orgIntents).toEqual([]);
+    expect(aged.orgProposalChanges["ch-1"].status).toBe("proposed");
+    expect(aged.orgIntentNotice).toEqual({ text: 'Accepting "retire @ops" did not reach the server after a minute; the change is back to proposed.', at: later });
+  });
+
+  it("a refusal returns one notice per intent for the toast", () => {
+    let st = staffing();
+    st = run(st, "decideOrgProposalChange", "ch-1", "skip");
+    const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "decideOrgProposalChange", ["ch-1", "skip"]);
+    expect(notices).toEqual(['Skipping "retire @ops" was refused; the change is back to proposed.']);
+    expect(dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "decideOrgProposalChange", ["other"])).toEqual([]);
+  });
+
+  it("the dispatch hook drops an intent only on a permanent refusal, and toasts it", async () => {
+    // A transient exhaustion (a backend timeout) leaves the parked outbox row
+    // to re-drive, so the intent must stay open or the ghost comes back while
+    // the accept still lands later. Pinned at the source: the call sits
+    // inside the permanent-error block and its notices reach a toast.
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "..", "..", "hooks", "useEnsureDispatch.ts"), "utf8");
+    const permanent = src.indexOf("if (isPermanentDispatchError(error)) {");
+    const drop = src.indexOf("dropRejectedOrgIntent(useInboxStore.getState(), action, args)");
+    expect(permanent).toBeGreaterThan(0);
+    expect(drop).toBeGreaterThan(permanent);
+    expect(src.slice(permanent, drop)).not.toMatch(/\n\s{6}}\n/); // no block closes between them
+    expect(src).toMatch(/for \(const text of dropRejectedOrgIntent\(.*\)\) toast\.error\(text\)/);
+  });
+
+  it("a role's fields ride an intent: a heartbeat push cannot flicker a Resume, and a refusal puts the fields back at once", () => {
+    const tree = clone();
+    tree.roles[0].status = "paused";
+    tree.roles[0].caps = { tokens_per_day: 100 };
+    let st: OrgSliceData = { ...staffing(), orgTree: tree };
+    st = run(st, "updateOrgRole", ROLE, { status: "active" });
+    st = run(st, "updateOrgRole", ROLE, { caps: { tokens_per_day: 400 } });
+    expect(st.orgTree!.roles[0].status).toBe("active");
+    expect(st.orgTree!.roles[0].caps).toEqual({ tokens_per_day: 400 });
+    // Two edits on one role are two intents, each with its own `from`.
+    expect(st.orgIntents.map((i) => i.kind === "roleFields" && [Object.keys(i.fields)[0], i.from])).toEqual([["status", { status: "paused" }], ["caps", { caps: { tokens_per_day: 100 } }]]);
+    // A push that still says paused (org.tree recomputes on any heartbeat) is replayed.
+    const stalePush = clone();
+    stalePush.roles[0].status = "paused";
+    stalePush.roles[0].caps = { tokens_per_day: 100 };
+    const stale = mergeOrgTree(stalePush, st.orgIntents);
+    expect(stale.intents).toHaveLength(2);
+    expect(stale.tree.roles[0].status).toBe("active");
+    expect(stale.tree.roles[0].caps).toEqual({ tokens_per_day: 400 });
+    // The echo agrees field by field: each intent clears on its own.
+    const echo = clone();
+    echo.roles[0].status = "active";
+    echo.roles[0].caps = { tokens_per_day: 100 };
+    const half = mergeOrgTree(echo, st.orgIntents);
+    expect(half.intents.map((i) => i.kind === "roleFields" && Object.keys(i.fields)[0])).toEqual(["caps"]);
+    expect(half.tree.roles[0].caps).toEqual({ tokens_per_day: 400 });
+    // The rail refuses the Resume: status goes back to paused now, the caps edit stays.
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "updateOrgRole", [ROLE, { status: "active" }]);
+    expect(notices).toEqual(["Resuming the role was refused; put back."]);
+    expect(reverted).toEqual([st.orgIntents[0].id]);
+    st = run(st, "revertOrgIntent", reverted[0]);
+    expect(st.orgTree!.roles[0].status).toBe("paused");
+    expect(st.orgTree!.roles[0].caps).toEqual({ tokens_per_day: 400 });
+    expect(st.orgIntents).toHaveLength(1);
+    // A field that was unset goes back to unset.
+    let st2: OrgSliceData = { ...staffing(), orgTree: clone() };
+    expect(st2.orgTree!.roles[0].caps).toBeUndefined();
+    st2 = run(st2, "updateOrgRole", ROLE, { caps: { hands_per_day: 2 } });
+    st2 = run(st2, "revertOrgIntent", st2.orgIntents[0].id);
+    expect(st2.orgTree!.roles[0].caps).toBeUndefined();
+  });
+
+  it("a retire rides an intent: a stale push replays it and the echo clears it", () => {
+    let st: OrgSliceData = { ...staffing(), orgTree: clone() };
+    const meTotal = st.orgTree!.people[0].total;
+    st = run(st, "retireOrgRole", ROLE);
+    expect(st.orgTree!.roles).toHaveLength(0);
+    expect(st.orgIntents.map((i) => i.kind)).toEqual(["retireRole"]);
+    const stale = mergeOrgTree(clone(), st.orgIntents);
+    expect(stale.intents).toHaveLength(1);
+    expect(stale.tree.roles).toHaveLength(0);
+    expect(stale.tree.people[0].total).toBe(meTotal + ORG_FIXTURE.roles[0].total);
+    const echo = clone();
+    echo.roles = [];
+    expect(mergeOrgTree(echo, st.orgIntents).intents).toHaveLength(0);
+    const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "retireOrgRole", [ROLE]);
+    expect(notices).toEqual(["Retiring @growth was refused; the role is back."]);
+  });
+
+  it("a hire puts a stub on the tree that a stale push keeps, the echo replaces, and a refusal removes", () => {
+    const input = { host_user_id: ME, client_id: "orgrolestub-chief-1", team_id: ORG_FIXTURE.workspace.id };
+    let st = staffing();
+    st = run(st, "staffChiefOfStaff", input);
+    expect(st.orgTree!.roles.some((r) => r._id === input.client_id && r.handle === "chief-of-staff")).toBe(true);
+    expect(st.orgIntents.map((i) => i.kind)).toEqual(["staff"]);
+    // Idempotent: a second click adds nothing.
+    st = run(st, "staffChiefOfStaff", { ...input, client_id: "orgrolestub-chief-2" });
+    expect(st.orgTree!.roles.filter((r) => r.handle === "chief-of-staff")).toHaveLength(1);
+    // A push without the chief keeps the stub.
+    const stale = mergeOrgTree(clone(), st.orgIntents);
+    expect(stale.intents).toHaveLength(1);
+    expect(stale.tree.roles.some((r) => r._id === input.client_id)).toBe(true);
+    // The echo names the real row: intent gone, stub gone with the replaced tree.
+    const echo = clone();
+    echo.roles.push({ ...echo.roles[0], _id: "real-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff" });
+    const settled = mergeOrgTree(echo, st.orgIntents);
+    expect(settled.intents).toHaveLength(0);
+    expect(settled.tree).toBe(echo);
+    // The rail refuses the hire: the stub comes off the draft's tree.
+    const reverted: string[] = [];
+    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "staffChiefOfStaff", [input]);
+    expect(reverted).toHaveLength(1);
+    st = run(st, "revertOrgIntent", reverted[0]);
+    expect(st.orgTree!.roles.some((r) => r.handle === "chief-of-staff")).toBe(false);
+    expect(st.orgIntents).toEqual([]);
   });
 
   it("satisfaction reads the tree, not the intent", () => {

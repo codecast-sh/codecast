@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage, parseChatWakePrompt, isChatWakePrompt } from "./sessionMessage";
+import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage, parseChatWakePrompt, isChatWakePrompt } from "./sessionMessage";
 import { formatHuddleSummaryTag, formatUserMessage } from "@codecast/shared/contracts";
 
 // A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
@@ -160,12 +160,15 @@ describe("parseInboundSessionMessage", () => {
   test("returns null on a truncated wrapper (needs the full body)", () => {
     const truncated = formatSessionMessage("jx7c6zk", "y".repeat(400)).slice(0, 200);
     expect(parseInboundSessionMessage(truncated)).toBeNull();
+    expect(isSessionMessage(truncated)).toBe(true);
+    expect(parseAgentAuthoredMessage(truncated)).toMatchObject({ from: "jx7c6zk", label: "message from" });
   });
 
   test("returns null for plain text and nullish input", () => {
     expect(parseInboundSessionMessage("hello")).toBeNull();
     expect(parseInboundSessionMessage(null)).toBeNull();
     expect(parseInboundSessionMessage(undefined)).toBeNull();
+    expect(parseUnwrappedSessionReport("hello")).toBeNull();
   });
 
   test("extracts the optional display name (link collaborator with no session pill)", () => {
@@ -234,6 +237,7 @@ describe("parseMachineDeliveredMessage", () => {
       '<scheduled-task title="T">x</scheduled-task>',
       TEAMMATE_BROADCAST,
       AGENT_REPORT,
+      "Backend B (ct-51438) review fixes: all five of mine fixed.",
       "plain human prompt",
     ]) {
       expect(parseMachineDeliveredMessage(raw) !== null).toBe(isMachineDeliveredMessage(raw));

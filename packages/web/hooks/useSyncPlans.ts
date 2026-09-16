@@ -30,6 +30,20 @@ export function useSyncPlans(statusFilter?: string) {
   return useSyncPlansWithArgs(useWorkspaceArgs(), statusFilter);
 }
 
+/** Seed the store's plans row from a plans.webGet payload, the page joins
+ *  stripped (tasks, sessions, doc_content, comments and author are computed
+ *  for the page, not row fields) so the persisted row keeps the list's shape.
+ *  The plan page mounts no list feeder and updatePlan writes the draft only
+ *  when the row exists: without this seed, a deep link's first charter edit
+ *  would paint only after the round trip. syncRecord runs the pending filter,
+ *  so an edit in flight is kept over the snapshot. Keyed by the row's own
+ *  _id, never the URL param (a short id would store a second copy). */
+export function ingestPlanDetail(d: any): void {
+  if (!d || typeof d._id !== "string") return;
+  const { tasks, sessions, doc_content, comments, author, ...row } = d;
+  useInboxStore.getState().syncRecord("plans", String(row._id), row);
+}
+
 /**
  * Cross-team mention index for plans — see useSyncMentionTasks for context.
  */

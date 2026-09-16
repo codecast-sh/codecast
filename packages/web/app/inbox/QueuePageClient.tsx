@@ -6,7 +6,7 @@ import { useShortcutContext } from "../../shortcuts";
 import { useMutation } from "convex/react";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useSearchParams } from "next/navigation";
-import { useTabContext } from "../../lib/tabParams";
+import { useTabActive } from "../../hooks/usePagePresence";
 import { urlSessionId } from "../../lib/pathLabel";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -234,8 +234,7 @@ export function QueuePageClient() {
   // stays mounted but renders FROZEN on its own ?s= param so its conversation
   // and scroll position survive untouched until it's brought forward again.
   // Outside the tab shell (web standalone), there's no context → always active.
-  const tabCtx = useTabContext();
-  const isActiveTab = tabCtx ? tabCtx.isActive : true;
+  const isActiveTab = useTabActive();
 
   // The session rail's route defaults (auto-open on entering the inbox) live
   // in DashboardLayout's navigation effects, gated so a tab switch — which

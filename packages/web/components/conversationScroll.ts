@@ -5,8 +5,28 @@
 // that intent latch is set, geometry must not override it: a row re-measure or
 // new chunk can make the viewport look "near bottom" without the reader asking
 // to be moved there.
-export function shouldFollowStreaming(userScrolled: boolean): boolean {
+export function shouldFollowStreaming(userScrolled: boolean, openAtTop = false): boolean {
+  // Unsigned share-link visitors start at the top of the transcript. End-follow
+  // would pin them to the live tail as rows measure in, which is the authed
+  // default and the wrong first paint for a guest reading a shared session.
+  if (openAtTop) return false;
   return !userScrolled;
+}
+
+export type InitialScrollEdge = "top" | "bottom" | null;
+
+/**
+ * Where a freshly mounted conversation should land. Signed-in viewers snap to
+ * the live tail (the session they already know). Unsigned share-link visitors
+ * start at the top so the thread reads from the beginning. A hash, highlight,
+ * or message target owns the landing spot instead — return null and leave it.
+ */
+export function initialScrollEdge(i: {
+  guest: boolean;
+  hasExplicitTarget: boolean;
+}): InitialScrollEdge {
+  if (i.hasExplicitTarget) return null;
+  return i.guest ? "top" : "bottom";
 }
 
 export interface JumpReadyInput {
@@ -147,4 +167,42 @@ export interface ResizeAdjustInput {
 export function shouldAdjustScrollForResize(i: ResizeAdjustInput): boolean {
   if (i.held) return false;
   return i.itemStart < i.scrollOffset;
+}
+
+export type FeedJumpDensity = "full" | "condensed" | "compact";
+
+export type JumpReceiptAggregates = {
+  absorbed: ReadonlySet<string>;
+  receiptOf: ReadonlyMap<string, ReadonlyArray<{ messageId: string }>>;
+  turnKeyOf: ReadonlyMap<string, string>;
+  // Folded identical nudges ("continue" ×5) keep only the run head in the
+  // DOM. Map every id in the run, including the head, to that head.
+  nudgeHeadOf?: ReadonlyMap<string, string>;
+};
+
+// Where a message-jump lands. Height-0 rows are not in the DOM:
+// condensed receipts fold tools into an owner, compact hides a turn until
+// opened, and a run of identical nudges keeps only its first row. Resolve
+// the visible row, then expand whatever group still hides it.
+export function jumpRowForMessage(
+  messageId: string,
+  density: FeedJumpDensity,
+  aggregates: JumpReceiptAggregates,
+): { scrollToId: string; expandKey: string | null } {
+  const id = aggregates.nudgeHeadOf?.get(messageId) ?? messageId;
+  if (density === "full") return { scrollToId: id, expandKey: null };
+  if (density === "compact") {
+    return { scrollToId: id, expandKey: aggregates.turnKeyOf.get(id) ?? null };
+  }
+  if (aggregates.absorbed.has(id)) {
+    for (const [ownerId, entries] of aggregates.receiptOf) {
+      if (ownerId === id || entries.some((e) => e.messageId === id)) {
+        return { scrollToId: ownerId, expandKey: ownerId };
+      }
+    }
+  }
+  if (aggregates.receiptOf.has(id)) {
+    return { scrollToId: id, expandKey: id };
+  }
+  return { scrollToId: id, expandKey: null };
 }

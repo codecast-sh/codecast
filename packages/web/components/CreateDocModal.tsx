@@ -6,18 +6,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { ChevronRight } from "lucide-react";
 import { DocEditor } from "./editor/DocEditor";
-
-const DOC_TYPES = [
-  { value: "note", label: "Note" },
-  { value: "spec", label: "Spec" },
-  { value: "design", label: "Design" },
-  { value: "plan", label: "Plan" },
-  { value: "investigation", label: "Investigation" },
-  { value: "handoff", label: "Handoff" },
-  { value: "decision", label: "Decision" },
-  { value: "charter", label: "Charter" },
-  { value: "brief", label: "Brief" },
-] as const;
+import { DOC_TYPES, DOC_TYPE_LABELS } from "@codecast/shared/docs";
 
 const FIDELITY_OPTIONS = [
   { value: "", label: "Auto (default)" },
@@ -155,15 +144,15 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
         <div className="flex items-center gap-2 px-6 py-3 border-t border-sol-border/40 flex-wrap">
           {DOC_TYPES.map((dt) => (
             <button
-              key={dt.value}
-              onClick={() => setDocType(dt.value)}
+              key={dt}
+              onClick={() => setDocType(dt)}
               className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                docType === dt.value
+                docType === dt
                   ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text"
                   : "border-sol-border/30 text-sol-text-dim hover:text-sol-text-muted"
               }`}
             >
-              {dt.label}
+              {DOC_TYPE_LABELS[dt]}
             </button>
           ))}
         </div>

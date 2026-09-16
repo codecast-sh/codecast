@@ -29,4 +29,11 @@ describe("isFullWidthRoute", () => {
   test("query and hash are stripped before matching", () => {
     expect(isFullWidthRoute("/files?path=x#y")).toBe(true);
   });
+
+  test("/config is full-width (exact and subpaths), not neighboring paths", () => {
+    expect(isFullWidthRoute("/config")).toBe(true);
+    expect(isFullWidthRoute("/config/anything")).toBe(true);
+    expect(isFullWidthRoute("/config?file=x")).toBe(true);
+    expect(isFullWidthRoute("/configuration")).toBe(false);
+  });
 });

@@ -16,6 +16,7 @@ import { formatRelative } from "../../lib/utils";
 import { ConfirmButton, LedgerLine, QuietButton, StatusDot, type DotTone } from "./parts";
 import { GithubInstallDetail } from "./GithubInstallDetail";
 import { IssueSyncSources } from "./IssueSyncSources";
+import { SlackMirrorsSummary } from "./SlackMirrorsSummary";
 
 /**
  * Health as the connector stamps it (issue-sync.md S1.5). Absent health is
@@ -184,6 +185,7 @@ export function IntegrationCard({
       {hasSources && (
         <IssueSyncSources provider={descriptor.id as "github" | "linear"} connected={!!connected} />
       )}
+      {descriptor.id === "slack" && scope === "team" && !!connected && <SlackMirrorsSummary />}
     </div>
   );
 }

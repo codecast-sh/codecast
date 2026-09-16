@@ -92,7 +92,9 @@ function LoginForm() {
           <p className="text-sol-text-muted mt-3 text-sm">
             {reason === "session_expired"
               ? "Your session expired. Please sign in again."
-              : "Sign in to access your conversations"}
+              : reason === "oauth"
+                ? "GitHub sign-in didn't complete. Please try again."
+                : "Sign in to access your conversations"}
           </p>
         </div>
 

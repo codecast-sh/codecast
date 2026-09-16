@@ -33,6 +33,7 @@ const Org = lazyPage("@/app/org/page", () => import("@/app/org/page"));
 const OrgScope = lazyPage("@/app/org/[id]/page", () => import("@/app/org/[id]/page"));
 const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
 const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
+const Community = lazyPage("@/app/community/page", () => import("@/app/community/page"));
 const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
 const Routines = lazyPage("@/app/workflows/page", () => import("@/app/workflows/page"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
@@ -40,6 +41,7 @@ const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/pa
 const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/triggers/[id]/page"));
 const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
 const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
+const SlackConnect = lazyPage("@/app/slack/connect/page", () => import("@/app/slack/connect/page"));
 const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
 const TeamActivity = lazyPage("@/app/team/activity/page", () => import("@/app/team/activity/page"));
 const TeamCharts = lazyPage("@/app/team/charts/page", () => import("@/app/team/charts/page"));
@@ -53,6 +55,7 @@ const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/n
 // The decision queue: one question at a time, full width.
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
 const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
+const DecisionStacks = lazyPage("@/app/decisions/stacks/page", () => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazyPage("@/app/decisions/stacks/[id]/page", () => import("@/app/decisions/stacks/[id]/page"));
 // The Threads inbox: every conversation the viewer is in, one page.
 const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
@@ -92,6 +95,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
   { pattern: /^\/triggers\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
+  { pattern: /^\/decisions\/stacks$/, paramNames: [], component: DecisionStacks },
   { pattern: /^\/decisions\/stacks\/([^/]+)$/, paramNames: ["id"], component: DecisionStack },
   { pattern: /^\/decisions\/([^/]+)$/, paramNames: ["id"], component: DecisionDetail },
   { pattern: /^\/schedules\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
@@ -114,6 +118,7 @@ const ROUTES: RouteEntry[] = [
   // Same component as the bare route, so opening a channel reconciles in place
   // instead of remounting the whole surface and losing the scroll position.
   { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },
+  { pattern: /^\/community\/([^/]+)$/, paramNames: ["channelId"], component: Community },
   { pattern: /^\/team\/activity$/, paramNames: [], component: TeamActivity },
   { pattern: /^\/team\/charts$/, paramNames: [], component: TeamCharts },
   { pattern: /^\/team\/([^/]+)$/, paramNames: ["username"], component: TeamMember },
@@ -132,12 +137,14 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
   { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
   { pattern: /^\/chat$/, paramNames: [], component: Chat },
+  { pattern: /^\/community$/, paramNames: [], component: Community },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/triggers$/, paramNames: [], component: Triggers },
   { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
+  { pattern: /^\/slack\/connect$/, paramNames: [], component: SlackConnect },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
   { pattern: /^\/search$/, paramNames: [], component: Search },

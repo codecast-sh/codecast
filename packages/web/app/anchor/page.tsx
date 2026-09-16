@@ -24,6 +24,7 @@ import { describeTaskCadence, taskStateLabel } from "../../components/triggerCad
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { AnchorAvatar, AnchorGlyph, AnchorScopePill } from "../../components/anchor/AnchorIdentity";
 import { AnchorConversation, AnchorOnboarding, CenteredNote } from "../../components/anchor/AnchorConversation";
+import { SlackLogo } from "../../components/SlackLogo";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -50,9 +51,8 @@ function AnchorSpace() {
   const { space } = useAnchorSpace(scope.type, scope.teamId);
   const anchors = useAnchors();
 
-  // When Slack redirects back to this (authenticated) page with ?code&?state,
-  // complete the install here — binding it to the logged-in user's own anchor.
-  const completeInstall = useAction(api.slack.completeSlackInstall);
+  // The Slack install completes on /slack/connect and comes back here with
+  // ?slack=connected|error (and ?scope=team&team=<id> for a team anchor).
   const [slackFlash, setSlackFlash] = useState<null | "connected" | "error">(null);
   useMountEffect(() => {
     const p = new URLSearchParams(window.location.search);
@@ -64,21 +64,6 @@ function AnchorSpace() {
     const wantsTeam = p.get("scope") === "team";
     const teamParam = p.get("team");
     if (wantsTeam) setScope({ type: "team", teamId: teamParam ?? activeTeamId });
-    const code = p.get("code");
-    const st = p.get("state");
-    if (code && st) {
-      completeInstall({ code, state: st } as any)
-        .then((res: any) => {
-          if (res?.scope_type === "team") setScope({ type: "team", teamId: res?.team_id ?? activeTeamId });
-          setSlackFlash(res?.ok ? "connected" : "error");
-        })
-        .catch(() => setSlackFlash("error"))
-        .finally(() => {
-          cleanUrl();
-          setTimeout(() => setSlackFlash(null), 6000);
-        });
-      return;
-    }
     const s = p.get("slack");
     if (s === "connected" || s === "error") {
       setSlackFlash(s);
@@ -298,7 +283,9 @@ function SlackPopover({ space }: { space: any }) {
     setBusy(true);
     setErr(null);
     try {
-      const res = await getInstallUrl({ scope_type: space.scope_type, team_id: space.anchor?.team_id ?? undefined } as any);
+      const teamId = space.anchor?.team_id ?? undefined;
+      const returnTo = space.scope_type === "team" ? `/anchor?scope=team${teamId ? `&team=${teamId}` : ""}` : "/anchor";
+      const res = await getInstallUrl({ scope_type: space.scope_type, team_id: teamId, return_to: returnTo, origin: window.location.origin } as any);
       if (res?.ok && res.url) {
         window.location.href = res.url;
       } else {
@@ -374,21 +361,6 @@ function SlackPopover({ space }: { space: any }) {
         {err && <div className="text-sol-red text-xs mt-2">{err}</div>}
       </PopoverContent>
     </Popover>
-  );
-}
-
-function SlackLogo({ className, muted }: { className?: string; muted?: boolean }) {
-  return (
-    <svg className={className} viewBox="0 0 122.8 122.8" aria-hidden style={muted ? { filter: "grayscale(1)", opacity: 0.6 } : undefined}>
-      <path d="M25.8 77.6a12.9 12.9 0 1 1-12.9-12.9h12.9v12.9z" fill="#E01E5A" />
-      <path d="M32.3 77.6a12.9 12.9 0 0 1 25.8 0v32.3a12.9 12.9 0 0 1-25.8 0V77.6z" fill="#E01E5A" />
-      <path d="M45.2 25.8a12.9 12.9 0 1 1 12.9-12.9v12.9H45.2z" fill="#36C5F0" />
-      <path d="M45.2 32.3a12.9 12.9 0 0 1 0 25.8H12.9a12.9 12.9 0 0 1 0-25.8h32.3z" fill="#36C5F0" />
-      <path d="M97 45.2a12.9 12.9 0 1 1 12.9 12.9H97V45.2z" fill="#2EB67D" />
-      <path d="M90.5 45.2a12.9 12.9 0 0 1-25.8 0V12.9a12.9 12.9 0 0 1 25.8 0v32.3z" fill="#2EB67D" />
-      <path d="M77.6 97a12.9 12.9 0 1 1-12.9 12.9V97h12.9z" fill="#ECB22E" />
-      <path d="M77.6 90.5a12.9 12.9 0 0 1 0-25.8h32.3a12.9 12.9 0 0 1 0 25.8H77.6z" fill="#ECB22E" />
-    </svg>
   );
 }
 

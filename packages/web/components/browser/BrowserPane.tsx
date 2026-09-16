@@ -50,6 +50,7 @@ import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import { useSqueezeToFit } from "../../hooks/useSqueezeToFit";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
+import { paneOfferOwner } from "../../lib/browserPaneOffer";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { PaneControls } from "../stage/PaneControls";
@@ -78,7 +79,27 @@ export function BrowserPane() {
     return window.location.pathname + window.location.search;
   }, [ctx]);
 
-  const source = useMemo(() => parseBrowserRoute(path), [path]);
+  // The route's `s=` names the session the pane was offered by, and a route
+  // is only a hint: a pasted link could name any session. Confirm it against
+  // the store's offer row for that session and this address, and strip it
+  // otherwise, so the desktop registry never stamps an owner nobody offered a
+  // pane to (lib/browserPaneOffer.ts paneOfferOwner). The subscription is to
+  // the ANSWER, a string: a cold deep link that paints before the offer row
+  // has synced re-derives the moment it lands, and heartbeat churn on the
+  // rows changes nothing here, so it re-renders nothing.
+  const parsed = useMemo(() => parseBrowserRoute(path), [path]);
+  const hinted = parsed?.kind === "url" ? parsed.session : undefined;
+  const owner = useInboxStore((s) => {
+    if (!hinted || parsed?.kind !== "url") return undefined;
+    const rows: any[] = [];
+    for (const r of Object.values(s.conversations)) if ((r as any)?.session_id === hinted) rows.push(r);
+    for (const r of Object.values(s.sessions)) if ((r as any)?.session_id === hinted) rows.push(r);
+    return paneOfferOwner({ hinted, url: parsed.url, rows, now: Date.now() });
+  });
+  const source = useMemo(() => {
+    if (!parsed || parsed.kind !== "url" || !parsed.session) return parsed;
+    return owner ? parsed : { kind: "url" as const, url: parsed.url };
+  }, [parsed, owner]);
   const wantsNative = prefersNativeRoute(path);
   const url = source?.kind === "url" ? source.url : null;
   const focused = ctx?.isActive ?? true;

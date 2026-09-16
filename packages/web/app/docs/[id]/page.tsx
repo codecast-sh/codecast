@@ -9,6 +9,7 @@ import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
+import { DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel, type DocType } from "@codecast/shared/docs";
 import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -42,14 +43,20 @@ import { DocDates } from "../../../components/DocDates";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 const api = _api as any;
 
-const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  plan: { label: "Plan", color: "text-sol-blue", bg: "bg-sol-blue/10 border-sol-blue/30" },
-  design: { label: "Design", color: "text-sol-violet", bg: "bg-sol-violet/10 border-sol-violet/30" },
-  spec: { label: "Spec", color: "text-sol-cyan", bg: "bg-sol-cyan/10 border-sol-cyan/30" },
-  investigation: { label: "Investigation", color: "text-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
-  handoff: { label: "Handoff", color: "text-sol-orange", bg: "bg-sol-orange/10 border-sol-orange/30" },
-  note: { label: "Note", color: "text-sol-text-muted", bg: "bg-sol-text-muted/10 border-sol-text-muted/30" },
+// Styling only; the type list and labels come from @codecast/shared/docs.
+// Typed by DocType so a type added there without a style here fails to compile.
+const DOC_TYPE_STYLE: Record<DocType, { color: string; bg: string }> = {
+  note: { color: "text-sol-text-muted", bg: "bg-sol-text-muted/10 border-sol-text-muted/30" },
+  plan: { color: "text-sol-blue", bg: "bg-sol-blue/10 border-sol-blue/30" },
+  design: { color: "text-sol-violet", bg: "bg-sol-violet/10 border-sol-violet/30" },
+  spec: { color: "text-sol-cyan", bg: "bg-sol-cyan/10 border-sol-cyan/30" },
+  investigation: { color: "text-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
+  handoff: { color: "text-sol-orange", bg: "bg-sol-orange/10 border-sol-orange/30" },
+  decision: { color: "text-sol-red", bg: "bg-sol-red/10 border-sol-red/30" },
+  charter: { color: "text-sol-magenta", bg: "bg-sol-magenta/10 border-sol-magenta/30" },
+  brief: { color: "text-sol-green", bg: "bg-sol-green/10 border-sol-green/30" },
 };
+const docTypeStyle = (docType: string) => DOC_TYPE_STYLE[docType as DocType] ?? DOC_TYPE_STYLE.note;
 
 const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string }> = {
   draft: { icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim" },
@@ -76,7 +83,7 @@ function DocTypeSelector({
   onChange: (v: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const type = DOC_TYPE_CONFIG[value] || DOC_TYPE_CONFIG.note;
+  const type = docTypeStyle(value);
 
   return (
     <div className="relative">
@@ -84,13 +91,13 @@ function DocTypeSelector({
         onClick={() => setOpen(!open)}
         className={`text-xs px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${type.color} ${type.bg} hover:opacity-80`}
       >
-        {type.label}
+        {docTypeLabel(value)}
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute top-full left-0 mt-1 bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1 z-50 min-w-[130px]">
-            {Object.entries(DOC_TYPE_CONFIG).map(([key, cfg]) => (
+            {DOC_TYPES.map((key) => (
               <button
                 key={key}
                 onClick={() => {
@@ -103,7 +110,7 @@ function DocTypeSelector({
                     : "text-sol-text-muted hover:bg-sol-bg-alt"
                 }`}
               >
-                <span className={cfg.color}>{cfg.label}</span>
+                <span className={docTypeStyle(key).color}>{DOC_TYPE_LABELS[key]}</span>
               </button>
             ))}
           </div>
@@ -406,7 +413,7 @@ function DocDetailContent() {
                   </h2>
                   <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
                     {childDocs.map((child) => {
-                      const typeConf = DOC_TYPE_CONFIG[child.doc_type] || DOC_TYPE_CONFIG.note;
+                      const typeConf = docTypeStyle(child.doc_type);
                       return (
                         <Link
                           key={child._id}
@@ -419,7 +426,7 @@ function DocDetailContent() {
                           <span className="flex-1 text-sm text-sol-text truncate">
                             {child.title || "Untitled"}
                           </span>
-                          <span className={`text-[10px] ${typeConf.color}`}>{typeConf.label}</span>
+                          <span className={`text-[10px] ${typeConf.color}`}>{docTypeLabel(child.doc_type)}</span>
                         </Link>
                       );
                     })}

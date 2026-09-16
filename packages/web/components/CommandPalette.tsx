@@ -33,6 +33,9 @@ import { score, matchScore } from "../hooks/useMentionQuery";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
+import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "./presence/memberPresence";
+import { MemberFace } from "./presence/MemberFace";
+import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { triggerSig, useSyncTriggers } from "../hooks/useSyncTriggers";
@@ -192,6 +195,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Threads", path: "/threads", icon: "message", keywords: "threads replies comments conversations unread mentions dms" },
   { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms", feature: "chat" },
+  { label: "Community", path: "/community", icon: "message", keywords: "public rooms codecast users support questions" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },
   { label: "Calls", path: "/calls", icon: "phone", keywords: "huddle call transcript recording meeting summary voice", feature: "calls" },
@@ -325,6 +329,60 @@ function getShortPath(p: string): string {
 }
 
 // ─── Action submenu component (Linear-style) ───────────────────
+/**
+ * One palette row for where a teammate is. In a session: "Go where Ann is"
+ * over the session's title, and selecting it opens that session through the
+ * palette's own session path (navigateToSession). A session outside this
+ * inbox is fetched as an inbox row (useMissingSessionRow) so the line names
+ * it and the row the palette injects carries its real title and author,
+ * not a blank stub. Around but in no session: a muted row that cannot be
+ * selected, so the name still answers a search without offering a jump.
+ */
+export function TeammateItem({
+  row,
+  className,
+  onGo,
+}: {
+  row: TeammateWhereabouts;
+  className: string;
+  onGo: (conv: { _id: string; title?: string }) => void;
+}) {
+  const id = row.conversationId;
+  const fetched = useMissingSessionRow(id && !row.inStore ? id : null);
+  if (!id) {
+    return (
+      <CommandPrimitive.Item
+        value={`__teammate__ ${row.name}|||${row.id}`}
+        disabled
+        className={`${className} opacity-60`}
+      >
+        <MemberFace member={row.member} size={16} title="" showHuddle={false} />
+        <span className="truncate flex-1">{row.name} is around, not in a session</span>
+      </CommandPrimitive.Item>
+    );
+  }
+  const title = row.title ?? fetched?.title;
+  return (
+    <CommandPrimitive.Item
+      value={`__teammate__ go where ${row.name} is|||${row.id}`}
+      data-palette-type="session" data-palette-id={id} data-palette-title={title}
+      onSelect={() => onGo(fetched ?? useInboxStore.getState().sessions[id] ?? { _id: id })}
+      className={className}
+    >
+      <MemberFace member={row.member} size={16} title="" showHuddle={false} />
+      <div className="flex-1 min-w-0">
+        <div className="truncate">Go where {row.name} is</div>
+        <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
+          {title ? cleanTitle(title) : fetched === null ? "a session that no longer opens" : "a session"}
+        </div>
+      </div>
+      {row.since !== undefined && Date.now() - row.since >= 60_000 && (
+        <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">for {compactDuration(Date.now() - row.since)}</span>
+      )}
+    </CommandPrimitive.Item>
+  );
+}
+
 export function ActionSubmenu({
   mode,
   targets,
@@ -858,11 +916,9 @@ export function ActionSubmenu({
     }
     if (mode === "bucket") {
       const store = useInboxStore.getState();
-      // Sessions mid-create carry stub ids the server can't act on — resolve to
-      // the real conversation id and skip (with a hint) if it hasn't landed yet.
       const resolveConvId = (t: any): string | null => {
         const real = store.getConvexId(t._id) ?? t._id;
-        return isConvexId(real) ? real : null;
+        return isConvexId(real) || store.sessions[real] || store.conversations[real] ? real : null;
       };
       const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
         let applied = 0;
@@ -873,7 +929,7 @@ export function ActionSubmenu({
           applied++;
         }
         if (!applied) {
-          toast.error("Session is still being created — try again in a moment");
+          toast.error("Session is no longer available");
           return;
         }
         toast.success(bucketId ? `Labeled ${bucketLabel}` : "Label removed");
@@ -1652,6 +1708,19 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return rows.sort((a, b) => a.s - b.s || b.t - a.t).slice(0, pickingChannels ? 12 : 5);
   }, [open, query, activeTeamId, chatOn, picking, pick]);
 
+  // Where each teammate is, from the roster SNAPSHOT (getState): the roster
+  // re-pushes on every teammate heartbeat and the palette must not re-render
+  // on it while open (the snapshot-memo rule above). The rule itself lives
+  // with the other presence logic (teammateWhereabouts): the server already
+  // withheld any session this viewer cannot open, so every row here is one
+  // the viewer can follow. Not offered in pick mode, which chooses an entity.
+  const teammateRows = useMemo(() => {
+    if (!open || picking) return [] as TeammateWhereabouts[];
+    const state = useInboxStore.getState() as any;
+    const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
+    return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions).slice(0, 6);
+  }, [open, query, picking]);
+
   // Chat message hits ride the same debounced non-throwing lane as
   // conversation search — and the same access story: the server re-checks
   // room membership per hit, so private rooms never leak through here.
@@ -1763,13 +1832,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // in a pane"); anything else leaves it as the blank-pane row.
   const browserPaneUrl = useMemo(() => typedAddress(query), [query]);
 
+  // A staffing proposal (`op-7`, org-staffing.md S4) opens the org page with
+  // its pane, the same way: it has no pill of its own either.
   const decisionRef = useMemo(() => {
-    const m = /^(sd|ds)-(\d+)$/i.exec(query.trim());
+    const m = /^(sd|ds|op)-(\d+)$/i.exec(query.trim());
     if (!m) return null;
     const id = `${m[1].toLowerCase()}-${m[2]}`;
     return m[1].toLowerCase() === "ds"
       ? { kind: "stack" as const, id, href: `/decisions/stacks/${id}` }
-      : { kind: "decision" as const, id, href: `/decisions/${id}` };
+      : m[1].toLowerCase() === "op"
+        ? { kind: "proposal" as const, id, href: `/org?proposal=${id}` }
+        : { kind: "decision" as const, id, href: `/decisions/${id}` };
   }, [query]);
 
   // Hand the current query off to the full /search page — the palette shows a
@@ -2226,7 +2299,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
-        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__") || value.startsWith("__pick__")) return 1;
+        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__") || value.startsWith("__pick__") || value.startsWith("__teammate__")) return 1;
         const idx = value.indexOf("|||");
         const searchable = idx >= 0 ? value.slice(0, idx) : value;
         return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
@@ -2455,6 +2528,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 </CommandPrimitive.Item>
               </>
             )}
+          </CommandPrimitive.Group>
+        )}
+
+        {teammateRows.length > 0 && (
+          <CommandPrimitive.Group heading="Teammates" className={groupClass}>
+            {teammateRows.map((row) => (
+              <TeammateItem key={`mate-${row.id}`} row={row} className={itemClass} onGo={navigateToSession} />
+            ))}
           </CommandPrimitive.Group>
         )}
 
@@ -2703,17 +2784,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {!picking && decisionRef && (
-          <CommandPrimitive.Group heading={decisionRef.kind === "stack" ? "Decision stack" : "Decision"} className={groupClass}>
+          <CommandPrimitive.Group heading={decisionRef.kind === "stack" ? "Decision stack" : decisionRef.kind === "proposal" ? "Staffing proposal" : "Decision"} className={groupClass}>
             <CommandPrimitive.Item
               value={`__entity__ ${decisionRef.id}|||${decisionRef.id}`}
-              data-palette-type={decisionRef.kind === "stack" ? "decision_stack" : "decision"}
+              data-palette-type={decisionRef.kind === "stack" ? "decision_stack" : decisionRef.kind === "proposal" ? "org_proposal" : "decision"}
               data-palette-short-id={decisionRef.id}
               onSelect={() => navigate(decisionRef.href)}
               className={itemClass}
             >
               <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
               <span className="font-mono text-sol-text-dim">{decisionRef.id}</span>
-              <span className="flex-1 truncate">{decisionRef.kind === "stack" ? "open the stack" : "open the decision page"}</span>
+              <span className="flex-1 truncate">{decisionRef.kind === "stack" ? "open the stack" : decisionRef.kind === "proposal" ? "open it on the org page" : "open the decision page"}</span>
               <KeyCap size="xs">→</KeyCap>
             </CommandPrimitive.Item>
           </CommandPrimitive.Group>

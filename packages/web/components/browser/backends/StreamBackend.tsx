@@ -73,6 +73,7 @@ export function StreamBackend({
     tab: null,
     controlAvailable: false,
     hasFrame: false,
+    nav: null,
   });
   const [control, setControl] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -108,8 +109,8 @@ export function StreamBackend({
 
   useWatchEffect(() => onState(paneState), [paneState, onState]);
 
-  // The strip's verbs. Drive is the one people come here for, so it keeps the
-  // pane's `is-on` treatment; the others are the plain panel buttons.
+  // The strip's verbs. The wheel is the one people come here for, so it keeps
+  // the pane's `is-on` treatment; the others are the plain panel buttons.
   const live = status.kind === "live";
   const offerReopen = !!failed?.tabGone && !!tabUrl;
   const busy = tabActions.state.kind === "busy";
@@ -120,8 +121,8 @@ export function StreamBackend({
       actions.push({
         icon: <MousePointerClick className="w-3 h-3" />,
         label: control
-          ? "Stop controlling — back to watching (Esc)"
-          : "Take control: click and type into this page",
+          ? "Hand the page back to the agent (Esc)"
+          : "Take the wheel: your clicks and typing go to this page",
         active: control,
         onClick: () => setControl((v) => !v),
       });
