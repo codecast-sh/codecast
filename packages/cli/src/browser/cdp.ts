@@ -234,7 +234,8 @@ export interface CdpTarget {
  *  (bridge/host.ts Client.session). */
 export type CdpEndpoint = number | { port: number; token?: string; session?: string };
 
-export const BRIDGE_HTTP_TIMEOUT_MS = 25_000;
+/** Longer than the host's own tab listing budget (host.ts listTabs, 40 s), so the host answers before the reader gives up. */
+export const BRIDGE_HTTP_TIMEOUT_MS = 45_000;
 
 export function cdpHttpTimeout(ep: CdpEndpoint, directMs = 5_000, bridgeMs = BRIDGE_HTTP_TIMEOUT_MS): number {
   return typeof ep !== "number" && ep.token ? bridgeMs : directMs;

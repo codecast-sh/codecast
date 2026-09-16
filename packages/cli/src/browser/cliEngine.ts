@@ -508,6 +508,31 @@ function settle(o: Ctx): void {
 export interface RunOptions {
   /** Inside `do`: no footer per step, the flow prints one at the end. */
   quiet?: boolean;
+  /** The pause before the one stall retry; tests shorten it. */
+  stallRetryDelayMs?: number;
+}
+
+/**
+ * A failure from the bridge's own plumbing before the verb reached the page:
+ * the worker's process was not scheduled (Chrome runs it at background
+ * priority) and a tab listing, an attach or a debugger step timed out. The
+ * page was not touched, so running the same verb again is safe, and the
+ * worker answers the moment it is scheduled, so the retry usually succeeds.
+ * A timeout inside the page (an eval, a wait) is not this: it may have acted.
+ */
+export function isStallFailure(output: string): boolean {
+  if (!/did not answer within \d+ms/.test(output)) return false;
+  return /tabs\.list|Target\.setDiscoverTargets|Target\.attachToTarget|debugger\.attach|domain enable|storage\.session|Chrome tabs\.query|overlay install|\battach\b/.test(output);
+}
+
+/** How long to let the worker's process get scheduled before the one retry. */
+export const STALL_RETRY_DELAY_MS = 3_000;
+
+/** What a verb's engine run is waiting on, for the narration while it runs long. */
+export function engineStepLabel(verb: string, engineArgs: string[]): string {
+  const url = engineArgs.slice(1).find((x) => /^[a-z]+:\/\//i.test(x));
+  if (verb === "open") return `opening ${url ?? "the page"} in Chrome (attach, navigate, load)`;
+  return `waiting for the browser to finish \`${verb}\``;
 }
 
 /**
@@ -610,9 +635,10 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
 
   const calls = translate(verb, forwarded, recallFind(session));
   let retried = false;
+  let retriedStall = false;
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i];
-    let res = runEngine(call.args, o);
+    let res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
     // A ref the engine cannot resolve any more — the page re-rendered, or the
     // route changed since the snapshot. Re-find it and retry once. Gated on
     // the engine's own "no such element" wording, because a retry re-runs the
@@ -636,6 +662,15 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
       } else {
         res = { ...res, stderr: `this session's tab is gone — \`cast browser open <url>\` starts a new one\n`, stdout: "" };
       }
+    }
+    // The bridge stalled before the verb reached the page: the extension's
+    // process was not scheduled. Once, after a pause, the same verb again;
+    // the human should see a slow command, not a failed one.
+    if (res.status !== 0 && !retriedStall && isStallFailure(res.stderr + res.stdout)) {
+      retriedStall = true;
+      console.error(fmt.muted(`  the Chrome extension did not answer in time (its process was not scheduled); trying once more…`));
+      await new Promise((r) => setTimeout(r, run.stallRetryDelayMs ?? STALL_RETRY_DELAY_MS));
+      res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
     }
     // A snapshot is the one output we rewrite: names that repeat get their
     // ordinal so the agent can say which one it means, and the ref table is
