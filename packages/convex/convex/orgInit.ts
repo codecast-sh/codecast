@@ -1,4 +1,5 @@
-import { mutation, query } from "./functions";
+import { action, mutation, query } from "./functions";
+import { api } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -6,7 +7,9 @@ import { scopedFetch } from "./data";
 import { workspaceKey } from "./lib/access";
 import { userCanAdminRole } from "./lib/orgAccess";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
-import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope } from "./org";
+import { collectOrgSessions, requireWorkspaceCaller } from "./org";
+import { latestEventAnywhere, roleActivity } from "./orgHealth";
+import { capacity } from "@codecast/shared/contracts/orgCapacity";
 import {
   overlapsAmong,
   performCreateRole,
@@ -19,17 +22,29 @@ import {
   resolveScopeRef,
   rolesInBoundary,
 } from "./orgRoles";
-import { capsFor, countersFor, trustOf, utcDay } from "./orgEvents";
+import { capsFor, countersFor, trustOf } from "./orgEvents";
 import { findDecision } from "./sessionDecisions";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import {
   applyProposalChanges,
   extractOrgProposal,
+  orgEveryToMs,
   orgProposalVerdict,
+  type OrgAdoptChange,
+  type OrgBudgetChange,
+  type OrgChange,
+  type OrgFileChange,
   type OrgProjectChange,
+  type OrgProjectMetaChange,
   type OrgProposal,
   type OrgRoleProposal,
+  type OrgRoutineChange,
+  type OrgScopeChange,
+  type OrgTrustChange,
 } from "@codecast/shared/contracts/orgProposal";
+import { performSetTrust, standingConversationOf } from "./orgRoles";
+import { insertTask } from "./agentTasks";
+import { charterPatch } from "./lib/orgCharter";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -42,17 +57,20 @@ import {
 type Ctx = { db: any };
 
 export const ANALYSIS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-export const IDLE_ROLE_DAYS = 14;
+export const IDLE_ROLE_DAYS = capacity("idle_days");
+// The week org.health reads (orgHealth.HEALTH_WINDOW_7D_MS); a literal here
+// because orgHealth loads through org.ts, which re-exports this module.
 export const WAKE_HISTORY_DAYS = 7;
 export const ANALYSIS_CAPS = {
   projects: 100,
   plans: 200,
   tasks: 2000,
-  docs: 1000,
+  docs: 300,
   insights: 300,
   channels: 50,
-  messages_per_channel: 200,
+  messages_per_channel: 50,
   decisions: 300,
+  assignments: 2000,
   labels: 30,
   titles_per_path: 5,
   git_roots: 40,
@@ -64,19 +82,28 @@ const topOf = (m: Map<string, number>, n: number) =>
   Array.from(m.entries()).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, n).map(([name, count]) => ({ name, count }));
 const objOf = (m: Map<string, number>): Record<string, number> => Object.fromEntries(m);
 
-export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
-  const cutoff = now - ANALYSIS_WINDOW_MS;
-  const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
-  const workspaceLabel = teamId ? (await ctx.db.get(teamId))?.name ?? "" : (await ctx.db.get(userId))?.name ?? "";
+// The inputs are three bounded reads, each its own query so none crosses the
+// execution limit on a large workspace, run from one action and merged once.
+// computeAnalysisInputs runs the same three in process for tests and any
+// server side caller; the shape is identical either way.
 
-  // ── Work items, through the workspace chokepoint ────────────────────────
-  const [projects, plans, tasks, docs] = await Promise.all([
-    scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
-    scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans }).then((r) => r.records),
-    scopedFetch(ctx, "tasks", { ...fetchOpts, limit: ANALYSIS_CAPS.tasks }).then((r) => r.records),
-    scopedFetch(ctx, "docs", { ...fetchOpts, limit: ANALYSIS_CAPS.docs, stripFields: ["content", "entries", "content_embedding"] }).then((r) => r.records),
-  ]);
+type AnalysisWork = ReturnType<typeof shapeWork>;
+type AnalysisOrg = Awaited<ReturnType<typeof computeAnalysisOrg>>;
+type AnalysisSignals = Awaited<ReturnType<typeof computeAnalysisSignals>>;
+/** What the org slice needs from the work slice: small rows, never the tasks. */
+export type AnalysisHandoff = {
+  projects: Array<{ id: string; short_id?: string; title: string; open_tasks: number }>;
+  plans: Array<{ id: string; short_id: string }>;
+  latest_event: number | null;
+};
 
+function statusCounts(rows: any[]): Record<string, number> {
+  const m = new Map<string, number>();
+  for (const t of rows) bump(m, t.status ?? "open");
+  return objOf(m);
+}
+
+function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[]) {
   const tasksByProject = new Map<string, any[]>();
   const tasksByPlan = new Map<string, any[]>();
   let unfiledOpen = 0;
@@ -85,11 +112,6 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
     if (t.plan_id) tasksByPlan.set(String(t.plan_id), [...(tasksByPlan.get(String(t.plan_id)) ?? []), t]);
     if (!t.project_id && !t.plan_id && t.status !== "done" && t.status !== "dropped") unfiledOpen++;
   }
-  const statusCounts = (rows: any[]) => {
-    const m = new Map<string, number>();
-    for (const t of rows) bump(m, t.status ?? "open");
-    return objOf(m);
-  };
   const projectRows = projects.map((p) => {
     const mine = tasksByProject.get(String(p._id)) ?? [];
     return {
@@ -125,8 +147,42 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
   });
   const docsByType = new Map<string, number>();
   for (const d of docs) if (!d.archived_at) bump(docsByType, d.doc_type ?? "note");
+  let latest: number | null = null;
+  for (const r of [...tasks, ...plans]) if (r.updated_at && (latest === null || r.updated_at > latest)) latest = r.updated_at;
+  const handoff: AnalysisHandoff = {
+    projects: projectRows.map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.tasks.open })),
+    plans: planRows.map((p) => ({ id: p.id, short_id: p.short_id })),
+    latest_event: latest,
+  };
+  return {
+    projects: projectRows,
+    plans: planRows,
+    tasks: { total: tasks.length, by_status: statusCounts(tasks), unfiled_open: unfiledOpen, truncated: tasks.length >= ANALYSIS_CAPS.tasks },
+    docs_by_type: objOf(docsByType),
+    truncated: {
+      projects: projects.length >= ANALYSIS_CAPS.projects,
+      plans: plans.length >= ANALYSIS_CAPS.plans,
+      tasks: tasks.length >= ANALYSIS_CAPS.tasks,
+      docs: docs.length >= ANALYSIS_CAPS.docs,
+    },
+    handoff,
+  };
+}
 
-  // ── Sessions: the org scan (30 days, access filtered, row capped) ───────
+// ── Work items, through the workspace chokepoint ──────────────────────────
+export async function computeAnalysisWork(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<AnalysisWork> {
+  const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
+  const [projects, plans, tasks, docs] = await Promise.all([
+    scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
+    scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans }).then((r) => r.records),
+    scopedFetch(ctx, "tasks", { ...fetchOpts, limit: ANALYSIS_CAPS.tasks }).then((r) => r.records),
+    scopedFetch(ctx, "docs", { ...fetchOpts, limit: ANALYSIS_CAPS.docs, stripFields: ["content", "entries", "content_embedding"] }).then((r) => r.records),
+  ]);
+  return shapeWork(projects, plans, tasks, docs);
+}
+
+// ── Sessions (the org scan), members, labels, git roots, roles ────────────
+export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, work: AnalysisHandoff) {
   const scan = await collectOrgSessions(ctx, userId, teamId, now);
   const perMember = new Map<string, { sessions: number; by_path: Map<string, number> }>();
   const gitRoots = new Map<string, { git_root: string; remote_url?: string; repo?: string; sessions: number }>();
@@ -164,43 +220,27 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
   }
 
   // Labels are personal filing (inbox_buckets): the caller's buckets over the
-  // scanned sessions.
+  // scanned sessions. The assignment read is capped: labels are colour, not
+  // evidence, and a caller with thousands of filed sessions must not sink the
+  // whole read.
   const labels = new Map<string, number>();
   const buckets: any[] = await ctx.db.query("inbox_buckets").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
   const bucketName = new Map(buckets.filter((b) => !b.archived_at).map((b) => [String(b._id), b.name]));
-  const assignments: any[] = await ctx.db.query("bucket_assignments").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  const assignments: any[] = await ctx.db.query("bucket_assignments").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).take(ANALYSIS_CAPS.assignments);
   for (const a of assignments) {
     const name = a.bucket_id ? bucketName.get(String(a.bucket_id)) : undefined;
     if (name && byId.has(String(a.conversation_id))) bump(labels, name);
   }
 
-  // ── Insights: themes and outcomes over the window ───────────────────────
-  const insightRows: any[] = teamId
-    ? await ctx.db.query("session_insights").withIndex("by_team_generated_at", (q: any) => q.eq("team_id", teamId).gte("generated_at", cutoff)).order("desc").take(ANALYSIS_CAPS.insights)
-    : await ctx.db.query("session_insights").withIndex("by_actor_generated_at", (q: any) => q.eq("actor_user_id", userId).gte("generated_at", cutoff)).order("desc").take(ANALYSIS_CAPS.insights);
-  const themes = new Map<string, number>();
-  const outcomes = new Map<string, number>();
-  const headlines: Array<{ headline: string; outcome: string; at: number }> = [];
-  for (const i of insightRows) {
-    for (const t of i.themes ?? []) bump(themes, t);
-    bump(outcomes, i.outcome_type ?? "unknown");
-    if (headlines.length < 20 && (i.headline || i.goal)) headlines.push({ headline: i.headline ?? i.goal, outcome: i.outcome_type, at: i.generated_at });
-  }
-
-  // ── Chat channels with activity (team only) ─────────────────────────────
-  const channels: Array<{ id: string; name: string; messages_30d: number; last_at?: number }> = [];
-  if (teamId) {
-    const rows: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
-    for (const ch of rows) {
-      if (!ch.name || ch.archived_at) continue;
-      const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.messages_per_channel);
-      channels.push({ id: String(ch._id), name: ch.name, messages_30d: msgs.length, last_at: msgs[0]?.created_at });
-    }
-  }
-
   // ── Roles, anchors, and each role's health (update mode reads these) ────
   const roleRows = scan.roles;
   const planProjectOf = await planProjectsOf(ctx, roleRows.map((r: any) => r.scope));
+  const projectTitle = new Map(work.projects.map((p) => [p.id, p.title]));
+  const planShort = new Map(work.plans.map((p) => [p.id, p.short_id]));
+  // The whole workspace idle clock: the newest task or plan (handed over from
+  // the work slice) or the newest scanned session.
+  const latestSession = latestEventAnywhere([], [], scan);
+  const latestAnywhere = work.latest_event === null ? latestSession : latestSession === null ? work.latest_event : Math.max(work.latest_event, latestSession);
   const coveredProjects = new Set<string>();
   let wholeWorkspaceRoles = 0;
   const roles = [];
@@ -210,22 +250,13 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
     for (const id of ids.project_ids) coveredProjects.add(id);
     for (const id of ids.plan_ids) { const pr = planProjectOf.get(id); if (pr) coveredProjects.add(pr); }
     const scopeNames = {
-      projects: ids.project_ids.map((id) => projects.find((p) => String(p._id) === id)?.title ?? id),
-      plans: ids.plan_ids.map((id) => plans.find((p) => String(p._id) === id)?.short_id ?? id),
+      projects: ids.project_ids.map((id) => projectTitle.get(id) ?? id),
+      plans: ids.plan_ids.map((id) => planShort.get(id) ?? id),
     };
-    // Last activity in the scope: the newest feed row, one read per role.
-    let lastScopeEventAt: number | null = null;
-    const resolved = await resolveScope(ctx, userId, { role_id: String(role._id) });
-    if (resolved) {
-      const feed = await computeScopeFeed(ctx, resolved, { limit: 1, now });
-      lastScopeEventAt = feed.rows[0]?.updated_at ?? null;
-    }
-    const wakes: any[] = await ctx.db.query("role_wakes").withIndex("by_role_created", (q: any) => q.eq("role_id", role._id).gte("created_at", now - WAKE_HISTORY_DAYS * 86_400_000)).collect();
-    const wakesByDay = new Map<string, number>();
-    let held = 0;
-    for (const w of wakes) { if (w.status === "held") held++; else bump(wakesByDay, utcDay(w.created_at)); }
+    // Last activity in the scope and the week's wakes: the one reading
+    // org.health uses (orgHealth.roleActivity).
+    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere });
     const caps = capsFor(role);
-    const daysAtCap = Array.from(wakesByDay.values()).filter((n) => n >= caps.wakes_per_day).length;
     const hands = (scan.byParent.get(`role:${String(role._id)}`) ?? []).length;
     const parent = role.reports_to?.kind === "role"
       ? `@${roleRows.find((r: any) => String(r._id) === String(role.reports_to.role_id))?.handle ?? "?"}`
@@ -246,70 +277,155 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
       standing: !!role.anchor_id,
       last_wake_at: role.last_wake_at ?? null,
       hands,
-      last_scope_event_at: lastScopeEventAt,
-      idle_days: lastScopeEventAt ? Math.floor((now - lastScopeEventAt) / 86_400_000) : null,
-      idle: !lastScopeEventAt || now - lastScopeEventAt > IDLE_ROLE_DAYS * 86_400_000,
-      wakes_7d: { total: wakes.length - held, held, days_at_cap: daysAtCap, by_day: objOf(wakesByDay) },
+      last_scope_event_at: activity.last_scope_event_at,
+      idle_days: activity.idle_days,
+      idle: activity.idle,
+      wakes_7d: activity.wakes_7d,
       overlaps: overlapsAmong(role, roleRows, planProjectOf).map((o) => ({ handle: o.handle, projects: o.project_ids.length, plans: o.plan_ids.length })),
     });
   }
   const anchors = scan.anchors.map((a: any) => ({ id: String(a._id), name: a.name, status: a.status, role_id: a.org_role_id ? String(a.org_role_id) : undefined }));
-  const projectsWithoutRole = wholeWorkspaceRoles > 0 ? [] : projectRows.filter((p) => !coveredProjects.has(p.id)).map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.tasks.open }));
+  const projectsWithoutRole = wholeWorkspaceRoles > 0 ? [] : work.projects.filter((p) => !coveredProjects.has(p.id)).map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.open_tasks }));
   let sessionsUnfiled = 0;
   for (const [key, list] of scan.byParent) if (key.startsWith("user:")) sessionsUnfiled += list.length;
 
-  // ── Open decisions by category ──────────────────────────────────────────
-  const memberSet = new Set(scan.memberIds.map(String));
-  const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_status_created", (q: any) => q.eq("status", "pending").gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.decisions);
-  const decisionsByCategory = new Map<string, number>();
-  for (const d of pending) {
-    const people: string[] = (d.asked_user_ids ?? [d.user_id]).map(String);
-    if (!people.some((p) => memberSet.has(p))) continue;
-    bump(decisionsByCategory, d.category ?? "uncategorized");
-  }
-
   return {
-    workspace: teamId ? { kind: "team" as const, id: String(teamId), name: workspaceLabel } : { kind: "user" as const, id: String(userId), name: workspaceLabel },
-    window_days: ANALYSIS_WINDOW_MS / 86_400_000,
-    caps: ANALYSIS_CAPS,
-    projects: projectRows,
-    plans: planRows,
-    tasks: { total: tasks.length, by_status: statusCounts(tasks), unfiled_open: unfiledOpen, truncated: tasks.length >= ANALYSIS_CAPS.tasks },
-    docs_by_type: objOf(docsByType),
-    // A list at its cap is a floor, not a count; the analyzer reports it as
-    // "could not verify" rather than as the total.
-    truncated: {
-      projects: projects.length >= ANALYSIS_CAPS.projects,
-      plans: plans.length >= ANALYSIS_CAPS.plans,
-      tasks: tasks.length >= ANALYSIS_CAPS.tasks,
-      docs: docs.length >= ANALYSIS_CAPS.docs,
-      insights: insightRows.length >= ANALYSIS_CAPS.insights,
-    },
     members,
     labels: topOf(labels, ANALYSIS_CAPS.labels),
     git_roots: Array.from(gitRoots.values()).sort((a, b) => b.sessions - a.sessions).slice(0, ANALYSIS_CAPS.git_roots),
     sessions: { total: scan.sessions.size, truncated: scan.truncated, unfiled: sessionsUnfiled, titles_by_path: Object.fromEntries(titlesByPath) },
-    insights: { total: insightRows.length, themes: topOf(themes, 30), outcomes: objOf(outcomes), headlines },
-    channels,
     org: { roles, anchors, projects_without_role: projectsWithoutRole, whole_workspace_roles: wholeWorkspaceRoles },
+  };
+}
+
+// ── Insights, chat channels, open decisions ───────────────────────────────
+export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+  const cutoff = now - ANALYSIS_WINDOW_MS;
+  const insightRows: any[] = teamId
+    ? await ctx.db.query("session_insights").withIndex("by_team_generated_at", (q: any) => q.eq("team_id", teamId).gte("generated_at", cutoff)).order("desc").take(ANALYSIS_CAPS.insights)
+    : await ctx.db.query("session_insights").withIndex("by_actor_generated_at", (q: any) => q.eq("actor_user_id", userId).gte("generated_at", cutoff)).order("desc").take(ANALYSIS_CAPS.insights);
+  const themes = new Map<string, number>();
+  const outcomes = new Map<string, number>();
+  const headlines: Array<{ headline: string; outcome: string; at: number }> = [];
+  for (const i of insightRows) {
+    for (const t of i.themes ?? []) bump(themes, t);
+    bump(outcomes, i.outcome_type ?? "unknown");
+    if (headlines.length < 20 && (i.headline || i.goal)) headlines.push({ headline: i.headline ?? i.goal, outcome: i.outcome_type, at: i.generated_at });
+  }
+
+  // Chat channels with activity (team only). messages_30d is a floor at the
+  // per channel cap.
+  const channels: Array<{ id: string; name: string; messages_30d: number; last_at?: number }> = [];
+  if (teamId) {
+    const rows: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
+    for (const ch of rows) {
+      if (!ch.name || ch.archived_at) continue;
+      const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.messages_per_channel);
+      channels.push({ id: String(ch._id), name: ch.name, messages_30d: msgs.length, last_at: msgs[0]?.created_at });
+    }
+  }
+
+  // Open decisions by category: one read per member (the asker's account),
+  // never the deployment's newest rows; the cap applies per member.
+  const memberIds: Id<"users">[] = teamId
+    ? (await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect()).map((m: any) => m.user_id)
+    : [userId];
+  const decisionsByCategory = new Map<string, number>();
+  for (const memberId of memberIds) {
+    const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", memberId).eq("status", "pending").gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.decisions);
+    for (const d of pending) bump(decisionsByCategory, d.category ?? "uncategorized");
+  }
+  return {
+    insights: { total: insightRows.length, themes: topOf(themes, 30), outcomes: objOf(outcomes), headlines },
+    insights_truncated: insightRows.length >= ANALYSIS_CAPS.insights,
+    channels,
     decisions_open_by_category: objOf(decisionsByCategory),
+  };
+}
+
+export function mergeAnalysisInputs(
+  userId: Id<"users">,
+  teamId: Id<"teams"> | undefined,
+  workspaceLabel: string,
+  work: AnalysisWork,
+  org: AnalysisOrg,
+  signals: AnalysisSignals,
+  now: number,
+) {
+  const { handoff: _handoff, truncated, ...rest } = work;
+  return {
+    workspace: teamId ? { kind: "team" as const, id: String(teamId), name: workspaceLabel } : { kind: "user" as const, id: String(userId), name: workspaceLabel },
+    window_days: ANALYSIS_WINDOW_MS / 86_400_000,
+    caps: ANALYSIS_CAPS,
+    ...rest,
+    // A list at its cap is a floor, not a count; the analyzer reports it as
+    // "could not verify" rather than as the total.
+    truncated: { ...truncated, insights: signals.insights_truncated },
+    ...org,
+    insights: signals.insights,
+    channels: signals.channels,
+    decisions_open_by_category: signals.decisions_open_by_category,
     generated_at: now,
   };
 }
 
-export const analysisInputs = query({
-  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")) },
-  handler: async (ctx, args) => {
+export async function workspaceLabelOf(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<string> {
+  return teamId ? (await ctx.db.get(teamId))?.name ?? "" : (await ctx.db.get(userId))?.name ?? "";
+}
+
+/** The three slices in one process: tests and server side callers. */
+export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+  const work = await computeAnalysisWork(ctx, userId, teamId);
+  const [org, signals, label] = await Promise.all([
+    computeAnalysisOrg(ctx, userId, teamId, now, work.handoff),
+    computeAnalysisSignals(ctx, userId, teamId, now),
+    workspaceLabelOf(ctx, userId, teamId),
+  ]);
+  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now);
+}
+
+// One slice per call, so each read stays inside the execution limit on a
+// large workspace; the action below runs the three and merges them.
+export const analysisPart = query({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals")),
+    work: v.optional(v.any()),
+    now: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<any> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
-    return computeAnalysisInputs(ctx, userId, args.team_id, Date.now());
+    const now = args.now ?? Date.now();
+    if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
+    if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
+    if (!args.work) throw new Error("the org slice needs the work slice's handoff");
+    return computeAnalysisOrg(ctx, userId, args.team_id, now, args.work as AnalysisHandoff);
+  },
+});
+
+export const analysisInputs = action({
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args): Promise<any> => {
+    const now = Date.now();
+    const part = (api as any).orgInit.analysisPart;
+    const [work, signals] = await Promise.all([
+      ctx.runQuery(part, { ...args, part: "work", now }),
+      ctx.runQuery(part, { ...args, part: "signals", now }),
+    ]);
+    if (!work || !signals) return null;
+    const org = await ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff });
+    if (!org) return null;
+    const { label, user_id, ...rest } = signals;
+    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now);
   },
 });
 
 // ── Apply (O2) ────────────────────────────────────────────────────────────────
 
-type Boundary = { team_id?: Id<"teams">; scope_user_id?: Id<"users"> };
-type ApplyResult =
+export type Boundary = { team_id?: Id<"teams">; scope_user_id?: Id<"users"> };
+export type ApplyResult =
   | { status: "applied"; note: string; role?: { id: string; short_id: string; handle: string } }
   | { status: "skipped"; note: string }
   | { status: "unanswered" }
@@ -339,7 +455,7 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
   return { project_ids, plan_ids };
 }
 
-async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string }): Promise<ApplyResult> {
+export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string }): Promise<ApplyResult> {
   const handle = p.handle.trim().toLowerCase();
   const charter = [p.charter?.trim(), note ? `Changes asked for by the person who approved this role:\n${note}` : undefined].filter(Boolean).join("\n\n") || undefined;
   // A live role with this handle is never adopted: it may be one the person
@@ -366,7 +482,7 @@ async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: O
   };
 }
 
-async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, changes: OrgProjectChange[], note: string | undefined): Promise<ApplyResult> {
+export async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, changes: OrgProjectChange[], note: string | undefined): Promise<ApplyResult> {
   const key = workspaceKey(boundary.team_id ? { type: "team", teamId: boundary.team_id } : { type: "personal", userId });
   const now = Date.now();
   const done: string[] = [];
@@ -409,7 +525,7 @@ async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, 
   return { status: "applied", note: done.join("; ") || "nothing to change" };
 }
 
-async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[] }, humanDecision: string): Promise<ApplyResult> {
+export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[] }, humanDecision: string): Promise<ApplyResult> {
   const handle = p.handle.replace(/^@/, "").toLowerCase();
   const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle);
   if (!role) throw new Error(`No live role @${handle} in this workspace`);
@@ -426,12 +542,124 @@ async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: {
   return { status: "applied", note: `@${role.handle}: ${did.join("; ") || "nothing to change"}`, role: { id: String(role._id), short_id: role.short_id, handle: role.handle } };
 }
 
-async function applyRetire(ctx: Ctx, userId: Id<"users">, boundary: Boundary, handleRef: string): Promise<ApplyResult> {
+export async function applyRetire(ctx: Ctx, userId: Id<"users">, boundary: Boundary, handleRef: string): Promise<ApplyResult> {
   const handle = handleRef.replace(/^@/, "").toLowerCase();
   const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === handleRef);
   if (!role) return { status: "applied", note: `@${handle} is already retired or never existed` };
   const r = await performRetireRole(ctx, userId, { role_id: String(role._id) });
   return { status: "applied", note: `retired @${role.handle} (${r.cleared} sessions back under their owners, ${r.rehomed} roles re-homed)` };
+}
+
+// ── The staffing changes (org-staffing.md S4) ────────────────────────────────
+// Six more change kinds, each a thin call into the role writers with the
+// person's decision as the human authority. `applyOrgChange` is the one
+// dispatcher the proposal mutations use for every kind, old and new.
+
+export type ApplyOpts = { provision: boolean; human_decision: string };
+
+async function liveRole(ctx: Ctx, boundary: Boundary, handleRef: string) {
+  const handle = handleRef.replace(/^@/, "").toLowerCase();
+  const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === handleRef);
+  if (!role) throw new Error(`No live role @${handle} in this workspace`);
+  return role;
+}
+const roleRef = (role: any) => ({ id: String(role._id), short_id: role.short_id, handle: role.handle });
+
+export async function applyScope(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgScopeChange, opts: ApplyOpts): Promise<ApplyResult> {
+  return applyMove(ctx, userId, boundary, { handle: p.handle, scope_add: p.add, scope_remove: p.remove }, opts.human_decision);
+}
+
+export async function applyBudget(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgBudgetChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const before = capsFor(role);
+  const updated = await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
+  const moved = (["hands_per_day", "wakes_per_day", "tokens_per_day"] as const).filter((k) => before[k] !== updated.caps[k]).map((k) => `${k.replace("_per_day", "")} ${before[k]} → ${updated.caps[k]}/day`);
+  return { status: "applied", note: `@${role.handle}: ${moved.join(", ") || "caps unchanged"}`, role: roleRef(role) };
+}
+
+export async function applyTrust(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgTrustChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const r = await performSetTrust(ctx, userId, { role_id: String(role._id), trust: p.trust, human_decision: opts.human_decision });
+  return { status: "applied", note: `@${role.handle}: trust ${r.previous_trust} → ${p.trust}`, role: roleRef(role) };
+}
+
+// A routine is a recurring trigger on the role's standing session, through
+// the same insert every `cast trigger add --every` uses. The first run is one
+// cadence out: the person accepted a rhythm, not an immediate wake.
+export async function applyRoutine(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoutineChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const interval = orgEveryToMs(p.every);
+  if (!interval) throw new Error(`"${p.every}" is not a cadence like 7d, 1d or 12h`);
+  const standing = await standingConversationOf(ctx, role);
+  if (!standing) throw new Error(`@${role.handle} has no standing session to run a routine on; provision the role first`);
+  const now = Date.now();
+  const created = await insertTask(ctx as any, standing.user_id, {
+    title: p.title.trim(),
+    prompt: p.prompt,
+    target_conversation_id: String(standing._id),
+    originating_conversation_id: String(standing._id),
+    project_path: standing.project_path ?? undefined,
+    agent_type: standing.agent_type === "claude_code" ? "claude" : standing.agent_type ?? undefined,
+    schedule_type: "recurring",
+    interval_ms: interval,
+    run_at: now + interval,
+  });
+  return { status: "applied", note: `@${role.handle}: routine "${p.title.trim()}" every ${p.every} (${created.short_id})`, role: roleRef(role) };
+}
+
+// The charter fields on a project (org-staffing.md S7), through the one
+// charter writer every project and plan update calls (lib/orgCharter).
+export async function applyProjectMeta(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgProjectMetaChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const ref = await resolveScopeRef(ctx, boundary, `project:${p.project}`);
+  const project = ref.kind === "project" ? await ctx.db.get(ref.id) : null;
+  if (!project) throw new Error(`No project "${p.project}" in this workspace`);
+  const { project: _ref, kind: _kind, ...fields } = p;
+  const patch = await charterPatch(ctx, project, fields, "projects");
+  await ctx.db.patch(project._id, { ...patch, updated_at: Date.now() });
+  const did = Object.keys(patch).map((k) => (k === "owner_role_id" ? `owner ${p.owner}` : k === "priority" ? String(patch.priority ?? "no priority") : k.replace(/_/g, " ")));
+  return { status: "applied", note: `project "${project.title}": ${did.join(", ") || "nothing to change"}` };
+}
+
+// This session becomes the role's standing session (org-staffing.md S6):
+// the provision path with adopt_conversation_id, which takes a short id, a
+// row id or the native session id the CLI knows itself by.
+export async function applyAdopt(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgAdoptChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const r = await performProvisionRole(ctx, userId, { role_id: String(role._id), adopt_conversation_id: p.conversation.trim() });
+  return { status: "applied", note: `@${role.handle}: adopted ${r?.short_id ?? p.conversation} as its standing session`, role: roleRef(role) };
+}
+
+// File a plan under a project (the review's "18 plans with open work under no
+// project"): both refs resolve inside the boundary, the plan row and its doc
+// take the project, the way a project merge moves them (applyProjects).
+export async function applyFile(ctx: Ctx, _userId: Id<"users">, boundary: Boundary, p: OrgFileChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const planRef = await resolveScopeRef(ctx, boundary, `plan:${p.plan}`);
+  const projectRef = await resolveScopeRef(ctx, boundary, `project:${p.project}`);
+  const plan = planRef.kind === "plan" ? await ctx.db.get(planRef.id) : null;
+  const project = projectRef.kind === "project" ? await ctx.db.get(projectRef.id) : null;
+  if (!plan || !project) throw new Error(`No ${!plan ? `plan "${p.plan}"` : `project "${p.project}"`} in this workspace`);
+  if (String(plan.project_id ?? "") === String(project._id)) return { status: "applied", note: `${plan.short_id} is already under "${project.title}"` };
+  const now = Date.now();
+  await ctx.db.patch(plan._id, { project_id: project._id, updated_at: now });
+  if (plan.doc_id) { const doc = await ctx.db.get(plan.doc_id); if (doc) await ctx.db.patch(doc._id, { project_id: project._id, updated_at: now }); }
+  return { status: "applied", note: `filed ${plan.short_id} "${plan.title}" under "${project.title}"` };
+}
+
+/** One change of any kind, applied. Throws on a refusal; the caller records it. */
+export async function applyOrgChange(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {
+  switch (change.kind) {
+    case "role": return applyRole(ctx, userId, boundary, change, note, opts);
+    case "projects": return applyProjects(ctx, userId, boundary, change.changes, note);
+    case "move": return applyMove(ctx, userId, boundary, change, opts.human_decision);
+    case "retire": return applyRetire(ctx, userId, boundary, change.handle);
+    case "scope": return applyScope(ctx, userId, boundary, change, opts);
+    case "budget": return applyBudget(ctx, userId, boundary, change, opts);
+    case "trust": return applyTrust(ctx, userId, boundary, change, opts);
+    case "routine": return applyRoutine(ctx, userId, boundary, change, opts);
+    case "project_meta": return applyProjectMeta(ctx, userId, boundary, change, opts);
+    case "adopt": return applyAdopt(ctx, userId, boundary, change, opts);
+    case "file": return applyFile(ctx, userId, boundary, change, opts);
+  }
 }
 
 // One answered decision → one org change. Reads the proposal block from the
@@ -473,11 +701,7 @@ export async function performApplyDecision(ctx: Ctx, userId: Id<"users">, ref: s
   const changed = verdict === "apply_with_changes" ? applyProposalChanges(proposal, decision.answer_text) : { proposal, note: undefined };
   const p: OrgProposal = changed.proposal;
   try {
-    let result: ApplyResult;
-    if (p.kind === "role") result = await applyRole(ctx, userId, boundary, p, changed.note, { provision: opts.provision ?? true, human_decision: humanDecision });
-    else if (p.kind === "projects") result = await applyProjects(ctx, userId, boundary, p.changes, changed.note);
-    else if (p.kind === "move") result = await applyMove(ctx, userId, boundary, p, humanDecision);
-    else result = await applyRetire(ctx, userId, boundary, p.handle);
+    const result = await applyOrgChange(ctx, userId, boundary, p, { provision: opts.provision ?? true, human_decision: humanDecision }, changed.note);
     if (result.status === "applied") await stamp(result.note);
     return { ...result, decision: id };
   } catch (err) {

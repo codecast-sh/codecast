@@ -1276,3 +1276,25 @@ describe("applyPatches drops org tree pointers", () => {
     expect(row.title).toBe("renamed"); // the rest of the patch still lands
   });
 });
+
+// Hiring the chief of staff from the web: the provisioned standing session
+// starts in a project, so the dispatch forwards the page's project_path; an
+// adoption keeps the adopted session's own path and sends none.
+describe("staffChiefOfStaff side effect", () => {
+  const userId = "users_owner";
+  const run = async (input: Record<string, unknown>) => {
+    let mutationArgs: unknown;
+    await (dispatch as any)._handler({
+      auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) },
+      db: makeFakeDb({}),
+      runMutation: async (_mutation: unknown, args: unknown) => { mutationArgs = args; return { role: {}, created: true }; },
+    }, { action: "staffChiefOfStaff", args: [input] });
+    return mutationArgs;
+  };
+  test("forwards team_id and project_path for a provisioned seat, and adopt_conversation_id without a path for an adoption", async () => {
+    expect(await run({ team_id: "teams_acme", host_user_id: userId, client_id: "orgrolestub-chief-1", project_path: "/Users/me/src/app" }))
+      .toEqual({ team_id: "teams_acme", project_path: "/Users/me/src/app" });
+    expect(await run({ team_id: "teams_acme", host_user_id: userId, client_id: "orgrolestub-chief-2", adopt_conversation_id: "conversations_me" }))
+      .toEqual({ team_id: "teams_acme", adopt_conversation_id: "conversations_me" });
+  });
+});

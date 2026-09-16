@@ -73,6 +73,15 @@ export const MAX_META_VALUE_CHARS = 400;
  *  whole row budget and starve every item sorted after it. */
 export const MAX_ITEM_CHARS = 8 * 1024;
 
+/** Longest markdown body stored for one capability. The fleet inventory never
+ *  carries bodies (they would blow the 256KB row); they live here, one row
+ *  per (user, kind, name), fetched when the reader opens. */
+export const MAX_CONTENT_BODY_CHARS = 64 * 1024;
+
+/** Bodies one report may carry. Matches the daemon's per-beat budget so a
+ *  hostile payload cannot turn one heartbeat into a thousand writes. */
+export const MAX_CONTENT_BATCH = 80;
+
 /** Entries one manifest list (`bin`, `hooks`, `mcp`, …) may carry. Past it the
  *  list is cut and the observation row carries `truncated: true`, so the UI can
  *  say "partial" instead of presenting the cut as the whole. */
@@ -356,6 +365,22 @@ export const capabilityTables = {
     .index("by_source_slug", ["source", "slug"])
     // Retention sweep only: `lt(cutoff)` over the whole cache.
     .index("by_fetched_at", ["fetched_at"]),
+
+  /**
+   * The markdown of one skill / command / subagent / snippet, as a machine
+   * last read it. Separate from `capability_state` on purpose: the fleet
+   * mirror has to stay small enough to list, and a 5MB skills tree would
+   * take the inventory dark. The reader queries one row when a card opens.
+   */
+  capability_content: defineTable({
+    user_id: v.id("users"),
+    kind: v.string(),
+    name: v.string(),
+    body: v.string(),
+    body_hash: v.string(),
+    truncated: v.optional(v.boolean()),
+    updated_at: v.number(),
+  }).index("by_user_kind_name", ["user_id", "kind", "name"]),
 };
 
 /* --------------------------------------------------------------------------
@@ -483,6 +508,18 @@ export interface CapabilityEventDoc {
   created_at: number;
 }
 
+export interface CapabilityContentDoc {
+  _id: string;
+  _creationTime: number;
+  user_id: string;
+  kind: string;
+  name: string;
+  body: string;
+  body_hash: string;
+  truncated?: boolean;
+  updated_at: number;
+}
+
 export interface CapabilityDb {
   query(table: "capability_state"): CapQuery<CapabilityStateDoc>;
   query(table: "capability_observation"): CapQuery<CapabilityObservationDoc>;
@@ -490,12 +527,14 @@ export interface CapabilityDb {
   query(table: "capability_bindings"): CapQuery<CapabilityBindingDoc>;
   query(table: "capability_consents"): CapQuery<CapabilityConsentDoc>;
   query(table: "capability_events"): CapQuery<CapabilityEventDoc>;
+  query(table: "capability_content"): CapQuery<CapabilityContentDoc>;
   insert(table: "capability_state", doc: NewDoc<CapabilityStateDoc>): Promise<string>;
   insert(table: "capability_observation", doc: NewDoc<CapabilityObservationDoc>): Promise<string>;
   insert(table: "capability_catalog_cache", doc: NewDoc<CapabilityCatalogDoc>): Promise<string>;
   insert(table: "capability_bindings", doc: NewDoc<CapabilityBindingDoc>): Promise<string>;
   insert(table: "capability_consents", doc: NewDoc<CapabilityConsentDoc>): Promise<string>;
   insert(table: "capability_events", doc: NewDoc<CapabilityEventDoc>): Promise<string>;
+  insert(table: "capability_content", doc: NewDoc<CapabilityContentDoc>): Promise<string>;
   patch(
     id: string,
     patch:
@@ -504,7 +543,8 @@ export interface CapabilityDb {
       | Partial<NewDoc<CapabilityCatalogDoc>>
       | Partial<NewDoc<CapabilityBindingDoc>>
       | Partial<NewDoc<CapabilityConsentDoc>>
-      | Partial<NewDoc<CapabilityEventDoc>>,
+      | Partial<NewDoc<CapabilityEventDoc>>
+      | Partial<NewDoc<CapabilityContentDoc>>,
   ): Promise<void>;
   delete(id: string): Promise<void>;
 }

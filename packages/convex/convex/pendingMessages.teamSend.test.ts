@@ -200,6 +200,24 @@ describe("team send — authorization", () => {
     );
   });
 
+  test("raw slash commands stay unwrapped; a report body is refused", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await performSessionSend(ctx as any, "uAlice" as any, {
+      to: "jxalice",
+      body: "/model opus",
+      raw: true,
+    });
+    expect(tables.pending_messages[0].content).toBe("/model opus");
+    await expect(
+      performSessionSend(ctx as any, "uAlice" as any, {
+        to: "jxalice",
+        from: "jxalice",
+        body: "Backend B (ct-51438) review fixes: all five of mine fixed.",
+        raw: true,
+      }),
+    ).rejects.toThrow(/only for slash commands/);
+  });
+
   test("rejects a whitespace-only body without normalizing valid bodies", async () => {
     const { ctx } = world({ now: Date.now() });
     await expect(
@@ -538,5 +556,65 @@ describe("planCrossUserNotify — pure decision", () => {
   });
   test("legacy row without owner_user_id → skip", () => {
     expect(planCrossUserNotify({ ...base, owner_user_id: undefined }, false, now).kind).toBe("skip");
+  });
+});
+
+describe("stale target — the send that would rebuild a whole context", () => {
+  const HOUR = 60 * 60 * 1000;
+  function staleWorld(bob: Record<string, unknown>, alice: Record<string, unknown> = {}) {
+    const w = world({ now: Date.now() });
+    Object.assign(w.tables.conversations.find((c) => c._id === "convBob")!, bob);
+    Object.assign(w.tables.conversations.find((c) => c._id === "convAlice")!, alice);
+    return w;
+  }
+  const idle = { usage_totals: { input: 1, output: 1, cache_read: 1, cache_write: 1, updated_at: Date.now() - 3 * HOUR, context_tokens: 480_000 } };
+  const fresh = { usage_totals: { input: 1, output: 1, cache_read: 1, cache_write: 1, updated_at: Date.now() - 5 * 60_000, context_tokens: 480_000 } };
+
+  test("holds a send into a session idle past the cache lifetime, naming the cost, and queues nothing", async () => {
+    const { ctx, tables } = staleWorld(idle);
+    await expect(
+      performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "any update?", wake: false }),
+    ).rejects.toThrow(/Not sent\. jxbob01 has not run for 3h.*480k tokens.*cast read jxbob01.*--wake/);
+    expect(tables.pending_messages).toHaveLength(0);
+  });
+
+  test("delivers into a session that ran recently", async () => {
+    const { ctx, tables } = staleWorld(fresh);
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "hi", wake: false });
+    expect(tables.pending_messages).toHaveLength(1);
+  });
+
+  test("holds a send into a killed session even when it ran recently", async () => {
+    const { ctx, tables } = staleWorld({ ...fresh, inbox_killed_at: Date.now() - 60_000 });
+    await expect(
+      performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "hi", wake: false }),
+    ).rejects.toThrow(/jxbob01 was killed/);
+    expect(tables.pending_messages).toHaveLength(0);
+  });
+
+  test("--wake, a worker reporting back, a dormant session, and a caller that never asked all deliver", async () => {
+    const woken = staleWorld(idle);
+    await performSessionSend(woken.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "go", wake: true });
+    expect(woken.tables.pending_messages).toHaveLength(1);
+
+    const reporting = staleWorld(idle, { spawned_by_conversation_id: "convBob" });
+    await performSessionSend(reporting.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "done: abc123", wake: false });
+    expect(reporting.tables.pending_messages).toHaveLength(1);
+
+    const dormant = staleWorld({ ...idle, thread_state_status: "dormant" });
+    await performSessionSend(dormant.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "your review is ready", wake: false });
+    expect(dormant.tables.pending_messages).toHaveLength(1);
+
+    const legacy = staleWorld(idle);
+    await performSessionSend(legacy.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "old cli" });
+    expect(legacy.tables.pending_messages).toHaveLength(1);
+  });
+
+  test("a killed session stays held even for the worker it started", async () => {
+    const { ctx, tables } = staleWorld({ ...idle, inbox_killed_at: Date.now() - HOUR }, { spawned_by_conversation_id: "convBob" });
+    await expect(
+      performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "done", wake: false }),
+    ).rejects.toThrow(/was killed/);
+    expect(tables.pending_messages).toHaveLength(0);
   });
 });

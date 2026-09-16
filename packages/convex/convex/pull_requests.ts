@@ -5,6 +5,7 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository } from "./lib/gitRefs";
+import { patchPullRequest } from "./prShepherd";
 import {
   canAccessConversation,
   canAccessPullRequest,
@@ -169,7 +170,7 @@ export const syncPRFromGitHub = internalMutation({
       // landed between the list call and this write); never rewind it.
       if (existing.updated_at > args.updated_at) return { pr_id: existing._id, created: false };
       const previousState = existing.state;
-      await ctx.db.patch(existing._id, fields);
+      await patchPullRequest(ctx, existing._id, fields);
       await recordPRMergedActivity(
         ctx,
         { ...existing, ...args, _id: existing._id, team_id: existing.team_id },
@@ -393,7 +394,7 @@ export const updatePRFiles = internalMutation({
       updates.merged_at = args.merged_at;
     }
 
-    await ctx.db.patch(args.pr_id, updates);
+    await patchPullRequest(ctx, args.pr_id, updates);
     return args.pr_id;
   },
 });
@@ -418,13 +419,14 @@ export const updatePRState = internalMutation({
       return null;
     }
 
-    await ctx.db.patch(pr._id, {
+    const previousState = pr.state;
+    await patchPullRequest(ctx, pr._id, {
       state: args.state,
       merged_at: args.merged_at,
       updated_at: Date.now(),
     });
 
-    await recordPRMergedActivity(ctx, pr, pr.state, args.state);
+    await recordPRMergedActivity(ctx, pr, previousState, args.state);
 
     return pr._id;
   },

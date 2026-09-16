@@ -114,8 +114,11 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  *                dropped error reads as "nothing installed" when the truth is
  *                "could not look" — AND a path is legitimate content, because
  *                the failure it names is machine-local ("~/.claude unreadable").
+ *   "body"       the markdown of a skill/command/snippet. Prose rules, paths
+ *                allowed (the file cites them), truncated over a much larger
+ *                cap so the reader can show the real document.
  */
-export type ReportedField = "text" | "identity" | "source" | "diagnostic";
+export type ReportedField = "text" | "identity" | "source" | "diagnostic" | "body";
 
 /** Whole string is a filesystem location: `/…`, `~/…`, or `C:\…`. */
 const ABSOLUTE_PATH = /^(?:\/|~[\\/]|[A-Za-z]:[\\/])/;
@@ -150,8 +153,8 @@ export function sanitizeReported(value: unknown, max: number, field: ReportedFie
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-  const prose = field === "text" || field === "diagnostic";
-  const pathIsContent = field === "source" || field === "diagnostic";
+  const prose = field === "text" || field === "diagnostic" || field === "body";
+  const pathIsContent = field === "source" || field === "diagnostic" || field === "body";
   if (prose ? FORBIDDEN_CONTROLS.test(trimmed) : ANY_CONTROL.test(trimmed)) return null;
   if (ENV_ASSIGNMENT.test(trimmed)) return null;
   if (!pathIsContent && ABSOLUTE_PATH.test(trimmed)) return null;

@@ -44,6 +44,7 @@ import {
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_SPACING_MS,
   pickThrottleContinueBatch,
+  throttleContinueAttemptKey,
   PACED_CONTINUE_KINDS,
   tokenBackedProfile,
   activeTokenProfile,
@@ -122,6 +123,17 @@ async function listBlockedConversations(
     subagentCount: subagents.length,
     totalBlocked: all.length,
   };
+}
+
+async function hasUndeliveredContinue(ctx: { db: any }, conversationId: Id<"conversations">): Promise<boolean> {
+  for (const status of ["pending", "injected"] as const) {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", status))
+      .take(50);
+    if (rows.some((m: any) => m.content === "continue")) return true;
+  }
+  return false;
 }
 
 // The one patch that takes a conversation out of the blocked set — the
@@ -415,6 +427,13 @@ export async function insertSwitchCommands(
   // racing CLI run and a double-click collapse into one send).
   let messaged = 0;
   const sendContinue = async (conv: Doc<"conversations">) => {
+    // An automatic continue still waiting to land already asks for the retry.
+    // Queuing another each paced tick built a backlog (one row a minute while a
+    // daemon read the session as busy) that drained as a refused turn every
+    // second once it went idle (ct-51376). Auto-switch paints its own client
+    // id per minute; that must not bypass this check or the same backlog
+    // comes back through the limit path.
+    if (await hasUndeliveredContinue(ctx, conv._id)) return;
     await enqueuePendingMessage(ctx, conv, userId, {
       content: "continue",
       client_id: opts.continueClientIds?.[conv._id] ?? blockedContinueClientId(conv._id, opts.now),
@@ -1067,20 +1086,24 @@ export const throttleContinueCheck = internalMutation({
     const now = Date.now();
     const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
     const state = primary?.cc_auto_switch_state ?? {};
-    const book = async (at: number) => {
+    const attempts = state.attempts ?? [];
+    const writeState = async (extra: Record<string, unknown>) => {
+      if (primary) await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, ...extra } });
+    };
+    const book = async (at: number, extra: Record<string, unknown> = {}) => {
       await ctx.scheduler.runAt(at, internal.accountSwitch.throttleContinueCheck, { user_id: args.user_id });
-      if (primary) await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: at } });
+      await writeState({ ...extra, throttle_check_at: at });
     };
     const { blocked, skipped } = await listBlockedConversations(ctx, args.user_id, false);
     const dismissed = await dismissSkippedWorkersAutomatically(ctx, primary, skipped);
-    const { batch, remaining, waiting, nextDueAt } = pickThrottleContinueBatch(blocked, now);
+    const { batch, remaining, waiting, nextDueAt } = pickThrottleContinueBatch(blocked, now, attempts);
     if (batch.length === 0) {
       if (nextDueAt !== null) {
         await book(Math.max(nextDueAt, now + 1000));
         return { acted: "wait", waiting, dismissed, next_check_at: nextDueAt };
       }
       if (primary && state.throttle_check_at) {
-        await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: undefined } });
+        await writeState({ throttle_check_at: undefined });
       }
       return { acted: "nothing_throttled", dismissed };
     }
@@ -1092,14 +1115,16 @@ export const throttleContinueCheck = internalMutation({
       continueBlocked: true,
       now,
     });
+    const nextAttempts = [
+      ...attempts,
+      ...batch.map((c) => ({ profile: throttleContinueAttemptKey(c._id), at: now })),
+    ].slice(-MAX_ATTEMPT_HISTORY);
     if (remaining > 0 || waiting > 0) {
       const at = remaining > 0 ? now + THROTTLE_CONTINUE_SPACING_MS : Math.max(nextDueAt ?? now, now + THROTTLE_CONTINUE_SPACING_MS);
-      await book(at);
+      await book(at, { attempts: nextAttempts });
       return { acted: "continued", continued: res.messaged + res.restarted, dismissed, remaining, waiting, next_check_at: at };
     }
-    if (primary && state.throttle_check_at) {
-      await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: undefined } });
-    }
+    await writeState({ attempts: nextAttempts, throttle_check_at: undefined });
     return { acted: "continued", continued: res.messaged + res.restarted, dismissed, remaining: 0, waiting: 0 };
   },
 });
@@ -2111,6 +2136,9 @@ export const listAccountProfiles = query({
           is_remote: d.is_remote === true,
           online: isDeviceOnline(d, now),
           active_email: d.cc_accounts?.active_email,
+          // When the current login took over: a session whose last call predates
+          // it restarts on a cache that belongs to another account.
+          active_since: d.cc_accounts?.active_since,
           login_flow: d.cc_login_flow,
           session_tokens: true,
           mint_flow: d.cc_mint_flow,

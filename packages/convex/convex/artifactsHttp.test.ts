@@ -153,3 +153,77 @@ describe("applyEditVersion", () => {
     expect(mutations).toHaveLength(0);
   });
 });
+
+// Evidence at publish (docs/architecture/the-line.md L6): the route resolves
+// the task or plan BEFORE any blob is stored, passes the binding into
+// upsertFromPublish, and reports it in the response. The binding itself is
+// tested in taskEvidence.test.ts; this pins the route's contract around it.
+import { getFunctionName } from "convex/server";
+import { publish } from "./artifactsHttp";
+
+function makePublishCtx(resolveEvidence: (args: Record<string, any>) => Record<string, any>) {
+  const stored: Blob[] = [];
+  const queries: Array<{ name: string; args: Record<string, any> }> = [];
+  const mutations: Array<{ name: string; args: Record<string, any> }> = [];
+  const ctx = {
+    storage: {
+      store: async (blob: Blob) => { stored.push(blob); return `st_${stored.length}`; },
+      delete: async () => {},
+    },
+    runQuery: async (fn: unknown, args: Record<string, any>) => {
+      const name = getFunctionName(fn as never);
+      queries.push({ name, args });
+      if (name === "artifacts:verify") return { user_id: "users_owner" };
+      if (name === "artifacts:byUserPath") return null;
+      if (name === "artifacts:slugTaken") return false;
+      if (name === "artifacts:resolveSessionRef") return { short_id: "jx1", conversation_id: "conversations_s1" };
+      if (name === "artifacts:resolveEvidence") return resolveEvidence(args);
+      throw new Error(`unexpected query ${name}`);
+    },
+    runMutation: async (fn: unknown, args: Record<string, any>) => {
+      const name = getFunctionName(fn as never);
+      mutations.push({ name, args });
+      return { url: "https://codecast.sh/a/fresh", version: 1, updated: false, owner_key: "ok" };
+    },
+  };
+  return { ctx: ctx as never, stored, queries, mutations };
+}
+
+const publishRequest = (body: Record<string, unknown>) =>
+  new Request("https://x/cli/artifacts/publish", { method: "POST", body: JSON.stringify({ api_token: "t", title: "Report", content: "<h1>hi</h1>", session_ref: "jx1", ...body }) });
+
+describe("publish route evidence binding", () => {
+  test("--task rides into resolveEvidence with the session, lands on upsertFromPublish, and comes back in the response", async () => {
+    const { ctx, stored, queries, mutations } = makePublishCtx(() => ({
+      binding: { task_id: "tasks_t1", plan_id: "plans_p1", station: "in_progress", task_short_id: "ct-1" },
+      error: null,
+    }));
+    const res = await (publish as any)._handler(ctx, publishRequest({ task: "ct-1" }));
+    expect(res.status).toBe(200);
+    const ev = queries.find((q) => q.name === "artifacts:resolveEvidence")!;
+    expect(ev.args).toEqual({ user_id: "users_owner", task: "ct-1", plan: undefined, session_conversation_id: "conversations_s1" });
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0].args).toMatchObject({ task_id: "tasks_t1", plan_id: "plans_p1", station: "in_progress", session_conversation_id: "conversations_s1" });
+    expect(stored).toHaveLength(1);
+    expect(await res.json()).toMatchObject({ url: "https://codecast.sh/a/fresh", evidence: { task: "ct-1", plan: null, station: "in_progress" } });
+  });
+
+  test("a task the publisher cannot read is a 404 before any blob is stored", async () => {
+    const { ctx, stored, mutations } = makePublishCtx(() => ({ binding: null, error: "Task not found: ct-9" }));
+    const res = await (publish as any)._handler(ctx, publishRequest({ task: "ct-9" }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Task not found: ct-9" });
+    expect(stored).toHaveLength(0);
+    expect(mutations).toHaveLength(0);
+  });
+
+  test("no flag: the session still reaches resolveEvidence (a bound session attaches), and an empty binding adds nothing", async () => {
+    const { ctx, queries, mutations } = makePublishCtx(() => ({ binding: {}, error: null }));
+    const res = await (publish as any)._handler(ctx, publishRequest({ plan: "" }));
+    expect(res.status).toBe(200);
+    expect(queries.find((q) => q.name === "artifacts:resolveEvidence")!.args).toMatchObject({ task: undefined, plan: undefined, session_conversation_id: "conversations_s1" });
+    expect(mutations[0].args.task_id).toBeUndefined();
+    expect(mutations[0].args.station).toBeUndefined();
+    expect(await res.json()).not.toHaveProperty("evidence");
+  });
+});

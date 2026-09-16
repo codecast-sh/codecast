@@ -26,6 +26,7 @@ import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { isVisibilityShareable } from "./privacy";
 import { pageThreadParticipants, purgeThread, touchThread } from "./threadReads";
+import { evidencePatch, resolveEvidenceBinding } from "./taskEvidence";
 
 export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 
@@ -347,6 +348,18 @@ export const resolveSessionRef = internalQuery({
   },
 });
 
+// Evidence binding for the publish HTTP action (the-line.md L6): resolved
+// BEFORE any blob is stored, so a bad --task never leaves an orphaned blob.
+export const resolveEvidence = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    task: v.optional(v.string()),
+    plan: v.optional(v.string()),
+    session_conversation_id: v.optional(v.id("conversations")),
+  },
+  handler: async (ctx, args) => resolveEvidenceBinding(ctx, args.user_id, args),
+});
+
 // Auth check for the link-edit flow: owner_key always may edit; edit_key only
 // when edit_mode is "link". Same null for wrong key and missing artifact.
 export const editTarget = internalQuery({
@@ -615,8 +628,15 @@ export const upsertFromPublish = internalMutation({
     access: v.optional(accessPatchValidator),
     assets: v.optional(assetInputValidator),
     thumb_storage_id: v.optional(v.id("_storage")),
+    // Evidence (the-line.md L6), already resolved by resolveEvidence: the task
+    // and station this page was produced for. Absent fields leave a
+    // republished page attached where it was.
+    task_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
+    station: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const evidence = evidencePatch(args);
     const existing =
       !args.force_new && args.source_path
         ? await ctx.db
@@ -638,7 +658,7 @@ export const upsertFromPublish = internalMutation({
         // A fresh thumbnail is the one incoming blob worth keeping on an
         // unchanged republish — otherwise a thumb could never refresh once
         // content stopped changing. Adopt it, drop the superseded one.
-        const merged: Record<string, unknown> = { ...accessPatch };
+        const merged: Record<string, unknown> = { ...accessPatch, ...evidence };
         if (args.thumb_storage_id) {
           if (existing.thumb_storage_id) await ctx.storage.delete(existing.thumb_storage_id).catch(() => {});
           merged.thumb_storage_id = args.thumb_storage_id;
@@ -660,7 +680,8 @@ export const upsertFromPublish = internalMutation({
         };
       }
 
-      if (Object.keys(accessPatch).length) await ctx.db.patch(existing._id, accessPatch);
+      const rowPatch = { ...accessPatch, ...evidence };
+      if (Object.keys(rowPatch).length) await ctx.db.patch(existing._id, rowPatch);
       const base = (await ctx.db.get(existing._id))!;
       const version = await bumpVersion(ctx, base, {
         storage_id: args.storage_id,
@@ -712,6 +733,7 @@ export const upsertFromPublish = internalMutation({
       created_at: now,
       updated_at: now,
       ...accessPatch,
+      ...evidence,
     });
     for (const asset of args.assets ?? []) {
       await ctx.db.insert("artifact_assets", {
@@ -1375,6 +1397,27 @@ export const deleteFromCLI = mutation({
     const match = r.match;
     await deleteArtifactCascade(ctx, match);
     return { deleted: toCliRow(match) };
+  },
+});
+
+// `cast task handoff --page <slug|url>` (the-line.md L6): attach an existing
+// page to a task at its current station. The caller must read the task, and
+// the page must be theirs or a teammate's they may see (the same rule the
+// team artifact list applies), so a hand cannot claim a stranger's page.
+export const attachFromCLI = mutation({
+  args: { api_token: v.string(), slug: v.string(), task: v.string(), station: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) return { error: "Unauthorized" };
+    const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", args.slug)).first();
+    if (!artifact) return { error: `No page with slug ${args.slug}` };
+    if (artifact.user_id !== auth.userId && !(await teammatesWhoCanSee(ctx, artifact.user_id)).has(auth.userId.toString())) {
+      return { error: `No page with slug ${args.slug}` };
+    }
+    const resolved = await resolveEvidenceBinding(ctx, auth.userId, { task: args.task, station: args.station });
+    if (resolved.error || !resolved.binding) return { error: resolved.error ?? "Could not resolve task" };
+    await ctx.db.patch(artifact._id, evidencePatch(resolved.binding));
+    return { ok: true, slug: artifact.slug, url: artifactUrl(artifact.slug), task: resolved.binding.task_short_id, station: resolved.binding.station };
   },
 });
 

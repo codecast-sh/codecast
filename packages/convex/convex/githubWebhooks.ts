@@ -31,8 +31,6 @@ import {
   recomputeReviewDecision,
   wakeShepherd,
   ensureShepherdTask,
-  closeOutShepherd,
-  refreshConversationPrStatus,
 } from "./prShepherd";
 import {
   type CheckEntry,
@@ -52,6 +50,10 @@ const MERGE_STATE_DELAY_MS = 15 * 1000;
 // "unstable" and `cast pr show` disagrees with itself. Asking shortly after the
 // checks settle is what closes that gap.
 const CHECK_MERGE_STATE_DELAY_MS = 10 * 1000;
+
+const isHumanReviewer = (user: { login?: string; type?: string } | undefined, pr: Doc<"pull_requests">) =>
+  !!user?.login && user.type !== "Bot" && !user.login.toLowerCase().endsWith("[bot]")
+  && user.login.toLowerCase() !== pr.author_github_username?.toLowerCase();
 
 // Event kinds some processor consumes. A delivery of any other kind is stored
 // for the record and marked processed on the spot.
@@ -622,7 +624,6 @@ export const processPRClosedEvent = internalMutation({
 
     await recordPRMergedActivity(ctx, pr, existing.state, pr.state);
     await fireTrigger(ctx, merged ? "pr_merged" : "pr_closed", pr);
-    await closeOutShepherd(ctx, pr, merged ? "merged" : "closed");
 
     await ctx.db.patch(args.event_id, { processed: true });
     return { success: true };
@@ -785,6 +786,7 @@ export const processReviewEvent = internalMutation({
       .query("reviews")
       .withIndex("by_github_review_id", (q) => q.eq("github_review_id", review.id))
       .first();
+    const changed = !existing || existing.state !== state || (existing.body ?? "") !== (review.body ?? "");
 
     if (existing) {
       await ctx.db.patch(existing._id, {
@@ -841,9 +843,8 @@ export const processReviewEvent = internalMutation({
     if (state === "approved") await fireTrigger(ctx, "pr_approved", updated);
     if (state === "changes_requested") await fireTrigger(ctx, "pr_changes_requested", updated);
 
-    // A bare "commented" review with no body says nothing the agent can act on.
-    const worthWaking = state !== "commented" || !!review.body;
-    if (worthWaking && event.action !== "dismissed") {
+    const worthWaking = state === "changes_requested" || ((state === "commented" || state === "approved") && !!review.body?.trim());
+    if (worthWaking && changed && isHumanReviewer(review.user, pr) && event.action !== "dismissed") {
       await wakeShepherd(
         ctx,
         updated._id,
@@ -962,7 +963,9 @@ async function ingestReviewComment(ctx: any, payload: any): Promise<boolean> {
     dedupe_key: `pr_review_comment:${comment.id}`,
   });
 
-  await wakeShepherd(ctx, pr._id, "review_comment_created", `${author} on ${where}`);
+  if (isHumanReviewer(comment.user, pr) && comment.body?.trim()) {
+    await wakeShepherd(ctx, pr._id, "review_comment_created", `${author} on ${where}`);
+  }
   return true;
 }
 
@@ -1667,7 +1670,7 @@ export const matchPRToConversation = internalMutation({
       await ctx.db.patch(prId, {
         ...fields,
         shepherd_conversation_id: existing.shepherd_conversation_id ?? shepherd?._id,
-        shepherd_enabled: existing.shepherd_enabled ?? !!shepherd,
+        shepherd_enabled: existing.shepherd_enabled ?? false,
       });
     } else {
       prId = await ctx.db.insert("pull_requests", {
@@ -1675,7 +1678,7 @@ export const matchPRToConversation = internalMutation({
         pr_comment_posted: false,
         created_at: args.created_at,
         shepherd_conversation_id: shepherd?._id,
-        shepherd_enabled: !!shepherd,
+        shepherd_enabled: false,
         shepherd_wake_count: 0,
       });
     }
@@ -1685,7 +1688,6 @@ export const matchPRToConversation = internalMutation({
 
     if (pr.shepherd_conversation_id && pr.shepherd_enabled) {
       await ensureShepherdTask(ctx, pr);
-      await refreshConversationPrStatus(ctx, pr.shepherd_conversation_id);
     }
 
     await recordExternalEvent(ctx, {

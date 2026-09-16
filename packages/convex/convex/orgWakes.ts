@@ -14,6 +14,7 @@
 // delivery bumps, and the fake db tests drive the same code.
 
 import { internalMutation, internalQuery } from "./functions";
+import { charterLine } from "./lib/orgCharter";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
@@ -22,6 +23,7 @@ import { enqueuePendingMessage } from "./pendingMessages";
 import { computeBriefFacts, type BriefFacts } from "./org";
 import { collectLinesSince } from "./chat";
 import {
+  OUTBOX_READ_CAP,
   RESTART_CAUSE,
   capsFor,
   countersFor,
@@ -39,6 +41,11 @@ export const MAX_ACTIVE_RETRIES = 20;
 export const FLUSH_SLACK_MS = 5_000;
 // Characters of facts a frame carries; past it, lists collapse to counts.
 export const FRAME_FACT_BUDGET = 3_000;
+// Lines a section carries before the rest becomes one count line, so a
+// released backlog (a paused role's week) reads as a digest, not a ledger.
+export const FRAME_WHY_LINES = 15;
+export const FRAME_PLAN_LINES = 8;
+export const FRAME_CHANGED_LINES = 12;
 // Chat lines a frame carries from the channels the role follows.
 export const FRAME_CHANNEL_LINES = 20;
 
@@ -63,6 +70,42 @@ const shortHash = (text: string): string => {
 
 const firstLine = (text: string | undefined | null): string => (text ?? "").split("\n")[0].trim();
 
+// One outbox row is one line, in the frame and in the wake log alike. A row
+// that folded several events (orgEvents: one row per (table, id) per window)
+// says how many, so "task ct-5 is done (changed 7 times)" is the whole story.
+export function causeLine(row: { cause: string; count?: number | null }): string {
+  const cause = row.cause.replace(RESTART_CAUSE, "").trim();
+  return (row.count ?? 1) > 1 ? `${cause} (changed ${row.count} times)` : cause;
+}
+
+// The rows of one frame, one entry per (table, id): the newest row's cause
+// is the state, the counts sum, and a group is passive only when every row
+// in it is. Immediate rows (a person's message, a decision) never group: each
+// reaches the role as itself. Newest first. The enqueue side merges repeats
+// inside a window (orgEvents); this covers rows that landed as separate rows,
+// such as a backlog released by a resume.
+export function groupRowsForFrame(rows: any[]): Array<{ cause: string; count: number; passive: boolean; held: boolean; at: number }> {
+  const groups = new Map<string, { cause: string; count: number; passive: boolean; held: boolean; at: number }>();
+  let n = 0;
+  for (const r of rows) {
+    const at = r.created_at ?? 0;
+    const key = r.kind !== "immediate" && r.ref ? `${r.ref.table}:${r.ref.id}` : `row:${n++}`;
+    const g = groups.get(key);
+    const count = r.count ?? 1;
+    if (!g) { groups.set(key, { cause: r.cause, count, passive: r.kind === "passive", held: !!r.held_at, at }); continue; }
+    g.count += count;
+    g.passive = g.passive && r.kind === "passive";
+    g.held = g.held || !!r.held_at;
+    if (at >= g.at) { g.at = at; g.cause = r.cause; }
+  }
+  return [...groups.values()].sort((a, b) => b.at - a.at);
+}
+
+// The first `cap` lines, then one line counting the rest.
+function capped(lines: string[], cap: number, noun: string): string[] {
+  return lines.length <= cap ? lines : [...lines.slice(0, cap), `- and ${lines.length - cap} more ${noun}`];
+}
+
 // ── Frame ───────────────────────────────────────────────────────────────────
 
 export type FrameInput = {
@@ -79,6 +122,13 @@ export type FrameInput = {
 };
 
 export type Frame = { text: string; hasNewFacts: boolean; newestFactAt: number };
+
+// The wake's short id goes on the opening tag once the log row exists (deliver
+// mints it after the frame is built), so the transcript names the wake it
+// renders and the web card can link "why did this wake me" to the log row.
+export function stampWakeId(text: string, wakeShortId: string): string {
+  return text.replace(/^<role-wake (\S+) (?:wake="[^"]*" )?/, `<role-wake $1 wake="${wakeShortId}" `);
+}
 
 // Lists under a shared character budget: overflow becomes "+N more".
 function budgeted(lines: string[], budget: { left: number }): string[] {
@@ -113,7 +163,12 @@ export function buildFrame(input: FrameInput): Frame {
     `Today: ${u.wakes + 1}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens`,
   ].join("\n"));
 
-  const why = rows.map((r) => `- ${r.kind === "passive" ? "(passive) " : ""}${r.cause.replace(RESTART_CAUSE, "").trim()}`);
+  // A group an earlier flush held (a cap, a pause) is marked so the backlog
+  // reads apart from what woke the role now; the tag carries both counts so a
+  // capped list still reports them whole (the web card reads the tag).
+  const groups = groupRowsForFrame(rows);
+  const heldCount = groups.filter((g) => g.held).length;
+  const why = capped(groups.map((g) => `- ${g.held ? "(held) " : ""}${g.passive ? "(passive) " : ""}${causeLine(g)}`), FRAME_WHY_LINES, "changes");
   sections.push([`## Why you are awake`, ...(why.length ? why : ["- (nothing queued)"])].join("\n"));
 
   // Facts: counts always; the changed rows since the last frame as a diff.
@@ -123,11 +178,18 @@ export function buildFrame(input: FrameInput): Frame {
     `Priority: ${Object.entries(t.by_priority).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(", ") || "none"}`,
     `Decisions: ${facts.decisions.open} open, ${facts.decisions.answered_today} answered today`,
   ];
-  const planLines = facts.plans.map((p) => `- plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress (${p.status})`);
+  // Plans the role can still move: a done plan is history, not scope.
+  const planLines = capped(
+    facts.plans.filter((p) => p.status === "active" || p.status === "draft").map((p) => `- plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress (${p.status})`),
+    FRAME_PLAN_LINES, "plans");
   const changed = facts.changed.filter((c) => c.updated_at > since);
-  const changedLines = changed.map((c) => `- ${c.kind} ${c.short_id ?? ""} ${c.title} → ${c.status}`);
+  const changedLines = capped(changed.map((c) => `- ${c.kind} ${c.short_id ?? ""} ${c.title} → ${c.status}`), FRAME_CHANGED_LINES, "changes");
+  // The charters lead (org-staffing.md S7): a role directs its hands toward
+  // each project's goal, not its task list. One line per chartered project.
+  const charterLines = facts.scope.projects.map((p) => charterLine(`- project ${p.title}`, p)).filter((l): l is string => !!l);
   sections.push([
     `## Your scope now`,
+    ...(charterLines.length ? [`Direction:`, ...budgeted(charterLines, budget)] : []),
     ...factLines,
     ...(planLines.length ? [`Plans:`, ...budgeted(planLines, budget)] : []),
     ...(changedLines.length ? [`Changed since your last frame:`, ...budgeted(changedLines, budget)] : [`Nothing in scope changed since your last frame.`]),
@@ -160,7 +222,7 @@ export function buildFrame(input: FrameInput): Frame {
     ...facts.hands.map((h) => h.state_at ?? 0),
     ...input.channelLines.map((l: any) => l.created_at ?? 0),
   );
-  const text = `<role-wake ${role.short_id} at="${new Date(now).toISOString()}">\n${sections.join("\n\n")}\n</role-wake>`;
+  const text = `<role-wake ${role.short_id} at="${new Date(now).toISOString()}" causes="${groups.length}" held="${heldCount}">\n${sections.join("\n\n")}\n</role-wake>`;
   return { text, hasNewFacts: newestFactAt > since || input.channelLines.length > 0, newestFactAt };
 }
 
@@ -204,12 +266,18 @@ export async function frameInputsFor(ctx: Ctx, role: any, rows: any[], now: numb
   };
 }
 
+// The frame the role would get now, or (with `wake_id`) a past wake's rows
+// rendered again against today's facts, to read what a change to the
+// builder does to a frame that already shipped.
 export const frameFor = internalQuery({
-  args: { role_id: v.id("org_roles") },
+  args: { role_id: v.id("org_roles"), wake_id: v.optional(v.id("role_wakes")) },
   handler: async (ctx, args) => {
     const role = await ctx.db.get(args.role_id);
     if (!role) return null;
-    const rows = await unflushedRowsFor(ctx, args.role_id);
+    const wake = args.wake_id ? await ctx.db.get(args.wake_id) : null;
+    const rows = wake
+      ? await ctx.db.query("role_wake_outbox").withIndex("by_role_flushed", (q: any) => q.eq("role_id", args.role_id).eq("flushed_at", wake.created_at)).take(OUTBOX_READ_CAP)
+      : await unflushedRowsFor(ctx, args.role_id);
     return buildFrame(await frameInputsFor(ctx, role, rows, Date.now()));
   },
 });
@@ -229,7 +297,7 @@ async function logWake(
   const wake_id: Id<"role_wakes"> = await ctx.db.insert("role_wakes", {
     role_id: role._id,
     short_id,
-    causes: rows.map((r) => firstLine(r.cause).slice(0, 200)),
+    causes: rows.map((r) => firstLine(causeLine(r)).slice(0, 200)),
     status,
     frame_chars: frameChars,
     pending_message_id: pendingMessageId,
@@ -240,6 +308,16 @@ async function logWake(
 
 async function markFlushed(ctx: Ctx, rows: any[], wakeId: Id<"role_wakes">, now: number): Promise<void> {
   for (const r of rows) await ctx.db.patch(r._id, { flushed_at: now, wake_id: wakeId });
+}
+
+// Rows a gate kept waiting carry the first hold's time; the next frame marks
+// their group "(held)" so the backlog reads apart from the cause of the wake.
+async function markHeld(ctx: Ctx, rows: any[], now: number): Promise<void> {
+  for (const r of rows) {
+    if (r.held_at) continue;
+    r.held_at = now;
+    await ctx.db.patch(r._id, { held_at: now });
+  }
 }
 
 // One transaction: the pending message, the rows, the log, the counters.
@@ -253,6 +331,7 @@ export async function deliver(
   now: number,
 ): Promise<Extract<FlushOutcome, { outcome: "delivered" }>> {
   const { wake_id, short_id } = await logWake(ctx, role, rows, "delivered", frame.text.length, undefined, now);
+  const text = stampWakeId(frame.text, short_id);
   // A person's message parked as "held" in the session: the frame rides that
   // row and releases it, so the role spends one turn and the daemon never
   // delivers the raw message ahead of the frame. Every other held row these
@@ -264,7 +343,7 @@ export async function deliver(
     if (!pending || String(pending.conversation_id) !== String(conversation._id)) continue;
     if (pending.status !== "held" && pending.status !== "pending") continue;
     if (!pendingMessageId) {
-      await ctx.db.patch(pending._id, { content: frame.text, status: "pending" });
+      await ctx.db.patch(pending._id, { content: text, status: "pending" });
       pendingMessageId = pending._id;
     } else if (pending.status === "held") {
       await ctx.db.patch(pending._id, { status: "cancelled", cancelled_at: now });
@@ -272,7 +351,7 @@ export async function deliver(
   }
   if (!pendingMessageId) {
     pendingMessageId = await enqueuePendingMessage(ctx, conversation, conversation.user_id, {
-      content: frame.text,
+      content: text,
       client_id: short_id,
       role_wake: true,
     });
@@ -286,7 +365,7 @@ export async function deliver(
     last_frame_seq: now,
     updated_at: now,
   });
-  return { outcome: "delivered", wake_id, short_id, pending_message_id: pendingMessageId, frame_chars: frame.text.length };
+  return { outcome: "delivered", wake_id, short_id, pending_message_id: pendingMessageId, frame_chars: text.length };
 }
 
 // ── Flush ───────────────────────────────────────────────────────────────────
@@ -308,7 +387,10 @@ export async function performFlush(ctx: Ctx, roleId: Id<"org_roles">, attempt = 
   const rows = waiting;
 
   // Gate 1: a paused or retired role holds its rows.
-  if (role.status === "paused" || role.status === "retired") return { outcome: "held", reason: role.status };
+  if (role.status === "paused" || role.status === "retired") {
+    await markHeld(ctx, rows, now);
+    return { outcome: "held", reason: role.status };
+  }
 
   // Gate 2: caps hold system rows; an immediate row (a person, a routine, a
   // decision) still goes through.
@@ -317,6 +399,7 @@ export async function performFlush(ctx: Ctx, roleId: Id<"org_roles">, attempt = 
   if (!hasImmediate && (counters.wakes >= caps.wakes_per_day || counters.tokens >= caps.tokens_per_day)) {
     const reason = counters.wakes >= caps.wakes_per_day ? "wakes_cap" : "tokens_cap";
     await logWake(ctx, role, rows, "held", 0, undefined, now);
+    await markHeld(ctx, rows, now);
     await scheduleFlush(ctx, roleId, msToNextUtcDay(now));
     return { outcome: "held", reason };
   }

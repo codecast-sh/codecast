@@ -35,6 +35,8 @@ import {
   shouldUseInlineDocSnapshotFallback,
 } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
+import { activityLine } from "@codecast/shared/render";
+import type { SessionActivity } from "@codecast/shared/contracts";
 import { extractSessionImages, type SessionImageEntry } from "./sessionImages";
 
 type DocExtractionMessage = {
@@ -574,6 +576,34 @@ export function mergeRecentFiles(
   const prev = existing ?? [];
   if (capped.length === prev.length && capped.every((p, i) => p === prev[i])) return null;
   return capped;
+}
+
+/**
+ * The activity line for a message batch: what the agent is doing now, from
+ * the newest assistant tool call in the batch (the last call of the last
+ * assistant message that carries any). Present tense through the shared phrase
+ * library, secrets scrubbed, newlines gone. Returns null when nothing should
+ * be written: no tool call in the batch, a call with no phrase, a batch older
+ * than the stamp already on the row (a historical backfill landing after live
+ * traffic), or the same stamp again (a re-sync of the same rows).
+ */
+export function deriveActivity(
+  messages: ReadonlyArray<{ role: string; timestamp?: number; tool_calls?: ReadonlyArray<{ name: string; input: string }> }>,
+  previous: SessionActivity | undefined,
+  now: number,
+): SessionActivity | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant" || !msg.tool_calls?.length) continue;
+    const tc = msg.tool_calls[msg.tool_calls.length - 1];
+    const text = redactSecrets(activityLine(tc)).replace(/\s+/g, " ").trim();
+    if (!text) return null;
+    const at = msg.timestamp || now;
+    if (previous && previous.at > at) return null;
+    if (previous && previous.at === at && previous.text === text && previous.tool === tc.name) return null;
+    return { text, tool: tc.name, at };
+  }
+  return null;
 }
 
 /**
@@ -1209,6 +1239,7 @@ export async function rollUpUsage(
   const seen = new Set<string>(prev.last_api_message_id ? [prev.last_api_message_id] : []);
   let input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
   let lastId: string | undefined = prev.last_api_message_id;
+  let contextTokens: number | undefined = prev.context_tokens;
   for (const r of rows) {
     if (!r.inserted || !r.usage) continue;
     if (r.api_message_id) {
@@ -1220,6 +1251,10 @@ export async function rollUpUsage(
     output += r.usage.output_tokens || 0;
     cacheRead += r.usage.cache_read_input_tokens || 0;
     cacheWrite += r.usage.cache_creation_input_tokens || 0;
+    // A refused turn (a limit banner) carries an all-zero usage block; it did not
+    // shrink the context, so it never overwrites the last real reading.
+    const context = (r.usage.input_tokens || 0) + (r.usage.cache_read_input_tokens || 0) + (r.usage.cache_creation_input_tokens || 0);
+    if (context > 0) contextTokens = context;
   }
   if (input + output + cacheRead + cacheWrite === 0) return;
   convPatch.usage_totals = {
@@ -1228,6 +1263,7 @@ export async function rollUpUsage(
     cache_read: prev.cache_read + cacheRead,
     cache_write: prev.cache_write + cacheWrite,
     updated_at: now,
+    ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
     ...(lastId ? { last_api_message_id: lastId } : {}),
   };
   const roleId = conversation.standing_role_id ?? conversation.org_role_id;
@@ -1498,8 +1534,8 @@ export const addMessage = mutation({
     }
     // A fresh park on a blocked-kind banner triggers the debounced reactions:
     // the auto-switch check (limit only) and the aggregated incident
-    // notification (any blocked kind). Statusful "error" banners self-retry
-    // and never notify.
+    // notification (any blocked kind). Kind "error" (marked client errors)
+    // is informational and never notifies.
     if (
       msgIsBanner &&
       nextBannerKind && nextBannerKind !== "error" &&
@@ -1518,6 +1554,10 @@ export const addMessage = mutation({
     if (imagePreview && imagePreview !== conversation.image_preview_url) {
       convPatch.image_preview_url = imagePreview;
     }
+    // What the agent is doing now, off this message's newest tool call (the
+    // inbox activity line; see schema.activity).
+    const nextActivity = deriveActivity([{ role: args.role, timestamp: msgTimestamp, tool_calls: safeToolCalls }], conversation.activity, now);
+    if (nextActivity) convPatch.activity = nextActivity;
     // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into the
     // conversation's loop_state so the inbox trigger set sees the armed loop.
     const singleMsg = [{ role: args.role, subtype: args.subtype, timestamp: msgTimestamp, tool_calls: args.tool_calls }];
@@ -2107,6 +2147,10 @@ export const addMessages = mutation({
       if (imagePreview && imagePreview !== conversation.image_preview_url) {
         convPatch.image_preview_url = imagePreview;
       }
+      // What the agent is doing now, off the batch's newest tool call (the
+      // inbox activity line; see schema.activity).
+      const nextActivity = deriveActivity(args.messages, conversation.activity, Date.now());
+      if (nextActivity) convPatch.activity = nextActivity;
       await ctx.db.patch(args.conversation_id, convPatch);
 
       const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);

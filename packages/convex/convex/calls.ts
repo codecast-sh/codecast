@@ -40,7 +40,15 @@ import {
   CALL_PUSH_SOUND,
   CALL_PUSH_TYPE_MISSED,
   CALL_PUSH_TYPE_RING,
+  normalizeTranscribeLanguages,
 } from "@codecast/shared/contracts";
+
+/** Seat languages the transcriber unions. Undefined means "this client did not say". */
+function stampedLanguages(raw: string[] | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  const langs = normalizeTranscribeLanguages(raw);
+  return langs.length ? langs : undefined;
+}
 
 export {
   CALL_HEARTBEAT_MS,
@@ -298,6 +306,9 @@ export const joinRoom = mutation({
     // Optional and additive the same way; see holdPrewarmSeat, which is the
     // whole of what it does.
     prewarm: v.optional(v.boolean()),
+    // Languages this device is set to. Optional and additive: an older client
+    // never sends it and the transcriber falls back to the scribe's own list.
+    languages: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -354,6 +365,7 @@ export const joinRoom = mutation({
       else await ctx.db.delete(m._id);
     }
 
+    const languages = stampedLanguages(args.languages);
     if (existing) {
       await ctx.db.patch(existing._id, {
         last_seen: now,
@@ -373,6 +385,7 @@ export const joinRoom = mutation({
         // can be a minute and a half before anybody spoke. The huddle started
         // when the person did.
         joined_at: existing.prewarm ? now : existing.joined_at,
+        ...(languages ? { languages } : {}),
       });
       return { room_key: args.room_key };
     }
@@ -390,6 +403,7 @@ export const joinRoom = mutation({
       camera: false,
       sharing: false,
       walkie_joined_at: args.walkie_join ? now : undefined,
+      languages,
     });
     return { room_key: args.room_key };
   },
@@ -401,6 +415,7 @@ export const heartbeat = mutation({
     muted: v.optional(v.boolean()),
     camera: v.optional(v.boolean()),
     sharing: v.optional(v.boolean()),
+    languages: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -417,6 +432,8 @@ export const heartbeat = mutation({
     if (args.muted !== undefined) patch.muted = args.muted;
     if (args.camera !== undefined) patch.camera = args.camera;
     if (args.sharing !== undefined) patch.sharing = args.sharing;
+    const languages = stampedLanguages(args.languages);
+    if (languages) patch.languages = languages;
     await ctx.db.patch(row._id, patch);
     return { ok: true };
   },

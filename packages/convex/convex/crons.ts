@@ -166,6 +166,15 @@ crons.interval(
   {}
 );
 
+// Slack mirror job ledger (slackSync): drop processed rows, requeue anything
+// whose action was lost.
+crons.interval(
+  "sweep slack sync events",
+  { hours: 1 },
+  internal.slackSync.sweepSyncEvents,
+  {}
+);
+
 crons.interval(
   // Capability rows for machines silent 90+ days: the daemon cannot clean up a
   // laptop that was wiped, so the server notices the silence instead.
@@ -256,6 +265,15 @@ crons.interval(
   "reap stale session migrations",
   { minutes: 5 },
   (internal as any).sessionMigrations.reapStale,
+  {}
+);
+
+crons.interval(
+  // The sweep starts the line (the-line.md L9): every open task assigned to a
+  // direct-trust role's agent gets a run of the scope's line, within caps.
+  "start the line for scoped tasks",
+  { minutes: 2 },
+  (internal as any).orgLine.sweep,
   {}
 );
 

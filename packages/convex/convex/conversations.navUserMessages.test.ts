@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   collectNavigableUserMessages,
+  NAV_USER_MESSAGES_OLDEST_LIMIT,
   NAV_USER_MESSAGES_SCAN_LIMIT,
 } from "./conversations";
 import { makeFakeDb } from "./testDb";
@@ -8,13 +9,8 @@ import { makeFakeDb } from "./testDb";
 // Regression for the "too many system operations" timeout on getUserMessages:
 // the user-role index range is mostly tool results, so an unbounded collect
 // scanned thousands of docs per reactive re-run on big sessions. The helper
-// must scan a bounded newest-first window (NAV_USER_MESSAGES_SCAN_LIMIT) —
-// prompts beyond the window are dropped, never scanned.
-//
-// makeFakeDb's order() is a no-op and take() slices in table order, so rows
-// are laid out newest-first here to mirror the production `.order("desc")`
-// scan; a revert to `.collect()` makes the out-of-window prompt reappear and
-// fails the truncation test.
+// scans a bounded newest window and a bounded oldest window — a prompt in the
+// gap between them is dropped, never scanned.
 describe("collectNavigableUserMessages", () => {
   const CONV = "conversations_1" as any;
 
@@ -41,10 +37,7 @@ describe("collectNavigableUserMessages", () => {
     expect(out.map((m) => m.content)).toEqual(["first prompt", "second prompt"]);
   });
 
-  test("scan is bounded: prompts past the newest-first window are not returned", async () => {
-    // Newest-first layout: one real prompt near the head, then enough
-    // tool-result filler to exhaust the scan window, then an old prompt that
-    // sits beyond it.
+  test("the opening prompt survives even when the newest window is full of tool results", async () => {
     const rows: any[] = [
       { _id: "messages_recent", conversation_id: CONV, role: "user", content: "recent prompt", timestamp: 1_000_000 },
     ];
@@ -55,6 +48,24 @@ describe("collectNavigableUserMessages", () => {
     const db = makeFakeDb({ messages: rows });
 
     const out = await collectNavigableUserMessages(db, CONV);
-    expect(out.map((m) => m.content)).toEqual(["recent prompt"]);
+    expect(out.map((m) => m.content)).toEqual(["ancient prompt", "recent prompt"]);
+  });
+
+  test("a prompt in the gap between the oldest and newest windows is not returned", async () => {
+    const rows: any[] = [
+      { _id: "messages_recent", conversation_id: CONV, role: "user", content: "recent prompt", timestamp: 1_000_000 },
+    ];
+    for (let i = 0; i < NAV_USER_MESSAGES_SCAN_LIMIT; i++) {
+      rows.push(toolResultRow(i, 900_000 - i));
+    }
+    rows.push({ _id: "messages_middle", conversation_id: CONV, role: "user", content: "middle prompt", timestamp: 50_000 });
+    for (let i = 0; i < NAV_USER_MESSAGES_OLDEST_LIMIT; i++) {
+      rows.push(toolResultRow(10_000 + i, 40_000 - i));
+    }
+    rows.push({ _id: "messages_ancient", conversation_id: CONV, role: "user", content: "ancient prompt", timestamp: 10 });
+    const db = makeFakeDb({ messages: rows });
+
+    const out = await collectNavigableUserMessages(db, CONV);
+    expect(out.map((m) => m.content)).toEqual(["ancient prompt", "recent prompt"]);
   });
 });

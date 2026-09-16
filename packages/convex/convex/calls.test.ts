@@ -173,6 +173,18 @@ describe("joinRoom: stamping a deliberate step into a burst", () => {
     expect(inserted[0].walkie_joined_at).toBeUndefined();
   });
 
+  test("a seat stores the languages this device is set to", async () => {
+    const { ctx, inserted } = stampCtx();
+    await join(ctx, { muted: true, languages: ["ja-JP", "en"] });
+    expect(inserted[0].languages).toEqual(["ja", "en"]);
+  });
+
+  test("an older client that sends no languages still joins", async () => {
+    const { ctx, inserted } = stampCtx();
+    await join(ctx, { muted: true });
+    expect(inserted[0].languages).toBeUndefined();
+  });
+
   test("a deliberate step into a burst stamps the new seat", async () => {
     const { ctx, inserted } = stampCtx();
     const before = Date.now();

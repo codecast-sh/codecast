@@ -4,6 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter, isTeamAdmin } from "./privacy";
+import { canAccessConversation } from "./lib/access";
 import {
   PRESENCE_FRESH_MS,
   bucketTs,
@@ -417,6 +418,19 @@ export const getTeamMembers = query({
           .first();
         const surfaceAlive =
           !!presenceRow && now - presenceRow.last_seen < PRESENCE_FRESH_MS;
+        // The conversation this member has open (usePresenceReporter). Shown
+        // only off a live row (a closed tab stops reporting, and the id must
+        // not outlive it), and only to a CALLER who can open that conversation
+        // themselves: the id of a private session is itself a fact about it,
+        // so it goes through the same access rule every reader of the session
+        // does. Access reads never touch team_id (CLAUDE.md, workspace rules).
+        let viewingConversationId: Id<"conversations"> | undefined;
+        if (surfaceAlive && presenceRow.viewing_conversation_id) {
+          const viewed = await ctx.db.get(presenceRow.viewing_conversation_id);
+          if (viewed && (await canAccessConversation(ctx, authUserId, viewed))) {
+            viewingConversationId = viewed._id;
+          }
+        }
         const devices =
           surfaceAlive && (user.machine_wide_presence ?? true)
             ? await ctx.db
@@ -491,6 +505,11 @@ export const getTeamMembers = query({
           presence_input_at: bucketTs(presenceRow?.last_input_at),
           in_huddle: !!liveCall,
           in_room_key: visibleRoomKey,
+          // Bucketed like the timestamps above, so the id alone drives a
+          // re-push: a teammate sitting in one session for an hour yields a
+          // byte-identical row every heartbeat.
+          viewing_conversation_id: viewingConversationId,
+          viewing_since: viewingConversationId ? bucketTs(presenceRow?.viewing_since) : undefined,
           recent_session_title: recentConvo?.title,
           // Coarse for the same reason as the presence fields above: this
           // roster is always mounted, and a teammate's streaming agent bumps

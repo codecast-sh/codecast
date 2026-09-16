@@ -1,7 +1,8 @@
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
-import { resolveCreationPrivacy } from "./privacy";
+import { buildShareUpdate, resolveCreationPrivacy } from "./privacy";
+import { patchConversationVisibility } from "./lib/access";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { enqueueKillSessionCommand } from "./cleanup";
@@ -250,8 +251,11 @@ export type ProvisionStandingAgentOpts = {
   model?: string;
   agent_type?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok";
   bootstrap?: boolean;
-  // Role provisioning: the role row and the extra bootstrap frame.
-  role?: { _id: Id<"org_roles">; bootstrap: RoleBootstrap };
+  // Role provisioning: the role row and the extra bootstrap frame. `adopt` is
+  // an existing conversation row that BECOMES the standing session
+  // (org-staffing.md S6): no new session is started, the row is re-identified
+  // as the role and the bootstrap lands in it as its next turn.
+  role?: { _id: Id<"org_roles">; bootstrap: RoleBootstrap; adopt?: any };
 };
 
 export async function provisionStandingAgent(
@@ -354,56 +358,77 @@ export async function provisionStandingAgent(
     updated_at: now,
   });
 
-  // The persistent session: owned (run + billed) by the human host, rendered as
-  // the bot, pinned, and exempt from auto-completion.
-  const sessionId = crypto.randomUUID();
-  // A team anchor always belongs to its team and is shared; a personal anchor
-  // resolves team/privacy from its project path like any session.
-  const privacy = args.scope_type === "user"
-    ? await resolveCreationPrivacy(ctx, hostUserId, args.project_path)
-    : { team_id: teamId, is_private: false, auto_shared: undefined };
+  const adopt = args.role?.adopt ?? null;
+  const conversationId: Id<"conversations"> = adopt ? adopt._id : await insertStandingConversation();
 
-  const agentType = args.agent_type ?? "claude_code";
-  const conversationId = await ctx.db.insert("conversations", {
-    user_id: hostUserId,
-    acting_user_id: botUserId,
-    anchor_id: anchorId,
-    // The row IS the role's session (T1); inbox placement treats it as an
-    // anchor's. org_role_id stays unset: a standing session reports to no seat.
-    standing_role_id: args.role?._id,
-    agent_type: agentType,
-    session_id: sessionId,
-    title: name,
-    title_is_custom: true,
-    project_path: args.project_path,
-    git_root: args.project_path,
-    model: args.model,
-    started_at: now,
-    updated_at: now,
-    message_count: 0,
-    ...privacy,
-    status: "active",
-    persistent: true,
-    // Not pinned in the inbox — the anchor lives in its dedicated /anchor space
-    // and only surfaces in the inbox when it's waiting on the user.
-  });
-  await ctx.db.patch(conversationId, {
-    short_id: conversationId.toString().slice(0, 7),
-  });
+  async function insertStandingConversation(): Promise<Id<"conversations">> {
+    // The persistent session: owned (run + billed) by the human host, rendered as
+    // the bot, pinned, and exempt from auto-completion.
+    const sessionId = crypto.randomUUID();
+    // A team anchor always belongs to its team and is shared; a personal anchor
+    // resolves team/privacy from its project path like any session.
+    const privacy = args.scope_type === "user"
+      ? await resolveCreationPrivacy(ctx, hostUserId, args.project_path)
+      : { team_id: teamId, is_private: false, auto_shared: undefined };
+
+    const agentType = args.agent_type ?? "claude_code";
+    const conversationId = await ctx.db.insert("conversations", {
+      user_id: hostUserId,
+      acting_user_id: botUserId,
+      anchor_id: anchorId,
+      // The row IS the role's session (T1); inbox placement treats it as an
+      // anchor's. org_role_id stays unset: a standing session reports to no seat.
+      standing_role_id: args.role?._id,
+      agent_type: agentType,
+      session_id: sessionId,
+      title: name,
+      title_is_custom: true,
+      project_path: args.project_path,
+      git_root: args.project_path,
+      model: args.model,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      ...privacy,
+      status: "active",
+      persistent: true,
+      // Not pinned in the inbox — the anchor lives in its dedicated /anchor space
+      // and only surfaces in the inbox when it's waiting on the user.
+    });
+    await ctx.db.patch(conversationId, {
+      short_id: conversationId.toString().slice(0, 7),
+    });
+
+    await enqueueStartSession(ctx, hostUserId, {
+      conversationId,
+      agentType: fromConvexAgentType(agentType),
+      projectPath: args.project_path,
+      sessionId,
+      model: args.model,
+      createdAt: now,
+    });
+    return conversationId;
+  }
+
+  // An adopted session keeps its owner, history and machine; it gains the
+  // role's identity and the standing markers a provisioned row is born with.
+  // A team seat is the team's: a private analyzer session that becomes the
+  // chief of staff must be visible to every member, or the org page shows
+  // the anchor with no session for everyone but the hirer. Visibility goes
+  // through the chokepoint so linked work items get their key recomputed.
+  if (adopt) {
+    const markers = { acting_user_id: botUserId, anchor_id: anchorId, standing_role_id: args.role!._id, persistent: true, updated_at: now };
+    if (args.scope_type === "team" && adopt.is_private !== false) {
+      await patchConversationVisibility(ctx, adopt, { ...(await buildShareUpdate(ctx, adopt, adopt.user_id)), ...markers });
+    } else {
+      await ctx.db.patch(conversationId, markers);
+    }
+  }
 
   await ctx.db.patch(anchorId, {
     conversation_id: conversationId,
     status: "active",
     updated_at: now,
-  });
-
-  await enqueueStartSession(ctx, hostUserId, {
-    conversationId,
-    agentType: fromConvexAgentType(agentType),
-    projectPath: args.project_path,
-    sessionId,
-    model: args.model,
-    createdAt: now,
   });
 
   if (args.bootstrap !== false) {
@@ -425,7 +450,7 @@ export async function provisionStandingAgent(
     anchor_id: anchorId,
     bot_user_id: botUserId,
     conversation_id: conversationId,
-    short_id: conversationId.toString().slice(0, 7),
+    short_id: adopt?.short_id ?? conversationId.toString().slice(0, 7),
     already_existed: false,
   };
 }

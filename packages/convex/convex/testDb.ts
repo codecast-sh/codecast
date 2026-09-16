@@ -57,6 +57,12 @@ function op(name: string, ...args: any[]): FilterExpr {
   };
 }
 
+// An index field may name a nested path ("external.ts"), as convex allows.
+function fieldValue(row: any, field: string): any {
+  if (!field.includes(".")) return row[field];
+  return field.split(".").reduce((acc, key) => (acc == null ? undefined : acc[key]), row);
+}
+
 export function makeFakeDb(tables: Record<string, any[]>) {
   const inserted: Array<{ table: string; doc: any; _id: string }> = [];
   const patched: Array<{ _id: any; patch: any }> = [];
@@ -92,7 +98,7 @@ export function makeFakeDb(tables: Record<string, any[]>) {
           : row.last_activity_at ?? row.created_at ?? row.timestamp ?? row.updated_at ?? null;
       const apply = () => {
         const rows = (tables[table] ?? [])
-          .filter((r) => filters.every(([f, v]) => r[f] === v))
+          .filter((r) => filters.every(([f, v]) => fieldValue(r, f) === v))
           .filter((r) => predicates.every((p) => !!evalFilter(p, r)))
           .filter((r) => !search
             || String(r[search[0]] ?? "").toLowerCase().includes(search[1].toLowerCase()));

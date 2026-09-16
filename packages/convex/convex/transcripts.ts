@@ -45,8 +45,10 @@ import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
+  LIVE_TRANSCRIBE_MODEL,
   RECORDING_SUMMARY_PUSH_TYPE,
   TRANSCRIBE_MAX_BYTES,
+  asrTranscriptionSession,
   formatHuddleDigest,
   formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
@@ -55,10 +57,13 @@ import {
   ownRoomChunkHeader,
   parseRoomKey,
   sessionRoomConversationId,
+  unionTranscribeLanguages,
 } from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { enqueuePush } from "./pushRouter";
+
+export { asrTranscriptionSession };
 
 // added_by is deliberately NOT accepted from clients: delivery acts AS the
 // route's adder (deliverRoutes), so a client-chosen added_by would let a
@@ -1351,19 +1356,28 @@ export const cliGetCall = query({
 // VAD speech start/stop events (the gap signal). The browser must never see
 // OPENAI_API_KEY, so this action mints a short-lived client secret scoped to
 // a transcription session. Authorization = may the caller transcribe the room.
+
 export const mintAsrToken = action({
-  args: { room_key: v.string() },
+  args: {
+    room_key: v.string(),
+    // Languages this recognizer may emit, ISO-639-1. The client sends the
+    // browser's list; we fold and cap it here so a bad tag cannot fail the mint.
+    languages: v.optional(v.array(v.string())),
+  },
   handler: async (
     ctx,
     args,
-  ): Promise<{ client_secret: string; model: string } | { error: string }> => {
+  ): Promise<
+    { client_secret: string; model: string; languages: string[] } | { error: string }
+  > => {
     const grant = await ctx.runQuery(internal.transcripts.authForAsr, {
       room_key: args.room_key,
     });
     if (!grant) return { error: "Not authorized for this room" };
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return { error: "Transcription is not configured" };
-    const model = "gpt-4o-mini-transcribe";
+    const model = LIVE_TRANSCRIBE_MODEL;
+    const languages = unionTranscribeLanguages(args.languages, grant.languages);
     // GA realtime API: client secrets are minted at /v1/realtime/client_secrets
     // with the session config nested under `session` (audio.input vocabulary).
     const resp = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
@@ -1372,18 +1386,7 @@ export const mintAsrToken = action({
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        session: {
-          type: "transcription",
-          audio: {
-            input: {
-              format: { type: "audio/pcm", rate: 24000 },
-              transcription: { model },
-              turn_detection: { type: "server_vad", silence_duration_ms: 600 },
-            },
-          },
-        },
-      }),
+      body: JSON.stringify({ session: asrTranscriptionSession(model, languages) }),
     });
     if (!resp.ok) {
       const body = (await resp.text()).slice(0, 300);
@@ -1393,7 +1396,7 @@ export const mintAsrToken = action({
     const data = (await resp.json()) as { value?: string; client_secret?: { value?: string } };
     const secret = data.value ?? data.client_secret?.value;
     if (!secret) return { error: "ASR session mint returned no secret" };
-    return { client_secret: secret, model };
+    return { client_secret: secret, model, languages };
   },
 });
 
@@ -1405,7 +1408,15 @@ export const authForAsr = internalQuery({
     // A recording mints against its own key like a huddle does; authorizeRoom
     // has already answered "is this transcript yours".
     const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
-    return auth.ok ? { user_id: String(userId) } : null;
+    if (!auth.ok) return null;
+    const rows = await ctx.db
+      .query("call_members")
+      .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+      .collect();
+    const languages = unionTranscribeLanguages(
+      ...liveMembers(rows, Date.now()).map((m) => m.languages),
+    );
+    return { user_id: String(userId), languages };
   },
 });
 
@@ -1533,7 +1544,7 @@ export const deliverRoutes = internalAction({
     const { transcript, segments } = data;
     for (const route of transcript.routes) {
       if (route.mode === "after" && !args.include_after_routes) continue;
-      const unsent = segments.filter((s) => s.seq > route.sent_seq);
+      const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
       if (unsent.length === 0) continue;
       const chunk = formatChunk(unsent);
       const maxSeq = unsent[unsent.length - 1].seq;

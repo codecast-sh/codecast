@@ -373,6 +373,17 @@ describe("collectDeliverableForOwner", () => {
     expect(out.map((r) => r._id).sort()).toEqual(["self_unowned", "team_owned"]);
   });
 
+  test("stamps each deliverable with the conversation's declared agent", async () => {
+    const rows = [
+      { _id: "m1", conversation_id: "cGrok", from_user_id: "u1", owner_user_id: "u1", status: "pending" },
+    ];
+    const convs = { cGrok: { _id: "cGrok", user_id: "u1", agent_type: "grok" } };
+    const { ctx } = createDeliverCtx(rows, convs);
+    const out = await collectDeliverableForOwner(ctx as any, "u1" as any, "dev1");
+    expect(out).toHaveLength(1);
+    expect(out[0].conversation_agent_type).toBe("grok");
+  });
+
   test("dedups a row that matches both indexes (owner == sender self-send)", async () => {
     const rows = [
       { _id: "both", conversation_id: "cMine", from_user_id: "u1", owner_user_id: "u1", status: "pending" },

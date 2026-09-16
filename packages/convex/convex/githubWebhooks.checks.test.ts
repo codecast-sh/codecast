@@ -122,7 +122,7 @@ describe("check_run", () => {
     expect(ctx.db._tables.github_webhook_events[0].processed).toBe(true);
   });
 
-  test("green only speaks up on the way back from red", async () => {
+  test("green updates visibility and explicit watches without waking the shepherd", async () => {
     const ctx = context(
       checkRunPayload({ conclusion: "success" }),
       "completed",
@@ -143,7 +143,8 @@ describe("check_run", () => {
     expect(ctx.db._tables.pull_requests[0].checks_state).toBe("success");
     expect(ctx.db._tables.external_events[0].title).toBe("CI passed on PR #12");
     expect(ctx._scheduled.some((s: any) => s.args?.event_type === "pr_checks_green")).toBe(true);
-    expect(ctx.db._tables.agent_tasks[0].prompt).toContain("the checks went green");
+    expect(ctx.db._tables.agent_tasks[0].prompt).toBe("old");
+    expect(ctx.db._tables.pull_requests[0].shepherd_wake_count).toBeUndefined();
   });
 
   test("an already green PR going green again wakes nobody", async () => {
@@ -318,7 +319,7 @@ describe("a check that re-runs", () => {
     expect(pr.checks[0]).toMatchObject({ name: "test (ubuntu)", conclusion: "success", external_id: "1002" });
     expect(pr.checks_state).toBe("success");
     expect(ctx._scheduled.some((s: any) => s.args?.event_type === "pr_checks_green")).toBe(true);
-    expect(ctx.db._tables.agent_tasks[0].prompt).toContain("the checks went green");
+    expect(ctx.db._tables.agent_tasks[0].prompt).toBe("old");
   });
 
   test("a matrix leg with a different name is still its own check", async () => {

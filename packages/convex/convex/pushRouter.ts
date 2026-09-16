@@ -31,7 +31,8 @@ import {
   type MachineDevice,
   type PresenceRow,
 } from "./presencePolicy";
-import { workspaceGrantsAccess, workspaceKey } from "./lib/access";
+import { canAccessConversation, workspaceGrantsAccess, workspaceKey } from "./lib/access";
+import type { Id } from "./_generated/dataModel";
 
 // Client heartbeats every ~30s while visible; background browser tabs get
 // throttled to ~1/min, so "fresh" tolerates two missed beats. Sleeping the
@@ -103,7 +104,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   session_idle: ["session waiting for input", "sessions waiting for input"],
   permission_request: ["permission request", "permission requests"],
   session_error: ["session error", "session errors"],
-  session_assigned: ["session assigned to you", "sessions assigned to you"],
+  session_assigned: ["session ownership update", "session ownership updates"],
   task_completed: ["task completed", "tasks completed"],
   task_failed: ["task failed", "tasks failed"],
   team_session_start: ["teammate session", "teammate sessions"],
@@ -524,10 +525,18 @@ export const flush = internalMutation({
 // idle_ms is a duration (time since last input on that machine), so client
 // clock skew can't poison the signal. Multiple desktops collapse into one row
 // via max(): any active machine makes the user active.
+//
+// viewing_conversation_id is the conversation the reporting window has open;
+// the report carries the whole view state, so an absent id means "nothing
+// open" and clears the stored one. The two viewing fields are written only
+// when the id changes (the row is hot, see ct-44788), and a changed id is
+// checked against conversation access first: a client cannot claim to sit in
+// a session it cannot open.
 export const reportPresence = mutation({
   args: {
     focused: v.boolean(),
     idle_ms: v.number(),
+    viewing_conversation_id: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -538,12 +547,14 @@ export const reportPresence = mutation({
       .query("user_presence")
       .withIndex("by_user", (q: any) => q.eq("user_id", userId))
       .first();
+    const viewingPatch = await viewingFieldsPatch(ctx, userId, existing, args.viewing_conversation_id, now);
     if (existing) {
       await ctx.db.patch(existing._id, {
         last_seen: now,
         last_input_at: Math.max(existing.last_input_at, lastInputAt),
         focused: args.focused,
         updated_at: now,
+        ...viewingPatch,
       });
     } else {
       await ctx.db.insert("user_presence", {
@@ -553,7 +564,30 @@ export const reportPresence = mutation({
         last_input_at: lastInputAt,
         focused: args.focused,
         updated_at: now,
+        ...viewingPatch,
       });
     }
   },
 });
+
+// The viewing fields to write for one report: nothing when the id is
+// unchanged, a clear when the report names none (or one the reporter cannot
+// open), else the new id with viewing_since = now.
+async function viewingFieldsPatch(
+  ctx: { db: any },
+  userId: Id<"users">,
+  existing: { viewing_conversation_id?: Id<"conversations"> } | null,
+  reported: Id<"conversations"> | undefined,
+  now: number,
+): Promise<{ viewing_conversation_id?: Id<"conversations">; viewing_since?: number }> {
+  const current = existing?.viewing_conversation_id;
+  if (reported === current) return {};
+  if (reported) {
+    const conversation = await ctx.db.get(reported);
+    if (conversation && (await canAccessConversation(ctx as any, userId, conversation))) {
+      return { viewing_conversation_id: reported, viewing_since: now };
+    }
+  }
+  if (current === undefined) return {};
+  return { viewing_conversation_id: undefined, viewing_since: undefined };
+}

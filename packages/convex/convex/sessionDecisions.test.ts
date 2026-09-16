@@ -20,7 +20,10 @@ import {
   agreementFor,
   SESSION_CANNOT_ANSWER_AS_PERSON,
   GRANT_TTL_MS,
+  edit,
+  withdraw,
 } from "./sessionDecisions";
+import { hashToken } from "./apiTokens";
 import * as fs from "fs";
 import * as path from "path";
 import { assignCategory, pinnedCategory } from "./lib/decisionCategory";
@@ -667,5 +670,104 @@ describe("review wave 1 regressions", () => {
     const r = await escalateCore(ctx, { userId: HOST }, { decision_id: a.short_id, session_id: "sess-lead" });
     expect(r.error).toBeUndefined();
     expect(tables.session_decisions[0].holder).toEqual({ kind: "role", id: "org_roles_head" });
+  });
+});
+
+// The decision hygiene items (the-line.md L6, L10): edit accepts every ask
+// field, withdraw settles like every other resolution, and an option page
+// round trips through ask, edit and the CLI row shape.
+describe("edit, withdraw and option pages (the-line.md L6, L10)", () => {
+  const TOKEN = "decide-hygiene-token";
+  async function seedWithToken(extra: Record<string, any[]> = {}) {
+    const out = seed({ api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(TOKEN) }], role_wake_outbox: [], ...extra });
+    return out;
+  }
+  const editCall = (ctx: any, decision_id: string, fields: Record<string, any>) =>
+    (edit as any)._handler(ctx, { api_token: TOKEN, decision_id, ...fields });
+
+  test("ask stores an option page; the CLI row shape adds its url", async () => {
+    const { ctx, tables } = await seedWithToken();
+    const r = await askCore(ctx, { userId: HOST }, {
+      session_id: "sess-ask",
+      question: "Which mockup?",
+      options: [{ label: "A", page_slug: "slug-a" }, { label: "B" }],
+      context_md: "two mockups",
+      category: "approach",
+    });
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].options[0].page_slug).toBe("slug-a");
+    const listed = await listForSessionCore(ctx, { userId: HOST }, { session_id: "sess-ask" });
+    expect(listed.decisions[0].options[0].page_url).toMatch(/\/a\/slug-a$/);
+    expect(listed.decisions[0].options[1].page_url).toBeUndefined();
+  });
+
+  test("edit rebinds task and station, joins a stack once, rewrites the doc, reshapes kind and form, and re-assigns a proposed category", async () => {
+    const { ctx, tables } = await seedWithToken();
+    const first = await askApproach(ctx);
+    const stack = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
+    const r = await editCall(ctx, first.short_id, {
+      task: "ct-7",
+      stack: stack.short_id,
+      doc_md: "# body",
+      category: "scope",
+      options: [{ label: "A", page_slug: "p1" }, { label: "B", page_slug: "p2" }, { label: "C" }],
+    });
+    expect(r.error).toBeUndefined();
+    const row = tables.session_decisions[0];
+    expect(row.task_id).toBe("tasks_t1");
+    expect(row.station).toBe("in_review");
+    expect(row.stack_id).toBe(stack.id);
+    expect(row.scope_keys).toContain(`stack:${stack.id}`);
+    expect(tables.decision_stacks[0].decision_ids).toEqual([first.id]);
+    expect(tables.docs).toHaveLength(1);
+    expect(tables.docs[0].content).toBe("# body");
+    expect(row.doc_id).toBe(tables.docs[0]._id);
+    expect(row.category).toBe("scope");
+    expect(row.category_proposed).toBe("scope");
+    expect(row.options.map((o: any) => o.page_slug)).toEqual(["p1", "p2", undefined]);
+    expect(r.task).toMatchObject({ short_id: "ct-7", station: "in_review" });
+    expect(r.stack).toMatchObject({ short_id: stack.short_id });
+
+    // A second edit with the same stack does not append twice; the doc updates in place.
+    await editCall(ctx, first.short_id, { stack: stack.short_id, doc_md: "# v2", station: "qa" });
+    expect(tables.decision_stacks[0].decision_ids).toEqual([first.id]);
+    expect(tables.docs).toHaveLength(1);
+    expect(tables.docs[0].content).toBe("# v2");
+    expect(tables.session_decisions[0].station).toBe("qa");
+
+    // Kind and form: a form needs fields; multi keeps the options.
+    const bad = await editCall(ctx, first.short_id, { kind: "form" });
+    expect(bad.error).toMatch(/form decision needs/);
+    const ok = await editCall(ctx, first.short_id, { kind: "form", form: { fields: [{ key: "n", label: "N", type: "number" }] } });
+    expect(ok.error).toBeUndefined();
+    expect(tables.session_decisions[0].kind).toBe("form");
+    expect(tables.session_decisions[0].form.fields[0].key).toBe("n");
+  });
+
+  test("edit refuses a task or stack outside the caller's boundary and a done stack", async () => {
+    const { ctx, tables } = await seedWithToken();
+    const first = await askApproach(ctx);
+    expect((await editCall(ctx, first.short_id, { task: "ct-404" })).error).toMatch(/Task not found/);
+    const stack = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
+    tables.decision_stacks[0].status = "done";
+    expect((await editCall(ctx, first.short_id, { stack: stack.short_id })).error).toMatch(/is done/);
+  });
+
+  test("withdraw settles: inbox rows close, the stack closes, and ladder roles receive the passive fact", async () => {
+    const { ctx, tables } = await seedWithToken({ anchors: [{ _id: "anchors_1", bot_user_id: HOST }] });
+    // The lead has an anchor, so a role event can be queued for it.
+    tables.org_roles.find((r: any) => r._id === "org_roles_lead").anchor_id = "anchors_1";
+    const stack = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
+    const first = await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q?", options: twoOptions, context_md: "ctx", category: "approach", stack: stack.short_id });
+    tables.role_wake_outbox.length = 0;
+    const r = await (withdraw as any)._handler(ctx, { api_token: TOKEN, decision_id: first.short_id });
+    expect(r.status).toBe("withdrawn");
+    expect(tables.session_decisions[0].status).toBe("withdrawn");
+    expect(tables.decision_inbox.every((i: any) => i.status === "done")).toBe(true);
+    expect(tables.decision_stacks[0].status).toBe("done");
+    const fact = tables.role_wake_outbox.find((e: any) => e.role_id === "org_roles_lead" && e.kind === "passive");
+    expect(fact?.cause).toContain("withdrawn");
+    // A withdrawal is not an override: no grant is scored.
+    expect(tables.decision_grants).toHaveLength(0);
   });
 });

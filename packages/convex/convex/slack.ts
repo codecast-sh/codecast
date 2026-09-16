@@ -4,6 +4,8 @@ import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
+import { isTeamAdmin } from "./privacy";
+import { installationForTeam } from "./lib/slackOutbound";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
 // stores a per-workspace bot token in `slack_installations` (replacing the single
@@ -14,7 +16,26 @@ import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchor
 // enough (multi-tenant boundary). SLACK_SIGNING_SECRET (app-level) verifies inbound
 // webhooks; outbound uses the per-workspace installation token (no env fallback).
 
-export const BOT_SCOPES = "app_mentions:read,chat:write,im:history,channels:read,groups:read,users:read";
+// Everything the anchor needs plus everything channel mirroring needs
+// (slackSync): read history both ways, post with a per-line name and face,
+// join public channels, react, read files and match people by email.
+export const BOT_SCOPES = [
+  "app_mentions:read",
+  "chat:write",
+  "chat:write.customize",
+  "im:history",
+  "channels:read",
+  "channels:history",
+  "channels:join",
+  "groups:read",
+  "groups:history",
+  "users:read",
+  "users:read.email",
+  "reactions:read",
+  "reactions:write",
+  "files:read",
+  "team:read",
+].join(",");
 
 export function convexSiteUrl(): string {
   return process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh";
@@ -26,18 +47,29 @@ export function webBaseUrl(): string {
 
 // Slack redirects back to the AUTHENTICATED web app (not the Convex callback), so
 // completion runs in the user's logged-in session and the install binds to the
-// completer's own anchor — a relayed state can't bind a victim's workspace to the
-// relayer's anchor. This URI must match exactly between authorize and exchange.
-export function slackRedirectUri(): string {
-  return `${webBaseUrl()}/anchor`;
+// completer's own scope — a relayed state can't bind a victim's workspace to the
+// relayer's team. This URI must match exactly between authorize and exchange.
+// One page completes every install (anchor, chat mirror) and then returns the
+// person to wherever they started (`return_to` in the signed state).
+export function slackRedirectUri(origin?: string): string {
+  return `${allowedWebOrigin(origin)}/slack/connect`;
 }
 
-export function slackAuthorizeUrl(state: string): string {
+// The web origins an install may return to. Each must also be registered as a
+// redirect URL on the Slack app. Production plus the two local dev origins, so
+// a mirror can be exercised from a dev web against the shared backend.
+export function allowedWebOrigin(origin?: string): string {
+  const prod = webBaseUrl();
+  const allowed = new Set([prod, "https://local.codecast.sh", "http://localhost:3200"]);
+  return origin && allowed.has(origin) ? origin : prod;
+}
+
+export function slackAuthorizeUrl(state: string, origin?: string): string {
   const clientId = process.env.SLACK_CLIENT_ID || "";
   return (
     `https://slack.com/oauth/v2/authorize?client_id=${encodeURIComponent(clientId)}` +
     `&scope=${encodeURIComponent(BOT_SCOPES)}` +
-    `&redirect_uri=${encodeURIComponent(slackRedirectUri())}` +
+    `&redirect_uri=${encodeURIComponent(slackRedirectUri(origin))}` +
     `&state=${encodeURIComponent(state)}`
   );
 }
@@ -79,9 +111,10 @@ export async function verifyState(state: string): Promise<Record<string, any> | 
   try {
     const payload = JSON.parse(atob(body));
     // Require a fresh timestamp — a state with no (or non-numeric) ts would never
-    // expire, defeating the replay window. 5 min is ample for a real install and
-    // keeps the leaked-state window (a defense-in-depth concern) small.
-    if (typeof payload.ts !== "number" || Date.now() - payload.ts > 5 * 60 * 1000) return null;
+    // expire, defeating the replay window. Ten minutes matches the lifetime of
+    // the code Slack hands back, so a slow consent screen does not fail the
+    // install, while the leaked-state window stays small.
+    if (typeof payload.ts !== "number" || Date.now() - payload.ts > 10 * 60 * 1000) return null;
     return payload;
   } catch {
     return null;
@@ -90,6 +123,19 @@ export async function verifyState(state: string): Promise<Record<string, any> | 
 
 // ── Scope / installation resolution ─────────────────────────────────────────
 
+// The team a caller means when they name none: their active workspace pointer,
+// then the team they were born into. An unset pointer is the personal
+// workspace, so "no team" is a real answer, not an error.
+async function callerTeam(
+  ctx: { db: any },
+  userId: Id<"users">,
+  teamId?: Id<"teams">,
+): Promise<Id<"teams"> | undefined> {
+  if (teamId) return teamId;
+  const host = await ctx.db.get(userId);
+  return host?.active_team_id ?? host?.team_id ?? undefined;
+}
+
 async function callerAnchor(
   ctx: { db: any },
   userId: Id<"users">,
@@ -97,11 +143,7 @@ async function callerAnchor(
   teamId?: Id<"teams">,
 ) {
   if (scope === "team") {
-    let resolved = teamId;
-    if (!resolved) {
-      const host = await ctx.db.get(userId);
-      resolved = host?.active_team_id ?? host?.team_id ?? undefined;
-    }
+    const resolved = await callerTeam(ctx, userId, teamId);
     if (!resolved) return null;
     const member = await ctx.db
       .query("team_memberships")
@@ -125,12 +167,7 @@ async function callerAnchor(
 // anchor's codecast scope (its team, or the user for a personal anchor).
 async function installationForAnchor(ctx: { db: any }, anchor: any): Promise<any | null> {
   if (!anchor) return null;
-  if (anchor.team_id) {
-    return await ctx.db
-      .query("slack_installations")
-      .withIndex("by_team", (q: any) => q.eq("team_id", anchor.team_id))
-      .first();
-  }
+  if (anchor.team_id) return await installationForTeam(ctx, anchor.team_id);
   if (anchor.scope_user_id) {
     return await ctx.db
       .query("slack_installations")
@@ -173,19 +210,29 @@ export const resolveInstallScope = internalQuery({
   handler: async (
     ctx,
     args,
-  ): Promise<{ user_id: string; anchor_id: string; team_id?: string; scope_user_id?: string } | null> => {
+  ): Promise<{ user_id: string; anchor_id?: string; team_id?: string; scope_user_id?: string } | null> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
-    const anchor = await callerAnchor(ctx, userId, args.scope_type, args.team_id);
+    if (args.scope_type === "team") {
+      // A team's Slack workspace serves its anchor AND its chat mirrors, so the
+      // install binds to the team itself; an anchor is not required. Connecting
+      // is a config action: team admins only, never a plain member.
+      const teamId = await callerTeam(ctx, userId, args.team_id);
+      if (!teamId) return null;
+      if (!(await isTeamAdmin(ctx, userId, teamId))) return null;
+      const anchor = await callerAnchor(ctx, userId, "team", teamId);
+      return {
+        user_id: userId.toString(),
+        anchor_id: anchor?._id.toString(),
+        team_id: teamId.toString(),
+      };
+    }
+    const anchor = await callerAnchor(ctx, userId, "user");
     if (!anchor) return null;
-    // Connecting the Slack workspace an anchor speaks through is a config action
-    // (like retire/rename) — gate it on admin, not mere team membership, so a
-    // plain member can't repoint a team anchor's Slack.
     if (!(await userCanAdminAnchor(ctx, userId, anchor))) return null;
     return {
       user_id: userId.toString(),
       anchor_id: anchor._id.toString(),
-      team_id: anchor.team_id?.toString(),
       scope_user_id: anchor.scope_user_id?.toString(),
     };
   },
@@ -199,45 +246,72 @@ export const getInstallUrl = action({
     api_token: v.optional(v.string()),
     scope_type: v.union(v.literal("team"), v.literal("user")),
     team_id: v.optional(v.id("teams")),
+    // Where the connect page sends the person afterwards. A relative path only;
+    // anything else falls back to the anchor page.
+    return_to: v.optional(v.string()),
+    // The web origin the browser is on, so Slack returns to the same app
+    // (allowlisted; anything else means production).
+    origin: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
     const clientId = process.env.SLACK_CLIENT_ID;
     if (!clientId) return { ok: false, error: "Slack app not configured (SLACK_CLIENT_ID)" };
-    const scope = await ctx.runQuery(internal.slack.resolveInstallScope, args);
-    if (!scope) return { ok: false, error: "No anchor to connect — create one first" };
+    const scope = await ctx.runQuery(internal.slack.resolveInstallScope, {
+      api_token: args.api_token, scope_type: args.scope_type, team_id: args.team_id,
+    });
+    if (!scope) {
+      return {
+        ok: false,
+        error: args.scope_type === "team"
+          ? "Only a team admin can connect Slack for the team"
+          : "No anchor to connect — create one first",
+      };
+    }
     // The state names its initiator (user_id + scope). completeSlackInstall runs
     // in the authenticated session and requires the completer to BE that initiator,
     // which blocks both relay directions (a link sent to a victim; or a code+state
     // CSRF'd into a victim's session).
-    const state = await signState({ ...scope, scope_type: args.scope_type, ts: Date.now() });
-    return { ok: true, url: slackAuthorizeUrl(state) };
+    const returnTo = safeReturnTo(args.return_to);
+    const origin = allowedWebOrigin(args.origin);
+    const state = await signState({ ...scope, scope_type: args.scope_type, return_to: returnTo, origin, ts: Date.now() });
+    return { ok: true, url: slackAuthorizeUrl(state, origin) };
   },
 });
 
-// completeSlackInstall — the anchor page calls this (authenticated) when Slack
+// A relative path only. `//host` is scheme-relative and a backslash parses as
+// a slash in http URLs (`/\evil` becomes `//evil`), so both are refused, as is
+// anything with whitespace or angle brackets.
+export function safeReturnTo(raw: string | undefined): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || /[\s<>\\]/.test(raw)) return "/anchor";
+  return raw.slice(0, 400);
+}
+
+// completeSlackInstall — the connect page calls this (authenticated) when Slack
 // redirects back with ?code&?state. The install binds to the AUTHENTICATED
 // caller's own anchor (re-derived here), NOT to anything in the portable state —
 // so a relayed link lands in the recipient's session and can only connect the
 // workspace to the recipient's own anchor, never the relayer's.
 export const completeSlackInstall = action({
   args: { api_token: v.optional(v.string()), code: v.string(), state: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string; scope_type?: string }> => {
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string; scope_type?: string; team_id?: string; return_to: string }> => {
     const st = await verifyState(args.state);
-    if (!st) return { ok: false, error: "bad_state" };
+    if (!st) return { ok: false, error: "bad_state", return_to: "/anchor" };
+    const returnTo = safeReturnTo(typeof st.return_to === "string" ? st.return_to : undefined);
     const scopeType = st.scope_type === "team" ? ("team" as const) : ("user" as const);
     const scope = await ctx.runQuery(internal.slack.resolveInstallScope, {
       api_token: args.api_token,
       scope_type: scopeType,
+      team_id: scopeType === "team" && typeof st.team_id === "string" ? (st.team_id as any) : undefined,
     });
-    if (!scope) return { ok: false, error: "no_anchor" };
+    if (!scope) return { ok: false, error: scopeType === "team" ? "not_admin" : "no_anchor", return_to: returnTo };
     // The completer MUST be the user who initiated the flow. This is the binding
     // that closes both relay directions: only the state's initiator can complete
     // it, so a link/code relayed to a victim (either way) is rejected here.
-    if (scope.user_id !== st.user_id) return { ok: false, error: "wrong_user" };
+    if (scope.user_id !== st.user_id) return { ok: false, error: "wrong_user", return_to: returnTo };
 
     const clientId = process.env.SLACK_CLIENT_ID;
     const clientSecret = process.env.SLACK_CLIENT_SECRET;
-    if (!clientId || !clientSecret) return { ok: false, error: "not_configured" };
+    if (!clientId || !clientSecret) return { ok: false, error: "not_configured", return_to: returnTo };
 
     let data: any;
     try {
@@ -248,15 +322,16 @@ export const completeSlackInstall = action({
           client_id: clientId,
           client_secret: clientSecret,
           code: args.code,
-          redirect_uri: slackRedirectUri(),
+          // Must equal the URI the authorize step used, byte for byte.
+          redirect_uri: slackRedirectUri(typeof st.origin === "string" ? st.origin : undefined),
         }).toString(),
       });
       data = await resp.json();
     } catch {
-      return { ok: false, error: "exchange_failed" };
+      return { ok: false, error: "exchange_failed", return_to: returnTo };
     }
     if (!data?.ok || !data.access_token || !data.team?.id || !data.bot_user_id) {
-      return { ok: false, error: data?.error || "exchange_failed" };
+      return { ok: false, error: data?.error || "exchange_failed", return_to: returnTo };
     }
 
     const stored = await ctx.runMutation(internal.slack.storeInstallation, {
@@ -270,8 +345,8 @@ export const completeSlackInstall = action({
       scope_user_id: scope.scope_user_id,
       installed_by: scope.user_id,
     });
-    if (!stored?.ok) return { ok: false, error: stored?.error || "store_failed" };
-    return { ok: true, scope_type: scopeType };
+    if (!stored?.ok) return { ok: false, error: stored?.error || "store_failed", return_to: returnTo };
+    return { ok: true, scope_type: scopeType, team_id: scope.team_id, return_to: returnTo };
   },
 });
 

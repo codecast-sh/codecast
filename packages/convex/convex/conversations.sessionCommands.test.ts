@@ -62,7 +62,7 @@ describe("requireSessionCommandTarget", () => {
 // caller). It gates the daemon's reap on the user's intent: a session the human
 // killed or stashed must not be resurrected by a recovery path. No other
 // daemon-facing query exposes the hide stamps, so this is the whole contract:
-// five fields, or null when the caller doesn't run the conversation.
+// those stamps plus agent_type, or null when the caller doesn't run the conversation.
 describe("getConversationLifecycle", () => {
   const CONV = "conversations_1";
   const call = (tables: Record<string, any[]>, subjectUser: string | null, args: any) =>
@@ -93,6 +93,7 @@ describe("getConversationLifecycle", () => {
       inbox_stashed_at: 111,
       inbox_pinned_at: null, // absent stamps normalize to null, never undefined
       has_pending_messages: false,
+      agent_type: null,
     });
   });
 
@@ -105,6 +106,7 @@ describe("getConversationLifecycle", () => {
       inbox_stashed_at: null,
       inbox_pinned_at: null,
       has_pending_messages: false,
+      agent_type: null,
     });
   });
 
@@ -129,6 +131,11 @@ describe("getConversationLifecycle", () => {
     expect(await call(tables, RUNNER, { conversation_id: CONV, session_id: "s1" })).toBeNull();
   });
 
+  test("reports the conversation's declared agent so a Codex recovery can refuse a switched session", async () => {
+    const tables = { conversations: [{ _id: CONV, user_id: RUNNER, status: "active", agent_type: "grok" }] };
+    expect((await call(tables, RUNNER, { conversation_id: CONV }))!.agent_type).toBe("grok");
+  });
+
   // The session route resolves the NEWEST twin. .first() is creation order —
   // the OLDEST row bound to the session_id (the ct-36973 foot-gun) — which for
   // this query means handing the daemon a dead twin's stamps for a live session.
@@ -146,6 +153,7 @@ describe("getConversationLifecycle", () => {
         inbox_stashed_at: null,
         inbox_pinned_at: null,
         has_pending_messages: false,
+        agent_type: null,
       });
     });
 
