@@ -66,6 +66,8 @@ describe("switchSessionAgent", () => {
     expect(args.force_reconstitute).toBe(true);
     expect(args.agent_type).toBe("codex");
     expect(args.conversation_id).toBe(CONV);
+    const kill = db._tables.daemon_commands.find((r: any) => r.command === "kill_session");
+    expect(JSON.parse(kill.args).switch_agent).toBe(true);
   });
 
   test("does not insert a second conversation", async () => {
