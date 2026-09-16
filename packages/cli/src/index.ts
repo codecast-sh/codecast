@@ -15943,13 +15943,13 @@ projectCmd
 function charterOptions(cmd: any, project: boolean): any {
   cmd
     .option("--goal <text>", stdinText("The goal; 'none' clears it"))
-    .option("--metric <text>", "A success metric (repeatable; replaces the list; 'none' clears)", collectRepeatable)
+    .option("--metric <text>", stdinText("A success metric (repeatable; replaces the list; 'none' clears)"), collectRepeatable)
     .option("--priority <p>", "Priority: p0, p1, p2, p3 ('none' clears)")
     .option("--owner <role>", "Owner role: @handle or or-N in the same workspace ('none' clears)")
-    .option("--non-goal <text>", "A non goal (repeatable; replaces the list; 'none' clears)", collectRepeatable);
+    .option("--non-goal <text>", stdinText("A non goal (repeatable; replaces the list; 'none' clears)"), collectRepeatable);
   if (project) {
     cmd
-      .option("--risk <text>", "A risk (repeatable; replaces the list; 'none' clears)", collectRepeatable)
+      .option("--risk <text>", stdinText("A risk (repeatable; replaces the list; 'none' clears)"), collectRepeatable)
       .option("--budget-tokens <n>", "Tokens per day the owner role may spend ('none' clears)");
   }
   return cmd;
