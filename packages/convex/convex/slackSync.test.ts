@@ -7,12 +7,21 @@ import {
   applyInboundMessage,
   applyInboundReaction,
   commitLink,
+  upsertSlackUser,
+  mapSlackPerson,
+  reattributeSlackPerson,
+  listSlackPeople,
+  linkSignedInPerson,
+  pushContext,
+  patchBackfill,
+  backfillSinceTs,
   ingestEvent,
   slackClientId,
   stampOutbound,
   updateLink,
 } from "./slackSync";
 import { sendMessage, toggleReaction, updateChannel } from "./chat";
+import { resolveChatMentions } from "./lib/mentionResolve";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -297,6 +306,87 @@ describe("outbound hooks in chat", () => {
   });
 });
 
+describe("people mapping", () => {
+  test("a hand mapping wins over the email switch, survives a profile refresh, and re-authors past lines", async () => {
+    const ctx = context(ALICE);
+    // Carol in Slack has no codecast email match: her line lands under the bridge.
+    await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UCAROL", team_id: TEAM, profile: { id: "UCAROL", name: "carol", real_name: "Carol", profile: { email: "carol@elsewhere.test" } } });
+    await call(applyInboundMessage, ctx, { link_id: LINK, ts: "2000.000001", content: "hi from carol", attachments: [], slack_user: "UCAROL", external_author: { name: "Carol" }, live: false });
+    const before = messages(ctx).find((m: any) => m.external?.ts === "2000.000001");
+    expect(before.external_author?.name).toBe("Carol");
+    // An admin says Carol IS Bob.
+    await call(mapSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", codecast_user_id: BOB });
+    const row = ctx.db._tables.slack_users.find((r: any) => r.slack_user_id === "UCAROL");
+    expect(row.mapped_by).toBe("manual");
+    expect(row.codecast_user_id).toBe(BOB);
+    expect(scheduledNames(ctx)).toContain("slackSync:reattributeSlackPerson");
+    await call(reattributeSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", link_index: 0 });
+    const after = messages(ctx).find((m: any) => m.external?.ts === "2000.000001");
+    expect(after.user_id).toBe(BOB);
+    expect(after.external_author).toBeUndefined();
+    // A refresh with a new email does not undo the choice.
+    const refreshed = await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UCAROL", team_id: TEAM, profile: { id: "UCAROL", name: "carol", real_name: "Carol", profile: { email: "alice@example.test" } } });
+    expect(refreshed.codecast_user_id).toBe(BOB);
+    expect(refreshed.mapped_by).toBe("manual");
+    // The email switch off does not hide a hand mapping.
+    await call(updateLink, ctx, { link_id: LINK, options: { match_people_by_email: false } });
+    await call(applyInboundMessage, ctx, { link_id: LINK, ts: "2000.000002", content: "again", attachments: [], slack_user: "UCAROL", author_user_id: BOB, live: false });
+    // Release: back to the Slack name, past lines return to the bridge.
+    await call(mapSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", codecast_user_id: null });
+    await call(reattributeSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", link_index: 0 });
+    const released = messages(ctx).find((m: any) => m.external?.ts === "2000.000001");
+    expect(released.external_author?.name).toBe("Carol");
+    expect(released.user_id).not.toBe(BOB);
+  });
+  test("a member may only claim or release themselves", async () => {
+    const bob = context(BOB);
+    await call(upsertSlackUser, bob, { workspace_id: WS, slack_user_id: "UDAVE", team_id: TEAM, profile: { id: "UDAVE", name: "dave" } });
+    await expect(call(mapSlackPerson, bob, { team_id: TEAM, slack_user_id: "UDAVE", codecast_user_id: ALICE })).rejects.toThrow(/admin/);
+    await call(mapSlackPerson, bob, { team_id: TEAM, slack_user_id: "UDAVE", codecast_user_id: BOB });
+    await call(mapSlackPerson, bob, { team_id: TEAM, slack_user_id: "UDAVE", codecast_user_id: null });
+    const people = await call(listSlackPeople, bob, { team_id: TEAM });
+    expect(people.people.find((p: any) => p.slack_user_id === "UDAVE").mapped_by).toBe("manual");
+  });
+});
+
+describe("Slack-only people as mention targets", () => {
+  test("a handle nobody in codecast answers to resolves to the Slack person, and the outbound copy pages them", async () => {
+    const ctx = context(ALICE);
+    await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UERIN", team_id: TEAM, profile: { id: "UERIN", name: "erin", profile: { display_name: "Erin" } } });
+    const resolved = await resolveChatMentions(ctx, TEAM, "@erin can you look? cc @bob", ALICE);
+    expect(resolved.users).toEqual([BOB]);
+    expect(resolved.slack).toEqual([{ user: "UERIN", handle: "erin", name: "Erin" }]);
+    expect(resolved.refs).toContainEqual({ kind: "slack", user: "UERIN", handle: "erin", name: "Erin" });
+    // Written through the ordinary send, the line's Slack copy pages Erin.
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@erin can you look?" });
+    const row = messages(ctx).find((m: any) => m.content === "@erin can you look?");
+    expect(row.mentions).toEqual([{ kind: "slack", user: "UERIN", handle: "erin", name: "Erin" }]);
+    const push = await call(pushContext, ctx, { message_id: row._id });
+    expect(push.handle_to_slack).toEqual({ erin: "UERIN" });
+  });
+  test("a Slack person matched to a teammate resolves to the teammate, not a Slack ref", async () => {
+    const ctx = context(ALICE);
+    await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UBOBBY", team_id: TEAM, profile: { id: "UBOBBY", name: "bobby", profile: { display_name: "Bobby", email: "bob@example.test" } } });
+    const resolved = await resolveChatMentions(ctx, TEAM, "@bobby ping", ALICE);
+    expect(resolved.users).toEqual([BOB]);
+    expect(resolved.slack).toEqual([]);
+  });
+  test("signing in to Slack links the Slack account to the teammate and re-authors their lines", async () => {
+    const ctx = context(BOB);
+    await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UBOB2", team_id: TEAM, profile: { id: "UBOB2", name: "robert", profile: { display_name: "Robert", email: "other@example.test" } } });
+    const res = await call(linkSignedInPerson, ctx, { installation_id: INSTALL, user_id: BOB, slack_user_id: "UBOB2" });
+    expect(res.status).toBe("linked");
+    const row = ctx.db._tables.slack_users.find((r: any) => r.slack_user_id === "UBOB2");
+    expect(row.codecast_user_id).toBe(BOB);
+    expect(row.mapped_by).toBe("manual");
+    expect(scheduledNames(ctx)).toContain("slackSync:reattributeSlackPerson");
+    // A never-seen Slack user gets a row seeded under the teammate's name.
+    const fresh = await call(linkSignedInPerson, ctx, { installation_id: INSTALL, user_id: ALICE, slack_user_id: "UALICE2" });
+    expect(fresh.status).toBe("linked");
+    expect(ctx.db._tables.slack_users.find((r: any) => r.slack_user_id === "UALICE2")).toMatchObject({ name: "Alice", codecast_user_id: ALICE, fetched_at: 0 });
+  });
+});
+
 describe("link management", () => {
   test("commitLink refuses a second mirror on either side, and a manager-only write", async () => {
     const ctx = context(ALICE);
@@ -325,6 +415,46 @@ describe("link management", () => {
     const ok = await call(commitLink, ctx, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0GEN2", slack_channel_name: "general", since_ts: "1" });
     expect(ok.chat_channel_name).toBe("random");
     expect((await ctx.db.get(OTHER_CHANNEL)).name).toBe("random");
+  });
+  test("a history window seeds the import progress on the link; none leaves it off", async () => {
+    const ctx = context(ALICE);
+    const ok = await call(commitLink, ctx, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0HIST", slack_channel_name: "history", since_ts: "1", backfill_window: "90d" });
+    const link = await ctx.db.get(ok.link_id);
+    expect(link.backfill).toMatchObject({ window: "90d", status: "running", fetched: 0 });
+    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 240, status: "running" });
+    expect((await ctx.db.get(ok.link_id)).backfill.fetched).toBe(240);
+    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 5000, status: "done", capped: true });
+    const done = (await ctx.db.get(ok.link_id)).backfill;
+    expect(done.status).toBe("done");
+    expect(done.capped).toBe(true);
+    expect(done.finished_at).toBeGreaterThan(0);
+    // A failed import restarts when the link is resumed.
+    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 12, status: "failed", error: "Slack: ratelimited" });
+    await call(updateLink, ctx, { link_id: ok.link_id, paused: false });
+    expect((await ctx.db.get(ok.link_id)).backfill).toMatchObject({ status: "running", fetched: 0 });
+    expect(scheduledNames(ctx)).toContain("slackSync:backfill");
+    // While it runs, another run is refused; once done, an explicit reimport
+    // and turning a kind of line on both run it again.
+    await expect(call(updateLink, ctx, { link_id: ok.link_id, reimport: true })).rejects.toThrow(/still running/);
+    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 40, status: "done" });
+    await call(updateLink, ctx, { link_id: ok.link_id, options: { bot_messages: false } });
+    expect((await ctx.db.get(ok.link_id)).backfill.status).toBe("done"); // turning OFF changes nothing
+    await call(updateLink, ctx, { link_id: ok.link_id, options: { bot_messages: true } });
+    expect((await ctx.db.get(ok.link_id)).backfill).toMatchObject({ status: "running", fetched: 0, window: "90d" });
+    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 55, status: "done" });
+    const r = await call(updateLink, ctx, { link_id: ok.link_id, reimport: true });
+    expect(r.reimport).toBe(true);
+    expect((await ctx.db.get(ok.link_id)).backfill.status).toBe("running");
+    // No window, no progress object at all.
+    const plain = context(BOB);
+    const ok2 = await call(commitLink, plain, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0PLAIN", slack_channel_name: "plain", since_ts: "1", backfill_window: "none" });
+    expect((await plain.db.get(ok2.link_id)).backfill).toBeUndefined();
+  });
+  test("history windows resolve to a Slack ts floor", () => {
+    const now = 1_700_000_000_000;
+    expect(backfillSinceTs("none", now)).toBe("1700000000.000000");
+    expect(backfillSinceTs("7d", now)).toBe(((now - 7 * 86_400_000) / 1000).toFixed(6));
+    expect(backfillSinceTs("all", now)).toBe("0");
   });
   test("a link whose installation is gone is replaced, not a blocker", async () => {
     const ctx = context(ALICE, { slack_installations: [] });

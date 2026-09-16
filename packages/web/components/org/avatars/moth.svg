@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Moth">
+  <!-- tones: ground #e3a1b4 = sol-magenta 40% over sol-bg-alt; body #96366f = sol-magenta 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-moth"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#e3a1b4"/>
+  <g clip-path="url(#c-moth)">
+  <path d="M46 50C38 30 16 24 6 34C0 42 8 60 24 66C34 70 42 66 46 60Z" fill="#96366f"/>
+  <path d="M50 50C58 30 80 24 90 34C96 42 88 60 72 66C62 70 54 66 50 60Z" fill="#96366f"/>
+  <path d="M46 62C36 66 26 76 30 88C34 96 44 92 47 78Z" fill="#96366f"/>
+  <path d="M50 62C60 66 70 76 66 88C62 96 52 92 49 78Z" fill="#96366f"/>
+  <circle cx="24" cy="46" r="6" fill="#fdf6e3"/><circle cx="72" cy="46" r="6" fill="#fdf6e3"/>
+  <circle cx="24" cy="46" r="2.4" fill="#002b36"/><circle cx="72" cy="46" r="2.4" fill="#002b36"/>
+  <ellipse cx="48" cy="62" rx="7" ry="16" fill="#fdf6e3"/>
+  <circle cx="48" cy="42" r="8" fill="#fdf6e3"/>
+  <g stroke="#002b36" stroke-width="2.4" stroke-linecap="round" fill="none">
+  <path d="M44 35C40 28 32 22 22 20"/><path d="M52 35C56 28 64 22 74 20"/>
+  <path d="M36 28L33 24M31 25L28 21M40 31L38 27"/><path d="M60 28L63 24M65 25L68 21M56 31L58 27"/>
+  </g>
+  <circle cx="45" cy="42" r="2" fill="#002b36"/><circle cx="51" cy="42" r="2" fill="#002b36"/>
+  </g>
+</svg>

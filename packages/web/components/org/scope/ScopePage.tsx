@@ -34,6 +34,7 @@ import { isMac } from "../../../shortcuts/registry";
 import { canEditRole, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { StateTally } from "../OrgNodeCards";
+import { RoleFace } from "../RoleFace";
 import { parentName } from "../orgMeta";
 import type { OrgAnchor, OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { ScopeFeed } from "./ScopeFeed";
@@ -121,7 +122,19 @@ export function ScopePageInner({ id }: { id: string }) {
   const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1]) => { if (role) store().updateOrgRole(role._id, fields); }, [role, store]);
   const reparent = useCallback((target: OrgParentRef) => { if (role) store().reparentOrgRole(role._id, target); }, [role, store]);
   useWatchEffect(() => { if (tab !== "settings") setRetireArmed(false); }, [tab]);
-  const retire = useCallback(() => { if (!role) return; store().retireOrgRole(role._id); toast.success(`Retired ${role.name}`); router.push("/org"); }, [role, store, router]);
+  // S16: the chief's confirm says what becomes of its standing agent; keeping
+  // it restores its old title, so the person is never left without the
+  // assistant they had.
+  const retire = useCallback((standingSession?: "keep" | "retire") => {
+    if (!role) return;
+    store().retireOrgRole(role._id, standingSession);
+    toast.success(standingSession === "keep"
+      ? `Retired ${role.name}; its agent keeps running as a plain agent`
+      : standingSession === "retire"
+        ? `Retired ${role.name} and its standing agent; the thread is kept`
+        : `Retired ${role.name}`);
+    router.push("/org");
+  }, [role, store, router]);
   const wakeMutation = useMutation(api.orgRoles.wake);
   const [wakeOpen, setWakeOpen] = useState(false);
   const [wakeText, setWakeText] = useState("");
@@ -216,6 +229,8 @@ export function ScopePageInner({ id }: { id: string }) {
           <Link href="/org" className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the org">
             <ArrowLeft className="w-4 h-4" />
           </Link>
+          {/* The role's face (S13); the root workspace has none. */}
+          {role && <RoleFace role={role} size={phone ? 36 : 44} className="shrink-0 mt-[2px]" />}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
               <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{handle}</span>

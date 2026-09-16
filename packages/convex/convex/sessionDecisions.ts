@@ -13,7 +13,7 @@
 // is routed through the org as a race (people in decision_inbox, roles on a
 // ladder that may recommend, a holder that may answer under a grant), it is
 // bound to a task and station, and it may sit in a stack (decisionStacks.ts).
-import { mutation, query } from "./functions";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -28,6 +28,7 @@ import { roleOfConversation } from "./lib/actor";
 import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
+import { listSessionOwnerIds } from "./sessionOwners";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -198,18 +199,101 @@ export async function buildLadder(
   return { hops, firstPersonId, activeRoles };
 }
 
-// The people a decision is visible to: the session's owners (primary plus
-// session_owners), and the first person above the asker's role.
+// The people a decision is visible to — whose question stack it sits on.
+// The session's owners, never the runner (conversations.user_id). Assignment
+// is how a question moves; including the runner kept it on the previous
+// person's stack after they handed the session over.
+//
+// A hand session (org_role_id) also includes the first person above the
+// role, so a manager sees questions from work that reports to them. A
+// standing session's people are its owners alone: the parent chain still
+// forms the recommendation ladder, but assigning the seat away takes the
+// questions with it.
 export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<"users">): Promise<Id<"users">[]> {
-  const ids: Id<"users">[] = [conversation.user_id];
-  const owners = await ctx.db
-    .query("session_owners")
-    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversation._id))
-    .collect();
-  for (const o of owners) ids.push(o.user_id);
-  if (firstPersonId) ids.push(firstPersonId);
+  const owners = await listSessionOwnerIds(ctx, conversation._id);
+  const primary = conversation.owner_user_id ?? owners[0] ?? conversation.user_id;
+  const ids: Id<"users">[] = [];
+  if (primary) ids.push(primary);
+  ids.push(...owners);
+  if (firstPersonId && !conversation.standing_role_id) ids.push(firstPersonId);
   return Array.from(new Set(ids.map(String))) as Id<"users">[];
 }
+
+// Keep decision_inbox in lockstep with asked_user_ids: insert missing pending
+// rows, delete rows for people who are no longer in the set. Deleting is
+// required — a done inbox row for a still-pending decision still lists in
+// listForUserCore, so marking it done would leave the card on their stack.
+export async function syncDecisionInbox(
+  ctx: Ctx,
+  decisionId: Id<"session_decisions">,
+  people: Id<"users">[],
+  now: number,
+): Promise<void> {
+  const wanted = new Set(people.map(String));
+  const existing = await ctx.db
+    .query("decision_inbox")
+    .withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId))
+    .collect();
+  const have = new Set<string>();
+  for (const row of existing) {
+    const key = String(row.user_id);
+    if (wanted.has(key)) {
+      have.add(key);
+      if (row.status !== "pending") await ctx.db.patch(row._id, { status: "pending" });
+    } else {
+      await ctx.db.delete(row._id);
+    }
+  }
+  for (const userId of people) {
+    if (have.has(String(userId))) continue;
+    await ctx.db.insert("decision_inbox", { decision_id: decisionId, user_id: userId, status: "pending", created_at: now });
+  }
+}
+
+// Recompute people, inbox rows and holder for every open decision on this
+// session. Called after ownership changes so the question stack follows
+// assignment instead of staying with the runner or the role parent.
+export async function reroutePendingDecisionsForConversation(
+  ctx: Ctx,
+  conversationId: Id<"conversations">,
+  now: number,
+): Promise<{ moved: number }> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return { moved: 0 };
+  const role = await roleOfConversation(ctx, conversation);
+  const ladder = await buildLadder(ctx, role, now);
+  const people = await peopleFor(ctx, conversation, ladder.firstPersonId);
+  const openRows: DecisionRow[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "pending"))
+    .collect();
+  for (const row of openRows) {
+    await ctx.db.patch(row._id, { asked_user_ids: people });
+    await syncDecisionInbox(ctx, row._id, people, now);
+    const updated = await ctx.db.get(row._id);
+    if (updated) await refreshHolder(ctx, updated, now);
+  }
+  return { moved: openRows.length };
+}
+
+// Repair path for a session that was assigned before questions followed
+// owners: recompute people and inbox rows from the current owner set.
+export const reroutePendingForConversation = internalMutation({
+  args: { conversation_id: v.string() },
+  handler: async (ctx, args) => {
+    const ref = args.conversation_id.trim();
+    let conversation = null;
+    try { conversation = await ctx.db.get(ref as Id<"conversations">); } catch { conversation = null; }
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q: any) => q.eq("short_id", ref))
+        .first();
+    }
+    if (!conversation) throw new Error(`No session ${ref}`);
+    return reroutePendingDecisionsForConversation(ctx, conversation._id, Date.now());
+  },
+});
 
 // The scope keys a grant may match for this decision: the asker's role and
 // its projects and plans, the task's project and plan, the stack.
@@ -537,8 +621,10 @@ export function guardClientResolution(doc: { status?: string }, safe: Record<str
 // Whether a signed-in person may resolve this row from the web: anyone in its
 // people set (asked_user_ids), or the legacy owner.
 export function personMayResolve(row: { user_id: any; asked_user_ids?: any[] }, userId: any): boolean {
-  if (row.user_id?.toString() === userId.toString()) return true;
-  return (row.asked_user_ids ?? []).some((id) => id.toString() === userId.toString());
+  if (row.asked_user_ids !== undefined) {
+    return row.asked_user_ids.some((id) => id.toString() === userId.toString());
+  }
+  return row.user_id?.toString() === userId.toString();
 }
 
 export async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions">, status: "pending" | "done") {
@@ -799,9 +885,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     session_title: conversation.title,
     project_path: conversation.project_path,
   });
-  for (const userId of people) {
-    await ctx.db.insert("decision_inbox", { decision_id: id, user_id: userId, status: "pending", created_at: now });
-  }
+  await syncDecisionInbox(ctx, id, people, now);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
   const woken = await wakeLadder(ctx, ladder.activeRoles, { _id: id, short_id, question: args.question, conversation_id: conversation._id });
 

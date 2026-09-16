@@ -26,7 +26,7 @@
 // The root carries the `dark` class: this floats over the desktop, and theme
 // tokens on dark glass invert to navy-on-navy in light mode (the call stage
 // learned this the loud way).
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -35,6 +35,9 @@ import { useCallSync } from "../../hooks/useCallSync";
 import { useSyncTeams } from "../../hooks/useSyncTeams";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { declineInvite } from "../../lib/calls/callManager";
+import { voiceHostShowsRing } from "../../lib/calls/walkie";
+import { useWalkieStatus } from "../../hooks/useWalkie";
+import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { callRingAnswer, callRingHide, callRingSize } from "../../lib/desktop";
 import { soundCallRing } from "../../lib/sounds";
 import { RingCard } from "../../components/calls/RingCard";
@@ -73,9 +76,20 @@ function CallRingRoot() {
     (st: any) => st.myCalls.incoming.map((i: any) => i._id).join("|"),
   ]);
   const incoming: any[] = s.myCalls?.incoming ?? [];
+  // Subscribed for their changes: both feed voiceHostShowsRing below, and a
+  // window that only re-rendered on the invite would keep drawing a card the
+  // host took over, or miss one it stood down from.
+  useWalkieStatus();
+  useDesktopWindowRole();
   // The oldest live ring: two people calling at once is rare, and a stack of
   // cards in a 340px window is worse than answering them one at a time.
-  const invite = incoming[0] ?? null;
+  //
+  // Only when no voice host is showing it. This window is built on the first
+  // ring and lives on, so from then on it sees every invite — and on a shell
+  // with a voice host, that host draws the ring itself whenever the person is
+  // not in a call of their own. Two cards for one ring is one too many, so
+  // this window is the ring exactly when the host's stage is up.
+  const invite = voiceHostShowsRing() ? null : (incoming[0] ?? null);
 
   // The window is exactly as big as the card, and the report is what reveals
   // it. Measured rather than assumed: an avatar that fails to load and a long

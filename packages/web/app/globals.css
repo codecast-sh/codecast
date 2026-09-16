@@ -1644,6 +1644,12 @@ pre[class*="language-"] {
   color: var(--sol-cyan);
   font-weight: 600;
 }
+/* Chat mentions stay red: that number is "someone named you", and washing it
+   to the same pale cyan as every other count hid the one that matters. */
+.simple-view [data-sv-nav] [data-sv-count="mention"] {
+  background: var(--sol-red);
+  color: #fff;
+}
 
 /* The "N files changed" pill floats over the message body: NO background —
    fully transparent by design — with a backdrop blur so text sliding under it
@@ -3507,6 +3513,10 @@ pre[class*="language-"] {
   font-size: 10px;
   font-weight: 600;
 }
+.minimal-style [data-sv-nav] [data-sv-count="mention"] {
+  background: var(--sol-red) !important;
+  color: #fff !important;
+}
 
 .minimal-style .cc-panel__head {
   padding-inline: 14px 10px;
@@ -4133,6 +4143,9 @@ pre[class*="language-"] {
 .org-pop-in { animation: org-pop-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 @keyframes org-panel-in { from { transform: translateX(24px); } to { transform: none; } }
 .org-panel-in { animation: org-panel-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+/* The first open guide's highlight ring (org-staffing.md S14): a slow breath, so the eye finds it. */
+@keyframes org-guide-ring { 0%, 100% { box-shadow: 0 0 0 2px var(--sol-violet), 0 0 0 8px color-mix(in srgb, var(--sol-violet) 22%, transparent); } 50% { box-shadow: 0 0 0 2px var(--sol-violet), 0 0 0 14px color-mix(in srgb, var(--sol-violet) 10%, transparent); } }
+.org-guide-ring { animation: org-guide-ring 1.8s ease-in-out infinite; }
 .org-flow .react-flow__node { transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .org-flow .react-flow__node.dragging { transition: none; }
 .org-flow .react-flow__edge-path { transition: d 260ms; }
@@ -4140,19 +4153,20 @@ pre[class*="language-"] {
 .org-flow .react-flow__controls-button { background: var(--sol-card); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent); color: var(--sol-text-muted); fill: var(--sol-text-muted); }
 .org-flow .react-flow__controls-button:hover { background: var(--sol-bg-highlight); }
 .org-flow .react-flow__controls-button svg { fill: currentColor; }
-@media (prefers-reduced-motion: reduce) { .org-sheet-in, .org-pop-in, .org-panel-in, .org-flow .react-flow__node { animation: none; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .org-sheet-in, .org-pop-in, .org-panel-in, .org-guide-ring, .org-flow .react-flow__node { animation: none; transition: none; } }
 
 /* ---------------------------------------------------------------------------
    The inline reveal (components/ObjectReveal): an object reference opens its
    full page as a band across the whole scrolling surface. Width, left pull
    and height are measured inline by the component; the grow and fold motion
-   is driven there too. The band is a different layer set INTO the transcript:
-   a quiet gutter around a framed page, the frame's edge in the object's own
-   colour (the pill's), a strip that stays pinned while the read scrolls
-   through the band so close is always in reach. The frame never restyles
-   what it holds: the page runs edge to edge under the strip and paints its
-   own ground exactly as it does on the stage. No striped fill — that read
-   as a page-load bar on a click that loads nothing.
+   is driven there too. The band is a different layer set INTO the transcript,
+   and reads as one: a hatched gutter around a framed page. The hatch on
+   each side is the conversation-scroll lane; the frame is the object's own
+   scroll. The frame's edge is in the object's own colour (the pill's), a
+   strip that stays pinned while the read scrolls through the band so close
+   is always in reach. The frame never restyles what it holds: the page runs
+   edge to edge under the strip and paints its own ground exactly as it does
+   on the stage.
    --------------------------------------------------------------------------- */
 .object-reveal {
   --reveal-accent: var(--sol-cyan);
@@ -4160,16 +4174,122 @@ pre[class*="language-"] {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  --reveal-gutter: 28px;
   margin: 14px 0;
-  padding: 10px 14px 18px;
+  padding: 0 0 18px;
   overflow: clip;
   cursor: auto;
   text-align: left;
   font-size: 1rem;
   line-height: 1.5;
   background-color: var(--sol-bg-alt);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--sol-border) 70%, transparent) 5px 6px
+  );
   border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
   border-bottom: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
+}
+/* The hatch on each side is a real hit target: wheel here moves the parent
+   conversation, not the object. A bar appears on hover so the lane reads. */
+.object-reveal__lane {
+  position: absolute;
+  top: 40px;
+  bottom: 58px;
+  width: var(--reveal-gutter);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+}
+.object-reveal__lane--left { left: 0; }
+.object-reveal__lane--right { right: 0; }
+.object-reveal__lane::after {
+  content: "";
+  width: 3px;
+  height: 28px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sol-text-muted) 40%, transparent);
+  opacity: 0;
+  transition: opacity 120ms, height 120ms, background 120ms;
+}
+.object-reveal__lane:hover {
+  background: color-mix(in srgb, var(--reveal-accent) 10%, transparent);
+}
+.object-reveal__lane:hover::after {
+  opacity: 1;
+  height: 40px;
+  background: var(--reveal-accent);
+}
+/* Juicy hit above and below the framed page: a real link, so a click opens
+   the object and Option-click opens it beside. */
+.object-reveal__open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 40px;
+  padding: 0 16px 0 var(--reveal-gutter);
+  color: var(--sol-text);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--reveal-accent) 10%, transparent);
+  transition: background 120ms, color 120ms;
+}
+.object-reveal__open:hover,
+.object-reveal__open:focus-visible {
+  background: color-mix(in srgb, var(--reveal-accent) 24%, transparent);
+  color: var(--sol-text);
+}
+.object-reveal__open-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.object-reveal__open-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sol-text-muted);
+  letter-spacing: 0;
+}
+.object-reveal-open-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--sol-text);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+  transition: background 120ms;
+}
+.object-reveal-open-compact:hover,
+.object-reveal-open-compact:focus-visible {
+  background: color-mix(in srgb, var(--sol-cyan) 22%, transparent);
+}
+.object-reveal-open-compact .object-reveal__open-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.object-reveal-open-compact .object-reveal__open-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--sol-text-muted);
 }
 /* overflow: clip, not hidden: the corners round without the frame becoming
    a scrollport, so the strip's sticky still measures against the transcript. */
@@ -4180,6 +4300,7 @@ pre[class*="language-"] {
   min-height: 0;
   overflow: clip;
   border: 1px solid color-mix(in srgb, var(--reveal-accent) 28%, var(--sol-border));
+  margin: 0 var(--reveal-gutter);
   border-left: 3px solid var(--reveal-accent);
   border-radius: 10px;
   background: var(--sol-bg);
@@ -4297,6 +4418,28 @@ pre[class*="language-"] {
   background: var(--reveal-accent);
 }
 .object-reveal[data-resizing] { cursor: row-resize; user-select: none; }
+
+/* While an object is open in a conversation, the conversation itself folds
+   to a title row and a one-line composer so the object has the canvas.
+   Focus in the composer expands it to type. The object's own page (a
+   session opened in the band) uses the same fold. */
+[data-cc-conversation][data-reveal-chrome] [data-sv-convhead] > :not(:first-child) {
+  display: none;
+}
+[data-cc-conversation][data-reveal-chrome] [data-sv-convhead] .cc-panel__head ~ * {
+  display: none;
+}
+[data-cc-conversation][data-reveal-chrome] [data-cc-conv-meta],
+[data-cc-conversation][data-reveal-chrome] [data-cc-conv-actions] {
+  display: none;
+}
+[data-cc-conversation][data-reveal-chrome]:not(:has([data-sv-composer]:focus-within)) [data-sv-composer] {
+  max-height: 58px;
+  overflow: hidden;
+}
+[data-cc-conversation][data-reveal-chrome]:not(:has([data-sv-composer]:focus-within)) [data-sv-composer] > .h-16 {
+  display: none;
+}
 /* The pill's reveal caret: hidden until hover, always shown while its band
    is open, and rotated to point up so the same glyph reads open and close.
    The space is reserved either way so a hover never reflows the sentence. */
@@ -4316,4 +4459,34 @@ pre[class*="language-"] {
    in it, the one reference on the page that says "open below". */
 .entity-ref[aria-pressed="true"] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 35%, transparent);
+}
+
+/* In-conversation search: every hit wears .search-hit (rehypeSearchHighlight
+   for markdown, domMarks for code blocks); the hit the counter points at gets
+   data-search-active and a one-shot ring so the eye lands on it even inside a
+   wall of other hits. Non-matching rows dim (.search-dimmed) so the hits read
+   as the figure, the transcript as the ground. */
+mark.search-hit {
+  background: color-mix(in srgb, var(--sol-yellow) 38%, transparent);
+  color: var(--sol-text);
+  border-radius: 2px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+mark.search-hit[data-search-active] {
+  background: var(--sol-orange);
+  color: var(--sol-bg);
+  box-shadow: 0 0 0 2px var(--sol-orange), 0 0 0 5px color-mix(in srgb, var(--sol-orange) 30%, transparent);
+  animation: searchActivePulse 0.9s ease-out;
+}
+@keyframes searchActivePulse {
+  0% { box-shadow: 0 0 0 2px var(--sol-orange), 0 0 0 14px color-mix(in srgb, var(--sol-orange) 45%, transparent); }
+  100% { box-shadow: 0 0 0 2px var(--sol-orange), 0 0 0 5px color-mix(in srgb, var(--sol-orange) 30%, transparent); }
+}
+.search-dimmed {
+  opacity: 0.45;
+}
+@media (prefers-reduced-motion: reduce) {
+  mark.search-hit[data-search-active] { animation: none; }
 }

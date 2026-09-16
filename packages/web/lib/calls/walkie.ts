@@ -38,8 +38,9 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, dmOpenInFlight, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
-import { joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
+import { bindWalkieUpgrade, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
 import {
+  getDesktopWindowRole,
   isVoiceHost,
   mirrorVoice,
   sendVoiceCommand,
@@ -217,6 +218,15 @@ const subscribers = new Set<() => void>();
 bindWalkieHearing(() => !!status.incoming);
 // And the microphone's: a key still down holds the device, however long.
 bindMicInUse(() => !!burst);
+// And the media plane's: a deliberate join into a room this engine holds is
+// the upgrade, whatever pressed it — an answered ring, "ring them" off the
+// key, the strip's Join live. The room is a call from here and the seat's
+// clock stops; the answer tells the join to stamp the seat for the far side.
+bindWalkieUpgrade((roomKey) => {
+  if (status.liveRoom?.key !== roomKey) return false;
+  markWalkieUpgraded(roomKey);
+  return true;
+});
 
 function emit(patch: Partial<WalkieStatus>) {
   const next = { ...status, ...patch };
@@ -492,6 +502,33 @@ export function walkieHoldsRoom(s: WalkieStatus, roomKey: string | null): boolea
   const live = s.liveRoom;
   if (!live || live.mode === "call") return false;
   return !roomKey || roomKey === live.key;
+}
+
+/**
+ * IS THIS PERSON IN A CALL OF THEIR OWN — a huddle, as opposed to a seat the
+ * walkie holds so a burst can play? The ring's one question, and it has to
+ * have one answer: the voice host draws and sounds a ring over a burst being
+ * heard (that is not a call of their own), and stands down for a huddle,
+ * where the stage stays up and the ring window and the banner say it. When
+ * the ring hook read the call phase alone it called a listen "in a call",
+ * opened the ring window as well, and one ring became two cards.
+ */
+export function inOwnCall(s: WalkieStatus, call: { phase: string; roomKey: string | null }): boolean {
+  return call.phase !== "idle" && !walkieHoldsRoom(s, call.roomKey);
+}
+
+/** The same question about the whole desktop: this window's own call, the
+ *  host's mirrored one, or a call any window reports hosting. */
+export function personInOwnCall(): boolean {
+  return inOwnCall(status, walkieCallState()) || getDesktopWindowRole().anyInCall;
+}
+
+/** Whether a voice host is showing the ring, so no other surface draws it:
+ *  one exists (this window or another) and the person is not in a call of
+ *  their own. False on a shell without a host, where the ring window and the
+ *  in-app toast are the ring. */
+export function voiceHostShowsRing(): boolean {
+  return (isVoiceHost() || voiceHostElsewhere()) && !personInOwnCall();
 }
 
 /** The room somebody stepped into on purpose, for the readers that only ask

@@ -1087,8 +1087,12 @@ export default function InboxScreen() {
   // First-payload state of the live sessions subscription (set by
   // useSyncInboxSessions). Distinguishes "still loading" from "account has no
   // sessions" — a brand-new account (e.g. App Review's demo login) otherwise
-  // sits on the skeleton list forever.
+  // sits on the skeleton list forever. Pair with clientStateInitialized so a
+  // kill-and-reopen that still has the SQLite cache never looks like a cold
+  // load: splash stays up until this is true, and the list then paints from
+  // disk even if the live subscription hasn't connected yet.
   const sessionsFirstLoad = useInboxStore((s) => s.liveLoading.sessions);
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const stashSession = useInboxStore((s) => s.stashSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
@@ -1405,11 +1409,13 @@ export default function InboxScreen() {
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
     if (Object.keys(sessions).length === 0) {
-      // Skeletons only while the live subscription hasn't delivered its first
-      // payload (undefined = sync hook not mounted yet). Once it has, an empty
-      // collection means a genuinely session-less account — show a real empty
-      // state, not an eternal skeleton.
-      if (sessionsFirstLoad !== false) {
+      // Skeletons only for a genuinely cold cache: hydration has landed with
+      // no rows AND the live subscription hasn't delivered its first payload
+      // (undefined = sync hook not mounted yet). Kill-and-reopen hydrates
+      // sessions from SQLite before splash hides, so this branch is not
+      // taken. Once the live payload has arrived, an empty collection is a
+      // real empty account — not an eternal skeleton.
+      if (!hydrated || sessionsFirstLoad !== false) {
         return [<SessionListSkeleton key="skeleton" />];
       }
       return [(
@@ -1481,7 +1487,7 @@ export default function InboxScreen() {
     sections.push(renderSection("Dormant", statusDormant, Theme.blue, undefined, countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

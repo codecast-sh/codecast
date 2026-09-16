@@ -46,6 +46,8 @@ import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProce
 import { getLabelColor } from "../lib/labelColors";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { memberListSig, rosterIdentity } from "../hooks/useTeamRoster";
+import { viewersOf, viewersSig } from "./presence/memberPresence";
+import { ViewerFaces } from "./presence/ViewerFaces";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
@@ -2424,8 +2426,13 @@ export const SessionCard = memo(function SessionCard({
     // wakes that one card and nothing else. The signature is text plus stamp,
     // never the object (each overlay push hands back a new one).
     (s) => activitySig(s.sessions[cardId]?.activity),
+    // Teammates who have this session open (their faces in the meta row and
+    // a ring on the card). The signature is the viewer id list, so a roster
+    // push that changes nothing about who is here wakes nothing.
+    (s) => viewersSig(s.teamMembers, cardId, s.currentUser?._id?.toString?.() ?? null),
   ]);
   const rowActivity = st.sessions[cardId]?.activity ?? null;
+  const viewers = viewersOf(st.teamMembers, cardId, st.currentUser?._id?.toString?.() ?? null);
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
   // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
   // structural signature), subscribe to a shared 30s clock so those stay fresh on
@@ -2467,11 +2474,10 @@ export const SessionCard = memo(function SessionCard({
   // liveness suppression (a stashed agent is still running; see the idle-dot
   // gate below, which stays keyed on the real dismissed variant).
   const isDismissed = variant === "dismissed" || isStashed;
-  // Compact sub-row look: Task subagents and agent-team teammates (via
-  // nestParentIdOf) plus worktree workers. Teammates render this way even when
-  // floating top-level (lead absent) — same as worktree rows, the ↳ arrow
-  // carries the "child of something" reading on its own.
-  const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session) || !!session.worktree_name;
+  // Compact nested-child look: a trigger sub-row, a Task subagent, or an
+  // agent-team teammate (via nestParentIdOf). A worktree is only where the
+  // session runs — it does not make a first-class card look like a child.
+  const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -2751,8 +2757,8 @@ export const SessionCard = memo(function SessionCard({
             {/* Corner arrow (↳) — marks this row as a child of its parent
                 session. The faint violet left-border alone reads as "indented"
                 only when the parent is directly above; this makes the
-                sub-of-parent relationship explicit even for a subagent floating
-                as its own top-level row (flat view, or parent off-screen). */}
+                sub-of-parent relationship explicit when a nested row is
+                focused or pinned without the parent immediately above. */}
             <svg className={`w-3 h-3 flex-shrink-0 ${subRow ? "text-sol-amber/60" : "text-violet-400/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow ? "Trigger session" : "Subagent"}>
               <title>{subRow ? "Session driven by the trigger above" : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
@@ -2873,6 +2879,7 @@ export const SessionCard = memo(function SessionCard({
     <div
       data-session-id={session._id}
       data-active={isActive ? "true" : undefined}
+      data-sv-viewed={viewers.length > 0 ? viewers.length : undefined}
       draggable
       onDragStart={handleCardDragStart}
       onDragEnd={handleCardDragEnd}
@@ -2885,6 +2892,11 @@ export const SessionCard = memo(function SessionCard({
         // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
         // unacked handoff must never read as "this is the session you have open".
         session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
+      } ${
+        // Blue, and only when no stronger ring is on: a teammate has this
+        // session open. The faces in the meta row say who; the ring makes the
+        // card findable in a long list.
+        viewers.length > 0 && !isActive && !isSelected && !session.assigned_ping ? "ring-1 ring-inset ring-sol-blue/30" : ""
       } ${
         isActive
           ? "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]"
@@ -3097,6 +3109,7 @@ export const SessionCard = memo(function SessionCard({
               <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
             </span>
           )}
+          {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
           {(project !== "unknown" || sessionLabel) && (
             // With a user label: label name in the label's color, but the dot
             // STAYS project-colored — provenance survives the relabel. Hover

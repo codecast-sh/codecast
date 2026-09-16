@@ -6,7 +6,7 @@ import { MessageInput } from "../ConversationView";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
-import { pendingImageUploads } from "../../lib/draftImages";
+import { settleComposerAttachments } from "../../lib/draftImages";
 import type { ChatAttachment } from "../../store/chatSlice";
 import "./chat.css";
 
@@ -120,20 +120,7 @@ export const ChatComposer = memo(function ChatComposer({
         onGateSend={async (text: string, images) => {
           typing.stop();
           const content = text.trim();
-          const list = images ?? [];
-          if (!content && list.length === 0) return;
-          // Settle what's still uploading; the registry outlives any remount.
-          const settled = await Promise.all(
-            list.map(async (img) => ({
-              ...img,
-              storageId:
-                img.storageId ??
-                (await (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve(null))),
-            })),
-          );
-          const attachments: ChatAttachment[] = settled
-            .filter((img) => img.storageId)
-            .map((img) => ({ storage_id: img.storageId as string, mime: img.mime }));
+          const attachments: ChatAttachment[] = await settleComposerAttachments(images);
           // Every upload failed and nothing was typed — uploadImage already
           // toasted each failure; there is nothing real to send.
           if (!content && attachments.length === 0) return;

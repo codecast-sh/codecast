@@ -4,7 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
-import { isTeamAdmin } from "./privacy";
+import { isTeamAdmin, isTeamMember } from "./privacy";
 import { installationForTeam } from "./lib/slackOutbound";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
@@ -36,6 +36,11 @@ export const BOT_SCOPES = [
   "files:read",
   "team:read",
 ].join(",");
+
+// What a PERSON grants for themselves alongside the bot install: enough to
+// list the private channels they are in and invite the bot into one. No
+// history, no posting: their token never reads or writes a message.
+export const USER_SCOPES = ["channels:read", "groups:read", "groups:write", "users:read"].join(",");
 
 export function convexSiteUrl(): string {
   return process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh";
@@ -69,6 +74,7 @@ export function slackAuthorizeUrl(state: string, origin?: string): string {
   return (
     `https://slack.com/oauth/v2/authorize?client_id=${encodeURIComponent(clientId)}` +
     `&scope=${encodeURIComponent(BOT_SCOPES)}` +
+    `&user_scope=${encodeURIComponent(USER_SCOPES)}` +
     `&redirect_uri=${encodeURIComponent(slackRedirectUri(origin))}` +
     `&state=${encodeURIComponent(state)}`
   );
@@ -204,7 +210,7 @@ async function channelRow(ctx: { db: any }, channel: string, workspace?: string)
 export const resolveInstallScope = internalQuery({
   args: {
     api_token: v.optional(v.string()),
-    scope_type: v.union(v.literal("team"), v.literal("user")),
+    scope_type: v.union(v.literal("team"), v.literal("user"), v.literal("self")),
     team_id: v.optional(v.id("teams")),
   },
   handler: async (
@@ -213,6 +219,19 @@ export const resolveInstallScope = internalQuery({
   ): Promise<{ user_id: string; anchor_id?: string; team_id?: string; scope_user_id?: string } | null> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
+    if (args.scope_type === "self") {
+      // A member connecting their OWN Slack account to a workspace the team
+      // already installed. Any member may: the token only ever acts as them.
+      const teamId = await callerTeam(ctx, userId, args.team_id);
+      if (!teamId) return null;
+      if (!(await isTeamMember(ctx, userId, teamId))) return null;
+      const install = await ctx.db
+        .query("slack_installations")
+        .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+        .first();
+      if (!install) return null;
+      return { user_id: userId.toString(), team_id: teamId.toString() };
+    }
     if (args.scope_type === "team") {
       // A team's Slack workspace serves its anchor AND its chat mirrors, so the
       // install binds to the team itself; an anchor is not required. Connecting
@@ -244,7 +263,7 @@ export const resolveInstallScope = internalQuery({
 export const getInstallUrl = action({
   args: {
     api_token: v.optional(v.string()),
-    scope_type: v.union(v.literal("team"), v.literal("user")),
+    scope_type: v.union(v.literal("team"), v.literal("user"), v.literal("self")),
     team_id: v.optional(v.id("teams")),
     // Where the connect page sends the person afterwards. A relative path only;
     // anything else falls back to the anchor page.
@@ -264,7 +283,9 @@ export const getInstallUrl = action({
         ok: false,
         error: args.scope_type === "team"
           ? "Only a team admin can connect Slack for the team"
-          : "No anchor to connect — create one first",
+          : args.scope_type === "self"
+            ? "Connect the team's Slack workspace first"
+            : "No anchor to connect — create one first",
       };
     }
     // The state names its initiator (user_id + scope). completeSlackInstall runs
@@ -297,13 +318,13 @@ export const completeSlackInstall = action({
     const st = await verifyState(args.state);
     if (!st) return { ok: false, error: "bad_state", return_to: "/anchor" };
     const returnTo = safeReturnTo(typeof st.return_to === "string" ? st.return_to : undefined);
-    const scopeType = st.scope_type === "team" ? ("team" as const) : ("user" as const);
+    const scopeType = st.scope_type === "team" ? ("team" as const) : st.scope_type === "self" ? ("self" as const) : ("user" as const);
     const scope = await ctx.runQuery(internal.slack.resolveInstallScope, {
       api_token: args.api_token,
       scope_type: scopeType,
-      team_id: scopeType === "team" && typeof st.team_id === "string" ? (st.team_id as any) : undefined,
+      team_id: scopeType !== "user" && typeof st.team_id === "string" ? (st.team_id as any) : undefined,
     });
-    if (!scope) return { ok: false, error: scopeType === "team" ? "not_admin" : "no_anchor", return_to: returnTo };
+    if (!scope) return { ok: false, error: scopeType === "team" ? "not_admin" : scopeType === "self" ? "no_workspace" : "no_anchor", return_to: returnTo };
     // The completer MUST be the user who initiated the flow. This is the binding
     // that closes both relay directions: only the state's initiator can complete
     // it, so a link/code relayed to a victim (either way) is rejected here.
@@ -330,10 +351,36 @@ export const completeSlackInstall = action({
     } catch {
       return { ok: false, error: "exchange_failed", return_to: returnTo };
     }
-    if (!data?.ok || !data.access_token || !data.team?.id || !data.bot_user_id) {
+    if (!data?.ok || !data.team?.id) {
       return { ok: false, error: data?.error || "exchange_failed", return_to: returnTo };
     }
 
+    // The person's own token, when Slack granted the user scopes. Stored for
+    // the team install's admin too, so the one who connected can add private
+    // channels right away.
+    const authed = data.authed_user;
+    const keepUserToken = async () => {
+      if (!authed?.access_token || !authed?.id || !scope.team_id) return { ok: true as const };
+      return await ctx.runMutation(internal.slack.storeUserToken, {
+        workspace_id: data.team.id,
+        team_id: scope.team_id,
+        user_id: scope.user_id,
+        slack_user_id: authed.id,
+        token: authed.access_token,
+        scopes: authed.scope,
+      });
+    };
+
+    if (scopeType === "self") {
+      const kept = await keepUserToken();
+      if (!kept.ok) return { ok: false, error: kept.error ?? "no_user_token", return_to: returnTo };
+      if (!authed?.access_token) return { ok: false, error: "no_user_token", return_to: returnTo };
+      return { ok: true, scope_type: scopeType, team_id: scope.team_id, return_to: returnTo };
+    }
+
+    if (!data.access_token || !data.bot_user_id) {
+      return { ok: false, error: data?.error || "exchange_failed", return_to: returnTo };
+    }
     const stored = await ctx.runMutation(internal.slack.storeInstallation, {
       workspace_id: data.team.id,
       workspace_name: data.team.name,
@@ -346,7 +393,47 @@ export const completeSlackInstall = action({
       installed_by: scope.user_id,
     });
     if (!stored?.ok) return { ok: false, error: stored?.error || "store_failed", return_to: returnTo };
+    await keepUserToken();
     return { ok: true, scope_type: scopeType, team_id: scope.team_id, return_to: returnTo };
+  },
+});
+
+// storeUserToken — a person's own token for the team's workspace. Refused when
+// the workspace Slack answered for is not the one this team installed, so a
+// token from some other workspace can never be filed under this team.
+export const storeUserToken = internalMutation({
+  args: {
+    workspace_id: v.string(),
+    team_id: v.string(),
+    user_id: v.string(),
+    slack_user_id: v.string(),
+    token: v.string(),
+    scopes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const teamId = ctx.db.normalizeId("teams", args.team_id);
+    const userId = ctx.db.normalizeId("users", args.user_id);
+    if (!teamId || !userId) return { ok: false as const, error: "bad_ids" };
+    const install = await ctx.db
+      .query("slack_installations")
+      .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+      .first();
+    if (!install) return { ok: false as const, error: "no_workspace" };
+    if (install.workspace_id !== args.workspace_id) return { ok: false as const, error: "wrong_workspace" };
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("slack_user_tokens")
+      .withIndex("by_installation_user", (q: any) => q.eq("installation_id", install._id).eq("user_id", userId))
+      .first();
+    const fields = { slack_user_id: args.slack_user_id, token: args.token, scopes: args.scopes, updated_at: now };
+    if (existing) await ctx.db.patch(existing._id, fields);
+    else await ctx.db.insert("slack_user_tokens", { installation_id: install._id, workspace_id: args.workspace_id, user_id: userId, created_at: now, ...fields });
+    // Slack just said who this teammate is there: link the two accounts, so
+    // their Slack lines speak as them without an email having to match.
+    await ctx.scheduler.runAfter(0, internal.slackSync.linkSignedInPerson, {
+      installation_id: install._id, user_id: userId, slack_user_id: args.slack_user_id,
+    });
+    return { ok: true as const };
   },
 });
 

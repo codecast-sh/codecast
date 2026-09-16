@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { Hash, Lock, Users } from "lucide-react";
-import { buildChatTimeline } from "@codecast/shared/chat";
+import { authorGroupKey, buildChatTimeline } from "@codecast/shared/chat";
 import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import type { ChatAttachment } from "../../../store/chatSlice";
 import { useThreadMessages, useThreadSync } from "../../../hooks/useChatSync";
@@ -66,6 +66,7 @@ export function ChatTimelineRows({
         messages.map((m: ChatMessageView) => ({
           id: m.id,
           authorId: m.author.id,
+          groupKey: authorGroupKey(m.author),
           createdAt: m.createdAt,
           pendingAgent: m.agentStatus === "thinking" || m.agentStatus === "streaming",
           deleted: !!m.deletedAt,

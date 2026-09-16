@@ -9,6 +9,10 @@ const authSource = readFileSync(
   `${import.meta.dir}/auth.tsx`,
   "utf8",
 );
+const layoutSource = readFileSync(
+  `${import.meta.dir}/../app/_layout.tsx`,
+  "utf8",
+);
 
 function sourceBetween(start: string, end: string): string {
   const startIndex = inboxSource.indexOf(start);
@@ -213,5 +217,22 @@ describe("mobile principal outbox binding", () => {
     expect(transition).toBeGreaterThanOrEqual(0);
     expect(clear).toBeGreaterThan(transition);
     expect(open).toBeGreaterThan(clear);
+  });
+
+  // Kill-and-reopen used to hide the native splash as soon as fonts loaded,
+  // then paint the inbox skeleton on an empty store until SQLite hydration
+  // (or the live subscription) caught up. Splash now stays until the cache
+  // is in memory, and the list only skeletons a genuinely cold empty cache.
+  test("native splash stays up until the SQLite cache has hydrated", () => {
+    expect(layoutSource).toContain("SplashScreen.preventAutoHideAsync()");
+    expect(layoutSource).not.toMatch(/if\s*\(loaded\)\s*\{\s*SplashScreen\.hideAsync/);
+    expect(authSource).toContain("shouldReleaseSplash({ hydrated, authDecision: renderDecision })");
+    expect(authSource).toContain("s.clientStateInitialized");
+    expect(authSource).toContain("SplashScreen.hideAsync()");
+  });
+
+  test("inbox skeletons only a cold empty cache, not a kill-and-reopen", () => {
+    expect(inboxSource).toContain("s.clientStateInitialized");
+    expect(inboxSource).toContain("if (!hydrated || sessionsFirstLoad !== false)");
   });
 });

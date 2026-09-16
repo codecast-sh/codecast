@@ -1,4 +1,4 @@
-import { View } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, type TouchableOpacityProps } from 'react-native';
 
 // react-native-gesture-handler's native module is ABSENT on the Feb 1.0.2 App
 // Store binary: the dependency was first installed 2026-03-05, AFTER that build
@@ -40,3 +40,31 @@ export const gestureHandler: any = gh;
 
 export const GestureHandlerRootView: any =
   gh?.GestureHandlerRootView ?? (({ style, children }: any) => <View style={style}>{children}</View>);
+
+// Native touch handling so a tap is captured even when the JS thread is busy
+// (new-session send: create, cache write, keyboard). Gesture-handler's
+// TouchableOpacity is the drop-in that recognizes the press on the UI thread.
+// RNGH Pressable is the wrong widget here: it fights the composer TextInput
+// for the responder and does not flatten `[style, false]`, so send looked
+// dead. Older binaries without the native module keep RN TouchableOpacity.
+export function NativePressable({
+  onPress,
+  style,
+  children,
+  hitSlop,
+  activeOpacity,
+  ...rest
+}: TouchableOpacityProps) {
+  const Button = gh?.TouchableOpacity ?? TouchableOpacity;
+  return (
+    <Button
+      onPress={onPress}
+      style={StyleSheet.flatten(style)}
+      hitSlop={hitSlop}
+      activeOpacity={activeOpacity}
+      {...rest}
+    >
+      {children}
+    </Button>
+  );
+}

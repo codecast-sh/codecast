@@ -248,7 +248,7 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     }
     callKitOwnsAudio = !!opts.callKitManaged;
 
-    const r = new Room({ adaptiveStream: true, dynacast: true });
+    const r = new Room({ adaptiveStream: { pixelDensity: "screen" }, dynacast: true });
     room = r;
     currentRoomKey = roomKey;
 

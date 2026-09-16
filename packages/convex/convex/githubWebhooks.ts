@@ -1298,6 +1298,23 @@ export async function conversationForCommit(
   return onBranch.length === 1 ? onBranch[0]._id : undefined;
 }
 
+/** The files a push payload's commit names (added, modified, removed), in
+ *  the commits table's file shape, capped so a sweeping commit stays a row. */
+export const PUSH_FILES_CAP = 200;
+export function pushCommitFiles(commit: { added?: string[]; modified?: string[]; removed?: string[] }): Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }> {
+  const out: Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }> = [];
+  const push = (names: string[] | undefined, status: string) => {
+    for (const filename of names ?? []) {
+      if (out.length >= PUSH_FILES_CAP) return;
+      if (typeof filename === "string" && filename) out.push({ filename, status, additions: 0, deletions: 0, changes: 0 });
+    }
+  };
+  push(commit.added, "added");
+  push(commit.modified, "modified");
+  push(commit.removed, "removed");
+  return out;
+}
+
 export const processPushEvent = internalMutation({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -1335,6 +1352,10 @@ export const processPushEvent = internalMutation({
       const added = commit.added?.length ?? 0;
       const removed = commit.removed?.length ?? 0;
       const modified = commit.modified?.length ?? 0;
+      // The file list, so the activity block can read which area a commit
+      // landed on (lib/orgActivity.commitAreaPrefixes). A push payload names
+      // the files but not their line counts; those stay zero.
+      const files = pushCommitFiles(commit);
 
       const links = await resolveTaskLinksFromText(ctx, message, branch);
       const conversationId = await conversationForCommit(ctx, sha, branch);
@@ -1355,6 +1376,7 @@ export const processPushEvent = internalMutation({
           author_avatar_url: existing.author_avatar_url ?? pusherAvatar,
           conversation_id: existing.conversation_id ?? conversationId,
           task_ids: existing.task_ids?.length ? existing.task_ids : links.task_ids,
+          files: existing.files?.length ? existing.files : files.length ? files : undefined,
         });
       } else {
         commitId = await ctx.db.insert("commits", {
@@ -1373,6 +1395,7 @@ export const processPushEvent = internalMutation({
           author_avatar_url: pusherAvatar,
           conversation_id: conversationId,
           task_ids: links.task_ids.length ? links.task_ids : undefined,
+          files: files.length ? files : undefined,
         });
         created++;
       }

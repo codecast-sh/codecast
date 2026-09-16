@@ -3,6 +3,7 @@
 // singleton. Types live here so the fixture, the layout, the cards and the
 // store slice all agree on one definition.
 import type { WorkState } from "@codecast/shared/contracts";
+import type { OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 
 export type StateCounts = Record<WorkState, number>;
 
@@ -78,6 +79,12 @@ export type OrgRole = {
   counters?: { day: string; hands: number; wakes: number; tokens: number };
   coalesce_ms?: number;
   review_backend?: string;
+  // Standing or program (org-staffing.md S10); absent = undeclared, drawn as
+  // standing. A program's ends carries plan/project ids as strings on the tree.
+  tenure?: OrgTenureSpec;
+  // The face (org-staffing.md S13): the chosen avatar key, else the default for
+  // the handle. org.tree always stamps this through avatarOf, so it is present.
+  avatar?: string;
   created_by: string;
   created_at: number;
   updated_at: number;

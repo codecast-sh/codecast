@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authRenderDecision, localBootTrust, shouldClearMemoryFor } from "./authTrust";
+import { authRenderDecision, localBootTrust, shouldClearMemoryFor, shouldReleaseSplash } from "./authTrust";
 
 const id = { principalId: "userA", subject: "userA|sess1" };
 
@@ -196,5 +196,23 @@ describe("authRenderDecision", () => {
         isAuthenticated: true,
       }),
     ).toBe("children");
+  });
+});
+
+describe("shouldReleaseSplash", () => {
+  test("a warm cache with local trust releases so the inbox paints from disk", () => {
+    expect(shouldReleaseSplash({ hydrated: true, authDecision: "children" })).toBe(true);
+  });
+
+  test("hydration still in flight keeps the splash up — never a skeleton inbox", () => {
+    expect(shouldReleaseSplash({ hydrated: false, authDecision: "children" })).toBe(false);
+  });
+
+  test("auth still reading the trust anchor keeps the splash up", () => {
+    expect(shouldReleaseSplash({ hydrated: true, authDecision: "blank" })).toBe(false);
+  });
+
+  test("storage failure still releases so the error is reachable", () => {
+    expect(shouldReleaseSplash({ hydrated: true, authDecision: "storage-failure" })).toBe(true);
   });
 });

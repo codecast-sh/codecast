@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Bear">
+  <!-- tones: ground #d7c280 = sol-yellow 40% over sol-bg-alt; body #825e2a = sol-amber 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-bear"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#d7c280"/>
+  <g clip-path="url(#c-bear)">
+  <path d="M4 96C8 76 26 68 48 68C70 68 88 76 92 96Z" fill="#825e2a"/>
+  <circle cx="25" cy="27" r="10.5" fill="#825e2a"/><circle cx="71" cy="27" r="10.5" fill="#825e2a"/>
+  <circle cx="25" cy="27" r="5" fill="#d7c280"/><circle cx="71" cy="27" r="5" fill="#d7c280"/>
+  <circle cx="48" cy="50" r="28" fill="#825e2a"/>
+  <ellipse cx="48" cy="62" rx="13" ry="10" fill="#fdf6e3"/>
+  <path d="M42 58Q48 55 54 58Q53 65.5 48 66.5Q43 65.5 42 58Z" fill="#002b36"/>
+  <circle cx="37" cy="46" r="2.7" fill="#002b36"/><circle cx="59" cy="46" r="2.7" fill="#002b36"/>
+  </g>
+</svg>

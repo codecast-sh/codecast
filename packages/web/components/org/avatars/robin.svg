@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Robin">
+  <!-- tones: ground #9ec3d4 = sol-blue 40% over sol-bg-alt; body #825e2a = sol-amber 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-robin"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#9ec3d4"/>
+  <g clip-path="url(#c-robin)">
+  <path d="M6 96C8 70 24 56 48 58C72 60 86 78 90 96Z" fill="#825e2a"/>
+  <circle cx="46" cy="42" r="21" fill="#825e2a"/>
+  <path d="M24 96C22 72 30 48 50 46C66 46 76 62 76 96Z" fill="#cb4b16"/>
+  <path d="M30 96C30 82 38 76 50 76C62 76 68 82 68 96Z" fill="#fdf6e3"/>
+  <circle cx="38" cy="38" r="3.2" fill="#002b36"/>
+  <path d="M27 42L15 45L27 48Z" fill="#002b36"/>
+  </g>
+</svg>
