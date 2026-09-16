@@ -52,6 +52,26 @@ export function applyRestartingSessionStamp(
   const { [conversationId]: _gone, ...rest } = cur;
   return rest;
 }
+
+/** Local restart phase belongs to one conversation. `null` means the open
+ *  conversation did not change. Otherwise the header strip rebinds: idle on a
+ *  session that is not itself restarting, or hydrates from the store stamp if
+ *  you navigated back to the one that is. */
+export function rebindRestartLifecycle(
+  conversationId: string,
+  ownerId: string,
+  map: Record<string, number> | undefined | null,
+  now = Date.now(),
+): { ownerId: string; phase: RestartPhase; startedAt: number | null } | null {
+  if (conversationId === ownerId) return null;
+  const ts = liveRestartStartedAt(map, conversationId, now);
+  return {
+    ownerId: conversationId,
+    phase: ts != null ? "restarting" : "idle",
+    startedAt: ts ?? null,
+  };
+}
+
 // A restart request no daemon has stamped after this long usually means the
 // owning device is offline — the one failure the command rows can't report.
 const RESTART_UNCLAIMED_WARN_MS = 20_000;
@@ -192,14 +212,19 @@ export function useSessionRestart(opts: {
   // later isLive=true is the restart's doing, not the pre-kill snapshot.
   const sawDownRef = useRef(false);
 
-  if (conversationId !== ownerId) {
-    const ts = liveRestartStartedAt(useInboxStore.getState().restartingSessions, conversationId);
-    setOwnerId(conversationId);
-    setPhase(ts != null ? "restarting" : "idle");
-    setStartedAt(ts ?? null);
+  const rebound = rebindRestartLifecycle(
+    conversationId,
+    ownerId,
+    useInboxStore.getState().restartingSessions,
+  );
+  if (rebound) {
+    setOwnerId(rebound.ownerId);
+    setPhase(rebound.phase);
+    setStartedAt(rebound.startedAt);
     setFailure(null);
     // Don't re-fire repairSession on a restart we already had time to escalate.
-    escalatedRef.current = ts != null && Date.now() - ts >= RESTART_ESCALATE_AFTER_MS;
+    escalatedRef.current = rebound.startedAt != null
+      && Date.now() - rebound.startedAt >= RESTART_ESCALATE_AFTER_MS;
     sawDownRef.current = false;
   }
 
