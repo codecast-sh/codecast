@@ -12576,7 +12576,14 @@ export async function enqueueKillAndResume(
   await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "kill_session",
-    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id }),
+    args: JSON.stringify({
+      conversation_id: conv._id,
+      session_id: conv.session_id,
+      // Survives a split kill/resume batch: the daemon otherwise treats this
+      // as a user kill, marks the conversation completed, and Codex keeps
+      // answering under the old thread (ct-51691).
+      ...(opts.switchAgent ? { switch_agent: true } : {}),
+    }),
     created_at: now,
   });
 

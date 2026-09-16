@@ -271,6 +271,21 @@ describe("enqueueKillAndResume", () => {
     expect(JSON.parse(cmds[1].args).force_reconstitute).toBe(true);
   });
 
+  test("an agent switch stamps switch_agent on the kill as well as the resume", async () => {
+    const ctx = ctxWith({ daemon_commands: [], pending_messages: [] });
+    await enqueueKillAndResume(ctx, USER, conv, { switchAgent: true });
+    const cmds = ctx.db._inserted.filter((i: any) => i.table === "daemon_commands").map((i: any) => i.doc);
+    expect(JSON.parse(cmds[0].args).switch_agent).toBe(true);
+    expect(JSON.parse(cmds[1].args).switch_agent).toBe(true);
+  });
+
+  test("an ordinary restart kill is not a switch", async () => {
+    const ctx = ctxWith({ daemon_commands: [], pending_messages: [] });
+    await enqueueKillAndResume(ctx, USER, conv);
+    const cmds = ctx.db._inserted.filter((i: any) => i.table === "daemon_commands").map((i: any) => i.doc);
+    expect(JSON.parse(cmds[0].args).switch_agent).toBeUndefined();
+  });
+
   test("dedupes against an already-pending resume for the same conversation", async () => {
     const ctx = ctxWith({
       daemon_commands: [{
