@@ -28,7 +28,7 @@ import { memberDisplayName } from "../liveEntities";
 import { startScribe, stopScribe } from "./transcription";
 import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
-import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
   hasCallPanel,
   isCallPanelWindow,
@@ -241,6 +241,7 @@ async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean }) {
   await convex.mutation(api.calls.joinRoom, {
     room_key: roomKey,
     muted: useInboxStore.getState().call.muted,
+    languages: localTranscribeLanguages(),
     // Only ever true, never false: the stamp says a conversation started here
     // and nothing takes that back but leaving.
     ...(opts?.walkieJoin ? { walkie_join: true } : {}),
@@ -258,6 +259,7 @@ function startHeartbeat(roomKey: string) {
         muted: call.muted,
         camera: call.camera,
         sharing: call.sharing,
+        languages: localTranscribeLanguages(),
       })
       .then((res: any) => {
         // ok:false = the server lease-swept our row (laptop slept >45s while
@@ -971,6 +973,7 @@ function pushFlags() {
       muted: call.muted,
       camera: call.camera,
       sharing: call.sharing,
+      languages: localTranscribeLanguages(),
     })
     .catch(() => {});
 }

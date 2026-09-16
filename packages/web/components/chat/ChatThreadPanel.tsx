@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { memo, useCallback, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { ChatAttachment } from "../../store/chatSlice";
@@ -54,6 +55,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   selfHandles,
   handleNames,
   teamId,
+  composer,
   now,
   targetMessageId,
   onClose,
@@ -75,6 +77,9 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   handleNames?: Map<string, string>;
   /** The channel's team — scopes the composer's @ popup to the room's team. */
   teamId?: string;
+  /** Replaces the reply composer: a visitor who cannot post sees a sign-in
+   *  prompt where the box would be. */
+  composer?: ReactNode;
   now: number;
   /** A permalink to a REPLY: the panel is the only place that message exists, so
    *  the link lands nowhere unless the panel scrolls to it. */
@@ -178,7 +183,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         onRetryAgent={onRetryAgent}
       />
 
-      <ChatComposer
+      {composer ?? <ChatComposer
         channelId={channelId}
         threadRootId={rootId}
         teamId={teamId}
@@ -189,7 +194,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         channelName={channelName}
         onSend={onSend}
         compact
-      />
+      />}
     </aside>
   );
 });

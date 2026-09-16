@@ -73,6 +73,16 @@ describe("TmuxAttachPill under a backend that lacks the query", () => {
     expect(render()).toContain('aria-disabled="false"');
   });
 
+  // Simple view hides anything marked data-simple-hide. The copy button is a
+  // one-click gesture the pill owns in both views, so it must not carry the
+  // marker: in simple view it is the only copy affordance left in the header.
+  test("keeps the copy button visible in simple view", () => {
+    lookup = () => ({ data: undefined, error: missingFunction });
+    const html = render();
+    expect(html).toContain('aria-label="Copy tmux attach command"');
+    expect(html).not.toContain("data-simple-hide");
+  });
+
   // The failure must not be mistaken for "this pane is on someone else's box",
   // which is the one case where the pill withholds a command entirely and
   // labels itself with the machine's name instead of "tmux".

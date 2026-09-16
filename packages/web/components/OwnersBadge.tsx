@@ -81,6 +81,12 @@ export function OwnerMenuItems({
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Owners · whose inbox
       </DropdownMenuLabel>
+      {currentUser && !currentUser.is_bot && !ownerIds.has(currentUser._id) && (
+        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); toggle(currentUser._id); }} className="text-xs gap-2 text-sol-cyan">
+          <UserCheck className="w-3.5 h-3.5 shrink-0" />
+          <span>Take ownership<span className="block text-[10px] text-sol-text-dim">Add to your inbox; keep existing owners</span></span>
+        </DropdownMenuItem>
+      )}
       {selectable.length === 0 && (
         <div className="px-2 py-1.5 text-xs text-sol-text-dim">No teammates</div>
       )}

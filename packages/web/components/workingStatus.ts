@@ -8,6 +8,8 @@
 // clock (and the tool in flight) turns that silent stretch into something that
 // visibly reads as progressing.
 
+import { activityLine, formatToolName } from "@codecast/shared/render";
+
 // Below this much elapsed silence we show a plain "Working"; past it the live clock
 // appears. Keeps normal fast turns clean and only surfaces a ticking time for a
 // genuinely long-quiet turn — the case that otherwise looks stuck.
@@ -29,7 +31,37 @@ export function formatElapsedClock(ms: number): string {
 }
 
 type TimelineItemLike = { type: string; data: unknown };
-type MessageLike = { role?: string; tool_calls?: Array<{ name?: unknown }> | null };
+type ToolCallLike = { name?: unknown; input?: unknown };
+type MessageLike = { role?: string; tool_calls?: Array<ToolCallLike> | null };
+
+// The tool call currently in flight (see deriveRunningTool for the rule), with
+// its input, so the phrase library can name the subject.
+function deriveRunningToolCall(timeline: ReadonlyArray<TimelineItemLike>): { name: string; input: string } | undefined {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const item = timeline[i];
+    if (item.type !== "message") continue;
+    const msg = item.data as MessageLike;
+    if (msg.role === "system") continue;
+    if (msg.role !== "assistant") return undefined;
+    const tcs = msg.tool_calls;
+    const tc = tcs && tcs.length ? tcs[tcs.length - 1] : undefined;
+    if (!tc || typeof tc.name !== "string") return undefined;
+    return { name: tc.name, input: typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input ?? {}) };
+  }
+  return undefined;
+}
+
+// What the agent is doing now, from the loaded timeline: the present tense
+// phrase the inbox activity line uses ("editing chat.ts", "running npx tsc"),
+// through the same shared phrase library, so the composer and the card never
+// name one tool two ways. Falls back to the tool's display name when the call
+// has no phrase (unparsed input). This is the composer's fallback for a row
+// whose server side activity stamp is absent or stale.
+export function deriveRunningPhrase(timeline: ReadonlyArray<TimelineItemLike>): string | undefined {
+  const tc = deriveRunningToolCall(timeline);
+  if (!tc) return undefined;
+  return activityLine(tc) || formatToolName(tc.name) || tc.name;
+}
 
 // The tool currently in flight, for the working status line. The tail being an
 // assistant message that carries tool calls means its result hasn't landed yet
@@ -39,15 +71,5 @@ type MessageLike = { role?: string; tool_calls?: Array<{ name?: unknown }> | nul
 // generation, or a tool whose result already arrived), where the clock alone carries
 // the liveness. System messages at the tail are skipped, not treated as the end.
 export function deriveRunningTool(timeline: ReadonlyArray<TimelineItemLike>): string | undefined {
-  for (let i = timeline.length - 1; i >= 0; i--) {
-    const item = timeline[i];
-    if (item.type !== "message") continue;
-    const msg = item.data as MessageLike;
-    if (msg.role === "system") continue;
-    if (msg.role !== "assistant") return undefined;
-    const tcs = msg.tool_calls;
-    const name = tcs && tcs.length ? tcs[tcs.length - 1]?.name : undefined;
-    return typeof name === "string" ? name : undefined;
-  }
-  return undefined;
+  return deriveRunningToolCall(timeline)?.name;
 }

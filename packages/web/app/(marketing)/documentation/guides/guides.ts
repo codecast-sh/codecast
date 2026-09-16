@@ -82,7 +82,7 @@ export const GUIDES: Guide[] = [
   {
     slug: "forks-and-spawn",
     title: "Forks and spawned sessions",
-    dek: "cast fork branches a conversation N ways; cast spawn starts fresh sessions. Both land in the inbox as work the human owns.",
+    dek: "cast spawn --subagent delegates a worker that nests under the session that launched it; plain cast spawn and cast fork start independent threads in the human's inbox.",
     category: "Collaboration",
     installSlug: "forks",
   },

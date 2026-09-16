@@ -3,6 +3,7 @@ import {
   formatElapsedClock,
   shouldShowElapsed,
   deriveRunningTool,
+  deriveRunningPhrase,
   WORKING_ELAPSED_GRACE_MS,
 } from "./workingStatus";
 
@@ -75,5 +76,36 @@ describe("deriveRunningTool", () => {
 
   test("empty timeline → undefined", () => {
     expect(deriveRunningTool([])).toBeUndefined();
+  });
+});
+
+// The composer's fallback phrase, when the row's server side activity stamp is
+// absent or stale: the same present tense line the inbox card shows, from the
+// same shared phrase library, so one tool is never named two ways.
+describe("deriveRunningPhrase", () => {
+  const asst = (...tool_calls: Array<{ name: string; input: unknown }>) => ({
+    type: "message",
+    data: { role: "assistant", tool_calls: tool_calls.map((tc) => ({ name: tc.name, input: typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input) })) },
+  });
+  const user = { type: "message", data: { role: "user" } };
+
+  test("names the running tool's subject in present tense, matching the inbox card", () => {
+    expect(deriveRunningPhrase([user, asst({ name: "Edit", input: { file_path: "/Users/me/src/app/chat.ts" } })])).toBe("editing app/chat.ts");
+    expect(deriveRunningPhrase([asst({ name: "Bash", input: { command: "cd repo && npx tsc --noEmit" } })])).toBe("running npx tsc");
+    expect(deriveRunningPhrase([asst({ name: "Grep", input: { pattern: "wakeSig" } })])).toBe("searching for wakeSig");
+    expect(deriveRunningPhrase([asst({ name: "AskUserQuestion", input: {} })])).toBe("asking a question");
+  });
+
+  test("the last call of the tail message is the one in flight", () => {
+    expect(deriveRunningPhrase([asst({ name: "Read", input: { file_path: "/x/a.ts" } }, { name: "Bash", input: { command: "bun test" } })])).toBe("running bun test");
+  });
+
+  test("a call with no phrase falls back to the tool's display name", () => {
+    expect(deriveRunningPhrase([asst({ name: "Bash", input: "{bad" })])).toBe("Bash");
+  });
+
+  test("tool result already landed, or nothing loaded: nothing in flight", () => {
+    expect(deriveRunningPhrase([asst({ name: "Bash", input: { command: "ls" } }), user])).toBeUndefined();
+    expect(deriveRunningPhrase([])).toBeUndefined();
   });
 });
