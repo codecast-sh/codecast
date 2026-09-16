@@ -4721,6 +4721,8 @@ import {
   rollback as artifactRollback,
   edit as artifactEdit,
   comment as artifactComment,
+  draftSave as artifactDraftSave,
+  draftList as artifactDraftList,
   identity as artifactIdentity,
   view as artifactView,
   corsPreflight as artifactCors,
@@ -4738,6 +4740,10 @@ artifactPost("/cli/artifacts/manage", artifactManage);
 artifactPost("/cli/artifacts/rollback", artifactRollback);
 artifactPost("/cli/artifacts/edit", artifactEdit);
 artifactPost("/cli/artifacts/comment", artifactComment);
+// Unsent viewer text, autosaved by pages that contain an editor. Not comments:
+// nothing here is delivered, notified, or listed in the discussion.
+artifactPost("/cli/artifacts/draft", artifactDraftSave);
+artifactPost("/cli/artifacts/drafts", artifactDraftList);
 artifactPost("/cli/artifacts/identity", artifactIdentity);
 artifactPost("/cli/artifacts/view", artifactView);
 

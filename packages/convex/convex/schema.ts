@@ -4638,6 +4638,33 @@ export default defineSchema({
     .index("by_artifact", ["artifact_id", "created_at"])
     .index("by_artifact_client_id", ["artifact_id", "client_id"]),
 
+  // Work-in-progress text a viewer has typed into a page but not yet sent.
+  // Artifact pages run under the sandbox CSP with no allow-same-origin, so the
+  // document has an OPAQUE ORIGIN and every browser store — localStorage,
+  // IndexedDB, OPFS — throws SecurityError. A page with an editor in it
+  // therefore cannot keep a draft across a reload or a crash on its own, and
+  // loosening the sandbox to fix that would hand published HTML real
+  // convex.codecast.sh privileges. So the draft lives here instead: the page
+  // autosaves as the viewer types and reads its draft back on open, which also
+  // means the draft follows them to another browser or machine.
+  //
+  // One row per (artifact, key, author) — `key` is whatever the page calls the
+  // field it is saving, opaque to the server. Drafts are NOT comments: they
+  // never appear in the comment feed, never notify the owner, and are deleted
+  // when the viewer sends or clears the text.
+  artifact_drafts: defineTable({
+    artifact_id: v.id("artifacts"),
+    // Page-defined field id (e.g. the prompt key on a prompt-editor page).
+    key: v.string(),
+    // Viewer-typed name, the same unverified string the comment box uses.
+    // A draft is a convenience, not a secret: anyone who can name the author
+    // can read that author's drafts on that page, exactly as anyone can post a
+    // comment under any name. Nothing here is access-controlled content.
+    author: v.string(),
+    text: v.string(),
+    updated_at: v.number(),
+  }).index("by_artifact", ["artifact_id", "author", "key"]),
+
   // View counters, isolated from the artifacts row so beacon writes never churn
   // the row that queries/pages watch.
   artifact_stats: defineTable({
