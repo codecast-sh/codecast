@@ -45,6 +45,9 @@ class Server {
     readWorkspace: async (team) => ({ kind: "team", teamId: team || "unrelated-active-team" }),
     workspaceArgs: (ws) => ws.kind === "team" ? { team_id: ws.teamId } : {},
     workspaceLabel: (ws) => ws.kind,
+    webUrl: () => "https://codecast.sh/",
+    callingSession: () => undefined,
+    realCwd: () => this.dir,
     cliPost: async (endpoint, body) => {
       this.calls.push({ endpoint, body });
       if (this.failBefore === endpoint) { this.failBefore = undefined; throw new Error("Connection lost before request"); }
