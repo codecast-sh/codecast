@@ -109,6 +109,41 @@ describe("updateClientUI stamped view keys", () => {
     });
     expect(useInboxStore.getState().clientState.ui?.sounds_enabled).toBe(false);
   });
+
+  // Pins to the top of the sidebar are a per-user shortcut list, not a
+  // per-device layout. Unstamped, local_wins let an empty array on another
+  // client (or a boot that took the server wholesale) drop the pin — you pin
+  // "cameron tasks", leave, come back, and the rail has forgotten it.
+  it("stamps sidebar_pins so a pin follows the user across devices", () => {
+    const before = Date.now();
+    const pins = [{ kind: "view" as const, id: "view1", label: "cameron tasks" }];
+    useInboxStore.getState().updateClientUI({ sidebar_pins: pins });
+    const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
+    expect(ui.sidebar_pins).toEqual(pins);
+    expect(ui["sidebar_pins:ts"]).toBeGreaterThanOrEqual(before);
+  });
+
+  it("a just-made pin survives a stale server echo of an empty list", () => {
+    const pins = [{ kind: "view" as const, id: "view1", label: "cameron tasks" }];
+    useInboxStore.getState().updateClientUI({ sidebar_pins: pins });
+    useInboxStore.getState().syncTable("clientState", {
+      ui: { sidebar_pins: [] },
+    });
+    expect(useInboxStore.getState().clientState.ui?.sidebar_pins).toEqual(pins);
+  });
+
+  it("a stamped pin from another device beats a legacy unstamped empty local list", () => {
+    useInboxStore.setState({
+      clientState: { ui: { sidebar_pins: [] } },
+      clientStateInitialized: true,
+      pending: {},
+    });
+    const pins = [{ kind: "view" as const, id: "view1", label: "cameron tasks" }];
+    useInboxStore.getState().syncTable("clientState", {
+      ui: { sidebar_pins: pins, "sidebar_pins:ts": Date.now() },
+    });
+    expect(useInboxStore.getState().clientState.ui?.sidebar_pins).toEqual(pins);
+  });
 });
 
 describe("updateClientDismissed", () => {
