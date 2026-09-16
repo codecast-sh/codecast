@@ -21,7 +21,7 @@ const AudioSession = livekit?.AudioSession ?? null;
 export { callsNativeAvailable };
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
-import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 
 export type CallPhase = "idle" | "connecting" | "connected" | "error";
 
@@ -141,13 +141,18 @@ function startHeartbeat(roomKey: string) {
         muted: snap.muted,
         camera: snap.cameraOn,
         sharing: false,
+        languages: localTranscribeLanguages(),
       })
       .then((res: any) => {
         // Lease swept while we were backgrounded/asleep: retake the seat, or
         // fall out honestly if authorization is gone.
         if (res?.ok === false && snap.roomKey === roomKey && snap.phase === "connected") {
           convex
-            .mutation(api.calls.joinRoom, { room_key: roomKey, muted: snap.muted })
+            .mutation(api.calls.joinRoom, {
+              room_key: roomKey,
+              muted: snap.muted,
+              languages: localTranscribeLanguages(),
+            })
             .catch(() => void leaveCall());
         }
       })
@@ -229,7 +234,11 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     ...(opts.muted !== undefined ? { muted: opts.muted } : {}),
   });
   try {
-    await convex.mutation(api.calls.joinRoom, { room_key: roomKey, muted: snap.muted });
+    await convex.mutation(api.calls.joinRoom, {
+      room_key: roomKey,
+      muted: snap.muted,
+      languages: localTranscribeLanguages(),
+    });
     if (superseded()) return;
     const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey });
     if (superseded()) return;
@@ -317,6 +326,7 @@ function pushFlags() {
       muted: snap.muted,
       camera: snap.cameraOn,
       sharing: false,
+      languages: localTranscribeLanguages(),
     })
     .catch(() => {});
 }

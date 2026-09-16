@@ -16,7 +16,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { buildChatTimeline, memberHandle } from '@codecast/shared/chat';
-import { MessageRow, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { MessageRow, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
 import { MessageActionsSheet, type MessageAction } from '@/components/chat/MessageActionsSheet';
@@ -232,9 +232,12 @@ export default function ChatThreadScreen() {
     const humanName = member?.name || authorById.get(String(m.user_id))?.name;
     // Session-typed line → session persona (see app/chat/[id].tsx toView).
     const sessionOrigin = m.origin === 'agent' && m.origin_session_id && m.author_kind !== 'agent';
+    // A Slack-relayed line names the real Slack person, never the bridge.
+    const slack = slackFieldsFor(m);
     return {
       id: String(m._id),
-      author: sessionOrigin
+      slack: slack.slack,
+      author: slack.author ?? (sessionOrigin
         ? {
             id: String(m.user_id),
             name: m.origin_session_title || 'Agent session',
@@ -247,7 +250,7 @@ export default function ChatThreadScreen() {
               || (m.author_kind === 'agent' ? thread?.anchor?.name ?? 'Anchor' : 'Teammate'),
             avatarUrl: member?.github_avatar_url || member?.image || undefined,
             isAgent: m.author_kind === 'agent' || member?.is_bot,
-          },
+          }),
       content: m.content,
       createdAt: m.created_at,
       editedAt: m.edited_at,

@@ -16,7 +16,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -5058,6 +5058,16 @@ export default function SessionDetailScreen() {
                 }
                 return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
               }
+              if (isSessionMessage(item.content)) {
+                const authored = parseAgentAuthoredMessage(item.content);
+                if (authored) {
+                  const huddle = parseHuddleSummaryTag(authored.body);
+                  if (huddle) {
+                    return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
+                  }
+                  return <SessionMessageBlock from={authored.from} body={authored.body} timestamp={item.timestamp} />;
+                }
+              }
               // A subagent reporting back to its parent arrives in the same
               // shape under its own tag; same rail, chrome that says so.
               if (isAgentMessage(item.content)) {
@@ -5065,6 +5075,10 @@ export default function SessionDetailScreen() {
                 if (report) {
                   return <SessionMessageBlock variant="agent" from={report.from} body={report.body} timestamp={item.timestamp} />;
                 }
+              }
+              const unwrappedReport = parseUnwrappedSessionReport(item.content);
+              if (unwrappedReport) {
+                return <SessionMessageBlock from={unwrappedReport.from} name={unwrappedReport.name} body={unwrappedReport.body} timestamp={item.timestamp} />;
               }
               if (isScheduledTaskMessage(item.content)) {
                 return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;

@@ -13,6 +13,8 @@ import { formatRelativeTime } from '@/components/SessionItem';
 import { MemberSkeleton } from '@/components/SkeletonLoader';
 import { dmOtherIds } from '@codecast/shared/chat';
 import { channelDisplayName } from '@codecast/web/lib/chatViews';
+import { MIRROR_STATE_LABEL, mirrorState, type SlackMirrorState } from '@codecast/convex/convex/lib/slackMirror';
+import { SlackLogo } from '@/components/SlackLogo';
 import { dmRoomKey } from '@codecast/shared/contracts';
 import { ChatAvatar } from './MessageRow';
 import { LivePulse, LiveRoomCard, type LiveRoomRow } from '@/components/calls/LiveRooms';
@@ -54,9 +56,14 @@ export function useChatRail(teamId: Id<'teams'> | undefined, enabled = true) {
     if (!data) return undefined;
     const rail = data.rail as ChannelRailRow[];
     const railByChannel = new Map(rail.map((r) => [String(r.channel_id), r]));
+    // A mirrored channel wears the Slack channel's name, so the row's label is
+    // the Slack mark (same rule as the web rail), coloured by the mirror's state.
+    const slackByChannel = new Map<string, SlackMirrorState>(
+      ((data as any).slack_links ?? []).map((l: any) => [String(l.chat_channel_id), mirrorState(l)]),
+    );
     const channels = (data.channels as any[]).filter((c) => !c.archived_at);
     const rows = channels
-      .map((c) => ({ channel: c, rail: railByChannel.get(String(c._id)) }))
+      .map((c) => ({ channel: c, rail: railByChannel.get(String(c._id)), slack: slackByChannel.get(String(c._id)) }))
       // Recency, like the web rail: the room where something just happened is
       // the room you are most likely opening the app for.
       .sort((a, b) => (b.rail?.sort_at ?? 0) - (a.rail?.sort_at ?? 0));
@@ -108,7 +115,7 @@ function DmFace({ channel, viewerId, members }: { channel: any; viewerId: string
 type ListItem =
   | { kind: 'header'; key: string; label: string; live?: boolean; action?: 'compose' }
   | { kind: 'live'; key: string; row: LiveRoomRow }
-  | { kind: 'channel'; key: string; channel: any; rail?: ChannelRailRow }
+  | { kind: 'channel'; key: string; channel: any; rail?: ChannelRailRow; slack?: SlackMirrorState }
   | { kind: 'member'; key: string; member: any; inRoom: LiveRoomRow | null }
   | { kind: 'loading'; key: string }
   | { kind: 'notice'; key: string; icon: 'comments-o' | 'hashtag'; title: string; body: string };
@@ -166,7 +173,7 @@ export function ChatHomeList({
         if (channels.length === 0) {
           out.push({ kind: 'notice', key: 'n-ch', icon: 'hashtag', title: 'No channels yet', body: `Create one from the web to give ${teamName} a room.` });
         }
-        for (const r of channels) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail });
+        for (const r of channels) out.push({ kind: 'channel', key: String(r.channel._id), channel: r.channel, rail: r.rail, slack: r.slack });
         out.push({ kind: 'header', key: 'h-dm', label: 'Direct messages', action: 'compose' });
         if (dms.length === 0) {
           out.push({ kind: 'notice', key: 'n-dm', icon: 'comments-o', title: 'No direct messages yet', body: 'Tap a teammate below to start one.' });
@@ -354,6 +361,11 @@ export function ChatHomeList({
                     >
                       {displayName(channel)}
                     </RNText>
+                    {item.slack && (
+                      <RNView accessibilityRole="image" accessibilityLabel={MIRROR_STATE_LABEL[item.slack]}>
+                        <SlackLogo size={10} muted={item.slack !== 'live'} />
+                      </RNView>
+                    )}
                     {muted && <FontAwesome name="bell-slash-o" size={10} color={Theme.textMuted0} />}
                     {r?.last_message && (
                       <RNText style={styles.time}>

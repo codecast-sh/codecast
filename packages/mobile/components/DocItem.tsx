@@ -4,21 +4,29 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { DocItem as DocItemType } from "@codecast/web/store/inboxStore";
 import { formatDateSmart, wasEdited } from "@codecast/shared/time";
+import { DOC_TYPES, DOC_TYPE_LABELS, type DocType } from "@codecast/shared/docs";
 
 type IconName = React.ComponentProps<typeof FontAwesome>["name"];
 
-export const DOC_TYPE_CONFIG: Record<string, { icon: IconName; label: string; color: string }> = {
-  note: { icon: "file-text-o", label: "Note", color: Theme.textMuted0 },
-  plan: { icon: "map-o", label: "Plan", color: Theme.blue },
-  design: { icon: "paint-brush", label: "Design", color: Theme.violet },
-  spec: { icon: "file-code-o", label: "Spec", color: Theme.cyan },
-  investigation: { icon: "search", label: "Investigation", color: Theme.accent },
-  handoff: { icon: "exchange", label: "Handoff", color: Theme.orange },
-  charter: { icon: "gavel", label: "Charter", color: Theme.violet },
-  brief: { icon: "sticky-note-o", label: "Brief", color: Theme.green },
+// Styling only; the type list and labels come from @codecast/shared/docs.
+// Typed by DocType so a type added there without a style here fails to compile.
+const DOC_TYPE_STYLE: Record<DocType, { icon: IconName; color: string }> = {
+  note: { icon: "file-text-o", color: Theme.textMuted0 },
+  plan: { icon: "map-o", color: Theme.blue },
+  design: { icon: "paint-brush", color: Theme.violet },
+  spec: { icon: "file-code-o", color: Theme.cyan },
+  investigation: { icon: "search", color: Theme.accent },
+  handoff: { icon: "exchange", color: Theme.orange },
+  decision: { icon: "balance-scale", color: Theme.red },
+  charter: { icon: "gavel", color: Theme.violet },
+  brief: { icon: "sticky-note-o", color: Theme.green },
 };
 
-export const DOC_TYPES = ["note", "plan", "design", "spec", "investigation", "handoff", "decision", "charter", "brief"];
+export const DOC_TYPE_CONFIG = Object.fromEntries(
+  DOC_TYPES.map((t) => [t, { ...DOC_TYPE_STYLE[t], label: DOC_TYPE_LABELS[t] }]),
+) as Record<string, { icon: IconName; label: string; color: string }>;
+
+export { DOC_TYPES };
 
 export function DocItemRow({
   doc,
