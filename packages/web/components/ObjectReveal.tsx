@@ -1,8 +1,8 @@
 "use client";
 // The inline reveal: a rich object reference (a pill in prose, a shared-object
 // card) opens its FULL page right here in the conversation — a full-bleed band
-// on a crosshatch ground, spanning the whole scrolling surface, with the
-// object's real page inside. Reading the object no longer means leaving.
+// spanning the whole scrolling surface, with the object's real page inside.
+// Reading the object no longer means leaving.
 //
 // Two halves. RevealHost wraps a rendered markdown body: it renders its
 // children untouched (a fragment, so a message body's blocks stay direct
@@ -407,6 +407,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
             e.stopPropagation();
             target.onOpen?.(e);
           }}
+          {...(target.onOpen ? { "data-no-progress": "" } : {})}
           className="cc-panel__btn flex-shrink-0"
           title="Open the page"
         >

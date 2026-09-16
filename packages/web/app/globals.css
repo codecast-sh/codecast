@@ -4139,12 +4139,13 @@ pre[class*="language-"] {
    The inline reveal (components/ObjectReveal): an object reference opens its
    full page as a band across the whole scrolling surface. Width, left pull
    and height are measured inline by the component; the grow and fold motion
-   is driven there too. The band is a different layer set INTO the transcript,
-   and reads as one: a hatched gutter around a framed page, the frame's edge
-   in the object's own colour (the pill's), a strip that stays pinned while
-   the read scrolls through the band so close is always in reach. The frame
-   never restyles what it holds: the page runs edge to edge under the strip
-   and paints its own ground exactly as it does on the stage.
+   is driven there too. The band is a different layer set INTO the transcript:
+   a quiet gutter around a framed page, the frame's edge in the object's own
+   colour (the pill's), a strip that stays pinned while the read scrolls
+   through the band so close is always in reach. The frame never restyles
+   what it holds: the page runs edge to edge under the strip and paints its
+   own ground exactly as it does on the stage. No striped fill — that read
+   as a page-load bar on a click that loads nothing.
    --------------------------------------------------------------------------- */
 .object-reveal {
   --reveal-accent: var(--sol-cyan);
@@ -4160,11 +4161,6 @@ pre[class*="language-"] {
   font-size: 1rem;
   line-height: 1.5;
   background-color: var(--sol-bg-alt);
-  background-image: repeating-linear-gradient(
-    -45deg,
-    transparent 0 5px,
-    color-mix(in srgb, var(--sol-border) 70%, transparent) 5px 6px
-  );
   border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
   border-bottom: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
 }
