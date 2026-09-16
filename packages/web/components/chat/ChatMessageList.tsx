@@ -282,6 +282,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   return (
     <div className="ch-list-wrap">
       <div className="ch-list" ref={list.containerRef}>
+        <div className="ch-list-fill">
         {isLoadingOlder && (
           <div className="ch-loading-older" role="status">
             <Loader2 className="w-3 h-3 animate-spin" />
@@ -332,6 +333,7 @@ export const ChatMessageList = memo(function ChatMessageList({
               </div>
             );
           })}
+        </div>
         </div>
       </div>
 
