@@ -336,7 +336,8 @@ export const generateStory = action({
     const input = await ctx.runQuery(internal.storyMode.getStoryInput, { conversation_id: args.conversation_id, user_id: userId });
     if (!input || input.turns.length === 0) return { ok: false, beats: 0 };
 
-    const groups = chunkInto(input.turns, beatCount(input.turns.length));
+    const turns = input.turns as Turn[];
+    const groups = chunkInto(turns, beatCount(turns.length));
     const beats = await mapBeats(groups, buildBeatPrompt, apiKey, (g) => ({
       anchor_prompt: g[0].prompt,
       anchor_message_id: g[0].promptId,
@@ -371,7 +372,8 @@ export const generateSummary = action({
     }
     if (!cached || cached.beats.length === 0) return { ok: false, phases: 0 };
 
-    const groups = chunkInto(cached.beats, phaseCount(cached.beats.length));
+    const beats = cached.beats as Beat[];
+    const groups = chunkInto(beats, phaseCount(beats.length));
     const phases = await mapBeats(groups, buildPhasePrompt, apiKey, (g) => ({
       anchor_prompt: g[0].anchor_prompt,
       anchor_message_id: g[0].anchor_message_id,
@@ -399,7 +401,8 @@ export const generateStoryInternal = internalAction({
     if (!apiKey) return { ok: false };
     const input = await ctx.runQuery(internal.storyMode.getStoryInput, { conversation_id: args.conversation_id, user_id: args.user_id });
     if (!input || input.turns.length === 0) return { ok: false };
-    const groups = chunkInto(input.turns, beatCount(input.turns.length));
+    const turns = input.turns as Turn[];
+    const groups = chunkInto(turns, beatCount(turns.length));
     const beats = await mapBeats(groups, buildBeatPrompt, apiKey, (g) => ({
       anchor_prompt: g[0].prompt,
       anchor_message_id: g[0].promptId,
