@@ -105,8 +105,8 @@ bridge host or extension disconnects, and a command repairs what it can
 before it reports anything. It starts the bridge host if none is running,
 stopping a stale host of ours that holds an old token. It waits eight
 seconds for the extension, which reconnects to a fresh host on its own. If
-Chrome is not running, it starts Chrome in the background (no window on
-macOS) and waits up to a minute for the extension to load. If Chrome runs
+Chrome is not running, it starts Chrome (its normal window appears once)
+and waits up to a minute for the extension to load. If Chrome runs
 but the extension's worker has not called in, it gives the worker's own
 30 second alarm its chance, then opens the extension's options page with
 `#wake`, which starts the worker; the page closes itself. That wake is sent
@@ -190,8 +190,10 @@ Rules the CLI enforces in real mode:
   live status and keeps the pair by hand form for the rare machine where
   setup cannot open Chrome.
 - **Chrome's own infobar:** *"Codecast" started debugging this
-  browser*. Chrome shows it for as long as any tab is attached. **Cancel**
-  detaches at once; the extension notices and lets the tab go. An extension
+  browser*. Chrome shows it for as long as any tab is attached. While a tab
+  is attached the extension also holds a debugger session on its own service
+  worker (see below), which adds no time to the banner. **Cancel** detaches
+  at once; the extension notices and lets the tab go. An extension
   cannot suppress this infobar. The only ways around it are to launch Chrome
   with `--silent-debugger-extension-api`, or to install the extension through
   an enterprise force install policy. Neither is part of this workflow.
@@ -254,6 +256,18 @@ serves both sides, and the open socket keeps the MV3 service worker alive
 `chrome.alarms` tick every 30 seconds reconnects if the worker was ever
 torn down. When the socket drops while the worker is awake it retries after
 one, two and five seconds first, so a host restart is not a 30 second gap.
+
+Traffic keeps the worker alive only while the worker gets CPU. Chrome runs
+an extension's service worker process at background priority, and on macOS
+that process is throttled hard: on a loaded Mac the same work ran 14 times
+slower there than at normal priority. Chrome pings a running worker and ends
+it when 30 seconds pass without an answer, so a starved worker died in the
+middle of commands and a new one started seconds later. No process outside
+Chrome can lift that throttling. Chrome skips the ping check for a worker
+with DevTools attached, so while it holds any tab the worker keeps a
+`chrome.debugger` session on itself, and the host waits up to five minutes
+of silence before it gives up on the socket. A starved worker is now slow,
+not gone.
 
 ## Smoke harness
 
