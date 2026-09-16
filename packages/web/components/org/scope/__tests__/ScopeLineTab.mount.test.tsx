@@ -1,7 +1,8 @@
 // Mounts the Line tab in jsdom (docs/architecture/the-line.md L10) with two
 // tasks at different stations: one column per station in order, each task in
 // its column with its run's live node and hand state, a held marker on the
-// task a pending blocking decision holds, and the evidence count.
+// task a pending blocking decision holds, and the evidence count. The hold
+// and run rules are lib/taskLine.ts, the same the task page strip uses.
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -55,7 +56,6 @@ beforeAll(() => {
     sessionDecisions: {
       d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "tb", station: "in_review", question: "Ship it?", options: [], conversation_id: "x", session_id: "x", created_at: 1 },
     },
-    artifacts: { pg1: { _id: "pg1", slug: "pg1", task_id: "ta", title: "Report" } },
   } as any);
 });
 
@@ -79,7 +79,10 @@ test("two tasks at different stations paint in their columns with node, hand sta
   expect(a.querySelector("[data-line-node]")!.textContent).toMatch(/Implement/);
   expect(a.querySelector("[data-line-node]")!.textContent).toMatch(/working/);
   expect(a.querySelector("[data-avatar]")!.getAttribute("data-avatar")).toBe("Sam Reviewer");
-  expect(a.textContent).toMatch(/1 page · 2 files/);
+  // Pages join the count once artifacts.listForWeb carries task_id; today
+  // the card counts the handoff's files.
+  expect(a.textContent).toMatch(/2 files/);
+  expect(a.textContent).not.toMatch(/page/);
   expect(a.querySelector("[data-line-held]")).toBeNull();
   expect(a.querySelector("a")!.getAttribute("href")).toBe("/tasks/ct-1");
 

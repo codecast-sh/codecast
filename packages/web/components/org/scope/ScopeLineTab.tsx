@@ -4,16 +4,17 @@
 // card in the column of its status. A card shows the run's live node with the
 // hand's state as its stripe, a held marker when a pending blocking decision
 // is bound at the task's station, and an evidence count. Paints from the
-// store: tasks, runs (useSyncRuns feeds workflow_runs.listRuns), decisions
-// and artifacts; no query per card.
+// store: tasks, runs (useSyncRuns feeds workflow_runs.listRuns) and
+// decisions; no query per card. The hold, run and node rules are the task
+// page's (lib/taskLine.ts), so the board and the strip agree.
 import { useMemo } from "react";
 import Link from "next/link";
 import { Lock, Workflow } from "lucide-react";
 import { classifySession, useTrackedStore, type SessionDecisionItem, type TaskItem } from "../../../store/inboxStore";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useCollectionRows } from "../../../hooks/useCollectionRows";
-import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../../hooks/useSyncRuns";
 import { useSyncArtifacts } from "../../../hooks/useSyncArtifacts";
+import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../../hooks/useSyncRuns";
 import { useIsPhone } from "../../../hooks/useIsPhone";
 import { inScope, type ScopeIds } from "../../../hooks/useScopeIds";
 import { statusVisual, useTeamTaskStatusList } from "../../../lib/taskStatuses";
@@ -22,12 +23,16 @@ import { decisionHref } from "../../../lib/decisionLinks";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { ORG_STATE_META } from "../orgMeta";
-import { evidenceCount, heldAt, lineColumns, liveNodeOf, runForTask, workStateOfVerdict } from "./lineBoard";
+import { handWorkState, heldDecisionFor, isLiveRun, runForTask, runLiveNode } from "../../../lib/taskLine";
+import { evidenceCount, lineColumns } from "./lineBoard";
 
-const heldDecisionSig = (d: SessionDecisionItem) => `${d.status}|${d.blocking ? 1 : 0}|${d.task_id ?? ""}|${d.station ?? ""}|${d.short_id ?? ""}`;
+const heldDecisionSig = (d: SessionDecisionItem) => `${d.status}|${d.blocking ? 1 : 0}|${d.task_id ?? ""}|${d.station ?? ""}|${d.short_id ?? ""}|${d.created_at ?? 0}`;
 const boundDecision = (d: SessionDecisionItem) => !!d.task_id && d.status === "pending" && !!d.blocking;
-const artifactByTask = (a: any) => !!a.task_id;
-const artifactTaskSig = (a: any) => String(a.task_id);
+// Pages attached to a task (the-line.md L6): the artifacts store rows carry
+// task_id, so the card's page count reads the store; the feeder is mounted
+// once per board.
+const boundPage = (a: { task_id?: string | null }) => !!a.task_id;
+const pageSig = (a: { slug?: string; task_id?: string | null; version?: number }) => `${a.slug}|${a.task_id ?? ""}|${a.version ?? 0}`;
 
 export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }) {
   const phone = useIsPhone();
@@ -36,10 +41,10 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
   // One feed for the whole board: the workspace's runs, which the cards look
   // up by task. The feeder overlays the shared runs collection (L8).
   useSyncRuns(useMemo(() => ({ limit: 200 }), []));
-  useSyncArtifacts();
   const runs = useWorkspaceRuns();
   const held = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: boundDecision, sig: heldDecisionSig });
-  const artifacts = useCollectionRows<any>("artifacts", { where: artifactByTask, sig: artifactTaskSig });
+  useSyncArtifacts();
+  const pages = useCollectionRows<{ slug?: string; task_id?: string | null; version?: number }>("artifacts", { where: boundPage, sig: pageSig });
 
   const inScopeTasks = useMemo(
     () => tasks.filter((t) => inScope(ids, t as any) && !(t as any).parent_id),
@@ -65,7 +70,7 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
           <section
             key={status.id}
             data-line-column={status.id}
-            className={cn("shrink-0 flex flex-col rounded-xl border", phone ? "w-[78vw]" : "w-[250px]")}
+            className={cn("shrink-0 flex flex-col rounded-xl border", phone ? "w-[78vw]" : "w-[224px]")}
             style={{ borderColor: "color-mix(in srgb, var(--sol-border) 24%, transparent)", background: "color-mix(in srgb, var(--sol-card) 60%, transparent)", scrollSnapAlign: phone ? "start" : undefined }}
           >
             <header className="flex items-center gap-1.5 px-2.5 h-9 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 20%, transparent)" }}>
@@ -80,9 +85,9 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
                 <LineCard
                   key={t._id}
                   task={t}
-                  run={runForTask(t, runs)}
-                  held={heldAt(t, held)}
-                  evidence={evidenceCount(t, artifacts)}
+                  run={runForTask(t, runs) ?? null}
+                  held={heldDecisionFor(t, held) ?? null}
+                  evidence={evidenceCount(t, pages)}
                 />
               ))}
             </div>
@@ -99,14 +104,17 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
   // re-render the card, a state change does. Assignee names come from the
   // live roster (lib/liveEntities), not the server snapshot.
   const s = useTrackedStore([
-    (st) => { const row = handId ? st.sessions[handId] : undefined; return row ? workStateOfVerdict(classifySession(row)) : null; },
+    (st) => { const row = handId ? st.sessions[handId] : undefined; return row ? handWorkState(classifySession(row), null) : null; },
     (st) => st.teamMembers,
     (st) => st.currentUser?._id,
   ]);
   const handRow = handId ? s.sessions[handId] : undefined;
-  const handState = handRow ? workStateOfVerdict(classifySession(handRow)) : null;
+  const live = isLiveRun(run) ? runLiveNode(run) : null;
+  const node = live?.label ?? null;
+  // The stripe follows the store row when we hold the hand's session, else
+  // the run's own enrichment; a run waiting at a gate with no hand says so.
+  const handState = live && (handRow || live.session) ? handWorkState(handRow ? classifySession(handRow) : null, live.session) : null;
   const handMeta = handState ? ORG_STATE_META[handState] : null;
-  const node = liveNodeOf(run);
   const assignee = resolveAssigneeInfo(task.assignee, task.assignee_info, s.teamMembers, s.currentUser);
   const evidenceLine = [evidence.pages ? `${evidence.pages} page${evidence.pages === 1 ? "" : "s"}` : "", evidence.files ? `${evidence.files} file${evidence.files === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
 

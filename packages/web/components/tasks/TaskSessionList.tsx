@@ -207,7 +207,11 @@ export function TaskSessionList({
   const now = useCoarseNow(30_000);
   const liveSig = useInboxStore((s) => sessions.map((c) => `${c._id}:${liveRowSig(s.sessions[c._id])}`).join("|"));
   const rows = useMemo(() => {
-    const overlaid = sessions.map((c) => overlayLive(c, useInboxStore.getState().sessions[c._id]));
+    // The task's conversation ids and its comment trail can name one session
+    // twice; one row per id keeps React keys unique.
+    const seen = new Set<string>();
+    const unique = sessions.filter((c) => (seen.has(String(c._id)) ? false : (seen.add(String(c._id)), true)));
+    const overlaid = unique.map((c) => overlayLive(c, useInboxStore.getState().sessions[c._id]));
     return sortTaskLinkedConversations(overlaid, originId);
     // liveSig stands in for the churny sessions ref
     // eslint-disable-next-line react-hooks/exhaustive-deps

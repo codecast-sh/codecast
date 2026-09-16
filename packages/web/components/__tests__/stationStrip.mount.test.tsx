@@ -22,6 +22,7 @@ const realWorkflows = { ...(await import("../../hooks/useSyncWorkflows")) };
 mock.module("../../hooks/useSyncWorkflows", () => ({
   ...realWorkflows,
   useWorkflowRun: (id: string | null | undefined) => useInboxStore((s: any) => (id ? s.workflowRuns[id] ?? null : undefined)),
+  useWorkflow: (id: string | null | undefined) => useInboxStore((s: any) => (id ? s.workflows[id] ?? null : undefined)),
 }));
 afterAll(() => { mock.module("../../hooks/useSyncWorkflows", () => realWorkflows); });
 const { StationStrip, TaskLineChip } = await import("../tasks/StationStrip");
@@ -40,6 +41,7 @@ const TASK_ID = "k97abcdefabcdefabcdefabcdefabcde";
 const RUN_ID = "kw1abcdefabcdefabcdefabcdefabcde";
 const DEC_ID = "kd1abcdefabcdefabcdefabcdefabcde";
 const CONV_ID = "kc1abcdefabcdefabcdefabcdefabcde";
+const WF_ID = "kf1abcdefabcdefabcdefabcdefabcde";
 
 const task = (over: Record<string, unknown> = {}) => ({
   _id: TASK_ID, short_id: "ct-1", title: "Ship the strip", task_type: "task", status: "in_review", priority: "medium",
@@ -60,7 +62,7 @@ const run = {
 };
 
 beforeEach(() => {
-  useInboxStore.setState({ sessionDecisions: {}, workflowRuns: {}, sessions: {}, teams: [] } as any);
+  useInboxStore.setState({ sessionDecisions: {}, workflowRuns: {}, workflows: {}, sessions: {}, teams: [] } as any);
 });
 
 async function mount(el: React.ReactElement) {
@@ -119,6 +121,23 @@ describe("StationStrip", () => {
     await act(() => root.unmount());
   });
 
+  test("names the live node by the workflow's label when the run row carries only ids", async () => {
+    // workflow_runs.get returns the raw row: no current_node_label, no label
+    // on node_statuses. The label comes from the workflow in the store.
+    const rawRun = {
+      _id: RUN_ID, status: "running", task_id: TASK_ID, workflow_id: WF_ID, current_node_id: "review", updated_at: 50,
+      node_statuses: [{ node_id: "review", status: "running", started_at: 20 }],
+    };
+    const workflow = { _id: WF_ID, name: "line", nodes: [{ id: "implement", label: "Implement" }, { id: "review", label: "Review the change" }] };
+    useInboxStore.setState({ workflowRuns: { [RUN_ID]: rawRun }, workflows: { [WF_ID]: workflow } } as any);
+    const { container, root } = await mount(<StationStrip task={task({ workflow_run_id: RUN_ID }) as any} />);
+    const node = container.querySelector("[data-live-node]") as HTMLElement;
+    expect(node.getAttribute("data-live-node")).toBe("review");
+    expect(node.textContent).toContain("Review the change");
+    expect(node.textContent).not.toMatch(/\breview\b/);
+    await act(() => root.unmount());
+  });
+
   test("a review verdict renders as a chip even with no run", async () => {
     const { container, root } = await mount(<StationStrip task={task({ review_verdict: { verdict: "changes", at: 1, note: "tests" } }) as any} />);
     expect(container.querySelector("[data-review-verdict]")?.getAttribute("data-review-verdict")).toBe("changes");
@@ -141,6 +160,9 @@ describe("TaskLineChip", () => {
     const live = await mount(<TaskLineChip task={task({ workflow_run_id: RUN_ID }) as any} />);
     expect(live.container.querySelector("[data-task-line-chip]")?.textContent).toContain("at In Review · Review");
     await act(() => live.root.unmount());
+    // A live run bound to the task by task_id counts even when the task does
+    // not name it, so the idle case needs an empty runs collection.
+    useInboxStore.setState({ workflowRuns: {} } as any);
     const idle = await mount(<TaskLineChip task={task() as any} />);
     expect(idle.container.querySelector("[data-task-line-chip]")).toBeNull();
     await act(() => idle.root.unmount());

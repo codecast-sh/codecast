@@ -1,11 +1,12 @@
 // Pure rules the scope page's Line tab paints from (docs/architecture/
-// the-line.md L3, L5, L10): the team's statuses are the stations, a task
-// sits in the column of its status, a pending blocking decision bound to the
-// task at that station holds it there, and the task's run names the node a
-// hand is working. Kept out of the component so it tests without React.
-import type { WorkState } from "@codecast/shared/contracts";
+// the-line.md L3, L10): the team's statuses are the stations and a task sits
+// in the column of its status. The hold, the task's run, its live node and
+// the hand's state are the task page's rules (lib/taskLine.ts); the board
+// imports them so the two surfaces can never disagree. Kept out of the
+// component so it tests without React.
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
-import { boardOrderedStatuses, taskStatusKey } from "../../../lib/taskStatuses";
+import { stationOrder } from "../../../lib/taskLine";
+import { taskStatusKey } from "../../../lib/taskStatuses";
 
 export type LineTaskLike = {
   _id: string;
@@ -16,25 +17,6 @@ export type LineTaskLike = {
   files_changed?: string[];
 };
 
-export type LineDecisionLike = {
-  _id: string;
-  short_id?: string;
-  status: string;
-  blocking?: boolean;
-  task_id?: string;
-  station?: string;
-};
-
-export type LineRunLike = {
-  _id: string;
-  task_id?: string;
-  status: string;
-  current_node_id?: string;
-  current_node_label?: string;
-  updated_at?: number;
-  created_at?: number;
-};
-
 export type LineColumn<T extends LineTaskLike> = { status: TeamTaskStatus; tasks: T[] };
 
 /** One column per station in pipeline order (backlog to dropped, the team's
@@ -42,7 +24,7 @@ export type LineColumn<T extends LineTaskLike> = { status: TeamTaskStatus; tasks
  *  resolves to, newest change first. Every station is present, empty or not,
  *  so the board reads the same shape for every scope. */
 export function lineColumns<T extends LineTaskLike>(tasks: T[], statuses: TeamTaskStatus[]): LineColumn<T>[] {
-  const ordered = boardOrderedStatuses(statuses);
+  const ordered = stationOrder(statuses);
   const byKey = new Map<string, T[]>(ordered.map((s) => [s.id, []]));
   for (const t of tasks) {
     const key = taskStatusKey(t, ordered);
@@ -56,52 +38,10 @@ export function lineColumns<T extends LineTaskLike>(tasks: T[], statuses: TeamTa
   }));
 }
 
-/** L5: the pending blocking decision bound to the task at its current
- *  station, or null. The station is the task's status as the ask recorded
- *  it; a team status id matches too, so a custom status holds as well. */
-export function heldAt<D extends LineDecisionLike>(task: LineTaskLike, decisions: D[]): D | null {
-  const stations = new Set([task.status, task.status_id].filter((x): x is string => !!x));
-  for (const d of decisions) {
-    if (d.status !== "pending" || !d.blocking || d.task_id !== task._id) continue;
-    if (d.station && stations.has(d.station)) return d;
-  }
-  return null;
-}
-
-/** The task's run: the one its row names, else its newest run by task id. */
-export function runForTask<R extends LineRunLike>(task: LineTaskLike, runs: R[]): R | null {
-  if (task.workflow_run_id) {
-    const named = runs.find((r) => r._id === task.workflow_run_id);
-    if (named) return named;
-  }
-  let best: R | null = null;
-  for (const r of runs) {
-    if (r.task_id !== task._id) continue;
-    const at = r.updated_at ?? r.created_at ?? 0;
-    if (!best || at > (best.updated_at ?? best.created_at ?? 0)) best = r;
-  }
-  return best;
-}
-
-/** The live node a run is on, as the card prints it: its label, else its id;
- *  nothing for a run that has finished. */
-export function liveNodeOf(run: LineRunLike | null): string | null {
-  if (!run) return null;
-  if (run.status === "completed" || run.status === "failed") return null;
-  return run.current_node_label || run.current_node_id || null;
-}
-
-/** A session's verdict (store classifySession) folded back to the one work
- *  state the org surfaces colour by. */
-export function workStateOfVerdict(v: { idle: boolean; waiting: boolean; rest: WorkState } | null | undefined): WorkState | null {
-  if (!v) return null;
-  if (!v.idle) return "working";
-  return v.waiting ? v.rest : "idle";
-}
-
-/** Evidence the card can count without a query: pages attached to the task
- *  in the artifacts store and the files its handoff named. */
-export function evidenceCount(task: LineTaskLike, artifacts: Array<{ task_id?: string }>): { pages: number; files: number } {
+/** Evidence the card can count without a query: pages bound to the task in
+ *  the artifacts store (rows that carry `task_id`) and the files its handoff
+ *  named. */
+export function evidenceCount(task: LineTaskLike, artifacts: Array<{ task_id?: string | null }>): { pages: number; files: number } {
   let pages = 0;
   for (const a of artifacts) if (a.task_id === task._id) pages++;
   return { pages, files: task.files_changed?.length ?? 0 };
