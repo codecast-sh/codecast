@@ -31,7 +31,12 @@ const handledSig = (d: HandledDecisionItem) => `${d.status}:${d.resolved_at ?? 0
 // Sessions parked on a terminal question (an AskUserQuestion, a permission
 // prompt) have no authored row and keep the one-at-a-time stepper.
 export function DecisionQueueList() {
-  useSyncDecisionStacks();
+  // The same argument set the stacks index and the stack page use: the feed
+  // is a snapshot, so two feeders that disagree on include_done would drop
+  // and restore each other's done rows while both are mounted. Done stacks
+  // in the store cost the queue nothing: a group renders only for a stack
+  // with pending members.
+  useSyncDecisionStacks({ includeDone: true });
   useSyncHandledDecisions();
   const pending = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: pendingWhere, sig: pendingSig });
   const stacks = useInboxStore((s) => s.decisionStacks);

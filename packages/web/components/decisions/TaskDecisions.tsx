@@ -57,7 +57,7 @@ export function TaskDecisions({ taskId }: { taskId: string }) {
   return (
     <div className="mb-6" data-task-decisions={open.length} data-task-decisions-resolved={resolved.length}>
       <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">
-        {open.length > 0 ? `Waiting on a decision${open.length > 1 ? `s · ${open.length}` : ""}` : "Decisions"}
+        {open.length === 1 ? "Waiting on a decision" : open.length > 1 ? `Waiting on ${open.length} decisions` : "Decisions"}
       </h2>
       {open.length > 0 && (
         <div className="space-y-2">
