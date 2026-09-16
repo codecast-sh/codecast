@@ -22,6 +22,7 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import { browserSocketUrl, CdpConnection, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
 import { shortTabId, tabLine } from "./tabId.js";
+import { narrated } from "./narrate.js";
 import {
   acquireStartLock, attachToTarget, clearState, freePort, killStrayChrome, launchManagedChrome, pickTarget,
   probeLiveness, pruneTabOwnership, readState, recordNavigation, setActiveTarget, settle, stopInstance,
@@ -455,18 +456,18 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // the bridge maps it to `tabs.create {active: false}`, and without it
         // every `open` pulls their window in front of what they were doing
         // (focusRaise.guard.test.ts now fails a create without it — ct-49625).
-        targetId = (await conn.send<{ targetId: string }>("Target.createTarget", { url, background: true })).targetId;
+        targetId = (await narrated("opening a tab in Chrome", conn.send<{ targetId: string }>("Target.createTarget", { url, background: true }))).targetId;
         created = true;
       }
       rememberRealTab(sessionKey, targetId);
-      const page = await attachToTarget(conn, targetId);
+      const page = await narrated("attaching to the tab through the extension", attachToTarget(conn, targetId));
       await armRecorder(page);
-      if (!created) await conn.send("Page.navigate", { url }, page.sessionId);
+      if (!created) await narrated("asking the tab to navigate", conn.send("Page.navigate", { url }, page.sessionId));
       if (o.wait !== false) {
-        const r = await settle(page);
+        const r = await narrated("waiting for the page to load", settle(page), { hint: "--no-wait returns as soon as the tab is attached" });
         if (!r.settled) console.log(fmt.muted(`  (did not fully settle: ${r.reason})`));
       }
-      const snap = await snapshotPage(page, { maxChars: 1 });
+      const snap = await narrated("reading the page", snapshotPage(page, { maxChars: 1 }));
       console.log(pageLine(snap.url, snap.title));
       console.log(fmt.muted(`  real tab ${shortTabId(targetId)} — Chrome shows its debugging banner while cast drives it`));
     });
@@ -518,8 +519,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const targets = await driver.targets();
         const blank = targets.find((t) => t.url === "about:blank");
         const mine = sessionId ? s.tabsBySession?.[sessionId] : null;
+        const newTab = () => narrated("opening a tab", conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB));
         if (o.newTab || !targets.length) {
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
+          const res = await newTab();
           targetId = res.targetId;
         } else if (mine && targets.some((t) => t.targetId === mine)) {
           // Reuse the tab this session already owns rather than the last tab
@@ -531,7 +533,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         } else {
           // No tab of our own and none spare: take a new one instead of
           // commandeering a page another agent may be mid-flow on.
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
+          const res = await newTab();
           targetId = res.targetId;
         }
 
@@ -543,15 +545,15 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // page's own boot logs — the errors an agent is usually looking for
         // happen during startup.
         try {
-          page = await driver.attach(targetId);
+          page = await narrated("attaching to the tab", driver.attach(targetId));
         } catch (err) {
           // isTabUnresponsive, not instanceof: the verdict may have been
           // raised across a process boundary and revived by name (recovery.ts).
           if (!isTabUnresponsive(err)) throw err;
           console.log(fmt.muted(`  ${tabLine(targetId, "was not responding, opening a new one")}`));
-          const res = await conn.send<{ targetId: string }>("Target.createTarget", NEW_TAB);
+          const res = await newTab();
           targetId = res.targetId;
-          page = await driver.attach(targetId);
+          page = await narrated("attaching to the tab", driver.attach(targetId));
         }
         // Carry this machine's login for the site we are about to open. Only
         // for a remote browser, and only when it has none of its own — see
@@ -585,15 +587,15 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
           const detail = sameDocument(already!, url) ? "" : ` (it redirected here last time)`;
           console.log(fmt.muted(`  already on this page${detail} — reusing it (--reload to load it again)`));
         } else {
-          await conn.send("Page.navigate", { url }, page.sessionId);
+          await narrated("asking the tab to navigate", conn.send("Page.navigate", { url }, page.sessionId));
         }
         setActiveTarget(s, targetId, sessionId);
 
         if (o.wait !== false && !sameUrl) {
-          const r = await settle(page);
+          const r = await narrated("waiting for the page to load", settle(page), { hint: "--no-wait returns as soon as the tab is attached" });
           if (!r.settled) console.log(fmt.muted(`  (did not fully settle: ${r.reason})`));
         }
-        const snap = await snapshotPage(page, { maxChars: 1 });
+        const snap = await narrated("reading the page", snapshotPage(page, { maxChars: 1 }));
         if (!sameUrl) recordNavigation(targetId, url, snap.url);
         console.log(pageLine(snap.url, snap.title));
         // Audit where the tab actually LANDED — a redirect can differ from
