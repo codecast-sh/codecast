@@ -1,5 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { deriveRestartStage, restartConfirmedLive, type RestartProgressRow } from "./useSessionRestart";
+import {
+  applyRestartingSessionStamp,
+  deriveRestartStage,
+  liveRestartStartedAt,
+  restartConfirmedLive,
+  RESTART_GIVE_UP_AFTER_MS,
+  type RestartProgressRow,
+} from "./useSessionRestart";
+
+const A = "a".repeat(32);
+const B = "b".repeat(32);
 
 const row = (over: Partial<RestartProgressRow>): RestartProgressRow => ({
   command: "resume_session",
@@ -62,5 +72,49 @@ describe("restartConfirmedLive", () => {
 
   it("ignores kill-only progress — the replacement is not up yet", () => {
     expect(restartConfirmedLive(true, false, [row({ command: "kill_session", executed_at: 2000 })])).toBe(false);
+  });
+});
+
+describe("applyRestartingSessionStamp", () => {
+  // The reported bug: ConversationView is reused, so a leftover isRestarting
+  // from A must not stamp B when the inbox selection changes.
+  it("does not copy an in-flight restart onto a different conversation", () => {
+    const cur = { [A]: 1000 };
+    expect(applyRestartingSessionStamp(cur, B, { isRestarting: true, startedAt: 1000, ownerId: A })).toBe(cur);
+  });
+
+  it("leaves the original stamp when the newly open conversation is idle", () => {
+    const cur = { [A]: 1000 };
+    expect(applyRestartingSessionStamp(cur, B, { isRestarting: false, startedAt: null, ownerId: B })).toBe(cur);
+  });
+
+  it("clears only the owned conversation when its restart ends", () => {
+    const cur = { [A]: 1000, [B]: 2000 };
+    expect(applyRestartingSessionStamp(cur, A, { isRestarting: false, startedAt: null, ownerId: A }))
+      .toEqual({ [B]: 2000 });
+  });
+
+  it("stamps the owned conversation while it is restarting", () => {
+    expect(applyRestartingSessionStamp({}, A, { isRestarting: true, startedAt: 1000, ownerId: A }))
+      .toEqual({ [A]: 1000 });
+  });
+
+  it("is a no-op when the stamp is already the same", () => {
+    const cur = { [A]: 1000 };
+    expect(applyRestartingSessionStamp(cur, A, { isRestarting: true, startedAt: 1000, ownerId: A })).toBe(cur);
+  });
+});
+
+describe("liveRestartStartedAt", () => {
+  it("returns the stamp while it is inside the give-up window", () => {
+    expect(liveRestartStartedAt({ [A]: 1000 }, A, 1000)).toBe(1000);
+  });
+
+  it("expires a stamp past the give-up window", () => {
+    expect(liveRestartStartedAt({ [A]: 1000 }, A, 1000 + RESTART_GIVE_UP_AFTER_MS)).toBeUndefined();
+  });
+
+  it("does not read another conversation's stamp", () => {
+    expect(liveRestartStartedAt({ [A]: 1000 }, B, 1000)).toBeUndefined();
   });
 });

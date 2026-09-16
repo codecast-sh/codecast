@@ -80,7 +80,7 @@ import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
-import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
+import { liveRestartStartedAt } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useAckAssignment } from "../hooks/useAckAssignment";
@@ -2448,7 +2448,8 @@ export const SessionCard = memo(function SessionCard({
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}|` +
       // The activity line's freshness cutoff: a stamp that ages out hides on
       // the clock, without waiting for a field change.
-      `${liveActivityOf(session, rowActivity, t) ? 1 : 0}`,
+      `${liveActivityOf(session, rowActivity, t) ? 1 : 0}|` +
+      `${liveRestartStartedAt(st.restartingSessions, cardId, t) ? 1 : 0}`,
     30_000,
   );
   // Held through one fade so the summary returns after the line leaves, not
@@ -2491,8 +2492,7 @@ export const SessionCard = memo(function SessionCard({
   );
   // Kill+restart in flight for this session (written by useSessionRestart).
   // Scalar per-card selector, so only this card re-renders when its own restart
-  // begins/ends.
-  const restartStartedAt = st.restartingSessions[cardId];
+  // begins/ends. The stamp is read at isRowRestarting below.
   const showModelBadge = st.clientState?.ui?.show_model_badge === true;
   const showAgentIcon = st.clientState?.ui?.show_agent_icon !== false;
   // Row thumbnail for sessions that contain images (server-denormalized
@@ -2550,7 +2550,7 @@ export const SessionCard = memo(function SessionCard({
   // its entry; liveness-gated so the green dot takes over the moment the
   // session is actually back. The coarse clock above keeps the age fresh.
   const isRowRestarting =
-    !!restartStartedAt && Date.now() - restartStartedAt < RESTART_GIVE_UP_AFTER_MS && !isLive;
+    liveRestartStartedAt(st.restartingSessions, cardId, coarseNow) != null && !isLive;
 
   // Author of THIS session — shown only when it isn't the current user's own. The
   // inbox cache is user-scoped, so a teammate's session is here only because it was

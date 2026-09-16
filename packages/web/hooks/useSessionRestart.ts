@@ -17,6 +17,41 @@ const RESTART_ESCALATE_AFTER_MS = 45_000;
 // as expired past this age (a restart navigated away from has no owner left to
 // clear its entry).
 export const RESTART_GIVE_UP_AFTER_MS = RESTART_ESCALATE_AFTER_MS * 2 + 30_000;
+
+/** Unexpired stamp for one conversation, or undefined. Inbox cards and the
+ *  restart hook share this so a TTL the writer no longer owns still retires. */
+export function liveRestartStartedAt(
+  map: Record<string, number> | undefined | null,
+  conversationId: string,
+  now = Date.now(),
+): number | undefined {
+  const ts = map?.[conversationId];
+  if (typeof ts !== "number") return undefined;
+  if (now - ts >= RESTART_GIVE_UP_AFTER_MS) return undefined;
+  return ts;
+}
+
+/** Mirror one conversation's in-flight restart into the store map. The hook
+ *  instance is reused when ConversationView switches sessions, so a leftover
+ *  `isRestarting` may only stamp the conversation that actually owns the
+ *  phase (`ownerId`). Switching away must not copy the stamp onto the newly
+ *  open id, and must not clear the original. */
+export function applyRestartingSessionStamp(
+  cur: Record<string, number>,
+  conversationId: string,
+  next: { isRestarting: boolean; startedAt: number | null; ownerId: string },
+): Record<string, number> {
+  if (!conversationId || next.ownerId !== conversationId) return cur;
+  if (next.isRestarting) {
+    const ts = next.startedAt;
+    if (typeof ts !== "number") return cur;
+    if (cur[conversationId] === ts) return cur;
+    return { ...cur, [conversationId]: ts };
+  }
+  if (!(conversationId in cur)) return cur;
+  const { [conversationId]: _gone, ...rest } = cur;
+  return rest;
+}
 // A restart request no daemon has stamped after this long usually means the
 // owning device is offline — the one failure the command rows can't report.
 const RESTART_UNCLAIMED_WARN_MS = 20_000;
@@ -147,11 +182,26 @@ export function useSessionRestart(opts: {
   const [phase, setPhase] = useState<RestartPhase>("idle");
   const [failure, setFailure] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  // ConversationView is reused across inbox clicks, so this local lifecycle
+  // has to rebind when conversationId changes — otherwise phase="restarting"
+  // from A paints the header strip on B and the store-mirror stamps B too.
+  const [ownerId, setOwnerId] = useState(conversationId);
   const isRestarting = phase === "restarting";
   const escalatedRef = useRef(false);
   // Set once the session is observed down after the click — the evidence that a
   // later isLive=true is the restart's doing, not the pre-kill snapshot.
   const sawDownRef = useRef(false);
+
+  if (conversationId !== ownerId) {
+    const ts = liveRestartStartedAt(useInboxStore.getState().restartingSessions, conversationId);
+    setOwnerId(conversationId);
+    setPhase(ts != null ? "restarting" : "idle");
+    setStartedAt(ts ?? null);
+    setFailure(null);
+    // Don't re-fire repairSession on a restart we already had time to escalate.
+    escalatedRef.current = ts != null && Date.now() - ts >= RESTART_ESCALATE_AFTER_MS;
+    sawDownRef.current = false;
+  }
 
   // Live kill→resume ladder from the daemon (getRestartProgress stamps each
   // command with executed_at + result/error). Skip-gated so it costs nothing
@@ -193,6 +243,7 @@ export function useSessionRestart(opts: {
     escalatedRef.current = false;
     sawDownRef.current = false;
     setFailure(null);
+    setOwnerId(conversationId);
     setStartedAt(Date.now());
     setPhase("restarting");
     convCommand(conversationId, "restartSession", ghostContext())
@@ -218,18 +269,21 @@ export function useSessionRestart(opts: {
   // Mirror the in-flight window into the store so surfaces beyond this
   // conversation (the inbox row) can show the recovery. Deliberately NOT
   // cleared on unmount: the daemon-side restart survives navigating away, so
-  // readers expire entries by age (RESTART_GIVE_UP_AFTER_MS) instead.
+  // readers expire entries by age (RESTART_GIVE_UP_AFTER_MS) instead. The
+  // ownerId guard is what stops a leftover phase from stamping the session
+  // you clicked next.
   useWatchEffect(() => {
     if (!isConvexId(conversationId)) return;
     // ?? {}: under HMR the live store state can predate this field's initializer.
     const cur = useInboxStore.getState().restartingSessions ?? {};
-    if (isRestarting) {
-      useInboxStore.setState({ restartingSessions: { ...cur, [conversationId]: startedAt ?? Date.now() } });
-    } else if (conversationId in cur) {
-      const { [conversationId]: _gone, ...rest } = cur;
-      useInboxStore.setState({ restartingSessions: rest });
-    }
-  }, [isRestarting, conversationId, startedAt]);
+    const next = applyRestartingSessionStamp(cur, conversationId, {
+      isRestarting,
+      startedAt,
+      ownerId,
+    });
+    if (next === cur) return;
+    useInboxStore.setState({ restartingSessions: next });
+  }, [isRestarting, conversationId, startedAt, ownerId]);
 
   // Record the session going down after the click. Declared before the restored
   // check below so the same render's confirmation sees it.
@@ -286,15 +340,18 @@ export function useSessionRestart(opts: {
 
   // Give-up backstop: after both stages have had their window, stop tracking —
   // and say so — rather than spin forever if nothing is ever going to revive it.
+  // Remaining time is from startedAt so navigating back to a still-restarting
+  // session does not reset the budget.
   useWatchEffect(() => {
     if (!isRestarting) return;
+    const remaining = RESTART_GIVE_UP_AFTER_MS - (Date.now() - (startedAt ?? Date.now()));
     const t = setTimeout(() => {
       setFailure("Session didn't come back — the device may be offline. Check the daemon, or try again.");
       setPhase("failed");
       notify("error", "Restart didn't bring the session back — the device may be offline");
-    }, RESTART_GIVE_UP_AFTER_MS);
+    }, Math.max(0, remaining));
     return () => clearTimeout(t);
-  }, [isRestarting]);
+  }, [isRestarting, startedAt]);
 
   return { restart, isRestarting, phase, stage, failure, startedAt };
 }
