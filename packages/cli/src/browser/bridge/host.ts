@@ -688,7 +688,9 @@ export function startBridgeHost(opts: {
   let pendingTabList: Promise<BridgeTab[]> | null = null;
   const listTabs = (): Promise<BridgeTab[]> => {
     if (pendingTabList) return pendingTabList;
-    pendingTabList = extCall("tabs.list", {}, 20_000).then(reply => {
+    // The worker's process is frozen for tens of seconds at a time on a
+    // loaded Mac (background priority); the listing answers when it wakes.
+    pendingTabList = extCall("tabs.list", {}, 40_000).then(reply => {
       const tabs = reply.tabs as BridgeTab[];
       pruneRestored(tabs);
       return [...tabs.filter(isCast), ...tabs.filter(t => !isCast(t))];

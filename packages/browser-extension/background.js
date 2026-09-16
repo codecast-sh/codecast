@@ -545,18 +545,49 @@ async function createTab(props) {
  * is frozen, throttled in a background window, or discarded by memory saver
  * simply never answers, and one such tab stalled every client of the bridge
  * for the host's 20 s attach budget. Every debugger call on the attach path is
- * bounded, so a tab that cannot answer is reported as such within seconds.
+ * bounded, so a tab that cannot answer is reported as such.
+ *
+ * The bound is generous on purpose. This worker's process runs at background
+ * priority, and on a loaded Mac it is not scheduled for tens of seconds at a
+ * time; a 5 s bound fired after such a stall on calls that answered the
+ * moment the process ran again (ct-51246). The host gives an attach 40 s, so
+ * the two steps that answer from the renderer share that budget.
  */
-const ATTACH_STEP_MS = 5000;
+const ATTACH_STEP_MS = 20_000;
+/**
+ * When the clock fires, the call gets this much longer before it counts as
+ * unanswered. A timer measures wall time, and this process is frozen for
+ * seconds at a stretch: the timer and the call's answer are both queued
+ * while it sleeps, and the timer can run first. Failing the call then throws
+ * away an answer that arrives a moment later (seen on tabs.list and the
+ * attach steps, ct-51246). A call that is truly hung costs this extra wait.
+ */
+const STALL_GRACE_MS = 3_000;
 function bounded(promise, what, timeoutMs = ATTACH_STEP_MS) {
   let timer;
-  const clock = new Promise((_, reject) => {
-    // Chrome runs this extension's process at background priority, which
-    // macOS schedules on the efficiency cores only: a call that has not
-    // answered was not scheduled, or its tab cannot answer.
-    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${timeoutMs}ms (this extension's process runs at background priority and was not scheduled, or the tab is unresponsive)`)), timeoutMs);
+  let settled = false;
+  const tracked = promise.then(
+    (v) => ((settled = true), v),
+    (e) => {
+      settled = true;
+      throw e;
+    },
+  );
+  const clock = new Promise((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
   });
-  return Promise.race([promise, clock]).finally(() => clearTimeout(timer));
+  const late = () => new Promise((resolve) => setTimeout(resolve, STALL_GRACE_MS));
+  return Promise.race([tracked, clock.then(() => (settled ? tracked : Promise.race([tracked, late()])))])
+    .then((v) => {
+      if (!settled) {
+        // Chrome runs this extension's process at background priority, which
+        // macOS schedules on the efficiency cores only: a call that has not
+        // answered was not scheduled, or its tab cannot answer.
+        throw new Error(`${what} did not answer within ${timeoutMs}ms (this extension's process runs at background priority and was not scheduled, or the tab is unresponsive)`);
+      }
+      return v;
+    })
+    .finally(() => clearTimeout(timer));
 }
 
 /**
@@ -617,9 +648,19 @@ async function attachTab(tabId) {
   await bounded(
     Promise.all(["Page", "DOM", "Runtime", "Accessibility", "Network"].map((domain) => chrome.debugger.sendCommand({ tabId }, domain + ".enable", {}).catch(() => {}))),
     "domain enable",
-    20_000,
   );
-  if (!borderScripts.has(tabId)) await bounded(installBorder(tabId), "overlay install");
+  // The frame is a courtesy, not a step of the attach. Painting it into the
+  // live document is a Runtime.evaluate, which waits on the page's main
+  // thread, and a page still parsing holds that thread for seconds. Awaiting
+  // it here failed the whole attach on google.com under load (2026-09-15),
+  // over a frame the on-new-document script would have painted anyway. So the
+  // install runs alongside the client's first commands; the tab is usable now.
+  if (!borderScripts.has(tabId) && !borderPending.has(tabId)) {
+    borderPending.add(tabId);
+    bounded(installBorder(tabId), "overlay install", CDP_CALL_MAX_MS)
+      .catch((err) => note(`overlay install on tab ${tabId}: ${String((err && err.message) || err)}`))
+      .finally(() => borderPending.delete(tabId));
+  }
 }
 
 async function detachTab(tabId) {
@@ -888,6 +929,7 @@ const WORLD = "cast-browser-bridge";
 const BEAT_MS = 3000;
 const LEASE_MS = 8000;
 const borderScripts = new Map(); // tabId → Page.addScriptToEvaluateOnNewDocument identifier
+const borderPending = new Set(); // tabIds whose overlay install is still running (attachTab does not wait for it)
 const borderIds = new Map(); // tabId → this attach's element id
 const worlds = new Map(); // tabId → executionContextId of our isolated world in the top frame
 
