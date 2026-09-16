@@ -5857,7 +5857,8 @@ async function executeRemoteCommand(
           break;
         }
         const sessionIdHint = typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined;
-        const killed = pendingAgentSwitches.has(conversationId)
+        const switchKill = parsed.switch_agent === true || pendingAgentSwitches.has(conversationId);
+        const killed = switchKill
           ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
           : await killConversationBackends(conversationId, sessionIdHint, true);
         result = killed.result;
@@ -6235,11 +6236,11 @@ async function executeRemoteCommand(
           resumeInFlight.delete(sessionId);
           resumeInFlightStarted.delete(sessionId);
           conversationResumeFailures.delete(conversationId);
-          const staleThreadId = appServerConversations.get(conversationId);
-          if (staleThreadId) {
-            removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, staleThreadId);
-          }
-          forgetPersistedAppServerConversation(conversationId);
+          // Interrupt the old backend for real. Dropping the live map (or the
+          // persisted record) without a turn interrupt leaves a Codex
+          // app-server thread running, and its output keeps landing on this
+          // conversation (ct-51691).
+          await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
           restartingSessionIds.set(sessionId, Date.now());
           try {
             const cwd = projectPath
@@ -17411,10 +17412,17 @@ export function isSupersededAppServerSession(
   conversationId = conversationCacheRef?.[sessionId],
   live: ReadonlyMap<string, string> = appServerConversations,
   persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+  cache: Record<string, string> | null | undefined = conversationCacheRef,
 ): boolean {
   if (!conversationId) return false;
   const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
-  return !!threadId && threadId !== sessionId;
+  if (threadId) return threadId !== sessionId;
+  // After a switch away from Codex the live/persisted maps are empty, but the
+  // conversation cache still aliases the old thread. A different live binding
+  // means this id is leftover — its output must not land on the new agent.
+  if (!cache) return false;
+  const liveId = findCachedSessionIdForConversation(cache, conversationId);
+  return !!liveId && liveId !== sessionId;
 }
 
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
@@ -17531,13 +17539,17 @@ export async function teardownConversationBackends(
     isValidTmuxTarget?: (target: string) => boolean;
     interruptActiveTurn?: (threadId: string) => Promise<void>;
     onLog?: (message: string) => void;
+    // Escape already falls back here. Teardown used to miss it, so a Codex
+    // thread that survived a daemon restart (or a dropped live map) kept
+    // answering after an in-place agent switch (ct-51691).
+    persistedThreadId?: string;
   },
 ): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
   let killedAppServer = false;
   let killedTmux = false;
 
   // 1. App-server agent (Codex) thread.
-  const appServerThreadId = deps.appServerConversations.get(conversationId);
+  const appServerThreadId = deps.appServerConversations.get(conversationId) ?? deps.persistedThreadId;
   if (appServerThreadId) {
     if (deps.interruptActiveTurn) {
       try { await deps.interruptActiveTurn(appServerThreadId); } catch {}
@@ -17567,6 +17579,7 @@ function teardownConversationBackendsLive(
   conversationId: string,
   opts: { interruptActiveTurn?: boolean } = {},
 ): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
+  const persisted = persistedAppServerThreads.get(conversationId);
   return teardownConversationBackends(conversationId, {
     appServerConversations,
     appServerThreads,
@@ -17576,10 +17589,11 @@ function teardownConversationBackendsLive(
     stopHeartbeat: stopManagedSessionHeartbeat,
     forgetPersisted: forgetPersistedAppServerConversation,
     isValidTmuxTarget: validateTmuxTarget,
+    persistedThreadId: persisted?.threadId,
     interruptActiveTurn: opts.interruptActiveTurn
       ? async (threadId: string) => {
           if (!codexAppServerInstance?.running) return;
-          const activeTurnId = findActiveTurnForThread(threadId);
+          const activeTurnId = findActiveTurnForThread(threadId) ?? persisted?.activeTurnId;
           if (activeTurnId) await codexAppServerInstance.turnInterrupt(threadId, activeTurnId);
         }
       : undefined,

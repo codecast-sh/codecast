@@ -196,6 +196,27 @@ describe("Codex history import routing", () => {
     const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
     expect(source).toContain("resumeInFlight.has(sessionId) && parsed.switch_agent !== true");
   });
+
+  test("a switch kill is identified from its own args, not only the in-batch resume", () => {
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const start = source.indexOf('case "kill_session":');
+    const end = source.indexOf("cast hibernate", start);
+    const body = source.slice(start, end);
+    expect(body).toContain("parsed.switch_agent === true");
+    expect(body).toContain("killConversationBackendsForAgentSwitch");
+  });
+
+  test("an in-place switch tears the old backend down instead of dropping its map", () => {
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const start = source.indexOf('if (parsed.switch_agent === true && conversationId && resumeAgentType !== "codex")');
+    const end = source.indexOf("// opencode API fork.", start);
+    const branch = source.slice(start, end);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(branch).toContain("teardownConversationBackendsLive(conversationId");
+    expect(branch).not.toContain("removeAppServerThreadRegistration");
+    expect(branch).not.toContain("forgetPersistedAppServerConversation");
+  });
 });
 
 describe("one conversation, one agent", () => {

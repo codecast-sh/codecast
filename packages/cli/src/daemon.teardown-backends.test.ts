@@ -122,6 +122,27 @@ describe("teardownConversationBackends", () => {
     expect(d.calls.stoppedHeartbeat).toEqual(["thread-z"]);
   });
 
+  test("a Codex thread that only lives in the persisted map is still interrupted", async () => {
+    const d = makeDeps({ persistedThreadId: "thread-persisted" });
+
+    const r = await teardownConversationBackends("conv-persisted", d.deps);
+
+    expect(r).toMatchObject({ killedAppServer: true, killedTmux: false, appServerThreadId: "thread-persisted" });
+    expect(d.calls.interrupted).toEqual(["thread-persisted"]);
+    expect(d.calls.forgotPersisted).toEqual(["conv-persisted"]);
+    expect(d.calls.stoppedHeartbeat).toEqual(["thread-persisted"]);
+  });
+
+  test("the live map outranks a stale persisted thread id", async () => {
+    const d = makeDeps({ persistedThreadId: "thread-stale" });
+    bindCodex(d, "conv-live", "thread-live");
+
+    const r = await teardownConversationBackends("conv-live", d.deps);
+
+    expect(r.appServerThreadId).toBe("thread-live");
+    expect(d.calls.interrupted).toEqual(["thread-live"]);
+  });
+
   test("an invalid tmux target is left alone", async () => {
     const d = makeDeps({ isValidTmuxTarget: () => false });
     d.startedTmux.set("conv-5", { tmuxSession: "garbage; rm -rf" });

@@ -21,6 +21,16 @@ describe("app-server status ownership after switching agents", () => {
     expect(isSupersededAppServerSession("claude-session", conv, new Map(), new Map())).toBe(false);
   });
 
+  test("after a switch away from Codex, the old thread is superseded via the conversation cache", () => {
+    const claudeId = "75340f90-7b40-40da-b2c1-0646ce59bfca";
+    const cache = {
+      "nq8wm4hwa7uky27feofh": conv,
+      [claudeId]: conv,
+    };
+    expect(isSupersededAppServerSession("nq8wm4hwa7uky27feofh", conv, new Map(), new Map(), cache)).toBe(true);
+    expect(isSupersededAppServerSession(claudeId, conv, new Map(), new Map(), cache)).toBe(false);
+  });
+
   test("a new live thread outranks an older persisted registration", () => {
     const replacement = new Map([[conv, "new-thread"]]);
     expect(isSupersededAppServerSession("codex-thread", conv, replacement, persisted)).toBe(true);
