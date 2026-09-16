@@ -553,8 +553,12 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   // the product's, not a team's.
   if (!chatOn && !community) return <TeamFeatureOff feature="chat" />;
 
+  // Team chat still wraps the shell (community puts a header above it). The
+  // wrap must have a real height: without one, `.ch-shell { height: 100% }`
+  // resolves against an auto parent, the transcript grows with its messages,
+  // and the stage clips it — a long room cannot scroll.
   return (
-    <div className={standalone ? "ch-community-page" : undefined}>
+    <div className={standalone ? "ch-community-page" : "h-full min-h-0"}>
     {standalone && <CommunityBar isGuest={isGuest} />}
     <div className="ch-shell">
       {showInlineRail && <ChatChannelRail
