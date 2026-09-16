@@ -445,9 +445,17 @@ export async function applyAutoDefaultsCore(ctx: Ctx, now: number): Promise<{ an
     .collect();
   let answered = 0;
   for (const stack of stacks) {
+    const members = await membersOf(ctx, stack);
+    // A stack is done when every member is resolved (D5), whichever path
+    // resolved them; a member dismissed or withdrawn before the stack learned
+    // to close itself is reconciled here.
+    if (members.length > 0 && members.every((m) => m.status !== "pending")) {
+      await ctx.db.patch(stack._id, { status: "done", updated_at: now });
+      continue;
+    }
     const ms = stack.policy.auto_default_after_ms;
     if (!ms) continue;
-    for (const m of await membersOf(ctx, stack)) {
+    for (const m of members) {
       if (m.status !== "pending" || m.blocking || m.default_option === undefined) continue;
       // The deadline counts from when the decision joined the stack, not from
       // the ask: an old advisory added to a fresh stack still gets its window.
