@@ -1261,7 +1261,16 @@ function getAgentLabel(agentType?: string): string | null {
   if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
   if (agentType === "codex" || agentType === "codex_cli") return "Codex";
   if (agentType === "cursor") return "Cursor";
+  if (agentType === "grok") return "Grok";
+  if (agentType === "gemini") return "Gemini";
+  if (agentType === "opencode") return "OpenCode";
   return agentType;
+}
+
+function homeRelPath(p: string): string {
+  const home = process.env.HOME;
+  if (home && (p === home || p.startsWith(home + path.sep))) return "~" + p.slice(home.length);
+  return p;
 }
 
 const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
@@ -1483,13 +1492,35 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
 
   const stuck = await stuckSyncs;
   if (stuck.length > 0) {
-    const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
-    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
+    const agents = [...new Set(stuck.map((s) => s.agentType).filter(Boolean))];
+    const who = agents.length === 1 ? (getAgentLabel(agents[0]) ?? agents[0]) : null;
+    const n = stuck.length;
+    const label = who
+      ? `${n} ${who} session${n === 1 ? "" : "s"}`
+      : `${n} session${n === 1 ? "" : "s"}`;
+    const reasons = new Set(stuck.map((s) => s.reason));
+    const why = reasons.size === 1 && reasons.has("unexamined_writes")
+      ? "(file grew after last ingest)"
+      : reasons.size === 1 && reasons.has("byte_backlog")
+        ? "(unread bytes sitting 5+ min)"
+        : "(no ingest in 5+ min)";
+    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted(why));
     for (const s of stuck.slice(0, 5)) {
       const short = s.sessionId.slice(0, 8);
-      const sizes = `${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`;
-      const age = formatRelativeTime(s.lastSyncedAt);
-      console.log(`      ${fmt.muted(icons.bullet)} ${fmt.id(short)}  ${fmt.number(sizes)}  ${fmt.muted("last sync")} ${fmt.value(age)}`);
+      const agent = s.agentType ? fmt.muted(getAgentLabel(s.agentType) ?? s.agentType) + " " : "";
+      const proj = s.projectPath ? "  " + fmt.path(homeRelPath(s.projectPath)) : "";
+      console.log(`      ${fmt.muted(icons.bullet)} ${agent}${fmt.id(short)}${proj}`);
+      const bits: string[] = [];
+      if (s.reason === "byte_backlog") {
+        bits.push(`${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`);
+      } else if (s.fileSize > 0) {
+        bits.push(`${formatBytesShort(s.fileSize)} transcript`);
+      }
+      bits.push(`last ingest ${formatRelativeTime(s.lastSyncedAt)}`);
+      if (s.fileMtimeMs > s.lastSyncedAt) {
+        bits.push(`file written ${formatRelativeTime(s.fileMtimeMs)}`);
+      }
+      console.log(`        ${fmt.muted(bits.join(" · "))}`);
     }
     if (stuck.length > 5) {
       console.log(`      ${fmt.muted(`... and ${stuck.length - 5} more`)}`);

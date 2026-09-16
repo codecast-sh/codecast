@@ -211,7 +211,8 @@ import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, me
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
-import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
+import { CollabComposer, CollabRequestBanner, OwnerComposerPresence, composerPresenceEnabled } from "./CollabComposer";
+import { ConversationViewers } from "./presence/ViewerFaces";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
@@ -16957,6 +16958,10 @@ const ConversationViewInner = (
 
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
+                {/* Who has this session open right now: teammates' faces off
+                    the roster's viewing field. A solo session shows nothing. */}
+                {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} />}
+
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
                     unconfigured — SessionHuddleButton gates itself). */}
@@ -17753,8 +17758,11 @@ const ConversationViewInner = (
             />
           ) : (
             <>
-              {conversation.share_token && (
-                <OwnerComposerPresence conversationId={conversation._id.toString()} />
+              {/* Who else is in this box: a teammate's live draft above the
+                  composer on every real conversation, and "is here" for a
+                  share link guest with no face on the roster. */}
+              {composerPresenceEnabled(conversation) && (
+                <OwnerComposerPresence conversationId={conversation._id.toString()} showHere={!!conversation.share_token} />
               )}
               <CollabRequestBanner conversationId={conversation._id.toString()} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (
