@@ -15288,13 +15288,13 @@ work
     for (let i = 0; i < rows.length; i++) await printTaskShow(rows[i], options, lines[i]);
   });
 
-// Decisions come through the one decide rail, which lists by task only for a
-// session (the route needs session_id), so a plain shell prints none. Runs
-// and evidence need no session. A missing route or a refusal prints nothing.
+// Decisions come through the one decide rail listed by task; the session id,
+// when there is one, only adds messages_since to the asks this session made.
+// A missing route or a refusal prints nothing.
 async function loadTaskLine(t: any): Promise<import("./taskShow.js").TaskLine> {
   const sessionId = detectCurrentSessionId();
   const [decisions, runs, evidence] = await Promise.all([
-    sessionId ? tryCliPost("/cli/decide", { action: "ls", session_id: sessionId, task: t.short_id }) : Promise.resolve(null),
+    tryCliPost("/cli/decide", { action: "ls", session_id: sessionId ?? undefined, task: t.short_id }),
     tryCliPost("/cli/workflow-runs/list", { task_id: t.short_id }),
     tryCliPost("/cli/work/evidence", { task_id: t.short_id }),
   ]);

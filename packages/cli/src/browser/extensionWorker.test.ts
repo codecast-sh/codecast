@@ -6,7 +6,7 @@ import { webcrypto } from 'node:crypto';
 const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
 const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
 
-function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean } = {}) {
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; slowOverlay?: boolean } = {}) {
   const grouped: unknown[] = [];
   const detached: number[] = [];
   const created: unknown[] = [];
@@ -29,7 +29,12 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
     runtime: { onStartup: event(), onInstalled: event(), onMessage: event(), getManifest: () => ({ version: '0.1.0' }), getURL: (path: string) => `chrome-extension://ext/${path}` },
     alarms: { create: async () => {}, onAlarm: event() },
     tabs: {
-      get: async () => ({ ...tab }), query: async () => opts.hungTabQuery ? new Promise(() => {}) : [tab],
+      get: async () => ({ ...tab }),
+      query: async () => {
+        if (opts.hungTabQuery) return new Promise(() => {});
+        if (opts.lateTabQueryMs) await new Promise((resolve) => setTimeout(resolve, opts.lateTabQueryMs));
+        return [tab];
+      },
       create: async (p: object) => {
         created.push(p);
         if (opts.humanTabDuringCreate) chrome.tabs.onCreated.emit({ ...tab, id: 8 });
@@ -62,6 +67,12 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
       sendCommand: async (_: unknown, method: string) => {
         if (opts.hungCleanup && method === 'Page.removeScriptToEvaluateOnNewDocument') return new Promise(() => {});
         if (opts.coldRenderer && method.endsWith('.enable')) await new Promise(resolve => setTimeout(resolve, 40));
+        // The overlay's Runtime.evaluate waits on the page's main thread; a page still parsing holds it well past the worker's step bound.
+        if (opts.slowOverlay) {
+          if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'top' } } };
+          if (method === 'Page.createIsolatedWorld') return { executionContextId: 1 };
+          if (method === 'Runtime.evaluate') await new Promise(resolve => setTimeout(resolve, 200));
+        }
         return {};
       },
       onEvent: event(), onDetach: event(),
@@ -81,9 +92,10 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
 describe('extension tab lifecycle', () => {
   test('a stalled ownership read times out and the next command can recover safely', async () => {
     const w = worker({ firstOwnershipReadStalls: true, ownedTabs: [7] });
+    // The 20 s bound is 80 ms here, plus the 3 s grace for a frozen process (12 ms).
     await expect(Promise.race([
       w.context.handle({ op: 'tabs.list' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('ownership stayed pending')), 100)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('ownership stayed pending')), 250)),
     ])).rejects.toThrow('Chrome storage.session.get did not answer');
     const result = await w.context.handle({ op: 'tabs.list' });
     expect(result.tabs[0]).toMatchObject({ tabId: 7, owned: true });
@@ -97,6 +109,15 @@ describe('extension tab lifecycle', () => {
     ]);
     expect(result.tabs).toHaveLength(1);
     expect(result.tabs[0]).toMatchObject({ tabId: 7, owned: true });
+  });
+
+  test('a tab query that answers just after the bound (a process that was frozen) still succeeds', async () => {
+    // The worker's timers run 250x faster in this harness: the 8 s bound on
+    // tabs.query is 32 ms, the 3 s grace after it is 12 ms. An answer at
+    // 36 ms is what a frozen process delivers a beat after the timer fired.
+    const w = worker({ lateTabQueryMs: 36 });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    expect(result.tabs).toHaveLength(1);
   });
 
   test('a stalled tab query identifies the Chrome API that did not answer', async () => {
@@ -177,6 +198,14 @@ describe('extension tab lifecycle', () => {
     w.dropSelf();
     await w.selfSettled();
     expect(w.selfSessions).toEqual(['attach sw-self', 'attach sw-self']);
+  });
+
+  test('a page that cannot paint the overlay yet still attaches: the frame is a courtesy, not a step', async () => {
+    const w = worker({ slowOverlay: true, ownedTabs: [7] });
+    const started = Date.now();
+    await w.context.attachTab(7);
+    expect(vm.runInContext('attached.has(7)', w.context)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(150);
   });
 
   test('a cold renderer gets time to enable its domains after debugger attach', async () => {

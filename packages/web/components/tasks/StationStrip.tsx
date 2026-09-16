@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowUpRight, GitBranch } from "lucide-react";
 import { classifySession, useTrackedStore, type TaskItem } from "../../store/inboxStore";
 import { useTeamTaskStatusList, statusVisual } from "../../lib/taskStatuses";
-import { useWorkflowRun } from "../../hooks/useSyncWorkflows";
+import { useWorkflow, useWorkflowRun } from "../../hooks/useSyncWorkflows";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { decisionHref } from "../../lib/decisionLinks";
 import { ORG_STATE_META } from "../org/orgMeta";
@@ -79,7 +79,10 @@ export function StationStrip({ task }: { task: TaskItem & LineTask }) {
   const held = useTaskHold(task);
   // Feeder and reader in one: the task's run, enriched with node sessions.
   const run = useWorkflowRun(task.workflow_run_id);
-  const node = runLiveNode(run);
+  // workflow_runs.get hands back the raw row: the node label lives on the
+  // workflow, so resolve it there, the same way the run panel below does.
+  const workflow = useWorkflow(run?.workflow_id);
+  const node = runLiveNode(run, workflow?.nodes);
   const live = isLiveRun(run);
   const now = useCoarseNow(30_000);
   const elapsed = live ? formatElapsed(node?.started_at, now) : null;
@@ -139,12 +142,35 @@ export function StationStrip({ task }: { task: TaskItem & LineTask }) {
 /** L10: the list row's chip. "held at <station>" when a blocking decision
  *  holds the task, else "at <station> · <node>" for a live run, else nothing.
  *  Subscribes to the chip text alone, so a row wakes only when it changes. */
+// One index per collection object: the store hands out a new collection ref
+// only when a row changed, so every chip in a long list reads its task's rows
+// in constant time instead of scanning the whole collection on each tick.
+const byTaskIndex = new WeakMap<object, Map<string, any[]>>();
+function rowsByTask(collection: Record<string, any>, keep: (row: any) => boolean): Map<string, any[]> {
+  const cached = byTaskIndex.get(collection);
+  if (cached) return cached;
+  const index = new Map<string, any[]>();
+  for (const key in collection) {
+    const row = collection[key];
+    if (!row?.task_id || !keep(row)) continue;
+    const list = index.get(row.task_id) ?? [];
+    list.push(row);
+    index.set(row.task_id, list);
+  }
+  byTaskIndex.set(collection, index);
+  return index;
+}
+const isOpenHold = (d: any) => d.status === "pending" && !!d.blocking;
+const anyRun = () => true;
+
 export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTask; className?: string }) {
   const statuses = useTeamTaskStatusList(task.team_id);
   const station = stationLabel(stationOf(task), statuses);
   const dep = useMemo(() => (st: any) => {
-    const held = heldDecisionFor(task, Object.values(st.sessionDecisions) as any[]);
-    const run = runForTask(task, Object.values(st.workflowRuns) as any[]);
+    const held = heldDecisionFor(task, rowsByTask(st.sessionDecisions, isOpenHold).get(task._id) ?? []);
+    const named = task.workflow_run_id ? st.workflowRuns[task.workflow_run_id] : undefined;
+    const runs = rowsByTask(st.workflowRuns, anyRun).get(task._id) ?? [];
+    const run = runForTask(task, named && !runs.includes(named) ? [named, ...runs] : runs);
     const text = lineChipText({ station, held, run });
     return text ? `${text}|${held ? "held" : run!.status}` : "";
   }, [task._id, task.status, task.status_id, task.workflow_run_id, station]);

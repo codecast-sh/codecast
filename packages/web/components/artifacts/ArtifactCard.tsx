@@ -30,7 +30,7 @@ import {
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../ui/context-menu";
 import { ForwardCtxItem } from "../menus/ObjectContextMenus";
 import { EntityIdPill } from "../EntityIdPill";
-import { CONVEX_URL } from "../../lib/localAuth";
+import { pageThumbUrl } from "../../lib/publishedPageUrls";
 import { relativeTime, withEditParam } from "./artifactCardUtils";
 
 export type ArtifactRow = {
@@ -103,7 +103,7 @@ export function ArtifactCard({
   // don't even try when a gate is on.
   const gated = !!a.has_password || !!a.email_gate;
   const showThumb = a.has_thumb && !gated && !thumbFailed;
-  const thumbUrl = `${CONVEX_URL}/cli/a/${a.slug}?thumb=1&r=v${a.version}`;
+  const thumbUrl = pageThumbUrl(a.slug, a.version);
   const age = relativeTime(a.updated_at);
   const expired = !!a.expires_at && a.expires_at < Date.now();
 

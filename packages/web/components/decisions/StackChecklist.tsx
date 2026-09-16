@@ -67,7 +67,12 @@ export function StackChecklist({ stack, editable = false, keys = false }: { stac
   }, [stack._id, stack.decision_ids, reorderStack]);
   const remove = useCallback((id: string) => removeFromStack(stack._id, id), [stack._id, removeFromStack]);
 
-  const done = members.filter((m) => m.status !== "pending").length;
+  // The server counts the stack's progress on the row (a member outside the
+  // viewer's queue is not in the store); the local count paints an answer
+  // given here before the echo. The larger of the two is right either way.
+  // Never more than the members that exist: an optimistic removal of a
+  // resolved member shrinks the list before the server's count catches up.
+  const done = Math.min(stack.decision_ids.length, Math.max(stack.resolved, members.filter((m) => m.status !== "pending").length));
 
   return (
     <div data-stack-checklist={stack.short_id ?? stack._id}>

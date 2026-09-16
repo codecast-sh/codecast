@@ -17,6 +17,8 @@ import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../hooks/useSync
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useTrackedStore } from "../../store/inboxStore";
 import { DecisionCompactCard } from "../../components/decisions/DecisionCompactCard";
+import { useSyncDecisionDetail } from "../../hooks/useSyncDecisionDetail";
+import { RunGate } from "../../components/WorkflowContextPanel";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { WorkflowsDashboardContent } from "./dashboard";
@@ -76,6 +78,7 @@ interface WorkflowRun {
   gate_response?: string;
   // the-line.md L4: the gate is a decision; the panel renders its card.
   gate_decision_id?: string;
+  gate_decision_short_id?: string;
   fail_reason?: string;
   created_at: number;
   updated_at: number;
@@ -248,11 +251,12 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const cancelRun = useMutation(api.workflow_runs.cancel);
   const [responding, setResponding] = useState(false);
-  // The gate's decision row, when the queue feed holds it (the-line.md L4).
-  // Subscribed by status only, so an unrelated decision edit does not repaint.
+  // The gate's decision row (the-line.md L4, L10): the queue feed holds it
+  // when the viewer was asked; for anyone else the per view detail feed
+  // brings it, so the panel renders the decision card and never its own
+  // buttons for a decision gate. Subscribed by status only, so an unrelated
+  // decision edit does not repaint.
   const gateId = run.gate_decision_id;
-  const gs = useTrackedStore([(x) => (gateId ? x.sessionDecisions[gateId]?.status : undefined)]);
-  const gateDecision = gateId ? gs.sessionDecisions[gateId] : undefined;
 
   const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
   const StatusIcon = st.icon;
@@ -308,13 +312,14 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
         </div>
       )}
 
-      {run.status === "paused" && gateDecision && (
+      {run.status === "paused" && gateId && (
         <div data-run-gate-card className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-2 py-2">
           <div className="px-1 pb-1 text-[9px] text-sol-magenta font-semibold uppercase tracking-widest">Gate</div>
-          <DecisionCompactCard decision={gateDecision} showTask={false} />
+          <RunGate run={run} />
         </div>
       )}
-      {run.status === "paused" && run.gate_prompt && !gateDecision && (
+      {/* Runs minted before gates were decisions carry only a prompt. */}
+      {run.status === "paused" && run.gate_prompt && !gateId && (
         <div className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-3 py-2 flex items-center gap-2 flex-wrap">
           <span className="text-[9px] text-sol-magenta font-semibold uppercase tracking-widest shrink-0">Gate</span>
           <span className="text-[10px] text-sol-text-muted truncate flex-1 min-w-0">{run.gate_prompt}</span>

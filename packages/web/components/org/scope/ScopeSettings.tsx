@@ -13,13 +13,15 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useWorkflows } from "../../../hooks/useSyncWorkflows";
 import { lineOptions } from "./lineBoard";
-import { orgRoleReparentMakesCycle, type OrgUpdateRoleInput } from "../../../store/orgSlice";
+import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
 import { cn } from "../../../lib/utils";
 import { InlineEdit, ScopeEditor } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
+
+const NO_INTENTS: OrgIntent[] = [];
 
 const api = _api as any;
 
@@ -81,13 +83,18 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? id.slice(0, 8) })), [role.follow_channel_ids, channels]);
 
   // The line (the-line.md L2). The org tree does not carry the slug, so the
-  // tab reads it once per view from orgRoles.line; the store's optimistic
-  // patch (setRoleLine) wins until the server echoes.
+  // tab reads it once per view from orgRoles.line; the store's line intent
+  // (setRoleLine) wins until that read echoes the slug, which is when the
+  // intent is dropped: the tree cannot settle it on its own.
   const { data: lineRow } = useQueryNoThrow(api.orgRoles.line, { role_id: role._id });
   const { workflows } = useWorkflows();
   const lineSlug: string = (role as any).line_workflow_slug ?? lineRow?.line_workflow_slug ?? "line";
   const lineChoices = useMemo(() => lineOptions(workflows, lineSlug), [workflows, lineSlug]);
   const setRoleLine = useInboxStore((s) => (s as any).setRoleLine as (roleId: string, slug: string) => void);
+  const dropOrgIntent = useInboxStore((s) => (s as any).dropOrgIntent as (id: string) => void);
+  const orgIntents = useInboxStore((s) => ((s as any).orgIntents ?? NO_INTENTS) as OrgIntent[]);
+  const echoedIds = useMemo(() => lineIntentEchoed(orgIntents, role._id, lineRow?.line_workflow_slug).map((i) => i.id).join(","), [orgIntents, role._id, lineRow?.line_workflow_slug]);
+  useWatchEffect(() => { for (const id of echoedIds.split(",")) if (id) dropOrgIntent(id); }, [echoedIds]);
 
   const projectName = (id: string) => role.scope_names.projects.find((p) => p.id === id)?.title ?? "a project";
   const planName = (id: string) => role.scope_names.plans.find((p) => p.id === id)?.short_id ?? "a plan";

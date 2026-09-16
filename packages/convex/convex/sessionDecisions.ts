@@ -614,6 +614,18 @@ export type AskArgs = {
   gate_node_id?: string;
 };
 
+// An option's page (the-line.md L6) must be a published page: a mistyped
+// file path would otherwise be stored as a slug and render a dead card.
+async function missingOptionPage(ctx: Ctx, options: Array<{ page_slug?: string }>): Promise<string | null> {
+  for (let i = 0; i < options.length; i++) {
+    const slug = options[i]?.page_slug;
+    if (!slug) continue;
+    const page = await ctx.db.query("artifacts").withIndex("by_slug", (q: any) => q.eq("slug", slug)).first();
+    if (!page) return `Option ${i + 1}: no page ${slug}`;
+  }
+  return null;
+}
+
 function validateShape(kind: DecisionKind, args: { question: string; options: any[]; default_option?: number; form?: any }): string | null {
   if (args.question.trim().length === 0) return "Empty question";
   if (kind === "form") {
@@ -663,7 +675,7 @@ async function upsertDecisionDoc(
 
 export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: AskArgs): Promise<any> {
   const kind: DecisionKind = args.kind ?? "single";
-  const shapeError = validateShape(kind, args);
+  const shapeError = validateShape(kind, args) ?? (await missingOptionPage(ctx, args.options));
   if (shapeError) return { error: shapeError };
 
   const conversation = await ctx.db
@@ -914,7 +926,7 @@ export const edit = mutation({
     const kind = (args.kind ?? row.kind ?? "single") as DecisionKind;
     const form = args.form ?? row.form;
     let defaultOption = args.clear_default ? undefined : args.default_option ?? row.default_option;
-    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form });
+    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form }) ?? (await missingOptionPage(ctx, options));
     if (shapeError) return { error: shapeError };
     // A blocking ask has no default; an advisory one needs one.
     if (blocking) defaultOption = undefined;
@@ -1041,20 +1053,28 @@ function cliRowShape(r: DecisionRow, conversation?: any) {
 // `cast decide ls`: what this session has asked, newest first, so an agent can
 // find the id to edit or cancel and read how an earlier ask was answered.
 // With `stack` or `task`, the members of that stack or the decisions on that
-// task instead (any status).
+// task instead (any status). Those two and `mine` need no session: `cast task
+// show` reads the decisions on a task from a plain shell (the-line.md L10),
+// and the session only feeds messages_since for the asks it made itself.
 export async function listForSessionCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { session_id: string; stack?: string; task?: string; mine?: boolean },
+  args: { session_id?: string; stack?: string; task?: string; mine?: boolean },
 ): Promise<any> {
-  const conversation = await ctx.db
-    .query("conversations")
-    .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
-    .first();
-  if (!conversation) return { error: "Session not found" };
-  if (conversation.user_id.toString() !== auth.userId.toString()) {
-    return { error: "Unauthorized: not your session" };
+  let conversation: any = undefined;
+  if (args.session_id) {
+    conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+      .first();
+    if (!conversation) return { error: "Session not found" };
+    if (conversation.user_id.toString() !== auth.userId.toString()) {
+      return { error: "Unauthorized: not your session" };
+    }
+  } else if (!args.stack && !args.task && !args.mine) {
+    return { error: "Missing session_id" };
   }
+  const own = (r: DecisionRow) => (conversation && r.conversation_id === conversation._id ? conversation : undefined);
   let rows: DecisionRow[] = [];
   if (args.mine) {
     // `cast decide ls --mine` (the-line.md L10): every pending decision the
@@ -1062,14 +1082,14 @@ export async function listForSessionCore(
     // the list reads as the queue does.
     rows = (await listForUserCore(ctx, auth.userId, Date.now())).filter((r) => r.status === "pending");
     rows.sort((a, b) => a.created_at - b.created_at);
-    return { decisions: rows.map((r) => cliRowShape(r, r.conversation_id === conversation._id ? conversation : undefined)) };
+    return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
   }
   if (args.stack) {
     const bound = await resolveDecisionBindings(ctx, auth.userId, { stack: args.stack });
     if ("error" in bound) return bound;
     const stack = bound.stack!;
     rows = (await Promise.all(stack.decision_ids.map((id) => ctx.db.get(id)))).filter(Boolean) as DecisionRow[];
-    return { decisions: rows.map((r) => cliRowShape(r, r.conversation_id === conversation._id ? conversation : undefined)) };
+    return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
   }
   if (args.task) {
     const bound = await resolveDecisionBindings(ctx, auth.userId, { task: args.task });
@@ -1094,13 +1114,13 @@ export async function listForSessionCore(
     }
   }
   rows.sort((a, b) => b.created_at - a.created_at);
-  return { decisions: rows.map((r) => cliRowShape(r, conversation)) };
+  return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
 }
 
 export const listForSession = mutation({
   args: {
     api_token: v.string(),
-    session_id: v.string(),
+    session_id: v.optional(v.string()),
     stack: v.optional(v.string()),
     task: v.optional(v.string()),
     mine: v.optional(v.boolean()),

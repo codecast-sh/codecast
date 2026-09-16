@@ -93,11 +93,13 @@ describe("L10 scope feed run rows", () => {
     const resolved = await scoped(db);
     const { rows } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["run"] });
     expect(rows.map((r) => r.id)).toEqual(["workflow_runs_r1", "workflow_runs_r2"]);
+    // The short id names the task or plan the run belongs to, so the CLI's
+    // feed printer shows which work a run is about.
     expect(rows[0]).toMatchObject({
-      kind: "run", title: "line", state: "running · Review", href: "/workflows/runs/workflow_runs_r1",
+      kind: "run", short_id: "ct-1", title: "line", state: "running · Review", href: "/workflows/runs/workflow_runs_r1",
       actor: { name: "Growth lead standing", is_bot: true }, preview: "reading the diff",
     });
-    expect(rows[1]).toMatchObject({ kind: "run", title: "Launch chain", state: "paused · Ship?", preview: "Ship it now?", actor: { name: "Me" } });
+    expect(rows[1]).toMatchObject({ kind: "run", short_id: "pl-1", title: "Launch chain", state: "paused · Ship?", preview: "Ship it now?", actor: { name: "Me" } });
   });
 
   test("run rows merge by updated_at with the other kinds, and the kind filter keeps them out when not asked", async () => {
@@ -105,8 +107,8 @@ describe("L10 scope feed run rows", () => {
     const resolved = await scoped(db);
     const { rows } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW });
     expect(rows.map((r) => `${r.kind}:${r.short_id ?? r.id}`)).toEqual([
-      "run:workflow_runs_r1", // -1h
-      "run:workflow_runs_r2", // -2h
+      "run:ct-1", // -1h, the run on ct-1
+      "run:pl-1", // -2h, the run on pl-1
       "decision:sd-1", // -3h, pending, no task, session in scope
       "decision:sd-3", // -4h, on ct-1
       "artifact:both", // -6h, one row for a page both published in and attached inside the scope

@@ -1012,15 +1012,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </div>
           </div>
 
-          {/* Subtasks — Linear's sub-issue section, always present */}
-          <SubtasksSection task={data} requestClose={requestClose} onNavigate={(tid) => router.push(`/tasks/${tid}`)} />
-
-          <TaskSessionList
-            sessions={linkedConversations}
-            originId={data.created_from_conversation}
-            onOpen={openLinkedSession}
-          />
-
           {/* Description */}
           <div className="mb-6">
             <DocEditor
@@ -1042,9 +1033,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           {/* Decisions bound to this task (D3): open cards, settled ones folded */}
           <TaskDecisions taskId={data._id} />
 
-          {/* Evidence at the station (the-line.md L6) */}
-          <TaskEvidence task={data as any} />
-
           {/* The run (L10): its gate renders the decision card */}
           {data.workflow_run_id && (
             <div className="mb-6">
@@ -1052,8 +1040,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </div>
           )}
 
+          {/* Evidence at the station (the-line.md L6) */}
+          <TaskEvidence task={data as any} />
+
           {/* The plan of the work: criteria, steps, estimates */}
           <ExecutionDetailsSection data={data} />
+
+          {/* Subtasks — Linear's sub-issue section, always present */}
+          <SubtasksSection task={data} requestClose={requestClose} onNavigate={(tid) => router.push(`/tasks/${tid}`)} />
+
+          <TaskSessionList
+            sessions={linkedConversations}
+            originId={data.created_from_conversation}
+            onOpen={openLinkedSession}
+          />
 
           {/* Source Insight */}
           {data.source_insight && (

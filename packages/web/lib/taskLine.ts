@@ -98,7 +98,9 @@ export function heldDecisionFor<D extends HoldCandidate>(task: Pick<LineTask, "_
   let held: D | undefined;
   for (const d of decisions) {
     if (d.status !== "pending" || !d.blocking || d.task_id !== task._id) continue;
-    if ((d.station ?? station) !== station) continue;
+    // The server holds only on an exact station match (tasks.ts
+    // holdingDecisionFor); the web derives the same, never a looser one.
+    if (d.station !== station) continue;
     if (!held || (d.created_at ?? 0) < (held.created_at ?? 0)) held = d;
   }
   return held;

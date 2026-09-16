@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { useMutation } from "convex/react";
 import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -36,6 +37,8 @@ interface WorkflowRun {
   primary_session_id?: string;
   goal_override?: string;
   gate_prompt?: string;
+  gate_decision_id?: string;
+  gate_decision_short_id?: string;
   gate_choices?: Array<{ key: string; label: string; target: string }>;
   gate_response?: string;
   fail_reason?: string;
@@ -165,7 +168,11 @@ function RunDetailContent({ runId }: { runId: string }) {
           </div>
         )}
 
-        {run.status === "paused" && run.gate_prompt && (
+        {run.status === "paused" && run.gate_decision_id && (
+          <RunGate run={run} className="rounded-xl border border-sol-yellow/30 bg-sol-yellow/5 p-3" />
+        )}
+
+        {run.status === "paused" && run.gate_prompt && !run.gate_decision_id && (
           <div className="border border-sol-magenta/25 bg-sol-magenta/5 rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 border-b border-sol-magenta/20 flex items-center gap-2">
               <User className="w-3.5 h-3.5 text-sol-magenta" />

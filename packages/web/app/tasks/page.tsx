@@ -31,6 +31,7 @@ import { LabelChips } from "../../components/LabelChips";
 import { IssueLink } from "../../components/tasks/IssueLink";
 import { TaskDecisionChip } from "../../components/decisions/TaskDecisions";
 import { TaskLineChip } from "../../components/tasks/StationStrip";
+import { useSyncRuns } from "../../hooks/useSyncRuns";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -180,7 +181,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
       {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       <TaskDecisionChip taskId={task._id} />
-      <TaskLineChip task={task as any} className="cq-hide-compact" />
+      <TaskLineChip task={task as any} />
       {state.isEditing ? (
         <input
           autoFocus
@@ -989,6 +990,8 @@ function useTaskUrlState() {
  *  its plan is listed. The caller expands a plan's project into planIds. */
 export type TaskListScope = { projectIds: string[]; planIds: string[] };
 
+const RUNS_FEED_ARGS = { limit: 200 };
+
 export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
   const router = useRouter();
   const params = useParams();
@@ -1076,6 +1079,9 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
   const { hasMore, loadMore } = useSyncTasks();
+  // The line chip on each row reads the workspace's runs from the store
+  // (the-line.md L10); this is the one feeder behind it, mounted per list.
+  useSyncRuns(RUNS_FEED_ARGS);
   const currentUser = useViewerIdentity();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   // One workspace pointer for the whole page: rows are scoped by activeTeamId

@@ -62,8 +62,8 @@ describe("a blocking decision holds its task (L5)", () => {
     expect(heldDecisionFor(TASK, [ask({ station: "in_progress" })])).toBeUndefined();
   });
 
-  it("a decision with no station binds to wherever the task stands", () => {
-    expect(heldDecisionFor(TASK, [ask({ station: undefined })])?._id).toBe("d");
+  it("a decision with no station holds nothing, the same as the server rule", () => {
+    expect(heldDecisionFor(TASK, [ask({ station: undefined })])).toBeUndefined();
   });
 
   it("the oldest hold wins when several hold", () => {

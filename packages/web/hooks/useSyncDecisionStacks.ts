@@ -7,5 +7,8 @@ const api = _api as any;
 // listStacks is the complete visible set, and every stack verb (add, remove,
 // reorder, policy) is a named mutation whose result echoes through it.
 export function useSyncDecisionStacks(opts?: { includeDone?: boolean; skip?: boolean }) {
-  return useSyncCollection("decisionStacks", api.decisionStacks.listStacks, opts?.skip ? "skip" : { include_done: !!opts?.includeDone });
+  // One argument set for every surface: listStacks is a snapshot feed, and
+  // two feeders that disagree on include_done drop and restore each other's
+  // done rows. Surfaces that want open stacks only filter the store rows.
+  return useSyncCollection("decisionStacks", api.decisionStacks.listStacks, opts?.skip ? "skip" : { include_done: opts?.includeDone ?? true });
 }
