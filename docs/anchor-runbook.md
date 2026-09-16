@@ -49,6 +49,17 @@ the results — no extra wiring.
 
 ## Activate Slack (the one part that needs your hands)
 
+> 2026-09-14: the same Slack app also powers channel mirroring
+> (docs/architecture/slack-chat-mirror.md). The scopes and events below are the
+> anchor's minimum; the mirror needs the full set in `slack.ts` BOT_SCOPES plus
+> the events `message.channels`, `message.groups`, `reaction_added`,
+> `reaction_removed`, `channel_rename`, `channel_archive`, `channel_unarchive`,
+> `channel_deleted`, `member_joined_channel`, `member_left_channel`,
+> `user_change`, `app_uninstalled`, `tokens_revoked`. The OAuth redirect URL is
+> now `<web origin>/slack/connect` (production, local.codecast.sh and
+> localhost:3200 are registered); the install binds to the TEAM (admins only)
+> and no longer needs an anchor to exist first.
+
 1. Create a Slack app (api.slack.com/apps) for the workspace.
 2. **Event Subscriptions** → Request URL: `https://convex.codecast.sh/api/webhooks/slack`
    (Slack will hit it with a `url_verification` challenge — the route answers it). Subscribe to

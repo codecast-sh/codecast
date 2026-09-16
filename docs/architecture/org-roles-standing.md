@@ -102,6 +102,12 @@ Flow, modeled on pushRouter.enqueuePush + flush:
    `last_frame_seq` when it exists), `Hands say` (each hand's state line),
    `Channels` (W6, when the role follows any), `Charter` (hash; full text only
    after a restart). Budget 3000 characters of facts; overflow becomes a count.
+   The opening tag names the role and the time, and carries the cause count
+   and how many of those groups an earlier flush held back (a cap, a pause;
+   the outbox row's `held_at`, which marks the group `(held)` in the Why
+   list): `<role-wake or-8 at="…" causes="9" held="2">`. `deliver` stamps the
+   wake's short id in as `wake="rw-N"` once the log row exists. The web reads
+   these off the tag; a frame from before them counts its Why lines.
 4. If the frame carries no fact newer than `last_frame_seq` and no immediate
    row, log the wake as dropped and clear the rows.
 5. Otherwise one mutation `orgWakes.deliver`: insert the pending message via
@@ -175,9 +181,17 @@ Routes `/cli/role/*`, `/cli/brief/*` in http.ts, next to `/cli/anchor/*`.
 Role page `/org/<or-id>` (shared with the scope page, W3) gets: the brief
 (facts block + narrative, editable narrative for the parent or a seat holder),
 the charter (editable by humans), hands with state, wakes log with causes and
-frame size, routines (the role's triggers), settings (trust stage with the
+frame size (the Wakes tab, `?tab=wakes&wake=rw-N` lands on one wake), routines (the role's triggers), settings (trust stage with the
 unlock sentence, caps, model, host, reports to, retire). The org page node
 gets a "Talk" action that opens the standing session in the conversation view.
+
+In the conversation view a frame renders as the wake card
+(`components/RoleWakeCard.tsx`, parsed by `components/roleWake.ts`): the role
+and handle linking to its page, the wake id, "woke on N changes, M held" with
+a held backlog tag, each section folded behind its line count (Why open), task
+and plan ids as live pills, and the role's controls (open, pause or resume
+through `updateOrgRole`, caps, the wake log). A raw frame in the transcript is
+a regression.
 
 ## Wake sources (as shipped, W1)
 
@@ -200,18 +214,31 @@ one place each event passes through; nothing else inserts outbox rows.
 | A chat mention of the role | `chat.ts` role mention path (replaces the `deliverToAnchor` call) | immediate | the mentioning session is the actor |
 | A restart | `orgRoles.performRestartRole`, cause prefixed `restart:` so the next frame carries the charter and brief in full | immediate | |
 
+Enqueue dedupes per ref: a fold or passive row for a (table, id) that
+already waits unflushed is refreshed in place (newest cause, first due time
+kept), so a task moved seven times by seven mutations is one line in one
+frame and one wake per window (ct-51491). Immediate rows never fold.
+
 Flush: `orgWakes.performFlush` (an internal mutation, scheduled by
 `orgEvents.scheduleFlush`). A due immediate or fold row takes every waiting
 row with it: enqueue arms one flush per coalesce window, so a fold row that
 landed while an earlier one waited rides the frame that is going out anyway
-(delivered up to `coalesce_ms` early, still one wake). Gates in order: paused or retired holds; over `wakes_per_day` or
+(delivered up to `coalesce_ms` early, still one wake). A fold or passive row
+is one per (table, id) per window: a repeat for a ref that already waits
+patches that row's cause and bumps its `count`, keeping the first due time,
+so a task moved seven times is one line ("... (changed 7 times)") and one
+wake, never seven rows (ct-51491). Gates in order: paused or retired holds; over `wakes_per_day` or
 `tokens_per_day` holds system rows (an immediate row still passes) and
 re-arms at the next UTC day; an active agent reschedules in 30s up to 20
 times. A frame with no fact newer than `last_frame_seq` and no immediate row
 is logged as dropped.
 
-Frame: `orgWakes.buildFrame`, sections `You`, `Why you are awake`, `Your
-scope now`, `Hands say` (each hand's pin, its task's status, execution status
+Frame: `orgWakes.buildFrame`, sections `You`, `Why you are awake` (the rows
+grouped by (table, id) at render, newest first, the latest cause with the
+counts summed, so a backlog released by a resume is one line per work item;
+15 lines, then one count line), `Your scope now` (plans active or draft only,
+8 lines; changes since the last frame, 12 lines; each overflow is one count
+line, and the 3000 character budget stays the ceiling), `Hands say` (each hand's pin, its task's status, execution status
 and review verdict), `Channels` (when the role follows any), `Charter`
 (hash; full text plus the brief after a restart). Facts come from
 `org.computeBriefFacts`, which reuses `resolveScope` and

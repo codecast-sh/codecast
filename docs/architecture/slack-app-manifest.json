@@ -1,0 +1,64 @@
+{
+  "display_information": {
+    "name": "Codecast",
+    "description": "Mirror Slack channels with codecast team chat, and talk to your team's agents.",
+    "background_color": "#1b1b1f"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Codecast",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://codecast.sh/slack/connect",
+      "https://local.codecast.sh/slack/connect",
+      "http://localhost:3200/slack/connect"
+    ],
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "chat:write.customize",
+        "im:history",
+        "channels:read",
+        "channels:history",
+        "channels:join",
+        "groups:read",
+        "groups:history",
+        "users:read",
+        "users:read.email",
+        "reactions:read",
+        "reactions:write",
+        "files:read",
+        "team:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false,
+    "event_subscriptions": {
+      "request_url": "https://convex.codecast.sh/api/webhooks/slack",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "reaction_added",
+        "reaction_removed",
+        "channel_rename",
+        "channel_archive",
+        "channel_unarchive",
+        "channel_deleted",
+        "member_joined_channel",
+        "member_left_channel",
+        "user_change",
+        "app_uninstalled",
+        "tokens_revoked"
+      ]
+    }
+  }
+}
