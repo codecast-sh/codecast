@@ -20,6 +20,11 @@ export type RingInvite = {
  * Markup and nothing else: what answering DOES depends on the window this is
  * drawn in — the host joins right here, the ring window hands the room to the
  * host — so the two gestures are the caller's.
+ *
+ * The ref lands on the GUTTER around the card, not the card: the glow and the
+ * shadow (ringCard.css) fall outside the card's box, and both windows size
+ * themselves to what they measure. Measuring the card cut the glow off at the
+ * window's edge — a hard rectangle around a card that was drawn to float.
  */
 export const RingCard = forwardRef<
   HTMLDivElement,
@@ -27,7 +32,8 @@ export const RingCard = forwardRef<
 >(function RingCard({ invite, onAnswer, onDecline }, ref) {
   const name = invite.from_name || "Someone";
   return (
-    <div ref={ref} className="ring-card" role="alertdialog" aria-label={`${name} wants to huddle`}>
+    <div ref={ref} className="ring-card-glow">
+    <div className="ring-card" role="alertdialog" aria-label={`${name} wants to huddle`}>
       <div className="ring-card-face-wrap" aria-hidden="true">
         <span className="ring-card-pulse" />
         <span className="ring-card-pulse ring-card-pulse-2" />
@@ -52,6 +58,7 @@ export const RingCard = forwardRef<
           Decline
         </button>
       </div>
+    </div>
     </div>
   );
 });

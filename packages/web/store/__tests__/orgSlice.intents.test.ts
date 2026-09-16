@@ -63,7 +63,7 @@ describe("org intents", () => {
     const meBefore = tree.people[0].total;
     const roleBefore = tree.roles[0].total;
     let st: OrgSliceData = { orgTree: tree, orgIntents: [] };
-    st = run(st, "reparentOrgSession", beyond._id, { kind: "role", role_id: ROLE }, beyond);
+    st = run(st, "reparentOrgSession", beyond._id, { kind: "role", role_id: ROLE }, { row: beyond });
     expect(st.orgTree!.people[0].total).toBe(meBefore - 1);
     expect(st.orgTree!.roles[0].total).toBe(roleBefore + 1);
     expect(st.orgTree!.roles[0].sessions.some((s) => s._id === beyond._id)).toBe(true);

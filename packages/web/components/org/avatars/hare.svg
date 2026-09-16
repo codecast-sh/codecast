@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Hare">
+  <!-- tones: ground #bab8ce = sol-violet 40% over sol-bg-alt; body #4e5f9d = sol-violet 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-hare"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#bab8ce"/>
+  <g clip-path="url(#c-hare)">
+  <path d="M10 96C14 82 30 78 48 78C66 78 82 82 86 96Z" fill="#4e5f9d"/>
+  <path d="M30 52C22 32 25 4 34 4C43 4 45 32 43 52Z" fill="#4e5f9d"/><path d="M66 52C74 32 71 4 62 4C53 4 51 32 53 52Z" fill="#4e5f9d"/>
+  <path d="M33.5 46C29 32 30.5 11 34.5 11C38.5 11 40 32 39 46Z" fill="#bab8ce"/><path d="M62.5 46C67 32 65.5 11 61.5 11C57.5 11 56 32 57 46Z" fill="#bab8ce"/>
+  <ellipse cx="48" cy="58" rx="22" ry="21" fill="#4e5f9d"/>
+  <ellipse cx="48" cy="68" rx="11" ry="8" fill="#fdf6e3"/>
+  <path d="M44.5 63.5Q48 62 51.5 63.5Q50 68 48 68.5Q46 68 44.5 63.5Z" fill="#002b36"/>
+  <circle cx="38" cy="54" r="2.6" fill="#002b36"/><circle cx="58" cy="54" r="2.6" fill="#002b36"/>
+  </g>
+</svg>

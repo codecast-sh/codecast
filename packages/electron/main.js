@@ -1552,7 +1552,7 @@ ipcMain.on("voice-mirror", (e, payload) => {
   if (!senderIsCallWindow(e)) return;
   if (!payload || typeof payload !== "object") return;
   lastVoiceMirror = payload;
-  for (const win of appWindows()) {
+  for (const win of toldWindows()) {
     if (win === callWindow || win.webContents.isDestroyed()) continue;
     win.webContents.send("voice-mirror", payload);
   }
@@ -1666,6 +1666,18 @@ function appWindows() {
   return out;
 }
 
+// The windows told what the app is doing — the role and the host's mirror.
+// The app windows, plus the ring window: it leads nothing and hosts nothing,
+// so it is not an app window, but it stands down from drawing a ring the
+// voice host is drawing, and the role (`voiceWindow`, `anyInCall`) and a
+// current mirror are how it knows. A mirror replayed once and never updated
+// would have it deciding off a call that ended.
+function toldWindows() {
+  const out = appWindows();
+  if (callRingWindow && !callRingWindow.isDestroyed()) out.push(callRingWindow);
+  return out;
+}
+
 function describeWindows() {
   return appWindows().map((win) => {
     const st = windowStates.get(win.webContents.id) || {};
@@ -1719,7 +1731,7 @@ function broadcastWindowRole() {
     // toggles that ask for them draw them.
     const facesOverlay = facesOverlayWanted();
     const peopleWall = wallWanted();
-    for (const win of appWindows()) {
+    for (const win of toldWindows()) {
       // A window can be past its render frame's disposal and not yet report
       // isDestroyed(), and sending into that gap throws "Render frame was
       // disposed before WebFrameMain could be accessed". The broadcast is
@@ -2170,8 +2182,11 @@ ipcMain.on("ring-attention", (e, on) => {
 ipcMain.on("call-ring-size", (e, size) => {
   const win = callRingWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
-  const width = Math.max(120, Math.min(520, Math.round(Number(size?.width) || 340)));
-  const height = Math.max(48, Math.min(360, Math.round(Number(size?.height) || 96)));
+  // Wide enough for the card and the glow it is measured with (ringCard.css
+  // .ring-card-glow): the window is the halo's box, so a cap at the card's
+  // size cut the shadow off square.
+  const width = Math.max(120, Math.min(560, Math.round(Number(size?.width) || 340)));
+  const height = Math.max(48, Math.min(480, Math.round(Number(size?.height) || 96)));
   placeCallRingWindow(width, height);
   // The reveal, and it never takes focus: the person is mid-sentence in
   // another app and a ring is not worth their keystrokes.

@@ -82,6 +82,10 @@ export const ORG_SIZES = {
    *  the line on the same predicate (standingLineOf), so the layout and the
    *  card cannot disagree about the card's height. */
   standingRow: 22,
+  /** Extra height of a program seat's tenure row (org-staffing.md S10): its own
+   *  line, because "program · ends with pl-N" does not fit the meta line. A
+   *  standing seat says nothing, so it takes no row. */
+  tenureRow: 18,
   /** Extra height of an adopt stub: a second line naming the role it joins. */
   adoptRow: 18,
   siblingGap: 40,
@@ -227,7 +231,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const kids = visiting.has(r._id) ? [] : (rolesUnderRole.get(r._id) ?? []).sort(byName);
     visiting.add(r._id);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + chipRow(id), role: r,
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
@@ -520,6 +524,10 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
       status: "active",
       ...(ch.charter ? { charter: ch.charter } : {}),
       ...(ch.caps ? { caps: { hands_per_day: ch.caps.hands_per_day ?? 0, wakes_per_day: ch.caps.wakes_per_day ?? 0, tokens_per_day: ch.caps.tokens_per_day ?? 0 } } : {}),
+      // A proposal's role carries its tenure and face onto the ghost seat (S10,
+      // S13), so the chip and the drawn avatar read the same as a live seat.
+      ...(ch.tenure ? { tenure: ch.tenure } : {}),
+      ...(ch.avatar ? { avatar: ch.avatar } : {}),
       trust: "understand",
       created_by: host,
       created_at: now,

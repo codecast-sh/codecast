@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Octopus">
+  <!-- tones: ground #bab8ce = sol-violet 40% over sol-bg-alt; body #96366f = sol-magenta 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-octopus"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#bab8ce"/>
+  <g clip-path="url(#c-octopus)">
+  <g stroke="#96366f" stroke-width="9" stroke-linecap="round" fill="none">
+  <path d="M22 70C12 80 10 92 16 100"/><path d="M36 76C30 86 30 96 34 104"/>
+  <path d="M60 76C66 86 66 96 62 104"/><path d="M74 70C84 80 86 92 80 100"/>
+  </g>
+  <path d="M14 58C14 30 30 14 48 14C66 14 82 30 82 58C82 72 70 78 48 78C26 78 14 72 14 58Z" fill="#96366f"/>
+  <circle cx="36" cy="52" r="7.5" fill="#fdf6e3"/><circle cx="60" cy="52" r="7.5" fill="#fdf6e3"/>
+  <circle cx="36.5" cy="53" r="3.2" fill="#002b36"/><circle cx="59.5" cy="53" r="3.2" fill="#002b36"/>
+  </g>
+</svg>

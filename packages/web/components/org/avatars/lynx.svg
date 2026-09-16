@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Lynx">
+  <!-- tones: ground #c4c880 = sol-green 40% over sol-bg-alt; body #817014 = sol-yellow 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-lynx"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#c4c880"/>
+  <g clip-path="url(#c-lynx)">
+  <path d="M6 96C10 82 28 78 48 78C68 78 86 82 90 96Z" fill="#817014"/>
+  <path d="M18 42L23 8L44 30Z" fill="#817014"/><path d="M78 42L73 8L52 30Z" fill="#817014"/>
+  <path d="M24 38L26 20L37 31Z" fill="#fdf6e3"/><path d="M72 38L70 20L59 31Z" fill="#fdf6e3"/>
+  <path d="M18 42C18 66 34 80 48 80C62 80 78 66 78 42C72 30 60 28 48 28C36 28 24 30 18 42Z" fill="#817014"/>
+  <path d="M16 54C20 68 30 82 48 82C66 82 76 68 80 54C74 62 62 66 48 64C34 66 22 62 16 54Z" fill="#fdf6e3"/>
+  <ellipse cx="37" cy="49" rx="3" ry="2.4" transform="rotate(-15 37 49)" fill="#002b36"/><ellipse cx="59" cy="49" rx="3" ry="2.4" transform="rotate(15 59 49)" fill="#002b36"/>
+  <path d="M44.5 66Q48 64.5 51.5 66Q50 70 48 70.5Q46 70 44.5 66Z" fill="#002b36"/>
+  </g>
+</svg>

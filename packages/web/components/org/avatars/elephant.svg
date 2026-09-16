@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Elephant">
+  <!-- tones: ground #bab8ce = sol-violet 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-elephant"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#bab8ce"/>
+  <g clip-path="url(#c-elephant)">
+  <path d="M30 32C14 30 4 44 6 60C8 74 20 80 32 74Z" fill="#586e75"/><path d="M66 32C82 30 92 44 90 60C88 74 76 80 64 74Z" fill="#586e75"/>
+  <path d="M28 40C18 40 12 50 14 60C16 68 24 72 30 68Z" fill="#bab8ce"/><path d="M68 40C78 40 84 50 82 60C80 68 72 72 66 68Z" fill="#bab8ce"/>
+  <circle cx="48" cy="46" r="25" fill="#586e75"/>
+  <path d="M41 60C41 74 40 84 36 92C40 94 46 94 50 90C52 82 55 72 55 60Z" fill="#586e75"/>
+  <path d="M38 64C34 70 30 74 26 78C30 76 36 72 42 68Z" fill="#fdf6e3"/><path d="M58 64C62 70 66 74 70 78C66 76 60 72 54 68Z" fill="#fdf6e3"/>
+  <circle cx="39" cy="44" r="2.6" fill="#002b36"/><circle cx="57" cy="44" r="2.6" fill="#002b36"/>
+  </g>
+</svg>

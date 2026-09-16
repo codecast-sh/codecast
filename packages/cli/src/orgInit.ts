@@ -37,8 +37,22 @@ export const ORG_INIT_HONESTY_RULES = {
   no_manufactured_work: "Never create tasks, plans, projects or sessions to support a proposal. The proposal cites what exists; the proposal is the only thing you create.",
 } as const;
 
+// Ground in what is happening, not in what was filed (S9). Plans go stale and
+// tasks finish without being closed; the analyzer reads activity before
+// records, brings the records in line first, and never staffs around a stale
+// one. Named so the test can assert the prompt keeps them.
+export const ORG_GROUNDING_RULES = {
+  activity_first: "Read activity before records. Where the commits and the sessions are is the ground truth; every plan, task and project is a claim about that ground, to verify before you build on it.",
+  done_is_sync: "A plan or task whose evidence says it is finished is a sync change, not a bottleneck: propose its status change, and count it out of every load you size.",
+  untouched_is_not_a_seat: "Scopes follow where the commits and sessions are. A project whose path nobody touches is not a seat, and a plan nobody works is not a load; never staff around a stale record.",
+  records_first: "Propose the changes that bring records in line first, in their own group ahead of every staffing change, so the chart you propose sits on the company as it is, not as it was filed.",
+} as const;
+
+/** Standing versus program roles (S10): every proposed role says which, with its end condition. */
+export const ORG_TENURE_RULE = "Every role you propose is standing or a program, and the change says which and why. Standing is an area that outlives any plan: a business line, a platform. A program is a bounded effort with an end: one plan, a dated push, a migration; name what ends it and what happens then, a retirement or a review. When in doubt, a program: converting a program to standing later is one edit, while retiring a standing seat that should have been a program is a week of wakes.";
+
 /** When the analyzer offers to become the chief of staff (S8, last bullet). */
-export const ORG_ADOPT_RULE = "When the company has no chief of staff and holds two or more roles or three or more projects, add one adopt change: this session becomes the standing session of a chief-of-staff role you propose in the same proposal. Offer it once, last, and let the person decide; a company below that size does not need a standing reviewer yet.";
+export const ORG_ADOPT_RULE = "When the company has no chief of staff and holds two or more roles or three or more projects, add one adopt change for a chief-of-staff role you propose in the same proposal. The conversation it names is the workspace's standing anchor when one exists (`cast anchor ls --json`, the row for this workspace): the chief of staff is that agent, and adopting it keeps every Slack and chat binding as an alias and restarts nothing. Only a workspace with no anchor adopts this session. Offer it once, last, and let the person decide; a company below that size does not need a standing reviewer yet.";
 
 export type OrgInitSummary = {
   projects: number;
@@ -50,6 +64,9 @@ export type OrgInitSummary = {
   git_roots: string[];
   /** Whether a chief-of-staff role already exists (the adopt rule's first test). */
   chief_of_staff: boolean;
+  /** Records the activity block (S9) says are behind what happened: the
+   *  glance names them so the reader knows sync changes come first. */
+  stale: { plans: number; tasks: number; projects: number };
 };
 
 export const ORG_INIT_LABEL = "org-init";
@@ -120,6 +137,7 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .command("staff")
     .description("Hire the Chief of Staff: the role, its standing session, a weekly company review, and the first review now. Idempotent per company.")
     .option("--adopt", "This session becomes the chief of staff's standing session instead of provisioning a new one")
+    .option("--seat <existing|fresh>", "With a standing agent already in the workspace: seat it (default, nothing restarts) or start a fresh session and retire it in the same act")
     .option("-C, --dir <path>", "Project directory the provisioned standing session starts in (default: current; ignored with --adopt)")
     .option("--every <duration>", "How often the company review runs", "7d")
     .option(...TEAM_OPT)

@@ -576,6 +576,9 @@ export const ingestLocal = mutation({
       // session in that checkout, commit newer than its last publish). Checked
       // against the caller before it is written: a daemon names only its own.
       conversation_id: v.optional(v.string()),
+      // The files the commit touched with their line counts (git log
+      // --numstat), so the activity block can read which area it landed on.
+      files: v.optional(v.array(v.object({ filename: v.string(), additions: v.number(), deletions: v.number() }))),
     }))),
   },
   handler: async (ctx, args): Promise<{ published: boolean; reason?: "private" | "disabled"; rows?: number; commits_created?: number }> => {
@@ -616,7 +619,8 @@ export const ingestLocal = mutation({
 
     let created = 0;
     for (const commit of args.commits ?? []) {
-      const { conversation_id: claimed, ...fields } = commit;
+      const { conversation_id: claimed, files, ...rest } = commit;
+      const fields: LocalCommitFields = { ...rest, ...(files?.length ? { files: files.map((f) => ({ filename: f.filename, status: "modified", additions: f.additions, deletions: f.deletions, changes: f.additions + f.deletions })) } : {}) };
       const result = await upsertLocalCommit(ctx, { userId, teamId, repository, commit: fields, claimedConversationId: claimed });
       if (result.created) created++;
     }
@@ -635,6 +639,7 @@ export type LocalCommitFields = {
   insertions: number;
   deletions: number;
   branch?: string;
+  files?: Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }>;
 };
 
 /**
@@ -660,7 +665,12 @@ export async function upsertLocalCommit(
     .withIndex("by_sha", (q: any) => q.eq("sha", args.commit.sha))
     .first();
   if (dup) {
-    if (conversationId && !dup.conversation_id) await ctx.db.patch(dup._id, { conversation_id: conversationId });
+    // A row that had no session learns one; a row that had no file list
+    // (a push webhook from before file lists were stored) learns the checkout's.
+    const patch: Record<string, any> = {};
+    if (conversationId && !dup.conversation_id) patch.conversation_id = conversationId;
+    if (!dup.files?.length && args.commit.files?.length) patch.files = args.commit.files;
+    if (Object.keys(patch).length) await ctx.db.patch(dup._id, patch);
     return { commit_id: dup._id, created: false, conversation_id: dup.conversation_id ?? conversationId };
   }
   const commit_id = await ctx.db.insert("commits", {

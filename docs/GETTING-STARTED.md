@@ -158,7 +158,7 @@ npx convex env set GITHUB_WEBHOOK_SECRET "<get-from-team-lead>"
 ```
 
 The Convex dashboard for the self-hosted instance is at:
-`https://convex-dashboard-production-bc8d.up.railway.app/`
+the dashboard on the Convex host: `ssh -N -L 6791:127.0.0.1:6791 pg-union` then open `http://localhost:6791`
 
 (`npx convex dashboard` does not work with self-hosted Convex.)
 
@@ -379,4 +379,4 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 
 **Auth callback fails** — `SITE_URL` on the Convex deployment must match your web app URL exactly (with protocol, no trailing slash).
 
-**`npx convex dashboard` doesn't work** — Use `https://convex-dashboard-production-bc8d.up.railway.app/` directly. Self-hosted Convex doesn't support the CLI dashboard command.
+**`npx convex dashboard` doesn't work** — Use the dashboard on the Convex host: `ssh -N -L 6791:127.0.0.1:6791 pg-union` then open `http://localhost:6791` directly. Self-hosted Convex doesn't support the CLI dashboard command.

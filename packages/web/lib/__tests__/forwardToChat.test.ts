@@ -52,6 +52,18 @@ describe("openForwardToChat", () => {
     expect(rows[0].content).toBe(`worth a look\n\n${URL}`);
   });
 
+  it("sends note + url with attached images", () => {
+    openForwardToChat({ url: URL });
+    const storage = serverId("img1");
+    currentPick().onPick(
+      { kind: "channel", id: CHANNEL, label: "#general" },
+      { note: "look", query: "", attachments: [{ storage_id: storage, mime: "image/png" }] },
+    );
+    const rows = Object.values(useInboxStore.getState().chatMessages) as any[];
+    expect(rows[0].content).toBe(`look\n\n${URL}`);
+    expect(rows[0].attachments).toEqual([{ storage_id: storage, mime: "image/png" }]);
+  });
+
   it("sends just the url when no note was typed", () => {
     openForwardToChat({ url: URL });
     currentPick().onPick({ kind: "channel", id: CHANNEL, label: "#general" }, { note: undefined, query: "" });

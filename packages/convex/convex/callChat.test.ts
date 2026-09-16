@@ -218,7 +218,7 @@ describe("post relays a typed line to the agents in the room", () => {
     users: [{ _id: "ua", name: "Ada Lovelace", email: "ada@x.org" }],
     team_members: [{ team_id: "team1", user_id: "ua" }],
     teams: [{ _id: "team1", features: { calls: true } }],
-    conversations: [conversation],
+    conversations: [{ ...conversation, team_id: "team1" }],
   };
 
   test("the line is stored, and each fed session gets it as the feed's adder", async () => {
@@ -231,24 +231,79 @@ describe("post relays a typed line to the agents in the room", () => {
       },
       { userId: "ua" },
     );
-    let stored: any[] = [];
-    try {
-      await call(post, ctx, { room_key: "session:conv1", text: "  can you check the deploy?  " });
-      stored = ctx.db._tables.call_chat_messages;
-    } catch (err) {
-      // The room authorizer's own fixtures are out of scope here: when it
-      // refuses this fake room, the relay is asserted on its inputs instead.
-      expect(String(err)).toContain("Cannot chat");
-      return;
-    }
+    await call(post, ctx, { room_key: "session:conv1", text: "  can you check the deploy?  " });
+    const stored = ctx.db._tables.call_chat_messages;
     expect(stored).toHaveLength(1);
     expect(stored[0].text).toBe("can you check the deploy?");
     expect(stored[0].agent_conversation_id).toBeUndefined();
+    expect(stored[0].attachments).toBeUndefined();
     const relays = ctx._scheduled.filter((s) => s.name === "transcripts:deliverToSession");
     expect(relays).toHaveLength(1);
     expect(relays[0].args.as_user).toBe("ua");
     expect(relays[0].args.to).toBe("conv1");
     expect(relays[0].args.body).toContain("Ada Lovelace wrote in the huddle's chat");
     expect(relays[0].args.body).toContain("**Ada Lovelace**: can you check the deploy?");
+    expect(relays[0].args.image_storage_ids).toBeUndefined();
+  });
+
+  test("an image rides the chat attachment shape and the session image path", async () => {
+    const ctx = ctxWith(
+      {
+        ...seated,
+        call_chat_messages: [],
+        transcripts: [transcript()],
+        call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", added_by: "ua" }],
+      },
+      { userId: "ua" },
+    );
+    const shot = { storage_id: "kg23b1w4w5y06f1yd7vfha6x298ehr6x", mime: "image/png" };
+    await call(post, ctx, {
+      room_key: "session:conv1",
+      text: "look at this",
+      attachments: [shot],
+    });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
+    expect(ctx.db._tables.call_chat_messages[0].attachments).toEqual([shot]);
+    const relays = ctx._scheduled.filter((s) => s.name === "transcripts:deliverToSession");
+    expect(relays).toHaveLength(1);
+    expect(relays[0].args.body).toContain("**Ada Lovelace**: look at this");
+    expect(relays[0].args.image_storage_ids).toEqual([shot.storage_id]);
+  });
+
+  test("an image-only line is stored and relayed without invented text", async () => {
+    const ctx = ctxWith(
+      {
+        ...seated,
+        call_chat_messages: [],
+        transcripts: [transcript()],
+        call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", added_by: "ua" }],
+      },
+      { userId: "ua" },
+    );
+    await call(post, ctx, {
+      room_key: "session:conv1",
+      text: "   ",
+      attachments: [{ storage_id: "img1", mime: "image/jpeg" }],
+    });
+    expect(ctx.db._tables.call_chat_messages[0].text).toBe("");
+    expect(ctx.db._tables.call_chat_messages[0].attachments).toHaveLength(1);
+    const relays = ctx._scheduled.filter((s) => s.name === "transcripts:deliverToSession");
+    expect(relays[0].args.body).toContain("attached an image");
+    expect(relays[0].args.image_storage_ids).toEqual(["img1"]);
+  });
+
+  test("empty text with no image is a no-op", async () => {
+    const ctx = ctxWith(
+      {
+        ...seated,
+        call_chat_messages: [],
+        transcripts: [transcript()],
+        call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", added_by: "ua" }],
+      },
+      { userId: "ua" },
+    );
+    await call(post, ctx, { room_key: "session:conv1", text: "  " });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(0);
+    expect(ctx._scheduled).toHaveLength(0);
   });
 });

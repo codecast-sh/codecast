@@ -52,6 +52,7 @@ import { DeviceRows } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
+import { ScreenCursors, useScreenCursorSender } from "./ScreenCursors";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import {
@@ -69,6 +70,7 @@ import {
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
 import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
+import { LivePulseDot } from "../SessionActivityLine";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -386,7 +388,7 @@ export function CallStage({
           <span className="relative">
             <Captions className="h-3.5 w-3.5" />
             {live && (
-              <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sol-green animate-pulse" />
+              <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />
             )}
           </span>
           transcript
@@ -865,6 +867,7 @@ export function StageVideo({
   contain?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   useWatchEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -873,8 +876,16 @@ export function StageVideo({
       tile.track.detach(el);
     };
   }, [tile.track]);
+  // Cursors ride only a letterboxed share: a cropped one has no honest
+  // mapping between the pointer and the share's pixels.
+  const cursorsOn = tile.kind === "screen" && !!contain;
+  const sender = useScreenCursorSender(tile, ref);
   return (
     <div
+      ref={boxRef}
+      data-sv-screen-tile={cursorsOn ? "cursors" : undefined}
+      onPointerMove={cursorsOn ? sender.onPointerMove : undefined}
+      onPointerLeave={cursorsOn ? sender.onPointerLeave : undefined}
       className={`relative overflow-hidden bg-black/60 transition-shadow duration-300 ${
         speaking ? SPEAKING_RING : ""
       } ${small ? "aspect-video w-full rounded-lg" : "h-full w-full rounded-xl"}`}
@@ -897,6 +908,7 @@ export function StageVideo({
         {tile.kind === "screen" ? " · screen" : ""}
         {muted && tile.kind === "camera" && <MicOff className="h-3 w-3 text-sol-red/90" />}
       </span>
+      {cursorsOn && <ScreenCursors tile={tile} boxRef={boxRef} videoRef={ref} />}
     </div>
   );
 }
@@ -1091,6 +1103,11 @@ function TranscriptRail({
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
   ).data as { segments: Array<any> } | null | undefined;
+  const scribeError = useSyncExternalStore(
+    subscribeScribe,
+    () => getScribeStatus().error,
+    () => null,
+  );
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const segCount = call?.segments?.length ?? 0;
@@ -1173,7 +1190,7 @@ function TranscriptRail({
           </div>
         ) : segCount === 0 ? (
           <div className="py-6 text-center text-[12px] text-sol-text-muted">
-            Listening — words appear as people speak.
+            {scribeError ?? "Listening — words appear as people speak."}
           </div>
         ) : (
           <div className="space-y-1 pb-2">
@@ -1226,7 +1243,9 @@ function CaptionsLane({
   return (
     <div className="pointer-events-none min-h-[4.25rem] border-b border-white/[0.06] px-5 py-2">
       {shown.length === 0 ? (
-        <div className="font-mono text-[11px] text-sol-text-dim">listening…</div>
+        <div className="font-mono text-[11px] text-sol-text-dim">
+          {scribe.error ?? "listening…"}
+        </div>
       ) : (
         <div className="space-y-1">
           {shown.map((c, i, arr) => (

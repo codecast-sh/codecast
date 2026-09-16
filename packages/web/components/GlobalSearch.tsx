@@ -11,17 +11,9 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
+import { parseSearchTerms } from "@codecast/shared/search";
 
-export function parseSearchTerms(query: string): string[] {
-  const terms: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    const term = match[1] || match[2];
-    if (term) terms.push(term.toLowerCase());
-  }
-  return terms;
-}
+export { parseSearchTerms };
 
 export function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text;

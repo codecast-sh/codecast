@@ -37,6 +37,7 @@ import {
   isVisibleAgentPending,
   mentionSessions,
   mentionUserIds,
+  threadFaceKey,
 } from "@codecast/shared/chat";
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
@@ -367,7 +368,7 @@ export async function patchChat(
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
-function displayName(user: Doc<"users"> | null): string {
+export function displayName(user: Doc<"users"> | null): string {
   return user?.name || user?.github_username || user?.email || "Someone";
 }
 
@@ -611,6 +612,10 @@ type ChatRailRow = {
     author_kind: "user" | "agent";
     created_at: number;
     preview: string;
+    // Present when the newest line is a thread reply. The toast layer uses
+    // this to apply the on-screen rule (channel floor ≠ that thread) without
+    // waiting for the message body to be in the store.
+    thread_root_id?: Id<"chat_messages">;
   } | null;
   last_inbound: { _id: Id<"chat_messages">; created_at: number } | null;
   sort_at: number;
@@ -719,6 +724,9 @@ async function railFor(
             author_kind: lastMessage.author_kind ?? "user",
             created_at: lastMessage.created_at,
             preview: plainPreview(lastMessage.content, 120),
+            ...(lastMessage.thread_root_id
+              ? { thread_root_id: lastMessage.thread_root_id }
+              : {}),
           }
         : null,
       // DM rooms only: what the other person last said, so a surface can key
@@ -859,6 +867,11 @@ export type ThreadSummary = {
   last_reply_at: number;
   // Newest distinct repliers, newest first — the faces on the affordance.
   reply_user_ids: Id<"users">[];
+  // The same repliers with the face to draw: a line mirrored in from Slack is
+  // written by the workspace's one bridge user, so the ids alone drew every
+  // Slack replier as the bridge. Distinct by the rendered identity (shared
+  // threadFaceKey), and a Slack person's snapshot rides along.
+  reply_faces: Array<{ user_id: Id<"users">; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } }>;
   // Set when the newest reply is an agent's and still unfinished, so the
   // channel can say "Anchor is thinking" without opening the thread. Without
   // this, an in-flight answer is invisible from the room it was asked in.
@@ -886,11 +899,16 @@ export async function threadSummariesFor(
     if (live.length === 0) continue;
     const seen = new Set<string>();
     const faces: Id<"users">[] = [];
+    const replyFaces: ThreadSummary["reply_faces"] = [];
     for (const r of live) {
-      const key = r.user_id.toString();
+      const key = threadFaceKey(r);
       if (seen.has(key)) continue;
       seen.add(key);
       faces.push(r.user_id);
+      const ext = r.external_author;
+      replyFaces.push(ext
+        ? { user_id: r.user_id, slack: { user: r.external?.user, name: ext.name, avatar_url: ext.avatar_url, is_bot: ext.is_bot } }
+        : { user_id: r.user_id });
       if (faces.length >= 4) break;
     }
     const newest = live[0];
@@ -902,6 +920,7 @@ export async function threadSummariesFor(
       reply_capped: live.length >= THREAD_SUMMARY_SCAN,
       last_reply_at: newest.created_at,
       reply_user_ids: faces,
+      reply_faces: replyFaces,
       ...(pendingAgent ? { agent_status: newest.agent_status as any } : {}),
     });
   }
@@ -2299,6 +2318,12 @@ export async function postChatMessage(
     // A backfilled Slack line keeps its original time so history reads in
     // order. Live lines take the channel's monotonic stamp like any other.
     createdAt?: number;
+    // The line is history (a Slack import bringing over a channel's past):
+    // stored, mirrored nowhere, and announced to nobody. Nobody just said it,
+    // so it earns no bell, no phone banner, no Threads inbox entry and no read
+    // mark — linking a channel with a year of history once rang every mention
+    // in it.
+    history?: boolean;
   },
 ): Promise<{
   messageId: Id<"chat_messages">;
@@ -2380,20 +2405,22 @@ export async function postChatMessage(
   const inserted = await ctx.db.get(messageId);
   if (inserted) await queueSlackOutbound(ctx, { op: "message", message: inserted });
 
-  const { hereCount, actorName } = await announceChatMessage(ctx, {
-    channel,
-    root,
-    messageId,
-    authorId,
-    content,
-    attachments,
-    mentions,
-    here,
-    createdAt: now,
-    agent: !!opts.agent,
-    agentLine: !!opts.agent || opts.origin === "agent",
-    actorLabel: originSession?.title,
-  });
+  const { hereCount, actorName } = opts.history
+    ? { hereCount: 0, actorName: await actorNameFor(ctx, authorId, originSession?.title) }
+    : await announceChatMessage(ctx, {
+      channel,
+      root,
+      messageId,
+      authorId,
+      content,
+      attachments,
+      mentions,
+      here,
+      createdAt: now,
+      agent: !!opts.agent,
+      agentLine: !!opts.agent || opts.origin === "agent",
+      actorLabel: originSession?.title,
+    });
 
   return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
 }
@@ -2429,6 +2456,15 @@ export const repairMissingOriginSession = internalMutation({
     return { repaired: true };
   },
 });
+
+// The name a line is announced under. Through the same sanitizer as the message
+// body: a display name is self-editable and goes into the bell and the phone
+// banner ahead of the text, where a bidi override or a fake "…mentioned you in
+// #security:" prefix makes the banner read as if someone else sent it.
+async function actorNameFor(ctx: MutationCtx, authorId: Id<"users">, actorLabel?: string): Promise<string> {
+  if (actorLabel) return oneLine(actorLabel, 60);
+  return oneLine(displayName(await ctx.db.get(authorId)), 60);
+}
 
 // Everything that turns a stored row into a message people are TOLD about: the
 // author's own read mark, mention/thread/@here/DM notification fan-out, and the
@@ -2474,14 +2510,7 @@ async function announceChatMessage(
   // has no read position and no bell.
   if (!opts.agent) await upsertRead(ctx, authorId, channel.team_id, channel._id, now, messageId, undefined);
 
-  const author = await ctx.db.get(authorId);
-  // Through the same sanitizer as the message body. A display name is
-  // self-editable and goes into the bell and the phone banner ahead of the
-  // text, where a bidi override or a fake "…mentioned you in #security:" prefix
-  // makes the banner read as if someone else sent it.
-  const actorName = opts.actorLabel
-    ? oneLine(opts.actorLabel, 60)
-    : oneLine(displayName(author), 60);
+  const actorName = await actorNameFor(ctx, authorId, opts.actorLabel);
   const preview = plainPreview(content);
   // The banner's "where" line. A 1:1 DM gets none — the title already names
   // the person, and "Direct message" under their name is noise.
@@ -4600,7 +4629,7 @@ export const replyAsAnchor = mutation({
     // the placeholder was inserted empty, so its mentions are resolved now.
     const resolved = status === "done"
       ? await resolveChatMentions(ctx, channel.team_id, args.content, anchor.bot_user_id)
-      : { users: [], roles: [], sessions: [], refs: [] };
+      : { users: [], roles: [], sessions: [], slack: [], refs: [] };
     if (resolved.refs.length > 0) patch.mentions = resolved.refs;
     await patchChat(ctx, message._id, patch);
     // The placeholder was empty when it was inserted, so the Slack mirror is

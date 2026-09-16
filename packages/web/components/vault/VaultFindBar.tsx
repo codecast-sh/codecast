@@ -8,62 +8,10 @@ import { memo, useCallback, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { clearMarks, markMatches } from "../../lib/domMarks";
 
 const HIGHLIGHT = "vault-find-hit";
 const CURRENT = "vault-find-current";
-
-/** Wrap every occurrence of `needle` in the note's text nodes. Returns the
- *  created marks in document order. Case-insensitive, literal (not regex) —
- *  a find bar that silently interprets `.` as "any character" is a trap. */
-function markMatches(root: HTMLElement, needle: string): HTMLElement[] {
-  if (!needle) return [];
-  const lower = needle.toLowerCase();
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => {
-      if (!node.nodeValue || !node.nodeValue.toLowerCase().includes(lower)) return NodeFilter.FILTER_REJECT;
-      const parent = node.parentElement;
-      if (!parent || parent.closest(`.${HIGHLIGHT}`)) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  const targets: Text[] = [];
-  let n: Node | null;
-  while ((n = walker.nextNode())) targets.push(n as Text);
-
-  const marks: HTMLElement[] = [];
-  for (const text of targets) {
-    const value = text.nodeValue ?? "";
-    let cursor = 0;
-    let idx = value.toLowerCase().indexOf(lower);
-    if (idx === -1) continue;
-    const frag = document.createDocumentFragment();
-    while (idx !== -1) {
-      if (idx > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, idx)));
-      const mark = document.createElement("mark");
-      mark.className = HIGHLIGHT;
-      mark.textContent = value.slice(idx, idx + needle.length);
-      frag.appendChild(mark);
-      marks.push(mark);
-      cursor = idx + needle.length;
-      idx = value.toLowerCase().indexOf(lower, cursor);
-    }
-    if (cursor < value.length) frag.appendChild(document.createTextNode(value.slice(cursor)));
-    text.parentNode?.replaceChild(frag, text);
-  }
-  return marks;
-}
-
-/** Undo markMatches: unwrap the marks and re-join the split text nodes so a
- *  later search sees whole words again. */
-function clearMarks(root: HTMLElement) {
-  const marks = [...root.querySelectorAll(`.${HIGHLIGHT}`)];
-  for (const mark of marks) {
-    const parent = mark.parentNode;
-    if (!parent) continue;
-    parent.replaceChild(document.createTextNode(mark.textContent ?? ""), mark);
-    parent.normalize();
-  }
-}
 
 export const VaultFindBar = memo(function VaultFindBar({
   scopeSelector = "[data-vault-note-scroll]",
@@ -94,13 +42,13 @@ export const VaultFindBar = memo(function VaultFindBar({
   useWatchEffect(() => {
     const root = document.querySelector(scopeSelector) as HTMLElement | null;
     if (!root) return;
-    clearMarks(root);
-    const marks = markMatches(root, query.trim());
+    clearMarks(root, HIGHLIGHT);
+    const marks = markMatches(root, [query.trim()], { className: HIGHLIGHT });
     marksRef.current = marks;
     setCount(marks.length);
     if (marks.length) focusMatch(0);
     else setCurrent(0);
-    return () => clearMarks(root);
+    return () => clearMarks(root, HIGHLIGHT);
   }, [query, scopeSelector, focusMatch]);
 
   useWatchEffect(() => {
