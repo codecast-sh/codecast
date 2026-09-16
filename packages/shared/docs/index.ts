@@ -14,6 +14,48 @@
  * transcript importer, `file_sync` / `inline_extract` from session mining,
  * `import` from bulk imports.
  */
+/**
+ * Every value docs.doc_type may hold, in the order tabs and pickers show
+ * them. The convex schema derives its validator from this tuple and every
+ * client derives its tabs from it, so a type added here reaches each surface
+ * at once. Each client's style map is typed Record<DocType, ...>, so a type
+ * that is in the tuple but missing from a map fails to compile instead of
+ * dereferencing undefined at render (the docs list crashed on "decision"
+ * when the tuple and the list page's map were two hand-kept copies).
+ */
+export const DOC_TYPES = [
+  "note",
+  "plan",
+  "design",
+  "spec",
+  "investigation",
+  "handoff",
+  // The long body of a `cast decide --doc` decision (session_decisions.doc_id).
+  "decision",
+  // A standing role's two documents (org-roles-standing.md T2): the charter
+  // humans write, and the brief the role keeps as its memory.
+  "charter",
+  "brief",
+] as const;
+export type DocType = (typeof DOC_TYPES)[number];
+
+export const DOC_TYPE_LABELS: Record<DocType, string> = {
+  note: "Note",
+  plan: "Plan",
+  design: "Design",
+  spec: "Spec",
+  investigation: "Investigation",
+  handoff: "Handoff",
+  decision: "Decision",
+  charter: "Charter",
+  brief: "Brief",
+};
+
+/** The label for any stored doc_type; unknown values read as a note, like every client's style fallback. */
+export function docTypeLabel(docType: string | null | undefined): string {
+  return DOC_TYPE_LABELS[docType as DocType] ?? DOC_TYPE_LABELS.note;
+}
+
 export type DocSource =
   | "human"
   | "agent"

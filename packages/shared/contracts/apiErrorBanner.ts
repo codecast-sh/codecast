@@ -102,7 +102,8 @@ export function withSafetyBlock<T extends { session_error?: string | null; pendi
 
 // The kinds that park a session — it won't heal itself, so the row earns the
 // amber badge, the fleet banner, and the revive actions. kind "error" is the
-// one deliberate exclusion: the CLI is still retrying those on its own.
+// one deliberate exclusion: it is a marked client error (opencode/pi) that is
+// shown for information, with no recovery chain behind it.
 export const BLOCKED_BANNER_KINDS: ReadonlySet<string> = new Set([
   "auth",
   "limit",
@@ -231,17 +232,17 @@ const LIMIT_BANNER_RE =
 // the window resets.
 //
 // A status code ("API Error: 529 Overloaded", "API Error: 400 {...}") means
-// an HTTP response came back, and the kind follows the cure. Statuses the CLI
-// retries on its own (408/409/429/5xx) are kind "error" and stay out of the
-// blocked set — badging them paints a mid-retry session as blocked. 401/403
-// are the provider refusing the credential — /login is the cure, kind "auth".
-// Every other status (400 invalid request, 404, 413…) is terminal: the CLI
-// gives up and the turn dies at the prompt exactly like a connection drop, so
-// kind "fatal" joins the blocked set and a plain "continue" retries it.
+// an HTTP response came back. 401/403 are the provider refusing the
+// credential — /login is the cure, kind "auth". Every other status is kind
+// "fatal": the turn is dead at the prompt and a plain "continue" retries it.
+// That includes the statuses Claude Code retries on its own (408/409/429/5xx):
+// its retry attempts are written as `system` api_error entries, which the
+// parser never syncs, and the assistant banner lands only once the retries
+// are spent. A synced "API Error: 500" is therefore the give-up, not a
+// mid-retry state, and a session left on one sat unbadged for as long as
+// nobody opened it.
 const GENERIC_BANNER_RE = /^api error\b/i;
 const STATUSFUL_BANNER_RE = /^api error:?\s*\(?(\d{3})\b/i;
-const RETRYABLE_STATUS = (status: number): boolean =>
-  status === 408 || status === 409 || status === 429 || status >= 500;
 
 // One 429 is not like another. A transient 429 (burst throttling) is retried
 // by the CLI and stays kind "error". A subscription-limit 429 carries the
@@ -323,8 +324,7 @@ export function classifyApiErrorBanner(
   const statusMatch = trimmed.match(STATUSFUL_BANNER_RE);
   if (statusMatch) {
     const status = Number(statusMatch[1]);
-    if (status === 401 || status === 403) return "auth";
-    return RETRYABLE_STATUS(status) ? "error" : "fatal";
+    return status === 401 || status === 403 ? "auth" : "fatal";
   }
   if (GENERIC_BANNER_RE.test(trimmed)) return "connection";
   return null;

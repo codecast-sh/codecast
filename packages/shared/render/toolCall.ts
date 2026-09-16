@@ -658,38 +658,101 @@ export function toolSummary(tc: ToolCallLike): string {
 // families where verb + subject wouldn't read as a phrase omit it and always
 // count. `path` marks the families whose subject is a file path, which clips
 // from the other end (see clipSubject).
-type ToolPhrase = { verb?: string; path?: boolean; one: string; many: (n: number) => string };
+//
+// `doing` is the present tense form the activity line uses while the tool is
+// still running ("editing chat.ts", "searching for wakeSig"); it takes the
+// same subject `verb` does. `doingAlone` marks a family whose present form is
+// already a whole phrase ("asking a question", "updating todos"), so the
+// subject is dropped rather than appended.
+type ToolPhrase = {
+  verb?: string;
+  doing?: string;
+  doingAlone?: boolean;
+  path?: boolean;
+  one: string;
+  many: (n: number) => string;
+};
+
+const WEB_SEARCH_TOOLS = new Set(["WebSearch", "web_search", "Web search:"]);
+const WEB_FETCH_TOOLS = new Set(["WebFetch", "web_fetch", "web__run", "open_page", "open_page_with_find"]);
+const CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__";
 
 function toolPhrase(rawName: string): ToolPhrase {
-  if (isReadTool(rawName)) return { verb: "read", path: true, one: "read 1 file", many: (n) => `read ${n} files` };
+  if (isReadTool(rawName)) return { verb: "read", doing: "reading", path: true, one: "read 1 file", many: (n) => `read ${n} files` };
   if (isEditTool(rawName) || rawName === "apply_patch" || rawName === "fileChange" || rawName === "NotebookEdit") {
-    return { verb: "edited", path: true, one: "1 edit", many: (n) => `${n} edits` };
+    return { verb: "edited", doing: "editing", path: true, one: "1 edit", many: (n) => `${n} edits` };
   }
-  if (isWriteTool(rawName)) return { verb: "wrote", path: true, one: "wrote 1 file", many: (n) => `wrote ${n} files` };
-  if (isShellTool(rawName)) return { verb: "ran", one: "ran 1 command", many: (n) => `ran ${n} commands` };
+  if (isWriteTool(rawName)) return { verb: "wrote", doing: "writing", path: true, one: "wrote 1 file", many: (n) => `wrote ${n} files` };
+  if (isShellTool(rawName)) return { verb: "ran", doing: "running", one: "ran 1 command", many: (n) => `ran ${n} commands` };
+  if (rawName === "list_dir") return { verb: "searched", doing: "listing", path: true, one: "1 search", many: (n) => `${n} searches` };
   if (isGrepTool(rawName) || isGlobTool(rawName) || rawName === "code_search" || rawName === "code_analysis") {
-    return { verb: "searched", one: "1 search", many: (n) => `${n} searches` };
+    return { verb: "searched", doing: "searching for", one: "1 search", many: (n) => `${n} searches` };
   }
-  if (rawName === "WebFetch" || rawName === "web_fetch" || rawName === "WebSearch" || rawName === "web_search" || rawName === "web__run" || rawName === "open_page" || rawName === "open_page_with_find" || rawName === "Web search:") {
-    return { verb: "looked up", one: "1 web lookup", many: (n) => `${n} web lookups` };
+  if (WEB_SEARCH_TOOLS.has(rawName)) {
+    return { verb: "looked up", doing: "searching the web for", one: "1 web lookup", many: (n) => `${n} web lookups` };
   }
-  if (isAgentTool(rawName)) return { one: "ran 1 agent", many: (n) => `ran ${n} agents` };
-  if (isTodoTool(rawName)) return { one: "updated todos", many: () => "updated todos" };
+  if (WEB_FETCH_TOOLS.has(rawName)) {
+    return { verb: "looked up", doing: "browsing", one: "1 web lookup", many: (n) => `${n} web lookups` };
+  }
+  if (isAgentTool(rawName)) return { doing: "running an agent", doingAlone: true, one: "ran 1 agent", many: (n) => `ran ${n} agents` };
+  if (isTodoTool(rawName)) return { doing: "updating todos", doingAlone: true, one: "updated todos", many: () => "updated todos" };
+  if (isAskTool(rawName) || rawName === "request_user_input") {
+    const label = formatToolName(rawName) || rawName;
+    return { verb: label, doing: "asking a question", doingAlone: true, one: label, many: (n) => `${label} ×${n}` };
+  }
+  if (rawName === CHROME_TOOL_PREFIX + "navigate") {
+    const label = formatToolName(rawName) || rawName;
+    return { verb: label, doing: "browsing", one: label, many: (n) => `${label} ×${n}` };
+  }
+  if (rawName.startsWith(CHROME_TOOL_PREFIX)) {
+    const label = formatToolName(rawName) || rawName;
+    return { verb: label, doing: "using the browser", doingAlone: true, one: label, many: (n) => `${label} ×${n}` };
+  }
   switch (rawName) {
     case "update_plan":
     case "enter_plan_mode":
     case "exit_plan_mode":
     case "EnterPlanMode":
-    case "ExitPlanMode": return { one: "updated plan", many: () => "updated plan" };
-    case "view_image": return { verb: "viewed", path: true, one: "viewed 1 image", many: (n) => `viewed ${n} images` };
+    case "ExitPlanMode": return { doing: "updating the plan", doingAlone: true, one: "updated plan", many: () => "updated plan" };
+    case "view_image": return { verb: "viewed", doing: "viewing", path: true, one: "viewed 1 image", many: (n) => `viewed ${n} images` };
     case "image_gen__imagegen":
     case "image_gen":
-    case "image_edit": return { verb: "generated", one: "generated 1 image", many: (n) => `generated ${n} images` };
+    case "image_edit": return { verb: "generated", doing: "generating an image", doingAlone: true, one: "generated 1 image", many: (n) => `generated ${n} images` };
+    case "Skill": return { verb: "ran", doing: "running", one: "ran 1 skill", many: (n) => `ran ${n} skills` };
+    case "StructuredOutput": return { doing: "returning a result", doingAlone: true, one: "returned a result", many: () => "returned a result" };
     default: {
       const label = formatToolName(rawName) || rawName;
-      return { verb: label, one: label, many: (n) => `${label} ×${n}` };
+      return { verb: label, doing: `using ${label}`, doingAlone: true, one: label, many: (n) => `${label} ×${n}` };
     }
   }
+}
+
+// The one line subject of a tool call: a shell command is named by its
+// program (shellLead), never its argv; everything else by toolSummary. Multi
+// line input (a heredoc, a chained shell) collapses to one line first, so a
+// clip spends its budget on words rather than indentation.
+function toolSubject(action: ToolCallLike): string {
+  const raw = isShellTool(action.name) ? shellLead(shellCommand(action)) : toolSummary(action);
+  return raw.replace(/\s+/g, " ").trim();
+}
+
+// The longest activity line a row shows, and the room its subject gets.
+export const ACTIVITY_TEXT_MAX = 80;
+const ACTIVITY_SUBJECT_BUDGET = 56;
+
+// What the agent is doing RIGHT NOW, in present tense, subject first:
+// "editing chat.ts", "running npx tsc", "searching for wakeSig",
+// "browsing stripe.com", "asking a question". One tool call in, one short
+// line out; "" when the call has no phrase (unparsed args). Every client
+// family the summary knows (Claude, Codex, OpenCode, Pi, Grok) resolves
+// through the same toolPhrase table the receipt chip uses.
+export function activityLine(tc: ToolCallLike): string {
+  const { doing, doingAlone, path } = toolPhrase(tc.name);
+  if (!doing) return "";
+  if (doingAlone) return truncateStr(doing, ACTIVITY_TEXT_MAX);
+  const subject = clipSubject(toolSubject(tc), ACTIVITY_SUBJECT_BUDGET, path === true);
+  if (!subject) return "";
+  return truncateStr(`${doing} ${subject}`, ACTIVITY_TEXT_MAX);
 }
 
 // Aggregate tool counts into a human phrase: "read 3 files · ran 2 commands".
@@ -750,10 +813,7 @@ export function describeSmallToolGroup(actions: readonly ToolCallLike[]): string
   let previousVerb = "";
   for (const action of actions) {
     const { verb, path } = toolPhrase(action.name);
-    // Multi-line commands (heredocs, chained shell) collapse to one line first,
-    // so the clip spends its budget on words rather than indentation.
-    const raw = isShellTool(action.name) ? shellLead(shellCommand(action)) : toolSummary(action);
-    const subject = clipSubject(raw.replace(/\s+/g, " ").trim(), budget, path === true);
+    const subject = clipSubject(toolSubject(action), budget, path === true);
     if (!verb || !subject) return "";
     parts.push(verb === previousVerb ? subject : `${verb} ${subject}`);
     previousVerb = verb;

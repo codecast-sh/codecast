@@ -32,6 +32,8 @@ import {
   describeToolGroup,
   describeSmallToolGroup,
   shellLead,
+  activityLine,
+  ACTIVITY_TEXT_MAX,
 } from "./index";
 
 const tc = (name: string, input: unknown) => ({
@@ -532,5 +534,66 @@ describe("browser_batch envelopes", () => {
 
   it("returns blank outcomes for a result that has not arrived", () => {
     expect(splitBrowserBatchResult("", 2)).toEqual([{ output: "" }, { output: "" }]);
+  });
+});
+
+describe("activityLine", () => {
+  // One case per tool family, across the client names the library knows
+  // (Claude, Codex, OpenCode, Pi, Grok): present tense, subject first.
+  const cases: Array<[string, unknown, string]> = [
+    ["Read", { file_path: "/Users/me/src/app/daemon.ts" }, "reading app/daemon.ts"],
+    ["file_read", { path: "/home/me/code/x/b.ts" }, "reading x/b.ts"],
+    ["read_file", { target_file: "/Users/me/src/app/a.ts" }, "reading app/a.ts"],
+    ["Edit", { file_path: "/Users/me/src/app/chat.ts" }, "editing app/chat.ts"],
+    ["edit", { filePath: "/Users/me/src/app/chat.ts" }, "editing app/chat.ts"],
+    ["search_replace", { file_path: "/Users/me/src/app/chat.ts" }, "editing app/chat.ts"],
+    ["apply_patch", { input: "*** Update File: /Users/me/src/app/p.ts\n" }, "editing app/p.ts"],
+    ["NotebookEdit", { notebook_path: "/Users/me/src/app/nb.ipynb" }, "editing app/nb.ipynb"],
+    ["Write", { file_path: "/Users/me/src/app/new.ts" }, "writing app/new.ts"],
+    ["write", { filePath: "/home/me/code/x/b.ts" }, "writing x/b.ts"],
+    ["Bash", { command: "cd packages/web && npx tsc --noEmit" }, "running npx tsc"],
+    ["shell_command", { cmd: "bun test" }, "running bun test"],
+    ["run_terminal_command", { command: "ls -la" }, "running ls"],
+    ["Grep", { pattern: "wakeSig" }, "searching for wakeSig"],
+    ["grep", { pattern: "TODO" }, "searching for TODO"],
+    ["Glob", { pattern: "**/*.ts" }, "searching for **/*.ts"],
+    ["list_dir", { target_directory: "/Users/me/src/app/packages/cli" }, "listing app/packages/cli"],
+    ["WebSearch", { query: "react 19 release" }, "searching the web for react 19 release"],
+    ["WebFetch", { url: "https://stripe.com/docs/api" }, "browsing stripe.com/docs/api"],
+    ["open_page", { url: "https://www.example.com/" }, "browsing example.com"],
+    ["mcp__claude-in-chrome__navigate", { url: "https://stripe.com/" }, "browsing stripe.com"],
+    ["mcp__claude-in-chrome__computer", { action: "screenshot" }, "using the browser"],
+    ["AskUserQuestion", { questions: [{ question: "Ship it?" }] }, "asking a question"],
+    ["request_user_input", { questions: [{ question: "Ship it?" }] }, "asking a question"],
+    ["Task", { description: "explore the store" }, "running an agent"],
+    ["spawn_subagent", { description: "explore" }, "running an agent"],
+    ["TodoWrite", { todos: [1, 2] }, "updating todos"],
+    ["update_plan", { plan: [1, 2] }, "updating the plan"],
+    ["view_image", { path: "/Users/me/src/app/shot.png" }, "viewing app/shot.png"],
+    ["image_gen", { prompt: "a cat" }, "generating an image"],
+    ["Skill", { skill: "commit" }, "running /commit"],
+    ["StructuredOutput", { verdict: "ok" }, "returning a result"],
+    ["mcp__svc__do_thing", {}, "using Do Thing"],
+  ];
+  it.each(cases)("%s reads as a present tense line", (name, input, expected) => {
+    expect(activityLine(tc(name, input))).toBe(expected);
+  });
+
+  it("returns '' when the call has no subject to name", () => {
+    expect(activityLine(tc("Bash", "{bad"))).toBe("");
+    expect(activityLine(tc("Read", {}))).toBe("");
+  });
+
+  it("collapses multi line commands and keeps a path's filename when clipping", () => {
+    expect(activityLine(tc("Bash", { command: "cat > /tmp/probe.mjs <<'EOF'\nimport fs\nEOF" }))).toBe("running cat");
+    const deep = "/Users/me/src/" + "dir/".repeat(20) + "leaf.ts";
+    const line = activityLine(tc("Edit", { file_path: deep }));
+    expect(line.startsWith("editing ")).toBe(true);
+    expect(line.endsWith("leaf.ts")).toBe(true);
+    expect(line.length).toBeLessThanOrEqual(ACTIVITY_TEXT_MAX);
+  });
+
+  it("caps a long subject", () => {
+    expect(activityLine(tc("WebSearch", { query: "q".repeat(200) })).length).toBeLessThanOrEqual(ACTIVITY_TEXT_MAX);
   });
 });

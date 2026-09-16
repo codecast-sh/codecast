@@ -37,6 +37,7 @@ export * from "./vaultMirror";
 export * from "./terminalStream";
 export * from "./callRoomKeys";
 export * from "./recordingAudio";
+export * from "./transcribeLanguage";
 export * from "./callPush";
 export * from "./transcriptChunk";
 // The row a finished huddle leaves in its chat room or session: one formatter
@@ -82,6 +83,7 @@ export * from "./prRefs";
 export * from "./triggerEvents";
 export * from "./fence";
 export * from "./triggerPrecheck";
+export * from "./triggerLifecycle";
 // Not re-exported here, imported by path: orgProposal (the fenced block
 // `cast org init` decisions carry) and browserPaneOffer (an agent offering a
 // page as a pane). Both sit off the CLI boot graph on purpose
