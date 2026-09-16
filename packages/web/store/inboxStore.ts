@@ -1702,6 +1702,9 @@ export type ClientUI = {
   // Sidebar subsection rows pinned to the top of the rail (lib/sidebarPins).
   // Structural shape rather than the SidebarPin import: sidebarPins.ts imports
   // this store, and a type import back the other way invites a require cycle.
+  // Stamped (STAMPED_UI_KEYS): a per-user shortcut list, so a pin made on one
+  // device stays pinned on the others. Unstamped, local_wins let an empty
+  // array on a second client clobber the pin (ct-51761).
   sidebar_pins?: Array<{ kind: "project" | "view" | "channel"; id: string; label: string }>;
   // The Threads page's "include agent sessions" toggle. Off unless exactly
   // true. Stamped (STAMPED_UI_KEYS): a per-user view preference.
@@ -5870,6 +5873,9 @@ export const STAMPED_UI_KEYS = new Set([
   "sounds_enabled", "chat_sounds_enabled", "session_sounds_enabled",
   "call_sounds_enabled", "walkie_sounds_enabled", "ui_sounds_enabled",
   "sound_volume",
+  // Pins to the top of the rail follow the user. Layout-ish neighbors
+  // (sidebar_collapsed, zen, theme, nav_sections) stay unstamped on purpose.
+  "sidebar_pins",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -12435,13 +12441,22 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
               // Stamps ride along with their base key below, never alone — a
               // bare stale ":ts" would misdate whatever value is already live.
               if (uk.endsWith(":ts")) continue;
-              if (uv != null && (curUI as any)[uk] == null) {
+              // Fill keys the live bag is missing, and let a NEWER cached stamp
+              // overlay an older live value. `[]` is not null, so a boot that
+              // took an empty server list wholesale would otherwise keep it
+              // and drop a pin still on disk (ct-51761).
+              const liveVal = (curUI as any)[uk];
+              const liveTs = (curUI as any)[`${uk}:ts`];
+              const cachedTs = (cachedUI as any)[`${uk}:ts`];
+              const liveMissing = liveVal == null;
+              const cachedNewer = typeof cachedTs === "number" &&
+                (typeof liveTs !== "number" || cachedTs > liveTs);
+              if (uv != null && (liveMissing || cachedNewer)) {
                 uiPatch[uk] = uv;
-                const ts = (cachedUI as any)[`${uk}:ts`];
                 // Keep the ORIGINAL write time (updateClientUI honors a passed
                 // stamp) so this boot-time restore can't outrank a genuinely
                 // newer write from another device.
-                if (typeof ts === "number") uiPatch[`${uk}:ts`] = ts;
+                if (typeof cachedTs === "number") uiPatch[`${uk}:ts`] = cachedTs;
               }
             }
             if (Object.keys(uiPatch).length > 0) state.updateClientUI(uiPatch);

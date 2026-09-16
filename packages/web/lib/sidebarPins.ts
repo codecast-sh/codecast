@@ -10,8 +10,9 @@ import { useInboxStore } from "../store/inboxStore";
 // the fallback label) with its unpin affordance — silently dropping it would
 // make pins feel lossy.
 //
-// Persisted in clientState.ui (the per-user LWW prefs bag), so pins follow the
-// user across devices like every other layout preference.
+// Persisted in clientState.ui.sidebar_pins, a stamped per-user LWW key, so a
+// pin made on one device stays pinned on the others. Unstamped, an empty list
+// on a second client clobbered the pin.
 
 export type SidebarPinKind = "project" | "view" | "channel";
 
