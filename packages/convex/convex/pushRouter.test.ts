@@ -559,6 +559,32 @@ describe("machine presence routing", () => {
     expect(reflushes(ctx)).toHaveLength(1);
   });
 
+  test("a DM at the Mac past the hold window ships — chat is not a session idle", async () => {
+    const later = NOW + HOLD_WHILE_ACTIVE_MS;
+    freezeTime(later);
+    const ctx = createCtx({
+      users: [MACHINE_USER],
+      user_presence: [idleClientPresence(later)],
+      devices: [machineDevice(later)],
+      push_outbox: [
+        {
+          _id: "push_outbox_1",
+          user_id: "users_1",
+          type: "chat_dm",
+          title: "Samvit",
+          body: "lunch?",
+          created_at: NOW,
+          due_at: later,
+          deferred: true,
+        },
+      ],
+    });
+    await performPushFlush(ctx, "users_1");
+    expect(sentPushes(ctx)).toHaveLength(1);
+    expect(sentPushes(ctx)[0].args.channel_id).toBe("chat");
+    expect(ctx.tables.push_outbox).toHaveLength(0);
+  });
+
   // Same state, opted out: the shipped escalation still fires.
   test("opted out, held row past its window: escalates as before", async () => {
     const later = NOW + HOLD_WHILE_ACTIVE_MS;

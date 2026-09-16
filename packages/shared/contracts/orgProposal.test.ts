@@ -26,7 +26,7 @@ describe("org proposal block", () => {
 
 // Staffing changes (org-staffing.md S4): one validator per kind, the spec
 // envelope, the accept order and the one-line describer.
-import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, describeOrgChange, isOrgChange, orderOrgChanges, orgChangeError, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
+import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, describeOrgChange, describeTenure, isOrgChange, orderOrgChanges, orgChangeError, orgTenureError, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
 
 const GOOD: Record<OrgChange["kind"], OrgChange> = {
   role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
@@ -40,6 +40,9 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
   adopt: { kind: "adopt", handle: "chief-of-staff", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "Platform" },
+  plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
+  task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
+  project_status: { kind: "project_status", project: "Legacy", status: "paused", reason: "no activity 30d" },
 };
 
 describe("org change validation", () => {
@@ -109,10 +112,10 @@ describe("parseOrgProposalSpec", () => {
 });
 
 describe("orderOrgChanges and describeOrgChange", () => {
-  test("projects, role, move, scope, budget, trust, routine, adopt, retire; unknown last; ties keep order", () => {
-    const rows = [GOOD.retire, GOOD.adopt, GOOD.routine, GOOD.trust, GOOD.budget, GOOD.scope, GOOD.move, GOOD.project_meta, { kind: "role", name: "B", handle: "bb" } as OrgChange, GOOD.role, GOOD.projects, null];
+  test("record syncs, projects, role, move, scope, budget, trust, routine, adopt, retire; unknown last; ties keep order", () => {
+    const rows = [GOOD.retire, GOOD.adopt, GOOD.routine, GOOD.trust, GOOD.budget, GOOD.scope, GOOD.move, GOOD.project_meta, { kind: "role", name: "B", handle: "bb" } as OrgChange, GOOD.role, GOOD.projects, GOOD.project_status, GOOD.task_status, GOOD.plan_status, null];
     expect(orderOrgChanges(rows, (c) => c).map((c) => c ? (c.kind === "role" ? `role:${c.handle}` : c.kind) : "none"))
-      .toEqual(["projects", "role:bb", "role:growth", "project_meta", "move", "scope", "budget", "trust", "routine", "adopt", "retire", "none"]);
+      .toEqual(["task_status", "plan_status", "project_status", "projects", "role:bb", "role:growth", "project_meta", "move", "scope", "budget", "trust", "adopt", "routine", "retire", "none"]);
     for (const kind of ORG_CHANGE_KINDS) expect(typeof ORG_CHANGE_APPLY_RANK[kind], kind).toBe("number");
   });
   test("one line per kind, in the words the walk and the ghosts use", () => {
@@ -126,6 +129,46 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.routine)).toBe("routine on @growth: Weekly funnel every 7d");
     expect(describeOrgChange(GOOD.project_meta)).toBe("charter pr-1 owner @growth p1: Ship the onboarding");
     expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @chief-of-staff's standing session");
+    expect(describeOrgChange(GOOD.plan_status)).toBe("mark plan pl-7 done");
+    expect(describeOrgChange(GOOD.task_status)).toBe("mark task ct-42 done");
+    expect(describeOrgChange(GOOD.project_status)).toBe("mark project Legacy paused");
+  });
+});
+
+// Bring records in line and tenure (org-staffing.md S9, S10).
+describe("status changes, tenure and horizon", () => {
+  test("each status kind names its faults; the reason is required", () => {
+    expect(orgChangeError({ kind: "plan_status", plan: "pl-1", status: "paused", reason: "x" })).toContain("done, abandoned, active");
+    expect(orgChangeError({ kind: "plan_status", plan: "pl-1", status: "done" })).toContain("reason");
+    expect(orgChangeError({ kind: "task_status", status: "done", reason: "x" })).toContain("task ref");
+    expect(orgChangeError({ kind: "task_status", task: "ct-1", status: "in_progress", reason: "x" })).toContain("done, dropped, open, backlog");
+    expect(orgChangeError({ kind: "task_status", task: "ct-1", status: "open", reason: "filed in bulk, never picked up" })).toBeNull();
+    expect(orgChangeError({ kind: "project_status", project: "P", status: "planning", reason: "x" })).toContain("paused, done, active");
+  });
+  test("tenure on a role change: standing, or a program with one end and a then", () => {
+    const role = (tenure: any) => ({ kind: "role", name: "Push lead", handle: "push", tenure });
+    expect(orgChangeError(role({ kind: "standing" }))).toBeNull();
+    expect(orgChangeError(role({ kind: "program", ends: { plan: "pl-3" }, then: "retire" }))).toBeNull();
+    expect(orgChangeError(role({ kind: "program", ends: { date: 1_800_000_000_000 }, then: "review" }))).toBeNull();
+    expect(orgChangeError(role({ kind: "program", ends: { plan: "pl-3", project: "P" }, then: "retire" }))).toContain("exactly one");
+    expect(orgChangeError(role({ kind: "program", ends: { date: "tomorrow" }, then: "retire" }))).toContain("unix ms");
+    expect(orgChangeError(role({ kind: "program", ends: { plan: "pl-3" }, then: "party" }))).toContain("retire or review");
+    expect(orgChangeError(role({ kind: "seasonal" }))).toContain("standing or program");
+    expect(orgTenureError({ kind: "program", ends: { plan: "" }, then: "retire" })).toContain("is a ref");
+    expect(describeTenure({ kind: "program", ends: { plan: "pl-3" }, then: "retire" })).toBe("program · ends with pl-3, then retire");
+    // A date reads the way a person says it. The year rides along only when it
+    // is not the current one, so these two are built relative to now and stay
+    // true whatever year the suite runs in.
+    const thisYear = new Date().getUTCFullYear();
+    expect(describeTenure({ kind: "program", ends: { date: Date.UTC(thisYear, 11, 1) }, then: "review" })).toBe("program · ends Dec 1, then review");
+    expect(describeTenure({ kind: "program", ends: { date: Date.UTC(thisYear + 2, 11, 1) }, then: "review" })).toBe(`program · ends Dec 1 ${thisYear + 2}, then review`);
+    expect(describeTenure({ kind: "standing" })).toBe("standing");
+    expect(describeOrgChange(role({ kind: "program", ends: { plan: "pl-3" }, then: "retire" }) as any)).toContain("(program · ends with pl-3, then retire)");
+  });
+  test("a project create carries a horizon", () => {
+    expect(orgChangeError({ kind: "projects", changes: [{ op: "create", title: "Migration", horizon: "bounded" }] })).toBeNull();
+    expect(orgChangeError({ kind: "projects", changes: [{ op: "create", title: "Migration", horizon: "forever" }] })).toContain("ongoing, bounded");
+    expect(describeOrgChange({ kind: "projects", changes: [{ op: "create", title: "Migration", horizon: "bounded" }] })).toBe("create project Migration (bounded)");
   });
 });
 
@@ -137,5 +180,15 @@ describe("file change", () => {
     expect(describeOrgChange({ kind: "file", plan: "pl-1", project: "Platform" })).toBe("file plan pl-1 under project Platform");
     const rows = [{ kind: "role", name: "A", handle: "a" }, { kind: "file", plan: "pl-1", project: "P" }, { kind: "projects", changes: [] }] as any[];
     expect(orderOrgChanges(rows, (r) => r).map((r) => r.kind)).toEqual(["projects", "file", "role"]);
+  });
+});
+
+describe("a proposal carries one change per subject", () => {
+  test("the same task status twice is refused with both positions named; different subjects pass", () => {
+    const c = (task: string) => ({ change: { kind: "task_status", task, status: "open", reason: "never worked" }, rationale: "r" });
+    const twice = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [c("ct-1"), c("ct-2"), c("ct-1")] });
+    expect(twice.spec).toBeNull();
+    expect(twice.errors).toEqual(["changes[2] (mark task ct-1 open) repeats changes[0]: one change per subject"]);
+    expect(parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [c("ct-1"), c("ct-2")] }).errors).toEqual([]);
   });
 });

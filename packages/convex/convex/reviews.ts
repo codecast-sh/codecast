@@ -1,9 +1,10 @@
 import { v } from "convex/values";
-import { mutation, query, action, internalQuery } from "./functions";
+import { mutation, query, action, internalQuery, internalMutation } from "./functions";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser, requireUserOrToken } from "./lib/auth";
 import { requireAccessiblePullRequest } from "./lib/access";
+import type { Doc } from "./_generated/dataModel";
 import { githubSentence } from "./prCli";
 import { pendingRowsFor, withoutOthersPending } from "./codeComments";
 import { sendNotesToSession } from "./reviewNotes";
@@ -323,7 +324,15 @@ export const reviewerFor = internalQuery({
     return {
       github_token: user.github_access_token ?? null,
       github_username: user.github_username ?? null,
-      pr: { repository: pr.repository, number: pr.number, head_sha: pr.head_sha ?? null, state: pr.state },
+      pr: {
+        repository: pr.repository,
+        number: pr.number,
+        head_sha: pr.head_sha ?? null,
+        state: pr.state,
+        // The session that owns the pull request, when one is bound: the
+        // review reaches it as a message the moment GitHub accepts it.
+        owner_conversation_id: pr.shepherd_conversation_id ? String(pr.shepherd_conversation_id) : null,
+      },
     };
   },
 });
@@ -416,6 +425,22 @@ export async function submitReviewWithNotes(
         commit_sha: reviewer.pr.head_sha ?? undefined,
         comments: posted,
       });
+      // The owning session hears the whole review as one message: verdict,
+      // summary and every note. The webhook echo of this review changes no
+      // row we have not already written, so it does not wake the session a
+      // second time.
+      const delivered: any = reviewer.pr.owner_conversation_id
+        ? await ctx.runMutation(internal.reviews.deliverSubmittedReview, {
+            user_id: userId,
+            pull_request_id: args.pull_request_id,
+            conversation_ref: reviewer.pr.owner_conversation_id,
+            note_ids: notes.map((n) => n._id),
+            github_review_id: result.review_id,
+            state: EVENT_STATE[args.event],
+            body: args.body,
+            review_url: result.review_url,
+          })
+        : null;
       return {
         repository: reviewer.pr.repository,
         number: reviewer.pr.number,
@@ -424,12 +449,63 @@ export async function submitReviewWithNotes(
         notes: notes.length,
         as: reviewer.github_username,
         ...stamped,
+        delivered_to: delivered,
       };
     } catch (error) {
       return { error: githubSentence(error) };
     }
   }
 }
+
+/**
+ * Hand a review GitHub just accepted to the session that owns the pull
+ * request. Best effort: the review is already on GitHub, so a session that
+ * cannot take a message (released, killed, not the reviewer's to send to)
+ * costs the reviewer nothing but a line in the result.
+ */
+export const deliverSubmittedReview = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    pull_request_id: v.id("pull_requests"),
+    conversation_ref: v.string(),
+    note_ids: v.array(v.id("review_comments")),
+    github_review_id: v.optional(v.number()),
+    state: v.union(v.literal("approved"), v.literal("changes_requested"), v.literal("commented")),
+    body: v.optional(v.string()),
+    review_url: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db.get(args.pull_request_id);
+    if (!pr) return null;
+    const rows: Doc<"review_comments">[] = [];
+    for (const id of args.note_ids) {
+      const row = await ctx.db.get(id);
+      if (row) rows.push(row);
+    }
+    try {
+      const sent = await sendNotesToSession(ctx, args.user_id, args.conversation_ref, rows, {
+        repository: pr.repository,
+        ref: pr.head_sha ?? undefined,
+        pullRequest: { number: pr.number, url: args.review_url ?? codecastPrUrl(pr.repository, pr.number) },
+        verdict: args.state,
+        summary: args.body,
+      });
+      // GitHub's webhook for this same review may still be on its way, or may
+      // have landed before our row was written. Either way the stamp tells its
+      // delayed wake that the session has already heard the review.
+      if (args.github_review_id != null) {
+        const row = await ctx.db
+          .query("reviews")
+          .withIndex("by_github_review_id", (q) => q.eq("github_review_id", args.github_review_id))
+          .first();
+        if (row) await ctx.db.patch(row._id, { session_delivered_at: Date.now() });
+      }
+      return { conversation_id: String(sent.conversation_id), short_id: sent.short_id ?? null, notes: sent.sent };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  },
+});
 
 export const callerId = internalQuery({
   args: { api_token: v.optional(v.string()) },
@@ -464,7 +540,7 @@ export const handPendingToSession = mutation({
     return await sendNotesToSession(ctx, userId, ref, rows, {
       repository: pr.repository,
       ref: pr.head_sha ?? undefined,
-      url: codecastPrUrl(pr.repository, pr.number),
+      pullRequest: { number: pr.number, url: codecastPrUrl(pr.repository, pr.number) },
     });
   },
 });

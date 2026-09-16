@@ -39,6 +39,12 @@ describe("offline boot auth", () => {
 
     expect(hydrate).toBeGreaterThan(-1);
     expect(release).toBeGreaterThan(hydrate);
+    // Phone: a sync SQLite read fills the store at module eval so kill-and-reopen
+    // paints the cached inbox without waiting on that message preload.
+    const paintRead = source.indexOf("loadPaintCacheSync()");
+    const firstAwait = source.indexOf("await loadCache(HYDRATION_CRITICAL_READ_KEYS)");
+    expect(paintRead).toBeGreaterThan(-1);
+    expect(paintRead).toBeLessThan(firstAwait);
     expect(source).toContain(
       "const restoreId = requestedId ?? ownId ?? st.clientState?.current_conversation_id",
     );

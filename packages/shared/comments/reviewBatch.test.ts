@@ -123,3 +123,34 @@ describe("buildReviewBatchPrompt", () => {
     expect(prompt).toContain("not shown here");
   });
 });
+
+describe("a submitted review", () => {
+  const notes = [{ file_path: "src/a.ts", line_number: 3, content: "rename" }];
+
+  test("leads with the verdict, then the summary, then the notes", () => {
+    const prompt = buildReviewBatchPrompt({
+      actorName: "Ashot",
+      repository: "codecast-sh/codecast",
+      ref: "abcdef1234567890",
+      pullRequest: { number: 47, url: "https://codecast.sh/pr/codecast-sh/codecast/47" },
+      verdict: "changes_requested",
+      summary: "Two things.",
+      notes,
+    });
+    const lines = prompt.split("\n");
+    expect(lines[0]).toBe("Ashot requested changes on codecast-sh/codecast#47@abcdef1 with 1 review note.");
+    expect(prompt).toContain("blocks the merge");
+    expect(prompt.indexOf("Two things.")).toBeLessThan(prompt.indexOf("File: src/a.ts"));
+    expect(prompt).toContain("Read each spot in the repository at commit abcdef1234567890 before answering.");
+    expect(prompt.trimEnd().endsWith("The review: https://codecast.sh/pr/codecast-sh/codecast/47")).toBe(true);
+  });
+
+  test("an approval with nothing else says so in one line and asks for nothing", () => {
+    const prompt = buildReviewBatchPrompt({
+      actorName: "Ashot", repository: "codecast-sh/codecast", pullRequest: { number: 47 }, verdict: "approved", notes: [],
+    });
+    expect(prompt.split("\n")[0]).toBe("Ashot approved codecast-sh/codecast#47.");
+    expect(prompt).toContain("approves the change");
+    expect(prompt).not.toContain("Read each spot");
+  });
+});

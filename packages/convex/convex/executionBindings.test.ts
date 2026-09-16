@@ -1135,7 +1135,7 @@ describe("conversation-global ordered delivery", () => {
       resolutionEvidence: "transcript contains command-1 exactly once",
       now: 36,
     });
-    expect(first.delivery_status).toBe("correlated-delivered");
+    expect((await db.get(firstId)).delivery_status).toBe("correlated-delivered");
 
     const secondClaim = await claimDelivery(ctx, secondId);
     const secondStarted = await startDeliveryInDb(ctx, USER, {
@@ -1154,7 +1154,7 @@ describe("conversation-global ordered delivery", () => {
         now: 38.1,
       }),
     ).toEqual({ accepted: true });
-    expect(second.delivery_status).toBe("delivered");
+    expect((await db.get(secondId)).delivery_status).toBe("delivered");
 
     await publishRuntimeDispositionInDb(ctx, USER, {
       conversationId: CONVERSATION,

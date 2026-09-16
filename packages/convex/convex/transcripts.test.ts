@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import {
   appendRecordingSegments,
+  appendSegments,
   asrTranscriptionSession,
   attachRecording,
   beat,
   finishRecordingTranscript,
+  stop,
   huddleDigestTarget,
   needsServerTranscription,
   ownRoomTarget,
@@ -22,6 +24,7 @@ import { makeFakeDb } from "./testDb";
 import {
   CALL_MEMBER_STALE_MS,
   MAX_RECORDING_MS,
+  REC_LEASE_STALE_MS,
   RECORDING_BYTES_PER_SECOND,
   TRANSCRIBE_MAX_BYTES,
 } from "@codecast/shared/contracts";
@@ -41,12 +44,19 @@ describe("recLeaseExpired", () => {
     // The first beat is fifteen seconds in; a tab that died before it still
     // has to be swept, and a recording that just began must not be.
     expect(recLeaseExpired({ started_at: now - 5_000 }, now)).toBe(false);
-    expect(recLeaseExpired({ started_at: now - CALL_MEMBER_STALE_MS - 1 }, now)).toBe(true);
+    expect(recLeaseExpired({ started_at: now - REC_LEASE_STALE_MS - 1 }, now)).toBe(true);
   });
 
-  test("the window is a seat's, so a missed beat reads exactly like a missed lease", () => {
-    expect(recLeaseExpired({ started_at: 0, last_beat: now - CALL_MEMBER_STALE_MS + 1 }, now)).toBe(false);
-    expect(recLeaseExpired({ started_at: 0, last_beat: now - CALL_MEMBER_STALE_MS }, now)).toBe(true);
+  test("a locked-phone recording outlives a seat's 45 second window", () => {
+    // Locking the phone freezes JS heartbeats. A seat-sized lease would end
+    // the transcript a minute in while native capture was still running.
+    expect(recLeaseExpired({ started_at: now - CALL_MEMBER_STALE_MS - 1 }, now)).toBe(false);
+    expect(recLeaseExpired({ started_at: 0, last_beat: now - CALL_MEMBER_STALE_MS }, now)).toBe(false);
+  });
+
+  test("the window is the recording lease, so a missed beat of that length is an orphan", () => {
+    expect(recLeaseExpired({ started_at: 0, last_beat: now - REC_LEASE_STALE_MS + 1 }, now)).toBe(false);
+    expect(recLeaseExpired({ started_at: 0, last_beat: now - REC_LEASE_STALE_MS }, now)).toBe(true);
   });
 });
 
@@ -70,7 +80,7 @@ describe("rec-only mutations refuse huddle transcripts", () => {
   const ctx = (rows: any[]) => {
     const scheduled: { delay: number; name: string; args: any }[] = [];
     return {
-      db: makeFakeDb({ transcripts: rows }),
+      db: makeFakeDb({ transcripts: rows, transcript_segments: [] }),
       auth: {
         async getUserIdentity() {
           return { subject: "ua|session" };
@@ -103,6 +113,42 @@ describe("rec-only mutations refuse huddle transcripts", () => {
     await expect(call(beat, ctx([huddle()]), { transcript_id: "t1" })).rejects.toThrow(
       "Not a recording",
     );
+  });
+
+  test("stopping an already-ended recording moves ended_at to now", async () => {
+    const rec = huddle({
+      room_key: "rec:9f8e7d6c-1234-4abc-9def-0123456789ab",
+      status: "ended",
+      started_at: 1_000,
+      ended_at: 1_000,
+    });
+    const c = ctx([rec]);
+    const before = Date.now();
+    await call(stop, c, { transcript_id: "t1" });
+    const t = await c.db.get("t1" as any);
+    expect(t.ended_at).toBeGreaterThanOrEqual(before);
+    expect(t.status).toBe("ended");
+  });
+
+  test("stopping an already-ended huddle leaves ended_at alone", async () => {
+    const c = ctx([huddle({ status: "ended", started_at: 1_000, ended_at: 2_000 })]);
+    await call(stop, c, { transcript_id: "t1" });
+    expect((await c.db.get("t1" as any)).ended_at).toBe(2_000);
+  });
+
+  test("live recording appends do not invent a Speaker participant", async () => {
+    const rec = huddle({
+      room_key: "rec:9f8e7d6c-1234-4abc-9def-0123456789ab",
+      status: "live",
+    });
+    const c = ctx([rec]);
+    await call(appendSegments, c, {
+      transcript_id: "t1",
+      segments: [
+        { speaker_id: "mic", speaker_name: "Speaker", text: "hello", t0: 0, t1: 1000 },
+      ],
+    });
+    expect((await c.db.get("t1" as any)).participants).toBeUndefined();
   });
 });
 

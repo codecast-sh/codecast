@@ -66,3 +66,15 @@ export function authRenderDecision(opts: {
   }
   return opts.isLoading || opts.isAuthenticated ? "blank" : "children";
 }
+
+// Native splash stays up until the SQLite cache is in the store AND auth is
+// ready to show something. On a warm start loadCacheSync fills sessions at
+// module eval, so this flag is already true and the first frame is the
+// cached list — same local-first boot as web/desktop. The hold is the
+// safety net when the sync read misses (empty disk, older binary).
+export function shouldReleaseSplash(opts: {
+  hydrated: boolean;
+  authDecision: AuthRenderDecision;
+}): boolean {
+  return opts.hydrated && opts.authDecision !== "blank";
+}

@@ -132,11 +132,15 @@ export type BottomAnchoredListOptions = {
 
   /** Where to land on first mount, and on every change of resetKey. Undefined
    *  or null means the bottom, which is what a chat does. An index lands that
-   *  row at the top of the viewport — used to open at the unread rule. */
+   *  row at the top of the viewport. */
   initialIndex?: number | null;
   /** Changing this re-runs the initial landing: a new channel, a new
    *  conversation. Keep it stable or the list re-snaps under the reader. */
   resetKey?: string;
+  /** Skip the bottom pin. A permalink names a row the caller will scroll to;
+   *  landing at the tail first would yank that link away, and following an
+   *  append would do the same. The latch stays up so the tail cannot pull. */
+  holdLanding?: boolean;
 
   /** Older messages exist above and can be fetched. */
   hasMoreAbove?: boolean;
@@ -195,6 +199,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     paddingEnd = 0,
     initialIndex,
     resetKey = "",
+    holdLanding = false,
     hasMoreAbove,
     isLoadingOlder,
     onLoadOlder,
@@ -408,7 +413,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     // virtualizer re-pins on THIS resize (its anchoring covers row sizes and
     // appends), so hold the bottom here while the reader has not scrolled away.
     // The first observation is the baseline, not a change — reacting to it
-    // would drag a list that is landing on the unread rule to the bottom.
+    // would drag a list that is still landing onto a specific row to the bottom.
     let lastHeight = -1;
     const ro = new ResizeObserver(() => {
       const h = sc.clientHeight;
@@ -538,6 +543,15 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
   const landedRef = useRef<string | null>(null);
   useWatchEffect(() => {
     if (count === 0) return;
+    // A permalink is in flight: do not pin to the tail, and do not follow an
+    // append, or the named row is pulled off screen the moment anything lands.
+    // Mark the landing consumed so clearing the link later cannot yank the
+    // reader to the tail.
+    if (holdLanding) {
+      landedRef.current = resetKey;
+      setUserScrolled(true);
+      return;
+    }
     if (landedRef.current === resetKey) return;
     landedRef.current = resetKey;
     setUserScrolled(false);
@@ -568,7 +582,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     return () => clearInterval(id);
     // initialIndex intentionally omitted: the landing spot is read once per
     // resetKey. A live unread watermark must not re-snap a reader mid read.
-  }, [resetKey, count > 0]);
+  }, [resetKey, count > 0, holdLanding]);
 
   // A new list means a fresh landing next time this key comes back.
   useWatchEffect(() => () => { landedRef.current = null; }, [resetKey]);

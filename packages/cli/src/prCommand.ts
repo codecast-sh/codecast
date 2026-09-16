@@ -801,13 +801,19 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .argument("[ref]", "PR reference")
     .description("The notes held in your review of a pull request, not yet sent")
     .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--discard", "Throw every held note away instead of listing them")
     .option("--json", "Machine-readable output")
     .action(async (ref: string | undefined, options) => {
       const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
-      const result = await apiPost(deps, "/cli/pr/notes", locator);
+      const result = await apiPost(deps, "/cli/pr/notes", { ...locator, discard: options.discard || undefined });
       if (result.error) fail(result.error);
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (options.discard) {
+        const n = result.discarded ?? 0;
+        console.log(`${c.green}ok${c.reset} discarded ${n} held ${n === 1 ? "note" : "notes"} on ${c.cyan}${result.repository}#${result.number}${c.reset}`);
         return;
       }
       const notes: any[] = result.notes ?? [];
@@ -882,7 +888,10 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       "Review a pull request on GitHub under your own account\n\n" +
       "A review is your judgement, so it goes out as you and needs your GitHub\n" +
       "account connected. GitHub refuses some reviews by rule, approving your own\n" +
-      "among them, and says so in its own words.",
+      "among them, and says so in its own words.\n\n" +
+      "Every note you hold (`cast pr comment --hold --file f --line n`) leaves with\n" +
+      "it as one review. When a session owns the pull request, the whole review\n" +
+      "reaches that session as one message the moment GitHub accepts it.",
     )
     .option("--repo <owner/name>", "Repository to resolve the reference in")
     .option("--approve", "Approve it")
@@ -920,6 +929,14 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
         (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : "") +
         (result.url ? ` ${fmt.muted(result.url)}` : ""),
       );
+      // The owning session, when the pull request has one, reads the review
+      // as a message: say so, or say why it did not.
+      const delivered = result.delivered_to;
+      if (delivered?.short_id || delivered?.conversation_id) {
+        console.log(`   ${fmt.muted(`delivered to session ${delivered.short_id ?? delivered.conversation_id}`)}`);
+      } else if (delivered?.error) {
+        console.log(`   ${fmt.warning(`not delivered to the owning session: ${delivered.error}`)}`);
+      }
     });
 
   // ── the other verbs: reopen, draft, reviewers, edit ──

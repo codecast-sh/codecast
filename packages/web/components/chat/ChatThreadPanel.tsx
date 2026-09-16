@@ -10,15 +10,16 @@ import "./chat.css";
 
 // The thread panel: Slack's right rail.
 //
-// The root message is pinned above the scroll region rather than folded into it.
-// A thread is read as "what was said about THIS", and a root that scrolls away
-// takes the subject with it — three replies down you are reading answers to a
-// question you can no longer see.
+// The root message is the first row of the replies list, so the whole thread
+// is one scroll. Pinned above the list, a long root (an agent's report) took
+// most of the panel and left the replies a small second scroll pane under it.
 //
 // The replies use the same virtualized list as the channel, in `inThread` mode:
-// no day separators, no nested thread affordance. Reusing it means a reply
-// groups, links, reacts and fails to send exactly the way a channel message
-// does, because it IS the same component.
+// no day separators, no nested thread affordance. Opening the panel pins to
+// the latest reply; a permalink (`?m=`) is the only case that lands on a
+// specific row instead. Reusing the list means a reply groups, links, reacts
+// and fails to send exactly the way a channel message does, because it IS the
+// same component.
 //
 // `rootId` is the REQUESTED root, `root` the loaded view of it. They are not the
 // same thing for the first seconds of every thread, and the difference is not
@@ -29,19 +30,21 @@ import "./chat.css";
 //
 // The width is the reader's, not the layout's: a drag on the left edge resizes
 // the panel and the choice persists per client (same pattern as the comment
-// rail, components/comments/CommentDock.tsx). The CSS max-width (34%) still
-// caps it, so a wide saved width can never starve the transcript on a small
-// window.
+// rail, components/comments/CommentDock.tsx). There is no fixed cap: a thread
+// full of code or an agent's long answer is worth most of the screen. The one
+// bound is the transcript beside it, which keeps a readable column
+// (MIN_TRANSCRIPT_W) however far the panel is dragged, measured against the
+// shell at drag time rather than a saved number that may not fit this window.
 
 const MIN_W = 300;
-const MAX_W = 720;
+const MIN_TRANSCRIPT_W = 360;
 const DEFAULT_W = 384;
 const WIDTH_KEY = "ch-thread-width";
 
 function loadWidth(): number {
   if (typeof window === "undefined") return DEFAULT_W;
   const v = Number(window.localStorage.getItem(WIDTH_KEY));
-  return v >= MIN_W && v <= MAX_W ? v : DEFAULT_W;
+  return v >= MIN_W ? v : DEFAULT_W;
 }
 
 export const ChatThreadPanel = memo(function ChatThreadPanel({
@@ -93,17 +96,20 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   onRetryAgent?: (messageId: string) => void;
 }) {
   const [width, setWidth] = useState(loadWidth);
-  const dragRef = useRef<{ x: number; w: number } | null>(null);
+  const dragRef = useRef<{ x: number; w: number; max: number } | null>(null);
 
   const onResizeDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    dragRef.current = { x: e.clientX, w: width };
+    // As wide as the shell allows while the transcript keeps its column.
+    const shell = (e.currentTarget as HTMLElement).parentElement?.parentElement;
+    const max = Math.max(MIN_W, (shell?.clientWidth ?? Infinity) - MIN_TRANSCRIPT_W);
+    dragRef.current = { x: e.clientX, w: width, max };
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     const move = (ev: MouseEvent) => {
       const d = dragRef.current;
       if (!d) return;
-      setWidth(Math.min(MAX_W, Math.max(MIN_W, d.w + (d.x - ev.clientX))));
+      setWidth(Math.min(d.max, Math.max(MIN_W, d.w + (d.x - ev.clientX))));
     };
     const up = () => {
       dragRef.current = null;
@@ -140,31 +146,6 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         </button>
       </div>
 
-      {root && (
-        <div className="ch-thread-root">
-          <ChatMessage
-            message={root}
-            channelId={channelId}
-            knownHandles={knownHandles}
-            selfHandles={selfHandles}
-            now={now}
-            mine={root.author.id === viewerId}
-            inThread
-            onReact={onReact}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onRetrySend={onRetrySend}
-            onRetryAgent={onRetryAgent}
-          />
-        </div>
-      )}
-
-      {replies.length > 0 && (
-        <div className="ch-thread-replies-label">
-          {replies.length} {replies.length === 1 ? "reply" : "replies"}
-        </div>
-      )}
-
       <ChatMessageList
         messages={replies}
         viewerId={viewerId}
@@ -176,6 +157,31 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         now={now}
         inThread
         targetMessageId={targetMessageId}
+        header={root && (
+          <>
+            <div className="ch-thread-root">
+              <ChatMessage
+                message={root}
+                channelId={channelId}
+                knownHandles={knownHandles}
+                selfHandles={selfHandles}
+                now={now}
+                mine={root.author.id === viewerId}
+                inThread
+                onReact={onReact}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onRetrySend={onRetrySend}
+                onRetryAgent={onRetryAgent}
+              />
+            </div>
+            {replies.length > 0 && (
+              <div className="ch-thread-replies-label">
+                {replies.length} {replies.length === 1 ? "reply" : "replies"}
+              </div>
+            )}
+          </>
+        )}
         onReact={onReact}
         onEdit={onEdit}
         onDelete={onDelete}

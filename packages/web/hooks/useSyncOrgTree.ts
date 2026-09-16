@@ -20,17 +20,17 @@ export function isMissingFunctionError(error: Error | undefined): boolean {
  *  subscribing the caller to the tree. A page that only names roles (an
  *  owner chip, the chief of staff link) mounts this and reads useOrgRoles,
  *  so a message under any node does not re-render it. */
-export function useSyncOrgTreeFeeder(): { ready: boolean; error?: Error; missing: boolean } {
+export function useSyncOrgTreeFeeder(): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   // A team stub id (createTeam in flight) is not a Convex id. Skip until it
   // resolves: falling back to `{}` would load the PERSONAL tree into the slot
   // and show the user's own org under the team they just created.
   const teamArg = !activeTeamId ? {} : isConvexId(activeTeamId) ? { team_id: activeTeamId } : "skip";
-  const { ready, error } = useSyncCollection("orgTree", api.org.tree, teamArg);
-  return { ready, error, missing: isMissingFunctionError(error) };
+  const { ready, error, refused, retry } = useSyncCollection("orgTree", api.org.tree, teamArg);
+  return { ready, error, missing: isMissingFunctionError(error), refused, retry };
 }
 
-export function useSyncOrgTree(): { tree: OrgTree | null; ready: boolean; error?: Error; missing: boolean } {
+export function useSyncOrgTree(): { tree: OrgTree | null; ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
   const state = useSyncOrgTreeFeeder();
   const tree = useInboxStore((s) => s.orgTree);
   return { tree, ...state };

@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
 import { flushPersistence } from '@codecast/web/store/idbCache';
+import { bootMark } from '@/lib/bootProfile';
 
 // Hosts the inbox store's server-sync hooks OUTSIDE any screen. The live
 // listInboxSessions subscription re-renders whichever component holds it on
@@ -24,12 +25,23 @@ import { flushPersistence } from '@codecast/web/store/idbCache';
 // controllers listen there. This replaces the document-gated listener that
 // never re-ticked on iOS (no DOM visibility events).
 export function StoreSyncBridge() {
+  // Feeders must not run on the first frame: useSyncCore mounts every live
+  // query at once and would steal the JS thread from painting the cached
+  // inbox. Arm after commit so first content paint wins.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => { setArmed(true); }, []);
+  if (!armed) return null;
+  return <StoreSyncBridgeInner />;
+}
+
+function StoreSyncBridgeInner() {
   useSyncCore('mobile');
+  useEffect(() => { bootMark("sync-armed"); }, []);
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') emitSyncWake();
-      // Scheduled blob writes (idbCache.native) ride a short delay; iOS may
+      // Scheduled cache writes (idbCache.native) ride a short delay; iOS may
       // suspend or kill a backgrounded app at any moment, so land them now.
       else void flushPersistence();
     });

@@ -209,6 +209,25 @@
       "is_idle": true
     },
     {
+      "_id": "dead_after_done",
+      "status": "active",
+      "updated_at": "E-23m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "thread_state_status": "done"
+    },
+    {
+      "_id": "queued_dead_after_done",
+      "status": "active",
+      "updated_at": "E-24m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "thread_state_status": "done",
+      "has_pending_messages": true
+    },
+    {
       "_id": "dead_blank",
       "status": "active",
       "updated_at": "E-22m",
@@ -474,8 +493,8 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 21,
-        "done": 4,
+        "needs_input": 22,
+        "done": 5,
         "dormant": 7,
         "working": 4,
         "idle": 0,
@@ -499,7 +518,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "aeeabde84900a34e",
+    "set_digest": "15abc6037e5c2765",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -544,6 +563,11 @@
       "completedcontentz160000000000000": [
         "needs_input",
         "needs_input",
+        false
+      ],
+      "deadafterdonez130000000000000000": [
+        "done",
+        "done",
         false
       ],
       "deadblankz9000000000000000000000": [
@@ -651,6 +675,11 @@
         "working",
         false
       ],
+      "queueddeadafterdonez190000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
       "queueddeadz100000000000000000000": [
         "needs_input",
         "needs_input",
@@ -747,6 +776,7 @@
       "boundarybarez1200000000000000000": -540000,
       "boundarykeepsdonez17000000000000": -540000,
       "completedcontentz160000000000000": -2220000,
+      "deadafterdonez130000000000000000": -1380000,
       "deadblankz9000000000000000000000": -1320000,
       "deadz400000000000000000000000000": -1260000,
       "declaredblockedz1500000000000000": -1020000,
@@ -768,6 +798,7 @@
       "permissionz100000000000000000000": -1140000,
       "pinnedneedsz11000000000000000000": -1740000,
       "pinnedworkingz130000000000000000": -1800000,
+      "queueddeadafterdonez190000000000": -1440000,
       "queueddeadz100000000000000000000": -1500000,
       "queuedz6000000000000000000000000": -1440000,
       "quietunansweredz1500000000000000": -1560000,
@@ -791,7 +822,8 @@
         "declareddonez1200000000000000000",
         "rowdonenodaemonz1500000000000000",
         "boundarykeepsdonez17000000000000",
-        "settledonecurrentz17000000000000"
+        "settledonecurrentz17000000000000",
+        "deadafterdonez130000000000000000"
       ],
       "dormant": [
         "loopfreshz9000000000000000000000",
@@ -816,6 +848,7 @@
         "apierrorz80000000000000000000000",
         "deadz400000000000000000000000000",
         "unresponsivez1200000000000000000",
+        "queueddeadafterdonez190000000000",
         "queueddeadz100000000000000000000",
         "anchorblockedz130000000000000000",
         "anchordeadz100000000000000000000",

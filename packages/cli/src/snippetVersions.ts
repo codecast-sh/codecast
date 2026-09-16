@@ -11,7 +11,7 @@
 // ./update.ts re-exports every getter here, so existing importers are unchanged.
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
-const TASK_VERSION = "7"; // bumped: --precheck, a shell gate that skips a firing instead of spending a session
+const TASK_VERSION = "8"; // bumped: how to choose fresh versus inline runs; fresh runs stay out of the inbox, a once run posts its result back
 const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
@@ -26,6 +26,7 @@ const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts
 const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const SKILLS_VERSION = "1"; // first release: the cast-* skills as one snippet
+const PR_VERSION = "1"; // first release: cast pr, the review loop, reviews delivered to the owning session
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
 
 export function getMemoryVersion(): string {
@@ -96,4 +97,8 @@ export function getComputerVersion(): string {
  *  body lands without a bump. Bump when a skill is added or removed. */
 export function getSkillsVersion(): string {
   return SKILLS_VERSION;
+}
+
+export function getPrVersion(): string {
+  return PR_VERSION;
 }

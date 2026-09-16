@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppWindow, ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import {
   getCallTiles,
   setCamera,
@@ -8,6 +8,7 @@ import {
   type ParticipantTile,
 } from "../../lib/calls/callManager";
 import { Avatar, CallStage, StageVideo } from "./CallStage";
+import { FollowChip } from "./FollowInCall";
 import { AvatarImg } from "../../lib/avatarCache";
 import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
@@ -227,6 +228,8 @@ function MiniWindow({
     [tiles],
   );
   const cols = video.length <= 1 ? 1 : 2;
+  // The person this window follows wears the ring on their face below.
+  const followLeaderId = useInboxStore((st) => st.followLeaderId);
 
   return (
     <div className="relative flex h-full w-full select-none flex-col overflow-hidden rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-2xl backdrop-blur">
@@ -298,7 +301,7 @@ function MiniWindow({
               <span className="inline-block h-10 w-10 animate-pulse rounded-full bg-sol-bg-highlight" />
             )}
             {roster.map((m) => (
-              <div key={m.user_id} className="flex flex-col items-center gap-1.5">
+              <div key={m.user_id} className="group flex flex-col items-center gap-1.5">
                 <div
                   className={`rounded-full transition-all duration-300 ${
                     speaking.has(String(m.user_id))
@@ -306,9 +309,10 @@ function MiniWindow({
                       : ""
                   }`}
                 >
-                  <Avatar m={m} size={44} />
+                  <Avatar m={m} size={44} followed={followLeaderId === String(m.user_id)} />
                 </div>
                 <span className="font-mono text-[11px] text-sol-text-muted">{firstName(m.user_name)}</span>
+                <FollowChip identity={String(m.user_id)} name={m.user_name} variant="row" />
               </div>
             ))}
           </div>

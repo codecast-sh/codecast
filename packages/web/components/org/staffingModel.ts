@@ -4,7 +4,8 @@
 // with the node each one points at, span of control per person, and the roles
 // that are bottlenecks. The pane renders these; it computes nothing itself.
 import { PERSON_SPAN } from "@codecast/shared/contracts/orgCapacity";
-import { editedOrgChange, isOrgChangeDecidable, orderOrgChanges } from "@codecast/shared/contracts/orgProposal";
+import { ORG_SYNC_KINDS, PLAN_STATUS_CHANGES, PROJECT_STATUS_CHANGES, TASK_STATUS_CHANGES, describeTenure, editedOrgChange, isOrgChangeDecidable, orderOrgChanges, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
 import { parentNodeId, resolveOrgParentRef } from "./orgLayout";
 import type { OrgCreateRoleInput } from "../../store/orgSlice";
@@ -15,6 +16,7 @@ import {
   type OrgChange,
   type OrgChangeStatus,
   type OrgHealth,
+  type OrgProposalAuthor,
   type OrgProposalChange,
   type OrgProposalListRow,
   type OrgProposalRow,
@@ -39,6 +41,38 @@ export function openProposals(rows: OrgProposalRow[]): OrgProposalRow[] {
 export function staffingMode(tree: OrgTree | null, proposal: OrgProposalRow | null): StaffingMode {
   if (proposal) return "proposal";
   return findChiefOfStaff(tree) ? "health" : "no_chief";
+}
+
+// ---------------------------------------------------------------- a review in flight
+
+/** "Propose an org now", as the prefs bag keeps it (ClientUI.org_review_run). */
+export type OrgReviewRun = { since: number; session_id: string | null; workspace: string };
+
+/** A review that produced nothing gives the buttons back after this long. */
+export const REVIEW_TTL_MS = 15 * 60_000;
+/** A fresh session reads as idle for a moment before its first turn starts. */
+export const REVIEW_START_GRACE_MS = 2 * 60_000;
+
+/**
+ * What the page says about the review it started:
+ *   reviewing  the run is young, no proposal has landed, the session is not known to have stopped
+ *   ended      the review session finished its turn, or was closed, and posted nothing
+ *   none       no run for this workspace, a proposal landed since, or the run aged out
+ * A proposal of ANY status counts as landed: one that was later withdrawn must
+ * not flip the page back to "reviewing".
+ */
+export function reviewRunState(
+  run: OrgReviewRun | null | undefined,
+  now: number,
+  workspace: string | null,
+  proposals: Pick<OrgProposalRow, "created_at">[],
+  session: { is_idle?: boolean; status?: string } | null | undefined,
+): "reviewing" | "ended" | "none" {
+  if (!run || !workspace || run.workspace !== workspace) return "none";
+  if (now - run.since >= REVIEW_TTL_MS) return "none";
+  if (proposals.some((p) => p.created_at >= run.since)) return "none";
+  const stopped = !!session && (session.status === "completed" || session.is_idle === true);
+  return stopped && now - run.since >= REVIEW_START_GRACE_MS ? "ended" : "reviewing";
 }
 
 // ---------------------------------------------------------------- progress
@@ -86,19 +120,168 @@ export function orderChanges(changes: OrgProposalChange[]): OrgProposalChange[] 
   return orderOrgChanges([...changes].sort((a, b) => a.seq - b.seq), (c) => c.change);
 }
 
-/** The change list grouped by kind, groups in apply order, empty kinds dropped. */
-export function groupChanges(changes: OrgProposalChange[]): { kind: OrgChange["kind"]; label: string; changes: OrgProposalChange[] }[] {
+export type ChangeGroup = {
+  /** A change kind, or "sync" for the records group (S9). */
+  kind: OrgChange["kind"] | "sync";
+  label: string;
+  changes: OrgProposalChange[];
+  /** The records group: the header says how many records it brings in line. */
+  sync: boolean;
+};
+
+/** A plan, task or project status change (S9): a record the evidence says is
+ *  already finished, not a staffing change. */
+export function isSyncChange(change: OrgChange): boolean {
+  return (ORG_SYNC_KINDS as readonly string[]).includes(change.kind);
+}
+
+/** The evidence line a sync change carries: what says the record is done.
+ *  The analyzer writes it as the change's `reason`; the pane shows it under
+ *  the line even when the row is not selected. Null for every other kind. */
+export function syncEvidence(change: OrgChange): string | null {
+  if (change.kind === "plan_status" || change.kind === "task_status" || change.kind === "project_status") return change.reason?.trim() || null;
+  return null;
+}
+
+/** How many records a list of changes brings in line: one per distinct
+ *  plan, task or project named, whatever the verdicts so far. */
+export function recordsInLine(changes: OrgProposalChange[]): number {
+  const refs = new Set<string>();
+  for (const c of changes) {
+    const ch = c.change;
+    if (ch.kind === "plan_status") refs.add(`plan:${ch.plan}`);
+    else if (ch.kind === "task_status") refs.add(`task:${ch.task}`);
+    else if (ch.kind === "project_status") refs.add(`project:${ch.project}`);
+  }
+  return refs.size;
+}
+
+export const SYNC_GROUP_LABEL = "Bring records in line";
+
+/** A records group over this many changes renders as one card (count by
+ *  kind, the most consequential lines, the evidence summary, Accept group and
+ *  Review each) instead of a wall of rows: the analyzer's first real review
+ *  brought 111 records, readable only through accept all. */
+export const SYNC_CARD_THRESHOLD = 8;
+
+/** The record a sync change names ("plan:pl-61"), or null for any other kind. */
+export function changeRecordRef(change: OrgChange): string | null {
+  if (change.kind === "plan_status") return `plan:${change.plan}`;
+  if (change.kind === "task_status") return `task:${change.task}`;
+  if (change.kind === "project_status") return `project:${change.project}`;
+  return null;
+}
+
+/** The tasks a plan status change closes along with the plan, when the
+ *  analyzer put them on the change (`tasks`: refs). The apply cascade lands
+ *  them in one accept, so the pane shows them under the plan row instead of
+ *  as rows of their own. Read loosely: the contract field is arriving. */
+export function planCarriedTasks(change: OrgChange): string[] {
+  if (change.kind !== "plan_status") return [];
+  const tasks = (change as { tasks?: unknown }).tasks;
+  return Array.isArray(tasks) ? tasks.filter((t): t is string => typeof t === "string" && t.trim().length > 0) : [];
+}
+
+const RECORD_WORD: Record<"plan_status" | "task_status" | "project_status", [string, string]> = {
+  task_status: ["task", "tasks"],
+  plan_status: ["plan", "plans"],
+  project_status: ["project", "projects"],
+};
+
+/** The evidence a record change rests on, in one of a few words, so a
+ *  hundred reasons sum to three counts. Ordered: the first pattern that
+ *  matches names the bucket. */
+const EVIDENCE_BUCKETS: [RegExp, string][] = [
+  [/\bcommits? [0-9a-f]{6,}|\bcommits? (landed|on main)|\bon main\b|\bmerged\b|\bshipped\b|\blanded\b/i, "commits landed"],
+  [/finished plan|plan (already )?(marked )?done|plan is done|its plan .* done/i, "under a finished plan"],
+  [/session (is |was )?done|sessions? (ended|declared|finished)|handoff|declared done/i, "its session ended"],
+  [/every task closed|all (its )?tasks (are )?(closed|done)|\d+ of \d+ done/i, "every task closed"],
+  [/no session|no activity|nobody touched|untouched|no commit|idle|no wake/i, "no activity"],
+];
+
+export function evidenceBucket(reason: string | undefined): string {
+  const text = reason ?? "";
+  for (const [re, label] of EVIDENCE_BUCKETS) if (re.test(text)) return label;
+  return "other evidence";
+}
+
+export type SyncGroupSummary = {
+  /** Every record change in the group, nested tasks included. */
+  total: number;
+  /** Still to decide, nested tasks included. */
+  remaining: number;
+  /** Counts by record kind, largest first: "103 tasks, 8 plans". */
+  byKind: { kind: "plan_status" | "task_status" | "project_status"; count: number; word: string }[];
+  countLine: string;
+  /** The most consequential changes, up to three: projects before plans
+   *  before tasks, a plan that carries tasks before one that does not, then
+   *  the biggest number its reason cites. */
+  top: OrgProposalChange[];
+  /** The evidence the reasons rest on, as counts, largest first. */
+  evidence: { label: string; count: number }[];
+  /** Task changes filed under the plan change that closes them, by the plan
+   *  change's id; `rows` is the group with those tasks taken out. */
+  nested: Record<string, OrgProposalChange[]>;
+  rows: OrgProposalChange[];
+};
+
+const KIND_RANK = { project_status: 0, plan_status: 1, task_status: 2 } as const;
+
+export function syncGroupSummary(changes: OrgProposalChange[]): SyncGroupSummary {
+  const sync = changes.filter((c) => isSyncChange(c.change));
+  const nested: Record<string, OrgProposalChange[]> = {};
+  const nestedIds = new Set<string>();
+  for (const c of sync) {
+    const carried = planCarriedTasks(c.change);
+    if (carried.length === 0) continue;
+    const refs = new Set(carried.map((t) => `task:${t}`));
+    const under = sync.filter((t) => t.change.kind === "task_status" && refs.has(changeRecordRef(t.change)!) && !nestedIds.has(t._id));
+    if (under.length === 0) continue;
+    nested[c._id] = under;
+    for (const t of under) nestedIds.add(t._id);
+  }
+  const rows = sync.filter((c) => !nestedIds.has(c._id));
+  const counts = new Map<"plan_status" | "task_status" | "project_status", number>();
+  for (const c of sync) counts.set(c.change.kind as any, (counts.get(c.change.kind as any) ?? 0) + 1);
+  const byKind = [...counts.entries()].map(([kind, count]) => ({ kind, count, word: RECORD_WORD[kind][count === 1 ? 0 : 1] })).sort((a, b) => b.count - a.count);
+  const biggestNumber = (c: OrgProposalChange) => Math.max(0, ...((syncEvidence(c.change) ?? "").match(/\d+/g) ?? []).map(Number));
+  const score = (c: OrgProposalChange) => KIND_RANK[c.change.kind as keyof typeof KIND_RANK] * 1_000_000 - (nested[c._id]?.length ?? 0) * 1_000 - Math.min(999, biggestNumber(c));
+  const top = [...rows].sort((a, b) => score(a) - score(b) || a.seq - b.seq).slice(0, 3);
+  const buckets = new Map<string, number>();
+  for (const c of sync) { const b = evidenceBucket(syncEvidence(c.change) ?? undefined); buckets.set(b, (buckets.get(b) ?? 0) + 1); }
+  const evidence = [...buckets.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
+  return {
+    total: sync.length,
+    remaining: sync.filter((c) => isDecidable(c.status)).length,
+    byKind,
+    countLine: byKind.map((k) => `${k.count} ${k.word}`).join(", "),
+    top,
+    evidence,
+    nested,
+    rows,
+  };
+}
+
+/** The change list grouped in apply order, empty kinds dropped. The three
+ *  record kinds (S9) rank first and share one group, "Bring records in line";
+ *  every other kind is its own group. */
+export function groupChanges(changes: OrgProposalChange[]): ChangeGroup[] {
   const ordered = orderChanges(changes);
-  const out: { kind: OrgChange["kind"]; label: string; changes: OrgProposalChange[] }[] = [];
+  const out: ChangeGroup[] = [];
   for (const c of ordered) {
+    const sync = isSyncChange(c.change);
+    const kind: ChangeGroup["kind"] = sync ? "sync" : c.change.kind;
     const last = out[out.length - 1];
-    if (last && last.kind === c.change.kind) last.changes.push(c);
-    else out.push({ kind: c.change.kind, label: KIND_LABEL[c.change.kind], changes: [c] });
+    if (last && last.kind === kind) last.changes.push(c);
+    else out.push({ kind, label: sync ? SYNC_GROUP_LABEL : KIND_LABEL[c.change.kind], changes: [c], sync });
   }
   return out;
 }
 
 export const KIND_LABEL: Record<OrgChange["kind"], string> = {
+  plan_status: "Plan status",
+  task_status: "Task status",
+  project_status: "Project status",
   projects: "Projects",
   file: "Filing",
   role: "Roles",
@@ -218,6 +401,7 @@ export function bottleneckRoles(health: OrgHealth | null): BottleneckRow[] {
 /** A short label for a flag code, for badges. */
 export const FLAG_LABEL: Record<HealthFlag["code"], string> = {
   overloaded: "overloaded",
+  bypassed: "bypassed",
   wide_span: "wide span",
   idle: "idle",
   slow_to_recommend: "slow to recommend",
@@ -227,6 +411,11 @@ export const FLAG_LABEL: Record<HealthFlag["code"], string> = {
   no_charter: "no charter",
   chatter: "chatter",
   unfiled_plan: "unfiled plan",
+  program_ended: "program ended",
+  wide_ledger: "wide ledger",
+  stale_plan: "stale plan",
+  stale_task: "stale task",
+  stale_project: "stale project",
 };
 
 /** The `?proposal=` value a URL carries: "op-N", else null. */
@@ -248,9 +437,39 @@ export function pickProposal(rows: OrgProposalRow[], shortId: string | null): Or
   return openProposals(rows)[0] ?? null;
 }
 
+// ---------------------------------------------------------------- tenure (S10)
+
+/** A role change's tenure, edits laid over: standing, a program with its
+ *  end, or null when the proposal left it unsaid. */
+export function changeTenure(c: Pick<OrgProposalChange, "change" | "edits">): OrgTenureSpec | null {
+  const ch = editedOrgChange(c.change, c.edits);
+  return ch.kind === "role" ? ch.tenure ?? null : null;
+}
+
+/** The tenure as one short line ("standing", "program · ends with pl-3, then
+ *  retire"), the plan or project named when the tree knows it. */
+export function tenureLine(t: OrgTenureSpec | null | undefined, tree?: OrgTree | null): string {
+  if (!t) return "";
+  if (t.kind === "standing") return describeTenure(t);
+  const e = t.ends as { plan?: string; project?: string; date?: number };
+  const names: { plan?: string; project?: string } = {};
+  if (e.plan && tree) names.plan = tree.roles.flatMap((r) => r.scope_names.plans).find((p) => p.id === e.plan || p.short_id === e.plan)?.short_id;
+  if (e.project && tree) names.project = tree.roles.flatMap((r) => r.scope_names.projects).find((p) => p.id === e.project || p.short_id === e.project || p.title === e.project)?.title;
+  return describeTenure(t, names);
+}
+
 // ---------------------------------------------------------------- inline edit
 
-export type ChangeField = { key: string; label: string; kind: "text" | "number" | "list"; value: string };
+export type ChangeField = { key: string; label: string; kind: "text" | "number" | "list" | "select"; value: string; options?: readonly string[] };
+
+/** The closed set a field picks from, when it has one: a record's status (S9). */
+function fieldOptions(kind: OrgChange["kind"], key: string): readonly string[] | undefined {
+  if (key !== "status") return undefined;
+  if (kind === "plan_status") return PLAN_STATUS_CHANGES;
+  if (kind === "task_status") return TASK_STATUS_CHANGES;
+  if (kind === "project_status") return PROJECT_STATUS_CHANGES;
+  return undefined;
+}
 
 /** The editable fields of a change, flattened one level ("caps.tokens_per_day")
  *  so the inline form (S5: Edit on anything but a role) is one input per field.
@@ -262,7 +481,10 @@ export function changeFields(change: OrgChange): ChangeField[] {
     if (Array.isArray(v)) out.push({ key, label: key.replace(/[._]/g, " "), kind: "list", value: v.map((x) => typeof x === "string" ? x : JSON.stringify(x)).join(", ") });
     else if (typeof v === "number") out.push({ key, label: key.replace(/[._]/g, " "), kind: "number", value: String(v) });
     else if (typeof v === "object") for (const [k, x] of Object.entries(v as Record<string, unknown>)) push(`${key}.${k}`, x);
-    else out.push({ key, label: key.replace(/[._]/g, " "), kind: "text", value: String(v) });
+    else {
+      const options = fieldOptions(change.kind, key);
+      out.push({ key, label: key === "reason" ? "evidence" : key.replace(/[._]/g, " "), kind: options ? "select" : "text", value: String(v), ...(options ? { options } : {}) });
+    }
   };
   for (const [k, v] of Object.entries(change)) if (k !== "kind") push(k, v);
   return out;
@@ -396,7 +618,7 @@ export function orgParentRefAsProposal(tree: OrgTree, ref: OrgParentRef | null |
  * the change as they are. Sending the dialog's shape raw left the role with
  * no scope and a reports_to the apply core could not read.
  */
-export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle" | "charter" | "caps" | "scope" | "reports_to"> & { touched?: HireRoleTouched }, tree: OrgTree, meId: string): Record<string, unknown> {
+export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle" | "charter" | "caps" | "scope" | "reports_to"> & { tenure?: OrgTenureSpec; avatar?: string; touched?: HireRoleTouched }, tree: OrgTree, meId: string): Record<string, unknown> {
   // Scope and parent ride along only when the person changed them: an
   // untouched form must not overwrite a ref it could not resolve, or a
   // parent the same proposal creates, with what it happened to display.
@@ -407,6 +629,9 @@ export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle
     handle: input.handle,
     ...(input.charter ? { charter: input.charter } : {}),
     ...(input.caps ? { caps: { ...input.caps } } : {}),
+    // Tenure and avatar (S10, S13) ride as the form hands them.
+    ...(input.tenure ? { tenure: input.tenure } : {}),
+    ...(input.avatar ? { avatar: input.avatar } : {}),
     ...(touched.scope ? { scope: { projects: [...(input.scope?.project_ids ?? [])], plans: [...(input.scope?.plan_ids ?? [])] } } : {}),
     ...(reports_to ? { reports_to } : {}),
   };
@@ -414,7 +639,7 @@ export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle
 
 /** The dialog's prefill for a role change, edits included, with the parent
  *  resolved against the tree. Undefined for any other kind. */
-export function roleChangeInitial(c: OrgProposalChange, tree: OrgTree): HireRoleInitial | undefined {
+export function roleChangeInitial(c: OrgProposalChange, tree: OrgTree): (HireRoleInitial & { tenure?: OrgTenureSpec; avatar?: string }) | undefined {
   const ch = editedOrgChange(c.change, c.edits);
   if (ch.kind !== "role") return undefined;
   return {
@@ -423,6 +648,49 @@ export function roleChangeInitial(c: OrgProposalChange, tree: OrgTree): HireRole
     ...(ch.charter ? { charter: ch.charter } : {}),
     ...(ch.caps ? { caps: ch.caps } : {}),
     ...(ch.scope ? { scope: ch.scope } : {}),
+    ...(ch.tenure ? { tenure: ch.tenure } : {}),
+    ...(ch.avatar ? { avatar: ch.avatar } : {}),
     reports_to: resolveOrgParentRef(tree, ch.reports_to),
   };
+}
+
+// ---------------------------------------------------------------- where a proposal came from (S15)
+
+/** What the author pill draws. `href` opens a role's scope page; a session
+ *  opens through the caller's session navigation (`sessionId`), never a bare
+ *  link, so the usual stage and pane rules apply. */
+export type ProposalAuthorView =
+  | { kind: "session"; sessionId: string; title: string; shortId: string | null }
+  | { kind: "role"; roleId: string; name: string; handle: string | null; avatar: string; href: string | null }
+  | { kind: "user"; name: string };
+
+/**
+ * The author, named. The server's enrichment wins when present; else the
+ * store rows the caller could find (the session row by id, the org tree's
+ * role row); else the bare id, so a pill always reads as something and the
+ * click still lands.
+ */
+export function resolveProposalAuthor(
+  author: OrgProposalAuthor,
+  found: { session?: { title?: string | null; short_id?: string | null } | null; role?: Pick<OrgRole, "name" | "handle" | "short_id"> & { avatar?: string } | null; user?: { name?: string | null } | null },
+): ProposalAuthorView {
+  if (author.kind === "session") {
+    const shortId = author.short_id ?? found.session?.short_id ?? null;
+    const title = author.title ?? author.name ?? found.session?.title ?? (shortId ? "Session" : "a session");
+    return { kind: "session", sessionId: author.id, title, shortId };
+  }
+  if (author.kind === "role") {
+    const shortId = author.short_id ?? found.role?.short_id ?? null;
+    const handle = author.handle ?? found.role?.handle ?? null;
+    const name = author.name ?? found.role?.name ?? (handle ? `@${handle}` : "a role");
+    return { kind: "role", roleId: author.id, name, handle, avatar: avatarOf({ avatar: author.avatar ?? found.role?.avatar, handle: handle ?? author.id }), href: shortId ? `/org/${shortId}` : null };
+  }
+  return { kind: "user", name: author.name ?? found.user?.name ?? "a person" };
+}
+
+/** The proposal a queue card or a decision page points at: its `?proposal=op-N`
+ *  link is in the decision's context (orgProposals.create), else null. */
+export function proposalRefInContext(md: string | null | undefined): string | null {
+  const m = /\/org\?proposal=(op-\d+)/i.exec(md ?? "");
+  return m ? m[1].toLowerCase() : null;
 }

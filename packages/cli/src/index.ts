@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
+import { chiefForward, isChiefAnchor } from "./anchorAlias.js";
 import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
@@ -83,11 +84,12 @@ import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./u
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
+import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getSkillsVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getSkillsVersion, getPrVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
@@ -1261,7 +1263,16 @@ function getAgentLabel(agentType?: string): string | null {
   if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
   if (agentType === "codex" || agentType === "codex_cli") return "Codex";
   if (agentType === "cursor") return "Cursor";
+  if (agentType === "grok") return "Grok";
+  if (agentType === "gemini") return "Gemini";
+  if (agentType === "opencode") return "OpenCode";
   return agentType;
+}
+
+function homeRelPath(p: string): string {
+  const home = process.env.HOME;
+  if (home && (p === home || p.startsWith(home + path.sep))) return "~" + p.slice(home.length);
+  return p;
 }
 
 const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
@@ -1483,13 +1494,35 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
 
   const stuck = await stuckSyncs;
   if (stuck.length > 0) {
-    const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
-    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
+    const agents = [...new Set(stuck.map((s) => s.agentType).filter(Boolean))];
+    const who = agents.length === 1 ? (getAgentLabel(agents[0]) ?? agents[0]) : null;
+    const n = stuck.length;
+    const label = who
+      ? `${n} ${who} session${n === 1 ? "" : "s"}`
+      : `${n} session${n === 1 ? "" : "s"}`;
+    const reasons = new Set(stuck.map((s) => s.reason));
+    const why = reasons.size === 1 && reasons.has("unexamined_writes")
+      ? "(file grew after last ingest)"
+      : reasons.size === 1 && reasons.has("byte_backlog")
+        ? "(unread bytes sitting 5+ min)"
+        : "(no ingest in 5+ min)";
+    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted(why));
     for (const s of stuck.slice(0, 5)) {
       const short = s.sessionId.slice(0, 8);
-      const sizes = `${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`;
-      const age = formatRelativeTime(s.lastSyncedAt);
-      console.log(`      ${fmt.muted(icons.bullet)} ${fmt.id(short)}  ${fmt.number(sizes)}  ${fmt.muted("last sync")} ${fmt.value(age)}`);
+      const agent = s.agentType ? fmt.muted(getAgentLabel(s.agentType) ?? s.agentType) + " " : "";
+      const proj = s.projectPath ? "  " + fmt.path(homeRelPath(s.projectPath)) : "";
+      console.log(`      ${fmt.muted(icons.bullet)} ${agent}${fmt.id(short)}${proj}`);
+      const bits: string[] = [];
+      if (s.reason === "byte_backlog") {
+        bits.push(`${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`);
+      } else if (s.fileSize > 0) {
+        bits.push(`${formatBytesShort(s.fileSize)} transcript`);
+      }
+      bits.push(`last ingest ${formatRelativeTime(s.lastSyncedAt)}`);
+      if (s.fileMtimeMs > s.lastSyncedAt) {
+        bits.push(`file written ${formatRelativeTime(s.fileMtimeMs)}`);
+      }
+      console.log(`        ${fmt.muted(bits.join(" · "))}`);
     }
     if (stuck.length > 5) {
       console.log(`      ${fmt.muted(`... and ${stuck.length - 5} more`)}`);
@@ -2222,6 +2255,7 @@ const SNIPPET_SECTIONS = {
   calls: snippetSection("calls"),
   limits: snippetSection("limits"),
   computer: snippetSection("computer"),
+  pr: snippetSection("pr"),
 } satisfies Record<string, SnippetSection>;
 
 // Every feature that introduces an object the agent names in prose (a session, a
@@ -2400,6 +2434,7 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   if (ensureLimitsGuidanceForMultiAccount(config)) writeConfig(config);
   if (config.limits_enabled) installSnippetSection("limits", true);
   if (config.computer_enabled) installSnippetSection("computer", true);
+  if (config.pr_enabled) installSnippetSection("pr", true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
   if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -2600,6 +2635,18 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   } else if (config.limits_enabled && config.limits_version !== getLimitsVersion()) {
     stampSnippet(config, "limits", getLimitsVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+  if (config.pr_enabled && snippetStale(config, "pr")) {
+    const result = installSnippetSection("pr", true);
+    stampSnippet(config, "pr", getPrVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Pull requests snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.pr_enabled && config.pr_version !== getPrVersion()) {
+    stampSnippet(config, "pr", getPrVersion()); // shadow only, no file write
     writeConfig(config);
   }
   if (config.computer_enabled && snippetStale(config, "computer")) {
@@ -4206,12 +4253,13 @@ program
     const result = await cliPost("/cli/sessions/own", {
       session_id: sessionId,
       owner: member?.trim() || "me",
+      from_session: callingSession(),
     });
     const added = result.added?.length > 0;
     const note = added ? "" : ` ${c.dim}(already an owner)${c.reset}`;
     console.log(
       `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}`
+      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}${toldSuffix(result.told)}`
     );
   });
 
@@ -4224,10 +4272,11 @@ program
   .action(async (first: string, second: string | undefined, opts: { all?: boolean }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "disown");
     const result = opts.all
-      ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [] })
+      ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [], from_session: callingSession() })
       : await cliPost("/cli/sessions/disown", {
           session_id: sessionId,
           owner: member?.trim() || "me",
+          from_session: callingSession(),
         });
     // Owners are a set, so "remove the owner" is ambiguous — you name the one you
     // mean. When the named target (or you, by default) isn't actually an owner,
@@ -10068,6 +10117,7 @@ program
       calls: { getVersion: getCallsVersion, install: (update = false) => installSnippetSection("calls", update), reEnable: "cast install calls" },
       limits: { getVersion: getLimitsVersion, install: (update = false) => installSnippetSection("limits", update), reEnable: "cast install limits" },
       computer: { getVersion: getComputerVersion, install: (update = false) => installSnippetSection("computer", update), reEnable: "cast install computer" },
+      pr: { getVersion: getPrVersion, install: (update = false) => installSnippetSection("pr", update), reEnable: "cast install pr" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
     // Single-snippet path: `cast install workflows` (+ --disable to turn off).
@@ -12409,6 +12459,9 @@ anchor
     }
     const where = scopeType === "team" ? "team" : "your personal workspace";
     if (result.already_existed) {
+      const row = await cliPost("/cli/anchor/resolve", { scope_type: scopeType, team_id: teamId }).catch(() => null);
+      const fwd = chiefForward(row, "create");
+      if (fwd) console.log(`${c.dim}${fwd.note}${c.reset}`);
       console.log(`${c.yellow}•${c.reset} ${where} already has an anchor ${c.cyan}${result.conversation_id ? String(result.conversation_id).slice(0, 7) : ""}${c.reset}`);
     } else {
       console.log(
@@ -12452,10 +12505,13 @@ anchor
     for (const a of anchors) {
       const scope = a.scope_type === "team" ? "team" : "personal";
       const conv = a.conversation_id ? String(a.conversation_id).slice(0, 7) : "(no session)";
+      const chief = isChiefAnchor(a) ? ` ${c.dim}·${c.reset} ${c.magenta}Chief of Staff${c.reset}` : "";
       console.log(
-        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}`,
+        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}${chief}`,
       );
     }
+    const fwd = chiefForward(anchors.find((a) => isChiefAnchor(a)), "ls");
+    if (fwd) console.log(`${c.dim}${fwd.note}${c.reset}`);
   });
 
 anchor
@@ -12483,6 +12539,13 @@ anchor
       console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
       process.exit(1);
     }
+    const fwd = chiefForward(anchorRow, "wake", { message, from_session: callingSession() });
+    if (fwd?.route) {
+      console.log(`${c.dim}${fwd.note}${c.reset}`);
+      const result = await cliPost(fwd.route, fwd.body);
+      console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset} ${c.dim}(${result?.short_id ?? ""})${c.reset}`);
+      return;
+    }
     const resp = await cliFetch(`${siteUrl}/cli/anchor/wake`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -12507,6 +12570,13 @@ anchor
     if (!anchorRow?._id) {
       console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
       process.exit(1);
+    }
+    const fwd = chiefForward(anchorRow, "brief");
+    if (fwd?.route) {
+      console.log(`${c.dim}${fwd.note}${c.reset}`);
+      await cliPost(fwd.route, fwd.body);
+      console.log(`${c.green}✓${c.reset} restarting ${c.cyan}${anchorRow.name}${c.reset}; the next frame carries the charter and brief in full`);
+      return;
     }
     await cliPost("/cli/anchor/brief", { anchor_id: anchorRow._id });
     console.log(`${c.green}✓${c.reset} re-briefed ${c.cyan}${anchorRow.name}${c.reset}`);
@@ -12535,6 +12605,13 @@ anchor
     if (!anchorRow?._id) {
       console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found.`);
       process.exit(1);
+    }
+    const fwd = chiefForward(anchorRow, "rm");
+    if (fwd?.route) {
+      console.log(`${c.dim}${fwd.note}${c.reset}`);
+      await cliPost(fwd.route, fwd.body);
+      console.log(`${c.green}✓${c.reset} retired ${c.cyan}${anchorRow.name}${c.reset}`);
+      return;
     }
     const resp = await cliFetch(`${siteUrl}/cli/anchor/decommission`, {
       method: "POST",
@@ -12767,6 +12844,16 @@ roleGroup
 const callingSession = (): string | undefined =>
   process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION || ownSessionId(getRealCwd()) || undefined;
 
+// What a reparent told (org-staffing.md S11): the moved session, or the role
+// and the hands that ride its frame. Nothing to say when nobody was told.
+function toldSuffix(told: { sessions?: number; roles?: number } | null | undefined): string {
+  if (!told) return "";
+  const parts: string[] = [];
+  if (told.roles) parts.push("the role was woken");
+  if (told.sessions) parts.push(told.roles ? `${told.sessions} hand${told.sessions === 1 ? "" : "s"} told` : "the session was told");
+  return parts.length ? `${c.dim}; ${parts.join(", ")}${c.reset}` : "";
+}
+
 async function resolveRoleId(ref: string, team?: string): Promise<string> {
   const ws = await readWorkspace(team);
   const target = await resolveOrgTarget(ref, ws);
@@ -12799,6 +12886,29 @@ function printRoleLine(r: any) {
   console.log(`${c.bold}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · trust ${trust}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`);
 }
 
+// `--tenure standing` or `--tenure program:<pl-N|project:ref|YYYY-MM-DD>[:review]`
+// → the tenure spec the server resolves (org-staffing.md S10). Refs stay
+// strings; the server resolves them inside the workspace.
+function parseTenureFlag(raw: string): any {
+  const s = raw.trim();
+  if (s === "standing") return { kind: "standing" };
+  const m = /^program:(.+)$/.exec(s);
+  if (!m) { console.error(`Invalid --tenure "${raw}" — standing, or program:<pl-N|project:ref|YYYY-MM-DD>[:review]`); process.exit(1); }
+  let rest = m[1];
+  let then: "retire" | "review" = "retire";
+  const tail = /:(retire|review)$/.exec(rest);
+  if (tail) { then = tail[1] as "retire" | "review"; rest = rest.slice(0, tail.index); }
+  let ends: any;
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rest);
+  if (/^pl-\d+$/i.test(rest)) ends = { plan: rest };
+  else if (rest.startsWith("project:")) ends = { project: rest.slice("project:".length) };
+  else if (date) {
+    const ms = new Date(Number(date[1]), Number(date[2]) - 1, Number(date[3]), 23, 59, 59).getTime();
+    ends = { date: ms };
+  } else ends = { project: rest };
+  return { kind: "program", ends, then };
+}
+
 roleGroup
   .command("create")
   .description("Create a role and provision its standing session")
@@ -12809,6 +12919,8 @@ roleGroup
   .option("--reports-to <target>", "A role (@handle or or-N) or a person (name, id, or me); default: you")
   .option("--charter <text>", stdinText("The charter body (the humans' statement of the job)"))
   .option("--review-backend <agent>", "Agent for the line's review station (claude, codex, ...); must differ from the role's own")
+  .option("--tenure <spec>", "standing, or program:<pl-N|project:ref|YYYY-MM-DD>[:review] (a program's end raises program_ended; default then retire)")
+  .option("--avatar <key>", "A face from the set (see shared/contracts/orgAvatars); default: a stable one from the handle")
   .option("--model <model>", "Model for the standing session")
   .option("--agent <agent>", "Agent backend for the standing session (default: claude)")
   .option("-C, --dir <path>", "Project directory the standing session runs in (default: current)")
@@ -12829,6 +12941,8 @@ roleGroup
       scope: project_ids.length || plan_ids.length ? { project_ids, plan_ids } : undefined,
       charter: options.charter,
       review_backend: options.reviewBackend,
+      tenure: options.tenure ? parseTenureFlag(options.tenure) : undefined,
+      avatar: options.avatar,
       provision: options.session !== false,
       model: options.model,
       agent_type: options.agent,
@@ -12922,10 +13036,11 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
     .option("--team <name|id>", "Team workspace")
+    .option("--standing <keep|retire>", "retire only: keep the standing session running as a plain agent (default for the chief of staff) or retire it with the seat")
     .option("--json", "Machine-readable output")
     .action(async (handle: string, options: any) => {
       const role_id = await resolveRoleId(handle, options.team);
-      const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, { role_id });
+      const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, verb === "retire" ? { role_id, standing_session: options.standing } : { role_id });
       if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
       const extra = verb === "pause" && result.interrupted ? ` ${c.dim}(${result.interrupted} hand${result.interrupted === 1 ? "" : "s"} told to stop at a safe point)${c.reset}` : "";
       console.log(`${c.green}✓${c.reset} ${verb === "restart" ? "restarting" : verb + "d"} @${handle.replace(/^@/, "")}${extra}`);
@@ -12964,17 +13079,20 @@ roleGroup
 
 roleGroup
   .command("update")
-  .description("Edit a role's name, handle, charter text or review backend")
+  .description("Edit a role's name, handle, charter text, review backend, tenure or avatar")
   .argument("<handle>", "@handle, or-N, or id")
   .option("--name <name>", "Display name")
   .option("--handle <handle>", "New handle")
   .option("--charter <text>", stdinText("Charter text"))
   .option("--review-backend <agent>", "Agent for the line's review station; must differ from the role's own")
+  .option("--tenure <spec>", "standing, or program:<pl-N|project:ref|YYYY-MM-DD>[:review] (a person's act)")
+  .option("--avatar <key>", "A face from the set, or 'none' to reset to the handle's default")
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
   .action(async (ref: string, options: any) => {
     const role_id = await resolveRoleId(ref, options.team);
-    const result = await cliPost("/cli/role/update", { role_id, name: options.name, handle: options.handle, charter: options.charter, review_backend: options.reviewBackend, from_session: callingSession() });
+    const avatar = options.avatar === undefined ? undefined : (options.avatar.trim().toLowerCase() === "none" ? "" : options.avatar);
+    const result = await cliPost("/cli/role/update", { role_id, name: options.name, handle: options.handle, charter: options.charter, review_backend: options.reviewBackend, tenure: options.tenure ? parseTenureFlag(options.tenure) : undefined, avatar, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     printRoleLine(result);
   });
@@ -13167,32 +13285,35 @@ org
   .description("Move a role or a session under another role or person")
   .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
   .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me)")
+  .option("--note <text>", "A line the agent reads with the move (\"You now report to X. <note>\")")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (subject: string, options: any) => {
     const ws = await readWorkspace(options.team);
     const target = await resolveOrgTarget(options.to, ws);
     const isRole = /^or-\d+$/.test(subject) || subject.startsWith("@");
+    const from_session = callingSession();
     const result = isRole
-      ? await cliPost("/cli/org/reparent", { role_id: (await resolveOrgTarget(subject, ws) as any).role_id, reports_to: target })
-      : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target });
+      ? await cliPost("/cli/org/reparent", { role_id: (await resolveOrgTarget(subject, ws) as any).role_id, reports_to: target, note: options.note, from_session })
+      : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target, note: options.note, from_session });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} ${subject} now reports to ${options.to}`);
+    console.log(`${c.green}✓${c.reset} ${subject} now reports to ${options.to}${toldSuffix(result?.told)}`);
   });
 
 org
   .command("retire")
   .description("Retire a role; its sessions fall back to their owners")
   .argument("<role>", "Role short id (or-N), id, or @handle")
+  .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the seat")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (ref: string, options: any) => {
     const ws = await readWorkspace(options.team);
     const target = await resolveOrgTarget(ref, ws);
     if (target.kind !== "role") { console.error(`"${ref}" is a person, not a role.`); process.exit(1); }
-    const result = await cliPost("/cli/org/retire", { role_id: target.role_id });
+    const result = await cliPost("/cli/org/retire", { role_id: target.role_id, standing_session: options.standing });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} retired ${result.name} ${c.dim}(${result.cleared} session${result.cleared === 1 ? "" : "s"} back under their owners)${c.reset}`);
+    console.log(`${c.green}✓${c.reset} retired ${result.name} ${c.dim}(${result.cleared} session${result.cleared === 1 ? "" : "s"} back under their owners${result.standing_session === "kept" ? "; the standing session keeps running as a plain agent" : result.standing_session === "retired" ? "; the standing session was retired" : ""})${c.reset}`);
   });
 
 // The scope feed (scopes-and-feed.md F2): what a role owns, merged newest first.
@@ -13682,11 +13803,14 @@ chatSlack
       const chatName = names.get(String(link.chat_channel_id)) ?? String(link.chat_channel_id).slice(0, 10);
       const state = link.paused ? `${c.yellow}paused${c.reset}` : `${c.green}live${c.reset}`;
       const counts = `${c.dim}↓${link.inbound_count ?? 0} ↑${link.outbound_count ?? 0}${c.reset}`;
+      const importing = link.backfill?.status === "running"
+        ? ` ${c.cyan}importing ${link.backfill.fetched} lines${c.reset}`
+        : link.backfill?.status === "done" && link.backfill.capped ? ` ${c.dim}history capped at ${link.backfill.fetched}${c.reset}` : "";
       const error = link.last_error
         ? ` ${c.red}${link.last_error}${c.reset}${link.last_error_at ? ` ${c.dim}${formatAge(Date.now() - link.last_error_at)}${c.reset}` : ""}`
         : "";
       const pad = " ".repeat(Math.max(0, width - chatName.length - 1));
-      console.log(`  ${slackPairLabel(chatName, link)}${pad} ${state} ${counts}${error}`);
+      console.log(`  ${slackPairLabel(chatName, link)}${pad} ${state} ${counts}${importing}${error}`);
     }
     if (status.pending_jobs) console.log(`${c.dim}  ${status.pending_jobs} event${status.pending_jobs === 1 ? "" : "s"} queued${c.reset}`);
   });
@@ -13722,7 +13846,7 @@ chatSlack
   .argument("<slack-channel>", "Slack channel: #name or id (C…)")
   .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
   .option("--direction <dir>", "both, from-slack, or to-slack", "both")
-  .option("--backfill <window>", "Pull recent Slack history in: none, 1d, 7d, 30d", "none")
+  .option("--backfill <window>", "Pull Slack history in: none, 1d, 7d, 30d, 90d, all (up to 25000 lines)", "none")
   .option("--no-threads", "Roots only, no thread replies")
   .option("--no-reactions", "Do not mirror reactions")
   .option("--no-edits", "Do not mirror edits and deletes")
@@ -13738,8 +13862,8 @@ chatSlack
       console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
       process.exit(1);
     }
-    if (!["none", "1d", "7d", "30d"].includes(options.backfill)) {
-      console.error(`--backfill wants none, 1d, 7d or 30d (got ${options.backfill})`);
+    if (!["none", "1d", "7d", "30d", "90d", "all"].includes(options.backfill)) {
+      console.error(`--backfill wants none, 1d, 7d, 30d, 90d or all (got ${options.backfill})`);
       process.exit(1);
     }
     const ws = await slackWorkspace(options);
@@ -13778,6 +13902,207 @@ chatSlack
       console.log(`${c.dim}  the channel is now #${chatName}, the same name as in Slack${c.reset}`);
     }
     if (options.backfill !== "none") console.log(`${c.dim}  backfilling the last ${options.backfill} of Slack history${c.reset}`);
+  });
+
+// Bring Slack channels over as new codecast channels: the terminal's version
+// of the channel browser. Each becomes a channel of the same name, mirrored
+// with the chosen history; the server creates the room and links it in one go.
+chatSlack
+  .command("add")
+  .description("Bring Slack channels into codecast as mirrored channels of the same name")
+  .argument("<slack-channel...>", "Slack channels: #name or id (C…), one or more")
+  .option("--team <name|id>", "Team the new channels belong to (default: your active team)")
+  .option("--direction <dir>", "both, from-slack, or to-slack", "both")
+  .option("--history <window>", "Slack history to bring in: none, 1d, 7d, 30d, 90d, all (up to 25000 lines)", "30d")
+  .option("--json", "Machine-readable output")
+  .action(async (slackRefs: string[], options: any) => {
+    const direction = SLACK_DIRECTION_FLAG[options.direction];
+    if (!direction) {
+      console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
+      process.exit(1);
+    }
+    if (!["none", "1d", "7d", "30d", "90d", "all"].includes(options.history)) {
+      console.error(`--history wants none, 1d, 7d, 30d, 90d or all (got ${options.history})`);
+      process.exit(1);
+    }
+    const ws = await slackWorkspace(options);
+    const results: any[] = [];
+    for (const slackRef of slackRefs) {
+      const slackChannelId = await resolveSlackChannelId(slackRef, ws);
+      const result = await cliPost("/cli/chat/slack/link", {
+        ...workspaceArgs(ws),
+        slack_channel_id: slackChannelId,
+        direction,
+        backfill: options.history,
+      });
+      results.push({ slack_channel: slackRef, ...result });
+      if (options.json) continue;
+      if (result.ok) {
+        console.log(
+          `${c.green}✓${c.reset} ${slackPairLabel(result.chat_channel_name, { direction, slack_channel_name: result.slack_channel_name })}` +
+          ` ${c.dim}in team${c.reset} ${c.bold}${workspaceLabel(ws)}${c.reset} ${c.dim}${result.chat_channel_id}${c.reset}`,
+        );
+      } else {
+        console.log(`${c.red}✗${c.reset} ${slackRef}: ${result.error ?? "could not add"}`);
+      }
+    }
+    if (options.json) {
+      console.log(JSON.stringify({ ...workspaceArgs(ws), history: options.history, results }, null, 2));
+      return;
+    }
+    if (options.history !== "none" && results.some((r) => r.ok)) {
+      console.log(`${c.dim}  bringing in ${options.history === "all" ? "all" : `the last ${options.history} of`} Slack history; ` +
+        `watch it land with cast chat slack ls${c.reset}`);
+    }
+    if (results.some((r) => !r.ok)) process.exitCode = 1;
+  });
+
+// Change a mirror's controls from the terminal: the same switches the dialog
+// has. Only the flags given are sent, so an untouched control keeps its value.
+// Turning a kind of line on after the import ran (say, Slack app messages)
+// makes the server run the import again for the lines that were skipped.
+chatSlack
+  .command("set")
+  .description("Change a mirror's controls (which lines cross, direction) or run its history import again")
+  .argument("<chat-channel>", "Codecast channel: #name or id")
+  .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
+  .option("--direction <dir>", "both, from-slack, or to-slack")
+  .option("--threads", "Mirror thread replies")
+  .option("--no-threads", "Roots only")
+  .option("--reactions", "Mirror reactions")
+  .option("--no-reactions", "Do not mirror reactions")
+  .option("--edits", "Mirror edits and deletes")
+  .option("--no-edits", "Do not mirror edits and deletes")
+  .option("--files", "Mirror attachments")
+  .option("--no-files", "Do not mirror attachments")
+  .option("--bot-messages", "Mirror lines Slack apps and bots post")
+  .option("--no-bot-messages", "Skip lines Slack apps and bots post")
+  .option("--system-messages", "Mirror joins, leaves, topic and pin notices")
+  .option("--no-system-messages", "Skip Slack's housekeeping notices")
+  .option("--agent-lines", "Send codecast agent and session lines to Slack")
+  .option("--no-agent-lines", "Keep agent and session lines out of Slack")
+  .option("--email-match", "A Slack person with a teammate's email is that teammate")
+  .option("--no-email-match", "Show everyone from Slack under their Slack name")
+  .option("--reimport", "Run the history import again from where it started; nothing is duplicated")
+  .option("--json", "Machine-readable output")
+  .action(async (chatRef: string, options: any) => {
+    const ws = await slackWorkspace(options);
+    const { link } = await slackLinkFor(chatRef, ws);
+    const body: any = { link_id: link._id };
+    if (options.direction !== undefined) {
+      const direction = SLACK_DIRECTION_FLAG[options.direction];
+      if (!direction) {
+        console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
+        process.exit(1);
+      }
+      body.direction = direction;
+    }
+    const map: Array<[string, string]> = [
+      ["threads", "threads"], ["reactions", "reactions"], ["edits", "edits"], ["files", "files"],
+      ["botMessages", "bot_messages"], ["systemMessages", "system_messages"], ["agentLines", "agent_lines"], ["emailMatch", "match_people_by_email"],
+    ];
+    const opts: Record<string, boolean> = {};
+    for (const [flag, key] of map) if (typeof options[flag] === "boolean") opts[key] = options[flag];
+    if (Object.keys(opts).length) body.options = opts;
+    if (options.reimport) body.reimport = true;
+    if (!body.direction && !body.options && !body.reimport) {
+      console.error("Nothing to change: give a control flag, --direction, or --reimport");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/chat/slack/update", body);
+    if (options.json) {
+      console.log(JSON.stringify({ ...result, ...body, ...workspaceArgs(ws) }, null, 2));
+      return;
+    }
+    const changed = [
+      ...(body.direction ? [`direction ${body.direction}`] : []),
+      ...Object.entries(opts).map(([k, val]) => `${k} ${val ? "on" : "off"}`),
+    ].join(", ");
+    console.log(`${c.green}✓${c.reset} ${slackPairLabel(link.chat_channel_name ?? chatRef.replace(/^#/, ""), link)}${changed ? ` ${c.dim}${changed}${c.reset}` : ""}`);
+    if (result.reimport) console.log(`${c.dim}  running the history import again; watch it with cast chat slack ls${c.reset}`);
+  });
+
+// Who each Slack person is in codecast, and the way to say otherwise.
+chatSlack
+  .command("people")
+  .description("People seen in the mirrored Slack channels and which teammate each one is")
+  .option("--team <name|id>", "Team whose Slack to read (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await slackWorkspace(options);
+    const result = await cliPost("/cli/chat/slack/people", workspaceArgs(ws));
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const people = result?.people ?? [];
+    if (!people.length) {
+      console.log(`${c.dim}Nobody from Slack has spoken in a mirrored channel yet.${c.reset}`);
+      return;
+    }
+    for (const p of people) {
+      const who = p.codecast_user_id
+        ? `${c.cyan}→ ${p.codecast_user_name ?? p.codecast_user_id}${c.reset} ${c.dim}(${p.mapped_by === "manual" ? "set" : "email"})${c.reset}`
+        : p.mapped_by === "manual" ? `${c.dim}Slack name (set)${c.reset}` : `${c.yellow}not matched${c.reset}`;
+      console.log(`  ${c.bold}${p.name}${c.reset}${p.handle ? ` ${c.dim}@${p.handle}${c.reset}` : ""}${p.email ? ` ${c.dim}${p.email}${c.reset}` : ""} ${who} ${c.dim}${p.slack_user_id}${c.reset}`);
+    }
+  });
+
+chatSlack
+  .command("map")
+  .description("Say who a Slack person is: a teammate, or 'none' to keep their Slack name")
+  .argument("<slack-user>", "Slack person: @handle, name, or id (U…)")
+  .argument("<teammate>", "Teammate: @handle, name, email, or 'none'")
+  .option("--team <name|id>", "Team whose Slack to change (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (slackRef: string, teammateRef: string, options: any) => {
+    const ws = await slackWorkspace(options);
+    const teamId = workspaceArgs(ws).team_id;
+    const result = await cliPost("/cli/chat/slack/people", workspaceArgs(ws));
+    const needle = slackRef.replace(/^@/, "").toLowerCase();
+    const person = (result?.people ?? []).find((p: any) =>
+      p.slack_user_id === slackRef || (p.handle ?? "").toLowerCase() === needle || p.name.toLowerCase() === needle || (p.real_name ?? "").toLowerCase() === needle);
+    if (!person) {
+      console.error(`No Slack person matches ${slackRef}. See cast chat slack people.`);
+      process.exit(1);
+    }
+    const out = await cliPost("/cli/chat/slack/map", { team_id: teamId, slack_user_id: person.slack_user_id, teammate_ref: teammateRef });
+    if (options.json) {
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    console.log(`${c.green}✓${c.reset} ${person.name} ${c.dim}is now${c.reset} ${out.codecast_user_id ? `a teammate (${teammateRef})` : "shown under their Slack name"}${c.dim}; their past lines are being re-authored${c.reset}`);
+  });
+
+// A person's own direct messages, on or off. Needs their connected Slack
+// account with the DM scopes (the web's Connect step grants them).
+chatSlack
+  .command("dms")
+  .description("Bring your Slack direct messages into codecast (on) or stop (off)")
+  .argument("<on|off>", "on or off")
+  .option("--team <name|id>", "Team whose Slack you connected (default: your active team)")
+  .option("--history <window>", "History to bring in when turning on: none, 1d, 7d, 30d, 90d, all", "30d")
+  .option("--json", "Machine-readable output")
+  .action(async (state: string, options: any) => {
+    if (!["on", "off"].includes(state)) {
+      console.error("Say on or off");
+      process.exit(1);
+    }
+    if (!["none", "1d", "7d", "30d", "90d", "all"].includes(options.history)) {
+      console.error(`--history wants none, 1d, 7d, 30d, 90d or all (got ${options.history})`);
+      process.exit(1);
+    }
+    const ws = await slackWorkspace(options);
+    const result = await cliPost("/cli/chat/slack/dms", { ...workspaceArgs(ws), enabled: state === "on", window: options.history });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (state === "on") {
+      console.log(`${c.green}✓${c.reset} your direct messages are coming over ${c.dim}(${options.history === "all" ? "all history" : `the last ${options.history}`}); each one becomes a DM here; watch them land with cast chat slack ls${c.reset}`);
+    } else {
+      console.log(`${c.green}✓${c.reset} your direct messages stop mirroring ${c.dim}(rooms and lines stay)${c.reset}`);
+    }
   });
 
 async function slackPauseAction(chatRef: string, options: any, paused: boolean) {
@@ -13864,8 +14189,8 @@ trigger
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers ignore it.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
-  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
-  .option("--thread", "Post results back to the current conversation thread")
+  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger; a trigger that fires once posts its result back into this session.")
+  .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
   .action(async (prompt, options) => {
     prompt = prompt.trim();
     if (!prompt) {
@@ -13921,10 +14246,11 @@ trigger
     let target_conversation_id: string | undefined;
 
     // --spawn: fresh session per run. Binding a session is what makes runs
-    // inject, so the two are mutually exclusive; --thread needs the current
-    // conversation resolved, which spawn mode deliberately skips.
-    if (options.spawn && (options.for || options.thread)) {
-      console.error(`--spawn conflicts with ${options.for ? "--for" : "--thread"}: spawn runs don't bind to a session`);
+    // inject, so the two are mutually exclusive. --thread is NOT a binding: it
+    // only names where each result is posted, so a fresh run can report into
+    // the thread that armed it.
+    if (options.spawn && options.for) {
+      console.error("--spawn conflicts with --for: spawn runs don't bind to a session");
       process.exit(1);
     }
 
@@ -13946,18 +14272,20 @@ trigger
     //     trigger via agent_task_id (the strip at the top of the session).
     const creatorSessionUuid = ownSessionId(getRealCwd());
     const sessionId = options.for || options.spawn ? null : creatorSessionUuid;
-    if (sessionId) {
+    // --spawn --thread resolves the creator for the post target alone.
+    const lookupSessionId = sessionId ?? (options.thread ? creatorSessionUuid : null);
+    if (lookupSessionId) {
       try {
         const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, session_ids: [sessionId] }),
+          body: JSON.stringify({ api_token: config.auth_token, session_ids: [lookupSessionId] }),
         });
         const data = await resp.json();
         const results = data?.conversations ?? (Array.isArray(data) ? data : [data]);
         const conv = results[0];
         if (conv?.conversation_id) {
-          originating_conversation_id = conv.conversation_id;
+          if (sessionId) originating_conversation_id = conv.conversation_id;
           if (options.thread) {
             target_conversation_id = conv.conversation_id;
           }
@@ -14192,6 +14520,15 @@ trigger
         process.exit(1);
       }
       if (result.success) {
+        // A run in a fresh session (the daemon exports its uuid) has just
+        // declared who acts next: the server pinned the summary as done, or as
+        // blocked with --needs-attention (agentTasks.settleRunConversation).
+        // Mirror it on disk exactly as `cast state` does, so the daemon settles
+        // the turn on the same verdict and the reminder hook sees a declaration.
+        const spawnedRun = process.env.CODECAST_RUN_SESSION_UUID;
+        if (spawnedRun && options.summary) {
+          writeThreadStatePulse(spawnedRun, options.needsAttention ? "blocked" : "done");
+        }
         console.log(`${c.green}ok${c.reset} Trigger completed: ${c.cyan}${id}${c.reset}`);
       } else {
         console.error("Failed to complete trigger (may not be in running state)");
@@ -14902,10 +15239,12 @@ function formatWorkItem(t: any, verbose = false, indent = 0): string {
   // A meeting task was decided by people; an agent only wrote it down. Marking
   // it here is what lets a reader tell it apart from agent bookkeeping.
   const origin = t.source === "meeting" ? ` ${c.magenta}meeting${c.reset}` : "";
+  // The icon shows the category; a team status inside it ("Today") is named.
+  const teamStatus = t.status_id && t.status_name ? ` ${c.yellow}${t.status_name}${c.reset}` : "";
   // Subtasks indent under their parent, with a guide so the nesting survives
   // the eye scanning a long list.
   const pad = indent > 0 ? `${"  ".repeat(indent)}${c.dim}└ ${c.reset}` : "";
-  let line = `  ${pad}${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${externalTag(t)}${pri}${assignee}${labels}${blocked}${origin}`;
+  let line = `  ${pad}${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${externalTag(t)}${teamStatus}${pri}${assignee}${labels}${blocked}${origin}`;
   if (verbose && t.description) {
     line += `\n    ${"  ".repeat(indent)}${c.dim}${t.description.slice(0, 120)}${c.reset}`;
   }
@@ -15159,7 +15498,7 @@ work
   .option("--blocked-by <ids>", "Comma-separated short_ids this is blocked by")
   .option("--labels <labels>", "Comma-separated labels")
   .option("--assignee <name>", "Assignee")
-  .option("--status <status>", "Initial status (default: open)", "open")
+  .option("--status <status>", "Initial status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today", "open")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .option("--parent <task_id>", "Nest this task under a parent task (e.g. ct-4102)")
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
@@ -15218,7 +15557,7 @@ work
   .alias("list")
   .description("List work items (default: active only)")
   .option("-p, --project <ref>", "Filter by project ID, short ID, or title substring")
-  .option("-s, --status <status>", "Filter by status")
+  .option("-s, --status <status>", "Filter by status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today")
   .option("-r, --ready", "Show only ready items (open, no blockers)")
   .option("-a, --all", "Include done/dropped tasks")
   .option("-d, --derived", "Include derived/mined tasks (hidden by default)")
@@ -15310,7 +15649,7 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   const pcolor = PRIORITY_COLORS[t.priority] || "";
   const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
   console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
-  console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
+  console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status_name ?? t.status} | ${pri} | ${t.task_type}`);
   if (t.parent) {
     console.log(`  ${c.dim}Subtask of ${c.reset}${c.cyan}${t.parent.short_id}${c.reset} ${c.dim}${t.parent.title}${c.reset}`);
   }
@@ -15552,7 +15891,7 @@ work
   .command("update")
   .description("Update a task")
   .argument("<short_id>", "Task short ID")
-  .option("-s, --status <status>", "New status")
+  .option("-s, --status <status>", "New status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today")
   .option("-p, --priority <level>", "New priority")
   .option("-t, --title <title>", stdinText("New title"))
   .option("-d, --description <text>", stdinText("New description"))
@@ -15950,7 +16289,8 @@ function charterOptions(cmd: any, project: boolean): any {
   if (project) {
     cmd
       .option("--risk <text>", stdinText("A risk (repeatable; replaces the list; 'none' clears)"), collectRepeatable)
-      .option("--budget-tokens <n>", "Tokens per day the owner role may spend ('none' clears)");
+      .option("--budget-tokens <n>", "Tokens per day the owner role may spend ('none' clears)")
+      .option("--horizon <h>", "ongoing (a lasting line) or bounded (an effort with an end); 'none' clears");
   }
   return cmd;
 }
@@ -15972,6 +16312,11 @@ function charterBody(options: any): Record<string, any> {
       if (!Number.isFinite(n) || n < 0) { console.error(`Invalid --budget-tokens "${options.budgetTokens}" — a non-negative number`); process.exit(1); }
       body.budget = { tokens_per_day: n };
     }
+  }
+  if (options.horizon !== undefined) {
+    if (NONE(options.horizon)) body.horizon = null;
+    else if (options.horizon === "ongoing" || options.horizon === "bounded") body.horizon = options.horizon;
+    else { console.error(`Invalid --horizon "${options.horizon}" — ongoing, bounded, or none`); process.exit(1); }
   }
   return body;
 }

@@ -51,9 +51,39 @@ describe("resolveStatusWrite — category only", () => {
     expect(r.statusId.set).toBe(false);
   });
 
-  test("an invalid category is refused with the category vocabulary", async () => {
+  test("an unknown status is refused with the team's vocabulary", async () => {
     await expect(
-      resolveStatusWrite(ctx(CUSTOM), TEAM, "open", { status: "working_on" }),
+      resolveStatusWrite(ctx(CUSTOM), TEAM, "open", { status: "shipping_soon" }),
+    ).rejects.toThrow(/Invalid task status 'shipping_soon'.*backlog.*working_on.*shipped/);
+  });
+});
+
+// The CLI only has `-s <status>`, so a team status must be reachable by name
+// through `status` (cast task update ct-1 -s today).
+describe("resolveStatusWrite — team status named in status", () => {
+  test("a name, in any case or separator, sets the category and the id", async () => {
+    for (const ref of ["Working on", "working_on", "WORKING-ON", "st_wip"]) {
+      const r = await resolveStatusWrite(ctx(CUSTOM), TEAM, "open", { status: ref });
+      expect(r.status).toBe("in_progress");
+      expect(r.statusId).toEqual({ set: true, value: "st_wip" });
+    }
+  });
+
+  test("a renamed category default resolves with no refinement", async () => {
+    const r = await resolveStatusWrite(ctx(CUSTOM), TEAM, "in_progress", { status: "todo" });
+    expect(r.status).toBe("open");
+    expect(r.statusId).toEqual({ set: true, value: undefined });
+  });
+
+  test("a name that disagrees with status_id is refused", async () => {
+    await expect(
+      resolveStatusWrite(ctx(CUSTOM), TEAM, "open", { status: "shipped", status_id: "st_wip" }),
+    ).rejects.toThrow(/does not match/);
+  });
+
+  test("a team status name is refused outside that team", async () => {
+    await expect(
+      resolveStatusWrite(ctx(), undefined, "open", { status: "working_on" }),
     ).rejects.toThrow(/Invalid task status/);
   });
 });

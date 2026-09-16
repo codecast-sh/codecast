@@ -211,7 +211,8 @@ import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
-import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
+import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
+import { ensureGrokFolderTrusted } from "./grokFolderTrust.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
@@ -5366,6 +5367,11 @@ async function executeRemoteCommand(
         // plain argv, which works here because envPrefix starts with `env`.
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
         if (agentType === "grok") {
+          // Pre-trust the cwd so grok does not park on the first-launch folder
+          // dialog. The pane classifier still answers `y` if the dialog appears.
+          if (cwd && ensureGrokFolderTrusted(cwd)) {
+            log(`grok folder trust granted for ${cwd}`);
+          }
           // The feed rides `--rules` (grok has no hook channel for context); the
           // fragment is a shell substitution, so it is appended to the typed
           // command after the argv allowlist, never passed through it.
@@ -8965,6 +8971,50 @@ async function trackTmuxSpawns(
   }
 }
 
+// Process evidence dies with the child: a `codex exec` that fails fast (usage
+// limit, bad flag) exits during the passes before its first message lands, and
+// the conversation is created on a later pass. So the walk remembers every
+// spawner it names, keyed by the child session, and any later pass maps those
+// names to a conversation after the process is gone.
+type SpawnerCandidate = { conversationId: string } | { sessionId: string };
+const spawnerCandidates = new Map<string, SpawnerCandidate[]>();
+
+async function walkSpawnerCandidates(
+  filePath: string,
+  sessionId: string,
+  agentType: AgentClientId,
+  spawnRegistry: TmuxSpawnRegistry,
+): Promise<SpawnerCandidate[]> {
+  let pids = await pidsWithFileOpen(filePath);
+  if (pids.length === 0) {
+    const proc = await findSessionProcess(sessionId, agentType).catch(() => null);
+    if (proc) pids = [proc.pid];
+  }
+  if (pids.length === 0) return [];
+  const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
+  const pidToPpid = parsePidPpidMap(psOut);
+  const tmuxPanes = spawnRegistry.hasEntries()
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    : "";
+  const startedAt = transcriptStartedAt(filePath);
+  const candidates: SpawnerCandidate[] = [];
+  for (const pid of pids) {
+    const ancestors = collectAncestorPids(pidToPpid, pid);
+    const tmuxParent = spawnRegistry.parentForPanes(tmuxPanes, [pid, ...ancestors], startedAt);
+    if (tmuxParent) candidates.push({ conversationId: tmuxParent });
+    // Claude Code's pid registry first: a plain file read, no subprocess.
+    const registrySessionId = resolveSpawnerSessionId(ancestors, readPidRegistrySessionId, sessionId);
+    if (registrySessionId) candidates.push({ sessionId: registrySessionId });
+    // Then the open-transcript route, which is the only one that can name a
+    // codex/gemini/pi spawner (`claude -p` run from a codex exec tool).
+    const openTranscripts = await ancestorTranscriptSessionIds(ancestors);
+    const openSessionId = resolveSpawnerSessionId(ancestors, (p) => openTranscripts.get(p) ?? null, sessionId);
+    if (openSessionId) candidates.push({ sessionId: openSessionId });
+    if (candidates.length) break;
+  }
+  return candidates;
+}
+
 export async function resolveSpawnerConversation(
   filePath: string,
   sessionId: string,
@@ -8972,34 +9022,14 @@ export async function resolveSpawnerConversation(
   conversationCache: ConversationCache,
   spawnRegistry: TmuxSpawnRegistry = tmuxSpawnRegistry,
 ): Promise<string | null> {
-  let pids = await pidsWithFileOpen(filePath);
-  if (pids.length === 0) {
-    const proc = await findSessionProcess(sessionId, agentType).catch(() => null);
-    if (proc) pids = [proc.pid];
+  let candidates = spawnerCandidates.get(sessionId);
+  if (!candidates) {
+    candidates = await walkSpawnerCandidates(filePath, sessionId, agentType, spawnRegistry);
+    if (candidates.length) spawnerCandidates.set(sessionId, candidates);
   }
-  if (pids.length === 0) return null;
-  const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
-  const pidToPpid = parsePidPpidMap(psOut);
-  const tmuxPanes = spawnRegistry.hasEntries()
-    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
-    : "";
-  const startedAt = transcriptStartedAt(filePath);
-  for (const pid of pids) {
-    const ancestors = collectAncestorPids(pidToPpid, pid);
-    const tmuxParent = spawnRegistry.parentForPanes(tmuxPanes, [pid, ...ancestors], startedAt);
-    if (tmuxParent && tmuxParent !== conversationCache[sessionId]) return tmuxParent;
-    // Claude Code's pid registry first: a plain file read, no subprocess.
-    const registrySessionId = resolveSpawnerSessionId(ancestors, readPidRegistrySessionId, sessionId);
-    if (registrySessionId && conversationCache[registrySessionId]) {
-      return conversationCache[registrySessionId];
-    }
-    // Then the open-transcript route, which is the only one that can name a
-    // codex/gemini/pi spawner (`claude -p` run from a codex exec tool).
-    const openTranscripts = await ancestorTranscriptSessionIds(ancestors);
-    const openSessionId = resolveSpawnerSessionId(ancestors, (p) => openTranscripts.get(p) ?? null, sessionId);
-    if (openSessionId && conversationCache[openSessionId]) {
-      return conversationCache[openSessionId];
-    }
+  for (const candidate of candidates) {
+    const conversationId = "conversationId" in candidate ? candidate.conversationId : conversationCache[candidate.sessionId];
+    if (conversationId && conversationId !== conversationCache[sessionId]) return conversationId;
   }
   return null;
 }
@@ -10578,6 +10608,11 @@ async function processCodexSessionPass(
     }
 
     if (messages.length === 0) {
+      // Name the spawner while the child still runs; creation waits for the
+      // first message, and a fast failing `codex exec` is gone by then.
+      if (!conversationId && !nativeParentSessionId) {
+        await resolveSpawnerConversation(filePath, sessionId, "codex", conversationCache).catch(() => null);
+      }
       await commitTranscriptIngest(ingest,sessionId,conversationId,conversationCache,() => {
         setPosition(filePath, lastPosition + bytesConsumed);
       },lineageKeys);
@@ -11409,7 +11444,10 @@ async function processTranscriptDeltaSessionPass(
     if (allMessages.length === 0) return;
     const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
-    if (newMessages.length === 0 && orphanUuids.length === 0) return;
+    if (newMessages.length === 0 && orphanUuids.length === 0) {
+      markExamined(ingestSource(ingest)?.file ?? filePath);
+      return;
+    }
 
     let conversationId = conversationCache[sessionId];
 
@@ -13459,6 +13497,34 @@ export function isCodexTrustDialog(text: string): boolean {
     && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*No,\s*quit\b/im.test(text);
 }
 
+// Grok 1.0.30 first-launch folder-trust dialog, verified against a live pane in
+// an untrusted directory (jx702ea, 2026-09-16):
+//
+//   Do you trust the contents of this directory?
+//   /Users/ashot/src/mail
+//   Grok Build may run or modify contents in this directory,
+//   posing security risks.
+//   Yes, proceed                 y
+//   No, quit                     n
+//   …~30 blank rows…
+//   Grok Build  1.0.30 [stable]
+//
+// Unlike Claude (numbered, cursor on "No, exit") and Codex (numbered
+// "Yes, continue"/"No, quit"), grok has no cursor glyph and answers with y/n.
+// The question sits in the middle of a full-screen pane, so extractTmuxLiveRegion
+// (a 5-line tail when there are no box separators) sees only the footer. Match
+// the option pair against the WHOLE pane. "Yes, proceed" is grok's wording —
+// Codex says "Yes, continue" — so the two dialogs cannot claim each other.
+export function isGrokTrustDialog(text: string): boolean {
+  return /Yes,\s*proceed\b[^\n]*\by\b/i.test(text)
+    && /No,\s*quit\b[^\n]*\bn\b/i.test(text);
+}
+
+// How many tmux history rows a grok classifier must see to reach the y/n
+// options above the footer. A 25-line capture of the live pane in jx702ea
+// held only padding + "Grok Build  1.0.30 [stable]".
+export const GROK_TRUST_PANE_CAPTURE_LINES = 80;
+
 export type TmuxLiveState =
   | "idle"          // empty input prompt — safe to paste
   | "busy"          // spinner / "esc to interrupt" — wait
@@ -13653,9 +13719,11 @@ export function glyphlessPromptPattern(agentType: AgentClientId | undefined): Re
 
 // Injection-readiness for a glyph-less client, tested against the WHOLE pane (not
 // extractTmuxLiveRegion's tight live-region tail — opencode has no ─/━ separator,
-// so that tail drops to the status bar and misses the footer marker). These
-// clients have no pane-driven modals (panePromptMonitoring:false; the store
-// watcher is the authoritative turn-state source), so readiness is the narrow
+// so that tail drops to the status bar and misses the footer marker). Tool
+// permission prompts ride the store watcher (panePromptMonitoring:false), but
+// grok's first-launch folder-trust dialog is a pane-driven modal that appears
+// before any store exists — classifyGlyphlessClientPaneState reports it as
+// "trust" so ensureTmuxReady can answer `y`. Otherwise readiness is the narrow
 // question "is the TUI up and accepting input": a visible readyPattern with no
 // active spinner means ready-to-paste. `busy` is best-effort — the store, not the
 // pane, owns turn state — but a visible spinner still says to skip the
@@ -13665,6 +13733,11 @@ export function classifyGlyphlessClientPaneState(
   readyPattern: RegExp,
 ): TmuxLiveState {
   if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(paneContent)) return "exited";
+  // Grok's first-launch folder-trust dialog is a pane-driven modal that appears
+  // BEFORE any store/transcript exists (jx702ea). Without this rule the pane
+  // classified "unknown" (no ❯ yet) and ensureTmuxReady's glyphless skip polled
+  // until timeout, never sending the `y` the dialog asks for.
+  if (isGrokTrustDialog(paneContent)) return "trust";
   // Busy before ready, always. Braille spinner frames + "esc to interrupt" cover
   // opencode/pi; `Esc:cancel` / `Waiting for response` / `[stop]` are grok's busy
   // chrome (live pane capture, v1.0.5 — the spinner sits in grok's HEADER, which a
@@ -15182,6 +15255,18 @@ export function selectRowHasLabel(line: string, label: string): boolean {
 }
 
 export async function acceptTrustPrompt(target: string): Promise<boolean> {
+  // Grok paints y/n with no cursor glyph, so the highlight walker below would
+  // return "none" and press nothing forever. The TUI itself names `y` as the
+  // grant key — send that, never Enter (there is no highlighted row).
+  try {
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${GROK_TRUST_PANE_CAPTURE_LINES}`]);
+    if (isGrokTrustDialog(stdout)) {
+      log(`Answering grok folder-trust dialog in ${target} (y)`);
+      await tmuxExec(["send-keys", "-t", target, "y"]);
+      await new Promise(r => setTimeout(r, 1500));
+      return true;
+    }
+  } catch {}
   const accepted = await selectHighlightedOption(target, isTrustAffirmativeRow, "the workspace trust dialog");
   // The agent boots behind this dialog; give it a moment before the caller re-reads.
   if (accepted) await new Promise(r => setTimeout(r, 1500));
@@ -15231,6 +15316,11 @@ class InputBlockedError extends Error {
 
 function assertPromptAbsent(pane: string): void {
   if (!pane.trim()) throw new InputBlockedError("terminal capture is empty");
+  // Folder-trust is answered by acceptTrustPrompt, not held as a card. Grok's
+  // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
+  // cursor), but skipping the detectors here keeps a future parse from parking
+  // delivery on a dialog the launch path already knows how to dismiss.
+  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane)) return;
   if (parseInteractivePrompt(pane, true)) throw new InputBlockedError("terminal is waiting for a human answer");
 }
 
@@ -15266,7 +15356,7 @@ export async function captureTmuxLiveState(target: string, glyphlessPattern: Reg
   return { stdout, region, state };
 }
 
-export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines = inspectPane ? 80 : 25): Promise<{ busy: boolean }> {
+export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
@@ -15278,13 +15368,16 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
   // their registry readiness pattern, not the ❯/›-glyph whitelist (see
   // classifyGlyphlessClientPaneState / ct-39174).
   const glyphlessPattern = glyphlessPromptPattern(agentType);
+  // Grok's folder-trust options sit ~40 rows above the footer; a 25-line
+  // capture never sees them (jx702ea). First-message inspect already used 80.
+  const lines = captureLines ?? (inspectPane || agentType === "grok" ? GROK_TRUST_PANE_CAPTURE_LINES : 25);
 
   while (true) {
     let stdout: string;
     let region: string;
     let state: TmuxLiveState;
     try {
-      ({ stdout, region, state } = await captureTmuxLiveState(target, glyphlessPattern, captureLines));
+      ({ stdout, region, state } = await captureTmuxLiveState(target, glyphlessPattern, lines));
     } catch (err) {
       if (inspectPane) throw new InputBlockedError(`terminal capture failed: ${String(err)}`);
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
@@ -15307,16 +15400,23 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // pendingPromptHold) until the scraped card is answered.
     if (state === "menu") throw new Error("AGENT_STDIN_NOT_READY: terminal is waiting for a human answer");
 
+    // Grok is glyphless, so the skip below would swallow this as "still booting"
+    // and never send `y`. Answer it here, before that continue.
+    if (state === "trust") {
+      await acceptTrustPrompt(target);
+      continue;
+    }
+
     // Corrective states: cap total time and bail if our key didn't move the state.
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
       if (authorizesTeardown(await panePresenceVerdict(target))) throw new Error(DEAD_PANE_ERROR);
       throw new Error(`AGENT_NOT_READY: live state '${state}' did not settle within ${STUCK_BUDGET_MS}ms`);
     }
 
-    // Glyph-less clients have no pane-driven corrective modals — an "unknown"
-    // here just means the readiness marker hasn't rendered yet (TUI still
-    // booting/redrawing), so poll again until it does or the budget above trips.
-    // There are no keys to send.
+    // Glyph-less clients have no other pane-driven corrective modals — an
+    // "unknown" here just means the readiness marker hasn't rendered yet (TUI
+    // still booting/redrawing), so poll again until it does or the budget above
+    // trips. Trust is handled above; there are no other keys to send.
     if (glyphlessPattern) {
       await new Promise(resolve => setTimeout(resolve, 300));
       continue;
@@ -20564,7 +20664,7 @@ export function classifyStartedPane(
   // scrollback instead of clearing it: matched over the whole capture the
   // verdict stays "trust" after the corrective ran, and every 2s poll presses
   // Enter again at a composer that is already up.
-  if (TRUST_PROMPT_RE.test(paneContent) || isCodexTrustDialog(extractTmuxLiveRegion(paneContent))) return "trust";
+  if (TRUST_PROMPT_RE.test(paneContent) || isCodexTrustDialog(extractTmuxLiveRegion(paneContent)) || isGrokTrustDialog(paneContent)) return "trust";
 
   const belowPrompt = paneTextAfterLastMatch(agentPane, promptPattern);
   if (belowPrompt === null) return "booting";
@@ -20588,13 +20688,13 @@ export function classifyStartedPane(
 // session exists and "gone" once it does not.
 async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: string) => void): Promise<{ state: StartedPaneState; pane: string }> {
   let paneContent: string;
+  const captureLines = entry.agentType === "grok" ? GROK_TRUST_PANE_CAPTURE_LINES : 20;
   try {
-    ({ stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]));
+    ({ stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", `-${captureLines}`]));
   } catch {
     const alive = await tmuxExec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
     return { state: alive ? "booting" : "gone", pane: "" };
   }
-  inspectPane?.(paneContent);
   const { promptReadyPattern, paneReadiness } = AGENT_CLIENTS[entry.agentType];
   // The two terminal modes tmux renders as formats, read only when a client's
   // rule asks for one. They are facts the client told the terminal, which is why
@@ -20614,9 +20714,12 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
   if (state === "trust") {
     // Same dialog, same hazard as the resume path: "No, exit" is the default
     // highlight, so a bare Enter here quit the agent it had just started.
+    // Grok has no highlight at all — acceptTrustPrompt sends `y`.
     log(`Started session ${entry.tmuxSession} showing trust prompt, selecting the affirmative option`);
     await acceptTrustPrompt(entry.tmuxSession).catch(() => false);
+    return { state, pane: paneContentAfterLaunchEcho(paneContent) };
   }
+  inspectPane?.(paneContent);
   return { state, pane: paneContentAfterLaunchEcho(paneContent) };
 }
 
@@ -21920,6 +22023,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   let resumeAccount: string | undefined;
   let stableRulesFile: string | undefined;
   if (agentType === "grok") {
+    if (cwd && ensureGrokFolderTrusted(cwd)) {
+      log(`grok folder trust granted on resume for ${cwd}`);
+    }
     try {
       stableRulesFile = await writeGrokStableRulesFile(config, cwd, undefined, sessionId, conversationId);
     } catch (err) {

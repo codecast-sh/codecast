@@ -392,12 +392,6 @@
   flex: 0 0 auto;
 }
 
-/* A thread hangs from the root message pinned above it. Packing replies to the
- * bottom would leave the answer detached from its question. */
-.ch-thread .ch-list-fill {
-  justify-content: flex-start;
-}
-
 .ch-loading-older {
   display: flex;
   align-items: center;
@@ -632,6 +626,21 @@
   color: var(--sol-violet);
   background: color-mix(in srgb, var(--sol-violet) 15%, transparent);
   text-decoration: none;
+}
+
+/* A person named who exists only in the team's Slack workspace: the person
+ * chip wearing the Slack mark. Nothing here to open — they are paged in the
+ * line's Slack copy — so it is a span, not a link. */
+.editor-mention.ch-mention-slack {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ch-mention-slack-mark {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
 }
 
 /* "folded": a role or session this line named was over its hourly mention
@@ -1092,22 +1101,46 @@ div.ch-reaction-tip {
   background: transparent;
 }
 
+/* Framed inside another surface (palette confirm, huddle rail): no page
+ * margins, and MessageInput's sticky / pointer-events-none float is cancelled
+ * so the box is a normal block. */
+.ch-composer-flush {
+  margin: 0;
+}
+.ch-composer-flush [data-sv-composer] {
+  position: static;
+  pointer-events: auto;
+}
+.ch-composer-flush [role="listbox"] {
+  z-index: 50;
+}
+
 /* ── Thread panel ────────────────────────────────────────────────────────── */
 
 .ch-thread {
   position: relative;
   width: 384px;
   flex: 0 0 384px;
-  /* Never more than a third of the surface: three fixed columns inside a shell
-   * that already spends 240px on the app sidebar left the transcript 265px at
-   * 1100px — four words a line, with clipped code and 600px of dead space in the
-   * panel beside it. */
-  max-width: 34%;
+  /* No CSS cap: the drag handle (ChatThreadPanel) bounds the width against the
+   * shell so the transcript keeps a readable column, and a saved width wider
+   * than this window is clamped the moment it is dragged. A percentage here
+   * once fought the drag — the panel stopped at a third of the surface with
+   * nothing to say why. */
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-left: 1px solid color-mix(in srgb, var(--sol-border) 32%, transparent);
   background: color-mix(in srgb, var(--sol-bg-alt) 22%, var(--sol-bg));
+}
+
+/* A message whose tools popover (the menu, the emoji picker) is open must
+ * paint over the rows below it. Every virtual row is transformed, so each is
+ * its own stacking context and a z-index inside one cannot escape it: the
+ * menu's own z-index only ordered it against its siblings in the same row,
+ * and the next row's text painted straight over "Copy link". Raising the ROW
+ * is what orders it against the other rows. The thread root is a row too. */
+.ch-list-sizer > [data-vkey]:has(.ch-tools-open) {
+  z-index: 5;
 }
 
 /* The panel's left edge is a drag handle (same affordance as the comment
@@ -3001,6 +3034,197 @@ a.ch-slack-mark:hover { color: var(--sol-text); text-decoration: underline; }
 .ch-slack-lede { font-size: 12px; line-height: 1.55; color: var(--sol-text-secondary); margin: 0; }
 .ch-slack-fine { font-size: 10.5px; line-height: 1.5; color: var(--sol-text-dim); margin: 0; }
 .ch-slack-quiet { font-size: 11px; color: var(--sol-text-dim); padding: 8px 2px; }
+.ch-slack-quiet:hover:not(:disabled) { color: var(--sol-text); }
+.ch-slack-quiet:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Channel browser (add channels from Slack) ─────────────────────────────
+ * Wider than the per channel dialog: the list is the point, and a row carries
+ * a name, a purpose, a member count and an import state side by side. */
+.ch-slack-browser { width: min(680px, calc(100vw - 24px)); }
+.ch-slack-browser-body { gap: 16px; }
+.ch-slack-browser-tools { display: flex; align-items: center; gap: 10px; }
+.ch-slack-browser-tools .ch-slack-search { flex: 1 1 auto; }
+.ch-slack-browser-quick { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.ch-slack-browser-list { max-height: min(340px, 44vh); }
+.ch-slack-browser-heading {
+  padding: 8px 9px 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sol-text-dim);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+.ch-slack-browser-row { height: auto; min-height: 34px; padding: 0 9px 0 0; gap: 0; }
+.ch-slack-browser-row-here { color: var(--sol-text-dim); }
+.ch-slack-browser-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  text-align: left;
+  color: inherit;
+}
+.ch-slack-browser-main:disabled { cursor: default; }
+.ch-slack-box {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
+  border-radius: 3px;
+  color: var(--sol-bg);
+  background: transparent;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.ch-slack-box-on { background: var(--sol-cyan); border-color: var(--sol-cyan); }
+.ch-slack-browser-row-here .ch-slack-box { border-style: dashed; color: var(--sol-text-dim); }
+/* The name never truncates in favour of the purpose: the purpose is the one
+ * that gives way, since the name is what the row is FOR. */
+.ch-slack-browser-main .ch-slack-row-name { flex: 0 0 auto; max-width: 45%; }
+.ch-slack-browser-purpose {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--sol-text-dim);
+}
+.ch-slack-browser-row .ch-slack-row-meta { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.ch-slack-browser-since { color: color-mix(in srgb, var(--sol-text-dim) 75%, transparent); }
+.ch-slack-browser-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  font-size: 10.5px;
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+}
+.ch-slack-browser-state:empty { display: none; }
+.ch-slack-browser-progress { display: inline-flex; align-items: center; gap: 4px; color: var(--sol-green); }
+.ch-slack-browser-fail { display: inline-flex; align-items: center; gap: 4px; color: var(--sol-red); overflow: hidden; text-overflow: ellipsis; }
+.ch-slack-browser-invite { color: var(--sol-orange); }
+.ch-slack-browser-open { display: inline-flex; align-items: center; gap: 3px; color: var(--sol-cyan); }
+.ch-slack-browser-open:hover { text-decoration: underline; }
+.ch-slack-tag-quiet { color: var(--sol-text-dim); border-color: color-mix(in srgb, var(--sol-border) 80%, transparent); margin-left: 5px; }
+.ch-slack-import { margin-top: 6px; }
+.ch-slack-import-failed { color: var(--sol-orange); }
+.ch-slack-import-again { padding: 0 0 0 8px; text-decoration: underline; text-underline-offset: 2px; }
+.ch-slack-empty { display: flex; align-items: center; gap: 6px; padding: 14px 10px; font-size: 11px; color: var(--sol-text-dim); }
+
+/* The step for private channels: one line and one button, in the browser
+ * body under the list, only while the person has not connected. */
+.ch-slack-connect-self {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent);
+  border-radius: 6px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--sol-text-dim);
+}
+.ch-slack-connect-self > span { flex: 1 1 auto; }
+.ch-slack-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--sol-border);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--sol-text);
+  white-space: nowrap;
+  background: var(--sol-bg);
+}
+.ch-slack-secondary:hover:not(:disabled) { background: var(--sol-bg-highlight); }
+.ch-slack-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+.ch-slack-browser-footnote { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
+.ch-slack-people-link { display: inline-flex; align-items: center; gap: 4px; padding: 0; color: var(--sol-cyan); }
+.ch-slack-people-link:hover { text-decoration: underline; }
+
+/* Your direct messages: a row with a switch, the history windows under it
+ * while off. Compact on the settings card, boxed inside the browser. */
+.ch-slack-dms { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent); border-radius: 6px; }
+.ch-slack-dms-compact { border: 0; padding: 6px 0 0; border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); border-radius: 0; }
+.ch-slack-dms-row { display: flex; align-items: flex-start; gap: 10px; }
+.ch-slack-dms-row .ch-slack-secondary, .ch-slack-dms-row [role=switch] { flex: 0 0 auto; margin-top: 2px; }
+.ch-slack-dms-title { font-size: 11.5px; font-weight: 600; color: var(--sol-text); margin-bottom: 2px; }
+.ch-slack-dms-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* People from Slack: one row per person, the picker on the right. */
+.ch-slack-people { width: min(640px, calc(100vw - 24px)); }
+.ch-slack-people-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 6px;
+  max-height: min(420px, 55vh);
+  overflow: auto;
+}
+.ch-slack-person {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+.ch-slack-person:last-child { border-bottom: 0; }
+.ch-slack-person-face { flex: 0 0 auto; display: inline-flex; }
+.ch-slack-person-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ch-slack-person-name { font-size: 12px; color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-slack-person-meta { font-size: 10.5px; color: var(--sol-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-slack-person-pick { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+.ch-slack-person-as { flex: 0 0 auto; display: inline-flex; }
+.ch-slack-select {
+  height: 26px;
+  max-width: 220px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  border-radius: 5px;
+  background: var(--sol-bg);
+  color: var(--sol-text);
+  font-size: 11px;
+}
+.ch-slack-select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* History windows: one row of cards, the default marked, each with its own
+ * one line reason, so the choice is made from the words and not from memory. */
+.ch-slack-windows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.ch-slack-window {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 9px;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 6px;
+  color: var(--sol-text-muted);
+}
+.ch-slack-window:hover:not(:disabled) { border-color: var(--sol-border); color: var(--sol-text); }
+.ch-slack-window:disabled { opacity: 0.6; cursor: not-allowed; }
+.ch-slack-window-on { border-color: var(--sol-cyan); background: color-mix(in srgb, var(--sol-cyan) 9%, transparent); color: var(--sol-text); }
+.ch-slack-window-label { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; }
+.ch-slack-window-hint { font-size: 10px; line-height: 1.4; color: var(--sol-text-dim); }
+.ch-slack-browser-foot { padding: 10px 16px 12px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); }
+@media (max-width: 640px) {
+  .ch-slack-windows { grid-template-columns: repeat(2, 1fr); }
+  .ch-slack-browser-tools { flex-wrap: wrap; }
+  .ch-slack-browser-purpose, .ch-slack-browser-since { display: none; }
+}
 .ch-slack-section { display: flex; flex-direction: column; gap: 7px; }
 .ch-slack-label {
   display: flex;
@@ -3177,6 +3401,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); text-decoration: underline; }
 .ch-slack-status-text { font-size: 12px; font-weight: 600; }
 .ch-slack-open { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-muted); }
 .ch-slack-open:hover { color: var(--sol-text); text-decoration: underline; }
+.ch-slack-open-next { margin-left: 10px; }
 .ch-slack-facts { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 18px; margin: 0; }
 .ch-slack-facts dt { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sol-text-dim); }
 .ch-slack-facts dd { margin: 1px 0 0; font-size: 11.5px; color: var(--sol-text-secondary); font-variant-numeric: tabular-nums; }

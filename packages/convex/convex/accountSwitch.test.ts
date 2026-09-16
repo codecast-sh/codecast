@@ -512,6 +512,30 @@ describe("decideAutoSwitch", () => {
     expect(unknownOnly).toEqual({ action: "switch", profile: "mystery" });
   });
 
+  test("a stale rolled snapshot that displays as 2% is unknown, not the hop", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(100) },
+        {
+          name: "stale",
+          email: "stale@x.com",
+          usage: {
+            fetched_at: now - 6 * 3600_000,
+            session: { percent: 2, resets_at: now + 3600_000 },
+            weekly: { percent: 54, resets_at: now - 3 * 3600_000 },
+            weekly_scoped: { percent: 100, resets_at: now - 3 * 3600_000, label: "Fable" },
+          },
+        },
+        { name: "known", email: "known@x.com", usage: mkUsage(69) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "switch", profile: "known" });
+  });
+
   test("never picks the active account or an exhausted one", () => {
     const d = decideAutoSwitch({
       now,

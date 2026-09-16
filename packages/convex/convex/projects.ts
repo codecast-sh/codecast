@@ -123,6 +123,8 @@ export const update = mutation({
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
+    // Ongoing or bounded (org-staffing.md S10); "none" from the CLI clears it.
+    horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"), v.null())),
     // The charter (org-staffing.md S7); `--owner @handle` resolves inside the
     // project's own workspace. Access is the project's, unchanged.
     ...projectCharterArgs,
@@ -140,6 +142,7 @@ export const update = mutation({
     if (args.status) updates.status = args.status;
     if (args.target_date !== undefined) updates.target_date = args.target_date ?? undefined;
     if (args.labels) updates.labels = args.labels;
+    if (args.horizon !== undefined) updates.horizon = args.horizon ?? undefined;
 
     await ctx.db.patch(args.id, updates);
     return { success: true };
@@ -332,6 +335,7 @@ export const webUpdate = mutation({
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
+    horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"), v.null())),
     ...projectCharterArgs,
   },
   handler: async (ctx, args) => {

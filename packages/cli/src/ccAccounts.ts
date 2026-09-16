@@ -1991,7 +1991,13 @@ export interface CcUsageSnapshot {
   session?: CcUsageWindow; // rolling 5h window
   weekly?: CcUsageWindow; // 7d, all models
   weekly_scoped?: CcUsageWindow; // 7d, model-scoped (the /usage screen's third bar)
-  extra?: { percent: number; enabled: boolean }; // overflow usage credits
+  extra?: {
+    percent: number;
+    enabled: boolean;
+    limit?: number; // extra_usage.monthly_limit, dollars
+    used?: number; // extra_usage.used_credits, dollars
+    spend_limit_reached?: boolean;
+  }; // overflow usage credits
   // The two fields below are LOCAL ONLY — stripped before the heartbeat,
   // because Convex's ccUsageValidator rejects unknown fields and a daemon that
   // sent one would have every heartbeat's account inventory refused.
@@ -2035,8 +2041,22 @@ export function parseUsageResponse(data: any, now: number): CcUsageSnapshot {
     snap.weekly = { percent: data.seven_day.utilization, resets_at: toMs(data.seven_day.resets_at) };
   }
   const extra = data?.extra_usage;
-  if (extra && typeof extra.utilization === "number") {
-    snap.extra = { percent: extra.utilization, enabled: extra.is_enabled === true };
+  const extraPercent =
+    typeof extra?.utilization === "number"
+      ? extra.utilization
+      : typeof extra?.monthly_limit === "number" && extra.monthly_limit > 0 && typeof extra.used_credits === "number"
+        ? Math.min(100, (extra.used_credits / extra.monthly_limit) * 100)
+        : typeof extra?.monthly_limit === "number"
+          ? 0
+          : undefined;
+  if (extra && extraPercent !== undefined) {
+    snap.extra = {
+      percent: extraPercent,
+      enabled: extra.is_enabled === true,
+      ...(typeof extra.monthly_limit === "number" && { limit: extra.monthly_limit }),
+      ...(typeof extra.used_credits === "number" && { used: extra.used_credits }),
+      ...(extra.spend_limit_reached === true && { spend_limit_reached: true }),
+    };
   }
   return snap;
 }
@@ -2745,7 +2765,11 @@ export function getAccountsHeartbeatPayloadAsync(): Promise<AccountsHeartbeatPay
  *  daemon that sent one would have every heartbeat's inventory rejected. */
 function publishableUsage(snap: CcUsageSnapshot | undefined): CcUsageSnapshot | undefined {
   if (!snap) return undefined;
-  const { source, polled_at, ...rest } = snap;
+  const { source, polled_at, extra, ...rest } = snap;
+  // Extra spend dollars stay local (`cast usage`) until every Convex that
+  // accepts this heartbeat has the matching extra fields. percent+enabled is
+  // the published shape; unknown keys here reject the whole inventory.
+  if (extra) rest.extra = { percent: extra.percent, enabled: extra.enabled };
   return rest;
 }
 

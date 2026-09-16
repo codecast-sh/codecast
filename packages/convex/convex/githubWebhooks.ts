@@ -50,6 +50,9 @@ const MERGE_STATE_DELAY_MS = 15 * 1000;
 // "unstable" and `cast pr show` disagrees with itself. Asking shortly after the
 // checks settle is what closes that gap.
 const CHECK_MERGE_STATE_DELAY_MS = 10 * 1000;
+// How long a review's webhook wake waits for codecast's own delivery of the
+// same review to the owning session (reviews.deliverSubmittedReview).
+const DIRECT_DELIVERY_GRACE_MS = 20 * 1000;
 
 const isHumanReviewer = (user: { login?: string; type?: string } | undefined, pr: Doc<"pull_requests">) =>
   !!user?.login && user.type !== "Bot" && !user.login.toLowerCase().endsWith("[bot]")
@@ -845,12 +848,24 @@ export const processReviewEvent = internalMutation({
 
     const worthWaking = state === "changes_requested" || ((state === "commented" || state === "approved") && !!review.body?.trim());
     if (worthWaking && changed && isHumanReviewer(review.user, pr) && event.action !== "dismissed") {
-      await wakeShepherd(
-        ctx,
-        updated._id,
-        state === "changes_requested" ? "changes_requested" : "review_submitted",
-        `${author} ${stateWords}`,
-      );
+      const reason = state === "changes_requested" ? "changes_requested" : "review_submitted";
+      const detail = `${author} ${stateWords}`;
+      // A reviewer with a codecast account may have sent this review through
+      // codecast, which hands it to the owning session itself and stamps the
+      // row. This webhook can beat that stamp, so its wake waits a moment and
+      // stands down if the session has already heard the review. Anyone else's
+      // review wakes the session at once, as before.
+      const viaCodecast = await ctx.db
+        .query("users")
+        .withIndex("by_github_username", (q) => q.eq("github_username", author))
+        .first();
+      if (viaCodecast && ctx.scheduler) {
+        await ctx.scheduler.runAfter(DIRECT_DELIVERY_GRACE_MS, internal.prShepherd.wake, {
+          pr_id: updated._id, reason, detail, unless_delivered_review: review.id,
+        });
+      } else {
+        await wakeShepherd(ctx, updated._id, reason, detail);
+      }
     }
 
     return { success: true };
@@ -1298,6 +1313,23 @@ export async function conversationForCommit(
   return onBranch.length === 1 ? onBranch[0]._id : undefined;
 }
 
+/** The files a push payload's commit names (added, modified, removed), in
+ *  the commits table's file shape, capped so a sweeping commit stays a row. */
+export const PUSH_FILES_CAP = 200;
+export function pushCommitFiles(commit: { added?: string[]; modified?: string[]; removed?: string[] }): Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }> {
+  const out: Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }> = [];
+  const push = (names: string[] | undefined, status: string) => {
+    for (const filename of names ?? []) {
+      if (out.length >= PUSH_FILES_CAP) return;
+      if (typeof filename === "string" && filename) out.push({ filename, status, additions: 0, deletions: 0, changes: 0 });
+    }
+  };
+  push(commit.added, "added");
+  push(commit.modified, "modified");
+  push(commit.removed, "removed");
+  return out;
+}
+
 export const processPushEvent = internalMutation({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -1335,6 +1367,10 @@ export const processPushEvent = internalMutation({
       const added = commit.added?.length ?? 0;
       const removed = commit.removed?.length ?? 0;
       const modified = commit.modified?.length ?? 0;
+      // The file list, so the activity block can read which area a commit
+      // landed on (lib/orgActivity.commitAreaPrefixes). A push payload names
+      // the files but not their line counts; those stay zero.
+      const files = pushCommitFiles(commit);
 
       const links = await resolveTaskLinksFromText(ctx, message, branch);
       const conversationId = await conversationForCommit(ctx, sha, branch);
@@ -1355,6 +1391,7 @@ export const processPushEvent = internalMutation({
           author_avatar_url: existing.author_avatar_url ?? pusherAvatar,
           conversation_id: existing.conversation_id ?? conversationId,
           task_ids: existing.task_ids?.length ? existing.task_ids : links.task_ids,
+          files: existing.files?.length ? existing.files : files.length ? files : undefined,
         });
       } else {
         commitId = await ctx.db.insert("commits", {
@@ -1373,6 +1410,7 @@ export const processPushEvent = internalMutation({
           author_avatar_url: pusherAvatar,
           conversation_id: conversationId,
           task_ids: links.task_ids.length ? links.task_ids : undefined,
+          files: files.length ? files : undefined,
         });
         created++;
       }

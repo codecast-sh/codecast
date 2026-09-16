@@ -7,12 +7,23 @@
 
 export type CcUsageWindow = { percent: number; resets_at?: number; label?: string };
 
+/** Extra usage credits (overflow spend past the plan windows). `limit`/`used`
+ *  are dollars from the provider's `extra_usage` block; absent on accounts
+ *  that have never configured extra spend. */
+export type CcExtraUsage = {
+  percent: number;
+  enabled: boolean;
+  limit?: number;
+  used?: number;
+  spend_limit_reached?: boolean;
+};
+
 export type CcUsage = {
   fetched_at: number;
   session?: CcUsageWindow; // rolling short window (5h / sub-24h)
   weekly?: CcUsageWindow; // 7d, all models
   weekly_scoped?: CcUsageWindow; // 7d, model-scoped
-  extra?: { percent: number; enabled: boolean };
+  extra?: CcExtraUsage;
   scoped?: { label: string; percent: number; resets_at?: number }[];
   credits?: { has_credits: boolean; unlimited?: boolean; balance?: string };
   reset_credits?: { available: number };
@@ -85,11 +96,30 @@ export function formatAgo(msAgo: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+/** A rolled window whose snapshot was taken BEFORE the reset is not 0% used —
+ *  it is unmeasured. livePercent returns 0 so a display meter does not stay
+ *  pegged at the old 100%; a switch decision that treated that 0 as "most
+ *  headroom" hopped to accounts whose usage probe had been 401ing for hours
+ *  (the new window may already be spent). Null = unknown, same standing as
+ *  no usage data. */
+export function switchUsagePercent(usage: CcUsage | undefined | null, now: number): number | null {
+  if (!usage) return null;
+  const windows = limitWindows(usage);
+  if (!windows.length) return null;
+  for (const w of windows) {
+    if (isWindowRolled(w, now) && (w.resets_at == null || usage.fetched_at <= w.resets_at)) {
+      return null;
+    }
+  }
+  return worstUsagePercent(usage, now);
+}
+
 /** Order accounts by how much room they have left: known headroom first
- * (lowest worst-window percent wins), accounts with no usage data after every
- * known one — eligible, just unproven. Stable for ties. */
+ * (lowest worst-window percent wins), accounts with no usage data — or a
+ * snapshot that has not measured the current windows — after every known
+ * one. Eligible, just unproven. Stable for ties. */
 export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: P[], now: number): P[] {
-  const score = (p: P): number => (p.usage ? (worstUsagePercent(p.usage, now) ?? 0) : 101);
+  const score = (p: P): number => switchUsagePercent(p.usage, now) ?? 101;
   return [...profiles].sort((a, b) => score(a) - score(b));
 }
 

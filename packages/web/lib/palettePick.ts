@@ -37,16 +37,25 @@ export type PalettePickResult = {
   note?: string;
   // The search box text at the moment of the pick, trimmed.
   query: string;
+  // Images from the confirm-step composer. Chat sends attach them; other
+  // pickers ignore them.
+  attachments?: Array<{
+    storage_id: string;
+    mime?: string;
+    name?: string;
+    width?: number;
+    height?: number;
+  }>;
 };
 
 export type PalettePick = {
   title: string;
   kinds: PalettePickKind[];
   extras?: PalettePickExtra[];
-  // Collect an optional free-text note. With this set, picking becomes two
-  // steps: choose a target from the list, then a confirm view shows the
-  // chosen target, the note field, and a confirm button. Without it, picking
-  // completes immediately.
+  // Collect an optional note. With this set, picking becomes two steps:
+  // choose a target from the list, then a confirm view shows the chosen
+  // target, the same composer the chat box uses (mentions, image paste,
+  // auto-grow), and a confirm button. Without it, picking completes immediately.
   notePlaceholder?: string;
   // Label for the confirm button in the two-step flow. Defaults to "Send".
   confirmLabel?: string;

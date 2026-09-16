@@ -4,13 +4,12 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { soundCallRing, soundCallDeclined } from "../lib/sounds";
 import {
   notifyNative,
-  getDesktopWindowRole,
   canRingInWindow,
   isCallRingWindow,
   openCallRingWindow,
-  voiceHostElsewhere,
 } from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
+import { personInOwnCall, voiceHostShowsRing } from "../lib/calls/walkie";
 import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
 import { useMountEffect } from "./useMountEffect";
@@ -56,8 +55,9 @@ export function useCallRing(): void {
     const quiet = me?.status === "busy";
     // "In a call" is app-wide on the desktop: the media plane lives in ONE
     // window, and a second window must not ring over a huddle it cannot see.
-    const inCall =
-      useInboxStore.getState().call.phase === "connected" || getDesktopWindowRole().anyInCall;
+    // A call of their OWN — a seat the walkie holds for a burst is not one,
+    // and the ring goes up over it (lib/calls/walkie inOwnCall).
+    const inCall = personInOwnCall();
 
     const knocked: Record<string, number> = useInboxStore.getState().callKnocked ?? {};
     for (const invite of incoming) {
@@ -96,9 +96,9 @@ export function useCallRing(): void {
       // Unless a voice host will show it: the host draws the ring as a shape
       // of its own, pinned over everything, and sounds it. The ring window is
       // then only for a ring that arrives while the host is busy in a call,
-      // where the ring shape would cover the stage.
-      const hostShowsIt = voiceHostElsewhere() && !inCall;
-      if (inWindow && !isCallRingWindow() && !hostShowsIt) void openCallRingWindow();
+      // where the ring shape would cover the stage. The same rule the host
+      // draws by, asked from any window — this hook runs in the host too.
+      if (inWindow && !isCallRingWindow() && !voiceHostShowsRing()) void openCallRingWindow();
       if (!inWindow) {
         toast.custom(
         () => (

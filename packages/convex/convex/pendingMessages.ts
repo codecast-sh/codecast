@@ -9,7 +9,7 @@ import { internal } from "./_generated/api";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
-import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
+import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
@@ -27,6 +27,7 @@ import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
 import { enqueueRoleEvent } from "./orgEvents";
+import { liveRolesByHandle } from "./lib/orgAccess";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -390,6 +391,13 @@ export async function enqueuePendingMessage(
     human?: boolean;
     // The wake rail's own frame (orgWakes.deliver): never re-enters the rail.
     role_wake?: boolean;
+    // A note the session reads on its NEXT turn, never a turn of its own: the
+    // row is parked as "held" (the daemon and the retry cron read "pending"
+    // only) and nothing about the conversation moves, so a session whose
+    // prompt cache is gone is not woken, resurfaced or resurrected to read one
+    // sentence. The next ordinary message into the session releases it, and
+    // it delivers first because it is older.
+    defer?: boolean;
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -400,6 +408,18 @@ export async function enqueuePendingMessage(
       )
       .first();
     if (existing) return existing._id;
+  }
+
+  if (fields.defer && !conversation.standing_role_id) {
+    return await insertEnqueuedPendingMessage(ctx, {
+      conversationId: conversation._id,
+      fromUserId,
+      ownerUserId: conversation.user_id,
+      content: fields.content,
+      clientId: fields.client_id,
+      createdAt: Date.now(),
+      held: true,
+    });
   }
 
   // Sending into a thread you were HANDED is the acknowledgment — retire the
@@ -438,6 +458,14 @@ export async function enqueuePendingMessage(
     delivery: fenced ?? undefined,
     held: roleWake,
   });
+
+  // Deferred notes ride this turn (see `defer`). A standing session's held
+  // rows are the wake flush's to release, never ours.
+  if (!conversation.standing_role_id) {
+    const deferred: any[] = await ctx.db.query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", "held")).collect();
+    for (const row of deferred) await ctx.db.patch(row._id, { status: "pending" });
+  }
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
   if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
@@ -707,7 +735,7 @@ export async function conversationHasLiveSession(
 export async function performSessionSend(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; image_storage_ids?: Id<"_storage">[] }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -756,22 +784,27 @@ export async function performSessionSend(
     throw new Error("--raw sends only into your own sessions (a teammate's session always gets the attributed wrapper)");
   }
 
-  // Sending into an UNOWNED teammate session claims it: the sender joins the
-  // owner set, so the thread follows them (inbox presence, idle/error
-  // notifications) until resolved or dismissed. Engaging with a thread is a
-  // statement of caring about its outcome — but never displace existing owners;
-  // reassignment stays explicit (cast own/disown). Bot accounts never own:
-  // nobody reads their inbox, and a bot claiming a thread would block the first
-  // HUMAN engager from auto-owning it.
+  // A message never claims a session a person started. The runner (user_id),
+  // or the original author if the session later moved machines, already owns
+  // the outcome; putting the sender on the owner set would move the thread
+  // into their inbox. Auto-claim remains only for bot-run threads with an
+  // empty owner set — a shared-machine session no human has taken yet.
+  // Reassignment of a person's session stays explicit (cast own / the owners
+  // menu). Bot senders never own: nobody reads their inbox, and a bot
+  // claiming a bot-run thread would block the first human engager.
   //
-  // "Unowned" means the canonical owner SET is empty. The owner_user_id cache is
-  // ALSO checked as a safety net: a legacy row written before the session_owners
-  // backfill has a cached owner but no join row, and must never be auto-claimed
-  // out from under them. Claiming writes through both.
+  // "Unowned" means the canonical owner SET is empty. The owner_user_id cache
+  // is ALSO checked as a safety net: a legacy row written before the
+  // session_owners backfill has a cached owner but no join row, and must never
+  // be auto-claimed out from under them. Claiming writes through both.
   let autoOwned = false;
   if (isCrossUser && !senderUser?.is_bot) {
     const existingOwners = await listSessionOwnerIds(ctx, target._id);
-    if (existingOwners.length === 0 && !target.owner_user_id) {
+    if (
+      existingOwners.length === 0 &&
+      !target.owner_user_id &&
+      !(await conversationHasHumanStarter(ctx, target))
+    ) {
       await addSessionOwnerRow(ctx, target._id, authUserId, authUserId);
       await syncPrimaryOwnerCache(ctx, target._id);
       autoOwned = true;
@@ -834,6 +867,7 @@ export async function performSessionSend(
       : args.direct
       ? formatUserMessage(senderName ?? "a teammate", body)
       : formatSessionMessage(fromShortId, body, fromName),
+    image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
     // never-drop semantics (your own busy session will get it when it's idle).
@@ -872,14 +906,10 @@ async function standingSessionForHandle(ctx: { db: any }, userId: Id<"users">, r
   if (!ref.startsWith("@")) return null;
   const handle = ref.slice(1).trim().toLowerCase();
   if (!handle) return null;
-  const candidates: any[] = await ctx.db.query("org_roles")
-    .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", userId).eq("handle", handle)).collect();
+  const candidates: any[] = await liveRolesByHandle(ctx, { scope_user_id: userId }, handle);
   const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
-  for (const m of memberships) {
-    candidates.push(...await ctx.db.query("org_roles")
-      .withIndex("by_team_handle", (q: any) => q.eq("team_id", m.team_id).eq("handle", handle)).collect());
-  }
-  const role = candidates.find((r) => r.status !== "retired" && r.anchor_id);
+  for (const m of memberships) candidates.push(...await liveRolesByHandle(ctx, { team_id: m.team_id }, handle));
+  const role = candidates.find((r) => r.anchor_id);
   if (!role) return null;
   const anchor = await ctx.db.get(role.anchor_id);
   return anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;

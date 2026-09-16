@@ -1,8 +1,8 @@
 "use client";
 // The inline reveal: a rich object reference (a pill in prose, a shared-object
 // card) opens its FULL page right here in the conversation — a full-bleed band
-// spanning the whole scrolling surface, with the object's real page inside.
-// Reading the object no longer means leaving.
+// on a crosshatch ground, spanning the whole scrolling surface, with the
+// object's real page inside. Reading the object no longer means leaving.
 //
 // Two halves. RevealHost wraps a rendered markdown body: it renders its
 // children untouched (a fragment, so a message body's blocks stay direct
@@ -19,14 +19,15 @@
 import React, { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { ArrowUpRight, PanelBottomClose, PanelBottomOpen, X } from "lucide-react";
+import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen, X } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
 import { PageIcon, pageAccent } from "./RecentVisitRow";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { hasOpenModal, isEditableTarget } from "../shortcuts";
+import { hasOpenModal, isEditableTarget, isMac } from "../shortcuts";
+import { canOpenBeside } from "../lib/stage";
 import { useRouter } from "next/navigation";
 import { useTabContext } from "../lib/tabParams";
 import { paneSessionId } from "../lib/stage";
@@ -109,6 +110,46 @@ export function RevealButton({
   );
 }
 
+/** The big "open this page" hit: a real link, so Option-click opens beside
+ *  (lib/openIntent) the same way every other in-app object does. `bar` is
+ *  the hatch above and below the framed page; `compact` is the card/pill. */
+export function RevealOpenLink({
+  href,
+  label,
+  onOpen,
+  variant = "bar",
+}: {
+  href: string;
+  label: string;
+  onOpen?: (e: React.MouseEvent) => void;
+  variant?: "bar" | "compact";
+}) {
+  const beside = canOpenBeside();
+  return (
+    <Link
+      href={href}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen?.(e);
+      }}
+      className={variant === "bar" ? "object-reveal__open" : "object-reveal-open-compact"}
+      title={beside ? `${label}. ${isMac ? "Option" : "Alt"}-click opens beside.` : label}
+    >
+      <span className="object-reveal__open-label">
+        {label}
+        <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+      </span>
+      {beside && (
+        <span className="object-reveal__open-hint">
+          <KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap>
+          <Columns2 className="h-3 w-3" />
+          beside
+        </span>
+      )}
+    </Link>
+  );
+}
+
 /**
  * Nearest thing the band should fill: an ancestor that opts in with
  * data-reveal-bounds, else the nearest scrolling ancestor — the transcript
@@ -122,6 +163,15 @@ function revealBounds(el: HTMLElement): HTMLElement | null {
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
+}
+
+/** The hatch beside the framed page is the conversation-scroll lane. Wheel
+ *  inside the frame reads the object; wheel on the gutter (or its lanes)
+ *  moves the parent thread. */
+export function revealWheelGoesToParent(target: EventTarget | null, _band?: HTMLElement): boolean {
+  const start = target instanceof Element ? target : null;
+  if (!start) return true;
+  return !start.closest(".object-reveal__frame");
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;
@@ -290,12 +340,29 @@ function useOpenMotion(ref: React.RefObject<HTMLDivElement | null>, reveal: Open
   }, [ref, reveal]);
 }
 
+function useRevealWheel(ref: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!revealWheelGoesToParent(e.target, el)) return;
+      const bounds = revealBounds(el);
+      if (!bounds) return;
+      e.preventDefault();
+      bounds.scrollTop += e.deltaY / cssZoomOf(bounds);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+  }, [ref]);
+}
+
 function RevealBand({ reveal }: { reveal: OpenReveal }) {
   const { target } = reveal;
   const ref = useRef<HTMLDivElement>(null);
   useFullBleed(ref);
   useScrollHold(ref, reveal);
   useOpenMotion(ref, reveal);
+  useRevealWheel(ref);
   // Closing folds the band back into the line it grew from, then brings the
   // reference that opened it back into view if the read had scrolled past it
   // — so a toggle lands the reader where they started, not on whatever the
@@ -385,6 +452,9 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       onClick={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
     >
+      <div className="object-reveal__lane object-reveal__lane--left" title="Scroll the conversation" />
+      <div className="object-reveal__lane object-reveal__lane--right" title="Scroll the conversation" />
+      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} />
       <div className="object-reveal__frame">
       <div
         className="object-reveal__strip"
@@ -401,18 +471,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
           <span className="object-reveal__hint-word">close</span>
           <KeyCap size="xs">esc</KeyCap>
         </span>
-        <Link
-          href={target.href}
-          onClick={(e) => {
-            e.stopPropagation();
-            target.onOpen?.(e);
-          }}
-          {...(target.onOpen ? { "data-no-progress": "" } : {})}
-          className="cc-panel__btn flex-shrink-0"
-          title="Open the page"
-        >
-          <ArrowUpRight className="h-3 w-3" />
-        </Link>
         <PaneControls onClose={requestClose} closeTitle="Close (Esc)" />
       </div>
       <div className="object-reveal__body">
@@ -446,6 +504,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
         <KeyCap size="xs">esc</KeyCap>
       </div>
       </div>
+      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} />
       {/* The grip is only a grip: the rounded bar under the frame, in the
           gutter, always drawn so the resize reads before the pointer finds it. */}
       <div

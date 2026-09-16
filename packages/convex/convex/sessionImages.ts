@@ -26,9 +26,13 @@ export type SessionImageEntry = {
   // don't carry message timestamps.
   timestamp?: number;
   seq?: number;
+  // The message the image belongs to, so the gallery can jump back to it.
+  // Absent on entries from callers that don't carry message ids.
+  message_id?: string;
 };
 
 type MessageLike = {
+  _id?: string;
   content?: string;
   timestamp?: number;
   images?: Array<{ media_type: string; data?: string; storage_id?: string }>;
@@ -51,7 +55,7 @@ export function extractSessionImages(
     // Per-message ordinal: two images in one message keep their order once the
     // merge re-sorts by (timestamp, seq).
     let seq = 0;
-    const at = () => ({ timestamp: msg.timestamp, seq: seq++ });
+    const at = () => ({ timestamp: msg.timestamp, seq: seq++, message_id: msg._id });
     if (msg.images) {
       for (const img of msg.images) {
         if (img.storage_id) {

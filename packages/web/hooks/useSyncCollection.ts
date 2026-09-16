@@ -12,12 +12,34 @@
 // survive its query failing (a client ahead of a deploy, a saturated backend).
 // The store keeps its cached rows; the caller gets `error` if it wants to say
 // so.
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { FunctionArgs, FunctionReference } from "convex/server";
+import { getFunctionName } from "convex/server";
+import { captureError } from "@/lib/analytics";
 import { useInboxStore } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useWatchEffect } from "./useWatchEffect";
+
+/**
+ * A feeder's terminal error is a fact worth recording even though the surface
+ * keeps painting from the cache: the backend's 1s user-code cap on a saturated
+ * host, or a client ahead of a deploy, would otherwise fail silently. Reported
+ * once per distinct message per feeder — the subscription re-runs on the next
+ * data change and the recovery poll re-probes on its own, so the same failure
+ * can repeat every few seconds while the host is busy.
+ */
+export function useFeederError(feeder: string, error: Error | undefined): void {
+  const lastRef = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!error) { lastRef.current = null; return; }
+    if (lastRef.current === error.message) return;
+    lastRef.current = error.message;
+    console.warn(`[feeder:${feeder}] query failed; serving the cached rows`, error);
+    captureError(error, { feeder });
+  }, [feeder, error]);
+}
 
 export type SyncCollectionOpts<T = any> = {
   /** Pull the rows out of a wrapped payload (`{ artifacts: [...] }`) or reshape
@@ -36,6 +58,11 @@ export type SyncCollectionResult = {
    *  ordinary "painting from cache" state, not a loading state. */
   ready: boolean;
   error?: Error;
+  /** The server answered `null`: it refused the caller (no access, a team
+   *  the viewer left). Not an empty result, and nothing was synced. */
+  refused: boolean;
+  /** Subscribe again after a terminal error (useQueryNoThrow's own retry). */
+  retry: () => void;
 };
 
 export function useSyncCollection<Query extends FunctionReference<"query">>(
@@ -44,7 +71,8 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
   args: FunctionArgs<Query> | "skip",
   opts?: SyncCollectionOpts,
 ): SyncCollectionResult {
-  const { data, error } = useQueryNoThrow(query, args, opts?.breakAfterMs ? { breakAfterMs: opts.breakAfterMs } : undefined);
+  const { data, error, retry } = useQueryNoThrow(query, args, opts?.breakAfterMs ? { breakAfterMs: opts.breakAfterMs } : undefined);
+  useFeederError(getFunctionName(query), error);
   const syncTable = useInboxStore((s) => s.syncTable);
   const select = opts?.select;
   const syncOpts = opts?.syncOpts;
@@ -60,7 +88,7 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
     ),
     opts?.coalesceMs ? { coalesceMs: opts.coalesceMs } : undefined,
   );
-  return { ready: data !== undefined, error };
+  return { ready: data !== undefined, error, refused: data === null, retry };
 }
 
 /**

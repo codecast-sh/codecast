@@ -35,3 +35,12 @@ test("both compact worktree rows and full cards render the same location chip", 
   expect(source.slice(compact)).toContain('<div className="flex min-w-0 pl-[18px] mt-0.5">{worktreeChip}</div>');
   expect(source.slice(compact).indexOf("{worktreeChip}")).toBeGreaterThan(source.slice(compact).indexOf("{showBlockedBadge"));
 });
+
+test("a worktree does not make a first-class session look like a nested child", () => {
+  const source = readFileSync(new URL("./GlobalSessionPanel.tsx", import.meta.url), "utf8");
+  const start = source.indexOf("const isSubagent =");
+  expect(start).toBeGreaterThan(0);
+  const line = source.slice(start, source.indexOf(";", start) + 1);
+  expect(line).toContain("nestParentIdOf(session)");
+  expect(line).not.toContain("worktree_name");
+});

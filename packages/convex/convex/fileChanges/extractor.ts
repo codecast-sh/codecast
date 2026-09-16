@@ -37,6 +37,7 @@ const EDIT_TOOL_NAMES = new Set([
   "edit_file",
   "replace",
   "str_replace",
+  "search_replace",
   "file_write",
   "write_file",
   "create_file",
@@ -129,9 +130,9 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
       try {
         const params = JSON.parse(toolCall.input);
         if (!params || typeof params !== "object") continue;
-        const filePath = params.file_path ?? params.filePath ?? params.path;
+        const filePath = params.file_path ?? params.filePath ?? params.path ?? params.target_file;
 
-        if (["edit", "file_edit", "edit_file", "replace", "str_replace", "multiedit"].includes(name)) {
+        if (["edit", "file_edit", "edit_file", "replace", "str_replace", "search_replace", "multiedit"].includes(name)) {
           if (typeof filePath !== "string" || !filePath) {
             continue;
           }

@@ -14,6 +14,8 @@ import {
   pickImages, startUpload, settleAttachments,
   type ChatAttachmentArg, type PickedImage,
 } from './chatUpload';
+import { useComposerField, nativeComposerText } from '@/lib/composerField';
+import { NativePressable } from '@/lib/gestureHandler';
 
 // The one chat composer on mobile — channel floor and thread alike.
 //
@@ -57,7 +59,14 @@ export function ChatComposerBar({
 }) {
   const Theme = useTheme();
   const convex = useConvex();
-  const [draft, setDraft] = useState('');
+  const {
+    value: draft,
+    setValue: setDraft,
+    onChangeText: applyChange,
+    epoch,
+    inputRef,
+    clearAfterSend,
+  } = useComposerField('');
   const [images, setImages] = useState<PickedImage[]>([]);
   const [sending, setSending] = useState(false);
 
@@ -102,10 +111,10 @@ export function ChatComposerBar({
   useEffect(() => stopTyping, [stopTyping]);
 
   const onChangeText = useCallback((text: string) => {
-    setDraft(text);
+    applyChange(text);
     if (text.trim()) reportTyping();
     else stopTyping();
-  }, [reportTyping, stopTyping]);
+  }, [applyChange, reportTyping, stopTyping]);
 
   // ── Attachments ───────────────────────────────────────────────────────────
   const onAttach = useCallback(async () => {
@@ -129,7 +138,10 @@ export function ChatComposerBar({
   // ── Send ──────────────────────────────────────────────────────────────────
   const canSend = (draft.trim().length > 0 || images.some((i) => !i.failed)) && !sending;
   const submit = useCallback(async () => {
-    const content = draft.trim();
+    const content = nativeComposerText(
+      inputRef.current as { _lastNativeText?: unknown } | null,
+      draft,
+    ).trim();
     if (editing && onSubmitEdit) {
       if (!content) return;
       onSubmitEdit(editing.messageId, content);
@@ -140,7 +152,8 @@ export function ChatComposerBar({
     const live = images.filter((i) => !i.failed);
     if (!content && live.length === 0) return;
     // Clear the box NOW (send must never feel laggy); await only the uploads.
-    setDraft('');
+    // Remount the native field so iOS cannot restore the just-sent buffer.
+    clearAfterSend(content);
     setImages([]);
     stopTyping();
     if (Platform.OS === 'ios') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -152,7 +165,7 @@ export function ChatComposerBar({
     } finally {
       setSending(false);
     }
-  }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping]);
+  }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping, clearAfterSend, inputRef]);
 
   return (
     <RNView>
@@ -198,6 +211,8 @@ export function ChatComposerBar({
           </TouchableOpacity>
         )}
         <ThemedTextInput
+          key={epoch}
+          ref={inputRef}
           style={styles.input}
           placeholder={placeholder}
           placeholderTextColor={placeholderTint ?? Theme.textMuted0}
@@ -206,18 +221,19 @@ export function ChatComposerBar({
           multiline
           submitBehavior="newline"
         />
-        <TouchableOpacity
+        <NativePressable
           style={[styles.send, !canSend && styles.sendDisabled, editing && styles.sendEdit]}
           onPress={submit}
-          disabled={!canSend}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Send"
         >
           {sending ? (
             <ActivityIndicator size="small" color={Theme.bg} />
           ) : (
             <FontAwesome name={editing ? 'check' : 'arrow-up'} size={14} color={canSend ? Theme.bg : Theme.textMuted0} />
           )}
-        </TouchableOpacity>
+        </NativePressable>
       </RNView>
     </RNView>
   );

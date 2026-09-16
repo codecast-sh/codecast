@@ -10,7 +10,9 @@ import { useConvexAuth, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
 import { openPrincipalDispatchOutbox } from './dispatchOutbox';
-import { authRenderDecision, localBootTrust, shouldClearMemoryFor } from './authTrust';
+import * as SplashScreen from 'expo-splash-screen';
+import { authRenderDecision, localBootTrust, shouldClearMemoryFor, shouldReleaseSplash } from './authTrust';
+import { bootMark } from './bootProfile';
 
 const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
@@ -107,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const [outboxOpenAttempt, setOutboxOpenAttempt] = useState(0);
   const dispatchGeneration = useRef(0);
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
 
   // These gates run during render: a token/account change cannot wait for an
   // effect cleanup while an old retry is still in flight.
@@ -345,6 +348,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return result.success;
   };
 
+  // Local-first render: a locally trusted boot shows the cached app
+  // immediately; "blank" covers only the ms-long anchor read and an
+  // untrusted token mid-verification (see authRenderDecision).
+  const renderDecision = authRenderDecision({
+    bootPrincipalLoaded: bootPrincipal !== undefined,
+    trustedSubject,
+    outboxFailureSubject: outboxFailure?.subject ?? null,
+    isLoading,
+    isAuthenticated,
+  });
+  // Hold the native splash until the store has the disk cache. Hiding on
+  // fonts left a kill-and-reopen window where the inbox painted skeletons
+  // on an empty store. The effect runs after that paint, still under the
+  // splash, so the first visible frame is already the cached list.
+  useEffect(() => {
+    if (shouldReleaseSplash({ hydrated, authDecision: renderDecision })) {
+      bootMark("splash-hide", { decision: renderDecision });
+      void SplashScreen.hideAsync();
+    }
+  }, [hydrated, renderDecision]);
+
   return (
     <AuthContext.Provider
       value={{
@@ -366,18 +390,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }}
     >
       {(() => {
-        // Local-first render: a locally trusted boot shows the cached app
-        // immediately; "blank" covers only the ms-long anchor read and an
-        // untrusted token mid-verification (see authRenderDecision).
-        const decision = authRenderDecision({
-          bootPrincipalLoaded: bootPrincipal !== undefined,
-          trustedSubject,
-          outboxFailureSubject: outboxFailure?.subject ?? null,
-          isLoading,
-          isAuthenticated,
-        });
-        if (decision === "children") return children;
-        if (decision === "blank") return null;
+        if (renderDecision === "children") return children;
+        if (renderDecision === "blank") return null;
         return (
               <View
                 accessibilityRole="alert"

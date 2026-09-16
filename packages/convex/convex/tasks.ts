@@ -9,12 +9,17 @@ import { docRelatesToTask } from "@codecast/shared/tasks";
 import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
+  findTeamTaskStatus,
   isActiveTask,
+  isTaskStatusCategory,
   isTerminalTaskStatus,
   isHumanOrigin,
+  resolveTaskStatus,
   subtaskProgressOf,
+  taskStatusChoices,
   teamTaskStatuses,
 } from "@codecast/shared/tasks";
+import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { Id } from "./_generated/dataModel";
 import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -166,9 +171,17 @@ function assertValidTaskStatus(status: string | undefined): asserts status is Ta
   }
 }
 
+async function loadTeamTaskStatuses(ctx: any, teamId: Id<"teams"> | undefined | null): Promise<TeamTaskStatus[]> {
+  const team = teamId ? await ctx.db.get(teamId) : null;
+  return teamTaskStatuses(team?.task_statuses);
+}
+
 // Resolve a status write against the team's configured statuses (Linear-style
 // custom statuses; see @codecast/shared/tasks/statuses.ts).
 //
+// - `status` names a category, or a team status by id or name ("today"). A
+//   team status in `status` is the same write as sending it as `status_id`,
+//   which is how the CLI (`-s today`) reaches the team's own statuses.
 // - `status_id` names a team status: it sets the category, and a `status` sent
 //   alongside must agree (a mismatch is a client bug, not a preference).
 //   The id is stored only when it refines the category default — a task on the
@@ -187,20 +200,31 @@ export async function resolveStatusWrite(
   currentStatus: string | undefined,
   args: { status?: string; status_id?: string },
 ): Promise<{ status?: TaskStatus; statusId: { set: boolean; value?: string } }> {
-  assertValidTaskStatus(args.status);
   let status = args.status;
-  if (args.status_id) {
-    const team = teamId ? await ctx.db.get(teamId) : null;
-    const statuses = teamTaskStatuses(team?.task_statuses);
-    const match = statuses.find((s: { id: string }) => s.id === args.status_id);
-    if (!match) throw new Error(`Unknown status '${args.status_id}' for this team`);
-    if (status && status !== match.category) {
-      throw new Error(`Status '${args.status_id}' is in category '${match.category}', not '${status}'`);
+  let statusId = args.status_id;
+  const namesTeamStatus = status !== undefined && !isTaskStatusCategory(status);
+  if (namesTeamStatus || statusId) {
+    const statuses = await loadTeamTaskStatuses(ctx, teamId);
+    if (namesTeamStatus) {
+      const named = findTeamTaskStatus(statuses, status!);
+      if (!named) {
+        throw new Error(`Invalid task status '${status}'. Valid: ${taskStatusChoices(statuses).join(", ")}`);
+      }
+      if (statusId && statusId !== named.id) {
+        throw new Error(`Status '${status}' does not match status_id '${statusId}'`);
+      }
+      status = undefined;
+      statusId = named.id;
     }
-    status = match.category;
-    return { status, statusId: { set: true, value: match.id === match.category ? undefined : match.id } };
+    const match = statuses.find((s) => s.id === statusId);
+    if (!match) throw new Error(`Unknown status '${statusId}' for this team`);
+    if (status && status !== match.category) {
+      throw new Error(`Status '${statusId}' is in category '${match.category}', not '${status}'`);
+    }
+    return { status: match.category, statusId: { set: true, value: match.id === match.category ? undefined : match.id } };
   }
-  if (args.status_id === "" || (status && status !== currentStatus)) {
+  assertValidTaskStatus(status);
+  if (statusId === "" || (status && status !== currentStatus)) {
     return { status, statusId: { set: true, value: undefined } };
   }
   return { status, statusId: { set: false } };
@@ -873,7 +897,6 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    assertValidTaskStatus(args.status);
 
     // Resolve conversation first so we can propagate team_id to the task
     let conversation_ids: Id<"conversations">[] | undefined;
@@ -898,6 +921,14 @@ export const create = mutation({
       project_path: args.project_path,
       ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
     });
+    // Same status rule as webCreate: a team status by name ("today") lands as
+    // its category plus status_id.
+    const statusWrite = await resolveStatusWrite(
+      ctx,
+      db.workspace.type === "team" ? db.workspace.teamId : undefined,
+      undefined,
+      args,
+    );
     const now = Date.now();
     const unkeyedShortId = args.client_key ? undefined : await nextShortId(ctx.db, "ct");
 
@@ -960,7 +991,8 @@ export const create = mutation({
       client_key: args.client_key,
       description: args.description,
       task_type: (args.task_type || "task") as any,
-      status: (args.status || "open") as any,
+      status: (statusWrite.status || "open") as any,
+      status_id: statusWrite.statusId.set ? statusWrite.statusId.value : undefined,
       priority: (args.priority || "medium") as any,
       assignee: resolvedAssignee,
       labels: args.labels,
@@ -1023,7 +1055,7 @@ export const create = mutation({
     // A subtask created directly in progress flips its parent chain, same as a
     // later start would — the parent must never sit "open" under running work.
     if (parent_id) {
-      await rollUpParentStart(ctx, { parent_id, user_id: auth.userId }, args.status);
+      await rollUpParentStart(ctx, { parent_id, user_id: auth.userId }, statusWrite.status);
     }
     if (resolvedAssignee) {
       const createdTask = await ctx.db.get(id) as any;
@@ -1353,7 +1385,7 @@ export const list = query({
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
       needsAccessFilter = true;
-    } else if (args.status && !args.team) {
+    } else if (isTaskStatusCategory(args.status) && !args.team) {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_user_status", (q) =>
@@ -1376,7 +1408,25 @@ export const list = query({
       );
     }
 
-    if (!args.status && !args.include_done) {
+    // Each task resolves against its own team's statuses, loaded once per team.
+    const teamStatuses = new Map<string, Promise<TeamTaskStatus[]>>();
+    const statusesOf = (t: any) => {
+      const key = String(t.team_id ?? "");
+      if (!teamStatuses.has(key)) teamStatuses.set(key, loadTeamTaskStatuses(ctx, t.team_id));
+      return teamStatuses.get(key)!;
+    };
+
+    if (args.status) {
+      // A category matches every task in it; a team status ("today") matches
+      // the tasks that render as that status.
+      const ref = args.status;
+      const keep = await Promise.all(tasks.map(async (t: any) => {
+        if (isTaskStatusCategory(ref)) return t.status === ref;
+        const statuses = await statusesOf(t);
+        return findTeamTaskStatus(statuses, ref)?.id === resolveTaskStatus(t, statuses).id;
+      }));
+      tasks = tasks.filter((_: any, i: number) => keep[i]);
+    } else if (!args.include_done) {
       tasks = tasks.filter((t: any) => t.status !== "done" && t.status !== "dropped");
     }
 
@@ -1453,8 +1503,10 @@ export const list = query({
     const result = tasks.slice(0, limit);
 
     const assigneeNames = await assigneeNamesFor(ctx, result.map((t: any) => t.assignee));
-    return result.map((t: any) => ({
+    const statusNames = await Promise.all(result.map(async (t: any) => resolveTaskStatus(t, await statusesOf(t)).name));
+    return result.map((t: any, i: number) => ({
       ...t,
+      status_name: statusNames[i],
       assignee_name: t.assignee ? (assigneeNames[t.assignee] || t.assignee) : undefined,
       parent_short_id: t.parent_id ? readyParentShortIds?.get(String(t.parent_id)) : undefined,
     }));
@@ -1509,6 +1561,7 @@ export const get = query({
     const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
     return {
       ...task,
+      status_name: resolveTaskStatus(task, await loadTeamTaskStatuses(ctx, task.team_id)).name,
       assignee_name: task.assignee ? (assigneeNames[task.assignee] || task.assignee) : undefined,
       plan: plan && (await canAccessPlan(ctx, auth.userId, plan))
         ? { short_id: plan.short_id, title: plan.title, status: plan.status }
@@ -1573,7 +1626,6 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    assertValidTaskStatus(args.status);
 
     const task = await ctx.db
       .query("tasks")
@@ -2944,7 +2996,6 @@ export const webUpdate = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    assertValidTaskStatus(args.status);
 
     const task = await ctx.db
       .query("tasks")

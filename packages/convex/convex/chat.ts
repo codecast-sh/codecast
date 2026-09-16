@@ -37,6 +37,7 @@ import {
   isVisibleAgentPending,
   mentionSessions,
   mentionUserIds,
+  threadFaceKey,
 } from "@codecast/shared/chat";
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
@@ -367,7 +368,7 @@ export async function patchChat(
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
-function displayName(user: Doc<"users"> | null): string {
+export function displayName(user: Doc<"users"> | null): string {
   return user?.name || user?.github_username || user?.email || "Someone";
 }
 
@@ -611,6 +612,10 @@ type ChatRailRow = {
     author_kind: "user" | "agent";
     created_at: number;
     preview: string;
+    // Present when the newest line is a thread reply. The toast layer uses
+    // this to apply the on-screen rule (channel floor ≠ that thread) without
+    // waiting for the message body to be in the store.
+    thread_root_id?: Id<"chat_messages">;
   } | null;
   last_inbound: { _id: Id<"chat_messages">; created_at: number } | null;
   sort_at: number;
@@ -719,6 +724,9 @@ async function railFor(
             author_kind: lastMessage.author_kind ?? "user",
             created_at: lastMessage.created_at,
             preview: plainPreview(lastMessage.content, 120),
+            ...(lastMessage.thread_root_id
+              ? { thread_root_id: lastMessage.thread_root_id }
+              : {}),
           }
         : null,
       // DM rooms only: what the other person last said, so a surface can key
@@ -859,6 +867,11 @@ export type ThreadSummary = {
   last_reply_at: number;
   // Newest distinct repliers, newest first — the faces on the affordance.
   reply_user_ids: Id<"users">[];
+  // The same repliers with the face to draw: a line mirrored in from Slack is
+  // written by the workspace's one bridge user, so the ids alone drew every
+  // Slack replier as the bridge. Distinct by the rendered identity (shared
+  // threadFaceKey), and a Slack person's snapshot rides along.
+  reply_faces: Array<{ user_id: Id<"users">; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } }>;
   // Set when the newest reply is an agent's and still unfinished, so the
   // channel can say "Anchor is thinking" without opening the thread. Without
   // this, an in-flight answer is invisible from the room it was asked in.
@@ -886,11 +899,16 @@ export async function threadSummariesFor(
     if (live.length === 0) continue;
     const seen = new Set<string>();
     const faces: Id<"users">[] = [];
+    const replyFaces: ThreadSummary["reply_faces"] = [];
     for (const r of live) {
-      const key = r.user_id.toString();
+      const key = threadFaceKey(r);
       if (seen.has(key)) continue;
       seen.add(key);
       faces.push(r.user_id);
+      const ext = r.external_author;
+      replyFaces.push(ext
+        ? { user_id: r.user_id, slack: { user: r.external?.user, name: ext.name, avatar_url: ext.avatar_url, is_bot: ext.is_bot } }
+        : { user_id: r.user_id });
       if (faces.length >= 4) break;
     }
     const newest = live[0];
@@ -902,6 +920,7 @@ export async function threadSummariesFor(
       reply_capped: live.length >= THREAD_SUMMARY_SCAN,
       last_reply_at: newest.created_at,
       reply_user_ids: faces,
+      reply_faces: replyFaces,
       ...(pendingAgent ? { agent_status: newest.agent_status as any } : {}),
     });
   }
@@ -1287,52 +1306,65 @@ export const openDm = mutation({
       chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
     }
 
-    // Team-scoped on purpose: chat is team-scoped everywhere (the rail, the
-    // roster, the notifications), so the same pair in two shared teams gets one
-    // room per team rather than one room that leaks across workspaces.
-    const dmKey = dmKeyFor(String(teamId), [userId, ...others].map(String));
-    const existing = await ctx.db
-      .query("chat_channels")
-      .withIndex("by_dm_key", (q: any) => q.eq("dm_key", dmKey))
-      .first();
-    if (existing) {
-      // Adopt the caller's client_id so their optimistic stub supersedes onto
-      // this row exactly as it would onto a fresh one. Any older client_id
-      // finished its one-shot rekey long ago; last opener wins.
-      if (args.client_id && existing.client_id !== args.client_id) {
-        await patchChat(ctx, existing._id, { client_id: args.client_id });
-      }
-      // Re-opening is joining: the caller may have left the read row behind.
-      await upsertRead(ctx, userId, teamId, existing._id, Date.now(), undefined, undefined);
-      return { channel_id: existing._id, created: false, team_id: teamId };
-    }
-
     await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
-    const now = Date.now();
-    const channelId = await ctx.db.insert("chat_channels", {
-      team_id: teamId,
-      name: "",
-      kind: "dm",
-      dm_key: dmKey,
-      created_by: userId,
-      created_at: now,
-      updated_at: now,
-      client_id: args.client_id,
-    });
-    await patchChat(ctx, channelId, { workspace: `restricted:${channelId}` });
-    for (const id of [userId, ...others]) {
-      await ctx.db.insert("chat_channel_members", {
-        channel_id: channelId, user_id: id, added_by: userId, added_at: now,
-      });
-    }
-    // No chat_added here: an empty DM room is not an event. The first MESSAGE
+    const room = await ensureDmRoom(ctx, teamId, [userId, ...others], userId, { client_id: args.client_id });
+    // Re-opening is joining: the caller may have left the read row behind. No
+    // chat_added here: an empty DM room is not an event. The first MESSAGE
     // notifies (chat_dm), which is the moment something was actually said.
-    // Level is moot for a DM (every line is addressed); the default keeps one
-    // rule for what a fresh read row looks like.
-    await upsertRead(ctx, userId, teamId, channelId, now, undefined, undefined);
-    return { channel_id: channelId, created: true, team_id: teamId };
+    await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
+    return { channel_id: room.channel._id, created: room.created, team_id: teamId };
   },
 });
+
+/** Find or make the direct message room for exactly these members. Identity
+ *  is the member set: the sorted ids joined into `dm_key` make the same
+ *  conversation resolve to the same room no matter who opens it or how many
+ *  times. Team scoped on purpose: chat is team scoped everywhere, so the same
+ *  pair in two shared teams gets one room per team rather than one that leaks
+ *  across workspaces. Callers validate the members (humans, teammates, cap);
+ *  this only makes the room, so the anchor's DMs and Slack's DMs (whose
+ *  members may be bot identities) come through the same door. */
+export async function ensureDmRoom(
+  ctx: MutationCtx,
+  teamId: Id<"teams">,
+  memberIds: Id<"users">[],
+  createdBy: Id<"users">,
+  opts: { client_id?: string } = {},
+): Promise<{ channel: Doc<"chat_channels">; created: boolean }> {
+  const dmKey = dmKeyFor(String(teamId), memberIds.map(String));
+  const existing = await ctx.db
+    .query("chat_channels")
+    .withIndex("by_dm_key", (q: any) => q.eq("dm_key", dmKey))
+    .first();
+  if (existing) {
+    // Adopt the caller's client_id so their optimistic stub supersedes onto
+    // this row exactly as it would onto a fresh one; last opener wins.
+    if (opts.client_id && existing.client_id !== opts.client_id) {
+      await patchChat(ctx, existing._id, { client_id: opts.client_id });
+      return { channel: (await ctx.db.get(existing._id))!, created: false };
+    }
+    return { channel: existing, created: false };
+  }
+  const now = Date.now();
+  const channelId = await ctx.db.insert("chat_channels", {
+    team_id: teamId,
+    name: "",
+    kind: "dm",
+    dm_key: dmKey,
+    created_by: createdBy,
+    created_at: now,
+    updated_at: now,
+    client_id: opts.client_id,
+  });
+  await patchChat(ctx, channelId, { workspace: `restricted:${channelId}` });
+  const seen = new Set<string>();
+  for (const id of memberIds) {
+    if (seen.has(id.toString())) continue;
+    seen.add(id.toString());
+    await ctx.db.insert("chat_channel_members", { channel_id: channelId, user_id: id, added_by: createdBy, added_at: now });
+  }
+  return { channel: (await ctx.db.get(channelId))!, created: true };
+}
 
 // The roster of a restricted room. Public channels return [] — their audience
 // is the team, and the team roster already has its own surface.
@@ -2299,6 +2331,12 @@ export async function postChatMessage(
     // A backfilled Slack line keeps its original time so history reads in
     // order. Live lines take the channel's monotonic stamp like any other.
     createdAt?: number;
+    // The line is history (a Slack import bringing over a channel's past):
+    // stored, mirrored nowhere, and announced to nobody. Nobody just said it,
+    // so it earns no bell, no phone banner, no Threads inbox entry and no read
+    // mark — linking a channel with a year of history once rang every mention
+    // in it.
+    history?: boolean;
   },
 ): Promise<{
   messageId: Id<"chat_messages">;
@@ -2380,20 +2418,22 @@ export async function postChatMessage(
   const inserted = await ctx.db.get(messageId);
   if (inserted) await queueSlackOutbound(ctx, { op: "message", message: inserted });
 
-  const { hereCount, actorName } = await announceChatMessage(ctx, {
-    channel,
-    root,
-    messageId,
-    authorId,
-    content,
-    attachments,
-    mentions,
-    here,
-    createdAt: now,
-    agent: !!opts.agent,
-    agentLine: !!opts.agent || opts.origin === "agent",
-    actorLabel: originSession?.title,
-  });
+  const { hereCount, actorName } = opts.history
+    ? { hereCount: 0, actorName: await actorNameFor(ctx, authorId, originSession?.title) }
+    : await announceChatMessage(ctx, {
+      channel,
+      root,
+      messageId,
+      authorId,
+      content,
+      attachments,
+      mentions,
+      here,
+      createdAt: now,
+      agent: !!opts.agent,
+      agentLine: !!opts.agent || opts.origin === "agent",
+      actorLabel: originSession?.title,
+    });
 
   return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
 }
@@ -2429,6 +2469,15 @@ export const repairMissingOriginSession = internalMutation({
     return { repaired: true };
   },
 });
+
+// The name a line is announced under. Through the same sanitizer as the message
+// body: a display name is self-editable and goes into the bell and the phone
+// banner ahead of the text, where a bidi override or a fake "…mentioned you in
+// #security:" prefix makes the banner read as if someone else sent it.
+async function actorNameFor(ctx: MutationCtx, authorId: Id<"users">, actorLabel?: string): Promise<string> {
+  if (actorLabel) return oneLine(actorLabel, 60);
+  return oneLine(displayName(await ctx.db.get(authorId)), 60);
+}
 
 // Everything that turns a stored row into a message people are TOLD about: the
 // author's own read mark, mention/thread/@here/DM notification fan-out, and the
@@ -2474,14 +2523,7 @@ async function announceChatMessage(
   // has no read position and no bell.
   if (!opts.agent) await upsertRead(ctx, authorId, channel.team_id, channel._id, now, messageId, undefined);
 
-  const author = await ctx.db.get(authorId);
-  // Through the same sanitizer as the message body. A display name is
-  // self-editable and goes into the bell and the phone banner ahead of the
-  // text, where a bidi override or a fake "…mentioned you in #security:" prefix
-  // makes the banner read as if someone else sent it.
-  const actorName = opts.actorLabel
-    ? oneLine(opts.actorLabel, 60)
-    : oneLine(displayName(author), 60);
+  const actorName = await actorNameFor(ctx, authorId, opts.actorLabel);
   const preview = plainPreview(content);
   // The banner's "where" line. A 1:1 DM gets none — the title already names
   // the person, and "Direct message" under their name is noise.
@@ -3157,33 +3199,12 @@ export const sendAsAnchor = mutation({
       if (others.length + 1 > MAX_DM_MEMBERS) {
         chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
       }
-      const dmKey = dmKeyFor(String(teamId), [anchor.bot_user_id, ...others].map(String));
-      const existing = await ctx.db
-        .query("chat_channels")
-        .withIndex("by_dm_key", (q: any) => q.eq("dm_key", dmKey))
-        .first();
-      if (existing) {
-        channel = existing;
-      } else {
-        await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
+      await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
+      const room = await ensureDmRoom(ctx, teamId, [anchor.bot_user_id, ...others], anchor.bot_user_id);
+      channel = room.channel;
+      if (room.created) {
         const now = Date.now();
-        const channelId = await ctx.db.insert("chat_channels", {
-          team_id: teamId,
-          name: "",
-          kind: "dm",
-          dm_key: dmKey,
-          created_by: anchor.bot_user_id,
-          created_at: now,
-          updated_at: now,
-        });
-        await patchChat(ctx, channelId, { workspace: `restricted:${channelId}` });
-        for (const id of [anchor.bot_user_id, ...others]) {
-          await ctx.db.insert("chat_channel_members", {
-            channel_id: channelId, user_id: id, added_by: anchor.bot_user_id, added_at: now,
-          });
-        }
-        for (const id of others) await upsertRead(ctx, id, teamId, channelId, now, undefined, undefined);
-        channel = (await ctx.db.get(channelId))!;
+        for (const id of others) await upsertRead(ctx, id, teamId, channel._id, now, undefined, undefined);
       }
     } else {
       if (!args.channel_id) chatFail("INVALID", "Pass a channel (--chat) or people to message (--dm)");
@@ -4600,7 +4621,7 @@ export const replyAsAnchor = mutation({
     // the placeholder was inserted empty, so its mentions are resolved now.
     const resolved = status === "done"
       ? await resolveChatMentions(ctx, channel.team_id, args.content, anchor.bot_user_id)
-      : { users: [], roles: [], sessions: [], refs: [] };
+      : { users: [], roles: [], sessions: [], slack: [], refs: [] };
     if (resolved.refs.length > 0) patch.mentions = resolved.refs;
     await patchChat(ctx, message._id, patch);
     // The placeholder was empty when it was inserted, so the Slack mirror is
