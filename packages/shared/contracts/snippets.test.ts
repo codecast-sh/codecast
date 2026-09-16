@@ -3,6 +3,9 @@ import {
   SNIPPET_CATALOG,
   snippetBySlug,
   allSnippetSlugs,
+  FORKS_SNIPPET,
+  MEMORY_SNIPPET,
+  stubSectionBody,
 } from "./snippets";
 
 describe("snippet catalog", () => {
@@ -81,5 +84,33 @@ describe("snippet catalog", () => {
     const ends = specs.map((sp) => sp.endMarker);
     expect(new Set(heads).size).toBe(heads.length);
     expect(new Set(ends).size).toBe(ends.length);
+  });
+});
+
+describe("delegated worker guidance", () => {
+  it("teaches nested workers before independent inbox handoffs in full and stub forms", () => {
+    for (const body of [FORKS_SNIPPET, stubSectionBody(snippetBySlug("forks")!)]) {
+      expect(body.indexOf("cast spawn --subagent")).toBeLessThan(body.indexOf("Plain `cast spawn`"));
+      expect(body).toContain("implementers");
+      expect(body).toContain("reviewers");
+      expect(body).toContain("report back");
+      expect(body).toContain("human");
+      expect(body).toContain("steer separately");
+    }
+  });
+
+  it("keeps the fleet recipe nested and watches workers by ID", () => {
+    const recipe = MEMORY_SNIPPET.slice(MEMORY_SNIPPET.indexOf("# ORCHESTRATE"), MEMORY_SNIPPET.indexOf("# Labels —"));
+    expect(recipe).toContain('cast spawn --subagent --label fleet "task A" "task B"');
+    expect(recipe).toContain("cast sessions <worker-id> <worker-id> -w --json");
+    expect(recipe).not.toContain("cast sessions --label fleet");
+    expect(recipe).toContain("including label filters");
+  });
+
+  it("keeps worker briefs and labeled launches out of the inbox", () => {
+    expect(FORKS_SNIPPET).toContain("cast spawn --subagent -- - <<'EOF'");
+    expect(FORKS_SNIPPET).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
+    expect(FORKS_SNIPPET).toContain("A label or a task/plan binding does not nest it");
+    expect(FORKS_SNIPPET).not.toContain("Use it to hand off self-contained work — a parallel audit");
   });
 });
