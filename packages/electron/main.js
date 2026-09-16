@@ -60,6 +60,7 @@ const {
   callWindowPlacementKey,
   isCallSize,
   normalizeCallWindowSize,
+  callWindowTitle,
 } = require("./callWindowPolicy");
 const {
   mergeMeetingDetect,
@@ -595,6 +596,16 @@ function savePeopleBounds(win) {
   updatePeopleState({ bounds: win.getBounds() });
 }
 
+// Every window names itself for window switchers (Mission Control, the Window
+// menu, AltTab). A single purpose window keeps the name the shell gives it: its
+// page is the web app, whose document title is the site's marketing line until
+// something rewrites it, and a switcher full of identical marketing lines names
+// nothing. Tab windows are named by the web app from what they show.
+function pinWindowTitle(win, title) {
+  win.setTitle(title);
+  win.on("page-title-updated", (e) => e.preventDefault());
+}
+
 function createPeopleWindow() {
   if (peopleWindow && !peopleWindow.isDestroyed()) {
     peopleWindow.show();
@@ -631,6 +642,7 @@ function createPeopleWindow() {
     backgroundColor: "#002b36",
   });
   peopleWindow = win;
+  pinWindowTitle(win, "Codecast People");
 
   win.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
   win.once("ready-to-show", () => win.show());
@@ -999,6 +1011,7 @@ function setRingAttention(on) {
  */
 function applyCallWindowSize(win, size, { reveal = true } = {}) {
   if (!win || win.isDestroyed()) return;
+  win.setTitle(callWindowTitle(size));
   const chrome = callWindowChrome(size, { pinned: wallPinned() });
   if (size === "idle") {
     stopCallWindowDrag();
@@ -1182,6 +1195,7 @@ function ensureCallWindow(roomKey, opts) {
     : null;
 
   applyCallWindowSize(win, callWindowSize, { reveal: false });
+  pinWindowTitle(win, callWindowTitle(callWindowSize));
   win.loadURL(callPanelUrl(roomKey, opts));
   win.once("ready-to-show", () => {
     if (win.isDestroyed() || callWindowSize === "idle") return;
@@ -1809,6 +1823,7 @@ function createPaletteWindow() {
 
   const win = paletteWindow;
 
+  pinWindowTitle(win, "Codecast Palette");
   win.loadURL(`${currentBaseUrl}/palette`);
 
   // Same rule as the main window: new-window links open in the default browser.
@@ -1985,6 +2000,7 @@ function createMeetingOfferWindow() {
     },
   });
   meetingOfferWindow = win;
+  pinWindowTitle(win, "Codecast Meeting");
   // Over a fullscreen meeting app — which is exactly where the person is when
   // this card matters.
   win.setAlwaysOnTop(true, "screen-saver");
@@ -2085,6 +2101,7 @@ function createCallRingWindow() {
     },
   });
   callRingWindow = win;
+  pinWindowTitle(win, "Codecast Ring");
   // Over a fullscreen app — which is exactly where somebody is when a ring
   // they cannot see arrives.
   win.setAlwaysOnTop(true, "screen-saver");

@@ -3,6 +3,7 @@ const assert = require("node:assert");
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const {
+  callWindowTitle,
   shouldHandBackCall,
   shouldHideCallWindow,
   callWindowChrome,
@@ -258,4 +259,14 @@ test("the call never gets a second window for its circles or its faces", () => {
   for (const dead of ["report-faces-state", "set-faces-size", "createFacesWindow", "facesWindow.", "set-faces-window-"]) {
     assert.ok(!src.includes(dead), `main.js still refers to \`${dead}\``);
   }
+});
+
+// Window switchers list the voice window by name, and it wears every shape.
+test("the voice window is named for the shape it is in", () => {
+  for (const size of CALL_SIZES) assert.equal(callWindowTitle(size), "Codecast Call", size);
+  assert.equal(callWindowTitle("faces"), "Codecast Faces");
+  assert.equal(callWindowTitle("wall"), "Codecast People");
+  assert.equal(callWindowTitle("walkie"), "Codecast Walkie");
+  assert.equal(callWindowTitle("ring"), "Codecast Ring");
+  assert.equal(callWindowTitle("idle"), "Codecast Voice");
 });
