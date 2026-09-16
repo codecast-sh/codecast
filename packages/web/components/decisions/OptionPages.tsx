@@ -5,7 +5,7 @@ import { ArrowUpRight, Check, Columns2 } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useTrackedStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { CONVEX_URL } from "../../lib/convexUrl";
+import { pageFrameSrc, pageShareUrl, pageThumbUrl } from "../../lib/publishedPageUrls";
 import { openBrowserPane } from "../../lib/stage";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import "./decisions.css";
@@ -49,16 +49,6 @@ export function OptionPages({
   );
 }
 
-// The serving origin frames the page (the same source PublishedPageEmbed
-// uses): it arrives under its own sandbox CSP. The share page is the full
-// open; the thumb endpoint serves the capture `cast publish` took.
-function pageFrameSrc(slug: string): string {
-  return `${CONVEX_URL}/cli/a/${slug}`;
-}
-function pageShareUrl(slug: string): string {
-  return `https://codecast.sh/a/${slug}`;
-}
-
 function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: number; label: string; slug: string; picked: boolean; onAnswer?: () => void }) {
   // The artifacts store row (fed by listForWeb) names the page when the
   // viewer owns it or a teammate shared it; getShared is the enrichment for
@@ -66,12 +56,16 @@ function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: numbe
   const s = useTrackedStore([
     (st) => (st as any).artifacts?.[slug]?.title,
     (st) => (st as any).artifacts?.[slug]?.version,
+    (st) => (st as any).artifacts?.[slug]?.has_thumb,
   ]);
-  const row = (s as any).artifacts?.[slug] as { title?: string; version?: number } | undefined;
+  const row = (s as any).artifacts?.[slug] as { title?: string; version?: number; has_thumb?: boolean } | undefined;
   const { data: meta } = useQueryNoThrow(api.artifacts.getShared, row ? "skip" : { slug });
   const title: string = row?.title ?? meta?.title ?? "Published page";
   const version = row?.version ?? meta?.version ?? 0;
   const [thumbFailed, setThumbFailed] = useState(false);
+  // A page published without a thumbnail says so on its row: draw the
+  // fallback at once instead of a broken image until the request fails.
+  const noThumb = thumbFailed || row?.has_thumb === false;
   const openPane = () => openBrowserPane({ kind: "url", url: pageFrameSrc(slug) });
 
   return (
@@ -95,10 +89,10 @@ function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: numbe
         <span className="min-w-0 flex-1 truncate text-[13px] text-sol-text" title={label}>{label}</span>
       </div>
       <button type="button" onClick={openPane} className="decision-option-page-thumb" title="Open beside your work, as a pane" aria-label={`Open ${title} in a pane`}>
-        {thumbFailed ? (
+        {noThumb ? (
           <span className="w-full h-full flex items-center justify-center text-sol-text-dim font-mono text-2xl select-none">{"</>"}</span>
         ) : (
-          <img src={`${CONVEX_URL}/cli/a/${slug}?thumb=1&r=v${version}`} alt="" loading="lazy" onError={() => setThumbFailed(true)} />
+          <img src={pageThumbUrl(slug, version)} alt="" loading="lazy" onError={() => setThumbFailed(true)} />
         )}
       </button>
       <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] min-w-0">

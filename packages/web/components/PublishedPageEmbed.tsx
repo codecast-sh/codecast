@@ -4,22 +4,11 @@ import { Link, Link2, ArrowUpRight, ChevronsUpDown, Columns2 } from "lucide-reac
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useFrameTheme } from "../hooks/useFrameTheme";
-import { CONVEX_URL } from "../lib/localAuth";
 import { copyToClipboard } from "../lib/utils";
 import { openBrowserPane } from "../lib/stage";
+import { pageFrameSrc, pageShareUrl } from "../lib/publishedPageUrls";
 
 const api = _api as any;
-
-/** The raw serving origin — same frame source the decision queue uses. The
- *  artifact origin serves its own sandbox CSP, so the iframe is already
- *  isolated; no second sanitizer needed on our side. */
-function pageFrameSrc(slug: string): string {
-  return `${CONVEX_URL}/cli/a/${slug}`;
-}
-
-function pageShareUrl(slug: string): string {
-  return `https://codecast.sh/a/${slug}`;
-}
 
 /**
  * Open the page as a stage pane. The pane frames the SERVING origin, not the

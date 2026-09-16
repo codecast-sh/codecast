@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowUpRight, Columns2, FileCode, FileText, GitPullRequest, Image as ImageIcon, Paperclip } from "lucide-react";
 import { useTeamTaskStatusList } from "../../lib/taskStatuses";
 import { openBrowserPane } from "../../lib/stage";
-import { CONVEX_URL } from "../../lib/localAuth";
+import { pageFrameSrc, pageShareUrl } from "../../lib/publishedPageUrls";
 import { TaskStatusBadge } from "../TaskStatusBadge";
 import { useSyncTaskEvidence, useTaskEvidence, type TaskEvidencePage, type TaskEvidenceRow } from "../../hooks/useSyncTaskEvidence";
 import { stationLabel, stationOf, type LineTask } from "../../lib/taskLine";
@@ -16,11 +16,6 @@ import { ReviewVerdictChip } from "./StationStrip";
 // images a bound session captured; the docs that name the task; the handoff's
 // files, PR and verification text; the execution status and the verdict.
 // One store row per task (taskEvidence), fed here, painted from cache first.
-
-// The same serving origin PublishedPageEmbed frames: the page arrives under
-// its own sandbox CSP, and the share page's chrome does not wrap it twice.
-const pageFrameSrc = (slug: string) => `${CONVEX_URL}/cli/a/${slug}`;
-const pageShareUrl = (slug: string) => `https://codecast.sh/a/${slug}`;
 
 type EvidenceTask = LineTask & {
   team_id?: string;

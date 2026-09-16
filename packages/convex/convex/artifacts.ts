@@ -175,6 +175,11 @@ function toCliRow(a: Doc<"artifacts">) {
     version: a.version,
     kind: a.kind ?? "html",
     session_short_id: a.session_short_id ?? null,
+    // Evidence binding (the-line.md L6): the web counts a task's pages from
+    // these, so the row carries them.
+    task_id: a.task_id ?? null,
+    plan_id: a.plan_id ?? null,
+    station: a.station ?? null,
     created_at: a.created_at,
     updated_at: a.updated_at,
     url,
