@@ -181,6 +181,7 @@ class Parser {
         if (attrs.model_stylesheet) graph.model_stylesheet = attrs.model_stylesheet as string;
         if (attrs.fidelity) graph.fidelity = attrs.fidelity as string;
         if (attrs.join_policy) graph.join_policy = attrs.join_policy as string;
+        if (attrs.stack) graph.stack = String(attrs.stack);
       }
       return;
     }
@@ -303,6 +304,8 @@ class Parser {
     if (attrs.goal_gate) node.goal_gate = attrs.goal_gate as boolean;
     if (attrs.thread_id) node.thread_id = attrs.thread_id as string;
     if (attrs.fidelity) node.fidelity = attrs.fidelity as string;
+    if (attrs.doc) node.doc = String(attrs.doc);
+    if (attrs.category) node.category = String(attrs.category);
 
     return node;
   }

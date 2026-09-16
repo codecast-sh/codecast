@@ -5,7 +5,8 @@ import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from "choki
 import { walkFiles, type WalkFile } from "./fsWalk.js";
 import type { ScanPolicy } from "./workers/scanTypes.js";
 
-type WatcherCallback = (filePath: string, eventType: "add" | "change") => void;
+export type WatcherEvent = "add" | "change" | "unlink";
+type WatcherCallback = (filePath: string, eventType: WatcherEvent) => void;
 
 const supportsRecursiveWatch = process.platform === "darwin" || process.platform === "win32";
 
@@ -230,7 +231,10 @@ export class RecursiveWatcher extends EventEmitter {
     try {
       stat = await fs.promises.stat(full);
     } catch {
-      return; // deleted before the probe ran
+      // Deleted before the probe ran. A file this watcher had seen is an
+      // unlink worth reporting; one it never recorded was a transient.
+      if (gen === this.generation && this.knownMtime.delete(full)) this.callback(full, "unlink");
+      return;
     }
     if (gen !== this.generation || !stat.isFile()) return;
     // While priming is still walking, the walk may stat this file AFTER the
@@ -326,6 +330,12 @@ export class RecursiveWatcher extends EventEmitter {
       if (gen !== this.generation) return;
       const rel = path.relative(this.watchPath, filePath);
       if (this.filter(rel)) this.callback(filePath, "change");
+    });
+
+    this.chokidarWatcher.on("unlink", (filePath) => {
+      if (gen !== this.generation) return;
+      const rel = path.relative(this.watchPath, filePath);
+      if (this.filter(rel)) this.callback(filePath, "unlink");
     });
 
     this.chokidarWatcher.on("error", (err: unknown) => {

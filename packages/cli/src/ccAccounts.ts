@@ -2308,14 +2308,33 @@ function mergeLiveUsage(
   prev: CcUsageSnapshot | undefined,
   snap: CcUsageSnapshot,
 ): CcUsageSnapshot | null {
+  // A live reading contributes PERCENTAGES only. The reset times stay as the
+  // poll left them, because they are the evidence liveUsageKey attributes the
+  // NEXT reading with: let a post rewrite them and one misfiled reading makes
+  // two accounts look alike, after which neither can be told apart again. A
+  // window whose stored reset has since passed reads as rolled (livePercent),
+  // which is the safe way to be stale — it never invents a limit.
+  const carryReset = (
+    live: CcUsageWindow | undefined,
+    polled: CcUsageWindow | undefined,
+  ): CcUsageWindow | undefined => {
+    if (!live) return polled;
+    return polled?.resets_at !== undefined
+      ? { ...live, resets_at: polled.resets_at }
+      : { percent: live.percent };
+  };
   const merged: CcUsageSnapshot = {
     ...snap,
     ...(prev?.weekly_scoped && { weekly_scoped: prev.weekly_scoped }),
     ...(prev?.extra && { extra: prev.extra }),
     ...(prev?.polled_at !== undefined && { polled_at: prev.polled_at }),
-    ...(!snap.weekly && prev?.weekly && { weekly: prev.weekly }),
-    ...(!snap.session && prev?.session && { session: prev.session }),
   };
+  const session = carryReset(snap.session, prev?.session);
+  const weekly = carryReset(snap.weekly, prev?.weekly);
+  if (session) merged.session = session;
+  else delete merged.session;
+  if (weekly) merged.weekly = weekly;
+  else delete merged.weekly;
   const unchanged =
     prev?.source === "live-session" &&
     snap.fetched_at - prev.fetched_at < LIVE_USAGE_RESTAMP_MS &&
@@ -2336,9 +2355,59 @@ export interface StatusLineIngest {
 let liveUsageWriteChain: Promise<void> = Promise.resolve();
 
 /**
+ * Which account a live reading belongs to, judged from the window resets it
+ * carries — the same evidence that names the owner of a scope-less token
+ * (attributeFingerprint), applied to the same question here.
+ *
+ * The profile name a session was launched under cannot answer it. Only a
+ * session holding its own sourced credential runs on the account it names;
+ * every other session runs on the machine's keychain login (see
+ * accountSourcePrefix), which the daemon moves underneath it. After a switch
+ * those sessions keep the name they launched with and report the NEW account's
+ * windows under the OLD account's key, and the account that just took over
+ * reads whatever the sessions still holding stale readings post under its name.
+ * On 2026-09-15 that filed a 102% reading under an account sitting at 37%, and
+ * auto-switch moved the machine off a good account onto a spent one — twice a
+ * minute, because every hop poisoned the next pair of meters the same way.
+ *
+ * An unmatched reading is DROPPED rather than filed under a guess: the OAuth
+ * poll reads every account on its own credential, so the cost of dropping one
+ * is a few minutes of staleness, and the cost of filing it wrong is the flap
+ * above. Ambiguity (two accounts whose windows reset at the same second) drops
+ * for the same reason. A payload with no weekly window carries no fingerprint
+ * and is dropped too — the poll is the only reading for those.
+ */
+function liveUsageKey(
+  snapshot: CcUsageSnapshot,
+  profiles: ProfileIndex["profiles"],
+  accounts: Record<string, CcUsageSnapshot>,
+  now: number,
+): string | undefined {
+  const seconds = (ms: number | undefined): number | null => (ms == null ? null : ms / 1000);
+  const name = attributeFingerprint(
+    {
+      five_hour_reset: seconds(snapshot.session?.resets_at),
+      seven_day_reset: seconds(snapshot.weekly?.resets_at),
+      five_hour_utilization: null,
+      seven_day_utilization: null,
+    },
+    profiles,
+    accounts,
+    now,
+  );
+  if (!name) return undefined;
+  const meta = profiles[name];
+  return meta?.uuid || meta?.email || undefined;
+}
+
+/**
  * The whole /hook/statusline body -> the usage cache, so the daemon route stays
  * a parser and this stays testable. Null when the payload carries no windows or
  * no account can be named for it.
+ *
+ * `account` is the name the session was launched under. It names the reading in
+ * the daemon's log and is validated because it arrives from a URL, but it never
+ * decides where the reading is filed — liveUsageKey does, from the windows.
  *
  * Every filesystem call here is async on purpose: this runs on the daemon's
  * loopback server, where one synchronous read stalls delivery, injection, the
@@ -2351,13 +2420,23 @@ export async function ingestStatusLineUsage(
   const now = opts.now ?? Date.now();
   const snapshot = parseStatusLineUsage(payload, now);
   if (!snapshot) return null;
-  const key = await usageKeyForSessionAsync(opts.account);
-  if (!key) return null;
+  // A name that could not be a profile name says the environment is not one we
+  // understand; its reading is not worth filing anywhere.
+  if (opts.account !== undefined && !VALID_PROFILE_NAME.test(opts.account)) return null;
+  // The index is read for the profiles' identities, so the validating reader
+  // (readProfileIndex) would only add a synchronous file read here.
+  const profiles = (await readJsonAsync<ProfileIndex>(indexPath()))?.profiles ?? {};
 
+  let key: string | undefined;
   let wrote = false;
   liveUsageWriteChain = liveUsageWriteChain.then(async () => {
     const stored = await readJsonAsync<UsageCache>(usageCachePath());
     const cache: UsageCache = stored?.accounts ? stored : { accounts: {} };
+    // Inside the chain: the snapshots this reading is matched against are the
+    // ones it is about to be written beside, never a copy a concurrent poll
+    // has already replaced.
+    key = liveUsageKey(snapshot, profiles, cache.accounts, now);
+    if (!key) return;
     const merged = mergeLiveUsage(cache.accounts[key], snapshot);
     if (!merged) return;
     cache.accounts[key] = merged;
@@ -2365,19 +2444,7 @@ export async function ingestStatusLineUsage(
     wrote = true;
   });
   await liveUsageWriteChain;
-  return { key, snapshot, wrote };
-}
-
-async function usageKeyForSessionAsync(account: string | undefined): Promise<string | undefined> {
-  if (account) {
-    if (!VALID_PROFILE_NAME.test(account)) return undefined;
-    // The index is read for two strings, so the validating reader
-    // (readProfileIndex) would only add a synchronous file read here.
-    const index = await readJsonAsync<ProfileIndex>(indexPath());
-    const meta = index?.profiles?.[account];
-    return meta?.uuid || meta?.email || undefined;
-  }
-  return (await readJsonAsync<ActiveStamp>(activeStampPath()))?.key;
+  return key ? { key, snapshot, wrote } : null;
 }
 async function readJsonAsync<T>(file: string): Promise<T | null> {
   try {

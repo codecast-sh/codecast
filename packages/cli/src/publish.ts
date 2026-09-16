@@ -176,13 +176,23 @@ function versionLine(result: { version: number; updated?: boolean; unchanged?: b
   return `${fmt.number(`v${result.version}`)} ${icons.arrow} ${result.updated ? "updated" : "published"}`;
 }
 
+/** "attached to ct-12 at in_progress" (the-line.md L6), or null when unattached. */
+export function describeEvidence(evidence?: { task?: string | null; plan?: string | null; station?: string | null } | null): string | null {
+  if (!evidence) return null;
+  const target = evidence.task ?? evidence.plan;
+  if (!target) return null;
+  return `attached to ${target}${evidence.task && evidence.station ? ` at ${evidence.station}` : ""}`;
+}
+
 function printPublishResult(
-  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null },
+  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null } },
   title: string,
   access?: Record<string, unknown>,
 ): void {
   console.log(`${fmt.success(icons.check)} ${fmt.highlight(title)}  ${versionLine(result)}`);
   console.log(`  ${fmt.accent(result.url)}`);
+  const attached = describeEvidence(result.evidence);
+  if (attached) console.log(`  ${fmt.label("evidence:")} ${attached}`);
   if (result.manage_url && result.manage_url !== result.url) {
     console.log(`  ${fmt.label("manage (owner link — keep private):")} ${result.manage_url}`);
   }
@@ -504,6 +514,29 @@ interface PublishOptions {
   comments?: boolean;
   thumb?: boolean;
   open?: boolean;
+  /** Evidence (the-line.md L6): the task (ct-N) or plan (pl-N) this page is for. */
+  task?: string;
+  plan?: string;
+}
+
+/** The /cli/artifacts/publish body: the payload plus the flags of this publish. */
+export function publishRequestBody(
+  payload: PublishPayload,
+  extra: { access?: Record<string, unknown>; sessionRef?: string; forceNew?: boolean; thumbB64?: string; task?: string; plan?: string },
+): Record<string, unknown> {
+  return {
+    title: payload.title,
+    source_path: payload.source_path,
+    ...(payload.kind ? { kind: payload.kind } : {}),
+    ...(payload.content !== undefined ? { content: payload.content } : {}),
+    ...(payload.files ? { files: payload.files } : {}),
+    ...(extra.forceNew ? { force_new: true } : {}),
+    ...(extra.access ? { access: extra.access } : {}),
+    ...(extra.sessionRef ? { session_ref: extra.sessionRef } : {}),
+    ...(extra.thumbB64 ? { thumb_b64: extra.thumbB64 } : {}),
+    ...(extra.task ? { task: extra.task } : {}),
+    ...(extra.plan ? { plan: extra.plan } : {}),
+  };
 }
 
 async function publishOnce(
@@ -520,17 +553,7 @@ async function publishOnce(
   const result = await apiPost(
     deps,
     "/cli/artifacts/publish",
-    {
-      title: payload.title,
-      source_path: payload.source_path,
-      ...(payload.kind ? { kind: payload.kind } : {}),
-      ...(payload.content !== undefined ? { content: payload.content } : {}),
-      ...(payload.files ? { files: payload.files } : {}),
-      ...(extra.forceNew ? { force_new: true } : {}),
-      ...(extra.access ? { access: extra.access } : {}),
-      ...(extra.sessionRef ? { session_ref: extra.sessionRef } : {}),
-      ...(thumbB64 ? { thumb_b64: thumbB64 } : {}),
-    },
+    publishRequestBody(payload, { access: extra.access, sessionRef: extra.sessionRef, forceNew: extra.forceNew, thumbB64, task: options.task, plan: options.plan }),
     { exitOnError: extra.exitOnError },
   );
   return { result, title: payload.title };
@@ -650,6 +673,8 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--comments", "Let viewers discuss the page (default)")
     .option("--no-comments", "Turn off the viewer discussion")
     .option("--no-thumb", "Skip the headless-Chrome thumbnail screenshot")
+    .option("--task <ct-N>", "Attach the page to a task as evidence at its current station (default: the session's active task)")
+    .option("--plan <pl-N>", "Attach the page to a plan")
     .option("--open", "Open the published URL in the browser")
     .option("--resolve <id>", "comments: mark one comment resolved")
     .option("--resolve-all", "comments: mark every open comment resolved")

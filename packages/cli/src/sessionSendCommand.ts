@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { c } from "./colors.js";
 import { stdinText } from "./sendBody.js";
 
-type SendOptions = { from?: string; raw?: boolean };
+type SendOptions = { from?: string; raw?: boolean; wake?: boolean };
 type SendIo = {
   currentSession(): string | null;
   post(path: string, body: Record<string, unknown>): Promise<any>;
@@ -19,6 +19,12 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
       "can message any session you can see in the feed (your own, or one shared\n" +
       "with a team you're in). If the target session is offline, the message is\n" +
       "queued and the cron tells your session if it can't be delivered.\n\n" +
+      "A session that was killed, or has not run for longer than its prompt\n" +
+      "cache lasts (one hour), is not woken by default: waking it rebuilds its\n" +
+      "whole context before it reads the message. The send stops and says what\n" +
+      "it would cost; pass --wake when it truly has to act. Reporting back to the\n" +
+      "session that started you, or to one that declared itself dormant, always\n" +
+      "goes through.\n\n" +
       "Detached scripts must pass --from <your session id> if the calling\n" +
       "session cannot be detected. An unattributed message is not queued.\n\n" +
       "Examples:\n" +
@@ -33,6 +39,7 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
     .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
     .argument("<text>", stdinText("Message text"))
     .option("--from <id>", "Override sender session (required if current session cannot be detected)")
+    .option("--wake", "Deliver even when the target was killed or idle past its prompt cache lifetime")
     .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper — for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
     .action(async (sessionId: string, text: string, options: SendOptions) => {
       const body = text ?? "";
@@ -41,11 +48,14 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
       if (!from && (!options.raw || options.from !== undefined)) {
         throw new Error("Sender session not detected. Nothing was sent. Pass --from <your session id>; detached scripts must carry their sender explicitly.");
       }
+      if (options.raw && !/^\/[a-zA-Z]/.test(body.trim())) {
+        throw new Error("--raw is only for slash commands (/model, /effort). Drop --raw so the message is attributed to the sending session.");
+      }
       const result = await io.post("/cli/messages/send", {
         to: sessionId,
         from,
         body,
-        ...(options.raw ? { raw: true } : {}),
+        ...(options.raw ? { raw: true } : { wake: options.wake === true }),
       });
       const fromNote = result.from_short_id && result.from_short_id !== "unknown"
         ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`

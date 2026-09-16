@@ -28,6 +28,7 @@ const mainAt = src.indexOf(MAIN);
 const SEQUENCE: Array<{ anchor: string; why: string }> = [
   { anchor: 'logLifecycle("daemon_start"', why: "boot starts here" },
   { anchor: "hookServer = startHookServer(", why: "the loopback server listens" },
+  { anchor: "bindConvexConnectionState(syncService.getSubscriptionClient()", why: "Convex WebSocket tracking starts before the warm restart" },
   { anchor: "void checkForForcedUpdate(", why: "the update check runs in the background" },
   { anchor: "readAvailableSkills()", why: "the boot skills sweep" },
   { anchor: "setHookStatusSink(", why: "the hook status handler registers" },
@@ -52,6 +53,14 @@ describe("daemon boot order", () => {
     const slice = sliceBetween(src, 'logLifecycle("daemon_start"', "hookServer = startHookServer(", mainAt);
     const lines = codeLines(slice.text).length;
     expect(lines, `${lines} code lines run before the loopback server listens`).toBeLessThan(80);
+  });
+
+  test("Convex WebSocket tracking is not held behind the tmux warm restart", () => {
+    const bindAt = src.indexOf("bindConvexConnectionState(syncService.getSubscriptionClient()", mainAt);
+    const warmAt = src.indexOf("await runBounded(ccSessions", mainAt);
+    expect(bindAt, "bindConvexConnectionState not found in main()").toBeGreaterThan(-1);
+    expect(warmAt, "warm restart runBounded not found in main()").toBeGreaterThan(-1);
+    expect(bindAt, "Convex WebSocket tracking must start before the warm restart await").toBeLessThan(warmAt);
   });
 
   test("updates and skill discovery cannot hold sync startup behind an unresolved promise", () => {

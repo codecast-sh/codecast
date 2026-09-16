@@ -5,8 +5,11 @@ import * as path from "path";
 import { loopHoldBoundMs, measureLoopHold } from "../test-helpers/loopHold.js";
 import {
   collectCapabilityInventory,
+  CONTENT_BATCH_CHARS,
   ensureCapabilityInventoryFresh,
+  markCapabilityContentsSent,
   markCapabilityPayloadSent,
+  pendingCapabilityContents,
   pendingCapabilityPayload,
   resetCapabilityHeartbeatState,
 } from "./heartbeat.js";
@@ -51,6 +54,51 @@ describe("capability heartbeat payload", () => {
     const p = collectCapabilityInventory(path.join(os.tmpdir(), "does-not-exist-cc"));
     expect(p.items).toEqual([]);
     expect(p.hash.length).toBe(16);
+  });
+
+  test("bodies ride a sidecar, never the inventory items", () => {
+    const home = fakeHome();
+    const p = collectCapabilityInventory(home);
+    expect(p.items.every((i) => (i as { body?: string }).body === undefined)).toBe(true);
+    const contents = pendingCapabilityContents();
+    expect(contents?.some((c) => c.name === "deploy" && c.body.includes("ship it"))).toBe(true);
+  });
+
+  test("an unchanged body stops riding after it is marked sent", () => {
+    const home = fakeHome();
+    collectCapabilityInventory(home);
+    const first = pendingCapabilityContents();
+    expect(first?.length).toBeGreaterThan(0);
+    markCapabilityContentsSent((first ?? []).map((c) => c.hash));
+    expect(pendingCapabilityContents()).toBeUndefined();
+  });
+
+  test("a body edit ships again under a new hash", () => {
+    const home = fakeHome();
+    collectCapabilityInventory(home);
+    markCapabilityContentsSent((pendingCapabilityContents() ?? []).map((c) => c.hash));
+    fs.writeFileSync(
+      path.join(home, ".claude", "skills", "deploy", "SKILL.md"),
+      "---\nname: deploy\ndescription: ship it\n---\nnew body\n",
+    );
+    collectCapabilityInventory(home);
+    const next = pendingCapabilityContents();
+    expect(next?.some((c) => c.body.includes("new body"))).toBe(true);
+  });
+
+  test("a large tree fills across beats instead of one payload", () => {
+    const home = fakeHome();
+    const bulky = "x".repeat(Math.floor(CONTENT_BATCH_CHARS / 2));
+    for (const name of ["one", "two", "three"]) {
+      const dir = path.join(home, ".claude", "skills", name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n${bulky}\n`);
+    }
+    collectCapabilityInventory(home);
+    const first = pendingCapabilityContents() ?? [];
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.length).toBeLessThan(4);
+    expect(first.reduce((n, c) => n + c.body.length, 0)).toBeLessThanOrEqual(CONTENT_BATCH_CHARS);
   });
 });
 

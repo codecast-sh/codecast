@@ -233,6 +233,72 @@ describe("spawned run launch flags", () => {
   });
 });
 
+describe("trigger run lifecycle guidance", () => {
+  const task = (extra: Record<string, any> = {}) => ({
+    ...spawnTask("task-internal-id"), short_id: "tr-42", schedule_type: "recurring", mode: "apply",
+    prompt: "Keep the ongoing mandate active. Collect the next due cohort after its deadline.",
+    ...extra,
+  });
+  const assertLifecycle = (prompt: string) => {
+    expect(prompt).toContain("cast trigger complete tr-42 --summary");
+    expect(prompt).toContain("Completing one recurring run alone does not retire its trigger");
+    expect(prompt).toContain("bounded trigger and its terminal condition is verified complete");
+    expect(prompt).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");
+    expect(prompt).toContain("Quiet or no-change results, quota errors, collector failures, unavailable sources, and pending deadlines are NOT proof of completion");
+    expect(prompt).toContain("Ongoing mandates remain active until explicitly ended");
+    expect(prompt).toContain("Do not close unrelated tasks or cancel other triggers");
+    expect(prompt).toContain("subordinate to this trigger's prompt, explicit user instructions, and the session's existing permissions");
+    expect(prompt).toContain("if cancellation is outside this run's authority, report the verified outcome and required cancellation");
+    expect(prompt).not.toContain("cast trigger cancel task-internal-id");
+  };
+
+  it("includes the protective lifecycle rules in a spawned run's briefing", () => {
+    const { scheduler } = makeScheduler([]);
+    const input = task();
+    const prompt = scheduler.buildPrompt(input);
+    expect(prompt).toContain(input.prompt);
+    assertLifecycle(prompt);
+  });
+
+  it("injects the same rules inline without changing the stored prompt or completing the purpose", async () => {
+    const input = task({ originating_conversation_id: "conv123" });
+    const { scheduler, calls } = makeScheduler([input], { claimResult: t => t });
+    const original = input.prompt;
+    await scheduler.poll();
+    expect(calls.injected).toEqual(["conv123"]);
+    const prompt = calls.prompts[0];
+    expect(prompt).toContain(`<scheduled-task title="${input.title}" task-id="${input._id}">${original}`);
+    assertLifecycle(prompt);
+    expect(input.prompt).toBe(original);
+    expect(calls.completed).toEqual([input._id]);
+    expect(calls.failed).toEqual([]);
+    const start = "Trigger lifecycle defaults";
+    const spawnedPrompt = scheduler.buildPrompt(task());
+    expect(prompt.slice(prompt.indexOf(start), prompt.indexOf("</scheduled-task>")))
+      .toBe(spawnedPrompt.slice(spawnedPrompt.indexOf(start), spawnedPrompt.indexOf('\n- To set a follow-up trigger:')));
+  });
+
+  it("keeps the safe-mode mandate and launch restrictions while deferring unauthorized cancellation", () => {
+    const { scheduler } = makeScheduler([]);
+    const input = task({ mode: "propose" });
+    const prompt = scheduler.buildPrompt(input);
+    assertLifecycle(prompt);
+    expect(prompt).toContain("strictly read-only");
+    expect(prompt).toContain("Never modify files, run state-changing commands, commit, push, or deploy");
+    const { extraAgentArgs } = buildRunLaunch(input, {} as any);
+    expect(extraAgentArgs).toContain("--disallowedTools");
+    expect(extraAgentArgs.join(" ")).toContain("strictly read-only");
+  });
+
+  it("an inline run inherits its session permissions without a new mode mandate", async () => {
+    const input = task({ originating_conversation_id: "conv123", mode: "propose" });
+    const { scheduler, calls } = makeScheduler([input], { claimResult: t => t });
+    await scheduler.poll();
+    assertLifecycle(calls.prompts[0]);
+    expect(calls.prompts[0]).not.toContain("This is a SAFE-mode scheduled run");
+  });
+});
+
 // `cast trigger add --precheck`: the gate decides whether a firing spends a
 // session at all. A refused firing must spawn nothing, inject nothing, and
 // leave a skip record — the only trace that the trigger fired.

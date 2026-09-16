@@ -30,6 +30,7 @@ import {
 import { deviceId } from "../remote/device.js";
 import { ssh } from "../remote/session-move.js";
 import { commandGroup } from "../commandGroups.js";
+import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 
 const OK = fmt.success(icons.check);
 
@@ -479,6 +480,7 @@ function pick(id: string | undefined, what: string): CloudHost {
  */
 export function buildHostsCommand(parent: Command): Command {
   const hosts = parent.command("hosts").description(commandGroup("hosts").description);
+  registerHostKeepaliveCommand(hosts);
 
   hosts
     .command("ls", { isDefault: true })

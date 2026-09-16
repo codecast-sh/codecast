@@ -109,7 +109,7 @@ interface ContextMessage {
   tool_results_count?: number;
 }
 
-interface SearchConversation {
+interface SearchConversation extends SessionPresence {
   id: string;
   title: string;
   project_path: string | null;
@@ -280,16 +280,50 @@ function colorForState(ws: string): string {
 // at all. The tag appears under -a, --state idle/pinned, and --by-label. Pinning
 // affects sort order, not grouping, so a pinned killed row is still collapsed in
 // the default view. formatter.test.ts pins this rather than the docs alone.
-function formatStateBadge(s: { work_state?: string; is_live?: boolean; is_pinned?: boolean; is_killed?: boolean; agent_status?: string }): string {
+function formatStateBadge(s: SessionPresence): string {
   const ws = s.work_state || "idle";
   const liveGlyph = LIVENESS_GLYPH[sessionLivenessVerdict(s)];
   const label = WORK_STATE_LABEL[ws] ?? ws;
   const detail = s.is_live && s.agent_status && s.agent_status !== ws && WORK_STATE_LABEL[s.agent_status] === undefined
     ? `${c.dim}:${s.agent_status}${c.reset}`
     : "";
-  const kill = s.is_killed ? ` ${c.red}killed${c.reset}` : "";
+  // A completed row (its process ended: SessionEnd, watchdog, teardown) that
+  // is not live again reads "ended"; a kill says more, so it wins.
+  const kill = s.is_killed
+    ? ` ${c.red}killed${c.reset}`
+    : s.is_completed && !s.is_live ? ` ${c.gray}ended${c.reset}` : "";
   const pin = s.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
   return `${liveGlyph} ${colorForState(ws)}${label}${c.reset}${detail}${kill}${pin}`;
+}
+
+/** The liveness facts a server session row ships (feedForCLI, searchForCLI,
+ * findSimilar, inboxForCLI), in the shape formatStateBadge reads. */
+export interface SessionPresence {
+  work_state?: string;
+  is_live?: boolean;
+  is_killed?: boolean;
+  is_completed?: boolean;
+  is_pinned?: boolean;
+  agent_status?: string;
+  /** Server sort key below relevance: 0 prompt cache warm, 1 cache expired,
+   * 2 killed or completed (recencyRankOf in convex/conversations.ts). */
+  recency_rank?: 0 | 1 | 2;
+}
+
+/** Copy just the liveness facts off a server row, for commands that rebuild
+ * session rows from several sources (`cast context`, `cast ask`). */
+export function pickSessionPresence(row: SessionPresence): SessionPresence {
+  const { work_state, is_live, is_killed, is_completed, agent_status, recency_rank } = row;
+  return { work_state, is_live, is_killed, is_completed, agent_status, recency_rank };
+}
+
+/** "● working | just now" / "○ idle killed | 3 days ago": the state badge and
+ * last activity age, so an agent sees before it messages a session whether the
+ * session is live, done, retired, or long quiet. A row from a server that ships
+ * no liveness facts shows the age alone rather than a made-up "idle". */
+export function formatSessionPresence(s: SessionPresence & { updated_at: string }): string {
+  const age = formatRelativeTime(s.updated_at);
+  return s.work_state === undefined ? age : `${formatStateBadge(s)} | ${age}`;
 }
 
 function wrapText(text: string, indent: string, maxWidth: number = 72): string {
@@ -365,7 +399,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     const userDisplay = conv.user?.name || conv.user?.email;
     const meta = [
       `${c.cyan}${truncateId(conv.id)}${c.reset}`,
-      `${c.dim}${formatRelativeTime(conv.updated_at)}${c.reset}`,
+      formatSessionPresence(conv),
       `${c.dim}${conv.message_count} msgs${c.reset}`,
       truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
@@ -544,16 +578,12 @@ interface FeedPreviewMessage {
   tool_results_count?: number;
 }
 
-interface FeedConversation {
+interface FeedConversation extends SessionPresence {
   id: string;
   title: string;
   project_path: string | null;
   updated_at: string;
   message_count: number;
-  is_live?: boolean;
-  agent_status?: string;
-  work_state?: string;
-  is_pinned?: boolean;
   user?: { name: string | null; email: string | null };
   /** Second-party owner (steering member), when assigned. */
   owner?: { name: string | null; email: string | null };
@@ -901,11 +931,9 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
       : conv.owner
         ? `owner: ${conv.owner.name || conv.owner.email}`
         : "";
-    const stateBadge = formatStateBadge(conv);
     const meta = [
       truncateId(conv.id),
-      stateBadge,
-      formatRelativeTime(conv.updated_at),
+      formatSessionPresence({ work_state: "idle", ...conv }),
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
@@ -2131,7 +2159,7 @@ export function formatBlameResults(result: BlameResult): string {
   return lines.join("\n");
 }
 
-interface ContextSession {
+interface ContextSession extends SessionPresence {
   id: string;
   title: string;
   project_path: string | null;
@@ -2176,10 +2204,9 @@ export function formatContextResults(input: ContextInput): string {
   lines.push("## Most Relevant");
   for (const session of sessions.slice(0, 5)) {
     const shortId = truncateId(session.id);
-    const date = formatDate(session.updated_at);
     const title = session.title || "Untitled";
 
-    lines.push(`[${shortId}] ${date} - "${title}"`);
+    lines.push(`[${shortId}] ${formatSessionPresence(session)} - "${title}"`);
 
     if (session.preview) {
       const previewClean = session.preview.replace(/\n+/g, " ").trim();

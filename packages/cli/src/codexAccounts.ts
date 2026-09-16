@@ -29,6 +29,7 @@ import {
   codexHome,
   collectCodexUsageSnapshot,
   fetchRateLimitsViaAppServer,
+  isCodexWindowFilled,
   parseRateLimitsReadResult,
   type CodexUsageSnapshot,
 } from "./codexUsage.js";
@@ -463,9 +464,16 @@ export async function refreshCodexUsageSnapshots(
     // credits are not on it: having none is the ordinary state of an account,
     // so treating that as a hole would send every account to the endpoint on
     // every cycle forever.
-    if (home && (!snap || !snap.session || !snap.plan_type)) {
+    const sessionFilled = isCodexWindowFilled(snap?.session);
+    const weeklyFilled = isCodexWindowFilled(snap?.weekly);
+    const needsBackend = !!(home && (!snap || !sessionFilled || !snap.plan_type || !weeklyFilled));
+    if (needsBackend) {
       const retry = cache.backend_retries?.[key];
-      if (retry && now < retry.retry_at) {
+      // Cooloff is only for "this plan has no 5h window". A missing weekly
+      // still has to go to the backend — otherwise a placeholder 0% from
+      // rollout logs (or a missed RPC) freezes the week bar empty.
+      const onlySessionHole = !!(snap && snap.plan_type && weeklyFilled && !sessionFilled);
+      if (retry && now < retry.retry_at && onlySessionHole) {
         summary.backend_deferred.push(label);
       } else {
         try {
@@ -476,7 +484,7 @@ export async function refreshCodexUsageSnapshots(
           // sources report the weekly bucket alone). Asking again every tick
           // would buy nothing, so rest — the app-server keeps the meters fresh
           // meanwhile, and an upgraded plan is picked up within the hour.
-          const next = backend && !snap?.session ? agreedNoSessionWindow(now) : undefined;
+          const next = backend && !isCodexWindowFilled(snap?.session) ? agreedNoSessionWindow(now) : undefined;
           if (next) {
             (cache.backend_retries ??= {})[key] = next;
             wrote = true;
@@ -508,6 +516,17 @@ export async function refreshCodexUsageSnapshots(
       }
     }
     if (snap) {
+      // A later probe that found no real windows (RPC miss + placeholder logs)
+      // must not wipe a weekly we already had.
+      if (prev) {
+        const merged = mergeCodexUsage(snap, prev);
+        if (merged) {
+          snap = {
+            ...merged,
+            ...(snap.models ? { models: snap.models } : prev.models ? { models: prev.models } : {}),
+          };
+        }
+      }
       cache.accounts[key] = snap;
       summary.probed.push(label);
       wrote = true;

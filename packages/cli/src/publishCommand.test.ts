@@ -17,6 +17,7 @@ import {
   formatAgeShort,
   formatArtifactTable,
   type ArtifactLsRow,
+  pageSlugFromRef,
 } from "./publishCommand";
 
 describe("extractHtmlTitle", () => {
@@ -311,5 +312,24 @@ describe("formatArtifactTable", () => {
     const lines = formatArtifactTable([lsRow({ title: "x".repeat(80) })], Date.now());
     expect(lines[1]).toContain("…");
     expect(lines[1]).not.toContain("x".repeat(40));
+  });
+});
+
+// `cast task handoff --page <slug|url>` (docs/architecture/the-line.md L6).
+describe("pageSlugFromRef", () => {
+  it("accepts a bare slug, an /a/ path and a full page url with a query, fragment or version suffix", () => {
+    expect(pageSlugFromRef("Ab12cD34eF56")).toBe("Ab12cD34eF56");
+    expect(pageSlugFromRef("/a/Ab12cD34eF56")).toBe("Ab12cD34eF56");
+    expect(pageSlugFromRef("https://codecast.sh/a/Ab12cD34eF56")).toBe("Ab12cD34eF56");
+    expect(pageSlugFromRef("https://codecast.sh/a/Ab12cD34eF56?v=2#o=secret")).toBe("Ab12cD34eF56");
+    expect(pageSlugFromRef("https://codecast.sh/a/Ab12cD34eF56/_v/2/")).toBe("Ab12cD34eF56");
+    expect(pageSlugFromRef("  Ab12cD34eF56  ")).toBe("Ab12cD34eF56");
+  });
+
+  it("rejects anything else", () => {
+    expect(pageSlugFromRef("")).toBeNull();
+    expect(pageSlugFromRef("https://codecast.sh/tasks/ct-1")).toBeNull();
+    expect(pageSlugFromRef("not a slug")).toBeNull();
+    expect(pageSlugFromRef("report.html")).toBeNull();
   });
 });

@@ -69,6 +69,7 @@ cast task create "Title" --project "<name>" # File a new task under a project
 cast task update <id> --project "<name>"    # File an existing task (--project '' unfiles it)
 cast task start/done/comment <id>           # Task lifecycle
 cast task start <id> --spawn                # Claim it AND hand it to a fresh agent session
+cast task handoff <id> --status done --evidence - --page <slug|url>   # Hand off with evidence; the page attaches to the task
 cast integrations ls|sources|import <provider> <ref>  # Linear teams/projects and GitHub repos as codecast projects; their issues are tasks, synced both ways
 cast task update <id> -t "..." -d "..."     # Keep title/description matching what you're actually doing (-s for status)
 cast task create "Title" -t task -p high    # Create task (internal to agent work by default)

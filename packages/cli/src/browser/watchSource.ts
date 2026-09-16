@@ -12,6 +12,10 @@
  *     by ack (at most one frame in flight, so nothing can pile up).
  *   - polling: any "give me a JPEG of the tab now" function, called on a
  *     timer. The fallback for engines with no CDP passthrough.
+ *
+ * The screencast source also carries the action channel (watchActions.ts):
+ * a page script on the same CDP session reports the agent's clicks, moves,
+ * typing and scrolls, so a viewer can draw the cursor the frames never show.
  */
 
 import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "./cdp.js";
@@ -21,6 +25,16 @@ import { desktopPanePins } from "./desktopPaneRegistry.js";
 import { readState, type InstanceState } from "./instance.js";
 import { readBridgeState } from "./bridge/host.js";
 import { isPidAlive } from "../workspace/chrome.js";
+import {
+  ACTION_BINDING,
+  actionObserverInstallExpression,
+  actionObserverSource,
+  parseActionPayload,
+  replayableActions,
+  type WatchAction,
+} from "./watchActions.js";
+
+export type { WatchAction } from "./watchActions.js";
 
 export interface WatchTab {
   /** Opaque, engine-scoped. Only ever compared for equality, never parsed. */
@@ -42,6 +56,10 @@ export interface FrameSourceHandlers {
   onTab(tab: WatchTab): void;
   /** The tab is gone: closed, or the engine lost it. */
   onGone(): void;
+  /** The agent acted on the page: a cursor move, a click, typed text, a
+   * navigation, a scroll (watchActions.ts). Sources that cannot observe the
+   * page never call it. */
+  onAction?(action: WatchAction): void;
 }
 
 export interface FrameSourceOptions {
@@ -281,9 +299,46 @@ export async function openCdpScreencast(
   // Input events arrive normalized 0..1 and scale by this.
   const viewport = { w: 0, h: 0 };
 
+  // The page reports every trusted input event, including the ones THIS
+  // source dispatches for a viewer in control. Those are the human's own
+  // hand, not the agent's, so for a moment after each viewer event the page's
+  // reports are dropped: the ghost cursor only ever shows the agent.
+  let viewerEchoUntil = 0;
+  // Where the cursor was last seen, so a navigation can say where it is.
+  const lastPoint = { x: 0, y: 0 };
+  const emitAction = (action: WatchAction | null) => {
+    if (!action || stopped || !handlers.onAction) return;
+    if (action.kind !== "nav") {
+      lastPoint.x = action.x;
+      lastPoint.y = action.y;
+    }
+    handlers.onAction(action);
+  };
+
   conn.on((ev) => {
     if (stopped) return;
-    if (ev.method === "Page.screencastFrame" && ev.sessionId === cdpSessionId) {
+    if (ev.method === "Target.detachedFromTarget") {
+      if ((ev.params as { sessionId?: string }).sessionId === cdpSessionId) {
+        stop();
+        handlers.onGone();
+      }
+      return;
+    }
+    if (ev.sessionId !== cdpSessionId) return;
+    if (ev.method === "Runtime.bindingCalled") {
+      const p = ev.params as { name?: string; payload?: string };
+      if (p.name !== ACTION_BINDING || Date.now() < viewerEchoUntil) return;
+      emitAction(parseActionPayload(p.payload));
+      return;
+    }
+    if (ev.method === "Page.frameNavigated") {
+      const frame = (ev.params as { frame?: { parentId?: string; url?: string } }).frame;
+      if (frame && !frame.parentId && typeof frame.url === "string") {
+        emitAction({ type: "action", kind: "nav", x: lastPoint.x, y: lastPoint.y, url: frame.url, at: Date.now() });
+      }
+      return;
+    }
+    if (ev.method === "Page.screencastFrame") {
       const p = ev.params as { data: string; metadata: Record<string, number>; sessionId: number };
       lastFrameAt = Date.now();
       if (p.metadata?.deviceWidth && p.metadata?.deviceHeight) {
@@ -292,9 +347,6 @@ export async function openCdpScreencast(
       }
       handlers.onFrame({ data: p.data, width: p.metadata?.deviceWidth ?? 0, height: p.metadata?.deviceHeight ?? 0 });
       scheduleAck(p.sessionId);
-    } else if (ev.method === "Target.detachedFromTarget" && (ev.params as any).sessionId === cdpSessionId) {
-      stop();
-      handlers.onGone();
     }
   });
 
@@ -310,6 +362,7 @@ export async function openCdpScreencast(
 
   const input = (msg: WatchInput): void => {
     if (stopped || !cdpSessionId) return;
+    viewerEchoUntil = Date.now() + VIEWER_ECHO_MS;
     const send = (method: string, params: Record<string, unknown>) =>
       void conn.send(method, params, cdpSessionId!, 5000).catch(() => {});
     if (msg.kind === "mouse") {
@@ -429,7 +482,41 @@ export async function openCdpScreencast(
     stop();
     throw err;
   }
+  // The action channel is best effort on top of a working stream: an engine
+  // whose CDP face refuses the Runtime domain still streams frames, just
+  // with no cursor over them.
+  if (handlers.onAction) {
+    void observeActions(conn, cdpSessionId, opts.signal)
+      .then((recent) => {
+        if (stopped) return;
+        for (const a of recent) emitAction(a);
+      })
+      .catch(() => {});
+  }
   return { tab, stop, input };
+}
+
+/** A viewer event and the page's own echo of it arrive within this window. */
+const VIEWER_ECHO_MS = 800;
+
+/**
+ * Put the observer into the page: a binding for it to call, the script on
+ * every future document, and the script in the document that is open now.
+ * Resolves with what the page had already seen (a previous viewer's script
+ * keeps a ring), so a viewer who connects mid flow sees the cursor at once.
+ */
+async function observeActions(conn: CdpConnection, sessionId: string, signal: AbortSignal): Promise<WatchAction[]> {
+  await conn.send("Runtime.enable", {}, sessionId, 10_000);
+  await conn.send("Runtime.addBinding", { name: ACTION_BINDING }, sessionId, 10_000);
+  if (signal.aborted) return [];
+  await conn.send("Page.addScriptToEvaluateOnNewDocument", { source: actionObserverSource() }, sessionId, 10_000);
+  const r = await conn.send<{ result?: { value?: unknown } }>(
+    "Runtime.evaluate",
+    { expression: actionObserverInstallExpression(), returnByValue: true },
+    sessionId,
+    10_000,
+  );
+  return signal.aborted ? [] : replayableActions(r?.result?.value);
 }
 
 export function cdpWatchEngine(deps: CdpEngineDeps = realCdpDeps): WatchEngine {

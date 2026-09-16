@@ -57,6 +57,10 @@ export interface WorkflowNode {
   // Context
   thread_id?: string;
   fidelity?: string;
+  // Gate nodes (the-line.md L4): the decision document body ($vars expand)
+  // and the proposed decision category.
+  doc?: string;
+  category?: string;
 }
 
 export interface WorkflowEdge {
@@ -75,6 +79,9 @@ export interface WorkflowGraph {
   rankdir?: string;
   fidelity?: string;
   join_policy?: string;
+  // the-line.md L4: one decision stack per run; the first gate creates it
+  // and every later gate appends to it.
+  stack?: string;
   nodes: Map<string, WorkflowNode>;
   edges: WorkflowEdge[];
 }

@@ -105,9 +105,21 @@ export interface CanonicalLimit {
   credits?: { has_credits?: boolean; unlimited?: boolean; balance?: string | null } | null;
 }
 
-/** A window worth showing: it carries a real used_percent. */
+/** Codex writes a zeroed block (`used_percent` 0, `resets_at` 0) when it has
+ * no reading yet — that is the absence of a window, not an empty one. A real
+ * 0% used window always carries a reset time. */
+export function isCodexWindowFilled(
+  w?: { percent: number; resets_at?: number } | null,
+): w is { percent: number; resets_at?: number } {
+  return !!w && !(w.percent === 0 && !w.resets_at);
+}
+
+/** A window worth showing: it carries a real used_percent, and is not the
+ * zeroed placeholder Codex emits when it has no reading. */
 function mappable(w: CanonicalWindow | null | undefined): CanonicalWindow | null {
-  return w && typeof w.used_percent === "number" && Number.isFinite(w.used_percent) ? w : null;
+  if (!w || typeof w.used_percent !== "number" || !Number.isFinite(w.used_percent)) return null;
+  if (w.resets_at === 0 || (w.used_percent === 0 && !w.resets_at)) return null;
+  return w;
 }
 
 function windowKind(w: CanonicalWindow): "session" | "weekly" | null {
@@ -159,7 +171,10 @@ export function foldCodexLimits(limits: CanonicalLimit[], now: number): Omit<Cod
     if (rl.plan_type && !snap.plan_type) snap.plan_type = rl.plan_type;
     if (rl.limit_name) {
       // Model-scoped limit (e.g. "GPT-5.3-Codex-Spark"): one labeled row.
-      const w = mappable(rl.primary) ?? mappable(rl.secondary);
+      // Prefer the weekly-length window when both exist — the 5h bucket is
+      // that model's session, and putting it on the scoped row hid the week.
+      const { session, weekly } = classifyCodexWindows(rl);
+      const w = weekly ?? session;
       if (w) (snap.scoped ??= []).push({ label: prettyCodexModel(rl.limit_name), ...toWindow(w) });
     } else {
       const { session, weekly } = classifyCodexWindows(rl);
@@ -274,28 +289,40 @@ export function fetchRateLimitsViaAppServer(
       }
       resolve(value);
     };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    child.on("error", () => finish(null));
-    child.on("exit", () => finish(null));
-    child.stdout!.on("data", (d) => {
-      buf += d.toString();
+    const handleLine = (line: string) => {
+      try {
+        const msg = JSON.parse(line);
+        if (msg.id === 1) {
+          child.stdin!.write(
+            JSON.stringify({ jsonrpc: "2.0", id: 2, method: "account/rateLimits/read", params: {} }) + "\n",
+          );
+        } else if (msg.id === 2) {
+          finish(msg.error ? null : (msg.result ?? null));
+        }
+      } catch {
+        /* notification or partial line */
+      }
+    };
+    const drain = () => {
       let nl;
       while ((nl = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        try {
-          const msg = JSON.parse(line);
-          if (msg.id === 1) {
-            child.stdin!.write(
-              JSON.stringify({ jsonrpc: "2.0", id: 2, method: "account/rateLimits/read", params: {} }) + "\n",
-            );
-          } else if (msg.id === 2) {
-            finish(msg.error ? null : (msg.result ?? null));
-          }
-        } catch {
-          /* notification or partial line */
-        }
+        handleLine(line);
       }
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    child.on("error", () => finish(null));
+    // Drain leftover bytes before giving up: app-server often writes the
+    // result and exits in the same tick, and `exit` can beat the last `data`.
+    child.on("exit", () => {
+      drain();
+      if (buf.trim()) handleLine(buf);
+      finish(null);
+    });
+    child.stdout!.on("data", (d) => {
+      buf += d.toString();
+      drain();
     });
     child.stdin!.write(
       JSON.stringify({

@@ -31,9 +31,10 @@ cast sessions --state needs-input # narrow to one state (also --team, -m <name>;
 cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
 cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
 cast sessions <id> --messages -w  # …focused on one session
-# ORCHESTRATE a fleet: spawn workers under a label, run the watch in the background, act on events.
-#   cast spawn --label fleet "task A" "task B"
-#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"done",…}
+# ORCHESTRATE a fleet: nest workers under this session, then watch their returned IDs.
+#   cast spawn --subagent --label fleet "task A" "task B"
+#   cast sessions <worker-id> <worker-id> -w --json     ← emits {"event":"transition","to":"done",…}
+# Nested workers are omitted from top-level lists, including label filters; name their IDs to watch them.
 #   worker flips to done = finished, needs_input = blocked → cast read <id>, then cast send <id> "next step"
 # The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
 # Event states use underscores ("needs_input"); the --state flag accepts either form.

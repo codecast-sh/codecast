@@ -24,13 +24,15 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteHost } from "../remote/session-move.js";
-import { copyCredentialToRemote, ensureRemoteClaudeReady } from "../remote/session-move.js";
+import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
 import { remoteExec, scpTo } from "./remote.js";
 import { decryptToken } from "../tokenEncryption.js";
 import { defaultConfigDir } from "../config/configDir.js";
+import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
 
 /** The Xvfb display everything on the box shares. */
 export const SCREEN_DISPLAY = ":99";
@@ -160,6 +162,11 @@ UNIT
 
 echo "[5/6] idle watchdog (${idleStopMinutes}m)"
 echo "${idleStopMinutes}" | sudo tee /etc/cast-idle-minutes >/dev/null
+sudo mkdir -p /usr/local/lib/codecast
+sudo tee /usr/local/lib/codecast/idle-probe.py >/dev/null <<'IDLE_PROBE'
+${cloudIdleProbeScript}
+IDLE_PROBE
+sudo chmod 644 /usr/local/lib/codecast/idle-probe.py
 sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 #!/bin/bash
 # Power off after N idle minutes. EC2 turns an OS shutdown into a stopped
@@ -183,6 +190,9 @@ STAMP=/home/ubuntu/.codecast/host-active
 active=0
 [ "$(ss -Htn state established '( sport = :22 )' | wc -l)" -gt 0 ] && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
+if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
+  active=1
+fi
 if [ -f "$STAMP" ]; then
   [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 180 ] && active=1
 else
@@ -262,12 +272,11 @@ echo DAEMON-UNIT-OK`;
  * targets — a JSC crash in the standalone runtime). The box instead gets the
  * same shape the npm package ships — the bundled dist entrypoints — run under
  * a real bun install. dist is self-contained (workspace deps inlined), so the
- * box needs bun plus these two files, nothing else; ~8MB instead of a 95MB
- * binary, which matters on a slow uplink.
+ * box needs bun plus the complete dist tree, including split chunks and assets.
  *
  * Only possible when this cast runs from a source checkout.
  */
-export function buildLinuxCast(onProgress: (m: string) => void): { indexJs: string; daemonJs: string } {
+export function buildLinuxCast(onProgress: (m: string) => void): { distDir: string; indexJs: string; daemonJs: string } {
   const here = path.dirname(fileURLToPath(import.meta.url)); // .../packages/cli/src/browser
   const cliRoot = path.resolve(here, "..", "..");
   const entry = path.join(cliRoot, "src", "index.ts");
@@ -278,15 +287,55 @@ export function buildLinuxCast(onProgress: (m: string) => void): { indexJs: stri
     );
   }
   onProgress("building cast bundles (dist)…");
-  execFileSync("bun", ["run", "build"], {
-    cwd: cliRoot,
-    stdio: ["ignore", "ignore", "pipe"],
-    timeout: 300_000,
-  });
-  return {
-    indexJs: path.join(cliRoot, "dist", "main.js"),
-    daemonJs: path.join(cliRoot, "dist", "daemon.js"),
-  };
+  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-linux-dist-"));
+  let built = false;
+  try {
+    execFileSync("bun", ["run", "build", "--outdir", distDir], {
+      cwd: cliRoot,
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 300_000,
+    });
+    const bundles = {
+      distDir,
+      indexJs: path.join(distDir, "main.js"),
+      daemonJs: path.join(distDir, "daemon.js"),
+    };
+    for (const entry of [bundles.indexJs, bundles.daemonJs]) {
+      if (!fs.existsSync(entry)) throw new Error(`cast build did not produce ${entry}`);
+    }
+    built = true;
+    return bundles;
+  } finally {
+    if (!built) fs.rmSync(distDir, { recursive: true, force: true });
+  }
+}
+
+export function uploadLinuxCast(host: RemoteHost, distDir: string): void {
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), "cast-linux-upload-"));
+  try {
+    const archive = path.join(stage, "dist.tar.gz");
+    execFileSync("tar", ["-czf", archive, "-C", distDir, "."], { timeout: 60_000 });
+    const remoteStage = remoteExec(host, "mktemp -d /tmp/cast-linux-upload.XXXXXXXXXX");
+    try {
+      scpTo(host, archive, `${remoteStage}/dist.tar.gz`);
+      const stagedDist = shq(`${remoteStage}/dist`);
+      remoteExec(
+        host,
+        `mkdir ${stagedDist} && tar -xzf ${shq(`${remoteStage}/dist.tar.gz`)} -C ${stagedDist} && ` +
+          `test -f ${stagedDist}/main.js && test -f ${stagedDist}/daemon.js && ` +
+          `chmod -R a+rX ${stagedDist} && sudo mkdir -p /usr/local/lib/codecast && ` +
+          `sudo cp -R ${stagedDist}/. /usr/local/lib/codecast/ && ` +
+          "sudo install -m 644 /usr/local/lib/codecast/main.js /usr/local/lib/codecast/index.js && " +
+          `printf '#!/usr/bin/env bash\\nexec /home/${host.user}/.bun/bin/bun /usr/local/lib/codecast/index.js "$@"\\n' | sudo tee /usr/local/bin/cast >/dev/null && ` +
+          "sudo chmod 755 /usr/local/bin/cast",
+        60_000,
+      );
+    } finally {
+      remoteExec(host, `rm -rf ${shq(remoteStage)}`);
+    }
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -357,19 +406,12 @@ export async function provisionLinuxHost(
   );
 
   const bundles = buildLinuxCast(onProgress);
-  onProgress("uploading cast bundles…");
-  scpTo(host, bundles.indexJs, "/tmp/cast-index.js");
-  scpTo(host, bundles.daemonJs, "/tmp/cast-daemon.js");
-  remoteExec(
-    host,
-    "sudo mkdir -p /usr/local/lib/codecast && " +
-      "sudo install -m 644 /tmp/cast-index.js /usr/local/lib/codecast/index.js && " +
-      "sudo install -m 644 /tmp/cast-daemon.js /usr/local/lib/codecast/daemon.js && " +
-      "rm -f /tmp/cast-index.js /tmp/cast-daemon.js && " +
-      `printf '#!/usr/bin/env bash\\nexec /home/${host.user}/.bun/bin/bun /usr/local/lib/codecast/index.js "$@"\\n' | sudo tee /usr/local/bin/cast >/dev/null && ` +
-      "sudo chmod 755 /usr/local/bin/cast",
-    60_000,
-  );
+  try {
+    onProgress("uploading cast bundles…");
+    uploadLinuxCast(host, bundles.distDir);
+  } finally {
+    fs.rmSync(bundles.distDir, { recursive: true, force: true });
+  }
 
   onProgress("installing claude…");
   remoteExec(

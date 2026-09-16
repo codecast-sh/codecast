@@ -864,3 +864,46 @@ describe("stepPermissionMode", () => {
     expect(pane.presses()).toBe(1);
   });
 });
+
+// Claude Code's safeguards interstitial (real capture, 2026-09-15). Its cursor
+// row "❯ 1. Switch to Opus 4.8" read as an idle composer, and the API retry
+// banner under it read as a live spinner, so the daemon pasted a message into
+// the dialog and every later message waited hours behind that paste.
+const SESSION_PAUSED_PANE = [
+  "  Reading Web B's health feeder and how singleton meta slots initialise",
+  "  ⎿  $ cat hooks/useSyncOrgHealth.ts; echo \"=== meta keys ===\"; grep -n META store/inboxStore.ts | head -6",
+  "",
+  "─".repeat(120),
+  " Session paused",
+  "",
+  "  Fable 5.1's safeguards flagged this message. Our intentionally broad safeguards allow us to deliver more capabilities faster, but can sometimes flag legitimate coding, cybersecurity, and biology tasks. Send feedback",
+  "  with /feedback or learn more",
+  "",
+  "  Details: `[cyber]`",
+  "",
+  "  ❯ 1. Switch to Opus 4.8",
+  "    2. Edit prompt and retry with Fable 5.1",
+  "",
+  "✻ Waiting for API response · will retry in 2m 40s · check your network",
+].join("\n");
+
+describe("safeguards Session paused interstitial", () => {
+  test("classifies as menu, with and without the API retry banner", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(SESSION_PAUSED_PANE))).toBe("menu");
+    const settled = SESSION_PAUSED_PANE.replace(/\n✻ Waiting for API response[^\n]*/, "");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(settled))).toBe("menu");
+  });
+
+  test("the paste guard parses it as a dialog despite the retry banner", () => {
+    for (const structural of [false, true]) {
+      const prompt = parseInteractivePrompt(SESSION_PAUSED_PANE, structural);
+      expect(prompt?.options.map((o) => o.label)).toEqual(["Switch to Opus 4.8", "Edit prompt and retry with Fable 5.1"]);
+    }
+  });
+
+  test("a real turn status line under a scrolled menu still proves a live composer", () => {
+    const scrolled = SESSION_PAUSED_PANE.replace(/\n✻ Waiting for API response[^\n]*/, "\n✶ Perambulating… (50s · ↓ 161 tokens)");
+    expect(parseInteractivePrompt(scrolled)).toBeNull();
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(scrolled))).toBe("busy");
+  });
+});

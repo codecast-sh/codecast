@@ -152,6 +152,11 @@ describe("skills", () => {
     expect(find(inv, "command", "commit")?.description).toBe("Commit changes");
     expect(find(inv, "subagent", "critic")?.description).toBe("Finds bugs");
   });
+
+  test("records the source path the reader reopens for the file body", () => {
+    expect(find(inv, "skill", "domain-search")?.source).toContain("SKILL.md");
+    expect(find(inv, "command", "commit")?.source).toContain("commit.md");
+  });
 });
 
 describe("plugins", () => {

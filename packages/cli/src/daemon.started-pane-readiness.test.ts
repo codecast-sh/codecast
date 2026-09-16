@@ -211,7 +211,7 @@ describe("discovery binds the assigned session id at prompt readiness", () => {
   test("first-message delivery reuses the same probe instead of its own capture loop", () => {
     const at = daemonSource.indexOf("const tryStartedTmux = async");
     const delivery = daemonSource.slice(at, at + 4000);
-    expect(delivery).toContain("probeStartedPane(entry, isMachineDeliveredMessage(content) ? assertMachinePromptAbsent : undefined)");
+    expect(delivery).toContain("probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent)");
     expect(delivery).not.toContain("trustPromptPatterns");
   });
 

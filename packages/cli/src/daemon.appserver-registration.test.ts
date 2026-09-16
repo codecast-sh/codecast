@@ -9,8 +9,10 @@ import {
   isImportBornCodexRolloutFirstSight,
   isMissingAppServerThreadError,
   isTmuxSessionMetadataMatch,
+  conversationUsesCodexAppServer,
   mayMaterializeClaudeTranscript,
   removeAppServerThreadRegistration,
+  sessionFileStaleForAgent,
   upsertAppServerThreadRegistration,
 } from "./daemon.js";
 
@@ -189,6 +191,11 @@ describe("Codex history import routing", () => {
     const end = source.indexOf("const childConvId", start);
     expect(source.slice(start, end)).toContain("pendingAgentSwitches.has(conversationId)");
   });
+
+  test("does not skip an in-place agent switch because a resume is already in flight", () => {
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    expect(source).toContain("resumeInFlight.has(sessionId) && parsed.switch_agent !== true");
+  });
 });
 
 describe("one conversation, one agent", () => {
@@ -224,11 +231,46 @@ describe("one conversation, one agent", () => {
 
   test("a failed turn keeps the registration unless the thread is gone", () => {
     const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
-    const start = source.indexOf("const tryAppServerDelivery = async (");
+    const start = source.indexOf("if (isMissingAppServerThreadError(err))");
     const end = source.indexOf("delivery failed, falling back to tmux", start);
     const body = source.slice(start, end);
-    const guard = body.indexOf("isMissingAppServerThreadError(err)");
-    expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(body.indexOf("removeAppServerThreadRegistration"));
+    expect(start).toBeGreaterThan(-1);
+    expect(body.indexOf("removeAppServerThreadRegistration")).toBeGreaterThan(0);
+  });
+
+  test("Codex app-server delivery is only for a conversation that is still Codex", () => {
+    expect(conversationUsesCodexAppServer(undefined)).toBe(true);
+    expect(conversationUsesCodexAppServer(null)).toBe(true);
+    expect(conversationUsesCodexAppServer("")).toBe(true);
+    expect(conversationUsesCodexAppServer("codex")).toBe(true);
+    expect(conversationUsesCodexAppServer("grok")).toBe(false);
+    expect(conversationUsesCodexAppServer("claude_code")).toBe(false);
+    expect(conversationUsesCodexAppServer("claude")).toBe(false);
+    expect(sessionFileStaleForAgent("codex", "grok")).toBe(true);
+    expect(sessionFileStaleForAgent("codex", "codex")).toBe(false);
+    expect(sessionFileStaleForAgent(undefined, "grok")).toBe(false);
+
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const delivery = source.slice(
+      source.indexOf("const tryAppServerDelivery = async ("),
+      source.indexOf("if (await tryAppServerDelivery()) return true;"),
+    );
+    expect(delivery).toContain("conversationUsesCodexAppServer(agentTypeHint)");
+    expect(delivery).toContain("forgetPersistedAppServerConversation(conversationId)");
+
+    const rehydrate = source.slice(
+      source.indexOf("async function rehydratePersistedAppServerThreads"),
+      source.indexOf("log(`[codex-app-server] resumed thread"),
+    );
+    expect(rehydrate).toContain("not Codex after switch");
+
+    const resumeInner = source.slice(
+      source.indexOf("async function autoResumeSessionInner("),
+      source.indexOf("const storeOwnedResumeType = agentTypeHint"),
+    );
+    expect(resumeInner).toContain("sessionFileStaleForAgent(sessionFile?.agentType, agentTypeHint)");
+
+    expect(source).toContain("rawAgent ? fromConvexAgentType(rawAgent) : undefined");
+    expect(source).toContain("agentTypeHint ?? detectedType");
   });
 });

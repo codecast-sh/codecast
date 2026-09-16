@@ -59,6 +59,9 @@ describe("cast task handoff argument parsing", () => {
     expect(handoffCommentText({ status: "done", evidence: "ran it", files: ["a"], pr: "u" }))
       .toBe("Handoff: done\n\nran it\n\nFiles: a\n\nPR: u");
     expect(handoffCommentText({ status: "blocked", evidence: "no key" })).toBe("Handoff: blocked\n\nno key");
+    // Pages attached as evidence (the-line.md L6) are listed for the reviewer.
+    expect(handoffCommentText({ status: "done", evidence: "ran it", pages: ["Ab12", "Cd34"] }))
+      .toBe("Handoff: done\n\nran it\n\nPages: /a/Ab12, /a/Cd34");
   });
 });
 

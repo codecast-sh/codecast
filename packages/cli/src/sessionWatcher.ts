@@ -63,7 +63,7 @@ export class SessionWatcher extends EventEmitter {
       scanPolicy: { dirs: "claudeWatch", files: "claudeWatch" },
       filter: watchFilter,
       dirFilter: watchDirFilter,
-      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      callback: (filePath, eventType) => { if (eventType !== "unlink") this.handleFileEvent(filePath, eventType); },
       onExisting: (files) => this.emitExistingFilesSorted(files),
       // Deep enough for workflow agent transcripts (6 segments); watchFilter keeps
       // the extra depth from matching anything else.

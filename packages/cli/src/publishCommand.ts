@@ -60,6 +60,22 @@ export function resolveMarkdownTitle(md: string, filePath: string, override?: st
   return path.basename(filePath).replace(/\.(md|markdown)$/i, "");
 }
 
+// ── page refs (the-line.md L6) ──────────────────────────────────────────────
+
+/**
+ * The slug behind a page ref: a bare slug, a `/a/<slug>` path, or a full
+ * published URL (query, fragment and version suffix dropped). Null when the
+ * ref is neither.
+ */
+export function pageSlugFromRef(ref: string): string | null {
+  const t = ref.trim();
+  if (!t) return null;
+  const fromUrl = t.match(/\/a\/([A-Za-z0-9]+)(?:[/?#]|$)/);
+  if (fromUrl) return fromUrl[1];
+  if (/^[A-Za-z0-9]+$/.test(t) && !/^https?:/i.test(t)) return t;
+  return null;
+}
+
 // ── --expires parsing ────────────────────────────────────────────────────────
 
 /** "7d" | "24h" | "30m" | "2w" → ms; "never" → null (clear). Invalid → {error}. */

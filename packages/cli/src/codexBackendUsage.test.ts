@@ -284,6 +284,14 @@ describe("mergeCodexUsage", () => {
     expect(merged.fetched_at).toBe(NOW);
   });
 
+  it("treats a 0% window with no reset time as a hole, not a reading", () => {
+    const placeholder = { fetched_at: NOW, session: { percent: 0 }, weekly: { percent: 0 } };
+    const merged = mergeCodexUsage(placeholder, backend)!;
+    expect(merged.session).toEqual({ percent: 37 });
+    expect(merged.weekly).toEqual({ percent: 99 });
+    expect(merged.plan_type).toBe("plus");
+  });
+
   it("stands in for a missing source on either side", () => {
     expect(mergeCodexUsage(null, backend)).toBe(backend);
     expect(mergeCodexUsage(rpc, null)).toBe(rpc);

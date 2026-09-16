@@ -28,6 +28,8 @@ export interface HandoffInput {
   evidence: string;
   files?: string[];
   pr?: string;
+  /** Page slugs attached as evidence (the-line.md L6), listed in the comment. */
+  pages?: string[];
 }
 
 /** `--files a,b` → ["a", "b"]; blanks dropped. */
@@ -71,6 +73,7 @@ export function handoffCommentText(input: HandoffInput): string {
   const lines = [`Handoff: ${input.status}`, "", input.evidence.trim()];
   if (input.files?.length) lines.push("", `Files: ${input.files.join(", ")}`);
   if (input.pr) lines.push("", `PR: ${input.pr}`);
+  if (input.pages?.length) lines.push("", `Pages: ${input.pages.map((slug) => `/a/${slug}`).join(", ")}`);
   return lines.join("\n");
 }
 

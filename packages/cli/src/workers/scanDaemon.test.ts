@@ -21,7 +21,7 @@ for(const enabled of [false,true])test(`production index, recent lookup, stale a
  await ensureSessionFileIndex();expect(ids.map(id=>findSessionFile(id,{staleOk:true})?.path)).toEqual(paths);
  if(enabled){expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);expect(reports.some(s=>s.includes('walkDirsSync'))).toBe(false);}
  const newId='66666666-6666-4666-8666-666666666666';const newFile=write(home,`.claude/projects/p/${newId}.jsonl`);
- if(enabled){expect(findSessionFile(newId)).toBeNull();await refreshRecentSessionFileForTests(newId);}
+ expect(findSessionFile(newId,{staleOk:true})).toBeNull();await refreshRecentSessionFileForTests(newId);
  expect(findSessionFile(newId)?.path).toBe(newFile);
  fs.unlinkSync(newFile);expect(findSessionFile(newId,{staleOk:true})).toBeNull();
  const managed=write(home,'.codex/sessions/2026/09/05/managed.jsonl',JSON.stringify({type:'session_meta',payload:{originator:'codecast',source:{custom:'codecast'}}})+'\n');

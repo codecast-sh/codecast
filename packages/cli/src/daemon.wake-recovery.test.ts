@@ -176,14 +176,14 @@ import { BackendOutageClock } from "./daemon.js";
 test("an outage spanning a suspend does not count the sleep", () => {
   const clock = new BackendOutageClock();
   clock.markFailure(1_000);         // maintenance wake, no network
-  clock.noteSuspend();              // lid closed
+  clock.noteGap();              // lid closed
   expect(clock.markSuccess(1_701_000)).toBe(0); // first heartbeat after the real wake
 });
 
 test("a backend still dead after wake is timed from the wake, not from before it", () => {
   const clock = new BackendOutageClock();
   clock.markFailure(1_000);
-  clock.noteSuspend();
+  clock.noteGap();
   clock.markFailure(1_000_000);     // still failing after wake
   expect(clock.markSuccess(1_200_000)).toBe(200_000);
 });

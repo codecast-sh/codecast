@@ -17,6 +17,7 @@ import * as path from "path";
 import {
   OpencodeStorageWatcher,
   assembleOpencodeSession,
+  queryOpencodeDelta,
   readOpencodeSessionLineage,
   resolveOpencodeSessionCwd,
   sessionExistsInOpencodeDb,
@@ -266,6 +267,76 @@ describe("OpencodeStorageWatcher — live detection + working->complete flip", (
     expect(emitted).not.toContain("ses_A"); // already synced, below the persisted watermark
 
     run2.stop();
+    clearPosition(dbPath);
+    fs.rmSync(dbPath, { force: true });
+  });
+
+  // The boot freeze: opening an unchanged multi-gigabyte store on every daemon
+  // start pinned the loop for 7-23s. Persisted mtime makes that restart two stats
+  // and zero SQL.
+  test("a restart with an unchanged store does not query sqlite", async () => {
+    const dbPath = tmpDbPath();
+    const w = new Database(dbPath);
+    createSchema(w);
+    w.query("INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?,?,?,?,?)")
+      .run("ses_A", "/tmp/a", "t", 1000, 1000);
+    w.query("INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?)")
+      .run("msg_a1", "ses_A", 1000, 1000, JSON.stringify({ role: "assistant", time: { created: 1000, completed: 1000 } }));
+    w.close();
+
+    let queries = 0;
+    const queryDelta = (path: string, watermark: number) => {
+      queries++;
+      return queryOpencodeDelta(path, watermark);
+    };
+
+    const run1 = new OpencodeStorageWatcher(dbPath, 50, { queryDelta });
+    const sawA = waitForSession(run1, (e) => e.sessionId === "ses_A");
+    run1.start();
+    await sawA;
+    run1.stop();
+    expect(queries).toBeGreaterThan(0);
+    const afterFirst = queries;
+
+    const emitted: string[] = [];
+    const run2 = new OpencodeStorageWatcher(dbPath, 50, { queryDelta });
+    run2.on("session", (e) => emitted.push(e.sessionId));
+    run2.start();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(queries).toBe(afterFirst);
+    expect(emitted).toEqual([]);
+
+    run2.stop();
+    clearPosition(dbPath);
+    fs.rmSync(dbPath, { force: true });
+  });
+
+  test("poll yields the event loop before sqlite returns", async () => {
+    const dbPath = tmpDbPath();
+    const w = new Database(dbPath);
+    createSchema(w);
+    w.query("INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?,?,?,?,?)")
+      .run("ses_08f9926d3ffelzGS3Q3CteaeUk", "/tmp/a", "t", 1000, 1000);
+    w.close();
+
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => { release = r; });
+    let started = false;
+    const queryDelta = async () => {
+      started = true;
+      await blocked;
+      return { globalMax: 1000, sessionIds: ["ses_08f9926d3ffelzGS3Q3CteaeUk"] };
+    };
+
+    const watcher = new OpencodeStorageWatcher(dbPath, 50, { queryDelta });
+    const saw = waitForSession(watcher, (e) => e.sessionId === "ses_08f9926d3ffelzGS3Q3CteaeUk");
+    watcher.start();
+    await new Promise((r) => setTimeout(r, 80));
+    expect(started).toBe(true);
+    release();
+    await saw;
+
+    watcher.stop();
     clearPosition(dbPath);
     fs.rmSync(dbPath, { force: true });
   });

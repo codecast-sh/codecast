@@ -371,3 +371,53 @@ describe("formatReadResult surfaces collapsed StructuredOutput payloads", () => 
     expect(out).not.toContain("--full");
   });
 });
+
+// Every surface that lists sessions for an agent shows the same liveness line:
+// state badge plus last activity age. Messages sent to sessions quiet past the
+// one hour prompt cache rebuild their whole context, and agents could not see
+// from search or context results that a session was old, killed, or ended.
+import { formatSearchResults, formatContextResults, formatSessionPresence } from "./formatter";
+
+describe("session presence on search, context, and feed", () => {
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+
+  test("formatSessionPresence shows badge and age, and the age alone without liveness facts", () => {
+    expect(strip(formatSessionPresence({ work_state: "working", is_live: true, updated_at: new Date().toISOString() })))
+      .toBe("● working | just now");
+    expect(strip(formatSessionPresence({ work_state: "idle", is_killed: true, updated_at: hoursAgo(3) })))
+      .toBe("○ idle killed | 3 hours ago");
+    expect(strip(formatSessionPresence({ updated_at: hoursAgo(3) }))).toBe("3 hours ago");
+  });
+
+  test("a completed row reads ended unless it is live again or killed", () => {
+    const at = hoursAgo(2);
+    expect(strip(formatSessionPresence({ work_state: "done", is_completed: true, updated_at: at }))).toBe("○ done ended | 2 hours ago");
+    expect(strip(formatSessionPresence({ work_state: "working", is_live: true, is_completed: true, updated_at: at }))).not.toContain("ended");
+    expect(strip(formatSessionPresence({ work_state: "idle", is_killed: true, is_completed: true, updated_at: at }))).not.toContain("ended");
+  });
+
+  test("search result meta carries the badge", () => {
+    const out = strip(formatSearchResults({
+      total_matches: 1,
+      conversations: [{
+        id: "jx7abcdef", title: "Old auth work", project_path: null, updated_at: hoursAgo(5),
+        message_count: 40, work_state: "idle", is_killed: true, matches: [], context: [],
+      }],
+    }));
+    expect(out).toContain("jx7abcd | ○ idle killed | 5 hours ago | 40 msgs");
+  });
+
+  test("context rows carry the badge in place of a bare date", () => {
+    const out = strip(formatContextResults({
+      query: "auth",
+      sessions: [{ id: "jx7live01", title: "Auth now", project_path: null, updated_at: new Date().toISOString(), message_count: 3, match_type: "text", work_state: "working", is_live: true }],
+      related_files: [],
+    }));
+    expect(out).toContain('[jx7live] ● working | just now - "Auth now"');
+  });
+
+  test("the feed card keeps its badge and age", () => {
+    const out = strip(formatFeedResults({ conversations: [feedConv({ is_live: true })], scope: "g" } as any));
+    expect(out).toContain("● working | just now");
+  });
+});

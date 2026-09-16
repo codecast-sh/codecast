@@ -3,7 +3,7 @@
 
 `cast send <session_id> "<text>"` starts a turn in another session and can interrupt work. Send to change the recipient's next action, answer a question, prevent a concrete conflict, or deliver finished work. Keep routine progress, hypotheses, and passing checks in your own session or task.
 
-Use `cast read <id>` and `cast diff <id>` before asking for updates. Ask only for missing information; send tasks or redirects when work needs to change.
+Every message costs the recipient a turn over its whole context. A session that has not run for more than an hour, or was killed, has also lost its prompt cache, so your message makes it reload everything it did before it reads a word, and it rarely knows more than its transcript already shows. Read before you write: `cast read <id>` and `cast diff <id>` answer what a session did at no cost to it. Sessions that search or the feed turn up are history to read, not colleagues to ask. Message an old session only when it still owns work that has to change; `cast send` holds that send and names the cost, and `--wake` delivers it when the answer is still yes. Ask only for missing information; send tasks or redirects when work needs to change.
 
 After accepting work from another session, send one result: commit or artifact, verification, caveats, and required action. Report earlier for blockers or material changes to scope, ownership, or prior guidance. Honor explicit requests for more frequent reports.
 

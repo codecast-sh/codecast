@@ -1022,6 +1022,13 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     invalidateAccountsCache();
   });
 
+  // Window resets, in epoch seconds: the 5h boundary is shared (every account's
+  // window closes on the same clock tick), the weekly one is per account.
+  const SESSION_RESET_S = 1_781_010_000;
+  const WEEKLY_RESET_S: Record<string, number> = { a: 1_781_300_000, b: 1_781_400_000, c: 1_781_500_000 };
+  const TOKEN_OWNER: Record<string, string> = { "at-active": "a", "at-a-stale": "a", "at-b": "b", "at-c-rotated": "c" };
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+
   // The usage endpoint answers by bearer token; the token endpoint (c's
   // lapsed dormant grant is rotated before its probe) hands out a fixed
   // rotated pair. `calls` records the usage probes only.
@@ -1036,7 +1043,14 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       const token = String(init?.headers?.Authorization ?? "").replace("Bearer ", "");
       calls.push(token);
       return new Response(
-        JSON.stringify({ limits: [{ kind: "session", percent: token === "at-b" ? 90 : 28, resets_at: "2026-07-15T17:39:59+00:00" }] }),
+        JSON.stringify({
+          limits: [
+            { kind: "session", percent: token === "at-b" ? 90 : 28, resets_at: iso(SESSION_RESET_S) },
+            // Each account's weekly window resets at its own second, which is
+            // what tells two accounts' readings apart (attributeFingerprint).
+            { kind: "weekly_all", percent: 40, resets_at: iso(WEEKLY_RESET_S[TOKEN_OWNER[token] ?? "a"]) },
+          ],
+        }),
         { status: 200 },
       );
     }) as any;
@@ -1124,12 +1138,14 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
   // fresher and free next to the five-minute OAuth poll. These cover who a post
   // is attributed to, and which of the two readings wins when they disagree.
 
-  const statusLinePayload = (fiveHour: number, sevenDay: number) => ({
+  // A live post from a session spending `account` — its windows are that
+  // account's windows, whatever profile name the session was launched under.
+  const statusLinePayload = (fiveHour: number, sevenDay: number, account = "b") => ({
     session_id: "f03e4098-8b2b-44e0-9370-de3b4fc2edd0",
     cost: { total_duration_ms: 17462 },
     rate_limits: {
-      five_hour: { used_percentage: fiveHour, resets_at: 1_788_759_000 },
-      seven_day: { used_percentage: sevenDay, resets_at: 1_789_016_400 },
+      five_hour: { used_percentage: fiveHour, resets_at: SESSION_RESET_S },
+      seven_day: { used_percentage: sevenDay, resets_at: WEEKLY_RESET_S[account] },
     },
   });
 
@@ -1138,23 +1154,87 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(snap).toEqual({
       fetched_at: NOW,
       source: "live-session",
-      session: { percent: 7, resets_at: 1_788_759_000_000 },
-      weekly: { percent: 32, resets_at: 1_789_016_400_000 },
+      session: { percent: 7, resets_at: SESSION_RESET_S * 1000 },
+      weekly: { percent: 32, resets_at: WEEKLY_RESET_S.b * 1000 },
     });
     expect(parseStatusLineUsage({ cost: { total_duration_ms: 1 } }, NOW)).toBeNull();
     expect(parseStatusLineUsage({ rate_limits: {} }, NOW)).toBeNull();
   });
 
-  it("attributes a post to the session's pinned account, and an unpinned one to the active login", async () => {
+  it("files a post under the account whose windows it carries, named or not", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    expect((await ingestStatusLineUsage(statusLinePayload(11, 12), { account: "b", now: NOW + 1000 }))?.key).toBe("uuid-b");
-    // No account name: the session runs on the keychain login, which the
-    // activation stamp names without a keychain read.
-    expect((await ingestStatusLineUsage(statusLinePayload(13, 14), { account: undefined, now: NOW + 1000 }))?.key).toBe("uuid-a");
+    expect((await ingestStatusLineUsage(statusLinePayload(11, 12, "b"), { account: "b", now: NOW + 1000 }))?.key).toBe("uuid-b");
+    // No account name: a session on the keychain login, recognised all the same.
+    expect((await ingestStatusLineUsage(statusLinePayload(13, 14, "a"), { account: undefined, now: NOW + 1000 }))?.key).toBe("uuid-a");
     expect(await ingestStatusLineUsage(statusLinePayload(1, 2), { account: "../x", now: NOW })).toBeNull();
     const cache = readUsageCache();
     expect(cache.accounts["uuid-b"]?.session?.percent).toBe(11);
     expect(cache.accounts["uuid-a"]?.session?.percent).toBe(13);
+  });
+
+  // 2026-09-15: sessions keep the profile name they launched under, but the
+  // daemon moves the keychain login underneath them — so after a switch their
+  // posts described one account and were filed under another. Auto-switch read
+  // the poisoned meter and hopped off an account with 60% headroom.
+  it("ignores a stale launch name and files by the windows instead", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    // A session launched under "b", now spending account a after a switch.
+    const res = await ingestStatusLineUsage(statusLinePayload(102, 24, "a"), { account: "b", now: NOW + 1000 });
+    expect(res?.key).toBe("uuid-a");
+    const cache = readUsageCache();
+    expect(cache.accounts["uuid-a"]?.session?.percent).toBe(102);
+    // b keeps the reading its own credential produced.
+    expect(cache.accounts["uuid-b"]?.session?.percent).toBe(90);
+  });
+
+  // The fingerprint has to survive the feed that reads it: a post that could
+  // move an account's reset times could make two accounts identical, and after
+  // that neither could be told from the other.
+  it("takes percentages from a live post and leaves the reset times to the poll", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(12, 34, "b"), { account: "b", now: NOW + 1000 });
+    const b = readUsageCache().accounts["uuid-b"];
+    expect(b?.session?.percent).toBe(12);
+    expect(b?.weekly?.percent).toBe(34);
+    expect(b?.session?.resets_at).toBe(SESSION_RESET_S * 1000);
+    expect(b?.weekly?.resets_at).toBe(WEEKLY_RESET_S.b * 1000);
+
+    // Once the stored 5h window has rolled, the post carries the NEXT window's
+    // reset and is still recognised — the weekly reset is what names the
+    // account, and a rolled window's stale reset proves nothing. The new reset
+    // waits for the poll, which is the only reader whose credential can say
+    // whose window it is.
+    const afterRoll = NOW + 4 * 3600_000;
+    const rolled = {
+      session_id: "f03e4098-8b2b-44e0-9370-de3b4fc2edd0",
+      cost: { total_duration_ms: 1 },
+      rate_limits: {
+        five_hour: { used_percentage: 3, resets_at: SESSION_RESET_S + 5 * 3600 },
+        seven_day: { used_percentage: 36, resets_at: WEEKLY_RESET_S.b },
+      },
+    };
+    expect((await ingestStatusLineUsage(rolled, { account: "b", now: afterRoll }))?.key).toBe("uuid-b");
+    const after = readUsageCache().accounts["uuid-b"];
+    expect(after?.session?.percent).toBe(3);
+    expect(after?.session?.resets_at).toBe(SESSION_RESET_S * 1000);
+  });
+
+  it("drops a reading no saved account can claim, rather than guessing", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    const stranger = {
+      session_id: "f03e4098-8b2b-44e0-9370-de3b4fc2edd0",
+      cost: { total_duration_ms: 1 },
+      rate_limits: {
+        five_hour: { used_percentage: 99, resets_at: SESSION_RESET_S },
+        seven_day: { used_percentage: 99, resets_at: 1_781_900_000 },
+      },
+    };
+    expect(await ingestStatusLineUsage(stranger, { account: "b", now: NOW + 1000 })).toBeNull();
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
+    // A payload carrying no weekly window has no fingerprint at all.
+    const weeklyless = { ...stranger, rate_limits: { five_hour: { used_percentage: 99, resets_at: SESSION_RESET_S } } };
+    expect(await ingestStatusLineUsage(weeklyless, { account: "b", now: NOW + 1000 })).toBeNull();
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
   });
 
   it("carries the live reading to the heartbeat without the local source marker", async () => {

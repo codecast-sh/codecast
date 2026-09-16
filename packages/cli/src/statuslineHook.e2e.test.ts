@@ -20,7 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
 import { handleStatusLinePost } from "./daemon.js";
-import { readUsageCache, readProfileStoreCredentials, credentialHealth } from "./ccAccounts.js";
+import { readUsageCache, readProfileStoreCredentials, credentialHealth, fetchUsageSnapshot } from "./ccAccounts.js";
 
 const has = (bin: string) => spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
 // A saved profile's launch credential (its per-session store, see ccAccounts
@@ -72,6 +72,19 @@ describe.skipIf(!CAN_RUN)("live usage from a real Claude turn", () => {
       path.join(home, ".codecast", "cc-accounts.json"),
       JSON.stringify({ profiles: { probe: { uuid: "uuid-probe", email: "probe@example.com" } } }),
     );
+    // A live reading is filed under the account whose window resets it carries
+    // (liveUsageKey), so the sandbox needs the same thing production has before
+    // any session posts: one poll of this account on its own credential. It is
+    // what makes the reading attributable at all, and it is the reading the
+    // turn below must then overwrite.
+    const accessToken = JSON.parse(storeCredential!).claudeAiOauth?.accessToken as string;
+    const polled = await fetchUsageSnapshot(accessToken);
+    expect(polled.weekly?.resets_at, "the usage endpoint gave this account no weekly window").toBeDefined();
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-usage.json"),
+      JSON.stringify({ accounts: { "uuid-probe": polled } }),
+    );
+
     const server = http.createServer((req, res) => handleStatusLinePost(req, res));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as { port: number }).port;
@@ -124,7 +137,10 @@ describe.skipIf(!CAN_RUN)("live usage from a real Claude turn", () => {
       tmux(["send-keys", "-t", `${session}:0.0`, "Enter"]);
 
       const pane = () => tmux(["capture-pane", "-p", "-J", "-t", `${session}:0.0`, "-S", "-40"]).stdout;
-      const landed = await waitFor(() => !!readUsageCache().accounts["uuid-probe"], 120_000);
+      const landed = await waitFor(
+        () => readUsageCache().accounts["uuid-probe"]?.source === "live-session",
+        120_000,
+      );
       const snap = readUsageCache().accounts["uuid-probe"];
       expect(landed, `pane:\n${pane()}`).toBe(true);
 

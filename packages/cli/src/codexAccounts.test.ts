@@ -184,13 +184,73 @@ describe("codexAccounts", () => {
 
     it("reports a failure (and keeps the old snapshot) when a probe returns nothing", async () => {
       writeActiveAuth(authJson());
-      await refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => rpcResult(10) });
+      await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async () => rpcResult(10),
+        backendFetch: async () => null,
+      });
       const res = await refreshCodexUsageSnapshots({
         now: NOW + 10 * 60_000,
         rpcFetch: async () => null,
+        backendFetch: async () => null,
       });
       expect(res.failed.map((f) => f.name)).toContain("active");
       expect(readUsageCache().accounts["acct-1"].weekly?.percent).toBe(10);
+    });
+
+    it("still asks the backend for weekly when a session-window cooloff is in effect", async () => {
+      writeActiveAuth(authJson());
+      await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async () => rpcResult(80),
+        backendFetch: async () => ({ fetched_at: NOW, plan_type: "pro", weekly: { percent: 80, resets_at: 1786011679 * 1000 } }),
+      });
+      expect(readUsageCache().backend_retries?.["acct-1"]?.reason).toBe("no session window on this plan");
+      const homes: string[] = [];
+      await refreshCodexUsageSnapshots({
+        now: NOW + 10 * 60_000,
+        rpcFetch: async () => null,
+        backendFetch: async (home) => {
+          homes.push(home);
+          return { fetched_at: NOW + 10 * 60_000, plan_type: "pro", weekly: { percent: 100, resets_at: 1789829744 * 1000 } };
+        },
+      });
+      expect(homes).toHaveLength(1);
+      expect(readUsageCache().accounts["acct-1"].weekly).toEqual({ percent: 100, resets_at: 1789829744 * 1000 });
+    });
+
+    it("keeps a previous weekly when RPC misses and logs only have placeholders", async () => {
+      writeActiveAuth(authJson());
+      await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async () => rpcResult(80),
+        backendFetch: async () => null,
+      });
+      const dir = path.join(tmp, "codex", "sessions", "2026", "07", "31");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "rollout-dummy.jsonl"),
+        JSON.stringify({
+          timestamp: "2026-07-31T12:01:00Z",
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: { total_token_usage: { total_tokens: 1000 } },
+            rate_limits: {
+              primary: { used_percent: 0, window_minutes: 300, resets_at: 0 },
+              secondary: { used_percent: 0, window_minutes: 10080, resets_at: 0 },
+            },
+          },
+        }) + "\n",
+      );
+      await refreshCodexUsageSnapshots({
+        now: NOW + 10 * 60_000,
+        rpcFetch: async () => null,
+        backendFetch: async () => {
+          throw new Error("backend down");
+        },
+      });
+      expect(readUsageCache().accounts["acct-1"].weekly?.percent).toBe(80);
     });
   });
 

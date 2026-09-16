@@ -8,6 +8,7 @@ cast publish report.html          # → https://codecast.sh/a/<slug>  (stable pe
 cast publish notes.md             # markdown renders as a clean reading page
 cast publish dist/                # directory bundle (needs index.html; assets keep relative paths)
 cast publish app.html --watch     # republish on every save; viewers on <url>?live=1 auto-reload
+cast publish report.html --task ct-N   # the page attaches to the task as evidence at its current station
 cast publish ls | rm <target> | open <target>
 ```
 

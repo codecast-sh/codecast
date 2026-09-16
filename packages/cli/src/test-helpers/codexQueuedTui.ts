@@ -7,12 +7,15 @@ let footerTick = 0;
 const state = { active: true, interrupts: 0, queued: ["Existing worker report."], delivered: [] as string[] };
 let composer = "";
 let input = "";
+let swallowEnter = layout === "claude-collapsed";
 
 function render() {
   writeFileSync(`${statePath}.tmp`, JSON.stringify(state));
   renameSync(`${statePath}.tmp`, statePath);
-  const prompt = composer || (layout === "claude" ? "" : "Ask Codex to do anything");
-  const pane = layout === "claude"
+  const prompt = layout === "claude-collapsed" && composer.length > 1000
+    ? "[Pasted text #98]"
+    : composer || (layout?.startsWith("claude") ? "" : "Ask Codex to do anything");
+  const pane = layout?.startsWith("claude")
     ? `${"─".repeat(80)}\n❯ ${prompt}\n${"─".repeat(80)}\n  bypass permissions on (shift+tab to cycle)${inputReleasePath ? ` · ${footerTick}` : ""}`
     : state.active
     ? layout === "clipped"
@@ -41,6 +44,11 @@ process.stdin.on("data", (chunk: string) => {
         state.interrupts++;
         state.active = false;
       } else if (key === "\r" || key === "\n") {
+        if (composer && swallowEnter) {
+          swallowEnter = false;
+          render();
+          continue;
+        }
         if (composer) (state.active ? state.queued : state.delivered).push(composer);
         composer = "";
       } else if (key === "\x0b" || key === "\x15") {

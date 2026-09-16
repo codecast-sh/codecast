@@ -73,8 +73,10 @@ const ROWS: Row[] = [
   // /hook/statusline: a live usage post per turn per session, so its whole
   // read-modify-write of the usage cache has to stay off the loop.
   { file: D, name: "handleStatusLinePost", kind: "function", minLines: 20, mustContain: "ingestStatusLineUsage" },
-  { file: "ccAccounts.ts", name: "ingestStatusLineUsage", kind: "function", minLines: 15, mustContain: "usageKeyForSessionAsync" },
-  { file: "ccAccounts.ts", name: "usageKeyForSessionAsync", kind: "function", minLines: 8, mustContain: "readJsonAsync" },
+  { file: "ccAccounts.ts", name: "ingestStatusLineUsage", kind: "function", minLines: 15, mustContain: "liveUsageKey" },
+  // Attribution itself reads nothing: it is handed the profiles and the
+  // snapshots the caller already loaded asynchronously.
+  { file: "ccAccounts.ts", name: "liveUsageKey", kind: "function", minLines: 8, mustContain: "attributeFingerprint" },
   { file: "ccAccounts.ts", name: "readJsonAsync", kind: "function", minLines: 3, mustContain: "JSON.parse" },
   { file: "ccAccounts.ts", name: "writeJsonAsync", kind: "function", minLines: 3, mustContain: "rename" },
   { file: D, name: "startEventLoopMonitor", kind: "function", minLines: 10, mustContain: "saveDaemonState" },

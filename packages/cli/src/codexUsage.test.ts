@@ -89,6 +89,45 @@ describe("snapshotFromRateLimits", () => {
     expect(snap.credits).toBeUndefined();
   });
 
+  it("ignores the zeroed placeholder Codex writes when it has no reading", () => {
+    const dummy = {
+      primary: { used_percent: 0, window_minutes: 300, resets_at: 0 },
+      secondary: { used_percent: 0, window_minutes: 10080, resets_at: 0 },
+      credits: { has_credits: false, unlimited: false, balance: null },
+      plan_type: null,
+    };
+    const snap = snapshotFromRateLimits(new Map([["", { at: NOW, rl: dummy }]]), NOW);
+    expect(snap.session).toBeUndefined();
+    expect(snap.weekly).toBeUndefined();
+  });
+
+  it("prefers a named limit's weekly window over its 5h bucket for the scoped row", () => {
+    const spark = {
+      limit_id: "codex_bengalfox",
+      limit_name: "GPT-5.3-Codex-Spark",
+      primary: { used_percent: 0, window_minutes: 300, resets_at: 1789535902 },
+      secondary: { used_percent: 0, window_minutes: 10080, resets_at: 1790122702 },
+      plan_type: "pro",
+    };
+    const base = {
+      limit_id: "codex",
+      limit_name: null,
+      primary: { used_percent: 100, window_minutes: 10080, resets_at: 1789829744 },
+      secondary: null,
+      plan_type: "pro",
+    };
+    const snap = snapshotFromRateLimits(
+      new Map([
+        ["codex_bengalfox", { at: NOW, rl: spark }],
+        ["codex", { at: NOW, rl: base }],
+      ]),
+      NOW,
+    );
+    expect(snap.weekly).toEqual({ percent: 100, resets_at: 1789829744 * 1000 });
+    expect(snap.session).toBeUndefined();
+    expect(snap.scoped).toEqual([{ label: "Spark", percent: 0, resets_at: 1790122702 * 1000 }]);
+  });
+
   it("maps sub-24h windows to session and keeps a real credits balance", () => {
     const rl = {
       limit_id: "codex",
@@ -167,6 +206,43 @@ describe("parseRateLimitsReadResult", () => {
     expect(snap.reset_credits).toEqual({ available: 1 });
   });
 
+  it("keeps an exhausted weekly on the weekly bar when Spark also reports unused windows", () => {
+    // Live account/rateLimits/read captured 2026-09-15: Codex week pegged,
+    // Spark 5h + week both unused. The meters were painting Spark's 0% onto
+    // Week because rollout placeholders won; the RPC shape must not.
+    const result = {
+      ordinaryUsageAllowed: false,
+      rateLimits: {
+        limitId: "codex",
+        limitName: null,
+        primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1789829744 },
+        secondary: null,
+        planType: "pro",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+      rateLimitsByLimitId: {
+        codex_bengalfox: {
+          limitId: "codex_bengalfox",
+          limitName: "GPT-5.3-Codex-Spark",
+          primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: 1789535902 },
+          secondary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: 1790122702 },
+          planType: "pro",
+        },
+        codex: {
+          limitId: "codex",
+          limitName: null,
+          primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1789829744 },
+          secondary: null,
+          planType: "pro",
+        },
+      },
+    };
+    const snap = parseRateLimitsReadResult(result, NOW)!;
+    expect(snap.weekly).toEqual({ percent: 100, resets_at: 1789829744 * 1000 });
+    expect(snap.session).toBeUndefined();
+    expect(snap.scoped).toEqual([{ label: "Spark", percent: 0, resets_at: 1790122702 * 1000 }]);
+  });
+
   it("falls back to the top-level rateLimits for older binaries", () => {
     const snap = parseRateLimitsReadResult({ rateLimits: RATE_LIMITS_READ_RESULT.rateLimits }, NOW)!;
     expect(snap.weekly?.percent).toBe(15);
@@ -233,6 +309,26 @@ describe("collectCodexUsageSnapshot", () => {
 
   it("returns null when there is no codex install", () => {
     expect(collectCodexUsageSnapshot(NOW)).toBeNull();
+  });
+
+  it("does not treat placeholder 0/0 rate_limits as an empty week", () => {
+    writeRollout("2026/07/31", "rollout-dummy.jsonl", [
+      turnContextLine("2026-07-31T09:00:00Z", "gpt-6-astra"),
+      tokenCountLine({
+        ts: "2026-07-31T09:01:00Z",
+        total: 1000,
+        rateLimits: {
+          primary: { used_percent: 0, window_minutes: 300, resets_at: 0 },
+          secondary: { used_percent: 0, window_minutes: 10080, resets_at: 0 },
+          credits: { has_credits: false, unlimited: false, balance: null },
+          plan_type: null,
+        },
+      }),
+    ]);
+    const snap = collectCodexUsageSnapshot(NOW)!;
+    expect(snap.session).toBeUndefined();
+    expect(snap.weekly).toBeUndefined();
+    expect(snap.models?.[0]?.label).toBe("Astra");
   });
 
   it("builds windows + per-model shares from recent rollouts", () => {

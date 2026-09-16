@@ -49,8 +49,17 @@ import { definitionLaunchFlags, describeDropped } from "./agentLaunch.js";
 import { spawn, whichBin } from "./proc.js";
 import { commandGroup, type GroupDeps } from "./commandGroups.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { readAuthConfig } from "./config/readAuthConfig.js";
 import { apiPost } from "./castApi.js";
 import { countingSemaphore } from "./semaphore.js";
+import {
+  compileChainWorkflow,
+  compileParallelWorkflow,
+  resultPreview,
+  startRecordedRun,
+  unrecordedRun,
+  type RecordedRun,
+} from "./workflow/chainWorkflow.js";
 
 const CONFIG_DIR = defaultConfigDir();
 const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
@@ -125,11 +134,20 @@ export interface ChildResult {
   output: string;
 }
 
-function runChild(
-  binary: string,
-  args: string[],
-  opts: { cwd: string; timeoutMs?: number; inheritStdin: boolean; capture?: boolean; onChunk?: (text: string) => void },
-): Promise<ChildResult> {
+export interface RunChildOptions {
+  cwd: string;
+  timeoutMs?: number;
+  inheritStdin: boolean;
+  capture?: boolean;
+  onChunk?: (text: string) => void;
+}
+
+/** How a resolved print command is started. The default spawns the binary; a
+ *  test hands in a fake so the chain's recording can be checked without an
+ *  agent on PATH. */
+export type ChildLauncher = (binary: string, args: string[], opts: RunChildOptions) => Promise<ChildResult>;
+
+function runChild(binary: string, args: string[], opts: RunChildOptions): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
       cwd: opts.cwd,
@@ -282,12 +300,23 @@ export interface ChainRunOptions {
   timeoutMs?: number;
   quiet?: boolean;
   dryRun?: boolean;
+  /** the-line.md L7: the run is bound to this task or plan. */
+  taskId?: string;
+  planId?: string;
+  /** Test seam: how each step's command is started (default: spawn it). */
+  launch?: ChildLauncher;
 }
 
 /** Run a chain: each step's captured output feeds the next step's template.
  *  Progress goes to stderr, the last step's output (or the JSON envelope when
  *  the output format is json) to stdout. Returns the exit code. Shared by
- *  `cast exec --chain` and `cast agent run`. */
+ *  `cast exec --chain` and `cast agent run`.
+ *
+ *  the-line.md L7: the chain is also a run. The compiled graph is upserted,
+ *  a run is created (bound with --task or --plan, spawner = this session),
+ *  each step reports running and then completed or failed with its output
+ *  head, and the run ends completed or failed. Recording never stops the
+ *  chain: an unreachable backend prints one note and the steps still run. */
 export async function runChain(deps: GroupDeps, chainName: string, task: string, opts: ChainRunOptions): Promise<number> {
   const { chain, definitions } = await loadChain(deps, chainName);
   if (!task) {
@@ -296,11 +325,17 @@ export async function runChain(deps: GroupDeps, chainName: string, task: string,
   }
   const say = (line: string) => { if (!opts.quiet) process.stderr.write(line + "\n"); };
   const json = opts.flags.outputFormat === "json";
+  const startChild = opts.launch ?? runChild;
   const steps: Array<{ agent: string; prompt: string; code: number; output: string; ms: number }> = [];
+  // The graph is compiled before any step runs so a resolve error and a dry
+  // run never leave a half recorded run behind.
+  const graph = compileChainWorkflow(chain, definitions);
+  let run: RecordedRun | undefined;
   let previous: string | undefined;
   for (let i = 0; i < chain.steps.length; i++) {
     const step = chain.steps[i];
     const def = definitions[step.agent];
+    const nodeId = `step-${i + 1}`;
     const prompt = renderChainStepPrompt(step.prompt, { task, previous });
     let launch: ResolvedLaunch;
     try {
@@ -309,6 +344,7 @@ export async function runChain(deps: GroupDeps, chainName: string, task: string,
       launch = resolveLaunch(prompt, { ...opts.flags, outputFormat: undefined }, def, "claude");
     } catch (err) {
       console.error((err as Error).message);
+      await run?.finish(nodeId, "failed", (err as Error).message);
       return 1;
     }
     for (const w of launch.warnings) process.stderr.write(`cast exec: ${w}\n`);
@@ -316,26 +352,34 @@ export async function runChain(deps: GroupDeps, chainName: string, task: string,
       console.log(`# step ${i + 1}/${chain.steps.length} ${step.agent}\n${formatPrintCommand(launch.binary, launch.binaryArgs)}`);
       continue;
     }
-    if (!path.isAbsolute(launch.binary) && !whichBin(launch.binary)) {
+    if (!opts.launch && !path.isAbsolute(launch.binary) && !whichBin(launch.binary)) {
       console.error(`${launch.binary} not found on PATH. Install the ${AGENT_CLIENTS[launch.agent].displayName} CLI.`);
+      await run?.finish(nodeId, "failed", `${launch.binary} not found on PATH`);
       return 1;
     }
+    run ??= await startRecordedRun(deps, graph, { taskId: opts.taskId, planId: opts.planId, projectPath: opts.dir, note: say });
     say(`▸ step ${i + 1}/${chain.steps.length} ${step.agent} (${launch.agent})`);
+    await run.node(nodeId, "running");
     const started = Date.now();
-    const result = await runChild(launch.binary, launch.binaryArgs, { cwd: opts.dir, timeoutMs: opts.timeoutMs, inheritStdin: false, capture: true });
+    const result = await startChild(launch.binary, launch.binaryArgs, { cwd: opts.dir, timeoutMs: opts.timeoutMs, inheritStdin: false, capture: true });
     const ms = Date.now() - started;
     steps.push({ agent: step.agent, prompt, code: result.code, output: result.output, ms });
     if (result.code !== 0) {
       say(`✗ ${step.agent} failed (exit ${result.code}) after ${Math.round(ms / 1000)}s`);
       if (!opts.quiet && result.output.trim()) process.stderr.write(tail(result.output, 12) + "\n");
+      const reason = `${step.agent} exited ${result.code}`;
+      await run.node(nodeId, "failed", { outcome: "failure", result_preview: resultPreview(result.output), fail_reason: reason });
+      await run.finish(nodeId, "failed", reason);
       if (json) console.log(JSON.stringify({ chain: chain.name, task, steps, ok: false }, null, 2));
       else process.stdout.write(result.output);
       return result.code;
     }
     say(`✓ ${step.agent} done in ${Math.round(ms / 1000)}s (${result.output.length} chars)`);
+    await run.node(nodeId, "completed", { outcome: "success", result_preview: resultPreview(result.output) });
     previous = result.output.trim();
   }
   if (opts.dryRun) return 0;
+  await run?.finish("exit", "completed");
   if (json) console.log(JSON.stringify({ chain: chain.name, task, steps, ok: true }, null, 2));
   else process.stdout.write((previous ?? "") + "\n");
   return 0;
@@ -352,6 +396,8 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
     .option("--as <definition>", "Run as a named agent definition (cast agent ls); explicit flags override it")
     .option("--chain <name>", "Run a chain: the prompt is the task, each step's output feeds the next")
     .option("-j, --jobs <n>", "Parallel: each prompt is its own run, at most n at once")
+    .option("--task <id>", "Record the chain or parallel run against this task (ct-N)")
+    .option("--plan <id>", "Record the chain or parallel run against this plan (pl-N)")
     .option("-C, --dir <path>", "Working directory (default: current directory)")
     .option("--output-format <fmt>", "text (default), json, or stream-json")
     .option("--permission-mode <mode>", "bypass (default), default, acceptEdits, full_auto, or a native mode")
@@ -455,7 +501,11 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
           console.error((err as Error).message);
           process.exit(1);
         }
-        const code = await runChain(deps, String(options.chain), task, { flags, dir, timeoutMs, quiet, dryRun: !!options.dryRun });
+        const code = await runChain(deps, String(options.chain), task, {
+          flags, dir, timeoutMs, quiet, dryRun: !!options.dryRun,
+          taskId: options.task ? String(options.task) : undefined,
+          planId: options.plan ? String(options.plan) : undefined,
+        });
         process.exit(code);
       }
 
@@ -479,20 +529,41 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
           });
           return;
         }
+        // the-line.md L7: one run for the whole fan out, one node per input.
+        // A parallel run needs no sign in; without one only the record is skipped.
+        const run = readAuthConfig(CONFIG_DIR)?.auth_token
+          ? await startRecordedRun(deps, compileParallelWorkflow(prompts, definition), {
+              taskId: options.task ? String(options.task) : undefined,
+              planId: options.plan ? String(options.plan) : undefined,
+              projectPath: dir,
+              note: say,
+            })
+          : unrecordedRun("not signed in; run cast auth", say);
+        await run.node("fanout", "completed", { outcome: "success" });
         const sem = countingSemaphore(jobs);
         const results = await Promise.all(
           prompts.map((prompt, i) =>
             sem.run(async () => {
+              const nodeId = `input-${i + 1}`;
               const launch = launchOrExit(prompt, definition, { outputFormat: undefined });
               say(`▸ task ${i + 1}/${prompts.length} started (${launch.agent})`);
+              await run.node(nodeId, "running");
               const started = Date.now();
               const result = await runChild(launch.binary, launch.binaryArgs, { cwd: dir, timeoutMs, inheritStdin: false, capture: true });
               const ms = Date.now() - started;
               say(`${result.code === 0 ? "✓" : "✗"} task ${i + 1}/${prompts.length} ${result.code === 0 ? "done" : `failed (exit ${result.code})`} in ${Math.round(ms / 1000)}s`);
+              await run.node(nodeId, result.code === 0 ? "completed" : "failed", {
+                outcome: result.code === 0 ? "success" : "failure",
+                result_preview: resultPreview(result.output),
+              });
               return { index: i, prompt, code: result.code, output: result.output, ms };
             }),
           ),
         );
+        const allOk = results.every((r) => r.code === 0);
+        const failedCount = results.filter((r) => r.code !== 0).length;
+        await run.node("fanin", allOk ? "completed" : "failed", { outcome: allOk ? "success" : "failure" });
+        await run.finish(allOk ? "exit" : "fanin", allOk ? "completed" : "failed", allOk ? undefined : `${failedCount} of ${results.length} inputs failed`);
         if (outputFormat === "json") {
           console.log(JSON.stringify({ tasks: results, ok: results.every((r) => r.code === 0) }, null, 2));
         } else {

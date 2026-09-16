@@ -416,6 +416,22 @@ export function parsePsEtimeSeconds(etime: string): number | null {
   return ((days * 24 + hours) * 60 + parseInt(m[3], 10)) * 60 + parseInt(m[4], 10);
 }
 
+/**
+ * Epoch seconds a process started, from its `ps -o etime=` count and the clock
+ * read the instant ps answered. The count only means something against that
+ * instant: subtract it from a clock read later, after any await, and the start
+ * moves forward by the length of the wait. On a loaded machine the hook-claims
+ * scan of the registry dir waits long enough to push a live process past its
+ * own hook's registration, and registrationPredatesProcess then convicts a
+ * real agent as a reused pid and deletes its claim (observed 2026-09-15: a
+ * fresh grok pane lost its registry file, the transcript watcher found no pane
+ * to match, and minted a second conversation for the same session).
+ */
+export function processStartSecFromEtime(etime: string, sampledAtMs: number): number | null {
+  const elapsed = parsePsEtimeSeconds(etime);
+  return elapsed === null ? null : Math.floor(sampledAtMs / 1000) - elapsed;
+}
+
 /** Slack for the hook writing its claim a moment before `ps` measures the
  *  process start (both read the same wall clock, so this only absorbs rounding). */
 const CLAIM_START_SLACK_SEC = 5;

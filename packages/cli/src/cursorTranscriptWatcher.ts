@@ -64,7 +64,7 @@ export class CursorTranscriptWatcher extends EventEmitter {
       dirFilter: dirFilterByDepth(() => true, (seg) => seg === "agent-transcripts", () => true),
       // <proj>/agent-transcripts/<id>/<id>.txt is depth 4; one spare level.
       maxDepth: 5,
-      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      callback: (filePath, eventType) => { if (eventType !== "unlink") this.handleFileEvent(filePath, eventType); },
       onExisting: (files) => this.emitExistingFilesSorted(files),
       debounceMs: 100,
     });
