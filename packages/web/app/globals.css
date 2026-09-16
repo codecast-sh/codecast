@@ -1712,6 +1712,13 @@ pre[class*="language-"] {
 :is(.electron-drag-region, .titlebar-head) :is(button, a, input, textarea, select, [role="button"], [role="tab"], [role="combobox"], [role="menuitem"], [contenteditable="true"]) {
   -webkit-app-region: no-drag;
 }
+/* Hover flyouts that hang off the titlebar. A drag region eats pointer
+   events (the window manager takes the mouse; the renderer never sees it
+   enter), so a hover panel closes the moment you move onto it. Buttons
+   already opt out above; a panel is a div. */
+[data-flyout] {
+  -webkit-app-region: no-drag;
+}
 
 /* ============================================================
    Quote / comment on assistant message blocks (review mode)
