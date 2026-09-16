@@ -1,5 +1,6 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
-import type { ChatRoleMention } from "@codecast/shared/chat";
+import type { ChatRoleMention, ChatSlackMention } from "@codecast/shared/chat";
+import { SLACK_MARK_PATHS, SLACK_MARK_VIEWBOX } from "../components/SlackLogo";
 
 // Highlight @mentions inside chat message bodies.
 //
@@ -47,7 +48,23 @@ export type ChatMentionOptions = {
    *  app's ordinary session pill — the entity:// link EntityAwareLink already
    *  renders, title and open-on-click included — with the "@" folded in. */
   sessions?: Set<string>;
+  /** People this line names who exist only in the team's Slack workspace
+   *  (same source), by lowercase Slack handle: a person chip wearing the
+   *  Slack mark, named from the snapshot. Nothing to open; they are paged in
+   *  the line's Slack copy. */
+  slack?: Map<string, ChatSlackMention>;
 };
+
+// The Slack mark as hast, for the chip above. mdast hands `data.hChildren`
+// straight through to rehype, so the plugin can draw the glyph without React.
+function slackMarkHast() {
+  return {
+    type: "element" as const,
+    tagName: "svg",
+    properties: { className: ["ch-mention-slack-mark"], viewBox: SLACK_MARK_VIEWBOX, ariaHidden: "true" },
+    children: SLACK_MARK_PATHS.map(([d, fill]) => ({ type: "element" as const, tagName: "path", properties: { d, fill }, children: [] })),
+  };
+}
 
 /** The route a role pill opens. */
 export function orgRoleHref(shortId: string): string {
@@ -55,7 +72,7 @@ export function orgRoleHref(shortId: string): string {
 }
 
 export function remarkChatMentions(options: ChatMentionOptions = {}) {
-  const { known, self, names, roles, sessions } = options;
+  const { known, self, names, roles, sessions, slack } = options;
   const has = (set: Set<string> | undefined, handle: string) =>
     !!set && (set.has(handle) || set.has(handle.toLowerCase()));
 
@@ -107,6 +124,22 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
                 // the DOM — the pill wears the session pill's own dress.
                 data: { hProperties: { "data-mention": lower } },
                 children: [{ type: "text", value: lower }],
+              };
+            }
+            const slackPerson = slack?.get(lower);
+            if (slackPerson) {
+              return {
+                type: "emphasis",
+                data: {
+                  hName: "span",
+                  hProperties: {
+                    className: "editor-mention mention-person ch-mention-slack",
+                    "data-mention": lower,
+                    title: `@${slackPerson.handle} in Slack`,
+                  },
+                  hChildren: [slackMarkHast(), { type: "text" as const, value: `@${slackPerson.name}` }],
+                },
+                children: [{ type: "text", value: `@${slackPerson.name}` }],
               };
             }
             if (known && !has(known, handle)) return false;

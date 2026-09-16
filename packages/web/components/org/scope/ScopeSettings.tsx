@@ -18,6 +18,7 @@ import { SelectBox } from "../../ui/select-box";
 import { cn } from "../../../lib/utils";
 import { InlineEdit, ScopeEditor } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
+import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
 
@@ -65,11 +66,16 @@ export type ScopeSettingsProps = {
   armRetire?: boolean;
   onUpdate: (fields: OrgUpdateRoleInput) => void;
   onReparent: (target: OrgParentRef) => void;
-  onRetire: () => void;
+  /** S16: for the chief of staff the confirm also says what becomes of its
+   *  standing agent; any other seat passes nothing and the server decides. */
+  onRetire: (standingSession?: "keep" | "retire") => void;
 };
 
 export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, counters, armRetire, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
   const [confirmRetire, setConfirmRetire] = useState(!!armRetire);
+  // Keeping the standing agent is the default (S16).
+  const isChief = role.handle === CHIEF_OF_STAFF_HANDLE;
+  const [standingSession, setStandingSession] = useState<"keep" | "retire">("keep");
   useWatchEffect(() => { if (armRetire) setConfirmRetire(true); }, [armRetire]);
   const caps: RoleCaps = role.caps ?? DEFAULT_CAPS;
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
@@ -241,9 +247,32 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
               <button type="button" onClick={() => setConfirmRetire(true)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-medium hover:bg-sol-red/10" style={{ color: "var(--sol-red)" }}><Trash2 className="w-3.5 h-3.5" /> Retire role</button>
             </div>
           ) : (
-            <div className="mt-2 flex items-center gap-2">
-              <button type="button" onClick={onRetire} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-red)", color: "var(--sol-bg)" }}>Retire {role.name}</button>
-              <button type="button" onClick={() => setConfirmRetire(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+            <div className="mt-2 flex flex-col gap-2">
+              {/* Unseating is one act (org-staffing.md S16): retiring the chief
+                  asks what becomes of the agent the person already talks to,
+                  and keeping it is the default, so nobody is left without the
+                  assistant they had. Any other seat has no such thread. */}
+              {isChief && (
+                <div className="flex flex-col gap-1.5">
+                  {([["keep", "Keep it running as a plain agent", "It gets its old title back and stops answering as the role."], ["retire", "Retire it with the seat", "The thread is kept and stops waking."]] as const).map(([value, label, sub]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={standingSession === value}
+                      onClick={() => setStandingSession(value)}
+                      className="text-left rounded-lg border px-2.5 py-2"
+                      style={{ borderColor: standingSession === value ? "var(--sol-red)" : "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: standingSession === value ? "color-mix(in srgb, var(--sol-red) 8%, transparent)" : undefined }}
+                    >
+                      <span className="text-[12px] font-semibold" style={{ color: "var(--sol-text)" }}>{label}</span>
+                      <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-muted)" }}>{sub}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => onRetire(isChief ? standingSession : undefined)} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-red)", color: "var(--sol-bg)" }}>Retire {role.name}</button>
+                <button type="button" onClick={() => setConfirmRetire(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+              </div>
             </div>
           )}
         </section>

@@ -46,7 +46,11 @@ services:
       options: { max-size: "100m", max-file: "5" }
 
   dashboard:
-    image: ghcr.io/get-convex/convex-dashboard:latest
+    # Pinned: every dashboard image built after 2026-03 fails on boot with
+    # "Cannot find module '@radix-ui/react-icons-<hash>'" (Next 16 turbopack
+    # externals), on amd64 and arm64 alike. This tag is the last build verified
+    # to serve; it matches the dashboard Railway ran until decommission.
+    image: ghcr.io/get-convex/convex-dashboard:46bcfa00ef626afe31cc2701636bba31fe0be5bd
     restart: unless-stopped
     env_file: [.env]
     ports:

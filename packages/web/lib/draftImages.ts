@@ -26,6 +26,39 @@ export type DraftImageRow = {
 // settled entries linger until then so late subscribers always find them.
 export const pendingImageUploads = new Map<string, Promise<string | null>>();
 
+/** Image row handed out of MessageInput's onGateSend. */
+export type ComposerGateImage = {
+  storageId?: string;
+  previewUrl: string;
+  mime: string;
+  uploading?: boolean;
+};
+
+/** Settled chat/huddle attachment: a storage id the send path can store. */
+export type ComposerAttachment = {
+  storage_id: string;
+  mime?: string;
+};
+
+/** Wait out in-flight uploads and drop the ones that failed. ChatComposer and
+ *  the huddle composer share this so a remount cannot lose a paste. */
+export async function settleComposerAttachments(
+  images: ComposerGateImage[] | undefined | null,
+): Promise<ComposerAttachment[]> {
+  const list = images ?? [];
+  const settled = await Promise.all(
+    list.map(async (img) => ({
+      storageId:
+        img.storageId ??
+        (await (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve(null))),
+      mime: img.mime,
+    })),
+  );
+  return settled
+    .filter((img): img is { storageId: string; mime: string } => !!img.storageId)
+    .map((img) => ({ storage_id: img.storageId, mime: img.mime }));
+}
+
 export function serializeDraftImages(images: PastedImage[]): DraftImageRow[] {
   return images.map(i => ({
     storageId: i.storageId,

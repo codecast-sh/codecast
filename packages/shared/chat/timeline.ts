@@ -10,6 +10,12 @@
 export type TimelineMessage = {
   id: string;
   authorId: string;
+  /** The identity a run of messages groups under. Defaults to `authorId`;
+   *  differs when one stored author speaks for several people: every line
+   *  mirrored in from Slack is written by the workspace's one bridge user, so
+   *  grouping on the row's author folded Samvit's reply under Aivery's and
+   *  drew it without a name or a face. See `authorGroupKey`. */
+  groupKey?: string;
   createdAt: number;
   /** An agent placeholder still waiting on its answer. Never grouped, because it
    *  is about to change height and grouping it makes the list jump. */
@@ -29,6 +35,28 @@ export type TimelineRow<M extends TimelineMessage> =
   | { kind: "day"; key: string; label: string; at: number }
   | { kind: "new"; key: string; at: number }
   | { kind: "message"; key: string; message: M; grouped: boolean };
+
+/** The grouping identity of a rendered author: the real Slack person (or app)
+ *  behind a bridge-authored line, the user id otherwise. Web and mobile both
+ *  feed this to `TimelineMessage.groupKey`, so the rule lives once. A Slack
+ *  app has no user id on its lines; its name is the next best key. */
+export function authorGroupKey(author: { id: string; name: string; slack?: { userId?: string } | null }): string {
+  if (!author.slack) return author.id;
+  return `slack:${author.slack.userId ?? author.name}`;
+}
+
+/** The same identity read off a stored row, for rollups computed before the
+ *  row is a rendered author (the server's thread summary, the web's local
+ *  reply rollup): the Slack person behind a bridge-authored line, else the
+ *  user id. Agrees with `authorGroupKey` by construction. */
+export function threadFaceKey(row: {
+  user_id: unknown;
+  external?: { user?: string } | null;
+  external_author?: { name: string } | null;
+}): string {
+  if (!row.external_author) return String(row.user_id);
+  return `slack:${row.external?.user ?? row.external_author.name}`;
+}
 
 /** How close together two messages by one author must be to render as one group.
  *  Slack uses five minutes; long enough to hold a train of thought together,
@@ -78,7 +106,7 @@ export type BuildTimelineOptions = {
  * when any of these is true:
  *   - it is the first message of a day (the separator already broke the run)
  *   - the unread rule falls immediately before it (same reason)
- *   - a different author wrote it
+ *   - a different author wrote it (by `groupKey`, the rendered identity)
  *   - more than GROUP_WINDOW_MS separates it from the previous one
  *   - either it or the message above is an agent placeholder mid-answer
  *   - either it or the message above is a standalone system row
@@ -124,7 +152,7 @@ export function buildChatTimeline<M extends TimelineMessage>(
     const grouped =
       !breaksGroup &&
       !!prev &&
-      prev.authorId === m.authorId &&
+      (prev.groupKey ?? prev.authorId) === (m.groupKey ?? m.authorId) &&
       !prev.pendingAgent &&
       !m.pendingAgent &&
       !prev.deleted &&
@@ -223,11 +251,25 @@ export type ToastDecisionInput = {
   notifyLevel?: "all" | "mentions" | "none";
   /** Global do-not-disturb or an active snooze, which outranks everything. */
   doNotDisturb?: boolean;
+  /** The line is history landing late — a Slack import bringing over a
+   *  channel's past. Nobody just said it, so nothing interrupts for it. */
+  history?: boolean;
   /** How many toasts this channel has already raised inside the recency window.
    *  The gate that stops three people typing from producing a toast every few
    *  seconds — after the cap the channel collapses to a badge until it settles. */
   recentToastsFromChannel?: number;
 };
+
+/** Whether a mirrored-in line is history rather than something just said: it
+ *  reached us long after its own time (a Slack import keeps Slack's stamp on
+ *  each line and lands the whole past in minutes). A live mirrored line is
+ *  seconds behind its stamp; anything a good while behind is the import.
+ *  Web and mobile ask this the same way, so an old line toasts on neither. */
+export const HISTORY_LAG_MS = 5 * 60 * 1000;
+export function isHistoryLine(row: { created_at: number; external?: { synced_at?: number } | null }): boolean {
+  const synced = row.external?.synced_at;
+  return synced !== undefined && synced - row.created_at > HISTORY_LAG_MS;
+}
 
 /** Quiet toasts allowed from one channel before it stops interrupting. Loud
  *  toasts are never rate limited: being named is not chatter. */
@@ -249,11 +291,13 @@ export function chatToastTier(input: ToastDecisionInput): ChatToastTier {
     channelMuted,
     notifyLevel = "all",
     doNotDisturb,
+    history,
     recentToastsFromChannel = 0,
   } = input;
 
   // You have read what you just sent.
   if (authorId === viewerId) return "silent";
+  if (history) return "silent";
   if (doNotDisturb) return "silent";
   if (notifyLevel === "none") return "silent";
 

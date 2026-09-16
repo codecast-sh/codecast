@@ -1,26 +1,41 @@
-// The capacity model (docs/architecture/org-staffing.md S2): what one role can
-// hold, when a person's span is too wide, and how often the chart may move.
-// ONE module, read by the server health query (org.health flags), by the
-// role cap defaults, and rendered into the analyzer prompt, so the product
-// never argues with itself about a threshold.
+// The capacity model (docs/architecture/org-staffing.md S2): what loads one
+// role, what its scope merely holds, when a person's span is too wide, and
+// how often the chart may move. ONE module, read by the server health query
+// (org.health flags), by the role cap defaults, and rendered into the
+// analyzer prompt, so the product never argues with itself about a threshold.
 //
 // Every number is a default with a reason. The analyzer reasons with them and
 // may argue for an exception in a change's rationale; the health query flags
 // against them as they stand.
+//
+// Load and ledger are two different things. A role does not do its scope's
+// tasks; hands and people do. What loads a role is what reaches it and asks
+// for its attention: the work items that change in its scope each day (a line
+// in its next frame), the decisions routed to it (an immediate wake with a
+// deadline), the hands it supervises (a state line each), the stalls it must
+// unstick, and how often it runs into its wake cap. The size of its ledger
+// (open tasks, tasks in flight, active plans) is context: it says how much the
+// frame lists before it overflows into counts, and a ledger far over the line
+// is a records problem (stale rows, unfiled plans) or a filing seam before it
+// is ever a seat problem. The overloaded flag reads the load; the ledger gets
+// its own information flag and never drives a split.
 
 /** Daily caps a role starts with (org-roles-standing.md T1). */
 export const DEFAULT_ROLE_CAPS = { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 } as const;
 
 export type CapacityThreshold = { value: number; unit: string; reason: string };
 
-/** What one role can hold. A role is one context window: its frame is capped
- *  at 3000 characters of facts and its brief is short, so a scope must fit in
- *  what one agent keeps in its head between wakes. */
+/** What loads one role. A role is one context window: its frame is capped at
+ *  3000 characters of facts (about thirty lines) and its brief is short, so
+ *  the flow into a seat must fit in what one agent keeps in its head between
+ *  wakes. The first five keys are the load axes the overloaded flag reads;
+ *  the rest are the other thresholds health flags on their own. */
 export const ROLE_CAPACITY = {
-  open_tasks: { value: 25, unit: "open tasks in scope", reason: "above this the frame overflows into counts and the role stops seeing individual tasks" },
-  in_flight: { value: 8, unit: "tasks in progress or in review in scope", reason: "each in-flight task is a thread the role follows across wakes; more than this and one of them is dropped" },
-  active_plans: { value: 4, unit: "active plans in scope", reason: "a plan is a goal with its own progress; a role directs toward a handful, not a portfolio" },
-  live_hands: { value: DEFAULT_ROLE_CAPS.hands_per_day, unit: "live hands", reason: "equals the default hands cap; every hand reports a state line into the frame" },
+  items_per_day: { value: 30, unit: "distinct tasks and plans in scope that changed, per day over 7 days", reason: "each changed item is one line the role reads at its next wake and holds until the item settles; the frame carries about thirty lines of facts, so past thirty a day the role reads counts, not items, and stops following any one thread" },
+  decisions_per_day: { value: 4, unit: "decisions routed to the role, per day over 7 days", reason: "every routed decision is an immediate wake with a 5 minute hop deadline; past four a day the seat spends its attention on recommendations rather than direction and each new ask queues behind the last" },
+  live_hands: { value: DEFAULT_ROLE_CAPS.hands_per_day, unit: "live hands", reason: "equals the default hands cap; every hand reports a state line into the frame and asks for direction when it settles" },
+  open_stalls: { value: 3, unit: "stalls the role must unstick: tasks stuck in review plus hands that reported blocked or needs context this week", reason: "a stall is a thread the role chases at every wake until it moves; past three at once one of them waits a day, and a day is the review stall window" },
+  cap_hit_days: { value: 1, unit: "days in the last 7 the role hit its wake or token cap", reason: "one day at the cap is a spike; more than one in a week means the flow into the seat exceeds what its wake budget lets it read, and immediate wakes start being held" },
   direct_reports: { value: 5, unit: "child roles", reason: "each report's brief line is read every wake; past this the role manages managers, and that is a layer" },
   wake_load: { value: 0.7, unit: "of the wake cap (today, or the 7 day average)", reason: "a role that wakes this close to its cap has no headroom for an immediate wake" },
   token_load: { value: 0.8, unit: "of the token cap (today, or the 7 day average)", reason: "past this the flush starts holding system wakes and the role goes quiet mid-day" },
@@ -28,6 +43,17 @@ export const ROLE_CAPACITY = {
   review_stall_hours: { value: 24, unit: "hours a task sits in review", reason: "a review that waits a day means nobody owns the verdict" },
   idle_days: { value: 14, unit: "days with no scope event", reason: "two quiet weeks means the scope has no work, or the work happens somewhere the role cannot see" },
   peer_sends: { value: 5, unit: "sends between two roles in 7 days, when they outnumber the work done", reason: "two roles that talk more than they ship are coordinating a scope that should be one role's, or a decision that should be a person's" },
+} as const satisfies Record<string, CapacityThreshold>;
+
+/** What one role's scope holds. Context, reported next to the load and never
+ *  a reason to split: the frame lists this much individually and shows the
+ *  rest as counts, so a ledger over these lines is first a question of
+ *  whether the records are true (stale rows, plans filed under no project)
+ *  and of where the seams are, and only then of whether the seat fits. */
+export const ROLE_LEDGER = {
+  open_tasks: { value: 25, unit: "open tasks in scope", reason: "what the frame lists one by one before it overflows into counts; above this the role sees totals, which is fine for a ledger it does not work itself" },
+  in_flight: { value: 8, unit: "tasks in progress or in review in scope", reason: "the threads the frame names individually; more than this and it names the newest and counts the rest" },
+  active_plans: { value: 4, unit: "active plans in scope", reason: "a plan is a goal with its own progress line; past a handful the frame summarizes them" },
 } as const satisfies Record<string, CapacityThreshold>;
 
 /** How many roles one person can answer for. */
@@ -39,26 +65,29 @@ export const PERSON_SPAN = {
  *  settles, and a role's brief is only useful once it has lived in a scope. */
 export const STABILITY = {
   move_cooldown_days: { value: 7, unit: "days since a role's last move", reason: "a role moved this week has not had time to show whether the move worked" },
-  split_after_breaches: { value: 2, unit: "consecutive reviews with an overload flag", reason: "one busy week is a spike; two is a scope that does not fit" },
-  split_on_first_breach_ratio: { value: 2, unit: "times the model on the busiest load count (open tasks, in flight, or active plans)", reason: "a scope twice the model is structural, not a busy week; it splits on the first breach without waiting for a second review" },
+  split_after_breaches: { value: 2, unit: "consecutive reviews with an overload flag", reason: "one busy week is a spike; two is a flow that does not fit" },
+  split_on_first_breach_ratio: { value: 2, unit: "times the model on the busiest volume axis (items a day, decisions a day, or live hands)", reason: "a flow twice the model is structural, not a busy week; it splits on the first breach without waiting for a second review. Stalls and cap hits are symptoms, not volume, and never make a split on their own; the ledger never does" },
   retire_after_idle_days: { value: 14, unit: "idle days before a retirement is proposed", reason: "a quiet role in a quiet workspace is not a problem; a role idle this long while the company works is" },
 } as const satisfies Record<string, CapacityThreshold>;
 
 export type RoleCapacityKey = keyof typeof ROLE_CAPACITY;
+export type RoleLedgerKey = keyof typeof ROLE_LEDGER;
 
 /** The number behind a threshold, for code that compares. */
 export function capacity<K extends RoleCapacityKey>(key: K): number { return ROLE_CAPACITY[key].value; }
+export function ledgerLine<K extends RoleLedgerKey>(key: K): number { return ROLE_LEDGER[key].value; }
 
 // Health flags (S3). The codes are the vocabulary the health query emits, the
 // org page renders as badges, and the analyzer prompt teaches; one list.
-export const FLAG_CODES = ["overloaded", "wide_span", "idle", "slow_to_recommend", "review_stall", "cap_hit", "unowned", "no_charter", "chatter", "unfiled_plan"] as const;
+export const FLAG_CODES = ["overloaded", "wide_ledger", "wide_span", "idle", "slow_to_recommend", "review_stall", "cap_hit", "unowned", "no_charter", "chatter", "unfiled_plan", "stale_plan", "stale_task", "stale_project", "program_ended"] as const;
 export type FlagCode = (typeof FLAG_CODES)[number];
 export type FlagSeverity = "info" | "warn" | "blocker";
 export type HealthFlag = { code: FlagCode; severity: FlagSeverity; detail: string };
 
 /** What each flag means, in the words every surface uses. */
 export const FLAG_MEANING: Record<FlagCode, string> = {
-  overloaded: "a role's load is past one or more thresholds of the capacity model",
+  overloaded: "the load reaching a role (items changing a day, decisions a day, live hands, stalls, cap hit days) is past one or more lines of the model",
+  wide_ledger: "a role's scope holds more open tasks, tasks in flight or active plans than the frame lists individually; context on size, and a records or filing question before it is a seat question",
   wide_span: "a person or role has more direct reports than the model allows",
   idle: "a role's scope had no event for the idle window",
   slow_to_recommend: "a role's median time from ask to recommendation is past the hop deadline",
@@ -68,6 +97,10 @@ export const FLAG_MEANING: Record<FlagCode, string> = {
   no_charter: "a project or plan has no goal, or a role has no charter",
   chatter: "two roles exchange more sends than either exchanges with its hands or its person",
   unfiled_plan: "a plan with open work is filed under no project, so no role's scope can see it",
+  stale_plan: "a plan still open whose evidence says it is finished or abandoned: every task closed, or its open tasks untouched for the stale window with no live session on it",
+  stale_task: "a task still open whose evidence says it is finished or never started: in progress with no session bound and no write for the stale window, in progress with every session done for that window, or commits carrying its id already landed",
+  stale_project: "a project nothing has touched for the activity window: no task, plan, session or commit",
+  program_ended: "a program role's end condition is met (its plan or project is done, or its date is past); the next review proposes the retire or the review its tenure names",
 };
 
 function line(name: string, t: CapacityThreshold): string {
@@ -76,17 +109,22 @@ function line(name: string, t: CapacityThreshold): string {
 }
 
 /** The capacity model as markdown for a prompt. The analyzer reads it here and
- *  nowhere else, so a changed threshold reaches the prompt without a rewrite. */
+ *  nowhere else, so a changed threshold, a changed axis or a changed way of
+ *  reading the numbers reaches the prompt without a rewrite. */
 export function renderCapacityModel(): string {
   const roles = Object.entries(ROLE_CAPACITY).map(([k, t]) => line(k, t)).join("\n");
+  const ledger = Object.entries(ROLE_LEDGER).map(([k, t]) => line(k, t)).join("\n");
   const span = Object.entries(PERSON_SPAN).map(([k, t]) => line(k, t)).join("\n");
   const stability = Object.entries(STABILITY).map(([k, t]) => line(k, t)).join("\n");
   const flags = FLAG_CODES.map((c) => `- ${c}: ${FLAG_MEANING[c]}`).join("\n");
   return [
-    "One role holds one context window. Its frame carries at most 3000 characters of facts and its brief is short, so a scope has to fit in what one agent can keep in its head between wakes. These are the defaults; each has a reason, and you may argue for an exception in a change's rationale.",
+    "One role holds one context window. Its frame carries at most 3000 characters of facts and its brief is short, so what flows into a seat has to fit in what one agent can keep in its head between wakes. A role does not do its scope's tasks; hands and people do. What loads a role is what reaches it and asks for its attention; what its scope holds is context. These are the defaults; each has a reason, and you may argue for an exception in a change's rationale.",
     "",
-    "What one role can hold:",
+    "What loads a role (the overloaded flag reads the first five; the rest raise their own flags):",
     roles,
+    "",
+    "What a role's scope holds (context, reported next to the load; never a reason to split on its own):",
+    ledger,
     "",
     "What one person can answer for:",
     span,
@@ -96,6 +134,10 @@ export function renderCapacityModel(): string {
     "",
     "The flags org.health raises against this model:",
     flags,
+    "",
+    "How to read the numbers. `cast org health` is the model's own reading: `load` is what reached the seat over the last seven days (items changing a day, decisions a day, live hands, open stalls, cap hit days), `ledger` is what its scope holds today (open tasks, in flight, active plans), `overload_ratio` is the busiest volume axis divided by its line, and `counted` says which projects, plans and tasks the row read and by what rule, so you can cite the same rows. A role's brief counts more (every plan under its projects, whatever its status) and a wake log shows single days; cite the health numbers as the breach and the brief's as context, and say which is which.",
+    "",
+    "How to size with it. A seat is right when the flow into it fits: count, from the inputs and the health rows, the items that will change in its scope each day, the decisions that will route to it, the hands it will read and the stalls it will chase, after the record changes in the same proposal have taken the stale rows out. Every role and every scope change states, in its rationale, the seat's resulting load against the model and its ledger as context, counted from the projects and plans it will own after the file changes in the same proposal; when a load axis is over the model, the rationale argues the exception or the change is split along a seam so each seat's flow fits. A wide ledger with a quiet flow is not a seat problem: bring the records in line, file the plans where they belong, and read the load again. A role needs a report when its own scope holds a seam (a repo, a package, a project with its own plans) whose flow would fit one agent and is past the lines when held together. A person needs a layer when the roles reporting straight to them pass the span. A role should be split when its load has breached the model in consecutive reviews, or at once when a volume axis is at twice the model, along a seam its own work shows; it should be merged with a sibling when both are idle or both watch the same scope and talk to each other more than they ship. A project needs an owner when it has sessions, tasks or plans and no role's scope covers it. Budget: `cast org health` reports `company.caps_total`, the daily hands, wakes and tokens the active roles may spend today. Every role and budget change states its caps with the evidence behind each number (a role's wakes over seven days, its tokens, its hands), and the summary states the company total after the proposal next to the total today; the person allows or trims that total, so never write it as unchanged when a seat is added.",
   ].join("\n");
 }
 
@@ -106,11 +148,29 @@ export function renderCapacityModel(): string {
 // analyzer reads the same flags in `cast org health --json`; a test can feed
 // it numbers with no database. Pure: no reads, no clock.
 
+/** The load that reached a role over the last seven days. */
+export type RoleLoad = {
+  /** Distinct tasks and plans in scope that changed, per day (7 day average). */
+  items_per_day: number;
+  /** Decisions routed to the role, per day (7 day average). */
+  decisions_per_day: number;
+  live_hands: number;
+  direct_reports: number;
+  /** Tasks stuck in review past the stall window plus hands that reported blocked or needs context this week. */
+  open_stalls: number;
+  /** Days in the last seven the role hit its wake or token cap. */
+  cap_hit_days: number;
+};
+
+/** What a role's scope holds today. Context, never load. */
+export type RoleLedger = { open_tasks: number; in_flight: number; active_plans: number };
+
 export type RoleSignals = {
   kind: "role";
   /** Names the seat in every detail: "@growth". */
   handle: string;
-  load: { open_tasks: number; in_flight: number; active_plans: number; live_hands: number; direct_reports: number };
+  load: RoleLoad;
+  ledger: RoleLedger;
   spend: {
     wakes_today: number; wakes_7d_avg: number; wakes_cap: number;
     tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number;
@@ -132,6 +192,10 @@ export type RoleSignals = {
   /** Days since the role was created: a new seat with no event is not idle yet. */
   age_days: number;
   has_charter: boolean;
+  /** A program role whose end condition is met (org-staffing.md S10): what
+   *  ended and what the tenure says happens next. Null for a standing role,
+   *  a program still running, or a role with no tenure. */
+  program_ended?: { ended: string; then: "retire" | "review" } | null;
 };
 
 export type PersonSignals = {
@@ -148,46 +212,78 @@ export type CompanySignals = {
   projects_without_charter: Array<{ id: string; title: string }>;
   /** Plans with open work and no project; each is one `file` change away from a scope. */
   unfiled_plans: Array<{ id: string; title: string; short_id?: string; open_tasks: number }>;
+  /** Records whose evidence says they are finished (org-staffing.md S9). Each
+   *  is one status change away from true; the analyzer proposes the sync
+   *  before it proposes staffing. */
+  stale?: StaleWork;
 };
+
+/** The stale lists org.analysisInputs and org.health share (S9). One reading
+ *  of "stale", computed by convex/lib/orgActivity from the rows. */
+export type StalePlanReason = "every task closed" | "no activity 21d" | "bound sessions all done";
+export type StaleTaskReason = "in progress, no session 14d" | "in progress, sessions done 14d" | "commits landed, still open";
+export type StalePlan = { short_id: string; title: string; status: string; last_task_activity_at: number | null; sessions_live: number; reason: StalePlanReason };
+export type StaleTask = { short_id: string; title: string; status: string; last_session_activity_at: number | null; reason: StaleTaskReason };
+export type StaleProject = { id: string; title: string; reason: "no activity 30d" };
+export type StaleWork = { plans: StalePlan[]; tasks: StaleTask[]; projects: StaleProject[] };
 
 export type CapacitySignals = RoleSignals | PersonSignals | CompanySignals;
 
 const pct = (n: number, cap: number): number => (cap > 0 ? n / cap : 0);
 const pctText = (n: number, cap: number): string => `${Math.round(pct(n, cap) * 100)}%`;
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
+const perDay = (n: number): string => `${Math.round(n * 10) / 10}`;
 
-/** Which load counts sit past the model: [count, key, word, suffix]. ONE
- *  reading of "overloaded", used by the flags and by the health query when it
- *  records a review's breach streak. */
-export function overloadDetails(load: RoleSignals["load"]): Array<[number, RoleCapacityKey, string, string]> {
-  const out: Array<[number, RoleCapacityKey, string, string]> = [];
-  const over = (key: RoleCapacityKey, n: number, word: string, suffix = "") => { if (n > capacity(key)) out.push([n, key, word, suffix]); };
-  over("open_tasks", load.open_tasks, "open task");
-  over("in_flight", load.in_flight, "task", " in flight");
-  over("active_plans", load.active_plans, "active plan");
-  over("live_hands", load.live_hands, "live hand");
+/** Which load axes sit past the model: [shown count, key, phrase]. ONE reading
+ *  of "overloaded", used by the flags and by the health query when it records
+ *  a review's breach streak. */
+export function overloadDetails(load: RoleLoad): Array<[number, RoleCapacityKey, string]> {
+  const out: Array<[number, RoleCapacityKey, string]> = [];
+  const over = (key: RoleCapacityKey, n: number, phrase: string) => { if (n > capacity(key)) out.push([n, key, phrase]); };
+  over("items_per_day", load.items_per_day, `${perDay(load.items_per_day)} items changing a day`);
+  over("decisions_per_day", load.decisions_per_day, `${perDay(load.decisions_per_day)} decisions a day`);
+  over("live_hands", load.live_hands, plural(load.live_hands, "live hand"));
+  over("open_stalls", load.open_stalls, plural(load.open_stalls, "open stall"));
+  over("cap_hit_days", load.cap_hit_days, `${plural(load.cap_hit_days, "cap hit day")} this week`);
   return out;
 }
-export function isOverloaded(load: RoleSignals["load"]): boolean { return overloadDetails(load).length > 0; }
+export function isOverloaded(load: RoleLoad): boolean { return overloadDetails(load).length > 0; }
 
-/** How far the busiest load count sits past the model: the largest of open
- *  tasks, in flight and active plans, each divided by its threshold. 1 is the
+/** How far the busiest VOLUME axis sits past the model: the largest of items
+ *  a day, decisions a day and live hands, each divided by its line. 1 is the
  *  line; STABILITY.split_on_first_breach_ratio is where a split waits for no
- *  second review. org.health emits it as `overload_ratio`. */
-export function overloadRatio(load: RoleSignals["load"]): number {
-  return Math.max(load.open_tasks / capacity("open_tasks"), load.in_flight / capacity("in_flight"), load.active_plans / capacity("active_plans"));
+ *  second review. Stalls and cap hits are symptoms and stay out of it, so a
+ *  bad week of reviews never reads as a structural split. org.health emits it
+ *  as `overload_ratio`. */
+export function overloadRatio(load: RoleLoad): number {
+  return Math.max(load.items_per_day / capacity("items_per_day"), load.decisions_per_day / capacity("decisions_per_day"), load.live_hands / capacity("live_hands"));
 }
-export function splitsOnFirstBreach(load: RoleSignals["load"]): boolean {
+export function splitsOnFirstBreach(load: RoleLoad): boolean {
   return overloadRatio(load) >= STABILITY.split_on_first_breach_ratio.value;
+}
+
+/** Which ledger counts sit past what the frame lists individually. */
+export function ledgerDetails(ledger: RoleLedger): Array<[number, RoleLedgerKey, string]> {
+  const out: Array<[number, RoleLedgerKey, string]> = [];
+  const over = (key: RoleLedgerKey, n: number, phrase: string) => { if (n > ledgerLine(key)) out.push([n, key, phrase]); };
+  over("open_tasks", ledger.open_tasks, plural(ledger.open_tasks, "open task"));
+  over("in_flight", ledger.in_flight, `${plural(ledger.in_flight, "task")} in flight`);
+  over("active_plans", ledger.active_plans, plural(ledger.active_plans, "active plan"));
+  return out;
+}
+
+function ledgerText(l: RoleLedger): string {
+  return `${l.open_tasks} open, ${l.in_flight} in flight, ${plural(l.active_plans, "active plan")}`;
 }
 
 function roleFlags(r: RoleSignals): HealthFlag[] {
   const flags: HealthFlag[] = [];
   const who = `@${r.handle}`;
 
-  // Overloaded: any load count past its threshold. One breach is a warning;
-  // two or more means the scope does not fit in one head, and that blocks.
-  const breaches = overloadDetails(r.load).map(([n, key, word, suffix]) => `${plural(n, word)}${suffix} (model: ${capacity(key)})`);
+  // Overloaded: any load axis past its line. One breach is a warning; two or
+  // more means the flow does not fit in one head, and that blocks. The ledger
+  // rides along as context so the reader sees both at once.
+  const breaches = overloadDetails(r.load).map(([, key, phrase]) => `${phrase} (model: ${capacity(key)})`);
   if (breaches.length) {
     // The streak is what the stability rule reads: this breach plus the
     // consecutive earlier reviews that flagged the role is the count the
@@ -195,13 +291,22 @@ function roleFlags(r: RoleSignals): HealthFlag[] {
     const earlier = r.breaches ?? 0;
     const streak = earlier + 1;
     const ratio = overloadRatio(r.load);
-    // A scope twice the model is structural: it splits now, whatever the
-    // streak says. Below that line the streak decides.
+    // A flow twice the model on a volume axis is structural: it splits now,
+    // whatever the streak says. Below that line the streak decides.
     const history = splitsOnFirstBreach(r.load)
       ? `; split now: ${Math.round(ratio * 10) / 10} times the model`
       : earlier ? `; flagged at ${plural(earlier, "earlier review")} in a row, so this is breach ${streak}` : "; first breach on record";
     const blocks = splitsOnFirstBreach(r.load) || breaches.length >= 2 || streak >= STABILITY.split_after_breaches.value;
-    flags.push({ code: "overloaded", severity: blocks ? "blocker" : "warn", detail: `${who} holds ${breaches.join(", ")}${history}` });
+    flags.push({ code: "overloaded", severity: blocks ? "blocker" : "warn", detail: `${who} carries ${breaches.join(", ")}${history}; ledger ${ledgerText(r.ledger)}` });
+  }
+
+  // Wide ledger: the scope lists more than the frame shows one by one.
+  // Information: a records or filing question first, a seat question only
+  // when the load says so too.
+  const wide = ledgerDetails(r.ledger).map(([, key, phrase]) => `${phrase} (frame lists: ${ledgerLine(key)})`);
+  if (wide.length) {
+    const quiet = !breaches.length;
+    flags.push({ code: "wide_ledger", severity: "info", detail: `${who}'s scope holds ${wide.join(", ")}; ${quiet ? "its load is inside the model, so this is size, not overload: bring records in line or file by seam before reading it as a seat" : "read the load above for whether the seat fits"}` });
   }
 
   if (r.load.direct_reports > capacity("direct_reports")) {
@@ -233,6 +338,11 @@ function roleFlags(r: RoleSignals): HealthFlag[] {
     flags.push({ code: "idle", severity: "info", detail: r.idle_days === null ? `${who}'s scope has had no event since the role was created ${plural(r.age_days, "day")} ago` : `${who}'s scope has had no event for ${plural(r.idle_days, "day")}` });
   }
 
+  // A program's end condition met: the seat outlived its reason to exist.
+  if (r.program_ended) {
+    flags.push({ code: "program_ended", severity: "warn", detail: `${who} is a program role and ${r.program_ended.ended}; its tenure says ${r.program_ended.then === "retire" ? "retire it" : "review it"}` });
+  }
+
   // Chatter: the busiest peer exchange, when it outnumbers the work shipped.
   const peers = new Map<string, number>();
   for (const s of [...r.flow.sends_7d.to, ...r.flow.sends_7d.from]) peers.set(s.handle, (peers.get(s.handle) ?? 0) + s.n);
@@ -259,6 +369,10 @@ function companyFlags(c: CompanySignals): HealthFlag[] {
   for (const p of c.plans_without_goal) flags.push({ code: "no_charter", severity: "info", detail: `plan "${p.title}" has no goal` });
   if (c.unfiled_tasks > 0) flags.push({ code: "unowned", severity: "info", detail: `${plural(c.unfiled_tasks, "open task")} filed under no project or plan` });
   for (const p of c.unfiled_plans) flags.push({ code: "unfiled_plan", severity: "info", detail: `plan "${p.title}"${p.short_id ? ` (${p.short_id})` : ""} has ${plural(p.open_tasks, "open task")} and no project` });
+  // Stale records (S9): information, and a sync change rather than a seat.
+  for (const p of c.stale?.plans ?? []) flags.push({ code: "stale_plan", severity: "info", detail: `plan "${p.title}" (${p.short_id}) is ${p.status} but ${p.reason}` });
+  for (const t of c.stale?.tasks ?? []) flags.push({ code: "stale_task", severity: "info", detail: `task "${t.title}" (${t.short_id}) is ${t.status.replace("_", " ")}: ${t.reason}` });
+  for (const p of c.stale?.projects ?? []) flags.push({ code: "stale_project", severity: "info", detail: `project "${p.title}" has had ${p.reason}` });
   return flags;
 }
 

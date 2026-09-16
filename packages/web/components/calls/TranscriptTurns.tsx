@@ -17,23 +17,34 @@ export function TranscriptTurnList({
   turns,
   isSelected,
   onTurnClick,
+  compact,
+  activeIndex,
 }: {
   turns: Turn[];
   isSelected?: (index: number) => boolean;
   onTurnClick?: (index: number, e: React.MouseEvent) => void;
+  /** Time plus words, no speaker name. A recording has one microphone. */
+  compact?: boolean;
+  /** The line the audio is currently in, if any. */
+  activeIndex?: number | null;
 }) {
   const selectable = !!onTurnClick;
   return (
     <>
-      {turns.map((t) => (
+      {turns.map((t) => {
+        const active = activeIndex === t.index;
+        const selected = isSelected?.(t.index);
+        return (
         <div
           key={t.index}
           {...(selectable
             ? {
                 role: "button",
                 tabIndex: 0,
-                "aria-pressed": isSelected?.(t.index),
-                "aria-label": `Turn by ${firstName(t.speaker_name)} at ${fmtClock(t.t0)}`,
+                "aria-pressed": selected,
+                "aria-label": compact
+                  ? `Line at ${fmtClock(t.t0)}`
+                  : `Turn by ${firstName(t.speaker_name)} at ${fmtClock(t.t0)}`,
                 onClick: (e: React.MouseEvent) => onTurnClick(t.index, e),
                 onKeyDown: (e: React.KeyboardEvent) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -44,26 +55,46 @@ export function TranscriptTurnList({
               }
             : {})}
           className={`-mx-2 rounded-md px-2 py-1 ${
-            selectable
-              ? `cursor-pointer transition-colors ${
-                  isSelected?.(t.index)
-                    ? "bg-sol-violet/10 ring-1 ring-inset ring-sol-violet/40"
-                    : "hover:bg-sol-bg-alt/40"
-                }`
-              : ""
+            selectable ? "cursor-pointer transition-colors " : ""
+          }${
+            selected
+              ? "bg-sol-violet/10 ring-1 ring-inset ring-sol-violet/40"
+              : active
+                ? "bg-sol-bg-alt/60"
+                : selectable
+                  ? "hover:bg-sol-bg-alt/40"
+                  : ""
           }`}
         >
-          <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
-            {firstName(t.speaker_name)}
-            <span className="ml-2 font-normal text-sol-text-dim">{fmtClock(t.t0)}</span>
-          </div>
-          {t.segments.map((s) => (
-            <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
-              {s.text}
-            </p>
-          ))}
+          {compact ? (
+            <div className="flex gap-3">
+              <span className="w-10 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-sol-text-dim">
+                {fmtClock(t.t0)}
+              </span>
+              <div className="min-w-0">
+                {t.segments.map((s) => (
+                  <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
+                    {s.text}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
+                {firstName(t.speaker_name)}
+                <span className="ml-2 font-normal text-sol-text-dim">{fmtClock(t.t0)}</span>
+              </div>
+              {t.segments.map((s) => (
+                <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
+                  {s.text}
+                </p>
+              ))}
+            </>
+          )}
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }

@@ -13,6 +13,9 @@ export type MentionItem = {
    *  vocabulary (github username, email local part, or a bot's name slug). */
   handle?: string;
   isBot?: boolean;
+  /** A person who exists only in the team's Slack workspace: the row wears
+   *  the Slack mark, and the send pages them in the line's Slack copy. */
+  slack?: boolean;
   image?: string;
   shortId?: string;
   status?: string;

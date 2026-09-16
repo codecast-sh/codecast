@@ -16,11 +16,21 @@ export type OrgProposalScope = {
   plans?: string[];
 };
 
+/** Standing or program (org-staffing.md S10). In a spec the end names a plan
+ *  by short id, a project by any ref, or a date in unix ms; the apply path
+ *  resolves refs into ids inside the boundary. */
+export type OrgTenureSpec =
+  | { kind: "standing" }
+  | { kind: "program"; ends: { plan: string } | { project: string } | { date: number }; then: "retire" | "review" };
+
 export type OrgRoleProposal = {
   kind: "role";
   name: string;
   handle: string;
   scope?: OrgProposalScope;
+  tenure?: OrgTenureSpec;
+  /** A key from orgAvatars.AVATAR_KEYS; absent = the default for the handle. */
+  avatar?: string;
   /** "@handle" or "or-N" for a role, "me" or a member's name for a person; absent = the person applying. */
   reports_to?: string;
   charter?: string;
@@ -30,8 +40,10 @@ export type OrgRoleProposal = {
   evidence?: string[];
 };
 
+export type OrgProjectHorizon = "ongoing" | "bounded";
+
 export type OrgProjectChange =
-  | { op: "create"; title: string; description?: string; project_path?: string }
+  | { op: "create"; title: string; description?: string; project_path?: string; horizon?: OrgProjectHorizon }
   | { op: "merge"; from: string; into: string };
 
 export type OrgProjectsProposal = { kind: "projects"; changes: OrgProjectChange[] };
@@ -80,28 +92,66 @@ export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: stri
 /** File a plan under a project (plans.project_id), so a role's scope can see it. Both are refs. */
 export type OrgFileChange = { kind: "file"; plan: string; project: string };
 
-export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange;
+// Bring records in line (org-staffing.md S9): a plan, task or project whose
+// evidence says it is finished gets its status set, through the same update
+// paths a person uses. `reason` is the evidence, for the person deciding.
+export type OrgPlanStatusChange = { kind: "plan_status"; plan: string; status: "done" | "abandoned" | "active"; reason: string };
+/** A task's status set: done or dropped closes it; open (or backlog, where the
+ *  team's statuses have it) puts a row that was marked in progress but never
+ *  worked back where it belongs, instead of dropping real backlog. */
+export type OrgTaskStatusChange = { kind: "task_status"; task: string; status: "done" | "dropped" | "open" | "backlog"; reason: string };
+export type OrgProjectStatusChange = { kind: "project_status"; project: string; status: "paused" | "done" | "active"; reason: string };
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt"] as const;
+export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
+  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange;
+
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status"] as const;
+/** The kinds the pane groups under "Bring records in line" (S9). */
+export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 export type OrgChangeKind = OrgChange["kind"];
 
-/** Accept order (S4): projects first, then roles (parents before children in
- *  the proposal's own order), then project charters (an owner may be a role
- *  the same proposal creates), then moves, scope, budget, trust, routines,
- *  adopt, retire. A retirement goes last so a move off the retiring role
- *  lands first; adopt goes after the role it names exists. */
+/** Accept order (S4, S9): the record syncs first (a plan, task or project
+ *  whose status the evidence contradicts), then projects, then roles
+ *  (parents before children in the proposal's own order), then project
+ *  charters (an owner may be a role the same proposal creates), then moves,
+ *  scope, budget, trust, routines, adopt, retire. A retirement goes last so
+ *  a move off the retiring role lands first; adopt goes after the role it
+ *  names exists. A task's own status lands before its plan's, because closing
+ *  a plan cascades to the plan's still-open tasks (dropped): a task the
+ *  proposal marks done on its own evidence must be done before the cascade
+ *  reads it. */
 export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
-  projects: 0, file: 1, role: 2, project_meta: 3, move: 4, scope: 5, budget: 6, trust: 7, routine: 8, adopt: 9, retire: 10,
+  task_status: 0, plan_status: 1, project_status: 2,
+  projects: 3, file: 4, role: 5, project_meta: 6, move: 7, scope: 8, budget: 9, trust: 10, routine: 11, adopt: 12, retire: 13,
 };
+const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
 /** Stable sort by apply rank; ties keep their given order. */
 export function orderOrgChanges<T>(rows: T[], changeOf: (row: T) => OrgChange | null | undefined): T[] {
-  const rank = (row: T) => { const c = changeOf(row); return c ? ORG_CHANGE_APPLY_RANK[c.kind] : 11; };
+  const rank = (row: T) => { const c = changeOf(row); return c ? ORG_CHANGE_APPLY_RANK[c.kind] : UNRANKED; };
   return rows.map((row, i) => ({ row, i, r: rank(row) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.row);
 }
 
 const ORG_TRUST_STAGES: readonly string[] = ["understand", "decide", "direct"];
 const ORG_PRIORITIES: readonly string[] = ["p0", "p1", "p2", "p3"];
+export const ORG_PROJECT_HORIZONS: readonly OrgProjectHorizon[] = ["ongoing", "bounded"];
+export const ORG_TENURE_THEN: readonly ("retire" | "review")[] = ["retire", "review"];
+export const PLAN_STATUS_CHANGES: readonly OrgPlanStatusChange["status"][] = ["done", "abandoned", "active"];
+export const TASK_STATUS_CHANGES: readonly OrgTaskStatusChange["status"][] = ["done", "dropped", "open", "backlog"];
+export const PROJECT_STATUS_CHANGES: readonly OrgProjectStatusChange["status"][] = ["paused", "done", "active"];
+
+/** Why a tenure is not one, or null. Shared by the spec validator and the role mutations. */
+export function orgTenureError(raw: any): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "tenure is { kind: standing } or { kind: program, ends, then }";
+  if (raw.kind === "standing") return null;
+  if (raw.kind !== "program") return `tenure kind is standing or program, not ${JSON.stringify(raw.kind)}`;
+  const e = raw.ends;
+  if (!e || typeof e !== "object" || Array.isArray(e)) return "a program's ends is { plan }, { project } or { date }";
+  const keys = Object.keys(e).filter((k) => e[k] !== undefined);
+  if (keys.length !== 1 || !["plan", "project", "date"].includes(keys[0])) return "a program ends with exactly one of plan, project, date";
+  if (keys[0] === "date" ? !(typeof e.date === "number" && e.date > 0) : !nonEmpty(e[keys[0]])) return keys[0] === "date" ? "a program's end date is unix ms" : `a program's end ${keys[0]} is a ref`;
+  return (ORG_TENURE_THEN as readonly string[]).includes(raw.then) ? null : "a program's then is retire or review";
+}
 const HANDLE_RE = /^[a-z0-9-]{2,32}$/;
 const EVERY_RE = /^\d+(m|h|d|w)$/;
 
@@ -128,8 +178,19 @@ export function orgChangeError(raw: any): string | null {
   if (!ORG_CHANGE_KINDS.includes(raw.kind)) return `unknown change kind ${JSON.stringify(raw.kind)}; one of ${ORG_CHANGE_KINDS.join(", ")}`;
   const handle = (): string | null => nonEmpty(raw.handle) ? (HANDLE_RE.test(raw.handle.replace(/^@/, "")) ? null : `handle ${JSON.stringify(raw.handle)} is not a-z, 0-9 and - (2 to 32 chars)`) : "handle is required";
   switch (raw.kind as OrgChangeKind) {
-    case "role": case "projects": case "move": case "retire":
-      return isOrgProposal(raw) ? (raw.kind === "role" ? handle() : null) : `${raw.kind} is missing its required fields`;
+    case "role": case "projects": case "move": case "retire": {
+      if (!isOrgProposal(raw)) return `${raw.kind} is missing its required fields`;
+      if (raw.kind === "role") {
+        const h = handle(); if (h) return h;
+        if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
+        if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
+      }
+      if (raw.kind === "projects") {
+        const bad = raw.changes.find((c: any) => c.op === "create" && c.horizon !== undefined && !(ORG_PROJECT_HORIZONS as readonly string[]).includes(c.horizon));
+        if (bad) return `project horizon is one of ${ORG_PROJECT_HORIZONS.join(", ")}`;
+      }
+      return null;
+    }
     case "scope": {
       const h = handle(); if (h) return h;
       if (!optStrings(raw.add) || !optStrings(raw.remove)) return "scope add and remove are lists of project or plan refs";
@@ -163,6 +224,18 @@ export function orgChangeError(raw: any): string | null {
     }
     case "file":
       return nonEmpty(raw.plan) && nonEmpty(raw.project) ? null : "file needs a plan ref and a project ref";
+    case "plan_status":
+      if (!nonEmpty(raw.plan)) return "plan_status needs a plan ref";
+      if (!(PLAN_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `plan_status status is one of ${PLAN_STATUS_CHANGES.join(", ")}`;
+      return nonEmpty(raw.reason) ? null : "plan_status needs a reason: the evidence the record is stale";
+    case "task_status":
+      if (!nonEmpty(raw.task)) return "task_status needs a task ref";
+      if (!(TASK_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `task_status status is one of ${TASK_STATUS_CHANGES.join(", ")}`;
+      return nonEmpty(raw.reason) ? null : "task_status needs a reason: the evidence the record is stale";
+    case "project_status":
+      if (!nonEmpty(raw.project)) return "project_status needs a project ref";
+      if (!(PROJECT_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `project_status status is one of ${PROJECT_STATUS_CHANGES.join(", ")}`;
+      return nonEmpty(raw.reason) ? null : "project_status needs a reason: the evidence the record is stale";
   }
   return null;
 }
@@ -260,8 +333,8 @@ export function editedOrgChange<T extends OrgChange>(change: T, edits: unknown):
 /** One line per change, the words the CLI walk and the ghost chips use. */
 export function describeOrgChange(c: OrgChange): string {
   switch (c.kind) {
-    case "role": return `create role ${c.name} ${at(c.handle)}${c.reports_to ? ` reporting to ${c.reports_to}` : ""}${c.scope?.projects?.length || c.scope?.plans?.length ? ` over ${list([...(c.scope.projects ?? []), ...(c.scope.plans ?? [])])}` : ""}`;
-    case "projects": return c.changes.map((x) => x.op === "create" ? `create project ${x.title}` : `merge project ${x.from} into ${x.into}`).join("; ");
+    case "role": return `create role ${c.name} ${at(c.handle)}${c.reports_to ? ` reporting to ${c.reports_to}` : ""}${c.scope?.projects?.length || c.scope?.plans?.length ? ` over ${list([...(c.scope.projects ?? []), ...(c.scope.plans ?? [])])}` : ""}${c.tenure ? ` (${describeTenure(c.tenure)})` : ""}`;
+    case "projects": return c.changes.map((x) => x.op === "create" ? `create project ${x.title}${x.horizon ? ` (${x.horizon})` : ""}` : `merge project ${x.from} into ${x.into}`).join("; ");
     case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${c.reports_to}` : ""}${c.scope_add?.length ? ` +${list(c.scope_add)}` : ""}${c.scope_remove?.length ? ` -${list(c.scope_remove)}` : ""}`;
     case "retire": return `retire ${at(c.handle)}`;
     case "scope": return `scope ${at(c.handle)}${c.add?.length ? ` +${list(c.add)}` : ""}${c.remove?.length ? ` -${list(c.remove)}` : ""}`;
@@ -271,7 +344,31 @@ export function describeOrgChange(c: OrgChange): string {
     case "project_meta": return `charter ${c.project}${c.owner ? ` owner ${at(c.owner)}` : ""}${c.priority ? ` ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `adopt session ${c.conversation} as ${at(c.handle)}'s standing session`;
     case "file": return `file plan ${c.plan} under project ${c.project}`;
+    case "plan_status": return `mark plan ${c.plan} ${c.status}`;
+    case "task_status": return `mark task ${c.task} ${c.status}`;
+    case "project_status": return `mark project ${c.project} ${c.status}`;
   }
+}
+
+/** "standing" or "program · ends with pl-3, then retire": the chip on a node,
+ *  the hire form and a proposal's role line all say it this way. */
+export function describeTenure(t: OrgTenureSpec | { kind: "standing" } | { kind: "program"; ends: { plan?: unknown; project?: unknown; date?: number }; then: "retire" | "review" } | null | undefined, names?: { plan?: string; project?: string }): string {
+  if (!t) return "";
+  if (t.kind === "standing") return "standing";
+  const e: any = t.ends;
+  const ends = e.plan !== undefined ? `with ${names?.plan ?? e.plan}` : e.project !== undefined ? `with ${names?.project ?? e.project}` : humanEndDate(e.date);
+  return `program · ends ${ends}, then ${t.then}`;
+}
+
+const TENURE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A program's end date the way a person says it: "Oct 3". The year comes along
+ *  only when it is not the current one, so a near end stays short and a distant
+ *  one is never ambiguous. UTC throughout, like the date the spec carries. */
+function humanEndDate(ms: number): string {
+  const d = new Date(ms);
+  const day = `${TENURE_MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return d.getUTCFullYear() === new Date().getUTCFullYear() ? day : `${day} ${d.getUTCFullYear()}`;
 }
 
 /** Option order every org proposal decision uses. The index is the verdict. */

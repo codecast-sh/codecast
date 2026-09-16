@@ -5,6 +5,11 @@ type Options = {
   className?: string;
 };
 
+/** The look every search hit shares, in markdown and in code blocks alike.
+ *  The active hit is styled by `mark[data-search-active]` in globals.css. */
+export const SEARCH_MARK_CLASS = "search-hit";
+export const SEARCH_MARK_ATTR = "data-search-highlight";
+
 /**
  * Rehype plugin that wraps occurrences of any search term (case-insensitive)
  * in `<mark data-search-highlight="true">` nodes within the HAST tree. Because
@@ -19,9 +24,7 @@ export function rehypeSearchHighlight(options: Options) {
     .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|");
   const regex = new RegExp(`(${pattern})`, "gi");
-  const className =
-    options.className ??
-    "bg-amber-300/50 text-amber-900 dark:bg-amber-700/40 dark:text-amber-100 rounded px-0.5 font-medium";
+  const className = options.className ?? SEARCH_MARK_CLASS;
 
   const shouldSkip = (node: Element): boolean => {
     const tag = node.tagName;
@@ -46,7 +49,7 @@ export function rehypeSearchHighlight(options: Options) {
         type: "element",
         tagName: "mark",
         properties: {
-          "data-search-highlight": "true",
+          [SEARCH_MARK_ATTR]: "true",
           className,
         },
         children: [{ type: "text", value: m[0] }],

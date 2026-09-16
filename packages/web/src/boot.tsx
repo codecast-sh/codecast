@@ -9,6 +9,11 @@ import { hasStoredAuthToken } from "../lib/localAuth";
 import { createReloadWhenHidden } from "../lib/reloadWhenHidden";
 import { App } from "./App";
 import "../store/inboxStore";
+import { stashSlackReturn } from "../lib/slackReturn";
+
+// Before anything mounts: a Slack OAuth return carries ?code=, which the auth
+// provider would otherwise redeem as its own and sign the person out.
+stashSlackReturn();
 
 // Everything here used to live in main.tsx, which is now a stub that loads this
 // module dynamically — see main.tsx for why (the desktop hand-off must be able

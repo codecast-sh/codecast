@@ -17,6 +17,19 @@ import { join } from "node:path";
 // is the hook, never widening this list's exemptions.
 const CACHED_ENRICHMENT_QUERIES = [
   "users.getRecentProjectPaths",
+  // The inbox feeders (useLiveInboxSessions / useSyncInboxSessions): the
+  // sessions cache is local-first, and these mount under ONE ErrorBoundary
+  // with every other global feeder. On 2026-09-16 listInboxSessions hit the
+  // backend's 1s user-code cap on a saturated host and the throw unmounted
+  // every feeder in the app until a reload.
+  "conversations.listInboxSessions",
+  "conversations.listFavoriteSessions",
+  "conversations.sessionsLiveness",
+  "client_state.get",
+  "bookmarks.listBookmarks",
+  // users.getCurrentUser is fed the same way but still has plain subscribers
+  // on auth/team pages (pinned by the raw useQuery ratchet), so it is not
+  // listed here yet.
 ];
 
 // Queries that scan full assistant tool_calls. A live subscription re-runs on

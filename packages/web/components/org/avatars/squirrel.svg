@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Squirrel">
+  <!-- tones: ground #d7c280 = sol-yellow 40% over sol-bg-alt; body #9c3335 = sol-red 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-squirrel"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#d7c280"/>
+  <g clip-path="url(#c-squirrel)">
+  <path d="M60 96C58 72 62 44 74 30C86 18 98 28 94 48C90 66 80 78 76 96Z" fill="#9c3335"/>
+  <path d="M70 96C70 76 74 56 82 42C86 50 84 66 80 78Z" fill="#fdf6e3" opacity="0.7"/>
+  <path d="M6 96C10 82 24 74 42 74C58 74 68 84 70 96Z" fill="#9c3335"/>
+  <path d="M26 40L28 20L40 34Z" fill="#9c3335"/><path d="M54 40L52 20L40 34Z" fill="#9c3335"/>
+  <circle cx="40" cy="52" r="21" fill="#9c3335"/>
+  <ellipse cx="40" cy="62" rx="10.5" ry="8" fill="#fdf6e3"/>
+  <path d="M37 57.5Q40 56 43 57.5Q41.5 61.5 40 62Q38.5 61.5 37 57.5Z" fill="#002b36"/>
+  <circle cx="32" cy="48" r="2.5" fill="#002b36"/><circle cx="48" cy="48" r="2.5" fill="#002b36"/>
+  </g>
+</svg>

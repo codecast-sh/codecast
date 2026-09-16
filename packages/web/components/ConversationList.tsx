@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
+import { LivePulseDot } from "./SessionActivityLine";
 
 function VisibilityDropdown({
   conversationId,
@@ -522,7 +523,7 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
                 </span>
                 {conv.is_active && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0 select-none">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+                    <LivePulseDot className="w-1.5 h-1.5" />
                     <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
                   </span>
                 )}

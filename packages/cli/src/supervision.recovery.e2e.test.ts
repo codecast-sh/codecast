@@ -114,6 +114,48 @@ describe("watchdog recovery with continuing log activity", () => {
   });
 });
 
+test("status does not flag a grok session-end hook tail as a stuck sync named updates", async () => {
+  const home = fixture();
+  const grokId = "01a0a5e8-0951-7f13-a251-1200846e2fe9";
+  const sessionDir = path.join(home, ".grok", "sessions", "%2Ftmp%2Fdemo", grokId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const file = path.join(sessionDir, "updates.jsonl");
+  const lastSyncedAt = Date.now() - 11 * 3_600_000;
+  const lastSec = Math.floor(lastSyncedAt / 1000);
+  const line = (ts: number, kind: string) => JSON.stringify({
+    timestamp: ts,
+    method: "_x.ai/session/update",
+    params: { sessionId: grokId, update: { sessionUpdate: kind } },
+  }) + "\n";
+  fs.writeFileSync(file, line(lastSec - 10, "user_message_chunk") + line(lastSec + 60, "hook_execution") + line(lastSec + 61, "hook_execution"));
+  fs.writeFileSync(path.join(home, ".codecast", "sync-ledger.json"), JSON.stringify({
+    [file]: {
+      lastSyncedAt,
+      lastSyncedPosition: 0,
+      messageCount: 1,
+      conversationId: "jx75dz2dmvyhnktcnr2qj6crtd8eegwp",
+      sourceGeneration: {
+        client: "grok", sessionId: grokId, dev: 1, ino: 1, birthtimeMs: lastSyncedAt,
+        unit: "signatures", watermark: "abc", prefixProven: true,
+      },
+    },
+  }));
+  const args = [path.join(import.meta.dir, "main.ts"), "status"];
+  const quiet = await run(process.execPath, args, home);
+  expect(quiet, quiet.stderr).toMatchObject({ code: 0 });
+  expect(quiet.stdout).not.toContain("Stuck syncs");
+  expect(quiet.stdout).not.toContain("updates");
+
+  fs.writeFileSync(file, line(lastSec - 10, "user_message_chunk") + line(lastSec + 60, "user_message_chunk") + line(lastSec + 120, "hook_execution"));
+  const loud = await run(process.execPath, args, home);
+  expect(loud, loud.stderr).toMatchObject({ code: 0 });
+  expect(loud.stdout).toContain("Stuck syncs");
+  expect(loud.stdout).toContain("01a0a5e8");
+  expect(loud.stdout).not.toMatch(/[•-] updates\b/);
+  expect(loud.stdout).toContain("file grew after last ingest");
+  expect(loud.stdout).toContain("/tmp/demo");
+}, 60_000);
+
 test("status distinguishes consumed Codex metadata from unread transcript bytes", async () => {
   const home = fixture();
   const dir = path.join(home, ".codex", "sessions", "2026", "09", "04");

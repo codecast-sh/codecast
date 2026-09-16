@@ -8,10 +8,13 @@
 // you shape it.
 
 import { useAction, useMutation } from "convex/react";
+import { useRouter } from "next/navigation";
+import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
+import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
 import { deriveAnchorStatus, useAnchors } from "../../hooks/useSyncAnchors";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Repeat, Settings2 } from "lucide-react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -43,6 +46,12 @@ export default function AnchorPage() {
 }
 
 function AnchorSpace() {
+  // The chief of staff is the workspace's standing agent (org-staffing.md
+  // S12): once one stands, this page is its scope page.
+  const router = useRouter();
+  useSyncOrgTreeFeeder();
+  const chief = useOrgRoles().roles.find((r) => r.handle === "chief-of-staff" && r.status !== "retired");
+  useEffect(() => { if (chief) router.replace(`/org/${chief.short_id}`); }, [chief?.short_id]); // eslint-disable-line react-hooks/exhaustive-deps
   const teams: any[] = useInboxStore((s) => s.teams) ?? [];
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id as string | undefined) ?? null;
   const [scope, setScope] = useState<Scope>({ type: "user", teamId: null });

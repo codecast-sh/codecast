@@ -27,6 +27,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
+import { parseSearchTerms } from "@codecast/shared/search";
 import { compressImage } from "../lib/compressImage";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { useStorageImageSrc, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
@@ -88,7 +89,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
-import { RevealAncestryCtx, useRevealAncestryWith } from "../lib/revealHost";
+import { RevealAncestryCtx, RevealInBandCtx, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -171,7 +172,7 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
-import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
+import { AssignedToYouBanner, HandoffPicker, OwnerAvatar, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
 import { SessionDaemonChip } from "./DaemonStatusChip";
@@ -205,13 +206,17 @@ import { THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
+import { HighlightContext } from "./HighlightContext";
+import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearchPages, type MatchInstance, type PendingHit } from "../lib/conversationSearch";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
 import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
-import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
+import { CollabComposer, CollabRequestBanner, OwnerComposerPresence, composerPresenceEnabled } from "./CollabComposer";
+import { ConversationViewers } from "./presence/ViewerFaces";
+import { anchorFromRects } from "../lib/follow";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
@@ -259,7 +264,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionSuggestion } from "./editor/MentionSuggestion";
 import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -348,8 +353,8 @@ function isStaleSentDraft(conversationId: string, text: string | null | undefine
 
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
-const EMPTY_MATCH_IDS: string[] = [];
-const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number; timestamp: number }[] = [];
+const EMPTY_ID_SET: ReadonlySet<string> = new Set();
+const EMPTY_MATCH_INSTANCES: MatchInstance[] = [];
 const EMPTY_QUEUE: string[] = [];
 
 // Skips a Convex query for the first paint after the keyed value (e.g. conversation id)
@@ -375,19 +380,6 @@ function safeString(value: any): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   try { return JSON.stringify(value); } catch { return String(value); }
 }
-
-function parseSearchTerms(query: string): string[] {
-  const terms: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    const term = match[1] || match[2];
-    if (term) terms.push(term.toLowerCase());
-  }
-  return terms;
-}
-
-const HighlightContext = createContext<string | undefined>(undefined);
 
 // toolCallId → the page URL and driven tab a `cast browser` row was on,
 // carried forward from earlier rows when the row's own output doesn't restate
@@ -985,6 +977,46 @@ function TimelineRule({
       <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
       {children}
       <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
+    </div>
+  );
+}
+
+// One handoff, drawn where it landed in the timeline: the rule names who
+// passed the session to whom, and the note they wrote sits under it as a
+// message from the assigner. Every viewer sees it — it is the record of the
+// transfer, not a private ping (that is AssignedToYouBanner, for the assignee
+// until they acknowledge). A transfer still in flight renders dimmed.
+function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: string }) {
+  const from = handoff.from === meId ? "You" : handoff.from_name;
+  const to = handoff.to === meId ? "you" : handoff.to_name;
+  return (
+    <div className={`mt-2 mb-3 ${handoff.pending ? "opacity-70" : ""}`} data-handoff-marker={handoff.to}>
+      <TimelineRule color="var(--sol-violet)" className="mb-2" label={`${from} handed this to ${to}`}>
+        <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoff.at)}>
+          <span className="flex items-center -space-x-1.5">
+            <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-5 h-5" /></span>
+            <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-5 h-5" /></span>
+          </span>
+          {from} handed this to {to} · {formatRelativeTime(handoff.at)}
+        </span>
+      </TimelineRule>
+      {handoff.note && (
+        <div className="mx-auto max-w-[640px] rounded-lg border border-sol-violet/35 bg-sol-violet/[0.07] px-3.5 py-2.5">
+          <div className="flex items-center gap-2 mb-1.5 text-[11px]">
+            <OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-4 h-4" />
+            <span className="font-semibold text-sol-text">{handoff.from_name}</span>
+            <ArrowRightLeft className="w-3 h-3 text-sol-violet" />
+            <OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-4 h-4" />
+            <span className="font-semibold text-sol-text">{handoff.to_name}</span>
+            {handoff.seen && handoff.to !== meId && (
+              <span className="ml-auto text-[10px] text-sol-text-dim">seen</span>
+            )}
+          </div>
+          <div className="text-sm text-sol-text leading-relaxed [&_p]:my-0">
+            <MessageMarkdown content={handoff.note} userText />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -6111,7 +6143,7 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
           className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold border ${badge.cls}`}
           title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined}
         >
-          {watching && <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />}
+          {watching && <LivePulseDot />}
           {badge.label}
         </span>
       </div>
@@ -10331,6 +10363,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
   const { user: mentionUser } = useCurrentUser();
+  // Hand-off: the composed text becomes the note that travels with the
+  // assignment (OwnersBadge.HandoffPicker). Real sessions only — a comment
+  // box, a workflow gate and a chat room have nobody to hand to.
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const owners = useOwnersFromStore(conversationId);
+  const canHandoff = !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
   // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
@@ -11222,9 +11260,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -11784,8 +11822,38 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     onMessageSent?.();
   };
 
+  // Hand off: the box empties the moment a teammate is picked (the marker is
+  // drawn optimistically), and the text comes back only if the server refuses.
+  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean) => {
+    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
+    const text = raw.trim();
+    sendingRef.current = true;
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    composeRef.current?.clear();
+    setMessage("");
+    messageRef.current = "";
+    useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
+    textareaRef.current?.focus();
+    void owners.handoffTo(target.id, text, { keepSelf }).then((ok) => {
+      if (ok) { onMessageSent?.(); return; }
+      if (composeMode && composeRef.current) composeRef.current.setMarkdown?.(text);
+      setMessage(text);
+      messageRef.current = text;
+    });
+  };
+  const openHandoff = (open: boolean) => {
+    setHandoffOpen(open);
+    if (!open) requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
   const acScrollRef = useRef(false);
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
+      e.preventDefault();
+      setHandoffOpen(true);
+      return;
+    }
     if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -12534,6 +12602,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           </button>
                         </ShortcutTooltip>
                       )}
+                      {canHandoff && (
+                        <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+                          <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+                          <button
+                            type="button"
+                            className={`w-7 h-7 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                            aria-label="Hand off to a teammate"
+                            onClick={() => openHandoff(!handoffOpen)}
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </button>
+                          </ShortcutTooltip>
+                        </HandoffPicker>
+                      )}
                       {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                         <button
                           type="button"
@@ -12615,6 +12697,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           <Archive className="w-3.5 h-3.5" />
                         </button>
                       </ShortcutTooltip>
+                    )}
+                    {canHandoff && (
+                      <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+                        <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+                        <button
+                          type="button"
+                          className={`w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                          aria-label="Hand off to a teammate"
+                          onClick={() => openHandoff(!handoffOpen)}
+                        >
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                        </button>
+                        </ShortcutTooltip>
+                      </HandoffPicker>
                     )}
                     {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                       <button
@@ -12889,13 +12985,17 @@ const ConversationViewInner = (
     }
   }, [isRenaming]);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
-  const [matchInstances, setMatchInstances] = useState<{ messageId: string; localIndex: number; timestamp: number }[]>([]);
+  const [matchingMessageIds, setMatchingMessageIds] = useState<ReadonlySet<string>>(EMPTY_ID_SET);
+  const [matchInstances, setMatchInstances] = useState<MatchInstance[]>(EMPTY_MATCH_INSTANCES);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [searchStatus, setSearchStatus] = useState<"idle" | "searching" | "done" | "error">("idle");
+  // The hit the view is bringing into view right now. Navigation points at
+  // it; the activation loop (after the virtualizer) consumes it. Declared
+  // here, above the session-switch reset that clears it during render.
+  const pendingHitRef = useRef<PendingHit | null>(null);
   const [isLocalSearchOpen, setIsLocalSearchOpen] = useState(false);
   const [localSearchQuery, setLocalSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-  const [navTrigger, setNavTrigger] = useState(0);
   const localSearchInputRef = useRef<HTMLInputElement>(null);
   useWatchEffect(() => {
     if (!localSearchQuery) { setDebouncedSearchQuery(""); return; }
@@ -13019,9 +13119,11 @@ const ConversationViewInner = (
     setDiffExpanded(false);
     setShowThinking(false);
     setHighlightedMessageId(null);
-    setAllMatchingMessageIds([]);
-    setMatchInstances([]);
+    setMatchingMessageIds(EMPTY_ID_SET);
+    setMatchInstances(EMPTY_MATCH_INSTANCES);
     setCurrentMatchIndex(0);
+    setSearchStatus("idle");
+    pendingHitRef.current = null;
     setIsLocalSearchOpen(false);
     setLocalSearchQuery("");
     setDebouncedSearchQuery("");
@@ -13881,24 +13983,27 @@ const ConversationViewInner = (
     () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
     [timeline, unreadAnchorAt, enteredAt],
   );
-  // The handoff anchor, drawn the same way: the "assigned to you" line sits
-  // above the first row at or after the moment a teammate made you an owner.
-  // A session handed over after its last message (the usual case: a finished
-  // thread passed on) anchors below the final row instead. -1 = no handoff.
-  const handoff = useOwnersFromStore(pendingConvId).handoff;
-  const handoffAt = handoff?.added_at ?? 0;
-  const handoffIndex = useMemo(() => {
-    if (!handoffAt || timeline.length === 0) return -1;
-    const idx = timeline.findIndex((it) => it.timestamp >= handoffAt);
-    return idx === -1 ? timeline.length : idx;
-  }, [timeline, handoffAt]);
-  const handoffRule = handoff && handoffIndex >= 0 && (
-    <TimelineRule color="var(--sol-violet)" label="Assigned to you">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoffAt)}>
-        {handoff.added_by_name || "A teammate"} assigned this to you · {formatRelativeTime(handoffAt)}
-      </span>
-    </TimelineRule>
-  );
+  // Handoff markers, drawn the same way: each transfer sits above the first
+  // row at or after the moment it happened, with the assigner's note under
+  // the rule. A session handed over after its last message (the usual case:
+  // a finished thread passed on) anchors below the final row instead — index
+  // timeline.length. Every viewer sees every handoff; the assignee's own
+  // "Got it" strip is the header banner.
+  const ownersApi = useOwnersFromStore(pendingConvId);
+  const handoffMeId = ownersApi.currentUser?._id?.toString?.();
+  const handoffsByIndex = useMemo(() => {
+    const byIndex = new Map<number, HandoffInfo[]>();
+    if (timeline.length === 0) return byIndex;
+    for (const h of ownersApi.handoffs) {
+      const idx = timeline.findIndex((it) => it.timestamp >= h.at);
+      const at = idx === -1 ? timeline.length : idx;
+      byIndex.set(at, [...(byIndex.get(at) ?? []), h]);
+    }
+    return byIndex;
+  }, [timeline, ownersApi.handoffs]);
+  const handoffRulesAt = (index: number) => handoffsByIndex.get(index)?.map((h) => (
+    <HandoffMarker key={`${h.to}:${h.at}`} handoff={h} meId={handoffMeId} />
+  ));
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
@@ -14386,138 +14491,77 @@ const ConversationViewInner = (
     knownItemIdsRef.current = currentIds;
   }, [timeline]);
 
-  // Track if we've already scrolled for this highlight query
-  const hasScrolledToHighlight = useRef(false);
-
-  // Fetch ALL matches across the whole conversation (not just loaded messages).
-  // Without this, a match in a message outside the current pagination window is invisible.
-  const cleanedHighlight = highlightQuery?.trim();
-  const globalMatches = useQuery(
-    api.messages.findAllMessagesByContent,
-    convexConvId && cleanedHighlight
-      ? { conversation_id: convexConvId, search_term: cleanedHighlight, ...shareTokenArg(convexConvId) }
-      : "skip"
-  );
-
-  // Build match instances from the global list so the counter and next/prev
-  // work across unloaded messages too.
-  useWatchEffect(() => {
-    if (!highlightQuery) {
-      setHighlightedMessageId(null);
-      setAllMatchingMessageIds(EMPTY_MATCH_IDS);
-      setMatchInstances(EMPTY_MATCH_INSTANCES);
-      setCurrentMatchIndex(0);
-      hasScrolledToHighlight.current = false;
-      return;
-    }
-    if (!globalMatches) return;
-
-    const matchingIds: string[] = [];
-    const instances: { messageId: string; localIndex: number; timestamp: number }[] = [];
-    for (const m of globalMatches) {
-      matchingIds.push(m.message_id);
-      for (let i = 0; i < m.match_count; i++) {
-        instances.push({ messageId: m.message_id, localIndex: i, timestamp: m.timestamp });
-      }
-    }
-
-    setAllMatchingMessageIds(matchingIds);
-    setMatchInstances(instances);
-    if (instances.length > 0) {
-      setHighlightedMessageId(instances[0].messageId);
-      setCurrentMatchIndex(prev => (prev < instances.length ? prev : 0));
-    } else {
-      setHighlightedMessageId(null);
-      setCurrentMatchIndex(0);
-    }
-  }, [highlightQuery, globalMatches]);
-
   // Ref of loaded message IDs for fast membership checks during navigation.
   const loadedIdsRef = useRef<Set<string>>(new Set());
   loadedIdsRef.current = useMemo(() => new Set(messages.map((m: Message) => m._id)), [messages]);
+  const matchInstancesRef = useRef(matchInstances);
+  matchInstancesRef.current = matchInstances;
+  const currentMatchIndexRef = useRef(currentMatchIndex);
+  currentMatchIndexRef.current = currentMatchIndex;
 
-  const navigateToMatch = useCallback((index: number) => {
-    if (matchInstances.length === 0) return;
-    const target = matchInstances[index];
+  const [activationTick, setActivationTick] = useState(0);
+  const navigateToHit = useCallback((index: number, dir: 1 | -1, instances: MatchInstance[]) => {
+    const target = instances[index];
+    if (!target) return;
     setCurrentMatchIndex(index);
     setHighlightedMessageId(target.messageId);
-    hasScrolledToHighlight.current = false;
-    setNavTrigger(t => t + 1);
-  }, [matchInstances]);
-
+    pendingHitRef.current = { ...target, dir, startedAt: Date.now(), jumped: false, skipped: 0 };
+    setActivationTick((t) => t + 1);
+  }, []);
   const goToNextMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
-    navigateToMatch((currentMatchIndex + 1) % matchInstances.length);
-  }, [matchInstances, currentMatchIndex, navigateToMatch]);
-
+    navigateToHit(stepIndex(currentMatchIndex, 1, matchInstances.length), 1, matchInstances);
+  }, [matchInstances, currentMatchIndex, navigateToHit]);
   const goToPrevMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
-    navigateToMatch(currentMatchIndex === 0 ? matchInstances.length - 1 : currentMatchIndex - 1);
-  }, [matchInstances, currentMatchIndex, navigateToMatch]);
+    navigateToHit(stepIndex(currentMatchIndex, -1, matchInstances.length), -1, matchInstances);
+  }, [matchInstances, currentMatchIndex, navigateToHit]);
 
-  // Activate the specific mark in the DOM after navigation
-  // Track pending scroll target; survives until the target message renders so that
-  // navigating to an unloaded match still scrolls once the jump loads the messages.
-  const pendingScrollRef = useRef<{ messageId: string; localIndex: number } | null>(null);
-
+  // Every hit across the whole conversation, one bounded server page at a
+  // time (messages.findAllMessagesByContent), so a match outside the loaded
+  // window still counts. A one-shot walk, not a live subscription: a live
+  // query over a long transcript re-ran the full scan on every new message
+  // and yanked the counter back to hit 1 each time. The first page that
+  // carries a hit shows it at once; later pages only grow the counter.
+  const cleanedHighlight = highlightQuery?.trim();
+  const searchGenRef = useRef(0);
   useWatchEffect(() => {
-    void navTrigger;
-    if (matchInstances.length === 0 || !containerRef.current) return;
-    const instance = matchInstances[currentMatchIndex];
-    if (!instance) return;
-    pendingScrollRef.current = { messageId: instance.messageId, localIndex: instance.localIndex };
-    const isLoaded = loadedIdsRef.current.has(instance.messageId);
-    // If the target message is outside the current pagination window, trigger
-    // a server jump so the activation effect can scroll to it once it loads.
-    if (!isLoaded && onJumpToTimestamp) {
-      onJumpToTimestamp(instance.timestamp);
+    const gen = ++searchGenRef.current;
+    pendingHitRef.current = null;
+    setMatchInstances(EMPTY_MATCH_INSTANCES);
+    setMatchingMessageIds(EMPTY_ID_SET);
+    setCurrentMatchIndex(0);
+    if (!convexConvId || !cleanedHighlight) {
+      setHighlightedMessageId(null);
+      setSearchStatus("idle");
+      return;
     }
-  }, [currentMatchIndex, matchInstances, navTrigger, onJumpToTimestamp]);
-
-  // Activate the pending mark whenever the DOM for the target message is ready.
-  // Messages are virtualized: the wrapper may render before its text/marks do.
-  // Scroll the wrapper in first (triggers virtualizer to render content), then
-  // retry finding marks. Runs on navigation AND when `messages` changes (post-jump).
-  useWatchEffect(() => {
-    const pending = pendingScrollRef.current;
-    if (!pending || !containerRef.current) return;
-    if (!loadedIdsRef.current.has(pending.messageId)) return;
-    let scrolledWrapper = false;
-    const activate = () => {
-      if (!containerRef.current || !pendingScrollRef.current) return;
-      const p = pendingScrollRef.current;
-      containerRef.current.querySelectorAll('mark[data-search-active]').forEach(m => {
-        m.removeAttribute('data-search-active');
-        (m as HTMLElement).style.cssText = '';
-      });
-      const msgEl = containerRef.current.querySelector(`#msg-${CSS.escape(p.messageId)}`);
-      if (!msgEl) return;
-      const marks = Array.from(msgEl.querySelectorAll('mark[data-search-highlight]'));
-      if (marks.length === 0) {
-        // Virtualizer hasn't rendered the message content yet — scroll the wrapper
-        // so it mounts; a later retry (50/200/500/1000ms) will find the marks.
-        if (!scrolledWrapper) {
-          msgEl.scrollIntoView({ block: 'center', behavior: 'auto' });
-          scrolledWrapper = true;
+    setSearchStatus("searching");
+    let shown = false;
+    walkSearchPages(
+      (after) => convex.query(api.messages.findAllMessagesByContent, {
+        conversation_id: convexConvId,
+        search_term: cleanedHighlight,
+        after_ts: after,
+        ...shareTokenArg(convexConvId),
+      }),
+      (all, done) => {
+        const instances = instancesFromMatches(all);
+        setMatchInstances(instances);
+        setMatchingMessageIds(new Set(all.map((m) => m.message_id)));
+        if (done) setSearchStatus("done");
+        if (!shown && instances.length > 0) {
+          shown = true;
+          navigateToHit(0, 1, instances);
         }
-        return;
-      }
-      const target = marks[p.localIndex] ?? marks[0];
-      if (target) {
-        target.setAttribute('data-search-active', 'true');
-        (target as HTMLElement).style.backgroundColor = 'rgb(245 158 11)';
-        (target as HTMLElement).style.borderRadius = '2px';
-        (target as HTMLElement).style.boxShadow = '0 0 0 1px rgb(245 158 11)';
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        pendingScrollRef.current = null;
-      }
-    };
-    const t1 = setTimeout(activate, 50);
-    const t2 = setTimeout(activate, 200);
-    const t3 = setTimeout(activate, 500);
-    const t4 = setTimeout(activate, 1000);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
-  }, [navTrigger, messages, highlightedMessageId]);
+      },
+      () => gen !== searchGenRef.current,
+    ).catch((err: unknown) => {
+      if (gen !== searchGenRef.current) return;
+      console.warn("[ConversationView] conversation search failed", { conversationId: convexConvId, err });
+      setSearchStatus("error");
+    });
+  }, [convexConvId, cleanedHighlight]);
 
   const jumpToStoryMessage = useCallback((messageId: string, timestamp: number) => {
     setDensity("full");
@@ -15227,6 +15271,17 @@ const ConversationViewInner = (
         rects.push({ index: v.index, top: r.top, bottom: r.bottom });
       }
       const { topVisibleIndex, visible } = topVisibleIndexFromRects(rects, containerRect.top, containerRect.bottom);
+      // Follow mode: while someone mirrors this window, its place in the
+      // transcript rides the same measurement the sticky prompt takes. Read
+      // off the store without subscribing; a window nobody follows writes
+      // nothing here.
+      {
+        const st = useInboxStore.getState();
+        if (st.followedBy.length > 0 && conversation?._id) {
+          const a = anchorFromRects(rects, topVisibleIndex, containerRect.top, timelineMessageIds);
+          st.setViewAnchor(a ? { conversationId: String(conversation._id), ...a } : null);
+        }
+      }
       const navId = resolveNavigatorCurrentId(
         navigatorTimelineIndices,
         timelineMessageIds,
@@ -15783,37 +15838,115 @@ const ConversationViewInner = (
 
   useEventListener("hashchange", () => scrollToHash());
 
-  // Scroll to highlighted message from search
+  // Rows that hold a hit at the current density — a folded tool message maps
+  // to the row it shows inside — so the dimming of everything else does not
+  // grey out the very row the active mark lives in.
+  const matchRowIds = useMemo(() => {
+    if (matchingMessageIds.size === 0) return EMPTY_ID_SET;
+    const rows = new Set<string>();
+    const aggregates = { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf };
+    for (const id of matchingMessageIds) rows.add(jumpRowForMessage(id, feedDensity, aggregates).scrollToId);
+    return rows;
+  }, [matchingMessageIds, feedDensity, turnAggregates, nudgeRuns]);
+
+  // Bring the pending search hit into view. One owner for the whole motion:
+  // ask the server for the window when the message is not loaded, open the
+  // fold it sits in at this density, scroll the virtualizer to its row, then
+  // scroll the mark itself into view once the row has rendered its text. A
+  // short poll rather than fixed timers, so a slow mount (a long transcript
+  // under load) still lands; a hit that never renders a mark (a row the
+  // transcript hides, text inside a tag the renderer strips) is skipped in
+  // the direction of travel. planActivation (lib/conversationSearch) decides
+  // each step; this effect only reads the DOM and acts.
   useWatchEffect(() => {
-    if (highlightedMessageId && timeline.length > 0 && !hasScrolledToHighlight.current) {
-      const itemIndex = timeline.findIndex(item => {
-        if (item.type === 'message') {
-          return item.data._id === highlightedMessageId;
-        }
-        return false;
+    void activationTick; void messages; void expandedGroups;
+    if (!pendingHitRef.current) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      if (cancelled) return;
+      const hit = pendingHitRef.current;
+      const container = containerRef.current;
+      if (!hit || !container) return;
+      const jump = jumpRowForMessage(hit.messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
+      const rowIndex = timeline.findIndex((item) => item.type === 'message' && item.data._id === jump.scrollToId);
+      const rowEl = container.querySelector(`#msg-${CSS.escape(jump.scrollToId)}`);
+      const marks = rowEl ? Array.from(rowEl.querySelectorAll<HTMLElement>('mark[data-search-highlight]')) : [];
+      const step = planActivation(hit, {
+        loaded: loadedIdsRef.current.has(hit.messageId),
+        rowIndex,
+        expandKey: jump.expandKey,
+        expanded: jump.expandKey ? expandedGroups.has(jump.expandKey) : false,
+        mounted: !!rowEl,
+        markCount: marks.length,
+        canJump: !!onJumpToTimestamp,
+        elapsedMs: Date.now() - hit.startedAt,
       });
-      if (itemIndex >= 0) {
-        hasScrolledToHighlight.current = true;
-        setUserScrolled(true);
-        // react-virtual's scrollToIndex assigns scrollTop but relies on the
-        // scroll event to recompute its visible range. Programmatic scrollTop
-        // writes don't always emit that event reliably (same-value writes,
-        // batching), so we nudge the range ourselves. Retries handle the case
-        // where item-size estimates for unmeasured items above shift the
-        // target offset — once those items render and measure, the next
-        // scrollToIndex corrects onto the real position.
-        const align = { align: "center" as const, behavior: "auto" as const };
-        const retry = () => {
-          virtualizer.scrollToIndex(itemIndex, align);
-          containerRef.current?.dispatchEvent(new Event('scroll', { bubbles: true }));
-        };
-        setTimeout(retry, 150);
-        setTimeout(retry, 300);
-        setTimeout(retry, 500);
-        setTimeout(retry, 900);
+      switch (step.kind) {
+        case "jump":
+          hit.jumped = true;
+          onJumpToTimestamp?.(hit.timestamp);
+          break;
+        case "expand":
+          setExpandedGroups((prev) => {
+            if (prev.has(step.key)) return prev;
+            const next = new Set(prev);
+            next.add(step.key);
+            return next;
+          });
+          return; // the effect re-runs on expandedGroups
+        case "scrollRow":
+          setUserScrolled(true);
+          virtualizer.scrollToIndex(step.index, { align: "start", behavior: "auto" });
+          container.dispatchEvent(new Event('scroll', { bubbles: true }));
+          break;
+        case "wait":
+          break;
+        case "dead": {
+          const next = skipDeadHit(hit, currentMatchIndexRef.current, matchInstancesRef.current, Date.now());
+          if (!next) { pendingHitRef.current = null; return; }
+          pendingHitRef.current = next.hit;
+          setCurrentMatchIndex(next.index);
+          setHighlightedMessageId(next.hit.messageId);
+          break;
+        }
+        case "activate": {
+          container.querySelectorAll('mark[data-search-active]').forEach((m) => m.removeAttribute('data-search-active'));
+          const target = marks[step.markIndex];
+          target.setAttribute('data-search-active', 'true');
+          setUserScrolled(true);
+          // Scroll the feed itself (not every ancestor, as scrollIntoView
+          // would) so the mark sits in the band the reader can actually see:
+          // below the sticky prompt that floats over the top of the feed.
+          const placeInBand = () => {
+            const c = container.getBoundingClientRect();
+            const top = Math.max(c.top, stickyElRef.current?.getBoundingClientRect().bottom ?? c.top);
+            const r = target.getBoundingClientRect();
+            if (r.top >= top + 8 && r.bottom <= c.bottom - 8) return;
+            const goal = top + (c.bottom - top) * 0.4;
+            container.scrollTop += r.top + r.height / 2 - goal;
+          };
+          placeInBand();
+          let expectedTop = container.scrollTop;
+          pendingHitRef.current = null;
+          // The virtualizer re-measures rows as their content mounts (code
+          // blocks, images), which can shove the mark out of view a beat
+          // later: look again, unless the reader has scrolled meanwhile.
+          const settle = () => {
+            if (cancelled || !target.isConnected) return;
+            if (Math.abs(container.scrollTop - expectedTop) > 40) return;
+            placeInBand();
+            expectedTop = container.scrollTop;
+          };
+          for (const ms of [250, 700, 1500]) setTimeout(settle, ms);
+          return;
+        }
       }
-    }
-  }, [highlightedMessageId, timeline, virtualizer]);
+      timer = setTimeout(tick, 80);
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [activationTick, messages, expandedGroups, timeline, feedDensity]);
 
   useWatchEffect(() => {
     if (!targetMessageId || timeline.length === 0 || hasScrolledToTarget.current) {
@@ -16112,6 +16245,14 @@ const ConversationViewInner = (
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
+  const openReveal = useOpenReveal();
+  const inRevealBand = useContext(RevealInBandCtx);
+  const [hostingReveal, setHostingReveal] = useState(false);
+  useLayoutEffect(() => {
+    const root = headerRef.current?.closest("[data-cc-conversation]");
+    setHostingReveal(!!(openReveal && root && root.contains(openReveal.slot)));
+  }, [openReveal]);
+  const compactChrome = inRevealBand || hostingReveal;
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16750,7 +16891,7 @@ const ConversationViewInner = (
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main data-cc-conversation className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation data-reveal-chrome={compactChrome ? "" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -16957,6 +17098,10 @@ const ConversationViewInner = (
 
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
+                {/* Who has this session open right now: teammates' faces off
+                    the roster's viewing field. A solo session shows nothing. */}
+                {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} />}
+
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
                     unconfigured — SessionHuddleButton gates itself). */}
@@ -17011,9 +17156,10 @@ const ConversationViewInner = (
                     ) : (
                       <span className="max-w-[100px] truncate">{highlightQuery}</span>
                     )}
+                    {searchStatus === "searching" && <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-70" />}
                     {matchInstances.length > 0 && (
                       <>
-                        <span className="text-[10px] opacity-70 ml-1">
+                        <span className="text-[10px] opacity-70 ml-1 tabular-nums whitespace-nowrap">
                           {currentMatchIndex + 1}/{matchInstances.length}
                         </span>
                         <button
@@ -17036,8 +17182,11 @@ const ConversationViewInner = (
                         </button>
                       </>
                     )}
-                    {matchInstances.length === 0 && highlightQuery && (
-                      <span className="text-[10px] opacity-70 ml-1">0 matches</span>
+                    {matchInstances.length === 0 && highlightQuery && searchStatus === "done" && (
+                      <span className="text-[10px] opacity-70 ml-1 whitespace-nowrap">No matches</span>
+                    )}
+                    {searchStatus === "error" && (
+                      <span className="text-[10px] ml-1 whitespace-nowrap text-sol-red">Search failed</span>
                     )}
                     <button
                       onClick={onClearHighlight}
@@ -17624,7 +17773,7 @@ const ConversationViewInner = (
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
-              const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
+              const isSearchDimmed = matchRowIds.size > 0 && item.type === 'message' && !matchRowIds.has((item.data as Message)._id);
               const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isToolRow = item.type === 'message' && isToolReceiptRow(item.data as Message, showThinking);
@@ -17645,20 +17794,20 @@ const ConversationViewInner = (
                   }}
                 >
                   {content && (
-                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} ${isSearchDimmed ? "search-dimmed" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
                         <TimelineRule color="var(--sol-orange)" label="New messages">
                           <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === handoffIndex && handoffRule}
+                      {handoffRulesAt(virtualItem.index)}
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
                         <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffIndex === timeline.length && handoffRule}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffRulesAt(timeline.length)}
                     </div>
                   )}
                 </div>
@@ -17753,8 +17902,11 @@ const ConversationViewInner = (
             />
           ) : (
             <>
-              {conversation.share_token && (
-                <OwnerComposerPresence conversationId={conversation._id.toString()} />
+              {/* Who else is in this box: a teammate's live draft above the
+                  composer on every real conversation, and "is here" for a
+                  share link guest with no face on the roster. */}
+              {composerPresenceEnabled(conversation) && (
+                <OwnerComposerPresence conversationId={conversation._id.toString()} showHere={!!conversation.share_token} />
               )}
               <CollabRequestBanner conversationId={conversation._id.toString()} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (

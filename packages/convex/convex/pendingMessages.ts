@@ -707,7 +707,7 @@ export async function conversationHasLiveSession(
 export async function performSessionSend(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; image_storage_ids?: Id<"_storage">[] }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -834,6 +834,7 @@ export async function performSessionSend(
       : args.direct
       ? formatUserMessage(senderName ?? "a teammate", body)
       : formatSessionMessage(fromShortId, body, fromName),
+    image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
     // never-drop semantics (your own busy session will get it when it's idle).

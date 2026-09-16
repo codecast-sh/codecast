@@ -12,6 +12,7 @@ import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
+import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 
 // The compact card: the queue's row, the task page's row. Question, who is
 // asking, the binding chips, and single-kind answers inline; every other
@@ -80,6 +81,8 @@ export function DecisionCompactCard({
               {decision.category}
             </span>
           )}
+          {/* S15: a staffing proposal's pointer card names who wrote the proposal */}
+          <DecisionProposalOrigin contextMd={decision.context_md} />
           {showTask && (task || decision.task_id) && (
             <Link href={`/tasks/${task?.short_id ?? decision.task_id}`} className="px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
               {task?.short_id ?? "task"}{decision.station ? ` · ${decision.station}` : ""}
