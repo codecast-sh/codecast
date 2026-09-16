@@ -596,7 +596,9 @@ export function deriveActivity(
     const msg = messages[i];
     if (msg.role !== "assistant" || !msg.tool_calls?.length) continue;
     const tc = msg.tool_calls[msg.tool_calls.length - 1];
-    const text = redactSecrets(activityLine(tc)).replace(/\s+/g, " ").trim();
+    // One line already: toolSubject collapses whitespace before the phrase is
+    // built, and redaction only swaps a match for a fixed token.
+    const text = redactSecrets(activityLine(tc));
     if (!text) return null;
     const at = msg.timestamp || now;
     if (previous && previous.at > at) return null;

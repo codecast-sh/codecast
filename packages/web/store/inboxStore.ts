@@ -1,3 +1,4 @@
+import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -1659,6 +1660,11 @@ export type ClientUI = {
   // over it, and this retires that callout for good. Stamped LWW: learning the
   // gesture on the laptop means the phone's browser has learned it too.
   walkie_hold_seen?: boolean;
+  // The org page's first open guide (org-staffing.md S14) has been dismissed
+  // once, so the page never opens on it again; "How this page works" in the
+  // toolbar reopens it by hand. Stamped LWW: a person who has read the guide
+  // on one device has read it everywhere.
+  org_nux_seen?: boolean;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
@@ -4721,6 +4727,18 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
 
   // -- Unified command palette --
   palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
+  // Follow mode (hooks/useFollowMode), ephemeral and per window: the teammate
+  // this window mirrors, whether their view is somewhere this person cannot
+  // open, who mirrors this window, and this window's place in a transcript
+  // (written only while followed).
+  followLeaderId: string | null;
+  followBlocked: boolean;
+  followedBy: FollowerRow[];
+  viewAnchor: ViewAnchor | null;
+  setFollowLeader: (id: string | null) => void;
+  setFollowBlocked: (blocked: boolean) => void;
+  setFollowedBy: (rows: FollowerRow[]) => void;
+  setViewAnchor: (anchor: ViewAnchor | null) => void;
   // `pick` opens the palette as an entity chooser (see lib/palettePick.ts):
   // the caller's title/extras on top, the usual recents + search below, and
   // the choice returned through `pick.onPick` instead of navigating.
@@ -5857,28 +5875,28 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
   return out;
 }
 
-// The ui keys whose writes carry a ":ts" stamp (updateClientUI), making them
-// per-key LWW across devices: the inbox VIEW configuration — scope, view mode,
-// the subagents / old-sessions toggles — is a per-USER preference ("the view
-// follows me"), not a per-device one. Everything else in the ui bag stays
-// unstamped and keeps exact legacy local_wins semantics: layout-ish prefs
-// (sidebar, zen mode, theme, active team) are naturally per-device, and
-// silently globalizing them would yank screens out from under people.
-export const STAMPED_UI_KEYS = new Set([
-  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
-  "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "auto_open_browser_panes",
-  "walkie_hold_seen", "call_camera_on", "call_mic_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
-  // The sound gates and volume: a mute is a per-user preference, not a
-  // per-device one — turning sounds off anywhere must silence every client,
-  // localhost dev origins included.
-  "sounds_enabled", "chat_sounds_enabled", "session_sounds_enabled",
-  "call_sounds_enabled", "walkie_sounds_enabled", "ui_sounds_enabled",
-  "sound_volume",
-  // Pins to the top of the rail follow the user. Layout-ish neighbors
-  // (sidebar_collapsed, zen, theme, nav_sections) stay unstamped on purpose.
-  "sidebar_pins",
+// Default: a ui write is stamped and last-writer-wins across devices, so a
+// new preference persists without joining a whitelist. The pin bug (ct-51761)
+// was one missed key on that whitelist — the write painted, then an empty
+// list from another client replaced it.
+//
+// Opt out only for prefs that name THIS window or THIS machine. Stamping those
+// would collapse the laptop's sidebar on the ultrawide, or send a headset id
+// to a phone that cannot open it.
+export const PER_DEVICE_UI_KEYS = new Set([
+  "theme", "visual_style",
+  "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
+  "sticky_headers_disabled", "diff_panel_open",
+  "trigger_prompt_height", "thread_state_collapsed", "people_view",
+  "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
 ]);
+
+export function isStampedUiKey(key: string): boolean {
+  return !key.endsWith(":ts") && !PER_DEVICE_UI_KEYS.has(key);
+}
+
+/** @deprecated Use isStampedUiKey. New keys stamp by default; this is not a list. */
+export const STAMPED_UI_KEYS = { has: isStampedUiKey };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
   if (typeof spec === "function") return spec(local, server, initialized);
@@ -6104,10 +6122,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   clientState: {
     kind: "singleton",
     merge: {
-      // Per-key LWW for the stamped inbox-view prefs (STAMPED_UI_KEYS); every
-      // unstamped key keeps exact local_wins per-key semantics. Blanket
-      // local_wins forked the bag per device forever — a pref changed on any
-      // other device never reached a client that already held the key.
+      // Per-key LWW: stamped keys (the default) take the newer write;
+      // PER_DEVICE_UI_KEYS stay unstamped local_wins so this window's chrome
+      // does not follow the user. Blanket local_wins forked the bag per
+      // device forever — a pref changed on any other device never reached a
+      // client that already held the key.
       ui: mergeStampedBagLww,
       layouts: "local_wins",
       dismissed: mergeStampedBagLww,
@@ -7622,6 +7641,28 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
+  followLeaderId: null,
+  followBlocked: false,
+  followedBy: [],
+  viewAnchor: null,
+  setFollowLeader: (id: string | null) => {
+    const s = useInboxStore.getState();
+    if (s.followLeaderId === id && !s.followBlocked) return;
+    set({ followLeaderId: id, followBlocked: false });
+  },
+  setFollowBlocked: (blocked: boolean) => {
+    if (useInboxStore.getState().followBlocked === blocked) return;
+    set({ followBlocked: blocked });
+  },
+  setFollowedBy: (rows: FollowerRow[]) => {
+    if (followersSig(useInboxStore.getState().followedBy) === followersSig(rows)) return;
+    set({ followedBy: rows });
+  },
+  setViewAnchor: (anchor: ViewAnchor | null) => {
+    if (sameViewAnchor(useInboxStore.getState().viewAnchor, anchor)) return;
+    set({ viewAnchor: anchor });
+  },
+
   openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger'; mode?: string; initialQuery?: string; pick?: PalettePick }) => {
     set({
       palette: {
@@ -9122,16 +9163,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
-    // Whitelisted per-USER keys get a flat "<key>:ts" sibling stamp so the ui
-    // bag can merge them per-key LWW (mergeStampedBagLww) — the inbox view
-    // follows the user across devices, and the newest toggle anywhere wins
-    // everywhere. A caller-supplied stamp is honored (the hydration gap-fill
-    // restores legacy values with their ORIGINAL write time, so a stale boot
-    // can't outrank a genuinely newer cross-device write).
+    // Every key is stamped unless it is in PER_DEVICE_UI_KEYS, so a new
+    // preference persists without joining a whitelist. A caller-supplied
+    // stamp is honored (the hydration gap-fill restores legacy values with
+    // their ORIGINAL write time, so a stale boot can't outrank a genuinely
+    // newer cross-device write).
     const stamped: Record<string, any> = { ...partial };
     const now = Date.now();
     for (const k of Object.keys(partial)) {
-      if (STAMPED_UI_KEYS.has(k) && stamped[`${k}:ts`] === undefined) stamped[`${k}:ts`] = now;
+      if (isStampedUiKey(k) && stamped[`${k}:ts`] === undefined) stamped[`${k}:ts`] = now;
     }
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
     Object.assign(this.clientState.ui, stamped);

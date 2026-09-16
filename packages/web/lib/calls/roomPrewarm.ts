@@ -45,7 +45,8 @@
 import { ConnectionState, RemoteParticipant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
-import { micConstraints, readJoinPrefs } from "./joinPrefs";
+import { huddleRoomOptions } from "./livekitMedia";
+import { readJoinPrefs } from "./joinPrefs";
 
 type ConvexHandle = {
   mutation: (fn: any, args: any) => Promise<any>;
@@ -259,11 +260,7 @@ export function prewarmRoom(roomKey: string): void {
         room_key: roomKey,
       });
       if (gen !== mine) return;
-      const room = new Room({
-        adaptiveStream: true,
-        dynacast: true,
-        audioCaptureDefaults: micConstraints(prefs.micDeviceId),
-      });
+      const room = new Room(huddleRoomOptions(prefs));
       await room.connect(url, token);
       if (gen !== mine) {
         void room.disconnect();

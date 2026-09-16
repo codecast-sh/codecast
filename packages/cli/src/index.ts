@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
+import { chiefForward, isChiefAnchor } from "./anchorAlias.js";
 import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
@@ -1261,7 +1262,16 @@ function getAgentLabel(agentType?: string): string | null {
   if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
   if (agentType === "codex" || agentType === "codex_cli") return "Codex";
   if (agentType === "cursor") return "Cursor";
+  if (agentType === "grok") return "Grok";
+  if (agentType === "gemini") return "Gemini";
+  if (agentType === "opencode") return "OpenCode";
   return agentType;
+}
+
+function homeRelPath(p: string): string {
+  const home = process.env.HOME;
+  if (home && (p === home || p.startsWith(home + path.sep))) return "~" + p.slice(home.length);
+  return p;
 }
 
 const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
@@ -1483,13 +1493,35 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
 
   const stuck = await stuckSyncs;
   if (stuck.length > 0) {
-    const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
-    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
+    const agents = [...new Set(stuck.map((s) => s.agentType).filter(Boolean))];
+    const who = agents.length === 1 ? (getAgentLabel(agents[0]) ?? agents[0]) : null;
+    const n = stuck.length;
+    const label = who
+      ? `${n} ${who} session${n === 1 ? "" : "s"}`
+      : `${n} session${n === 1 ? "" : "s"}`;
+    const reasons = new Set(stuck.map((s) => s.reason));
+    const why = reasons.size === 1 && reasons.has("unexamined_writes")
+      ? "(file grew after last ingest)"
+      : reasons.size === 1 && reasons.has("byte_backlog")
+        ? "(unread bytes sitting 5+ min)"
+        : "(no ingest in 5+ min)";
+    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted(why));
     for (const s of stuck.slice(0, 5)) {
       const short = s.sessionId.slice(0, 8);
-      const sizes = `${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`;
-      const age = formatRelativeTime(s.lastSyncedAt);
-      console.log(`      ${fmt.muted(icons.bullet)} ${fmt.id(short)}  ${fmt.number(sizes)}  ${fmt.muted("last sync")} ${fmt.value(age)}`);
+      const agent = s.agentType ? fmt.muted(getAgentLabel(s.agentType) ?? s.agentType) + " " : "";
+      const proj = s.projectPath ? "  " + fmt.path(homeRelPath(s.projectPath)) : "";
+      console.log(`      ${fmt.muted(icons.bullet)} ${agent}${fmt.id(short)}${proj}`);
+      const bits: string[] = [];
+      if (s.reason === "byte_backlog") {
+        bits.push(`${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`);
+      } else if (s.fileSize > 0) {
+        bits.push(`${formatBytesShort(s.fileSize)} transcript`);
+      }
+      bits.push(`last ingest ${formatRelativeTime(s.lastSyncedAt)}`);
+      if (s.fileMtimeMs > s.lastSyncedAt) {
+        bits.push(`file written ${formatRelativeTime(s.fileMtimeMs)}`);
+      }
+      console.log(`        ${fmt.muted(bits.join(" · "))}`);
     }
     if (stuck.length > 5) {
       console.log(`      ${fmt.muted(`... and ${stuck.length - 5} more`)}`);
@@ -4206,12 +4238,13 @@ program
     const result = await cliPost("/cli/sessions/own", {
       session_id: sessionId,
       owner: member?.trim() || "me",
+      from_session: callingSession(),
     });
     const added = result.added?.length > 0;
     const note = added ? "" : ` ${c.dim}(already an owner)${c.reset}`;
     console.log(
       `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}`
+      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}${toldSuffix(result.told)}`
     );
   });
 
@@ -4224,10 +4257,11 @@ program
   .action(async (first: string, second: string | undefined, opts: { all?: boolean }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "disown");
     const result = opts.all
-      ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [] })
+      ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [], from_session: callingSession() })
       : await cliPost("/cli/sessions/disown", {
           session_id: sessionId,
           owner: member?.trim() || "me",
+          from_session: callingSession(),
         });
     // Owners are a set, so "remove the owner" is ambiguous — you name the one you
     // mean. When the named target (or you, by default) isn't actually an owner,
@@ -12409,6 +12443,9 @@ anchor
     }
     const where = scopeType === "team" ? "team" : "your personal workspace";
     if (result.already_existed) {
+      const row = await cliPost("/cli/anchor/resolve", { scope_type: scopeType, team_id: teamId }).catch(() => null);
+      const fwd = chiefForward(row, "create");
+      if (fwd) console.log(`${c.dim}${fwd.note}${c.reset}`);
       console.log(`${c.yellow}•${c.reset} ${where} already has an anchor ${c.cyan}${result.conversation_id ? String(result.conversation_id).slice(0, 7) : ""}${c.reset}`);
     } else {
       console.log(
@@ -12452,10 +12489,13 @@ anchor
     for (const a of anchors) {
       const scope = a.scope_type === "team" ? "team" : "personal";
       const conv = a.conversation_id ? String(a.conversation_id).slice(0, 7) : "(no session)";
+      const chief = isChiefAnchor(a) ? ` ${c.dim}·${c.reset} ${c.magenta}Chief of Staff${c.reset}` : "";
       console.log(
-        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}`,
+        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}${chief}`,
       );
     }
+    const fwd = chiefForward(anchors.find((a) => isChiefAnchor(a)), "ls");
+    if (fwd) console.log(`${c.dim}${fwd.note}${c.reset}`);
   });
 
 anchor
@@ -12483,6 +12523,13 @@ anchor
       console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
       process.exit(1);
     }
+    const fwd = chiefForward(anchorRow, "wake", { message, from_session: callingSession() });
+    if (fwd?.route) {
+      console.log(`${c.dim}${fwd.note}${c.reset}`);
+      const result = await cliPost(fwd.route, fwd.body);
+      console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset} ${c.dim}(${result?.short_id ?? ""})${c.reset}`);
+      return;
+    }
     const resp = await cliFetch(`${siteUrl}/cli/anchor/wake`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -12507,6 +12554,13 @@ anchor
     if (!anchorRow?._id) {
       console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
       process.exit(1);
+    }
+    const fwd = chiefForward(anchorRow, "brief");
+    if (fwd?.route) {
+      console.log(`${c.dim}${fwd.note}${c.reset}`);
+      await cliPost(fwd.route, fwd.body);
+      console.log(`${c.green}✓${c.reset} restarting ${c.cyan}${anchorRow.name}${c.reset}; the next frame carries the charter and brief in full`);
+      return;
     }
     await cliPost("/cli/anchor/brief", { anchor_id: anchorRow._id });
     console.log(`${c.green}✓${c.reset} re-briefed ${c.cyan}${anchorRow.name}${c.reset}`);
@@ -12535,6 +12589,13 @@ anchor
     if (!anchorRow?._id) {
       console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found.`);
       process.exit(1);
+    }
+    const fwd = chiefForward(anchorRow, "rm");
+    if (fwd?.route) {
+      console.log(`${c.dim}${fwd.note}${c.reset}`);
+      await cliPost(fwd.route, fwd.body);
+      console.log(`${c.green}✓${c.reset} retired ${c.cyan}${anchorRow.name}${c.reset}`);
+      return;
     }
     const resp = await cliFetch(`${siteUrl}/cli/anchor/decommission`, {
       method: "POST",
@@ -12766,6 +12827,16 @@ roleGroup
 // or a raw id through the org tree, then calls /cli/role/* or /cli/brief/*.
 const callingSession = (): string | undefined =>
   process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION || ownSessionId(getRealCwd()) || undefined;
+
+// What a reparent told (org-staffing.md S11): the moved session, or the role
+// and the hands that ride its frame. Nothing to say when nobody was told.
+function toldSuffix(told: { sessions?: number; roles?: number } | null | undefined): string {
+  if (!told) return "";
+  const parts: string[] = [];
+  if (told.roles) parts.push("the role was woken");
+  if (told.sessions) parts.push(told.roles ? `${told.sessions} hand${told.sessions === 1 ? "" : "s"} told` : "the session was told");
+  return parts.length ? `${c.dim}; ${parts.join(", ")}${c.reset}` : "";
+}
 
 async function resolveRoleId(ref: string, team?: string): Promise<string> {
   const ws = await readWorkspace(team);
@@ -13167,17 +13238,19 @@ org
   .description("Move a role or a session under another role or person")
   .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
   .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me)")
+  .option("--note <text>", "A line the agent reads with the move (\"You now report to X. <note>\")")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (subject: string, options: any) => {
     const ws = await readWorkspace(options.team);
     const target = await resolveOrgTarget(options.to, ws);
     const isRole = /^or-\d+$/.test(subject) || subject.startsWith("@");
+    const from_session = callingSession();
     const result = isRole
-      ? await cliPost("/cli/org/reparent", { role_id: (await resolveOrgTarget(subject, ws) as any).role_id, reports_to: target })
-      : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target });
+      ? await cliPost("/cli/org/reparent", { role_id: (await resolveOrgTarget(subject, ws) as any).role_id, reports_to: target, note: options.note, from_session })
+      : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target, note: options.note, from_session });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} ${subject} now reports to ${options.to}`);
+    console.log(`${c.green}✓${c.reset} ${subject} now reports to ${options.to}${toldSuffix(result?.told)}`);
   });
 
 org
@@ -13682,11 +13755,14 @@ chatSlack
       const chatName = names.get(String(link.chat_channel_id)) ?? String(link.chat_channel_id).slice(0, 10);
       const state = link.paused ? `${c.yellow}paused${c.reset}` : `${c.green}live${c.reset}`;
       const counts = `${c.dim}↓${link.inbound_count ?? 0} ↑${link.outbound_count ?? 0}${c.reset}`;
+      const importing = link.backfill?.status === "running"
+        ? ` ${c.cyan}importing ${link.backfill.fetched} lines${c.reset}`
+        : link.backfill?.status === "done" && link.backfill.capped ? ` ${c.dim}history capped at ${link.backfill.fetched}${c.reset}` : "";
       const error = link.last_error
         ? ` ${c.red}${link.last_error}${c.reset}${link.last_error_at ? ` ${c.dim}${formatAge(Date.now() - link.last_error_at)}${c.reset}` : ""}`
         : "";
       const pad = " ".repeat(Math.max(0, width - chatName.length - 1));
-      console.log(`  ${slackPairLabel(chatName, link)}${pad} ${state} ${counts}${error}`);
+      console.log(`  ${slackPairLabel(chatName, link)}${pad} ${state} ${counts}${importing}${error}`);
     }
     if (status.pending_jobs) console.log(`${c.dim}  ${status.pending_jobs} event${status.pending_jobs === 1 ? "" : "s"} queued${c.reset}`);
   });
@@ -13722,7 +13798,7 @@ chatSlack
   .argument("<slack-channel>", "Slack channel: #name or id (C…)")
   .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
   .option("--direction <dir>", "both, from-slack, or to-slack", "both")
-  .option("--backfill <window>", "Pull recent Slack history in: none, 1d, 7d, 30d", "none")
+  .option("--backfill <window>", "Pull Slack history in: none, 1d, 7d, 30d, 90d, all (up to 25000 lines)", "none")
   .option("--no-threads", "Roots only, no thread replies")
   .option("--no-reactions", "Do not mirror reactions")
   .option("--no-edits", "Do not mirror edits and deletes")
@@ -13738,8 +13814,8 @@ chatSlack
       console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
       process.exit(1);
     }
-    if (!["none", "1d", "7d", "30d"].includes(options.backfill)) {
-      console.error(`--backfill wants none, 1d, 7d or 30d (got ${options.backfill})`);
+    if (!["none", "1d", "7d", "30d", "90d", "all"].includes(options.backfill)) {
+      console.error(`--backfill wants none, 1d, 7d, 30d, 90d or all (got ${options.backfill})`);
       process.exit(1);
     }
     const ws = await slackWorkspace(options);
@@ -13778,6 +13854,176 @@ chatSlack
       console.log(`${c.dim}  the channel is now #${chatName}, the same name as in Slack${c.reset}`);
     }
     if (options.backfill !== "none") console.log(`${c.dim}  backfilling the last ${options.backfill} of Slack history${c.reset}`);
+  });
+
+// Bring Slack channels over as new codecast channels: the terminal's version
+// of the channel browser. Each becomes a channel of the same name, mirrored
+// with the chosen history; the server creates the room and links it in one go.
+chatSlack
+  .command("add")
+  .description("Bring Slack channels into codecast as mirrored channels of the same name")
+  .argument("<slack-channel...>", "Slack channels: #name or id (C…), one or more")
+  .option("--team <name|id>", "Team the new channels belong to (default: your active team)")
+  .option("--direction <dir>", "both, from-slack, or to-slack", "both")
+  .option("--history <window>", "Slack history to bring in: none, 1d, 7d, 30d, 90d, all (up to 25000 lines)", "30d")
+  .option("--json", "Machine-readable output")
+  .action(async (slackRefs: string[], options: any) => {
+    const direction = SLACK_DIRECTION_FLAG[options.direction];
+    if (!direction) {
+      console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
+      process.exit(1);
+    }
+    if (!["none", "1d", "7d", "30d", "90d", "all"].includes(options.history)) {
+      console.error(`--history wants none, 1d, 7d, 30d, 90d or all (got ${options.history})`);
+      process.exit(1);
+    }
+    const ws = await slackWorkspace(options);
+    const results: any[] = [];
+    for (const slackRef of slackRefs) {
+      const slackChannelId = await resolveSlackChannelId(slackRef, ws);
+      const result = await cliPost("/cli/chat/slack/link", {
+        ...workspaceArgs(ws),
+        slack_channel_id: slackChannelId,
+        direction,
+        backfill: options.history,
+      });
+      results.push({ slack_channel: slackRef, ...result });
+      if (options.json) continue;
+      if (result.ok) {
+        console.log(
+          `${c.green}✓${c.reset} ${slackPairLabel(result.chat_channel_name, { direction, slack_channel_name: result.slack_channel_name })}` +
+          ` ${c.dim}in team${c.reset} ${c.bold}${workspaceLabel(ws)}${c.reset} ${c.dim}${result.chat_channel_id}${c.reset}`,
+        );
+      } else {
+        console.log(`${c.red}✗${c.reset} ${slackRef}: ${result.error ?? "could not add"}`);
+      }
+    }
+    if (options.json) {
+      console.log(JSON.stringify({ ...workspaceArgs(ws), history: options.history, results }, null, 2));
+      return;
+    }
+    if (options.history !== "none" && results.some((r) => r.ok)) {
+      console.log(`${c.dim}  bringing in ${options.history === "all" ? "all" : `the last ${options.history} of`} Slack history; ` +
+        `watch it land with cast chat slack ls${c.reset}`);
+    }
+    if (results.some((r) => !r.ok)) process.exitCode = 1;
+  });
+
+// Change a mirror's controls from the terminal: the same switches the dialog
+// has. Only the flags given are sent, so an untouched control keeps its value.
+// Turning a kind of line on after the import ran (say, Slack app messages)
+// makes the server run the import again for the lines that were skipped.
+chatSlack
+  .command("set")
+  .description("Change a mirror's controls (which lines cross, direction) or run its history import again")
+  .argument("<chat-channel>", "Codecast channel: #name or id")
+  .option("--team <name|id>", "Team the chat channel belongs to (default: your active team)")
+  .option("--direction <dir>", "both, from-slack, or to-slack")
+  .option("--threads", "Mirror thread replies")
+  .option("--no-threads", "Roots only")
+  .option("--reactions", "Mirror reactions")
+  .option("--no-reactions", "Do not mirror reactions")
+  .option("--edits", "Mirror edits and deletes")
+  .option("--no-edits", "Do not mirror edits and deletes")
+  .option("--files", "Mirror attachments")
+  .option("--no-files", "Do not mirror attachments")
+  .option("--bot-messages", "Mirror lines Slack apps and bots post")
+  .option("--no-bot-messages", "Skip lines Slack apps and bots post")
+  .option("--system-messages", "Mirror joins, leaves, topic and pin notices")
+  .option("--no-system-messages", "Skip Slack's housekeeping notices")
+  .option("--agent-lines", "Send codecast agent and session lines to Slack")
+  .option("--no-agent-lines", "Keep agent and session lines out of Slack")
+  .option("--email-match", "A Slack person with a teammate's email is that teammate")
+  .option("--no-email-match", "Show everyone from Slack under their Slack name")
+  .option("--reimport", "Run the history import again from where it started; nothing is duplicated")
+  .option("--json", "Machine-readable output")
+  .action(async (chatRef: string, options: any) => {
+    const ws = await slackWorkspace(options);
+    const { link } = await slackLinkFor(chatRef, ws);
+    const body: any = { link_id: link._id };
+    if (options.direction !== undefined) {
+      const direction = SLACK_DIRECTION_FLAG[options.direction];
+      if (!direction) {
+        console.error(`--direction wants both, from-slack or to-slack (got ${options.direction})`);
+        process.exit(1);
+      }
+      body.direction = direction;
+    }
+    const map: Array<[string, string]> = [
+      ["threads", "threads"], ["reactions", "reactions"], ["edits", "edits"], ["files", "files"],
+      ["botMessages", "bot_messages"], ["systemMessages", "system_messages"], ["agentLines", "agent_lines"], ["emailMatch", "match_people_by_email"],
+    ];
+    const opts: Record<string, boolean> = {};
+    for (const [flag, key] of map) if (typeof options[flag] === "boolean") opts[key] = options[flag];
+    if (Object.keys(opts).length) body.options = opts;
+    if (options.reimport) body.reimport = true;
+    if (!body.direction && !body.options && !body.reimport) {
+      console.error("Nothing to change: give a control flag, --direction, or --reimport");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/chat/slack/update", body);
+    if (options.json) {
+      console.log(JSON.stringify({ ...result, ...body, ...workspaceArgs(ws) }, null, 2));
+      return;
+    }
+    const changed = [
+      ...(body.direction ? [`direction ${body.direction}`] : []),
+      ...Object.entries(opts).map(([k, val]) => `${k} ${val ? "on" : "off"}`),
+    ].join(", ");
+    console.log(`${c.green}✓${c.reset} ${slackPairLabel(link.chat_channel_name ?? chatRef.replace(/^#/, ""), link)}${changed ? ` ${c.dim}${changed}${c.reset}` : ""}`);
+    if (result.reimport) console.log(`${c.dim}  running the history import again; watch it with cast chat slack ls${c.reset}`);
+  });
+
+// Who each Slack person is in codecast, and the way to say otherwise.
+chatSlack
+  .command("people")
+  .description("People seen in the mirrored Slack channels and which teammate each one is")
+  .option("--team <name|id>", "Team whose Slack to read (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await slackWorkspace(options);
+    const result = await cliPost("/cli/chat/slack/people", workspaceArgs(ws));
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const people = result?.people ?? [];
+    if (!people.length) {
+      console.log(`${c.dim}Nobody from Slack has spoken in a mirrored channel yet.${c.reset}`);
+      return;
+    }
+    for (const p of people) {
+      const who = p.codecast_user_id
+        ? `${c.cyan}→ ${p.codecast_user_name ?? p.codecast_user_id}${c.reset} ${c.dim}(${p.mapped_by === "manual" ? "set" : "email"})${c.reset}`
+        : p.mapped_by === "manual" ? `${c.dim}Slack name (set)${c.reset}` : `${c.yellow}not matched${c.reset}`;
+      console.log(`  ${c.bold}${p.name}${c.reset}${p.handle ? ` ${c.dim}@${p.handle}${c.reset}` : ""}${p.email ? ` ${c.dim}${p.email}${c.reset}` : ""} ${who} ${c.dim}${p.slack_user_id}${c.reset}`);
+    }
+  });
+
+chatSlack
+  .command("map")
+  .description("Say who a Slack person is: a teammate, or 'none' to keep their Slack name")
+  .argument("<slack-user>", "Slack person: @handle, name, or id (U…)")
+  .argument("<teammate>", "Teammate: @handle, name, email, or 'none'")
+  .option("--team <name|id>", "Team whose Slack to change (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (slackRef: string, teammateRef: string, options: any) => {
+    const ws = await slackWorkspace(options);
+    const teamId = workspaceArgs(ws).team_id;
+    const result = await cliPost("/cli/chat/slack/people", workspaceArgs(ws));
+    const needle = slackRef.replace(/^@/, "").toLowerCase();
+    const person = (result?.people ?? []).find((p: any) =>
+      p.slack_user_id === slackRef || (p.handle ?? "").toLowerCase() === needle || p.name.toLowerCase() === needle || (p.real_name ?? "").toLowerCase() === needle);
+    if (!person) {
+      console.error(`No Slack person matches ${slackRef}. See cast chat slack people.`);
+      process.exit(1);
+    }
+    const out = await cliPost("/cli/chat/slack/map", { team_id: teamId, slack_user_id: person.slack_user_id, teammate_ref: teammateRef });
+    if (options.json) {
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    console.log(`${c.green}✓${c.reset} ${person.name} ${c.dim}is now${c.reset} ${out.codecast_user_id ? `a teammate (${teammateRef})` : "shown under their Slack name"}${c.dim}; their past lines are being re-authored${c.reset}`);
   });
 
 async function slackPauseAction(chatRef: string, options: any, paused: boolean) {

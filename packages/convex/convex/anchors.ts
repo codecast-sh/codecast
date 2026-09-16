@@ -7,7 +7,7 @@ import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { enqueueKillSessionCommand } from "./cleanup";
 import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
-import { roleGrants } from "./lib/orgAccess";
+import { CHIEF_OF_STAFF_HANDLE, roleGrants } from "./lib/orgAccess";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -209,29 +209,33 @@ async function findExistingAnchor(
   ctx: { db: any },
   scope: { scope_type: "team" | "user"; team_id?: Id<"teams">; scope_user_id?: Id<"users">; org_role_id?: Id<"org_roles"> },
 ) {
+  const rows: any[] = scope.scope_type === "team" && scope.team_id
+    ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", scope.team_id)).collect()
+    : scope.scope_user_id
+      ? await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scope.scope_user_id)).collect()
+      : [];
+  const live = rows.filter((a: any) => a.status !== "decommissioned");
   // A role's standing agent is one per role, whatever the boundary holds;
   // the workspace anchor stays one per scope (and never matches a role's).
-  if (scope.org_role_id) {
-    const rows = scope.team_id
-      ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", scope.team_id)).collect()
-      : await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scope.scope_user_id)).collect();
-    return rows.find((a: any) => a.status !== "decommissioned" && String(a.org_role_id ?? "") === String(scope.org_role_id)) ?? null;
-  }
-  if (scope.scope_type === "team" && scope.team_id) {
-    const rows = await ctx.db
-      .query("anchors")
-      .withIndex("by_team", (q: any) => q.eq("team_id", scope.team_id))
-      .collect();
-    return rows.find((a: any) => a.status !== "decommissioned" && !a.org_role_id) ?? null;
-  }
-  if (scope.scope_type === "user" && scope.scope_user_id) {
-    const rows = await ctx.db
-      .query("anchors")
-      .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scope.scope_user_id))
-      .collect();
-    return rows.find((a: any) => a.status !== "decommissioned" && !a.org_role_id) ?? null;
+  if (scope.org_role_id) return live.find((a: any) => String(a.org_role_id ?? "") === String(scope.org_role_id)) ?? null;
+  const plain = live.find((a: any) => !a.org_role_id);
+  if (plain) return plain;
+  // The chief of staff IS the workspace's standing agent (org-staffing.md
+  // S12): once `cast org staff` has seated the anchor as the chief, its row
+  // carries the role pointer and still answers as the workspace anchor, so
+  // Slack, chat and `cast anchor say` keep working as aliases of the chief.
+  for (const a of live) {
+    const role = a.org_role_id ? await ctx.db.get(a.org_role_id) : null;
+    if (role && role.handle === CHIEF_OF_STAFF_HANDLE && role.status !== "retired") return a;
   }
   return null;
+}
+
+// The workspace anchor of a boundary (a team's, or a person's own), or null.
+export async function workspaceAnchorFor(ctx: { db: any }, boundary: { team_id?: Id<"teams">; scope_user_id?: Id<"users"> }): Promise<any | null> {
+  return boundary.team_id
+    ? findExistingAnchor(ctx, { scope_type: "team", team_id: boundary.team_id })
+    : findExistingAnchor(ctx, { scope_type: "user", scope_user_id: boundary.scope_user_id });
 }
 
 // provisionStandingAgent — idempotently create (or return) a standing agent:
@@ -318,6 +322,29 @@ export async function provisionStandingAgent(
       bot_user_id: existing.bot_user_id,
       conversation_id: existing.conversation_id ?? null,
       already_existed: true,
+    };
+  }
+
+  // Seating the workspace anchor itself (org-staffing.md S12): its session
+  // already has a bot, an anchors row and a machine. The row gains the role
+  // pointer, the session gains the standing marker, and nothing restarts.
+  const adoptedAnchor = args.role?.adopt?.anchor_id && !args.role.adopt.standing_role_id ? await ctx.db.get(args.role.adopt.anchor_id) : null;
+  if (adoptedAnchor && adoptedAnchor.status !== "decommissioned" && !adoptedAnchor.org_role_id
+    && String(adoptedAnchor.team_id ?? "") === String(teamId ?? "") && String(adoptedAnchor.scope_user_id ?? "") === String(scopeUserId ?? "")) {
+    await ctx.db.patch(adoptedAnchor._id, { org_role_id: args.role!._id, updated_at: now });
+    await ctx.db.patch(adoptedAnchor.bot_user_id, { bot_kind: "role" });
+    await ctx.db.patch(args.role!.adopt._id, { standing_role_id: args.role!._id, persistent: true, updated_at: now });
+    if (args.bootstrap !== false) {
+      await enqueuePendingMessage(ctx, await ctx.db.get(args.role!.adopt._id), hostUserId, {
+        content: bootstrapMessage({ name, scopeType: args.scope_type, scopeLabel, ownerName, teamName, persona: adoptedAnchor.persona, role: args.role!.bootstrap }),
+      });
+    }
+    return {
+      anchor_id: adoptedAnchor._id,
+      bot_user_id: adoptedAnchor.bot_user_id,
+      conversation_id: args.role!.adopt._id,
+      short_id: args.role!.adopt.short_id ?? String(args.role!.adopt._id).slice(0, 7),
+      already_existed: false,
     };
   }
 
@@ -620,6 +647,8 @@ export const listAnchors = query({
       out.push({
         ...a,
         bot_name: bot?.name ?? a.name,
+        // Set once the anchor is a role's seat (the chief of staff, S12).
+        org_role_id: a.org_role_id ?? null,
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,

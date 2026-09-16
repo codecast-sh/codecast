@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Toucan">
+  <!-- tones: ground #9ec3d4 = sol-blue 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-toucan"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#9ec3d4"/>
+  <g clip-path="url(#c-toucan)">
+  <path d="M4 96C6 76 22 66 42 66C62 66 78 76 80 96Z" fill="#586e75"/>
+  <circle cx="42" cy="44" r="25" fill="#586e75"/>
+  <ellipse cx="46" cy="48" rx="14" ry="16" fill="#fdf6e3"/>
+  <path d="M54 40C68 34 86 38 94 52C86 56 68 58 54 56Z" fill="#b58900"/>
+  <path d="M54 56C70 58 86 58 92 54C86 66 68 68 54 62Z" fill="#cb4b16"/>
+  <circle cx="42" cy="46" r="3.6" fill="#002b36"/>
+  </g>
+</svg>

@@ -40,7 +40,23 @@ A mirrored channel wears the Slack channel's name. `commitLink` renames the chat
 - **Per channel** (`SlackSyncDialog`, from the header pill or the channel menu): connect the workspace (team admins; one click), pick the Slack channel (public ones are joined automatically; private ones need `/invite @Codecast` first), direction, every content flag, a backfill window, pause, unlink, recent job ledger with plain-language skip reasons. Writes are optimistic store actions (`updateChatSlackLink`, `unlinkChatSlack`); the link itself is an action because it probes Slack first.
 - **Per line**: the composer's Slack switch keeps one line home (`sync_local_only`); the message menu offers "Share to Slack" for a line that stayed local or predates the mirror, and "Open in Slack" for any mirrored line.
 - **Team**: Settings → Integrations shows the workspace and every mirrored channel.
-- **CLI**: `cast chat slack [ls|channels|link|unlink|pause|resume]`, every verb with `--json`.
+- **CLI**: `cast chat slack [ls|channels|add|link|unlink|pause|resume]`, every verb with `--json`.
+
+## Bringing channels over (the channel browser)
+
+`SlackChannelBrowser` (Settings → Integrations → Slack → "Add channels from Slack", and "Add from Slack" in the chat rail's new channel modal) lists the connected workspace's channels busiest first, with purpose, member count and creation month, the ones already mirrored under their own heading. Tick any number, pick one history window and one direction, add. Each picked channel goes through `linkChannel` with no `chat_channel_id`: the action creates the codecast channel from the Slack channel (same name, Slack's purpose as the topic, `client_id` `slack:<channel id>` so a retry lands on the same row) and links it. A codecast channel that already carries the name becomes the mirror instead of a duplicate; the row says "joins #name" up front. Private channels the app is not in are greyed with the `/invite @Codecast` hint.
+
+History windows (`lib/slackMirror.BACKFILL_WINDOWS`): from now, last day, week, month (the default), three months, everything. The import runs one page of roots (and their replies) per scheduled action with Slack's cursor, caps at 25,000 lines, and writes `backfill {status, fetched, capped}` on the link after every page. The browser rows, the settings card and `cast chat slack ls` read that field, so a running import shows its count climbing. A failed import (Slack error) pauses the link; Resume runs it again from the link's floor, and lines already here dedupe on their Slack ts. "Everything" sends no `oldest` to Slack (Slack rejects `oldest=0`).
+
+CLI: `cast chat slack add <#slack-channel>... [--history 30d] [--direction both]` is the same import from the terminal.
+
+## Private channels
+
+The app can only see a private channel it is in. Rather than asking for a manual `/invite`, a person connects their own Slack account once (Settings → Integrations → Slack, or the "Connect your Slack account" step inside the channel browser). That is the same OAuth flow with `user_scope=channels:read,groups:read,groups:write,users:read`; the resulting `xoxp` token lands in `slack_user_tokens` keyed by installation and person, and is refused if Slack answered for a different workspace than the team's. The team install's admin gets their token in the same install. The token does exactly one thing: `listSlackChannels` lists the private channels the person is in (rows carry `you_are_in`), and `linkChannel` probes such a channel through the person's view and runs `conversations.invite` as them to bring the bot in, then continues with the bot token. It never reads or posts messages.
+
+## People
+
+`slack_users.codecast_user_id` says who a Slack person is here; `mapped_by` says how it was decided. The email rule sets `"email"` and is recomputed on every profile refresh. The People popup (`SlackPeopleDialog`, from the channel dialog, the settings card and the browser's footer after an import) lets a team admin match any Slack person to any teammate, or pin "keep the Slack name"; a member may claim a Slack account as themselves or release one that points at them. Such a choice is `"manual"`, wins over the link's email switch, survives refreshes, and `reattributeSlackPerson` re-authors that person's past inbound lines across the team's mirrored channels, one page per run, so a match applies to history as well as to what comes next.
 
 ## Install flow
 

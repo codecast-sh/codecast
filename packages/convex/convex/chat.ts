@@ -367,7 +367,7 @@ export async function patchChat(
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
-function displayName(user: Doc<"users"> | null): string {
+export function displayName(user: Doc<"users"> | null): string {
   return user?.name || user?.github_username || user?.email || "Someone";
 }
 

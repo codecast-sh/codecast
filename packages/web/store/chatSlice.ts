@@ -110,6 +110,18 @@ export type ChatSlackLinkRow = {
   outbound_count?: number;
   last_error?: string;
   last_error_at?: number;
+  /** The history import, while and after it runs (convex slack_channel_links.backfill). */
+  backfill?: {
+    window: string;
+    status: "running" | "done" | "failed";
+    fetched: number;
+    skipped?: number;
+    started_at: number;
+    heartbeat_at?: number;
+    finished_at?: number;
+    capped?: boolean;
+    error?: string;
+  };
   created_by: string;
   created_at: number;
   updated_at: number;
@@ -376,6 +388,8 @@ export type ChatSliceData = {
 };
 
 export type ChatSlackLinkPatch = {
+  /** Run the history import again from the link's floor. */
+  reimport?: boolean;
   direction?: ChatSlackLinkRow["direction"];
   options?: Partial<ChatSlackLinkRow["options"]>;
   paused?: boolean;

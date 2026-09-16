@@ -1,21 +1,32 @@
-import { useMemo, useRef, useState } from "react";
-import { ExternalLink, SendHorizontal, Sparkles } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { ExternalLink, ImagePlus, Sparkles } from "lucide-react";
 import { useMutation } from "convex/react";
 import ReactMarkdown from "react-markdown";
 import { api } from "@codecast/convex/convex/_generated/api";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { AvatarImg } from "../../lib/avatarCache";
 import { navigateMainWindow } from "../../lib/desktop";
+import { settleComposerAttachments } from "../../lib/draftImages";
 import { AgentTypeIcon } from "../AgentTypeIcon";
+import { MessageInput } from "../ConversationView";
+import { ChatAttachments } from "../chat/ChatMessage";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
+import type { ChatAttachment } from "../../store/chatSlice";
 import { FeedChip } from "./FeedChip";
 import { findSessionRow } from "../../lib/calls/findSessionRow";
 import { useRemoveLiveFeed } from "./useCallFeed";
+import "../chat/chat.css";
 import "./callSurface.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+
+function echoKey(text: string, attachments?: { storage_id: string }[] | null): string {
+  return `${text}\0${(attachments ?? []).map((a) => a.storage_id).join(",")}`;
+}
+
 // The huddle's text lane: one thread per room, live on the call stage and
 // preserved on the call page — links and asides dropped mid-call stay next to
 // the words that prompted them. Optimistic rows keep sending instant; the
@@ -27,6 +38,10 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // line typed here reaches it, and while it works the foot of the list says
 // so. The stage passes `live` (the transcript and its routes); the call page
 // reads the same thread after the fact and passes nothing.
+//
+// Images piggyback on team chat: MessageInput in bareComposer mode (paste,
+// drop, pick, thumbnail strip, upload), chat attachment tiles to render them,
+// and pending_messages.image_storage_ids so a fed agent sees the picture.
 export function CallChatPanel({
   roomKey,
   className,
@@ -46,15 +61,21 @@ export function CallChatPanel({
 }) {
   const { data: rows } = useQueryNoThrow(api.callChat.list, { room_key: roomKey });
   const post = useMutation(api.callChat.post);
-  const [text, setText] = useState("");
-  const [pending, setPending] = useState<Array<{ key: string; text: string; at: number }>>([]);
+  const [pending, setPending] = useState<Array<{ key: string; text: string; attachments: ChatAttachment[]; at: number }>>([]);
+  const [dragging, setDragging] = useState(false);
+  const dragDepthRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
+  const pickerRef = useRef<HTMLInputElement | null>(null);
+  const draftKey = `huddle:${roomKey}`;
 
   const messages = useMemo(() => {
     const server = rows ?? [];
-    // A pending row retires once the server echoes a row of mine with its text.
-    const echoed = new Set(server.filter((r: any) => r.mine).map((r: any) => r.text));
-    const stillPending = pending.filter((p) => !echoed.has(p.text));
+    // A pending row retires once the server echoes a row of mine with the
+    // same text and the same attached storage ids (image-only lines have
+    // empty text, so text alone would retire the wrong row).
+    const echoed = new Set(server.filter((r: any) => r.mine).map((r: any) => echoKey(r.text, r.attachments)));
+    const stillPending = pending.filter((p) => !echoed.has(echoKey(p.text, p.attachments)));
     return [
       ...server,
       ...stillPending.map((p) => ({
@@ -62,6 +83,7 @@ export function CallChatPanel({
         user_name: "you",
         user_image: undefined,
         text: p.text,
+        attachments: p.attachments,
         at: p.at,
         mine: true,
         pending: true,
@@ -78,15 +100,47 @@ export function CallChatPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, working.length]);
 
-  const send = () => {
-    const body = text.trim();
-    if (!body) return;
-    setText("");
-    setPending((p) => [...p, { key: `p:${Date.now()}:${p.length}`, text: body, at: Date.now() }]);
-    void post({ room_key: roomKey, text: body }).catch(() => {
-      setPending((p) => p.filter((x) => x.text !== body));
+  const send = (body: string, attachments: ChatAttachment[]) => {
+    if (!body && attachments.length === 0) return;
+    const key = `p:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    setPending((p) => [...p, { key, text: body, attachments, at: Date.now() }]);
+    void post({
+      room_key: roomKey,
+      text: body,
+      attachments: attachments.length
+        ? attachments.map((a) => ({
+            storage_id: a.storage_id as Id<"_storage">,
+            mime: a.mime,
+            name: a.name,
+            width: a.width,
+            height: a.height,
+          }))
+        : undefined,
+    }).catch(() => {
+      setPending((p) => p.filter((x) => x.key !== key));
     });
   };
+
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    dragDepthRef.current++;
+    setDragging(true);
+  }, []);
+  const onDragLeave = useCallback(() => {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragging(false);
+  }, []);
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+  }, []);
+  const onDrop = useCallback((e: React.DragEvent) => {
+    dragDepthRef.current = 0;
+    setDragging(false);
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
+    e.preventDefault();
+    dropFilesRef.current?.(files);
+  }, []);
 
   const openSession = (id: string) => {
     if (panel) return void navigateMainWindow(`/conversation/${id}`);
@@ -101,7 +155,18 @@ export function CallChatPanel({
   // What people said is content — the stage around this panel is chrome and
   // turns selection off, so the messages and the box turn it back on.
   return (
-    <div className={`flex min-h-0 flex-col ${className ?? ""}`}>
+    <div
+      className={`call-chat-panel flex min-h-0 flex-col ${className ?? ""}`}
+      onDragEnter={readOnly ? undefined : onDragEnter}
+      onDragLeave={readOnly ? undefined : onDragLeave}
+      onDragOver={readOnly ? undefined : onDragOver}
+      onDrop={readOnly ? undefined : onDrop}
+    >
+      {dragging && (
+        <div className="ch-drop-overlay" aria-hidden="true">
+          <div className="ch-drop-card">Drop images to attach</div>
+        </div>
+      )}
       {agents.length > 0 && live && (
         <AgentsStrip agents={agents} transcriptId={live.transcript_id} onOpen={openSession} />
       )}
@@ -111,8 +176,8 @@ export function CallChatPanel({
             {readOnly
               ? "Nothing was said in chat."
               : agents.length > 0
-                ? "Drop links and asides here — the agent reads them, and answers here."
-                : "Drop links and asides here — they stay with the call."}
+                ? "Drop links, images and asides here — the agent reads them, and answers here."
+                : "Drop links, images and asides here — they stay with the call."}
           </div>
         ) : (
           messages.map((m: any, i: number) => {
@@ -170,7 +235,7 @@ export function CallChatPanel({
                         {m.text}
                       </ReactMarkdown>
                     </div>
-                  ) : (
+                  ) : m.text ? (
                     <div
                       className={`whitespace-pre-wrap break-words text-[12.5px] leading-relaxed ${
                         m.pending ? "text-sol-text-muted" : "text-sol-text"
@@ -178,6 +243,9 @@ export function CallChatPanel({
                     >
                       {m.text}
                     </div>
+                  ) : null}
+                  {m.attachments?.length > 0 && (
+                    <ChatAttachments messageId={m._id} attachments={m.attachments} />
                   )}
                 </div>
               </div>
@@ -200,28 +268,42 @@ export function CallChatPanel({
       </div>
       {!readOnly && (
         <div className="shrink-0 p-2">
-          <div className="flex items-end gap-1.5">
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
+          <div className="ch-composer call-chat-composer">
+            <MessageInput
+              key={draftKey}
+              conversationId={draftKey}
+              bareComposer
+              composerPlaceholder={placeholder}
+              onDropFiles={dropFilesRef}
+              onGateSend={async (text, images) => {
+                const attachments = await settleComposerAttachments(images);
+                const content = text.trim();
+                if (!content && attachments.length === 0) return;
+                send(content, attachments);
               }}
-              rows={1}
-              placeholder={placeholder}
-              className="max-h-24 min-w-0 flex-1 select-text resize-none rounded-xl bg-sol-bg-highlight px-3 py-1.5 text-[12.5px] text-sol-text placeholder:text-sol-text-muted focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
             />
-            <button
-              onClick={send}
-              disabled={!text.trim()}
-              className="rounded-full p-2 text-sol-cyan transition-colors hover:bg-sol-cyan/10 disabled:opacity-30"
-              title="Send"
-            >
-              <SendHorizontal className="h-4 w-4" />
-            </button>
+            <div className="ch-composer-foot">
+              <button
+                type="button"
+                className="ch-composer-attach"
+                title="Attach an image"
+                onClick={() => pickerRef.current?.click()}
+              >
+                <ImagePlus className="h-3.5 w-3.5" />
+              </button>
+              <input
+                ref={pickerRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length) dropFilesRef.current?.(files);
+                  e.target.value = "";
+                }}
+              />
+            </div>
           </div>
         </div>
       )}

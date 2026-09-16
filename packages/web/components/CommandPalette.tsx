@@ -342,36 +342,46 @@ export function TeammateItem({
   row,
   className,
   onGo,
+  following = false,
 }: {
   row: TeammateWhereabouts;
   className: string;
-  onGo: (conv: { _id: string; title?: string }) => void;
+  /** Start (or stop) following the teammate; the session they have open, if
+   *  any, is handed along so the follow starts where they are at once. */
+  onGo: (row: TeammateWhereabouts, conv: { _id: string; title?: string } | null) => void;
+  /** This window already follows them: the row offers to stop. */
+  following?: boolean;
 }) {
   const id = row.conversationId;
   const fetched = useMissingSessionRow(id && !row.inStore ? id : null);
   if (!id) {
+    // Around but in no session: still followable (the mirror covers every
+    // route, not only sessions), so the row reads like the others.
     return (
       <CommandPrimitive.Item
-        value={`__teammate__ ${row.name}|||${row.id}`}
-        disabled
-        className={`${className} opacity-60`}
+        value={`__teammate__ follow ${row.name}|||${row.id}`}
+        onSelect={() => onGo(row, null)}
+        className={className}
       >
         <MemberFace member={row.member} size={16} title="" showHuddle={false} />
-        <span className="truncate flex-1">{row.name} is around, not in a session</span>
+        <div className="flex-1 min-w-0">
+          <div className="truncate">{following ? `Stop following ${row.name}` : `Follow ${row.name}`}</div>
+          <div className="truncate text-[11px] text-sol-text-dim mt-0.5">around, not in a session</div>
+        </div>
       </CommandPrimitive.Item>
     );
   }
   const title = row.title ?? fetched?.title;
   return (
     <CommandPrimitive.Item
-      value={`__teammate__ go where ${row.name} is|||${row.id}`}
+      value={`__teammate__ follow ${row.name}|||${row.id}`}
       data-palette-type="session" data-palette-id={id} data-palette-title={title}
-      onSelect={() => onGo(fetched ?? useInboxStore.getState().sessions[id] ?? { _id: id })}
+      onSelect={() => onGo(row, fetched ?? useInboxStore.getState().sessions[id] ?? { _id: id })}
       className={className}
     >
       <MemberFace member={row.member} size={16} title="" showHuddle={false} />
       <div className="flex-1 min-w-0">
-        <div className="truncate">Go where {row.name} is</div>
+        <div className="truncate">{following ? `Stop following ${row.name}` : `Follow ${row.name}`}</div>
         <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
           {title ? cleanTitle(title) : fetched === null ? "a session that no longer opens" : "a session"}
         </div>
@@ -1448,6 +1458,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const { killWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
+  const followLeaderId = useInboxStore((s) => s.followLeaderId);
 
   const open = standalone || paletteOpen;
 
@@ -1718,7 +1729,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!open || picking) return [] as TeammateWhereabouts[];
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
-    return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions).slice(0, 6);
+    return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions, state.followLeaderId ?? null).slice(0, 6);
   }, [open, query, picking]);
 
   // Chat message hits ride the same debounced non-throwing lane as
@@ -2534,7 +2545,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {teammateRows.length > 0 && (
           <CommandPrimitive.Group heading="Teammates" className={groupClass}>
             {teammateRows.map((row) => (
-              <TeammateItem key={`mate-${row.id}`} row={row} className={itemClass} onGo={navigateToSession} />
+              <TeammateItem
+                key={`mate-${row.id}`}
+                row={row}
+                className={itemClass}
+                following={followLeaderId === row.id}
+                onGo={(r, conv) => {
+                  const st = useInboxStore.getState();
+                  if (st.followLeaderId === r.id) {
+                    st.setFollowLeader(null);
+                    closePalette();
+                    return;
+                  }
+                  st.setFollowLeader(r.id);
+                  if (conv) navigateToSession(conv);
+                  else closePalette();
+                }}
+              />
             ))}
           </CommandPrimitive.Group>
         )}

@@ -16,6 +16,7 @@
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
+    "./contracts/orgAvatars": "./contracts/orgAvatars.ts",
     "./contracts/browserPaneOffer": "./contracts/browserPaneOffer.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",

@@ -26,7 +26,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { startScribe, stopScribe } from "./transcription";
-import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
@@ -38,6 +39,7 @@ import {
   voiceHostElsewhere,
 } from "../desktop";
 import { shouldYieldCallOnDisconnect } from "./callHandoff";
+import { bindCallCursors } from "./callCursors";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { readMeterLevel } from "./walkieMeter";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
@@ -532,14 +534,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // refuses to hand one over whose microphone the person has changed since,
     // so the rule holds across the seam rather than being skipped at it.
     const prefs = readJoinPrefs();
-    r = warm ?? new Room({
-      adaptiveStream: true,
-      dynacast: true,
-      audioCaptureDefaults: micConstraints(prefs.micDeviceId),
-      videoCaptureDefaults: prefs.cameraDeviceId
-        ? { deviceId: { ideal: prefs.cameraDeviceId } }
-        : {},
-    });
+    r = warm ?? new Room(huddleRoomOptions(prefs));
     room = r;
     currentRoomKey = roomKey;
 
@@ -566,6 +561,8 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // different event from unsubscribe and must also clear the tile — without
     // this a stopped share leaves a dead hero on the stage.
     r.on(RoomEvent.TrackUnpublished, () => rebuildTiles());
+    // Teammates' pointers over a screen share, on the data channel.
+    bindCallCursors(r);
     r.on(RoomEvent.TrackMuted, rebuildTiles);
     r.on(RoomEvent.TrackUnmuted, rebuildTiles);
     r.on(RoomEvent.LocalTrackPublished, (pub) => {
@@ -944,7 +941,16 @@ export async function setScreenShare(on: boolean, sourceId?: string): Promise<vo
       }
       // audio:false — a huddle shares the screen, not system audio (which
       // Chrome only offers for tabs anyway and doubles the mic path).
-      const pub = await room.localParticipant.setScreenShareEnabled(on, { audio: false });
+      // Capture/encoding for a share of UI: see livekitMedia.ts. Encoding is
+      // passed here as well as on the Room so a huddle that joined before
+      // those defaults existed still publishes a sharp share.
+      const pub = await room.localParticipant.setScreenShareEnabled(
+        on,
+        on ? SCREEN_SHARE_CAPTURE : { audio: false },
+        on
+          ? { screenShareEncoding: SCREEN_SHARE_ENCODING, degradationPreference: "maintain-resolution" }
+          : undefined,
+      );
       const live = on ? !!pub?.track : false;
       setCall({ sharing: live });
     } catch (err: any) {

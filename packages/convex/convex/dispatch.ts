@@ -2016,7 +2016,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateChatSlackLink: async (
     ctx,
     _userId,
-    [linkId, patch]: [string, { direction?: any; options?: Record<string, boolean>; paused?: boolean }],
+    [linkId, patch]: [string, { direction?: any; options?: Record<string, boolean>; paused?: boolean; reimport?: boolean }],
   ) => {
     if (!isServerId(linkId)) return;
     return await ctx.runMutation!(api.slackSync.updateLink, {
@@ -2024,6 +2024,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(patch?.direction ? { direction: patch.direction } : {}),
       ...(patch?.options ? { options: patch.options } : {}),
       ...(typeof patch?.paused === "boolean" ? { paused: patch.paused } : {}),
+      ...(patch?.reimport ? { reimport: true } : {}),
     });
   },
   unlinkChatSlack: async (ctx, _userId, [linkId]: [string]) => {

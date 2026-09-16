@@ -88,7 +88,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
-import { RevealAncestryCtx, useRevealAncestryWith } from "../lib/revealHost";
+import { RevealAncestryCtx, RevealInBandCtx, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -171,7 +171,7 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
-import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
+import { AssignedToYouBanner, HandoffPicker, OwnerAvatar, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
 import { SessionDaemonChip } from "./DaemonStatusChip";
@@ -211,7 +211,9 @@ import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, me
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
-import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
+import { CollabComposer, CollabRequestBanner, OwnerComposerPresence, composerPresenceEnabled } from "./CollabComposer";
+import { ConversationViewers } from "./presence/ViewerFaces";
+import { anchorFromRects } from "../lib/follow";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
@@ -259,7 +261,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionSuggestion } from "./editor/MentionSuggestion";
 import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -985,6 +987,46 @@ function TimelineRule({
       <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
       {children}
       <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
+    </div>
+  );
+}
+
+// One handoff, drawn where it landed in the timeline: the rule names who
+// passed the session to whom, and the note they wrote sits under it as a
+// message from the assigner. Every viewer sees it — it is the record of the
+// transfer, not a private ping (that is AssignedToYouBanner, for the assignee
+// until they acknowledge). A transfer still in flight renders dimmed.
+function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: string }) {
+  const from = handoff.from === meId ? "You" : handoff.from_name;
+  const to = handoff.to === meId ? "you" : handoff.to_name;
+  return (
+    <div className={`mt-2 mb-3 ${handoff.pending ? "opacity-70" : ""}`} data-handoff-marker={handoff.to}>
+      <TimelineRule color="var(--sol-violet)" className="mb-2" label={`${from} handed this to ${to}`}>
+        <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoff.at)}>
+          <span className="flex items-center -space-x-1.5">
+            <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-5 h-5" /></span>
+            <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-5 h-5" /></span>
+          </span>
+          {from} handed this to {to} · {formatRelativeTime(handoff.at)}
+        </span>
+      </TimelineRule>
+      {handoff.note && (
+        <div className="mx-auto max-w-[640px] rounded-lg border border-sol-violet/35 bg-sol-violet/[0.07] px-3.5 py-2.5">
+          <div className="flex items-center gap-2 mb-1.5 text-[11px]">
+            <OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-4 h-4" />
+            <span className="font-semibold text-sol-text">{handoff.from_name}</span>
+            <ArrowRightLeft className="w-3 h-3 text-sol-violet" />
+            <OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-4 h-4" />
+            <span className="font-semibold text-sol-text">{handoff.to_name}</span>
+            {handoff.seen && handoff.to !== meId && (
+              <span className="ml-auto text-[10px] text-sol-text-dim">seen</span>
+            )}
+          </div>
+          <div className="text-sm text-sol-text leading-relaxed [&_p]:my-0">
+            <MessageMarkdown content={handoff.note} userText />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -6111,7 +6153,7 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
           className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold border ${badge.cls}`}
           title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined}
         >
-          {watching && <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />}
+          {watching && <LivePulseDot />}
           {badge.label}
         </span>
       </div>
@@ -10331,6 +10373,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
   const { user: mentionUser } = useCurrentUser();
+  // Hand-off: the composed text becomes the note that travels with the
+  // assignment (OwnersBadge.HandoffPicker). Real sessions only — a comment
+  // box, a workflow gate and a chat room have nobody to hand to.
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const owners = useOwnersFromStore(conversationId);
+  const canHandoff = !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
   // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
@@ -11222,9 +11270,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -11784,8 +11832,38 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     onMessageSent?.();
   };
 
+  // Hand off: the box empties the moment a teammate is picked (the marker is
+  // drawn optimistically), and the text comes back only if the server refuses.
+  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean) => {
+    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
+    const text = raw.trim();
+    sendingRef.current = true;
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    composeRef.current?.clear();
+    setMessage("");
+    messageRef.current = "";
+    useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
+    textareaRef.current?.focus();
+    void owners.handoffTo(target.id, text, { keepSelf }).then((ok) => {
+      if (ok) { onMessageSent?.(); return; }
+      if (composeMode && composeRef.current) composeRef.current.setMarkdown?.(text);
+      setMessage(text);
+      messageRef.current = text;
+    });
+  };
+  const openHandoff = (open: boolean) => {
+    setHandoffOpen(open);
+    if (!open) requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
   const acScrollRef = useRef(false);
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
+      e.preventDefault();
+      setHandoffOpen(true);
+      return;
+    }
     if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -12534,6 +12612,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           </button>
                         </ShortcutTooltip>
                       )}
+                      {canHandoff && (
+                        <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+                          <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+                          <button
+                            type="button"
+                            className={`w-7 h-7 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                            aria-label="Hand off to a teammate"
+                            onClick={() => openHandoff(!handoffOpen)}
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </button>
+                          </ShortcutTooltip>
+                        </HandoffPicker>
+                      )}
                       {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                         <button
                           type="button"
@@ -12615,6 +12707,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           <Archive className="w-3.5 h-3.5" />
                         </button>
                       </ShortcutTooltip>
+                    )}
+                    {canHandoff && (
+                      <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+                        <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+                        <button
+                          type="button"
+                          className={`w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                          aria-label="Hand off to a teammate"
+                          onClick={() => openHandoff(!handoffOpen)}
+                        >
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                        </button>
+                        </ShortcutTooltip>
+                      </HandoffPicker>
                     )}
                     {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                       <button
@@ -13881,24 +13987,27 @@ const ConversationViewInner = (
     () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
     [timeline, unreadAnchorAt, enteredAt],
   );
-  // The handoff anchor, drawn the same way: the "assigned to you" line sits
-  // above the first row at or after the moment a teammate made you an owner.
-  // A session handed over after its last message (the usual case: a finished
-  // thread passed on) anchors below the final row instead. -1 = no handoff.
-  const handoff = useOwnersFromStore(pendingConvId).handoff;
-  const handoffAt = handoff?.added_at ?? 0;
-  const handoffIndex = useMemo(() => {
-    if (!handoffAt || timeline.length === 0) return -1;
-    const idx = timeline.findIndex((it) => it.timestamp >= handoffAt);
-    return idx === -1 ? timeline.length : idx;
-  }, [timeline, handoffAt]);
-  const handoffRule = handoff && handoffIndex >= 0 && (
-    <TimelineRule color="var(--sol-violet)" label="Assigned to you">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoffAt)}>
-        {handoff.added_by_name || "A teammate"} assigned this to you · {formatRelativeTime(handoffAt)}
-      </span>
-    </TimelineRule>
-  );
+  // Handoff markers, drawn the same way: each transfer sits above the first
+  // row at or after the moment it happened, with the assigner's note under
+  // the rule. A session handed over after its last message (the usual case:
+  // a finished thread passed on) anchors below the final row instead — index
+  // timeline.length. Every viewer sees every handoff; the assignee's own
+  // "Got it" strip is the header banner.
+  const ownersApi = useOwnersFromStore(pendingConvId);
+  const handoffMeId = ownersApi.currentUser?._id?.toString?.();
+  const handoffsByIndex = useMemo(() => {
+    const byIndex = new Map<number, HandoffInfo[]>();
+    if (timeline.length === 0) return byIndex;
+    for (const h of ownersApi.handoffs) {
+      const idx = timeline.findIndex((it) => it.timestamp >= h.at);
+      const at = idx === -1 ? timeline.length : idx;
+      byIndex.set(at, [...(byIndex.get(at) ?? []), h]);
+    }
+    return byIndex;
+  }, [timeline, ownersApi.handoffs]);
+  const handoffRulesAt = (index: number) => handoffsByIndex.get(index)?.map((h) => (
+    <HandoffMarker key={`${h.to}:${h.at}`} handoff={h} meId={handoffMeId} />
+  ));
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
@@ -15227,6 +15336,17 @@ const ConversationViewInner = (
         rects.push({ index: v.index, top: r.top, bottom: r.bottom });
       }
       const { topVisibleIndex, visible } = topVisibleIndexFromRects(rects, containerRect.top, containerRect.bottom);
+      // Follow mode: while someone mirrors this window, its place in the
+      // transcript rides the same measurement the sticky prompt takes. Read
+      // off the store without subscribing; a window nobody follows writes
+      // nothing here.
+      {
+        const st = useInboxStore.getState();
+        if (st.followedBy.length > 0 && conversation?._id) {
+          const a = anchorFromRects(rects, topVisibleIndex, containerRect.top, timelineMessageIds);
+          st.setViewAnchor(a ? { conversationId: String(conversation._id), ...a } : null);
+        }
+      }
       const navId = resolveNavigatorCurrentId(
         navigatorTimelineIndices,
         timelineMessageIds,
@@ -16112,6 +16232,14 @@ const ConversationViewInner = (
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
+  const openReveal = useOpenReveal();
+  const inRevealBand = useContext(RevealInBandCtx);
+  const [hostingReveal, setHostingReveal] = useState(false);
+  useLayoutEffect(() => {
+    const root = headerRef.current?.closest("[data-cc-conversation]");
+    setHostingReveal(!!(openReveal && root && root.contains(openReveal.slot)));
+  }, [openReveal]);
+  const compactChrome = inRevealBand || hostingReveal;
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16750,7 +16878,7 @@ const ConversationViewInner = (
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main data-cc-conversation className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation data-reveal-chrome={compactChrome ? "" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -16956,6 +17084,10 @@ const ConversationViewInner = (
                 <BranchCodeLink session={conversation} />
 
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
+
+                {/* Who has this session open right now: teammates' faces off
+                    the roster's viewing field. A solo session shows nothing. */}
+                {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} />}
 
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
@@ -17651,14 +17783,14 @@ const ConversationViewInner = (
                           <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === handoffIndex && handoffRule}
+                      {handoffRulesAt(virtualItem.index)}
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
                         <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffIndex === timeline.length && handoffRule}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffRulesAt(timeline.length)}
                     </div>
                   )}
                 </div>
@@ -17753,8 +17885,11 @@ const ConversationViewInner = (
             />
           ) : (
             <>
-              {conversation.share_token && (
-                <OwnerComposerPresence conversationId={conversation._id.toString()} />
+              {/* Who else is in this box: a teammate's live draft above the
+                  composer on every real conversation, and "is here" for a
+                  share link guest with no face on the roster. */}
+              {composerPresenceEnabled(conversation) && (
+                <OwnerComposerPresence conversationId={conversation._id.toString()} showHere={!!conversation.share_token} />
               )}
               <CollabRequestBanner conversationId={conversation._id.toString()} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (

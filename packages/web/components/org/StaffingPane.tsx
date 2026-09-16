@@ -11,12 +11,13 @@
 // hands it.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, ChevronRight, ExternalLink, Flag as FlagGlyph, Pause, Pencil, Play, Sparkles, UserRoundPlus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ClipboardCheck, ExternalLink, Flag as FlagGlyph, Pause, Pencil, Play, Sparkles, UserRoundPlus, X } from "lucide-react";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
+import { ProposalAuthorPill } from "./ProposalAuthorPill";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -28,14 +29,18 @@ import {
   changeEdits,
   changeFields,
   changeLine,
+  changeTenure,
   collectHealthFlags,
   groupChanges,
   isDecidable,
   openProposals,
   proposalProgress,
+  recordsInLine,
   relatedFlags,
   spanOfControl,
   staffingMode,
+  syncEvidence,
+  tenureLine,
   type ChangeField,
   type HealthFlagRow,
 } from "./staffingModel";
@@ -152,8 +157,9 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         )}
       </div>
       <h2 className="mt-2 text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
+      {/* provenance (S15): who wrote it, one click from here */}
       <div className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[11.5px]" style={{ color: "var(--sol-text-muted)" }}>
-        <AuthorLink author={proposal.author} onOpenSession={props.onOpenSession} />
+        <ProposalAuthorPill author={proposal.author} onOpenSession={props.onOpenSession} />
         <Dot />
         <span>{MODE_WORD[proposal.mode] ?? proposal.mode}</span>
         <Dot />
@@ -177,12 +183,23 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
       <div className="flex flex-col gap-3">
         {groups.map((g) => (
           <div key={g.kind} data-change-group={g.kind}>
-            <div className="sticky top-0 z-[1] text-[10px] font-medium uppercase tracking-[0.08em] py-1 px-1" style={{ color: "var(--sol-text-dim)", background: "var(--sol-bg)" }}>{g.label}</div>
+            {g.sync ? (
+              // S9: the records the evidence says are already finished come
+              // first, as their own group; the header counts them.
+              <div className="sticky top-0 z-[1] flex items-center gap-1.5 py-1 px-1" style={{ background: "var(--sol-bg)" }} data-sync-header>
+                <ClipboardCheck className="w-3 h-3 shrink-0" style={{ color: "var(--sol-green)" }} />
+                <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: "var(--sol-green)" }}>{g.label}</span>
+                <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-sync-count>{recordsInLine(g.changes)} {recordsInLine(g.changes) === 1 ? "record" : "records"}</span>
+              </div>
+            ) : (
+              <div className="sticky top-0 z-[1] text-[10px] font-medium uppercase tracking-[0.08em] py-1 px-1" style={{ color: "var(--sol-text-dim)", background: "var(--sol-bg)" }}>{g.label}</div>
+            )}
             <div className="flex flex-col gap-1">
               {g.changes.map((c) => (
                 <ChangeRow
                   key={c._id}
                   change={c}
+                  tree={tree}
                   selected={c._id === selectedChangeId}
                   editing={editing === c._id}
                   onPick={() => props.onSelectChange(c._id === selectedChangeId ? null : c._id)}
@@ -206,7 +223,7 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
           ) : (
             <div className="rounded-lg p-3 border" style={{ borderColor: "color-mix(in srgb, var(--sol-cyan) 40%, transparent)", background: "color-mix(in srgb, var(--sol-cyan) 6%, transparent)" }}>
               <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>
-                Apply the {progress.remaining} remaining changes now, in the apply order: projects, filings, roles, charters, then moves, scope, budget, trust, routines, adopt and retire. Each applies as proposed{progress.failed > 0 ? `; the ${progress.failed} failed ${progress.failed === 1 ? "one is" : "ones are"} retried` : ""}.
+                Apply the {progress.remaining} remaining changes now, in the apply order: the records first, then projects, filings, roles, charters, then moves, scope, budget, trust, routines, adopt and retire. Each applies as proposed{progress.failed > 0 ? `; the ${progress.failed} failed ${progress.failed === 1 ? "one is" : "ones are"} retried` : ""}.
               </p>
               <div className="mt-2 flex items-center gap-2">
                 <button type="button" onClick={() => { setConfirmAll(false); props.onAcceptAll(proposal._id); }} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>Accept {progress.remaining}</button>
@@ -266,17 +283,6 @@ function ProgressStrip({ changes, selectedId, onPick }: { changes: OrgProposalCh
   );
 }
 
-function AuthorLink({ author, onOpenSession }: { author: OrgProposalRow["author"]; onOpenSession: (id: string) => void }) {
-  const name = author.name ?? (author.kind === "role" ? "a role" : author.kind === "session" ? (author.short_id ?? "a session") : "a person");
-  if (author.kind === "role" && author.short_id) {
-    return <Link href={`/org/${author.short_id}`} className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-violet)" }}><Sparkles className="w-3 h-3" />{name}</Link>;
-  }
-  if (author.kind === "session") {
-    return <button type="button" onClick={() => onOpenSession(author.id)} className="font-medium hover:underline" style={{ color: "var(--sol-cyan)", fontFamily: "var(--font-mono)" }}>{name}</button>;
-  }
-  return <span className="font-medium" style={{ color: "var(--sol-text)" }}>{name}</span>;
-}
-
 function Fact({ k, v, tone }: { k: string; v: string; tone?: string }) {
   return (
     <div className="mt-1.5 text-[12px] leading-snug">
@@ -306,12 +312,16 @@ export function StatusPill({ status }: { status: OrgChangeStatus }) {
  * decided without leaving its row (the phone sheet shows the list several
  * screens tall).
  */
-function ChangeRow({ change, selected, editing, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
-  change: OrgProposalChange; selected: boolean; editing: boolean;
+function ChangeRow({ change, tree, selected, editing, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
+  change: OrgProposalChange; tree: OrgTree | null; selected: boolean; editing: boolean;
   onPick: () => void; onAccept: () => void; onSkip: () => void; onEdit: () => void; onCancelEdit: () => void; onAcceptWithEdits: (edits: Record<string, unknown>) => void;
 }) {
   const open = isDecidable(change.status);
   const failed = change.status === "failed";
+  // S10: a role change says whether the seat is standing or a program with
+  // its end. S9: a record change says what the evidence is, on the row itself.
+  const tenure = tenureLine(changeTenure(change), tree);
+  const evidence = syncEvidence(change.change);
   return (
     <div className={cn("rounded-lg border transition-colors", selected ? "bg-sol-bg-highlight/70" : "hover:bg-sol-bg-highlight/40")} style={{ borderColor: selected ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "transparent" }} data-change-row={change._id} data-change-status={change.status}>
       <div className="flex items-start gap-2 px-2 py-1.5">
@@ -319,6 +329,12 @@ function ChangeRow({ change, selected, editing, onPick, onAccept, onSkip, onEdit
           <StatusPill status={change.status} />
           <span className="min-w-0 flex-1">
             <span className={cn("block text-[12.5px] leading-snug", selected ? "break-words" : "line-clamp-2", change.status === "skipped" && "line-through opacity-60")} style={{ color: "var(--sol-text)" }} title={changeLine(change.change)}>{changeLine(change.change)}</span>
+            {tenure && <TenureChip line={tenure} />}
+            {evidence && (
+              <span className={cn("block text-[11px] leading-snug mt-0.5", selected ? "break-words" : "line-clamp-2")} style={{ color: "var(--sol-text-muted)" }} data-sync-evidence title={evidence}>
+                <span className="uppercase tracking-[0.08em] text-[9.5px] mr-1" style={{ color: "var(--sol-green)" }}>evidence</span>{evidence}
+              </span>
+            )}
             {failed && !selected && change.applied_note && (
               <span className="block truncate text-[11px] leading-snug mt-0.5" style={{ color: CHANGE_STATUS_META.failed.color }} data-failed-note>{change.applied_note}</span>
             )}
@@ -363,6 +379,18 @@ function ChangeRow({ change, selected, editing, onPick, onAccept, onSkip, onEdit
   );
 }
 
+/** "standing" or "program · ends with pl-3, then retire" (S10), as a chip on
+ *  a role change; the same words the node chip and the hire form use. */
+export function TenureChip({ line }: { line: string }) {
+  const program = line.startsWith("program");
+  const tone = program ? "var(--sol-orange)" : "var(--sol-blue)";
+  return (
+    <span className="inline-flex items-center gap-1 max-w-full mt-1 h-[16px] px-1.5 rounded text-[10px] font-medium" style={{ background: `color-mix(in srgb, ${tone} 12%, transparent)`, color: tone }} data-tenure={program ? "program" : "standing"} title={line}>
+      <span className="truncate">{line}</span>
+    </span>
+  );
+}
+
 function IconButton({ label, tone, onClick, children }: { label: string; tone?: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button type="button" onClick={onClick} aria-label={label} title={label} className="w-6 h-6 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: tone ?? "var(--sol-text-dim)" }}>
@@ -382,13 +410,25 @@ export function EditChangeForm({ change, onCancel, onAccept }: { change: OrgProp
       {fields.map((f, i) => (
         <label key={f.key} className="grid grid-cols-[110px_1fr] items-center gap-2 text-[11px]">
           <span className="truncate" style={{ color: "var(--sol-text-dim)" }} title={f.key}>{f.label}</span>
-          <input
-            value={f.value}
-            type={f.kind === "number" ? "number" : "text"}
-            onChange={(e) => setFields((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
-            className="h-7 rounded-md px-2 border outline-none text-[12px] bg-sol-bg-alt"
-            style={{ borderColor: BORDER, color: "var(--sol-text)" }}
-          />
+          {f.kind === "select" && f.options ? (
+            <select
+              value={f.value}
+              onChange={(e) => setFields((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+              className="h-7 rounded-md px-1.5 border outline-none text-[12px] bg-sol-bg-alt"
+              style={{ borderColor: BORDER, color: "var(--sol-text)" }}
+              data-edit-select={f.key}
+            >
+              {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input
+              value={f.value}
+              type={f.kind === "number" ? "number" : "text"}
+              onChange={(e) => setFields((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+              className="h-7 rounded-md px-2 border outline-none text-[12px] bg-sol-bg-alt"
+              style={{ borderColor: BORDER, color: "var(--sol-text)" }}
+            />
+          )}
         </label>
       ))}
       <div className="flex items-center justify-end gap-1.5 mt-1">

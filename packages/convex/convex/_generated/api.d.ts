@@ -95,6 +95,7 @@ import type * as fileChanges_extractor from "../fileChanges/extractor.js";
 import type * as fileChanges_patchParser from "../fileChanges/patchParser.js";
 import type * as fileChanges_unifiedDiffParser from "../fileChanges/unifiedDiffParser.js";
 import type * as fileTouches from "../fileTouches.js";
+import type * as follow from "../follow.js";
 import type * as forkCopy from "../forkCopy.js";
 import type * as functions from "../functions.js";
 import type * as gitActivity from "../gitActivity.js";
@@ -337,6 +338,7 @@ declare const fullApi: ApiFromModules<{
   "fileChanges/patchParser": typeof fileChanges_patchParser;
   "fileChanges/unifiedDiffParser": typeof fileChanges_unifiedDiffParser;
   fileTouches: typeof fileTouches;
+  follow: typeof follow;
   forkCopy: typeof forkCopy;
   functions: typeof functions;
   gitActivity: typeof gitActivity;

@@ -57,7 +57,7 @@ function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src
   );
 }
 
-function ChatAttachments({
+export function ChatAttachments({
   messageId,
   attachments,
 }: {

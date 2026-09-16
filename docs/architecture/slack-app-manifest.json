@@ -33,6 +33,12 @@
         "reactions:write",
         "files:read",
         "team:read"
+      ],
+      "user": [
+        "channels:read",
+        "groups:read",
+        "groups:write",
+        "users:read"
       ]
     }
   },

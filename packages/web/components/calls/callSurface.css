@@ -72,6 +72,27 @@
   border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
 }
 
+/* The huddle chat panel reuses the chat composer's frame (ch-composer in
+ * chat.css) so paste/drop/pick and the thumbnail strip are the same as
+ * team chat. The frame's page margins would float it off the panel; pin it. */
+.call-chat-panel {
+  position: relative;
+}
+.call-chat-composer {
+  margin: 0;
+}
+.call-chat-composer [data-sv-composer] {
+  position: static;
+  pointer-events: auto;
+}
+.call-chat-panel .ch-att img {
+  max-height: 160px;
+}
+.call-chat-panel .ch-atts-grid .ch-att {
+  width: 88px;
+  height: 88px;
+}
+
 /* The huddle chat's agent rows (components/calls/CallChatPanel.tsx).
  *
  * An agent answers in prose with the odd list or code span, so its row

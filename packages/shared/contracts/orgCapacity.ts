@@ -51,7 +51,7 @@ export function capacity<K extends RoleCapacityKey>(key: K): number { return ROL
 
 // Health flags (S3). The codes are the vocabulary the health query emits, the
 // org page renders as badges, and the analyzer prompt teaches; one list.
-export const FLAG_CODES = ["overloaded", "wide_span", "idle", "slow_to_recommend", "review_stall", "cap_hit", "unowned", "no_charter", "chatter", "unfiled_plan"] as const;
+export const FLAG_CODES = ["overloaded", "wide_span", "idle", "slow_to_recommend", "review_stall", "cap_hit", "unowned", "no_charter", "chatter", "unfiled_plan", "stale_plan", "stale_task", "stale_project", "program_ended"] as const;
 export type FlagCode = (typeof FLAG_CODES)[number];
 export type FlagSeverity = "info" | "warn" | "blocker";
 export type HealthFlag = { code: FlagCode; severity: FlagSeverity; detail: string };
@@ -68,6 +68,10 @@ export const FLAG_MEANING: Record<FlagCode, string> = {
   no_charter: "a project or plan has no goal, or a role has no charter",
   chatter: "two roles exchange more sends than either exchanges with its hands or its person",
   unfiled_plan: "a plan with open work is filed under no project, so no role's scope can see it",
+  stale_plan: "a plan still open whose evidence says it is finished or abandoned: no task activity for the stale window, every task closed, or every bound session done",
+  stale_task: "a task still open whose evidence says it is finished: in progress with every session done for the stale window, or commits carrying its id already landed",
+  stale_project: "a project nothing has touched for the activity window: no task, plan, session or commit",
+  program_ended: "a program role's end condition is met (its plan or project is done, or its date is past); the next review proposes the retire or the review its tenure names",
 };
 
 function line(name: string, t: CapacityThreshold): string {
@@ -132,6 +136,10 @@ export type RoleSignals = {
   /** Days since the role was created: a new seat with no event is not idle yet. */
   age_days: number;
   has_charter: boolean;
+  /** A program role whose end condition is met (org-staffing.md S10): what
+   *  ended and what the tenure says happens next. Null for a standing role,
+   *  a program still running, or a role with no tenure. */
+  program_ended?: { ended: string; then: "retire" | "review" } | null;
 };
 
 export type PersonSignals = {
@@ -148,7 +156,18 @@ export type CompanySignals = {
   projects_without_charter: Array<{ id: string; title: string }>;
   /** Plans with open work and no project; each is one `file` change away from a scope. */
   unfiled_plans: Array<{ id: string; title: string; short_id?: string; open_tasks: number }>;
+  /** Records whose evidence says they are finished (org-staffing.md S9). Each
+   *  is one status change away from true; the analyzer proposes the sync
+   *  before it proposes staffing. */
+  stale?: StaleWork;
 };
+
+/** The stale lists org.analysisInputs and org.health share (S9). One reading
+ *  of "stale", computed by convex/lib/orgActivity from the rows. */
+export type StalePlan = { short_id: string; title: string; status: string; last_task_activity_at: number | null; sessions_live: number; reason: "no activity 21d" | "every task closed" | "bound sessions all done" };
+export type StaleTask = { short_id: string; title: string; status: string; last_session_activity_at: number | null; reason: "in progress, sessions done 14d" | "commits landed, still open" };
+export type StaleProject = { id: string; title: string; reason: "no activity 30d" };
+export type StaleWork = { plans: StalePlan[]; tasks: StaleTask[]; projects: StaleProject[] };
 
 export type CapacitySignals = RoleSignals | PersonSignals | CompanySignals;
 
@@ -233,6 +252,11 @@ function roleFlags(r: RoleSignals): HealthFlag[] {
     flags.push({ code: "idle", severity: "info", detail: r.idle_days === null ? `${who}'s scope has had no event since the role was created ${plural(r.age_days, "day")} ago` : `${who}'s scope has had no event for ${plural(r.idle_days, "day")}` });
   }
 
+  // A program's end condition met: the seat outlived its reason to exist.
+  if (r.program_ended) {
+    flags.push({ code: "program_ended", severity: "warn", detail: `${who} is a program role and ${r.program_ended.ended}; its tenure says ${r.program_ended.then === "retire" ? "retire it" : "review it"}` });
+  }
+
   // Chatter: the busiest peer exchange, when it outnumbers the work shipped.
   const peers = new Map<string, number>();
   for (const s of [...r.flow.sends_7d.to, ...r.flow.sends_7d.from]) peers.set(s.handle, (peers.get(s.handle) ?? 0) + s.n);
@@ -259,6 +283,10 @@ function companyFlags(c: CompanySignals): HealthFlag[] {
   for (const p of c.plans_without_goal) flags.push({ code: "no_charter", severity: "info", detail: `plan "${p.title}" has no goal` });
   if (c.unfiled_tasks > 0) flags.push({ code: "unowned", severity: "info", detail: `${plural(c.unfiled_tasks, "open task")} filed under no project or plan` });
   for (const p of c.unfiled_plans) flags.push({ code: "unfiled_plan", severity: "info", detail: `plan "${p.title}"${p.short_id ? ` (${p.short_id})` : ""} has ${plural(p.open_tasks, "open task")} and no project` });
+  // Stale records (S9): information, and a sync change rather than a seat.
+  for (const p of c.stale?.plans ?? []) flags.push({ code: "stale_plan", severity: "info", detail: `plan "${p.title}" (${p.short_id}) is ${p.status} but ${p.reason}` });
+  for (const t of c.stale?.tasks ?? []) flags.push({ code: "stale_task", severity: "info", detail: `task "${t.title}" (${t.short_id}) is ${t.status.replace("_", " ")}: ${t.reason}` });
+  for (const p of c.stale?.projects ?? []) flags.push({ code: "stale_project", severity: "info", detail: `project "${p.title}" has had ${p.reason}` });
   return flags;
 }
 

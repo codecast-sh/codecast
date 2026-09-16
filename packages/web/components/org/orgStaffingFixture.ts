@@ -22,7 +22,7 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
   changes: [
     {
       _id: "fixture-change-1", proposal_id: "fixture-proposal-7", seq: 1, status: "proposed",
-      change: { kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me", scope: { projects: ["Platform"] }, charter: "Owns the sync layer, the daemon and every release of the CLI." },
+      change: { kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me", scope: { projects: ["Platform"] }, charter: "Owns the sync layer, the daemon and every release of the CLI.", tenure: { kind: "standing" } },
       rationale: "The Platform project has 14 open tasks and no owner role; its sessions report straight to you and three of them asked for a decision this week.",
       evidence: [{ label: "14 open tasks in Platform", href: "/tasks?project=Platform" }, { label: "3 decisions waiting", href: "/decisions" }],
       expected_effect: "Platform decisions get a recommendation within the hop deadline.",
@@ -30,7 +30,7 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
     },
     {
       _id: "fixture-change-2", proposal_id: "fixture-proposal-7", seq: 2, status: "proposed",
-      change: { kind: "role", name: "Content Lead", handle: "content", reports_to: "@growth", scope: { plans: ["pl-88"] }, charter: "Owns the SEO plan and the weekly post." },
+      change: { kind: "role", name: "Content Lead", handle: "content", reports_to: "@growth", scope: { plans: ["pl-88"] }, charter: "Owns the SEO plan and the weekly post.", tenure: { kind: "program", ends: { plan: "pl-88" }, then: "review" } },
       rationale: "Growth carries 11 tasks in flight against a limit of 8; the SEO plan is half of them and has its own cadence.",
       evidence: [{ label: "11 in flight under @growth", href: "/org/or-1?tab=tasks" }],
       expected_effect: "Growth drops below the in-flight limit without dropping the SEO work.",
@@ -60,6 +60,41 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
       change: { kind: "project_meta", project: "Growth", goal: "Double organic signups by December", success_metrics: ["organic signups per week", "AI citation count"], priority: "p1", owner: "@growth" },
       rationale: "The Growth project has no goal on record; the role directs its hands toward the task list instead.",
       evidence: [{ label: "Growth project", href: "/projects/fixture-project-growth" }],
+    },
+    {
+      _id: "fixture-change-7", proposal_id: "fixture-proposal-7", seq: 7, status: "proposed",
+      change: { kind: "plan_status", plan: "pl-61", status: "done", reason: "Every task closed 19 days ago; the two bound sessions ended with done handoffs." },
+      rationale: "The plan reads as active on the board and counts against Growth's load, but nothing under it has moved since August.",
+      evidence: [{ label: "pl-61", href: "/plans/pl-61" }, { label: "last handoff", href: "/tasks/ct-4102" }],
+      expected_effect: "Growth's active plan count drops to one, which is what its sessions say.",
+    },
+    {
+      _id: "fixture-change-8", proposal_id: "fixture-proposal-7", seq: 8, status: "proposed",
+      change: { kind: "task_status", task: "ct-4102", status: "done", reason: "Three commits landed on the branch it names; the session that held it declared done 14 days ago." },
+      rationale: "An open task whose work shipped keeps a seat looking busier than it is.",
+      evidence: [{ label: "ct-4102", href: "/tasks/ct-4102" }],
+    },
+  ],
+};
+
+/** A second fixture proposal written by a session, not a role (S15): the
+ *  author pill's other shape, and a proposal the pane's picker can switch to. */
+export const ORG_STAFFING_FIXTURE_SESSION_PROPOSAL: OrgProposalRow = {
+  _id: "fixture-proposal-8",
+  short_id: "op-8",
+  team_id: "fixture-team",
+  author: { kind: "session", id: "fixture-conv-review", name: "Org review, September", short_id: "jx7rev1" },
+  title: "Retire the ops seat",
+  summary_md: "Ops has had no wake in 30 days and its two plans are done.",
+  mode: "review",
+  status: "open",
+  created_at: T0 - 26 * 3_600_000,
+  changes: [
+    {
+      _id: "fixture-change-9", proposal_id: "fixture-proposal-8", seq: 1, status: "proposed",
+      change: { kind: "retire", handle: "ops", reason: "idle 30 days" },
+      rationale: "No wake, no hand, no decision in 30 days; both plans in scope are done.",
+      evidence: [{ label: "@ops health", href: "/org/or-4?tab=health" }],
     },
   ],
 };

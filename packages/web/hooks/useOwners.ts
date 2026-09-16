@@ -16,7 +16,7 @@
  * notify callback (web: sonner toast; mobile: the session screen's toast).
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError } from "@codecast/shared/contracts";
@@ -34,7 +34,51 @@ type OwnerInfo = {
   added_at?: number;
   note?: string | null;
   seen_at?: number | null;
+  image?: string | null;
+  added_by_image?: string | null;
 };
+
+/**
+ * One handoff as the transcript draws it: who passed the session to whom, when,
+ * and the note they wrote. Derived from the owner row the handoff created (a
+ * self-claim is not a handoff), plus an optimistic entry for a transfer still
+ * in flight so the marker lands the instant the composer clears.
+ */
+export type HandoffInfo = {
+  to: string;
+  to_name: string;
+  to_image?: string | null;
+  from: string;
+  from_name: string;
+  from_image?: string | null;
+  at: number;
+  note: string | null;
+  seen: boolean;
+  pending?: boolean;
+};
+
+// In-flight handoffs, shared by every useOwners instance on a conversation:
+// the composer writes one when a teammate is picked and the transcript (a
+// separate instance) draws it the same frame. Module state, not the inbox
+// store — it lives only until the server row echoes back.
+const pendingHandoffsByConv = new Map<string, Record<string, HandoffInfo>>();
+const pendingListeners = new Set<() => void>();
+const EMPTY_PENDING: Record<string, HandoffInfo> = {};
+function setPendingHandoffs(conversationId: string, update: (p: Record<string, HandoffInfo>) => Record<string, HandoffInfo>) {
+  const prev = pendingHandoffsByConv.get(conversationId) ?? EMPTY_PENDING;
+  const next = update(prev);
+  if (next === prev) return;
+  if (Object.keys(next).length === 0) pendingHandoffsByConv.delete(conversationId);
+  else pendingHandoffsByConv.set(conversationId, next);
+  for (const l of pendingListeners) l();
+}
+function usePendingHandoffs(conversationId: string): Record<string, HandoffInfo> {
+  return useSyncExternalStore(
+    (l) => { pendingListeners.add(l); return () => { pendingListeners.delete(l); }; },
+    () => pendingHandoffsByConv.get(conversationId) ?? EMPTY_PENDING,
+    () => EMPTY_PENDING,
+  );
+}
 
 export type OwnersEnv = {
   // Warm-paint fallback roster only: the picker overlays the SESSION team's
@@ -100,12 +144,16 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   );
   const addOwner = useMutation(api.sessionOwnership.addSessionOwner);
   const removeOwner = useMutation(api.sessionOwnership.removeSessionOwner);
+  const setOwners = useMutation(api.sessionOwnership.setSessionOwners);
   const ackAssignment = useMutation(api.sessionOwnership.ackSessionAssignment);
 
   // In-flight optimistic overrides: user_id -> desired membership. Each entry is
   // dropped once the reactive query confirms it (reconcile effect), so the chip
   // never flickers back to the server value mid-round-trip.
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  // In-flight handoffs (assignee -> the marker to draw), dropped once the
+  // server's owner row carries this handoff (same assigner, stamped no earlier).
+  const pendingHandoffs = usePendingHandoffs(conversationId);
 
   const serverIds = useMemo(
     () => new Set((data?.owners ?? []).map((o: OwnerInfo) => o.user_id)),
@@ -130,8 +178,35 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     const info = (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === id);
     const name =
       mem?.name || info?.name || mem?.email?.split("@")[0] || info?.email?.split("@")[0] || "Teammate";
-    return { name, image: mem?.image || mem?.github_avatar_url };
+    return { name, image: mem?.image || mem?.github_avatar_url || info?.image || undefined };
   };
+
+  const meId = currentUser?._id?.toString?.();
+
+  // Every handoff the owner rows record, oldest first, with in-flight ones
+  // overlaid by assignee. Visible to every viewer: the transcript marks where
+  // each transfer landed, not just the current user's own.
+  const handoffs: HandoffInfo[] = useMemo(() => {
+    const byTo = new Map<string, HandoffInfo>();
+    for (const o of data?.owners ?? []) {
+      if (!o.added_by || o.added_by === o.user_id || !o.added_at) continue;
+      const from = memberById.get(o.added_by);
+      const to = memberById.get(o.user_id);
+      byTo.set(o.user_id, {
+        to: o.user_id,
+        to_name: to?.name || o.name || to?.email?.split("@")[0] || o.email?.split("@")[0] || "Teammate",
+        to_image: to?.image || to?.github_avatar_url || o.image,
+        from: o.added_by,
+        from_name: from?.name || o.added_by_name || from?.email?.split("@")[0] || "A teammate",
+        from_image: from?.image || from?.github_avatar_url || o.added_by_image,
+        at: o.added_at,
+        note: o.note ?? null,
+        seen: !!o.seen_at,
+      });
+    }
+    for (const [id, h] of Object.entries(pendingHandoffs)) byTo.set(id, h);
+    return Array.from(byTo.values()).sort((a, b) => a.at - b.at);
+  }, [data, memberById, pendingHandoffs]);
 
   // Once the server reflects an override's desired state, drop it.
   useWatchEffect(() => {
@@ -142,6 +217,15 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
         if (serverIds.has(id) === want) { delete n[id]; changed = true; }
       }
       return changed ? n : o;
+    });
+    setPendingHandoffs(conversationId, (p) => {
+      let changed = false;
+      const n = { ...p };
+      for (const [id, h] of Object.entries(p)) {
+        const row = (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === id);
+        if (row && row.added_by === h.from && (row.added_at ?? 0) >= h.at - 60_000) { delete n[id]; changed = true; }
+      }
+      return changed ? n : p;
     });
   }, [serverIds]);
 
@@ -163,6 +247,39 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     }
   };
 
+  /**
+   * Hand the session to a teammate with a note, in ONE mutation: the desired
+   * set is the current owners plus them, minus me unless `keepSelf`. The note
+   * rides the assignee's row (their banner, their notification) and the
+   * transcript marker everyone sees. The marker is drawn optimistically so it
+   * lands the instant the composer clears.
+   */
+  const handoffTo = async (id: string, note: string, opts: { keepSelf?: boolean } = {}) => {
+    const trimmed = note.trim();
+    const desired = new Set(ownerIds);
+    desired.add(id);
+    if (!opts.keepSelf && meId) desired.delete(meId);
+    const disp = displayFor(id);
+    const me = meId ? displayFor(meId) : { name: "You", image: undefined };
+    setOverrides((o) => ({ ...o, [id]: true, ...(!opts.keepSelf && meId ? { [meId]: false } : {}) }));
+    if (meId) {
+      setPendingHandoffs(conversationId, (p) => ({
+        ...p,
+        [id]: { to: id, to_name: disp.name, to_image: disp.image, from: meId, from_name: me.name, from_image: me.image, at: Date.now(), note: trimmed || null, seen: false, pending: true },
+      }));
+    }
+    try {
+      await setOwners({ session_id: conversationId, owners: Array.from(desired), note: trimmed || undefined });
+      notify?.(`Handed off to ${disp.name}`, "success");
+      return true;
+    } catch (e: any) {
+      setOverrides((o) => { const n = { ...o }; delete n[id]; if (meId) delete n[meId]; return n; });
+      setPendingHandoffs(conversationId, (p) => { const n = { ...p }; delete n[id]; return n; });
+      notify?.(humanizeConvexError(e, "Handoff failed"), "error");
+      return false;
+    }
+  };
+
   const clearAll = async () => {
     const ids = Array.from(ownerIds);
     setOverrides((o) => { const n = { ...o }; for (const id of ids) n[id] = false; return n; });
@@ -181,7 +298,6 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   // seen_at) — drives the "assigned to you" banner. Locally-acked state hides
   // it instantly while the mutation round-trips.
   const [ackedLocally, setAckedLocally] = useState(false);
-  const meId = currentUser?._id?.toString?.();
   const myRow = meId ? (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === meId) : undefined;
   // The handoff: my owner row when someone ELSE added me. Outlives the ack —
   // the conversation marks where in the timeline the handoff landed for as
@@ -198,7 +314,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   };
 
   const canManage = error || data === null ? false : data ? true : undefined;
-  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage };
+  return { ownerIds, ownerList, displayFor, toggle, handoffTo, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

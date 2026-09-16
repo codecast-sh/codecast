@@ -123,4 +123,24 @@ describe("capacityFlags", () => {
       { code: "unfiled_plan", severity: "info", detail: 'plan "Loose" (pl-2) has 4 open tasks and no project' },
     ]);
   });
+
+  test("stale records are information; a program whose end came warns (S9, S10)", () => {
+    const stale = capacityFlags({
+      kind: "company", unowned_projects: [], unfiled_tasks: 0, plans_without_goal: [], projects_without_charter: [], unfiled_plans: [],
+      stale: {
+        plans: [{ short_id: "pl-3", title: "Old push", status: "active", last_task_activity_at: 1, sessions_live: 0, reason: "every task closed" }],
+        tasks: [{ short_id: "ct-9", title: "Wire it", status: "in_progress", last_session_activity_at: 1, reason: "commits landed, still open" }],
+        projects: [{ id: "p2", title: "Legacy", reason: "no activity 30d" }],
+      },
+    });
+    expect(stale).toEqual([
+      { code: "stale_plan", severity: "info", detail: 'plan "Old push" (pl-3) is active but every task closed' },
+      { code: "stale_task", severity: "info", detail: 'task "Wire it" (ct-9) is in progress: commits landed, still open' },
+      { code: "stale_project", severity: "info", detail: 'project "Legacy" has had no activity 30d' },
+    ]);
+    expect(capacityFlags(quietRole({ program_ended: { ended: "its plan pl-3 is done", then: "retire" } }))).toEqual([
+      { code: "program_ended", severity: "warn", detail: "@growth is a program role and its plan pl-3 is done; its tenure says retire it" },
+    ]);
+    expect(capacityFlags(quietRole({ program_ended: null }))).toEqual([]);
+  });
 });

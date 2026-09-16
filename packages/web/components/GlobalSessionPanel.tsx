@@ -46,6 +46,8 @@ import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProce
 import { getLabelColor } from "../lib/labelColors";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { memberListSig, rosterIdentity } from "../hooks/useTeamRoster";
+import { viewersOf, viewersSig } from "./presence/memberPresence";
+import { ViewerFaces } from "./presence/ViewerFaces";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
@@ -2424,8 +2426,13 @@ export const SessionCard = memo(function SessionCard({
     // wakes that one card and nothing else. The signature is text plus stamp,
     // never the object (each overlay push hands back a new one).
     (s) => activitySig(s.sessions[cardId]?.activity),
+    // Teammates who have this session open (their faces in the meta row and
+    // a ring on the card). The signature is the viewer id list, so a roster
+    // push that changes nothing about who is here wakes nothing.
+    (s) => viewersSig(s.teamMembers, cardId, s.currentUser?._id?.toString?.() ?? null),
   ]);
   const rowActivity = st.sessions[cardId]?.activity ?? null;
+  const viewers = viewersOf(st.teamMembers, cardId, st.currentUser?._id?.toString?.() ?? null);
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
   // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
   // structural signature), subscribe to a shared 30s clock so those stay fresh on
@@ -2873,6 +2880,7 @@ export const SessionCard = memo(function SessionCard({
     <div
       data-session-id={session._id}
       data-active={isActive ? "true" : undefined}
+      data-sv-viewed={viewers.length > 0 ? viewers.length : undefined}
       draggable
       onDragStart={handleCardDragStart}
       onDragEnd={handleCardDragEnd}
@@ -2885,6 +2893,11 @@ export const SessionCard = memo(function SessionCard({
         // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
         // unacked handoff must never read as "this is the session you have open".
         session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
+      } ${
+        // Blue, and only when no stronger ring is on: a teammate has this
+        // session open. The faces in the meta row say who; the ring makes the
+        // card findable in a long list.
+        viewers.length > 0 && !isActive && !isSelected && !session.assigned_ping ? "ring-1 ring-inset ring-sol-blue/30" : ""
       } ${
         isActive
           ? "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]"
@@ -3097,6 +3110,7 @@ export const SessionCard = memo(function SessionCard({
               <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
             </span>
           )}
+          {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
           {(project !== "unknown" || sessionLabel) && (
             // With a user label: label name in the label's color, but the dot
             // STAYS project-colored — provenance survives the relabel. Hover

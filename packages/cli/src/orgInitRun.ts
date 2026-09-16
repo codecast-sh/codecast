@@ -14,13 +14,14 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
-// ── The prompt (S8) ──────────────────────────────────────────────────────────
+// ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
-// Principle level: the company model, what to read, the capacity model and
-// how to reason with it, how to design or review, how to write, what never
-// to invent, and the one offer. The one prescriptive part is the spec shape,
+// Principle level: the company model, what to read, grounding in activity
+// before records, the capacity model and how to reason with it, standing
+// versus program tenure, how to design or review, how to write, what never to
+// invent, and the one offer. The one prescriptive part is the spec shape,
 // because `cast org propose` has to parse it.
 
 /** The company model (S1), the words every surface and every prompt uses. */
@@ -29,8 +30,11 @@ export const COMPANY_MODEL = `A company is a workspace. Its executives are peopl
 /** The change kinds a proposal may carry and what each field means. */
 function changeKindsReference(): string {
   return [
-    `- role: { name, handle, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter?, trust?: "understand", caps?: { hands_per_day, wakes_per_day, tokens_per_day }, evidence?: [string] }. A new seat. Scope refs are a project's short id (pr-N), id or a title that matches one project; a plan's pl-N.`,
-    `- projects: { changes: [{ op: "create", title, description?, project_path? } | { op: "merge", from, into }] }. Business lines the chart needs and does not have, or two that are one thing.`,
+    `- plan_status: { plan: ref, status: "done" | "abandoned" | "active", reason }. A record brought in line with what happened: done when its evidence says the work landed, abandoned when nobody has worked it and nothing waits on it, active when a plan marked done still has sessions on it. The reason cites the evidence.`,
+    `- task_status: { task: ref, status: "done" | "dropped", reason }. The same for a task: done when the commits or the sessions that carried it are finished, dropped when it was never picked up and its plan moved on.`,
+    `- project_status: { project: ref, status: "paused" | "done" | "active", reason }. The same for a business line: paused when its path had no commits and no sessions for the window, done when its goal is met, active when a paused one has work again.`,
+    `- role: { name, handle, tenure: { kind: "standing" } | { kind: "program", ends: { plan: ref } | { project: ref } | { date: unix ms }, then: "retire" | "review" }, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter?, trust?: "understand", caps?: { hands_per_day, wakes_per_day, tokens_per_day }, evidence?: [string] }. A new seat, with its tenure: standing, or a program with what ends it and what happens then. Scope refs are a project's short id (pr-N), id or a title that matches one project; a plan's pl-N.`,
+    `- projects: { changes: [{ op: "create", title, description?, project_path?, horizon?: "ongoing" | "bounded" } | { op: "merge", from, into }] }. Business lines the chart needs and does not have, or two that are one thing; a bounded line ends with its work and a program role can end with it.`,
     `- file: { plan: ref, project: ref }. A plan filed under a project, so the role that owns the project sees it; the smallest change there is, and the one that answers an unfiled_plan flag.`,
     `- move: { handle, reports_to?, scope_add?: [ref], scope_remove?: [ref], reason? }. A role under a different parent, or with a different scope, in one change.`,
     `- scope: { handle, add?: [ref], remove?: [ref] }. Only the scope.`,
@@ -49,8 +53,8 @@ const SPEC_EXAMPLE = JSON.stringify({
   mode: "init",
   changes: [
     {
-      change: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-12"] }, reports_to: "me", charter: "One paragraph: what the seat owns, what it reports, what it raises." },
-      rationale: "Why this change, in the reader's words.",
+      change: { kind: "role", name: "Head of Growth", handle: "growth", tenure: { kind: "standing" }, scope: { projects: ["pr-12"] }, reports_to: "me", charter: "One paragraph: what the seat owns, what it reports, what it raises." },
+      rationale: "Why this change, in the reader's words; for a role, why standing or why a program.",
       evidence: [{ label: "14 sessions on ~/src/growth in 30 days", href: "https://codecast.sh/org?scope=pr-12" }],
       expected_effect: "What should be different at the next review, and how you will know.",
       risk: "What could go wrong, and what you would watch.",
@@ -92,15 +96,21 @@ ${COMPANY_MODEL}`;
 
   const glance = `## The company at a glance
 
-${summary.projects} projects, ${summary.plans} plans, ${summary.tasks_open} open tasks, ${summary.members} members, ${summary.sessions_30d} sessions in 30 days, ${summary.roles} existing roles${summary.chief_of_staff ? ", a chief of staff" : ", no chief of staff"}.`;
+${summary.projects} projects, ${summary.plans} plans, ${summary.tasks_open} open tasks, ${summary.members} members, ${summary.sessions_30d} sessions in 30 days, ${summary.roles} existing roles${summary.chief_of_staff ? ", a chief of staff" : ", no chief of staff"}. ${staleGlance(summary.stale)}`;
 
   const read = `## What to read, before you form a view
 
-1. \`cast org inputs${team} --json\`: projects with task counts, plans with progress, members with their sessions by path, git roots, insight themes, channels, existing roles and anchors, open decisions. Read it whole.
-2. \`cast org health${team} --json\`: per role, per person and for the company, the load, spend and flow signals the capacity model needs, and the flags it raises. Every flag names its evidence.
+1. \`cast org inputs${team} --json\`, its \`activity\` block first: where the commits and sessions of the last 30 days are, by repository and top level path, who works where, and the plans, tasks and projects the evidence says are stale, each with its reason. Then the rest, whole: projects with task counts, plans with progress, members with their sessions by path, git roots, insight themes, channels, existing roles and anchors, open decisions.
+2. \`cast org health${team} --json\`: per role, per person and for the company, the load, spend and flow signals the capacity model needs, and the flags it raises. Every flag names its evidence; the stale flags (\`stale_plan\`, \`stale_task\`, \`stale_project\`) and \`program_ended\` are the ones you answer before any other.
 3. Each git root's layout: \`ls\` the root and the package names one level down. This is the only reading outside codecast; do not walk the tree.
 ${roots}
 4. The project charters (\`cast project show <ref>${team}\`: goal, metrics, priority, owner, non goals, risks) and the roles' briefs (\`cast brief @handle${team}\`), where they exist. A charter that is missing is itself a finding. \`cast role wakes @handle${team}\` shows what woke a role and how big each frame was, which is where a cap hit explains itself.`;
+
+  const grounding = `## Ground in what is happening, not in what was filed
+
+${ORG_GROUNDING_RULES.activity_first} ${ORG_GROUNDING_RULES.done_is_sync} ${ORG_GROUNDING_RULES.untouched_is_not_a_seat} ${ORG_GROUNDING_RULES.records_first}
+
+How to read the evidence. The activity block says which paths had commits and sessions and who made them; a plan whose tasks are all closed, whose bound sessions are all done, or whose area had no activity for three weeks is stale, and the block names which. A task in progress whose sessions finished two weeks ago, or whose commits landed while it stayed open, is finished or dropped, not in flight. A project whose path had no commits and no sessions for the window is paused, not unowned. Every stale record becomes one status change with its evidence in the reason, and the loads you size for a seat exclude it: the model measures work that is happening, and a seat sized on records that are behind it is a seat nobody needs. Where the record and the activity disagree and you cannot tell which is right, say so as a finding and size without the record.`;
 
   const capacity = `## The capacity model
 
@@ -112,11 +122,15 @@ How to size with it. A scope is right when one agent can hold all of it in its h
 
 What a scope is made of. A role's scope is projects plus plans, and everything filed under a project follows the project: its tasks, its plans, their tasks. A scope change adds or removes refs a role names; it cannot take one plan out of a project the role owns. Work moves between roles by moving the plan: a file change puts a plan under another project, and the role that owns that project sees it from then on. When a seam inside one project should become its own seat, file its plans under the project the new role owns, in the same proposal, ahead of the role; naming the same plans in two roles' scopes leaves both watching the work and the overlap flag says so.`;
 
+  const tenure = `## Standing and program roles
+
+${ORG_TENURE_RULE} A business line that the activity shows people returning to month after month is standing; a seat that exists for one plan, one migration or one dated push is a program that ends with it, and the rationale names the plan, the project or the date. A program role's end is a health signal: when its plan is done, its project done or its date past, health raises \`program_ended\`, and the review that sees it proposes the retirement, or a review of the seat when the role's tenure says so.`;
+
   const design = mode === "init" ? `## How to design from scratch
 
-Start from the business lines and their goals, not from the people or the tools. For each line, ask what would have to be true in a month for it to be going well; that is the charter you propose when the project has none. Name one owner per line, then check the span of the person the owners report to. Allocate budget from the company total health reports. Explain every role with evidence a person can click: counts, session titles, commits, short ids. Where a line has no evidence of work, propose an intake draft instead of a role that owns nothing. Few roles with plain scopes beat a complete chart; proposing one role, or none, is a valid answer for a small company, and the summary should say why.` : `## How to review
+Start from the business lines the activity shows, and their goals, not from the people, the tools or the project list as filed. For each line, ask what would have to be true in a month for it to be going well; that is the charter you propose when the project has none. Name one owner per line and say whether the seat is standing or a program, then check the span of the person the owners report to. Allocate budget from the company total health reports. Explain every role with evidence a person can click: counts, session titles, commits, short ids. Where a line has no evidence of work, propose an intake draft instead of a role that owns nothing. Few roles with plain scopes beat a complete chart; proposing one role, or none, is a valid answer for a small company, and the summary should say why.` : `## How to review
 
-Read the flags first, then the evidence behind each: the chatter graph (who sends to whom, against what they ship), decision latency, review stalls, unowned projects, unfiled plans and tasks, idle roles, roles at their caps. For each bottleneck, propose the smallest change that removes it, and say what you expect to change by the next review and how you will know. A plan with open work and no project is a file change, not a finding: its goal and title say which business line it belongs to, and the role that owns that project sees it once filed. When a role you propose needs plans that are unfiled today, propose their file changes first in the same proposal, so the scope is real the moment the role is accepted. Respect the stability rules as \`cast org health\` reports them: a role moved inside the cooldown (\`last_move_at\`) is left alone; a split waits for the second breach unless the scope is structurally too big: \`overload_ratio\` is the busiest load count divided by the model's line, and at or above the split_on_first_breach_ratio the overloaded flag says "split now" and the split goes in this proposal; below it, the flag says which breach this is (\`breaches\` counts the consecutive earlier reviews that flagged the role), a first breach on record is not a split, and you propose what does not split and let the next review decide. A split names the seam its own work shows, files the plans of each side first, and shows each resulting seat's open tasks, in-flight tasks and active plans against the model, so the reader sees that every seat fits and the parent's load falls under the line; a retirement waits for the idle window. A quiet role in a quiet company is not a problem to fix; a chart that changes every week never settles. When nothing needs to change, post a proposal with no changes only if the summary carries a finding worth reading; otherwise say so in your state and end.`;
+Read the stale flags and the activity first, and turn each stale record into its status change before you read anything as a bottleneck; a seat sized against records the activity has passed is the wrong seat. Then the flags and the evidence behind each: the chatter graph (who sends to whom, against what they ship), decision latency, review stalls, unowned projects, unfiled plans and tasks, idle roles, roles at their caps, program roles whose end has come. For each bottleneck, propose the smallest change that removes it, and say what you expect to change by the next review and how you will know. A plan with open work and no project is a file change, not a finding: its goal and title say which business line it belongs to, and the role that owns that project sees it once filed. When a role you propose needs plans that are unfiled today, propose their file changes first in the same proposal, so the scope is real the moment the role is accepted. Respect the stability rules as \`cast org health\` reports them: a role moved inside the cooldown (\`last_move_at\`) is left alone; a split waits for the second breach unless the scope is structurally too big: \`overload_ratio\` is the busiest load count divided by the model's line, and at or above the split_on_first_breach_ratio the overloaded flag says "split now" and the split goes in this proposal; below it, the flag says which breach this is (\`breaches\` counts the consecutive earlier reviews that flagged the role), a first breach on record is not a split, and you propose what does not split and let the next review decide. A split names the seam its own work shows, files the plans of each side first, and shows each resulting seat's open tasks, in-flight tasks and active plans against the model, so the reader sees that every seat fits and the parent's load falls under the line; a retirement waits for the idle window. A quiet role in a quiet company is not a problem to fix; a chart that changes every week never settles. When nothing needs to change, post a proposal with no changes only if the summary carries a finding worth reading; otherwise say so in your state and end.`;
 
   const write = `## How to write
 
@@ -126,7 +140,7 @@ The output is one proposal, posted with \`cast org propose${team} --spec proposa
 ${SPEC_EXAMPLE}
 \`\`\`
 
-Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so a project comes before the role that owns it and a parent before its child; a retirement goes last. The summary is what a founder reads on a phone before opening anything. Lead with the decision you are asking for: what to accept and why, one sentence per seat, the filings and charters in one line, and the company budget before and after. That paragraph stays under two hundred words; a seat's sizing against the model, its evidence and its caps live in the change, not here. Then the evidence, one line per finding with the numbers that matter. What you could not verify and the findings that are not changes go after it, as a short list, so the ask stays on top.
+Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. The summary is what a founder reads on a phone before opening anything. Lead with the decision you are asking for: what to accept and why, the records to bring in line in one line, one sentence per seat with its tenure, the filings and charters in one line, and the company budget before and after. That paragraph stays under two hundred words; a seat's sizing against the model, its evidence and its caps live in the change, not here. Then the evidence, one line per finding with the numbers that matter. What you could not verify and the findings that are not changes go after it, as a short list, so the ask stays on top.
 
 The change kinds:
 
@@ -153,7 +167,15 @@ ${opts.open.short_id} "${opts.open.title}" waits on a person: ${opts.open.decide
 
 End your turn with \`cast state --status done\` naming op-N and the page link. The person decides on the org page; that page is the only door, and nothing you run applies a change.`;
 
-  return [purpose, model, glance, standing, read, capacity, design, write, honesty, adopt, end].filter(Boolean).join("\n\n") + "\n";
+  return [purpose, model, glance, standing, read, grounding, capacity, tenure, design, write, honesty, adopt, end].filter(Boolean).join("\n\n") + "\n";
+}
+
+/** The glance's last sentence: how many records the activity block says are behind. */
+function staleGlance(stale: OrgInitSummary["stale"] | undefined): string {
+  const n = (stale?.plans ?? 0) + (stale?.tasks ?? 0) + (stale?.projects ?? 0);
+  if (!n) return "The activity block marks no record as stale.";
+  const parts = [[stale!.plans, "plan"], [stale!.tasks, "task"], [stale!.projects, "project"]] as const;
+  return `The activity block marks ${parts.filter(([k]) => k > 0).map(([k, w]) => `${k} ${w}${k === 1 ? "" : "s"}`).join(", ")} as stale: those are sync changes, and they come first.`;
 }
 
 // ── Guards and helpers ───────────────────────────────────────────────────────
@@ -187,6 +209,11 @@ export function summarizeInputs(inputs: any): OrgInitSummary {
     roles: roles.length,
     git_roots: (inputs?.git_roots ?? []).map((g: any) => g.git_root).filter(Boolean),
     chief_of_staff: roles.some((r) => r?.handle === CHIEF_OF_STAFF_HANDLE),
+    stale: {
+      plans: inputs?.activity?.stale?.plans?.length ?? 0,
+      tasks: inputs?.activity?.stale?.tasks?.length ?? 0,
+      projects: inputs?.activity?.stale?.projects?.length ?? 0,
+    },
   };
 }
 
@@ -240,6 +267,9 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
   for (const [repo, v] of byRepo) console.log(`  ${fmt.muted("repo")} ${repo} ${fmt.muted(`· ${v.sessions} sessions${v.roots > 1 ? ` across ${v.roots} checkouts` : ""}`)}`);
   for (const r of inputs.org.roles) console.log(`  ${fmt.muted("role")} @${r.handle} ${r.name} ${fmt.muted(`· ${r.idle ? "idle" : `${r.idle_days}d since a scope event`} · ${r.wakes_7d.total} wakes/7d${r.wakes_7d.days_at_cap ? ` (${r.wakes_7d.days_at_cap} days at cap)` : ""}${r.overlaps.length ? ` · overlaps ${r.overlaps.map((o: any) => `@${o.handle}`).join(", ")}` : ""}`)}`);
   if (inputs.org.projects_without_role.length) console.log(`  ${fmt.muted("no role:")} ${inputs.org.projects_without_role.map((p: any) => p.title).join(", ")}`);
+  // Where the work is (S9): the busiest areas and the records behind them.
+  for (const a of (inputs.activity?.areas ?? []).slice(0, 8)) console.log(`  ${fmt.muted("area")} ${a.path_prefix} ${fmt.muted(`· ${a.commits_30d} commits · ${a.sessions_30d} sessions${a.authors?.length ? ` · ${a.authors.slice(0, 3).map((x: any) => x.name).join(", ")}` : ""}`)}`);
+  if (s.stale.plans + s.stale.tasks + s.stale.projects) console.log(`  ${fmt.muted("stale:")} ${s.stale.plans} plans · ${s.stale.tasks} tasks · ${s.stale.projects} projects ${fmt.muted("(records behind the activity; a review proposes their status changes first)")}`);
   console.log(fmt.muted("  --json for the full payload"));
 }
 

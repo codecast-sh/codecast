@@ -34,6 +34,7 @@ import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
 import { OrgScopePanel, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
+import { OrgEmptyCanvas, OrgGuide, orgGuideSteps } from "./OrgFirstOpen";
 import { changeNodeId, composeParam, findChiefOfStaff, openProposals, orgPreviewEnabled, pickProposal, proposalParam, proposalProgress, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
@@ -116,6 +117,7 @@ export function OrgPageInner() {
     (st) => st.orgIntentNotice?.at,
     (st) => st.currentSessionId,
     (st) => st.teams,
+    (st) => st.clientState.ui?.org_nux_seen,
   ]);
   const storeFocusChangeId = s.orgFocusChangeId;
   // The journal put an edit back on its own (no echo within its TTL): say
@@ -190,6 +192,11 @@ export function OrgPageInner() {
   const [graphFocus, setGraphFocus] = useState<OrgFocusTarget | null>(null);
   const focusSeq = useRef(0);
   const askFocus = useCallback((kind: OrgFocusTarget["kind"], id: string) => setGraphFocus({ kind, id, seq: ++focusSeq.current }), []);
+  // First open (org-staffing.md S14): the three step guide over the canvas.
+  // Opens on its own once, when the tree lands with no roles and the pref is
+  // unset; "How this page works" reopens it; Done or dismiss writes the pref.
+  const [guide, setGuide] = useState<{ step: number } | null>(null);
+  const guideOffered = useRef(false);
   const proposals = useMemo<OrgProposalRow[]>(() => preview ? previewProposals : joinProposals(s.orgProposals, s.orgProposalChanges), [preview, previewProposals, s.orgProposals, s.orgProposalChanges]);
   const workspaceProposals = useMemo(() => {
     const wanted = tree?.workspace;
@@ -272,6 +279,25 @@ export function OrgPageInner() {
     return !!r && (isAdmin || r.host_user_id === (me?.user_id ?? meId));
   }, [tree, isAdmin, me, meId]);
   const canMoveSession = useCallback((sess: OrgSession) => isAdmin || sess.owner_user_id === (me?.user_id ?? meId), [isAdmin, me, meId]);
+
+  // -------- first open (S14)
+  const liveRoles = tree ? tree.roles.filter((r) => r.status !== "retired").length : 0;
+  const meNodeId = me ? parentNodeId({ kind: "user", user_id: me.user_id }) : null;
+  const nuxSeen = s.clientState.ui?.org_nux_seen === true;
+  useWatchEffect(() => {
+    if (guideOffered.current || !tree || preview || liveRoles > 0 || nuxSeen) return;
+    guideOffered.current = true;
+    setGuide({ step: 0 });
+  }, [tree, preview, liveRoles, nuxSeen]);
+  // The first step is the person's own node: bring it into view.
+  useWatchEffect(() => {
+    if (guide?.step === 0 && meNodeId) askFocus("node", meNodeId);
+  }, [guide?.step, meNodeId, askFocus]);
+  const closeGuide = useCallback(() => {
+    setGuide(null);
+    if (!preview && !nuxSeen) useInboxStore.getState().updateClientUI({ org_nux_seen: true });
+  }, [preview, nuxSeen]);
+  const guideSteps = useMemo(() => orgGuideSteps(meNodeId, liveRoles > 0), [meNodeId, liveRoles]);
   /** Which cards may be picked up at all: no drag that would only snap back. */
   const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
 
@@ -577,9 +603,12 @@ export function OrgPageInner() {
             Org
             {tree && <span className="text-[13px] font-normal mt-1 truncate" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>/ {tree.workspace.name || (tree.workspace.kind === "user" ? "personal" : "team")}</span>}
           </h1>
-          <p className="mt-1.5 text-[12.5px] truncate" style={{ color: "var(--sol-text-muted)" }}>
-            <span className="hidden sm:inline">Who reports to whom: people, the roles they created, standing anchors, every session. Drag a card to move it.</span>
-            <span className="sm:hidden">Who reports to whom. Drag a card to move it.</span>
+          <p className="mt-1.5 text-[12.5px] truncate flex items-center gap-2" style={{ color: "var(--sol-text-muted)" }}>
+            <span className="hidden sm:inline truncate">Who reports to whom: people, the roles they created, standing anchors, every session. Drag a card to move it.</span>
+            <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
+            {tree && (
+              <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -606,6 +635,7 @@ export function OrgPageInner() {
             style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}
             title={proposal ? `${proposal.short_id}: ${staffingCount} to decide` : "Company health and the chief of staff"}
             aria-pressed={staffingOpen && panelMode === "staffing"}
+            data-org-guide="staffing"
           >
             Staffing
             {staffingCount > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{staffingCount}</span>}
@@ -621,7 +651,7 @@ export function OrgPageInner() {
             <MapIcon className="w-4 h-4" />
           </button>
           {tree && isAdmin !== false && (
-            <button type="button" onClick={() => setAddRoleOpen(true)} title="A seat that sessions and other roles report to, with a scope of projects and plans" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>
+            <button type="button" onClick={() => setAddRoleOpen(true)} title="A seat that sessions and other roles report to, with a scope of projects and plans" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-org-guide="hire">
               <Plus className="w-3.5 h-3.5" /> Add a role
             </button>
           )}
@@ -685,6 +715,10 @@ export function OrgPageInner() {
                 </div>
               )}
             </div>
+          )}
+          {/* S14: no roles yet. The person's own node is on the canvas; this is the paragraph and the two buttons that start a proposal. */}
+          {tree && layout && liveRoles === 0 && !proposal && !(phone && panelOpen) && (
+            <OrgEmptyCanvas me={me ?? null} reviewing={reviewing} onHireChief={hireChief} onProposeNow={proposeNow} />
           )}
           <div className="pointer-events-none absolute bottom-3 hidden lg:flex items-center gap-2 text-[10.5px] whitespace-nowrap transition-[right] duration-200" style={{ color: "var(--sol-text-dim)", right: panelWidth + 12 }}>
             <span>drag to move · double click to open</span>
@@ -767,6 +801,9 @@ export function OrgPageInner() {
           }}
         />
       )}
+
+      {/* first open guide (S14) */}
+      {guide && tree && <OrgGuide steps={guideSteps} step={guide.step} onStep={(i) => setGuide({ step: i })} onDone={closeGuide} />}
 
       {/* context menu */}
       <ContextMenu state={menu}>

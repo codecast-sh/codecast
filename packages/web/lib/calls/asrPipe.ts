@@ -26,10 +26,13 @@
 // yet — always the last one, and for a short burst the only one. `finish()`
 // commits the buffer and waits, bounded, for the transcription to come back.
 // `close()` remains what it always was: the abandon path.
+//
+// A huddle never calls finish until hangup. gpt-live-transcribe only emits a
+// completed line after `input_audio_buffer.commit`, so `speech_stopped` is
+// that commit. The previous model closed turns on VAD by itself.
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   LIVE_TRANSCRIBE_MODEL,
-  asrTranscriptionSession,
   isUnexpectedTranscript,
   localTranscribeLanguages,
   normalizeTranscribeLanguages,
@@ -79,6 +82,18 @@ export type AsrPipe = {
   close(): void;
 };
 
+/**
+ * The same recognizer, fed PCM instead of a MediaStreamTrack. The phone has
+ * no AudioContext, so it taps the microphone as int16 and calls `feedInt16`;
+ * the browser pipe below is this session plus an AudioContext on a track.
+ */
+export type AsrPcmSession = AsrPipe & {
+  /** PCM16 mono already at 24 kHz, the rate the socket wants. */
+  feedPcm16(pcm: ArrayBuffer): void;
+  /** PCM16 mono at `sampleRate`, resampled to 24 kHz then sent. */
+  feedInt16(samples: Int16Array, sampleRate: number): void;
+};
+
 const SAMPLE_RATE = 24_000;
 /** How much speech may wait for a socket that has not opened yet. Generous
  *  next to a burst; the cap only exists so a pipe that never connects cannot
@@ -110,27 +125,40 @@ function b64(buf: ArrayBuffer): string {
   return btoa(s);
 }
 
-/**
- * Open a recognizer on one track. Returns synchronously WITH THE MICROPHONE
- * ALREADY BEING READ — the mint and the socket settle behind it, and `close()`
- * at any point abandons whatever is in flight, so a caller never has to await a
- * pipe it is about to throw away.
- *
- * `roomKey` is what the ephemeral key is minted against: the server runs the
- * same authorizeRoom the media token runs, so a pipe can only ever exist for a
- * room its opener may already hear.
- */
-export function openAsrPipe(opts: {
+/** PCM16 mono → 24 kHz PCM16. A no-op when the source is already 24 kHz. */
+function int16To24k(input: Int16Array, inRate: number): ArrayBuffer {
+  if (!(inRate > 0) || input.length === 0) return new ArrayBuffer(0);
+  if (inRate === SAMPLE_RATE) {
+    const copy = new Int16Array(input.length);
+    copy.set(input);
+    return copy.buffer;
+  }
+  const ratio = inRate / SAMPLE_RATE;
+  const outLen = Math.floor(input.length / ratio);
+  const out = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) out[i] = input[Math.floor(i * ratio)]!;
+  return out.buffer;
+}
+
+type AsrSessionOpts = {
   convex: AsrConvexHandle;
   roomKey: string;
-  track: MediaStreamTrack;
   /** Timeline clock for utterance offsets, in ms. */
   clock: () => number;
   events?: AsrPipeEvents;
-  /** Languages this pipe may emit. Defaults to the browser's list. */
   languages?: string[];
-}): AsrPipe {
-  const { convex, roomKey, track, clock, events } = opts;
+};
+
+/**
+ * Open a recognizer the caller feeds. Capture is the caller's job — the
+ * browser pipe starts an AudioContext, the phone taps WebRTC PCM — and this
+ * is only the socket, the buffer, and the words coming back.
+ *
+ * Returns synchronously so a caller can start feeding before the mint
+ * answers; audio waits in the buffer until the socket is ready.
+ */
+export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
+  const { convex, roomKey, clock, events } = opts;
   let languages = normalizeTranscribeLanguages(
     opts.languages ?? localTranscribeLanguages(),
   );
@@ -138,9 +166,6 @@ export function openAsrPipe(opts: {
   let speaking = false;
   let utteranceStart = 0;
   let ws: WebSocket | null = null;
-  let actx: AudioContext | null = null;
-  let node: ScriptProcessorNode | null = null;
-  let source: MediaStreamAudioSourceNode | null = null;
   // False from the moment `finish` is called: what is buffered by then is
   // exactly what gets committed, so no audio arrives after the commit.
   let capturing = true;
@@ -151,6 +176,14 @@ export function openAsrPipe(opts: {
   // Set by the transcription that answers our commit — the one thing `finish`
   // is actually waiting for.
   let transcribedSinceCommit = false;
+  // gpt-live-transcribe emits a final transcript only after the client
+  // commits a turn. The previous model closed turns on server VAD by itself,
+  // which is why a huddle (which never calls finish until hangup) used to
+  // show words and a walkie burst still did (finish commits). When the mint
+  // hands back the live model, speech_stopped is the close of a turn and we
+  // have to commit it. An older mint that does not name the model keeps the
+  // old "VAD already committed" path.
+  let commitOnSpeechStop = false;
   /** PCM that has nowhere to go yet, oldest first. */
   let buffered: ArrayBuffer[] = [];
   let bufferedSamples = 0;
@@ -192,40 +225,6 @@ export function openAsrPipe(opts: {
     }
   }
 
-  function startCapture() {
-    try {
-      const stream = new MediaStream([track]);
-      const ac = new AudioContext();
-      actx = ac;
-      // A context built outside a gesture starts suspended and its processor
-      // never runs; the walkie's press IS a gesture, so this only matters for a
-      // pipe opened from a timer.
-      void Promise.resolve(ac.resume?.()).catch(() => {});
-      const src = ac.createMediaStreamSource(stream);
-      source = src;
-      // ScriptProcessor over AudioWorklet deliberately: one file, no worklet
-      // module fetch, and 4096-frame buffers (~85ms at 48k) are fine for ASR.
-      const proc = ac.createScriptProcessor(4096, 1, 1);
-      node = proc;
-      proc.onaudioprocess = (e) => {
-        if (closed || !capturing) return;
-        feed(floatTo16(e.inputBuffer.getChannelData(0), ac.sampleRate));
-      };
-      src.connect(proc);
-      // A ScriptProcessor only runs when connected toward the destination;
-      // route through a zero-gain node so nothing is audible.
-      const mute = ac.createGain();
-      mute.gain.value = 0;
-      proc.connect(mute);
-      mute.connect(ac.destination);
-    } catch {
-      // No capture path at all (an AudioContext the browser refused). The
-      // recognizer will report nothing, which the caller already treats as a
-      // burst without words rather than a failed burst.
-      hopeless = true;
-    }
-  }
-
   /** Poll a condition to a deadline. Small and dependency-free on purpose: the
    *  two things `finish` waits for are set from a socket callback, and a poll
    *  cannot miss one that fired before the wait began. */
@@ -239,9 +238,17 @@ export function openAsrPipe(opts: {
     });
   }
 
-  const pipe: AsrPipe = {
+  const pipe: AsrPcmSession = {
     get speaking() {
       return speaking;
+    },
+    feedPcm16(pcm: ArrayBuffer) {
+      if (closed || !capturing || pcm.byteLength === 0) return;
+      feed(pcm);
+    },
+    feedInt16(samples: Int16Array, sampleRate: number) {
+      if (closed || !capturing) return;
+      this.feedPcm16(int16To24k(samples, sampleRate));
     },
     async finish() {
       if (closed) return;
@@ -271,41 +278,33 @@ export function openAsrPipe(opts: {
       buffered = [];
       bufferedSamples = 0;
       try {
-        node?.disconnect();
-        source?.disconnect();
-        void actx?.close();
         ws?.close();
       } catch {}
       ws = null;
-      actx = null;
-      node = null;
-      source = null;
     },
   };
-
-  // The microphone, first and synchronously. Everything below this line is a
-  // round trip, and none of it may stand between a person talking and the audio
-  // being kept.
-  startCapture();
 
   void (async () => {
     const tryMint = (args: { room_key: string; languages?: string[] }) =>
       convex
         .action(api.transcripts.mintAsrToken, args)
         .catch((err: any) => ({ error: String(err?.message ?? "Could not start transcription") }));
-    // An older mint rejects the languages field. Retry without it so a huddle
-    // still transcribes; the socket update below is what then applies the list.
+    // Languages go on the first mint so a mixed room stays constrained. If
+    // that payload is refused — an older server that has no field, or OpenAI
+    // rejecting one tag — retry unconstrained rather than sit on a live
+    // transcript with no recognizer. Auth and "not configured" are the room
+    // or the deployment; a second trip cannot change those.
     let minted = await tryMint({
       room_key: roomKey,
       ...(languages.length ? { languages } : {}),
     });
     if (closed) return;
-    // Only retry when the mint rejected the new field itself. Auth failures
-    // and "not configured" must not spend a second round trip.
     if (
       languages.length &&
       typeof minted?.error === "string" &&
-      /languages|ArgumentValidation|Unexpected argument|extra field/i.test(minted.error)
+      /languages|ArgumentValidation|Unexpected argument|extra field|mint failed/i.test(
+        minted.error,
+      )
     ) {
       minted = await tryMint({ room_key: roomKey });
     }
@@ -331,6 +330,7 @@ export function openAsrPipe(opts: {
     if (Array.isArray(minted.languages) && minted.languages.length) {
       languages = normalizeTranscribeLanguages(minted.languages);
     }
+    commitOnSpeechStop = minted.model === LIVE_TRANSCRIBE_MODEL;
 
     // Browser websockets cannot set headers; the Realtime API accepts the
     // ephemeral secret as a subprotocol.
@@ -344,17 +344,10 @@ export function openAsrPipe(opts: {
 
     socket.onopen = () => {
       if (closed) return;
-      // The mint bakes the allowlist when it can. This update is the same
-      // object, sent again, so a mint that could not take `languages` (an
-      // older server) still ends up constrained before any audio is flushed.
-      if (languages.length) {
-        socket.send(
-          JSON.stringify({
-            type: "session.update",
-            session: asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL, languages),
-          }),
-        );
-      }
+      // The mint is the session. A session.update here used to re-send the
+      // live model and the allowlist so an older mint still ended up
+      // constrained; it also rewrote turn detection on a working socket, and
+      // a huddle then heard speech without ever getting a completed line.
       // What was said while this was connecting goes first, in order, so the
       // server hears one continuous take rather than the tail of one.
       flush();
@@ -375,6 +368,13 @@ export function openAsrPipe(opts: {
       } else if (msg.type === "input_audio_buffer.speech_stopped") {
         speaking = false;
         events?.onSpeechStop?.();
+        // Close the turn. gpt-live-transcribe does not emit a completed
+        // transcript on VAD the way gpt-4o-mini-transcribe did; without this
+        // a huddle stays on "Listening" for its whole length.
+        if (commitOnSpeechStop && socketOpen() && capturing && !finishing) {
+          transcribedSinceCommit = false;
+          ws!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+        }
       } else if (
         msg.type === "conversation.item.input_audio_transcription.delta" &&
         typeof msg.delta === "string"
@@ -423,4 +423,100 @@ export function openAsrPipe(opts: {
   })();
 
   return pipe;
+}
+
+/**
+ * Open a recognizer on one track. Returns synchronously WITH THE MICROPHONE
+ * ALREADY BEING READ — the mint and the socket settle behind it, and `close()`
+ * at any point abandons whatever is in flight, so a caller never has to await a
+ * pipe it is about to throw away.
+ *
+ * `roomKey` is what the ephemeral key is minted against: the server runs the
+ * same authorizeRoom the media token runs, so a pipe can only ever exist for a
+ * room its opener may already hear.
+ */
+export function openAsrPipe(opts: {
+  convex: AsrConvexHandle;
+  roomKey: string;
+  track: MediaStreamTrack;
+  /** Timeline clock for utterance offsets, in ms. */
+  clock: () => number;
+  events?: AsrPipeEvents;
+  /** Languages this pipe may emit. Defaults to the browser's list. */
+  languages?: string[];
+}): AsrPipe {
+  const { track, events } = opts;
+  let actx: AudioContext | null = null;
+  let node: ScriptProcessorNode | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+
+  function dropCapture() {
+    try {
+      node?.disconnect();
+      source?.disconnect();
+      void actx?.close();
+    } catch {}
+    actx = null;
+    node = null;
+    source = null;
+  }
+
+  const session = openAsrPcmSession({
+    ...opts,
+    events: {
+      ...events,
+      onFailed: (m) => {
+        dropCapture();
+        events?.onFailed?.(m);
+      },
+      onDropped: () => {
+        dropCapture();
+        events?.onDropped?.();
+      },
+    },
+  });
+
+  try {
+    const stream = new MediaStream([track]);
+    const ac = new AudioContext();
+    actx = ac;
+    // A context built outside a gesture starts suspended and its processor
+    // never runs; the walkie's press IS a gesture, so this only matters for a
+    // pipe opened from a timer.
+    void Promise.resolve(ac.resume?.()).catch(() => {});
+    const src = ac.createMediaStreamSource(stream);
+    source = src;
+    // ScriptProcessor over AudioWorklet deliberately: one file, no worklet
+    // module fetch, and 4096-frame buffers (~85ms at 48k) are fine for ASR.
+    const proc = ac.createScriptProcessor(4096, 1, 1);
+    node = proc;
+    proc.onaudioprocess = (e) => {
+      session.feedPcm16(floatTo16(e.inputBuffer.getChannelData(0), ac.sampleRate));
+    };
+    src.connect(proc);
+    // A ScriptProcessor only runs when connected toward the destination;
+    // route through a zero-gain node so nothing is audible.
+    const mute = ac.createGain();
+    mute.gain.value = 0;
+    proc.connect(mute);
+    mute.connect(ac.destination);
+  } catch {
+    // No capture path at all (an AudioContext the browser refused). The
+    // recognizer will report nothing, which the caller already treats as a
+    // burst without words rather than a failed burst.
+  }
+
+  return {
+    get speaking() {
+      return session.speaking;
+    },
+    finish: () => {
+      dropCapture();
+      return session.finish();
+    },
+    close() {
+      dropCapture();
+      session.close();
+    },
+  };
 }

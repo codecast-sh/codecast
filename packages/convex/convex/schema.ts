@@ -1159,6 +1159,20 @@ export default defineSchema({
     // The fact horizon the last delivered frame covered (a change_log seq,
     // i.e. a timestamp); the next frame diffs against it.
     last_frame_seq: v.optional(v.number()),
+    // Standing or program (org-staffing.md S10). A program ends with a plan,
+    // a project or a date; when the end comes org.health raises program_ended
+    // and the next review proposes what `then` says. Absent = undeclared.
+    tenure: v.optional(v.union(
+      v.object({ kind: v.literal("standing") }),
+      v.object({
+        kind: v.literal("program"),
+        ends: v.union(v.object({ plan: v.id("plans") }), v.object({ project: v.id("projects") }), v.object({ date: v.number() })),
+        then: v.union(v.literal("retire"), v.literal("review")),
+      }),
+    )),
+    // The face (org-staffing.md S13): a key from shared/contracts/orgAvatars;
+    // absent rows draw the default for their handle.
+    avatar: v.optional(v.string()),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -1260,6 +1274,23 @@ export default defineSchema({
     .index("by_team", ["team_id"])
     .index("by_scope_user", ["scope_user_id"]),
 
+  // A person's own Slack token (xoxp) for a workspace the team installed. Used
+  // for exactly one thing: seeing the private channels THEY are in and inviting
+  // the bot into one they pick, so a private channel comes over without a
+  // manual /invite. Never used to read or post messages.
+  slack_user_tokens: defineTable({
+    installation_id: v.id("slack_installations"),
+    workspace_id: v.string(),
+    user_id: v.id("users"), // the codecast person
+    slack_user_id: v.string(), // who they are in Slack
+    token: v.string(),
+    scopes: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_installation_user", ["installation_id", "user_id"])
+    .index("by_user", ["user_id"]),
+
   // Idempotency for inbound Slack events: Slack retries on slow/failed acks, and
   // a double-wake would make the anchor answer the same mention twice (Aivery's
   // triple-send bug). We record each event_id and drop repeats.
@@ -1312,6 +1343,19 @@ export default defineSchema({
     outbound_count: v.optional(v.number()),
     last_error: v.optional(v.string()),
     last_error_at: v.optional(v.number()),
+    // The history import, when one was asked for. Runs page by page in
+    // scheduled actions; the settings surface reads `fetched` as it grows.
+    backfill: v.optional(v.object({
+      window: v.string(), // "1d" | "7d" | "30d" | "90d" | "all"
+      status: v.union(v.literal("running"), v.literal("done"), v.literal("failed")),
+      fetched: v.number(), // lines brought over so far (roots and replies)
+      skipped: v.optional(v.number()), // lines that failed to convert; the import went on without them
+      started_at: v.number(),
+      heartbeat_at: v.optional(v.number()), // last run that reported in; the stall sweep reads this, not updated_at
+      finished_at: v.optional(v.number()),
+      capped: v.optional(v.boolean()), // stopped at the per import ceiling
+      error: v.optional(v.string()),
+    })),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -1336,6 +1380,10 @@ export default defineSchema({
     is_bot: v.optional(v.boolean()),
     deleted: v.optional(v.boolean()),
     codecast_user_id: v.optional(v.id("users")),
+    // How codecast_user_id was decided. "email": the addresses matched, and a
+    // profile refresh may recompute it. "manual": a teammate chose it (or chose
+    // "nobody", with codecast_user_id unset); a refresh leaves it alone.
+    mapped_by: v.optional(v.union(v.literal("email"), v.literal("manual"))),
     fetched_at: v.number(),
   })
     .index("by_workspace_user", ["workspace_id", "slack_user_id"])
@@ -3859,6 +3907,10 @@ export default defineSchema({
     non_goals: v.optional(v.array(v.string())),
     risks: v.optional(v.array(v.string())),
     budget: v.optional(v.object({ tokens_per_day: v.optional(v.number()), hands_per_day: v.optional(v.number()) })),
+    // Ongoing (a business line that outlives any plan) or bounded (an effort
+    // with an end); a bounded project is what a program role ends with
+    // (org-staffing.md S10).
+    horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"))),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -5089,6 +5141,16 @@ export default defineSchema({
     // arrive as them.
     user_id: v.id("users"),
     text: v.string(),
+    // Images pasted, dropped or picked in the huddle chat. Same shape as
+    // chat_messages.attachments so the room reuses the chat tile, and the
+    // same storage ids ride to fed sessions as pending_messages.image_storage_ids.
+    attachments: v.optional(v.array(v.object({
+      storage_id: v.id("_storage"),
+      name: v.optional(v.string()),
+      mime: v.optional(v.string()),
+      width: v.optional(v.number()),
+      height: v.optional(v.number()),
+    }))),
     // Set when an AGENT said this: the session that is fed the huddle live
     // and answered. Rendered with the agent's identity, never as user_id's
     // own words. `source_message_id` is the session message it mirrors, so
@@ -5918,6 +5980,27 @@ export default defineSchema({
   // a leaked row (tab closed mid-word) misleads for one TTL and never again.
   // Deliberately NOT in the store/sync pipeline: this is presence, not state —
   // nothing persists it, and the only reader is the open channel's surface.
+  // Follow mode (Figma style). A follower's lease on a leader: upserted to
+  // start, renewed every few seconds while following, dead after
+  // FOLLOW_LEASE_MS (follow.ts). No row means nobody follows, which is what
+  // gates the leader's view writes below.
+  view_follows: defineTable({
+    follower_id: v.id("users"),
+    leader_id: v.id("users"),
+    updated_at: v.number(),
+  })
+    .index("by_leader", ["leader_id", "updated_at"])
+    .index("by_follower", ["follower_id"]),
+  // Where a leader is right now, written only while someone follows them,
+  // about four times a second at most. Readers get it only while their own
+  // lease is live, and never a conversation they could not open themselves.
+  view_states: defineTable({
+    user_id: v.id("users"),
+    path: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+    updated_at: v.number(),
+  }).index("by_user", ["user_id"]),
   chat_typing: defineTable({
     channel_id: v.id("chat_channels"),
     user_id: v.id("users"),

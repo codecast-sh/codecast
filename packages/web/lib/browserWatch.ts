@@ -134,19 +134,34 @@ export function mapFromFrame(
 
 const ACTION_KINDS = new Set<WatchActionKind>(["move", "down", "up", "type", "nav", "scroll"]);
 
-/** One `action` message as the socket delivered it, or null if malformed. */
+/** The daemon caps typed text here (the CLI's ACTION_TEXT_CAP); the viewer
+ *  holds the same line so a frame from an older or foreign daemon cannot
+ *  hand the overlay a transcript. */
+export const WATCH_ACTION_TEXT_CAP = 200;
+
+const unit = (v: number) => Math.min(1, Math.max(0, v));
+
+/**
+ * One `action` message as the socket delivered it, or null if malformed.
+ * The same shape the daemon's normalizeAction produces: a point clamped to
+ * the viewport, text only on `type` (and never beside `secret`), a url only
+ * on `nav`. Anything else a message carries is dropped here, so the overlay
+ * only ever sees frames the protocol defines.
+ */
 export function parseWatchAction(msg: any): WatchActionFrame | null {
   if (!msg || typeof msg.kind !== "string" || !ACTION_KINDS.has(msg.kind)) return null;
   if (typeof msg.x !== "number" || typeof msg.y !== "number" || !Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return null;
   const action: WatchActionFrame = {
     kind: msg.kind,
-    x: msg.x,
-    y: msg.y,
+    x: unit(msg.x),
+    y: unit(msg.y),
     at: typeof msg.at === "number" && Number.isFinite(msg.at) ? msg.at : Date.now(),
   };
-  if (typeof msg.text === "string") action.text = msg.text;
-  if (msg.secret === true) action.secret = true;
-  if (typeof msg.url === "string") action.url = msg.url;
+  if (action.kind === "type") {
+    if (msg.secret === true) action.secret = true;
+    else if (typeof msg.text === "string") action.text = msg.text.slice(-WATCH_ACTION_TEXT_CAP);
+  }
+  if (action.kind === "nav" && typeof msg.url === "string") action.url = msg.url;
   return action;
 }
 

@@ -74,6 +74,7 @@ export type ShortcutAction =
   | 'msg.sendAdvance'
   | 'msg.sendDismiss'
   | 'msg.forkSend'
+  | 'msg.handoff'
   | 'permission.approve'
   | 'permission.deny'
   | 'review.nextFile'
@@ -295,6 +296,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+enter', action: 'msg.sendAdvance', when: 'conversation', skipInputCheck: true, description: 'Send and advance' },
   { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, description: 'Send and stash' },
   { key: 'ctrl+shift+enter', mac: 'meta+shift+enter', action: 'msg.forkSend', when: 'conversation', skipInputCheck: true, description: 'Fork and send' },
+  { key: 'alt+shift+h', action: 'msg.handoff', when: 'conversation', skipInputCheck: true, description: 'Hand off to a teammate' },
   { key: 'y', action: 'permission.approve', when: 'conversation', description: 'Approve permission' },
   { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
 

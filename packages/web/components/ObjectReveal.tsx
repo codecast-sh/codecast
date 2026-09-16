@@ -1,8 +1,8 @@
 "use client";
 // The inline reveal: a rich object reference (a pill in prose, a shared-object
 // card) opens its FULL page right here in the conversation — a full-bleed band
-// spanning the whole scrolling surface, with the object's real page inside.
-// Reading the object no longer means leaving.
+// on a crosshatch ground, spanning the whole scrolling surface, with the
+// object's real page inside. Reading the object no longer means leaving.
 //
 // Two halves. RevealHost wraps a rendered markdown body: it renders its
 // children untouched (a fragment, so a message body's blocks stay direct
@@ -122,6 +122,36 @@ function revealBounds(el: HTMLElement): HTMLElement | null {
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
+}
+
+function scrollerCanTake(el: HTMLElement, deltaY: number): boolean {
+  if (el.scrollHeight <= el.clientHeight + 1) return false;
+  if (deltaY < 0) return el.scrollTop > 0;
+  return el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+}
+
+function isPageScroller(el: HTMLElement): boolean {
+  return el.hasAttribute("data-sv-feed") || el.hasAttribute("data-main-scroll") || el.classList.contains("object-reveal__body");
+}
+
+/** Wheel on the band moves the parent conversation, so a full-size object
+ *  cannot trap the reader. A small nested list (`data-reveal-scroll`, or any
+ *  overflow box that is not the page's own feed) keeps the wheel while it
+ *  can still scroll. */
+export function revealWheelGoesToParent(target: EventTarget | null, band: HTMLElement, deltaY: number): boolean {
+  const start = target instanceof Element ? target : null;
+  if (!start) return true;
+  if (start.closest("[data-reveal-scroll]")) {
+    const box = start.closest<HTMLElement>("[data-reveal-scroll]");
+    return !box || !scrollerCanTake(box, deltaY);
+  }
+  for (let n: HTMLElement | null = start as HTMLElement; n && n !== band; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if (oy !== "auto" && oy !== "scroll") continue;
+    if (isPageScroller(n)) return true;
+    if (scrollerCanTake(n, deltaY)) return false;
+  }
+  return true;
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;
@@ -290,12 +320,29 @@ function useOpenMotion(ref: React.RefObject<HTMLDivElement | null>, reveal: Open
   }, [ref, reveal]);
 }
 
+function useRevealWheel(ref: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!revealWheelGoesToParent(e.target, el, e.deltaY)) return;
+      const bounds = revealBounds(el);
+      if (!bounds) return;
+      e.preventDefault();
+      bounds.scrollTop += e.deltaY / cssZoomOf(bounds);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+  }, [ref]);
+}
+
 function RevealBand({ reveal }: { reveal: OpenReveal }) {
   const { target } = reveal;
   const ref = useRef<HTMLDivElement>(null);
   useFullBleed(ref);
   useScrollHold(ref, reveal);
   useOpenMotion(ref, reveal);
+  useRevealWheel(ref);
   // Closing folds the band back into the line it grew from, then brings the
   // reference that opened it back into view if the read had scrolled past it
   // — so a toggle lands the reader where they started, not on whatever the

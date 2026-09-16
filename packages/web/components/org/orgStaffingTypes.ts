@@ -71,7 +71,22 @@ export type OrgProposalChange = {
   applied_at?: number;
 };
 
-export type OrgProposalAuthor = { kind: "role" | "session" | "user"; id: string; name?: string; short_id?: string };
+/** Who wrote a proposal (S15). The server stores kind and id; the rest is
+ *  what a pill needs and is filled by the server when it enriches, else by
+ *  the web from the store (a session row, the org tree's role row). */
+export type OrgProposalAuthor = {
+  kind: "role" | "session" | "user";
+  id: string;
+  /** A role's or a person's name; a session's title. */
+  name?: string;
+  /** "jx7abcd" for a session, "or-N" for a role. */
+  short_id?: string;
+  /** A session's title, when the server names it apart from `name`. */
+  title?: string;
+  /** A role's handle and avatar key (orgAvatars). */
+  handle?: string;
+  avatar?: string;
+};
 
 export type OrgProposalRow = {
   _id: string;

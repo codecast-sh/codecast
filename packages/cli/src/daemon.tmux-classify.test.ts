@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
-import { CODEX_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
+import { parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -587,6 +588,55 @@ describe("codex trust dialog", () => {
 
   test("codex's update menu is untouched by the trust rule", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(CODEX_UPDATE_MENU_PANE))).toBe("update_menu");
+  });
+});
+
+// ── Grok first-launch folder-trust dialog (jx702ea, 2026-09-16) ────────────
+// Full-screen y/n, no cursor, options ~40 rows above the footer. The live
+// region is only the version footer, so classifyTmuxLiveState cannot see it;
+// grok classifies whole-pane via classifyLivePaneFor.
+
+describe("grok trust dialog", () => {
+  const grokReady = AGENT_CLIENTS.grok.promptReadyPattern;
+
+  test("the live region is only the footer — the options are not in view", () => {
+    const region = extractTmuxLiveRegion(GROK_TRUST_PANE);
+    expect(region).not.toContain("Yes, proceed");
+    expect(region).toContain("Grok Build");
+  });
+
+  test("a 25-line tail misses the options; the grok capture budget sees them", () => {
+    const lines = GROK_TRUST_PANE.replace(/\s+$/, "").split("\n");
+    expect(isGrokTrustDialog(lines.slice(-25).join("\n"))).toBe(false);
+    expect(GROK_TRUST_PANE_CAPTURE_LINES).toBeGreaterThanOrEqual(80);
+    expect(isGrokTrustDialog(lines.slice(-GROK_TRUST_PANE_CAPTURE_LINES).join("\n"))).toBe(true);
+  });
+
+  test("whole-pane grok classification is trust, not unknown", () => {
+    expect(isGrokTrustDialog(GROK_TRUST_PANE)).toBe(true);
+    expect(classifyGlyphlessClientPaneState(GROK_TRUST_PANE, grokReady)).toBe("trust");
+    expect(classifyLivePaneFor("grok", GROK_TRUST_PANE)).toBe("trust");
+  });
+
+  test("codex's numbered trust dialog is not grok's", () => {
+    expect(isGrokTrustDialog(CODEX_TRUST_PANE)).toBe(false);
+  });
+
+  test("an idle grok composer is not a trust dialog", () => {
+    const idle = "│ ❯ \nShift+Tab:mode  │  Ctrl+x:shortcuts\n  Grok Build  1.0.30 [stable]";
+    expect(isGrokTrustDialog(idle)).toBe(false);
+    expect(classifyLivePaneFor("grok", idle)).toBe("idle");
+  });
+
+  test("parseInteractivePrompt does not mint a card for grok's y/n dialog", () => {
+    // No numbered rows, no cursor, no "Press enter to continue" — holding this
+    // as a human question is how the first delivery parked (jx702ea).
+    expect(parseInteractivePrompt(GROK_TRUST_PANE)).toBeNull();
+    expect(parseInteractivePrompt(GROK_TRUST_PANE, true)).toBeNull();
+  });
+
+  test("the highlight walker cannot confirm grok's dialog (no cursor — send y)", () => {
+    expect(planTrustPromptStep(GROK_TRUST_PANE.split("\n")).action).toBe("none");
   });
 });
 

@@ -182,11 +182,34 @@ export async function performCreateProposal(
 
 // ── Read ────────────────────────────────────────────────────────────────────
 
+/**
+ * The author, named (org-staffing.md S15). The row stores kind and id; every
+ * read hands back what the pill draws: a session's title and short id, a
+ * role's name, handle, short id and avatar, a person's name. A row whose
+ * subject is gone keeps the bare kind and id, so the pill still renders.
+ */
+async function enrichAuthor(ctx: Ctx, author: ProposalRow["author"]): Promise<Record<string, unknown>> {
+  try {
+    if (author.kind === "session") {
+      const conv: any = await ctx.db.get(author.id as Id<"conversations">);
+      return conv ? { ...author, title: conv.title ?? undefined, name: conv.title ?? undefined, short_id: conv.short_id ?? undefined } : author;
+    }
+    if (author.kind === "role") {
+      const role: any = await ctx.db.get(author.id as Id<"org_roles">);
+      return role ? { ...author, name: role.name, handle: role.handle, short_id: role.short_id, avatar: role.avatar ?? undefined } : author;
+    }
+    const user: any = await ctx.db.get(author.id as Id<"users">);
+    return user ? { ...author, name: user.name ?? user.email ?? undefined } : author;
+  } catch {
+    return author;
+  }
+}
+
 export async function readProposal(ctx: Ctx, userId: Id<"users">, ref: string): Promise<any | null> {
   const proposal = await findProposal(ctx, ref);
   if (!proposal || !(await userCanAccessRole(ctx, userId, hostShape(proposal)))) return null;
   const changes = (await changesOf(ctx, proposal._id)).map((c) => ({ ...c, line: describeOrgChange(c.change) }));
-  return { ...proposal, changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
+  return { ...proposal, author: await enrichAuthor(ctx, proposal.author), changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
 }
 
 const countsOf = (changes: ChangeRow[]) => ({
@@ -204,7 +227,7 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
   const rank = (s: string) => (s === "open" ? 0 : s === "resolved" ? 1 : 2);
   const kept = rows.filter((p) => !args.status || p.status === args.status).sort((a, b) => rank(a.status) - rank(b.status) || b.created_at - a.created_at).slice(0, PROPOSAL_LIST_CAP);
   const out = [];
-  for (const p of kept) out.push({ ...p, link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
+  for (const p of kept) out.push({ ...p, author: await enrichAuthor(ctx, p.author), link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
   return out;
 }
 

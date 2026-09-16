@@ -17,6 +17,7 @@ import {
 } from "@codecast/shared/chat";
 import { entityMentionRegex } from "@codecast/shared/entities";
 import { emailLocalHandle } from "../chatText";
+import { CHIEF_OF_STAFF_HANDLE } from "./orgAccess";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { canSendProductMessage } from "../pendingMessages";
 
@@ -93,6 +94,9 @@ export async function resolveMentions(
  *  to that bot (a plain user mention that wakes nothing) and never to the
  *  role. Retired roles are not addressable; a paused one resolves (its wake
  *  rail holds it). */
+/** The handle the workspace anchor answered to before the chief of staff. */
+export const ANCHOR_ALIAS = "anchor";
+
 export type ChatMentions = {
   users: Id<"users">[];
   roles: Doc<"org_roles">[];
@@ -124,8 +128,12 @@ export async function resolveChatMentions(
       .query("org_roles")
       .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", senderId).eq("handle", handle))
       .first());
-  for (const handle of handles) {
-    const person = matchHandle(roster, handle);
+  for (const written of handles) {
+    // `@anchor` names the chief of staff once one stands (org-staffing.md
+    // S12): the workspace's standing agent is the chief, and the bot named
+    // Anchor is its identity, so the mention reaches the seat, not the bot.
+    const handle = written.toLowerCase() === ANCHOR_ALIAS && (await roleByHandle(CHIEF_OF_STAFF_HANDLE)) ? CHIEF_OF_STAFF_HANDLE : written;
+    const person = matchHandle(roster, written);
     if (person && !person.is_bot) continue;
     if (SESSION_SHORT_ID_RE.test(handle)) {
       const conversation = await findConversationByAnyRefWhere(

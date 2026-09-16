@@ -106,3 +106,27 @@ test("opening a reference in another host closes the first; a host inside the ba
   expect(content.querySelector("button.b")?.getAttribute("aria-pressed")).toBe("true");
   React.act(() => root!.render(null));
 });
+
+test("wheel on the page feed goes to the parent conversation, a nested list keeps it", () => {
+  const { revealWheelGoesToParent } = mod;
+  const band = document.createElement("div");
+  const feed = document.createElement("div");
+  feed.setAttribute("data-sv-feed", "");
+  Object.defineProperty(feed, "scrollHeight", { value: 2000 });
+  Object.defineProperty(feed, "clientHeight", { value: 400 });
+  feed.scrollTop = 80;
+  const p = document.createElement("p");
+  feed.appendChild(p);
+  band.appendChild(feed);
+  expect(revealWheelGoesToParent(p, band, 40)).toBe(true);
+
+  const list = document.createElement("div");
+  list.setAttribute("data-reveal-scroll", "");
+  Object.defineProperty(list, "scrollHeight", { value: 400 });
+  Object.defineProperty(list, "clientHeight", { value: 80 });
+  list.scrollTop = 10;
+  band.appendChild(list);
+  expect(revealWheelGoesToParent(list, band, 40)).toBe(false);
+  list.scrollTop = 0;
+  expect(revealWheelGoesToParent(list, band, -40)).toBe(true);
+});

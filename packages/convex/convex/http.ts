@@ -4237,6 +4237,12 @@ cliRoute("/cli/chat/slack/update", async (ctx, body) => {
 cliRoute("/cli/chat/slack/unlink", async (ctx, body) => {
   return await ctx.runMutation(api.slackSync.unlinkChannel, body);
 });
+cliRoute("/cli/chat/slack/people", async (ctx, body) => {
+  return await ctx.runQuery(api.slackSync.listSlackPeople, body);
+});
+cliRoute("/cli/chat/slack/map", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.mapSlackPerson, body);
+});
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }
 // where role is "or-N" or a handle and channel is an id or "#name".

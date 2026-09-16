@@ -5,9 +5,10 @@
 // this to start a recording or to read the last one, and splitting them would
 // put a tap between the two things anybody comes here for.
 //
-// WHAT THIS SCREEN WILL NOT DO is show live words. The phone has no recognizer
-// (see lib/recorder.ts), so while it captures there is an elapsed clock and a
-// level, which are honest, and nothing pretending to be a transcript.
+// While it records, the clock and the level say the microphone is working,
+// and live lines appear as the recognizer hears them — the same words the
+// call page is filling in. If the recognizer cannot start, the file still
+// transcribes after stop.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -146,7 +147,20 @@ export default function RecordScreen() {
             <LevelBar />
             <RNText style={styles.hint} maxFontSizeMultiplier={CHROME_FONT_CAP}>
               Records from this phone&apos;s microphone. You can lock the screen.
+              Words appear here and on the call page as they are said.
             </RNText>
+            {(rec.tail.length > 0 || rec.partial) && (
+              <RNView style={styles.liveBox}>
+                {rec.tail.slice(-3).map((line, i) => (
+                  <RNText key={`${i}:${line.text.slice(0, 24)}`} style={styles.liveLine}>
+                    {line.text}
+                  </RNText>
+                ))}
+                {rec.partial ? (
+                  <RNText style={styles.livePartial}>{rec.partial}</RNText>
+                ) : null}
+              </RNView>
+            )}
           </>
         ) : null}
 
@@ -154,8 +168,9 @@ export default function RecordScreen() {
           <>
             <RNText style={styles.buttonLabel}>Record a meeting</RNText>
             <RNText style={styles.hint} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-              Records from this phone&apos;s microphone. The words and a summary
-              arrive after you stop. Only you can open it.
+              Records from this phone&apos;s microphone. Words appear as they
+              are said, on this screen and on the call page. Only you can open
+              it.
             </RNText>
           </>
         ) : null}
@@ -283,6 +298,24 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.textMuted,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  liveBox: {
+    width: '100%',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+  },
+  liveLine: {
+    fontSize: FontSize.sm,
+    color: Theme.text,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  livePartial: {
+    fontSize: FontSize.sm,
+    color: Theme.textMuted,
+    lineHeight: 20,
+    textAlign: 'center',
   },
 
   levelTrack: {
