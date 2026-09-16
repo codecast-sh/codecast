@@ -157,7 +157,9 @@ describe("command groups stay off the boot graph", () => {
     // 219 after ct-51435: triggerLifecycle.ts, the run completion vocabulary
     // the scheduler and the Convex writer both state. A leaf of pure strings
     // through the barrel, importing nothing; no subsystem arrived with it.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(219);
+    // 220 after the 2026-09-15 sweep: convexConnectionState.ts, a leaf the
+    // CLI command tree reads for connection copy.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(220);
     expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3032);
   }, GRAPH_WALK_TIMEOUT);
 
@@ -190,7 +192,9 @@ describe("command groups stay off the boot graph", () => {
     // source that feeds desktop panes, and the unattended contract via the barrel.
     // 306 after ct-51435: triggerLifecycle.ts, the same run completion leaf,
     // reached through taskScheduler.ts which already sat on this graph.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(306);
+    // 310 after the 2026-09-15 sweep: idleProbe, keepalive, convexConnectionState
+    // and watchActions, the daemon's own cloud and browser-watch work.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(310);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
