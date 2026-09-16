@@ -8,6 +8,8 @@ import {
   mergeOrgTree,
   orgIntentSatisfied,
   dropRejectedOrgIntent,
+  lineIntentEchoed,
+  orgIntentNoticeText,
   ORG_INTENT_TTL_MS,
   type OrgIntent,
   type OrgSliceData,
@@ -254,6 +256,45 @@ describe("org intents", () => {
     st2 = run(st2, "updateOrgRole", ROLE, { caps: { hands_per_day: 2 } });
     st2 = run(st2, "revertOrgIntent", st2.orgIntents[0].id);
     expect(st2.orgTree!.roles[0].caps).toBeUndefined();
+  });
+
+  it("the line rides an intent: a tree push cannot snap the picker back, the per view echo drops it, a refusal restores, expiry says nothing", () => {
+    // The tree never carries the slug (orgRoles.line does), so the replay is
+    // the only thing that keeps the picker on the new value until the echo.
+    let st: OrgSliceData = { ...staffing(), orgTree: clone() };
+    st = run(st, "setRoleLine", ROLE, "feature");
+    expect((st.orgTree!.roles[0] as any).line_workflow_slug).toBe("feature");
+    expect(st.orgIntents.map((i) => i.kind === "line" && [i.role_id, i.slug, i.from])).toEqual([[ROLE, "feature", undefined]]);
+    // A second pick replaces the first on the same subject.
+    st = run(st, "setRoleLine", ROLE, "plan-autopilot");
+    expect(st.orgIntents).toHaveLength(1);
+    expect((st.orgTree!.roles[0] as any).line_workflow_slug).toBe("plan-autopilot");
+    // Any push (a heartbeat) drops the field; the intent puts it back.
+    const stale = mergeOrgTree(clone(), st.orgIntents);
+    expect(stale.intents).toHaveLength(1);
+    expect((stale.tree.roles[0] as any).line_workflow_slug).toBe("plan-autopilot");
+    // The per view read echoes the slug: that is the acknowledgement.
+    expect(lineIntentEchoed(st.orgIntents, ROLE, "feature")).toHaveLength(0);
+    expect(lineIntentEchoed(st.orgIntents, ROLE, undefined)).toHaveLength(0);
+    expect(lineIntentEchoed(st.orgIntents, ROLE, "plan-autopilot").map((i) => i.id)).toEqual([st.orgIntents[0].id]);
+    st = run(st, "dropOrgIntent", st.orgIntents[0].id);
+    expect(st.orgIntents).toHaveLength(0);
+    // A refusal puts the row back to what it held (unset here) and says so.
+    let st2: OrgSliceData = { ...staffing(), orgTree: clone() };
+    st2 = run(st2, "setRoleLine", ROLE, "feature");
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent({ orgIntents: st2.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "setRoleLine", [ROLE, "feature"]);
+    expect(notices).toEqual(["Setting the line to feature was refused; put back."]);
+    st2 = run(st2, "revertOrgIntent", reverted[0]);
+    expect((st2.orgTree!.roles[0] as any).line_workflow_slug).toBeUndefined();
+    // Ageing out is not evidence the write failed: no notice, and the merge
+    // leaves the server's row as pushed.
+    let st3: OrgSliceData = { ...staffing(), orgTree: clone() };
+    st3 = run(st3, "setRoleLine", ROLE, "feature");
+    expect(orgIntentNoticeText(st3.orgIntents[0], "expired")).toBe("");
+    const aged = mergeOrgTree(clone(), st3.orgIntents, Date.now() + ORG_INTENT_TTL_MS + 1);
+    expect(aged.intents).toHaveLength(0);
+    expect((aged.tree.roles[0] as any).line_workflow_slug).toBeUndefined();
   });
 
   it("a retire rides an intent: a stale push replays it and the echo clears it", () => {

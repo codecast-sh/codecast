@@ -46,6 +46,9 @@ export type OrgIntent =
    *  restores them at once instead of waiting for a push. */
   | { kind: "roleFields"; id: string; role_id: string; fields: OrgUpdateRoleInput; from: OrgUpdateRoleInput; at: number }
   | { kind: "retireRole"; id: string; role_id: string; handle: string; at: number }
+  /** The role's line (the-line.md L2): the workflow slug its scope runs on.
+   *  `from` is the slug the tree row held before, for a refusal to restore. */
+  | { kind: "line"; id: string; role_id: string; slug: string; from?: string; at: number }
   | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; edits?: Record<string, unknown>; at: number }
   | { kind: "staff"; id: string; stub: OrgStaffInput; at: number };
 
@@ -258,6 +261,13 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
     }
     case "retireRole":
       return !tree.roles.some((r) => r._id === intent.role_id);
+    case "line": {
+      // org.tree carries no slug today (orgRoles.line does), so a push
+      // cannot confirm this one; the settings tab drops it when its per view
+      // read echoes the slug (lineIntentEchoed), else it ages out quietly.
+      const role = tree.roles.find((r) => r._id === intent.role_id) as (OrgRole & { line_workflow_slug?: string }) | undefined;
+      return !role || role.line_workflow_slug === intent.slug;
+    }
     case "moveSession": {
       const parent = orgSessionParent(tree, intent.conversation_id);
       // A session beyond the target's top N cannot be seen in the snapshot at
@@ -297,6 +307,13 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       const role = tree.roles.find((r) => r._id === intent.role_id);
       if (!role) return;
       applyRoleFields(role, intent.fields, roleFieldKeys(intent.fields));
+      role.updated_at = Math.max(role.updated_at, intent.at);
+      return;
+    }
+    case "line": {
+      const role = tree.roles.find((r) => r._id === intent.role_id) as (OrgRole & { line_workflow_slug?: string }) | undefined;
+      if (!role) return;
+      role.line_workflow_slug = intent.slug;
       role.updated_at = Math.max(role.updated_at, intent.at);
       return;
     }
@@ -446,6 +463,13 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       applyRoleFields(role, intent.from, roleFieldKeys(intent.fields));
       return;
     }
+    case "line": {
+      const role = draft.orgTree?.roles.find((r) => r._id === intent.role_id) as (OrgRole & { line_workflow_slug?: string }) | undefined;
+      if (!role) return;
+      if (intent.from === undefined) delete role.line_workflow_slug;
+      else role.line_workflow_slug = intent.from;
+      return;
+    }
     default:
       return;
   }
@@ -461,6 +485,10 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
       const what = intent.fields.status === "active" ? "Resuming" : intent.fields.status === "paused" ? "Pausing" : `Updating ${roleFieldKeys(intent.fields).join(", ")} on`;
       return `${what} the role ${tail}; put back.`;
     }
+    // Expiry says nothing: the tree never echoes the slug, so an aged line
+    // intent is not evidence the write failed (the per view read shows the
+    // server's value either way).
+    case "line": return reason === "refused" ? `Setting the line to ${intent.slug} ${tail}; put back.` : "";
     case "retireRole": return `Retiring @${intent.handle} ${tail}; the role is back.`;
     case "moveSession": return `Moving the session ${tail}; it is back where it was.`;
     case "moveRole": return `Moving the role ${tail}; it is back where it was.`;
@@ -482,7 +510,8 @@ export function pruneOrgIntents(draft: Pick<OrgDraft, "orgTree" | "orgIntents" |
     const aged = now - i.at >= ORG_INTENT_TTL_MS;
     if (aged) {
       revertOrgIntent(draft, i);
-      draft.orgIntentNotice = { text: orgIntentNoticeText(i, "expired"), at: now };
+      const text = orgIntentNoticeText(i, "expired");
+      if (text) draft.orgIntentNotice = { text, at: now };
       continue;
     }
     if (draft.orgTree && orgIntentSatisfied(draft.orgTree, i, draft.orgProposalChanges)) continue;
@@ -531,9 +560,17 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "decideOrgProposalChange" && i.kind === "decideChange" && i.change_id === args[0]) ||
     (action === "acceptAllOrgProposal" && i.kind === "decideChange" && i.proposal_id === args[0]) ||
     (action === "staffChiefOfStaff" && i.kind === "staff" && i.stub.client_id === (args[0] as OrgStaffInput | undefined)?.client_id) ||
-    (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))));
+    (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
+    (action === "setRoleLine" && i.kind === "line" && i.role_id === args[0] && i.slug === args[1]));
   for (const i of reverts) { state.revertOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
   return notices;
+}
+
+/** The line intents on a role that the server's own read (orgRoles.line)
+ *  now agrees with: the echo the tree cannot carry. The caller drops them. */
+export function lineIntentEchoed(intents: OrgIntent[], roleId: string, serverSlug: string | undefined): OrgIntent[] {
+  if (!serverSlug) return [];
+  return intents.filter((i) => i.kind === "line" && i.role_id === roleId && i.slug === serverSlug);
 }
 
 let intentSeq = 0;
@@ -553,6 +590,7 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
     // same role are two edits, each with its own `from` to go back to.
     : i.kind === "roleFields" ? `rf:${i.role_id}:${roleFieldKeys(i.fields).join(",")}`
     : i.kind === "retireRole" ? `x:${i.role_id}`
+    : i.kind === "line" ? `l:${i.role_id}`
     : "staff";
   const key = subjectOf(intent);
   draft.orgIntents = [...draft.orgIntents.filter((i) => subjectOf(i) !== key), intent];
@@ -707,11 +745,17 @@ export function createOrgSlice(): OrgSliceState {
       pushIntent(this, intent);
     }),
 
+    // The line (the-line.md L2). An intent, not a bare patch: org.tree is a
+    // singleton replaced wholesale on every push and only intents replay
+    // over it, so a heartbeat push before the mutation echoed would snap the
+    // picker back to the old slug.
     setRoleLine: action(function (this: OrgDraft, roleId: string, slug: string) {
-      const role = this.orgTree?.roles.find((r) => r._id === roleId) as (OrgRole & { line_workflow_slug?: string }) | undefined;
-      if (!role) return;
-      role.line_workflow_slug = slug;
-      role.updated_at = Date.now();
+      const tree = this.orgTree;
+      const role = tree?.roles.find((r) => r._id === roleId) as (OrgRole & { line_workflow_slug?: string }) | undefined;
+      if (!tree || !role) return;
+      const intent: OrgIntent = { kind: "line", id: intentId(), role_id: roleId, slug, from: role.line_workflow_slug, at: Date.now() };
+      applyOrgIntent(tree, intent);
+      pushIntent(this, intent);
     }),
 
     followOrgChannel: action(function (this: OrgDraft, roleShortId: string, channelId: string, follow: boolean) {
