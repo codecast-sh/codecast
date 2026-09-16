@@ -36,6 +36,7 @@ const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
 const Community = lazyPage("@/app/community/page", () => import("@/app/community/page"));
 const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
 const Routines = lazyPage("@/app/workflows/page", () => import("@/app/workflows/page"));
+const WorkflowRun = lazyPage("@/app/workflows/runs/[id]/page", () => import("@/app/workflows/runs/[id]/page"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
 const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/page"));
 const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/triggers/[id]/page"));
@@ -140,6 +141,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/community$/, paramNames: [], component: Community },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
+  { pattern: /^\/workflows\/runs\/([^/]+)$/, paramNames: ["id"], component: WorkflowRun },
   { pattern: /^\/triggers$/, paramNames: [], component: Triggers },
   { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
