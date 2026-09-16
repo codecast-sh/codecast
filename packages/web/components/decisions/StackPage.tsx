@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -60,11 +60,24 @@ function StackBody({ stack }: { stack: DecisionStackItem }) {
   const hours = stack.policy.auto_default_after_ms ? Math.round(stack.policy.auto_default_after_ms / 3_600_000) : 0;
   const [hoursInput, setHoursInput] = useState(String(hours || ""));
   const [dueInput, setDueInput] = useState(() => toLocalInput(stack.policy.due_at));
+  // The row is the truth: a due written on another device, or cleared by
+  // the server, re-seeds the input.
+  useEffect(() => { setDueInput(toLocalInput(stack.policy.due_at)); }, [stack.policy.due_at]);
+  // The hours field follows the row too, so a change from another device or
+  // a server side clear does not leave a stale number in the box.
+  useEffect(() => { setHoursInput(String(hours || "")); }, [hours]);
   const [delegateInput, setDelegateInput] = useState("");
 
-  const write = useCallback((args: StackPolicyPatch, ok: string) => {
-    setStackPolicy(stack._id, args);
-    toast.success(ok);
+  const write = useCallback(async (args: StackPolicyPatch, ok: string) => {
+    // The draft paints at once; the toast waits for the server, which
+    // refuses with { error } rather than throwing.
+    try {
+      const r = await setStackPolicy(stack._id, args);
+      if (r?.error) toast.error(r.error);
+      else toast.success(ok);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "The stack did not save");
+    }
   }, [setStackPolicy, stack._id]);
 
   const saveHours = useCallback(() => {

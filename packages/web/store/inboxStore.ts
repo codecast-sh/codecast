@@ -5201,7 +5201,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   // The stack's policy (D5, the-line.md L10): auto default, due, delegate.
   // One write path for the stack page's controls; the draft paints the
   // policy the server will write, the setStackPolicy side effect writes it.
-  setStackPolicy: (stackId: string, args: StackPolicyPatch) => void;
+  // The mutation refuses with { error } instead of throwing (an unknown
+  // delegate handle, a due in the past), so the caller awaits the result.
+  setStackPolicy: (stackId: string, args: StackPolicyPatch) => Promise<{ error?: string } | null | undefined>;
   // "Group into a stack": a stub row keyed by client_key (altKey supersedes
   // when the server row syncs) and stack_id stamped on the members.
   createStackWith: (input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) => void;
@@ -7867,18 +7869,25 @@ const inboxStoreConfig = (set: any, get: any) => ({
     stack.decision_ids = decisionIds;
     stack.updated_at = Date.now();
   }),
-  setStackPolicy: action(function (this: Draft, stackId: string, args: StackPolicyPatch) {
+  setStackPolicy: asyncAction(function (this: Draft, stackId: string, args: StackPolicyPatch) {
     const stack = this.decisionStacks[stackId];
     if (!stack) return;
-    // Built the way decisionStacks.setStackPolicy builds it (spread, then
-    // assign), so the optimistic object and the server's echo stringify the
-    // same and the field lock retires on the first push. A delegate is a
-    // handle the server resolves, so it paints only from the echo.
-    const policy = { ...stack.policy };
-    if (args.clear_auto_default) policy.auto_default_after_ms = undefined;
-    else if (args.auto_default_after_ms !== undefined) policy.auto_default_after_ms = args.auto_default_after_ms;
-    if (args.clear_due) policy.due_at = undefined;
-    else if (args.due_at !== undefined) policy.due_at = args.due_at;
+    // Assigning `policy` locks the whole object until the server echoes an
+    // equal one (the engine compares the JSON text). Convex returns objects
+    // with sorted keys and no undefined values, so the painted object is
+    // built the same way; a stale key order would keep the lock forever.
+    // A delegate is a handle the server resolves into delegate_role_id, so
+    // a delegate only write leaves the draft alone and paints from the echo:
+    // locking a policy without the delegate keys would never retire.
+    const next: Record<string, number | string | undefined> = { ...stack.policy };
+    let touched = false;
+    if (args.clear_auto_default) { next.auto_default_after_ms = undefined; touched = true; }
+    else if (args.auto_default_after_ms !== undefined) { next.auto_default_after_ms = args.auto_default_after_ms; touched = true; }
+    if (args.clear_due) { next.due_at = undefined; touched = true; }
+    else if (args.due_at !== undefined) { next.due_at = args.due_at; touched = true; }
+    if (!touched) return;
+    const policy: DecisionStackItem["policy"] = {};
+    for (const key of Object.keys(next).sort()) if (next[key] !== undefined) (policy as any)[key] = next[key];
     stack.policy = policy;
   }),
   removeFromStack: action(function (this: Draft, stackId: string, decisionId: string) {
