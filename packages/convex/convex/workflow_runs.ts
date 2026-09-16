@@ -540,7 +540,7 @@ export const get = query({
     const run = await ctx.db.get(args.id);
     // the-line.md L8: a teammate who can read the run's workspace reads the run.
     if (!run || !(await canReadRun(ctx, userId, run))) return null;
-    return await withAgentSessions(ctx, run);
+    return await enrichRun(ctx, await withAgentSessions(ctx, run));
   },
 });
 
@@ -1087,30 +1087,35 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
 
   const workflows = new Map<string, any>();
   const shaped = [];
-  for (const run of out.slice(0, limit)) {
-    let workflow: any = null;
-    if (run.workflow_id) {
-      const wid = String(run.workflow_id);
-      if (!workflows.has(wid)) workflows.set(wid, await ctx.db.get(run.workflow_id));
-      workflow = workflows.get(wid);
-    }
-    const node = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
-    const task = run.task_id ? await ctx.db.get(run.task_id) : null;
-    const plan = run.plan_id ? await ctx.db.get(run.plan_id) : null;
-    const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
-    shaped.push({
-      ...run,
-      task_short_id: task?.short_id,
-      task_title: task?.title,
-      plan_short_id: plan?.short_id,
-      workflow_name: run.workflow_name ?? workflow?.name,
-      workflow_slug: workflow?.slug,
-      current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,
-      gate_decision_short_id: decision?.short_id,
-      gate_decision_status: decision?.status,
-    });
-  }
+  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, run, workflows));
   return shaped;
+}
+
+// The one shape every run feed hands the web store (the-line.md L10): the
+// list and the single run query agree, so a store row replaced by either
+// keeps its task, workflow, node label and gate decision chips.
+export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> = new Map()) {
+  let workflow: any = null;
+  if (run.workflow_id) {
+    const wid = String(run.workflow_id);
+    if (!workflows.has(wid)) workflows.set(wid, await ctx.db.get(run.workflow_id));
+    workflow = workflows.get(wid);
+  }
+  const node = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+  const plan = run.plan_id ? await ctx.db.get(run.plan_id) : null;
+  const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+  return {
+    ...run,
+    task_short_id: task?.short_id,
+    task_title: task?.title,
+    plan_short_id: plan?.short_id,
+    workflow_name: run.workflow_name ?? workflow?.name,
+    workflow_slug: workflow?.slug,
+    current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,
+    gate_decision_short_id: decision?.short_id,
+    gate_decision_status: decision?.status,
+  };
 }
 
 export const listRuns = query({

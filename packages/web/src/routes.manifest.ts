@@ -147,6 +147,8 @@ const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows (import: @/app/workflows/dashboard).
 const Routines = lazy(() => import("@/app/workflows/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
+// One run's page (the-line.md L10): the run panel, its gate as a decision card.
+const WorkflowRun = lazy(() => import("@/app/workflows/runs/[id]/page"));
 // Triggers = delayed/recurring/event-driven agent runs (renamed from "Schedules";
 // the /schedules path stays routable as an alias for old links).
 const Triggers = lazy(() => import("@/app/triggers/page"));
@@ -309,6 +311,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "projects/:id", component: cast(ProjectDetail), layout: "dashboardShell", tab: "/projects/:id", fullWidth: true },
   { path: "projects/:id/:taskId", component: cast(ProjectDetail), layout: "dashboardShell", tab: "/projects/:id/:taskId", fullWidth: true },
   { path: "workflows", component: cast(Workflows), layout: "dashboardShell", tab: "/workflows", fullWidth: true },
+  { path: "workflows/runs/:id", component: cast(WorkflowRun), layout: "dashboardShell", tab: "/workflows/runs/:id" },
   { path: "routines", component: cast(Routines), layout: "dashboardShell", tab: "/routines", fullWidth: true },
   { path: "triggers", component: cast(Triggers), layout: "dashboardShell", tab: "/triggers", fullWidth: true },
   { path: "triggers/:id", component: cast(TriggerDetail), layout: "dashboardShell", tab: "/triggers/:id", fullWidth: true },

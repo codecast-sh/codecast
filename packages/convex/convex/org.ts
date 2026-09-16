@@ -685,12 +685,21 @@ export async function computeScopeFeed(
     // Runs (the-line.md L10): every workflow run bound to a task or plan in
     // scope. The state is the run's status plus its current node's label; the
     // actor is the session that started it.
+    // Each run keeps the short id of the task or plan it was collected under,
+    // so a feed row names the work the run belongs to.
     const runById = new Map<string, any>();
+    const runShortId = new Map<string, string>();
     for (const t of resolved.tasks) {
-      for (const r of await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) runById.set(r._id.toString(), r);
+      for (const r of await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) {
+        runById.set(r._id.toString(), r);
+        runShortId.set(r._id.toString(), t.short_id);
+      }
     }
     for (const p of resolved.plans) {
-      for (const r of await ctx.db.query("workflow_runs").withIndex("by_plan", (q: any) => q.eq("plan_id", p._id)).collect()) runById.set(r._id.toString(), r);
+      for (const r of await ctx.db.query("workflow_runs").withIndex("by_plan", (q: any) => q.eq("plan_id", p._id)).collect()) {
+        runById.set(r._id.toString(), r);
+        if (!runShortId.has(r._id.toString())) runShortId.set(r._id.toString(), p.short_id);
+      }
     }
     const workflowById = new Map<string, any>();
     const rows: FeedRow[] = [];
@@ -708,6 +717,7 @@ export async function computeScopeFeed(
       rows.push({
         kind: "run",
         id: r._id.toString(),
+        short_id: runShortId.get(r._id.toString()),
         title: r.workflow_name ?? workflow?.name ?? "run",
         state: nodeLabel ? `${r.status} · ${nodeLabel}` : r.status,
         actor: spawner ? { name: spawner.title || spawner.short_id || "session", is_bot: true } : await actor(r.user_id),

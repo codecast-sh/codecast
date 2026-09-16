@@ -56,6 +56,7 @@ const Questions = lazy(() => import("@/app/questions/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
+const WorkflowRun = lazy(() => import("@/app/workflows/runs/[id]/page"));
 const Threads = lazy(() => import("@/app/threads/page"));
 
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
@@ -252,6 +253,7 @@ export function App() {
               <Route path="projects/:id/:taskId" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
               <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
               <Route path="routines" element={<E name="Routines"><Routines /></E>} />
+              <Route path="workflows/runs/:id" element={<E name="WorkflowRun"><WorkflowRun /></E>} />
               <Route path="triggers" element={<E name="Triggers"><Triggers /></E>} />
               <Route path="triggers/:id" element={<E name="TriggerDetail"><TriggerDetail /></E>} />
               <Route path="schedules" element={<E name="Triggers"><Triggers /></E>} />

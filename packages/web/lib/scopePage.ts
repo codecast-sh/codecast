@@ -53,6 +53,14 @@ export function feedStateTone(kind: FeedKind, state?: string): string {
   const s = state.toLowerCase();
   if (kind === "session") return SESSION_TONE[s] ?? "var(--sol-text-dim)";
   if (kind === "decision") return s === "pending" ? "var(--sol-yellow)" : s === "answered" ? "var(--sol-cyan)" : "var(--sol-text-dim)";
+  // A run row's state starts with the run status ("paused · Ship it?").
+  if (kind === "run") {
+    if (s.startsWith("running")) return "var(--sol-green)";
+    if (s.startsWith("paused")) return "var(--sol-yellow)";
+    if (s.startsWith("failed")) return "var(--sol-red)";
+    if (s.startsWith("completed")) return "var(--sol-cyan)";
+    return FEED_NEUTRAL_TONE;
+  }
   if (s === "done" || s === "answered" || s === "completed" || s === "merged") return "var(--sol-cyan)";
   if (s === "in_progress" || s === "active" || s === "working") return "var(--sol-green)";
   if (s === "dropped" || s === "dismissed" || s === "withdrawn") return "var(--sol-red)";

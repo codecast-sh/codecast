@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useTrackedStore } from "../store/inboxStore";
 import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
+import { useSyncDecisionDetail } from "../hooks/useSyncDecisionDetail";
 import {
   ChevronDown,
   ChevronRight,
@@ -47,10 +48,6 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   // A gate is a decision (the-line.md L4, L10): the panel renders the
   // decision card for the run's gate_decision_id, never its own buttons.
   // The row rides the sessionDecisions collection; until it lands, a link.
-  const gateDecisionId = run?.gate_decision_id as string | undefined;
-  const s = useTrackedStore([(st) => (gateDecisionId ? st.sessionDecisions[gateDecisionId] : undefined)]);
-  const gateDecision = gateDecisionId ? s.sessionDecisions[gateDecisionId] : undefined;
-
   if (!run) return null;
 
   const statusColor = STATUS_COLOR[run.status] || "text-sol-text-dim";
@@ -94,29 +91,7 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
             </p>
           )}
 
-          {run.status === "paused" && (
-            <div className="space-y-1.5" data-run-gate={gateDecisionId ?? ""}>
-              {gateDecision ? (
-                <DecisionCompactCard decision={gateDecision} showTask={false} />
-              ) : gateDecisionId ? (
-                <Link
-                  href={`/decisions/${run.gate_decision_short_id ?? gateDecisionId}`}
-                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-sol-yellow/40 text-[11px] text-sol-text hover:bg-sol-yellow/10"
-                >
-                  <Pause className="w-3 h-3 text-sol-orange" />
-                  Answer the gate{run.gate_decision_short_id ? ` · ${run.gate_decision_short_id}` : ""}
-                </Link>
-              ) : run.gate_prompt ? (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[10px] text-sol-magenta font-semibold">Gate</span>
-                  <span className="text-[10px] text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
-                  {run.gate_response
-                    ? <span className="text-[10px] text-sol-green">Responded: {run.gate_response}</span>
-                    : <span className="text-[10px] text-sol-text-dim">· reply in the conversation</span>}
-                </div>
-              ) : null}
-            </div>
-          )}
+          {run.status === "paused" && <RunGate run={run} />}
 
           <div className="space-y-0.5">
             {nodes.map((node: any) => {
@@ -160,6 +135,48 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
           </Link>
         </div>
       )}
+    </div>
+  );
+}
+
+// A paused run's gate, one way everywhere (the-line.md L4, L10): the decision
+// card for the run's gate_decision_id from the sessionDecisions store; a link
+// to the decision page until the row lands; the stored prompt only for a run
+// that predates gates as decisions.
+export function RunGate({ run, className }: {
+  run: { gate_decision_id?: string; gate_decision_short_id?: string; gate_prompt?: string; gate_response?: string };
+  className?: string;
+}) {
+  const gateDecisionId = run.gate_decision_id;
+  // The queue feed holds the row when the viewer was asked; the per view
+  // detail feed brings it for anyone else who can read the run.
+  useSyncDecisionDetail(gateDecisionId);
+  const s = useTrackedStore([
+    (st) => (gateDecisionId ? st.sessionDecisions[gateDecisionId] : undefined),
+    (st) => (gateDecisionId ? (st as any).decisionDetails?.[gateDecisionId]?.decision : undefined),
+  ]);
+  const gateDecision = gateDecisionId ? (s.sessionDecisions[gateDecisionId] ?? (s as any).decisionDetails?.[gateDecisionId]?.decision) : undefined;
+  return (
+    <div className={className ?? "space-y-1.5"} data-run-gate={gateDecisionId ?? ""}>
+      {gateDecision ? (
+        <DecisionCompactCard decision={gateDecision} showTask={false} />
+      ) : gateDecisionId ? (
+        <Link
+          href={`/decisions/${run.gate_decision_short_id ?? gateDecisionId}`}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-sol-yellow/40 text-[11px] text-sol-text hover:bg-sol-yellow/10"
+        >
+          <Pause className="w-3 h-3 text-sol-orange" />
+          Answer the gate{run.gate_decision_short_id ? ` · ${run.gate_decision_short_id}` : ""}
+        </Link>
+      ) : run.gate_prompt ? (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] text-sol-magenta font-semibold">Gate</span>
+          <span className="text-[10px] text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
+          {run.gate_response
+            ? <span className="text-[10px] text-sol-green">Responded: {run.gate_response}</span>
+            : <span className="text-[10px] text-sol-text-dim">· reply in the conversation</span>}
+        </div>
+      ) : null}
     </div>
   );
 }

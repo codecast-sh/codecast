@@ -210,7 +210,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
-  { label: "Workflows", path: "/workflows", icon: "workflow", keywords: "orchestration runs graph dot gates", secondary: true },
+  { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
   { label: "Live Sessions", path: "/sessions", icon: "session", keywords: "running machines devices liveness", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
   { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace", secondary: true },
