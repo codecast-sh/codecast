@@ -10388,6 +10388,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Guards the one allowed automatic kill+restart: fires once when the daemon has declared a
   // sent message undeliverable (delivery genuinely failed over many minutes), reset per message.
   const autoRestartTriggeredRef = useRef(false);
+  // MessageInput is reused when the inbox selection changes. A footer
+  // "Killing & restarting" from the previous conversation must not follow.
+  const restartBoundIdRef = useRef(conversationId);
+  if (restartBoundIdRef.current !== conversationId) {
+    restartBoundIdRef.current = conversationId;
+    if (isRestarting) setIsRestarting(false);
+    if (isResuming) setIsResuming(false);
+    autoRestartTriggeredRef.current = false;
+    autoResumeTriggeredRef.current = false;
+  }
   const convCommand = useInboxStore((s) => s.convCommand);
   // Live kill→resume ladder while a recovery is in flight: the daemon stamps
   // each command row (executed_at + result/error), so the footer can show what
