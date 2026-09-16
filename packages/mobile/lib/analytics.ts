@@ -26,11 +26,10 @@ export function initAnalytics() {
     environment: __DEV__ ? "development" : "production",
     platform: "mobile",
     appName: "codecast",
-    // Needs the posthog-react-native-session-replay NATIVE module, so it only
-    // takes effect on binaries built with it (2026-08+). The SDK guards its own
-    // require, so an OTA landing on an older binary degrades to no replay
-    // instead of the crash-and-rollback this header warns about.
-    enableSessionReplay: true,
+    // Session replay walks the view tree on the JS thread (and masks every
+    // text input). That froze taps for seconds, worst on a new session with
+    // the keyboard open and send waiting on the same thread. Sentry stays.
+    enableSessionReplay: false,
   });
 }
 

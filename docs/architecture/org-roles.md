@@ -56,8 +56,10 @@ sees it automatically once the table is in the schema); the web feeds from the
 `org.tree` query, not from a per row collection.
 
 `conversations.org_role_id?: Id<org_roles>` with index `by_org_role
-[org_role_id]`. It is written only by `orgRoles.reparentSession`; it is not in
-the dispatchable conversation field manifest.
+[org_role_id]`. It is written only by the session reparent core
+(`sessionOwnership.performReparentSession`, re-exported from `orgRoles`, the
+one place `session_owners` and `org_role_id` change together; org-staffing.md
+S11) and by `retire`; it is not in the dispatchable conversation field manifest.
 
 ## S3. Query `org.tree`
 
@@ -152,10 +154,19 @@ orgRoles.reparent({ role_id, reports_to })
 orgRoles.retire({ role_id })
    Sets status retired and clears org_role_id on every session filed under it
    (by_org_role), so those sessions fall back to their owner.
-orgRoles.reparentSession({ conversation_id, target: { kind: "user"; user_id } | { kind: "role"; role_id } })
-   user target: performSetSessionOwner (existing) and clear org_role_id.
+orgRoles.reparentSession({ conversation_id, target, note?, from_session? })
+   target: { kind: "user"; user_id } | { kind: "user"; owners: string[]; mode: "set" | "add" | "remove" } | { kind: "role"; role_id }
+   user target: the ownership gesture (the same core `cast own`, `cast disown` and
+   the owners picker call): the owner rows change, the session reports to the
+   person the act named (`add` re-homes under the added person), and org_role_id
+   is cleared. A `remove` leaves the reporting line to whoever remains.
    role target: set org_role_id; owners unchanged. The caller must be an owner of
-   the conversation or able to reshape the target role.
+   the conversation (a person target: the ownership rule, any teammate who can
+   see it) or able to reshape the target role.
+   Every move that changes the reporting line tells the session once
+   ("You now report to <name>. <note>", org-staffing.md S11) and returns
+   `told: { sessions, roles }`; `orgRoles.reparent` returns the same after
+   waking the role.
 ```
 
 Every mutation takes `api_token?` like the anchor mutations so the CLI can call

@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useRef } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useBottomAnchoredList, prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
-import { buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
+import { authorGroupKey, buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import "./chat.css";
@@ -131,6 +131,7 @@ export const ChatMessageList = memo(function ChatMessageList({
         messages.map((m) => ({
           id: m.id,
           authorId: m.author.id,
+          groupKey: authorGroupKey(m.author),
           createdAt: m.createdAt,
           pendingAgent: m.agentStatus === "thinking" || m.agentStatus === "streaming",
           deleted: !!m.deletedAt,

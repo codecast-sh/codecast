@@ -8,11 +8,11 @@ import {
   type ChatNotifyLevel,
   type ChatRailRow,
 } from "../store/inboxStore";
-import { chatToastTier, type ChatToastTier } from "../lib/chatTimeline";
+import { chatToastTier, isHistoryLine, type ChatToastTier } from "../lib/chatTimeline";
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
 import { isChatContextOnScreen } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
-import { knownAgentMember, memberName, type ChatMember } from "../lib/chatViews";
+import { knownAgentMember, memberName, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
 import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -140,16 +140,22 @@ export function useChatToasts(): void {
       if (last.user_id === viewerId) continue;
 
       const full = messages[messageId];
-      // The rail cannot say whether a message named you; a rise in the server's
-      // own mention count can, and the full row says so outright when we have it.
-      const mentionsViewer = full
-        ? full.mention_scope === "here" || !!full.mentions?.includes(viewerId)
-        : (row.unread_mentions ?? 0) > prev.mentions;
-      const threadRootId = full?.thread_root_id;
+      // Named you: the full row when we have it (people only — role/session
+      // entries are objects), plus a rise in the server's mention count, which
+      // is what the rail can say even before the message body is loaded. The
+      // two together: `mentions.includes(viewerId)` missed a DM with no @
+      // (no mention list) whenever the body happened to already be in the
+      // store, and then notify_level "mentions" swallowed the toast.
+      const mentionsViewer =
+        (full ? rowMentionsViewer(full, viewerId) : false) ||
+        (row.unread_mentions ?? 0) > prev.mentions;
+      const threadRootId = full?.thread_root_id ?? last.thread_root_id;
       const viewerInThread =
         !!threadRootId &&
         Object.values(messages).some(
-          (m) => m.thread_root_id === threadRootId && m.user_id === viewerId,
+          (m) =>
+            m.user_id === viewerId &&
+            (m.thread_root_id === threadRootId || m._id === threadRootId),
         );
 
       const recent = (burstRef.current.get(channelId) ?? []).filter(
@@ -176,6 +182,8 @@ export function useChatToasts(): void {
         channelMuted: row.notify_level === "none",
         notifyLevel: row.notify_level,
         doNotDisturb: snoozedUntil > Date.now(),
+        // A Slack import landing a channel's past: nobody just said it.
+        history: !!full && isHistoryLine(full),
         recentToastsFromChannel: recent.length,
       });
       if (tier === "silent") continue;

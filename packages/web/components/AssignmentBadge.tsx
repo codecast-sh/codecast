@@ -123,9 +123,9 @@ export function AssignmentBadge({
   const d = own ?? (foreign || undefined);
   const { ownerList, displayFor, currentUser } = owners;
 
-  // The default case — no explicit owners (implicitly yours) or just you —
-  // renders CONDENSED: avatar only, no name, no "Assign" text. Full names are
-  // reserved for the interesting case: the thread living in someone else's inbox.
+  // You (or the human who started it) as the only owner is still an owner:
+  // show the name in the header the same way a teammate's name shows. Dim
+  // styling marks it as the default line, not a handoff.
   const meId = currentUser?._id?.toString?.();
   const isRunner = runner?.id ? runner.id === meId : isOwner;
   const selfOnly =
@@ -136,6 +136,14 @@ export function AssignmentBadge({
         image: currentUser.image || currentUser.github_avatar_url,
       }
     : null;
+  const ownerLabel =
+    ownerList.length === 0 && isRunner
+      ? selfDisp?.name ?? "You"
+      : ownerList.length === 1
+        ? displayFor(ownerList[0]).name
+        : ownerList.length > 1
+          ? `${ownerList.length} owners`
+          : "Take ownership";
 
   const { worktree, preparing } = useRunLocation(conversationId);
   // A machine that boots itself when work arrives reads differently from a
@@ -195,24 +203,22 @@ export function AssignmentBadge({
             className={`inline-flex items-center gap-1.5 py-0.5 ${compact ? "pl-1 pr-1.5" : "pl-1.5 pr-2 max-w-[150px]"} ${
               selfOnly ? "text-sol-text-dim hover:text-sol-text" : "bg-sol-cyan/10 text-sol-cyan"
             }`}
-            title={selfOnly ? `Assigned to you${ownerList.length === 0 ? " (default)" : ""} — click to reassign` : undefined}
+            title={selfOnly ? `Owned by you${ownerList.length === 0 ? " (you started it)" : ""} — click to reassign` : undefined}
           >
-            {selfOnly ? (
-              selfDisp && <OwnerAvatar name={selfDisp.name} image={selfDisp.image} />
+            {ownerList.length === 0 && !isRunner ? (
+              <>
+                <UserCheck className="w-3.5 h-3.5" />
+                {!compact && <span className="truncate cq-sq1">Take ownership</span>}
+              </>
             ) : (
               <>
-                {ownerList.length === 0 && <UserCheck className="w-3.5 h-3.5" />}
                 <span className="flex -space-x-1.5">
-                  {ownerList.slice(0, 3).map((id) => {
-                    const disp = displayFor(id);
+                  {(ownerList.length ? ownerList.slice(0, 3) : meId ? [meId] : []).map((id) => {
+                    const disp = id === meId && selfDisp ? selfDisp : displayFor(id);
                     return <OwnerAvatar key={id} name={disp.name} image={disp.image} />;
                   })}
                 </span>
-                {!compact && (
-                  <span className="truncate cq-sq1">
-                    {ownerList.length === 0 ? "Take ownership" : ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
-                  </span>
-                )}
+                {!compact && <span className="truncate cq-sq1">{ownerLabel}</span>}
               </>
             )}
           </span>

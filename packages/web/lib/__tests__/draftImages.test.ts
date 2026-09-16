@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
-import { persistDraftImages, restoreDraftImages, settleDraftImageUpload, type PastedImage } from "../draftImages";
+import { persistDraftImages, restoreDraftImages, settleComposerAttachments, settleDraftImageUpload, pendingImageUploads, type PastedImage } from "../draftImages";
 
 const pastedImage = (over: Partial<PastedImage> = {}): PastedImage => ({
   file: new File([], "shot.png", { type: "image/png" }),
@@ -95,5 +95,20 @@ describe("draftImages", () => {
       draft_image_preview: "blob:http://local/old",
     });
     expect(legacy[0]).toMatchObject({ storageId: "storage-old", previewUrl: "blob:http://local/old", uploading: false });
+  });
+
+  it("settles composer images from storageId or the in-flight upload map", async () => {
+    pendingImageUploads.clear();
+    pendingImageUploads.set("blob:pending", Promise.resolve("storage-pending"));
+    const attachments = await settleComposerAttachments([
+      { storageId: "storage-ready", previewUrl: "blob:ready", mime: "image/png" },
+      { previewUrl: "blob:pending", mime: "image/jpeg" },
+      { previewUrl: "blob:missing", mime: "image/png" },
+    ]);
+    expect(attachments).toEqual([
+      { storage_id: "storage-ready", mime: "image/png" },
+      { storage_id: "storage-pending", mime: "image/jpeg" },
+    ]);
+    pendingImageUploads.clear();
   });
 });

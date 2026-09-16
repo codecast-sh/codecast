@@ -11,9 +11,13 @@ import { beforeEach, describe, expect, it } from "bun:test";
 const kv = new Map<string, string>();
 // Every setItem lands here; a test can hold the gate to simulate a slow disk.
 const setItemCalls: string[] = [];
+let getAllKeysSyncCalls = 0;
 let setItemGate: Promise<void> = Promise.resolve();
 (globalThis as any).__CODECAST_TEST_KV_STORAGE__ = {
   async getItem(key: string): Promise<string | null> {
+    return kv.has(key) ? (kv.get(key) as string) : null;
+  },
+  getItemSync(key: string): string | null {
     return kv.has(key) ? (kv.get(key) as string) : null;
   },
   async setItem(key: string, value: string): Promise<void> {
@@ -21,13 +25,35 @@ let setItemGate: Promise<void> = Promise.resolve();
     await setItemGate;
     kv.set(key, value);
   },
+  setItemSync(key: string, value: string): void {
+    kv.set(key, value);
+  },
   async removeItem(key: string): Promise<void> {
+    kv.delete(key);
+  },
+  removeItemSync(key: string): void {
     kv.delete(key);
   },
   async multiGet(keys: string[]): Promise<[string, string | null][]> {
     return keys.map((k) => [k, kv.has(k) ? (kv.get(k) as string) : null]);
   },
+  async getAllKeys(): Promise<string[]> {
+    return [...kv.keys()];
+  },
+  getAllKeysSync(): string[] {
+    getAllKeysSyncCalls++;
+    return [...kv.keys()];
+  },
 };
+
+function collectionRows(name: string): any[] {
+  const prefix = `col:${name}:`;
+  const rows: any[] = [];
+  for (const [k, v] of kv) {
+    if (k.startsWith(prefix)) rows.push(JSON.parse(v));
+  }
+  return rows;
+}
 
 const {
   writePatchesToIDB,
@@ -39,11 +65,14 @@ const {
   PERSISTENCE_AVAILABLE,
   _resetPersistedShadow,
   flushPersistence,
+  persistPendingMessageChanges,
 } = await import("../idbCache.native");
 
 describe("idbCache.native", () => {
   beforeEach(() => {
     kv.clear();
+    setItemCalls.length = 0;
+    getAllKeysSyncCalls = 0;
     // The persistence shadow lives at module scope; reset it so a prior test's
     // writes don't make this test's diff think nothing changed.
     _resetPersistedShadow();
@@ -111,8 +140,8 @@ describe("idbCache.native", () => {
       { tasks: { mh7real: { ...real, title: "Renamed" } } },
     );
     await flushPersistence();
-    const onDisk = JSON.parse(kv.get("col:tasks")!) as any[];
-    expect(onDisk.map((r) => r._id)).toEqual(["mh7real"]);
+    expect(kv.has("col:tasks")).toBe(false);
+    expect(collectionRows("tasks").map((r) => r._id)).toEqual(["mh7real"]);
   });
 
   it("skips the rewrite when a sync changed nothing", async () => {
@@ -120,15 +149,17 @@ describe("idbCache.native", () => {
     const state = { sessions: { a } };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], state);
     await flushPersistence();
-    expect(kv.has("col:sessions")).toBe(true);
+    expect(kv.has("col:sessions:a")).toBe(true);
 
     // Same row reference re-pushed (the live-query churn case). Clear storage and
     // observe the storage key directly — loadCache would re-seed the shadow, so
-    // assert on the raw blob: if the diff correctly skips, the key is never set.
+    // assert on the raw key: if the diff correctly skips, the key is never set.
     kv.clear();
+    setItemCalls.length = 0;
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], state);
     await flushPersistence();
-    expect(kv.has("col:sessions")).toBe(false);
+    expect(kv.has("col:sessions:a")).toBe(false);
+    expect(setItemCalls).toEqual([]);
   });
 
   it("NEVER clears the cache from a store-shrink — a row missing without an exclude is kept", async () => {
@@ -203,10 +234,13 @@ describe("idbCache.native", () => {
 
     const cached = await loadCache();
     expect(Object.keys(cached!.sessions).sort()).toEqual([cid(1), cid(3), cid(4), cid(5)].sort());
-    // The pruned blob was persisted back — the stale row is gone from disk too.
+    // The pruned rows were persisted back as per-row keys — the stale row is
+    // gone from disk too, and the leftover whole-table blob is dropped.
     await flushPersistence();
-    const onDisk = JSON.parse(kv.get("col:sessions")!) as any[];
-    expect(onDisk.map((r) => r._id).sort()).toEqual([cid(1), cid(3), cid(4), cid(5)].sort());
+    expect(kv.has("col:sessions")).toBe(false);
+    expect(collectionRows("sessions").map((r) => r._id).sort()).toEqual(
+      [cid(1), cid(3), cid(4), cid(5)].sort(),
+    );
   });
 
   it("caps windowed sessions at the newest MAX_CACHED_SESSIONS on load", async () => {
@@ -223,6 +257,50 @@ describe("idbCache.native", () => {
     expect(ids).not.toContain(cid(1299)); // oldest of the windowed set dropped
   });
 
+  it("writes only the changed row, not the whole collection (heartbeat must not stringify the table)", async () => {
+    // The tap-freeze: overlay last_heartbeat on one live session used to
+    // JSON.stringify every cached session (~4.5 MB) on the JS thread.
+    const sessions: Record<string, { _id: string; title: string; last_heartbeat: number }> = {};
+    for (let i = 0; i < 80; i++) {
+      const id = `k${String(i).padStart(31, "0")}`;
+      sessions[id] = { _id: id, title: `S${i}`, last_heartbeat: 1 };
+    }
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions });
+    await flushPersistence();
+    expect(kv.has("col:sessions")).toBe(false);
+    expect(collectionRows("sessions")).toHaveLength(80);
+
+    const touched = `k${String(0).padStart(31, "0")}`;
+    const next = {
+      ...sessions,
+      [touched]: { ...sessions[touched], last_heartbeat: 2 },
+    };
+    setItemCalls.length = 0;
+    writePatchesToIDB([{ op: "replace", path: ["sessions", touched], value: {} } as any], { sessions: next });
+    await flushPersistence();
+
+    expect(setItemCalls).toEqual([`col:sessions:${touched}`]);
+    const written = JSON.parse(kv.get(`col:sessions:${touched}`)!);
+    expect(written).toEqual({ _id: touched, title: "S0", last_heartbeat: 2 });
+    // The rest of the table is untouched — a whole-blob rewrite would have
+    // setItem'd every row (or one giant array).
+    expect(JSON.parse(kv.get(`col:sessions:${`k${String(1).padStart(31, "0")}`}`)!).last_heartbeat).toBe(1);
+  });
+
+  it("hydrates a leftover whole-table blob and splits it into per-row keys", async () => {
+    const a = { _id: "a", title: "Alpha" };
+    const b = { _id: "b", title: "Beta" };
+    kv.set("col:sessions", JSON.stringify([a, b]));
+
+    const cached = await loadCache();
+    expect(cached!.sessions).toEqual({ a, b });
+
+    await flushPersistence();
+    expect(kv.has("col:sessions")).toBe(false);
+    expect(JSON.parse(kv.get("col:sessions:a")!)).toEqual(a);
+    expect(JSON.parse(kv.get("col:sessions:b")!)).toEqual(b);
+  });
+
   it("prunes the conversations meta blob with the same retention policy", async () => {
     const DAY = 24 * 60 * 60 * 1000;
     const now = Date.now();
@@ -234,6 +312,50 @@ describe("idbCache.native", () => {
 
     const cached = await loadCache();
     expect(Object.keys(cached!.conversations)).toEqual([cid(1)]);
+    await flushPersistence();
+    expect(kv.has("meta:conversations")).toBe(false);
+    expect(JSON.parse(kv.get(`meta:conversations:${cid(1)}`)!)._id).toBe(cid(1));
+    expect(kv.has(`meta:conversations:${cid(2)}`)).toBe(false);
+  });
+
+  it("writes only the changed conversation row, not the whole conversations map", async () => {
+    // New-session send freeze: beginOptimisticSession patched conversations
+    // and JSON.stringified every cached conversation on the JS thread.
+    const conversations: Record<string, { _id: string; title: string }> = {};
+    for (let i = 0; i < 80; i++) {
+      const id = `k${String(i).padStart(31, "0")}`;
+      conversations[id] = { _id: id, title: `C${i}` };
+    }
+    writePatchesToIDB([{ op: "replace", path: ["conversations"], value: {} } as any], { conversations });
+    await flushPersistence();
+    expect(kv.has("meta:conversations")).toBe(false);
+
+    const touched = `k${String(0).padStart(31, "0")}`;
+    const next = {
+      ...conversations,
+      [touched]: { _id: touched, title: "New session" },
+    };
+    setItemCalls.length = 0;
+    writePatchesToIDB([{ op: "replace", path: ["conversations", touched], value: {} } as any], { conversations: next });
+    await flushPersistence();
+    expect(setItemCalls).toEqual([`meta:conversations:${touched}`]);
+    expect(JSON.parse(kv.get(`meta:conversations:${touched}`)!).title).toBe("New session");
+  });
+
+  it("a pending-input flush does not rescan every KV key once per key", async () => {
+    // After per-row persistence the KV store holds thousands of keys. The
+    // journal used to call getAllKeysSync once per key (length + key(i)),
+    // which froze send on a new session.
+    for (let i = 0; i < 400; i++) kv.set(`col:sessions:k${i}`, "{}");
+    getAllKeysSyncCalls = 0;
+    persistPendingMessageChanges(
+      {},
+      { c: [{ _id: "m1", _clientId: "m1", role: "user", content: "hi", timestamp: 1 }] },
+      "owner",
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getAllKeysSyncCalls).toBeLessThan(5);
   });
 
   it("drops expired exclude tombstones at load, keeps recent ones and stamps legacy ones", async () => {

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Crane">
+  <!-- tones: ground #c4c880 = sol-green 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-crane"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#c4c880"/>
+  <g clip-path="url(#c-crane)">
+  <path d="M-4 96C0 78 16 70 40 70C64 70 90 78 100 96Z" fill="#586e75"/>
+  <path d="M42 72C42 56 44 44 50 34C54 28 55 22 54 16L62 16C63 24 60 32 56 38C51 46 50 56 50 72Z" fill="#586e75"/>
+  <circle cx="58" cy="16" r="8.5" fill="#586e75"/>
+  <path d="M56 18C58 24 64 26 67 21C65 16 60 15 56 18Z" fill="#fdf6e3"/>
+  <path d="M51 12C52 8 55 6 58 6C61 6 63 8 64 11Z" fill="#dc322f"/>
+  <path d="M65 14L94 18L65 21Z" fill="#002b36"/>
+  <circle cx="60.5" cy="14.5" r="1.7" fill="#002b36"/>
+  </g>
+</svg>

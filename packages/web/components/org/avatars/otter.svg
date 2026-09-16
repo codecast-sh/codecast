@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Otter">
+  <!-- tones: ground #a0ccbd = sol-cyan 40% over sol-bg-alt; body #825e2a = sol-amber 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-otter"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#a0ccbd"/>
+  <g clip-path="url(#c-otter)">
+  <path d="M6 96C10 78 28 72 48 72C68 72 86 78 90 96Z" fill="#825e2a"/>
+  <path d="M30 96C30 84 38 80 48 80C58 80 66 84 66 96Z" fill="#fdf6e3"/>
+  <circle cx="22" cy="40" r="6.5" fill="#825e2a"/><circle cx="74" cy="40" r="6.5" fill="#825e2a"/>
+  <ellipse cx="48" cy="48" rx="28" ry="25" fill="#825e2a"/>
+  <ellipse cx="48" cy="60" rx="16" ry="11" fill="#fdf6e3"/>
+  <circle cx="38" cy="44" r="2.7" fill="#002b36"/><circle cx="58" cy="44" r="2.7" fill="#002b36"/>
+  <path d="M42 55Q48 52.5 54 55Q52.5 61 48 62Q43.5 61 42 55Z" fill="#002b36"/>
+  <g fill="#002b36"><circle cx="36" cy="60" r="1.1"/><circle cx="34" cy="64" r="1.1"/><circle cx="60" cy="60" r="1.1"/><circle cx="62" cy="64" r="1.1"/></g>
+  </g>
+</svg>

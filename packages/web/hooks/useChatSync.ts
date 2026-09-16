@@ -60,6 +60,7 @@ import type { ChatMessageView } from "../components/chat/chatTypes";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { useSyncCollection } from "./useSyncCollection";
 const api = _api as any;
 
 /** Warm the image cache (id→URL mapping AND bytes) for every image attachment
@@ -162,7 +163,8 @@ export const slackLinksSig = makeCollectionSig<ChatSlackLinkRow>(
   (l) =>
     `${l._id}|${l.chat_channel_id}|${l.slack_channel_id}|${l.slack_channel_name ?? ""}|${l.direction}|${l.paused ? 1 : 0}` +
     `|${Object.entries(l.options ?? {}).map(([k, val]) => `${k}=${val ? 1 : 0}`).join(",")}` +
-    `|${l.last_inbound_at ?? 0}|${l.last_outbound_at ?? 0}|${l.inbound_count ?? 0}|${l.outbound_count ?? 0}|${l.last_error ?? ""}`,
+    `|${l.last_inbound_at ?? 0}|${l.last_outbound_at ?? 0}|${l.inbound_count ?? 0}|${l.outbound_count ?? 0}|${l.last_error ?? ""}` +
+    `|${l.backfill ? `${l.backfill.status}:${l.backfill.fetched}:${l.backfill.capped ? 1 : 0}` : ""}`,
 );
 
 const channelsSig = makeCollectionSig<ChatChannelRow>(
@@ -220,6 +222,18 @@ export function useChatChannelsSync(): { error?: Error } {
     // chat has no scope at all, so there is nothing to subscribe to.
     // Follower windows receive the channel rail over replication instead.
     chatOn && isSyncHost && teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
+  );
+
+  // The workspace's people, on the same gate. Its own subscription because a
+  // profile refresh (users.info, on a TTL) must not re-push the channel rail.
+  const feedPeople = !!(chatOn && isSyncHost && teamId && isConvexId(teamId));
+  useSyncCollection(
+    "chatSlackPeople",
+    api.slackSync.listSlackPeople,
+    feedPeople ? { team_id: teamId } : "skip",
+    useMemo(() => ({
+      select: (d: any) => d === null ? [] : d?.people?.map((p: any) => ({ ...p, _id: p.slack_user_id, team_id: teamId })),
+    }), [teamId]),
   );
 
   useConvexSync(

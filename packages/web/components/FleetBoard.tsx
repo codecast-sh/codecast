@@ -30,6 +30,7 @@ import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { LivePulseDot } from "./SessionActivityLine";
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
 // grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
@@ -382,7 +383,7 @@ export function FleetBoard() {
           <div ref={titlebarRef} className="mb-3 flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-baseline gap-3">
               <h2 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.2em] text-sol-text">
-                <span className="h-1.5 w-1.5 rounded-full bg-sol-green animate-pulse" />
+                <LivePulseDot className="h-1.5 w-1.5" />
                 FLEET
               </h2>
               <span className="truncate text-[10px] tracking-[0.1em] text-sol-text-dim">

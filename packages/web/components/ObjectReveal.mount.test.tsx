@@ -72,12 +72,13 @@ test("the band portals into a slot right under the reference's paragraph and the
   click(band.querySelector(".object-reveal__foot")!);
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
-  // The header strip closes as well; its open link does not.
+  // The header strip closes as well; the open-the-page bars do not.
   click(content.querySelector("button")!);
-  const strip = content.querySelector<HTMLElement>(".object-reveal__strip")!;
-  click(strip.querySelector("a[title='Open the page']")!);
+  const opens = content.querySelectorAll(".object-reveal__open");
+  expect(opens.length).toBe(2);
+  click(opens[0]!);
   expect(content.querySelector(".object-reveal")).not.toBeNull();
-  click(strip);
+  click(content.querySelector(".object-reveal__strip")!);
   expect(content.querySelector(".object-reveal")).toBeNull();
   React.act(() => root!.render(null));
 });
@@ -105,4 +106,25 @@ test("opening a reference in another host closes the first; a host inside the ba
   expect(content.querySelector("button.a")?.getAttribute("aria-pressed")).toBe("false");
   expect(content.querySelector("button.b")?.getAttribute("aria-pressed")).toBe("true");
   React.act(() => root!.render(null));
+});
+
+test("wheel on the hatch lane scrolls the conversation; wheel in the frame scrolls the object", () => {
+  const { revealWheelGoesToParent } = mod;
+  const band = document.createElement("div");
+  band.className = "object-reveal";
+  const lane = document.createElement("div");
+  lane.className = "object-reveal__lane";
+  const frame = document.createElement("div");
+  frame.className = "object-reveal__frame";
+  const body = document.createElement("div");
+  body.className = "object-reveal__body";
+  frame.appendChild(body);
+  band.append(lane, frame);
+  expect(revealWheelGoesToParent(lane, band)).toBe(true);
+  expect(revealWheelGoesToParent(body, band)).toBe(false);
+  expect(revealWheelGoesToParent(band, band)).toBe(true);
+  const open = document.createElement("a");
+  open.className = "object-reveal__open";
+  band.appendChild(open);
+  expect(revealWheelGoesToParent(open, band)).toBe(true);
 });

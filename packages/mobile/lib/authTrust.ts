@@ -66,3 +66,16 @@ export function authRenderDecision(opts: {
   }
   return opts.isLoading || opts.isAuthenticated ? "blank" : "children";
 }
+
+// Native splash stays up until the SQLite cache has landed AND auth is ready
+// to show something (the cached app, the login flow, or the storage-failure
+// screen). Releasing on fonts alone was the kill-and-reopen skeleton: the
+// inbox mounted on an empty store and painted placeholders until hydration
+// (or the live subscription) caught up. Web's DashboardLayout holds
+// AppLoader on the same `clientStateInitialized` flag.
+export function shouldReleaseSplash(opts: {
+  hydrated: boolean;
+  authDecision: AuthRenderDecision;
+}): boolean {
+  return opts.hydrated && opts.authDecision !== "blank";
+}

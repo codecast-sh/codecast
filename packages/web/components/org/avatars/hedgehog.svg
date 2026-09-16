@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Hedgehog">
+  <!-- tones: ground #e79f93 = sol-red 40% over sol-bg-alt; body #825e2a = sol-amber 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-hedgehog"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#e79f93"/>
+  <g clip-path="url(#c-hedgehog)">
+  <path d="M19.3 68.2L7.5 67.2L14.9 58.0L4.1 53.2L14.1 46.9L5.4 38.9L17.0 36.1L11.3 25.7L23.1 26.8L21.1 15.2L31.9 20.0L33.8 8.4L42.4 16.5L48.0 6.0L53.6 16.5L62.2 8.4L64.1 20.0L74.9 15.2L72.9 26.8L84.7 25.7L79.0 36.1L90.6 38.9L81.9 46.9L91.9 53.2L81.1 58.0L88.5 67.2L76.7 68.2Z" fill="#825e2a"/>
+  <path d="M8 96C12 82 28 76 48 76C68 76 84 82 88 96Z" fill="#825e2a"/>
+  <path d="M24 58C30 50 40 46 48 46C56 46 66 50 72 58C70 70 62 80 54 88C50 92 46 92 42 88C34 80 26 70 24 58Z" fill="#fdf6e3"/>
+  <ellipse cx="48" cy="86" rx="5" ry="4.2" fill="#002b36"/>
+  <circle cx="38" cy="60" r="2.5" fill="#002b36"/><circle cx="58" cy="60" r="2.5" fill="#002b36"/>
+  </g>
+</svg>

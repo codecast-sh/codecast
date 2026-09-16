@@ -20,8 +20,18 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { huddleChatLineHeader } from "@codecast/shared/contracts";
 import { authorizeRoom } from "./callRooms";
+import { MAX_ATTACHMENTS } from "./chatText";
 
 const MAX_TEXT = 4000;
+// Same shape as chat_messages.attachments / chat.ts's attachmentValidator —
+// huddle images are chat images, stored and rendered the same way.
+const attachmentValidator = v.object({
+  storage_id: v.id("_storage"),
+  name: v.optional(v.string()),
+  mime: v.optional(v.string()),
+  width: v.optional(v.number()),
+  height: v.optional(v.number()),
+});
 const PAGE = 200;
 // A chat bubble, not a report: a long answer is clipped here and the row
 // links to the session that holds the whole of it.
@@ -69,6 +79,7 @@ export const list = query({
         user_name: agent ? agent.title : u.name,
         user_image: agent ? undefined : u.image,
         text: r.text,
+        attachments: r.attachments,
         at: r._creationTime,
         mine: !agent && String(r.user_id) === String(userId),
         agent,
@@ -96,7 +107,11 @@ async function agentIdentity(ctx: any, id: Id<"conversations">): Promise<AgentId
 }
 
 export const post = mutation({
-  args: { room_key: v.string(), text: v.string() },
+  args: {
+    room_key: v.string(),
+    text: v.string(),
+    attachments: v.optional(v.array(attachmentValidator)),
+  },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
@@ -105,12 +120,17 @@ export const post = mutation({
     const auth = await authorizeRoom(ctx, userId, args.room_key);
     if (!auth.ok) throw new Error(`Cannot chat in this room: ${auth.reason}`);
     const text = args.text.trim().slice(0, MAX_TEXT);
-    if (!text) return;
+    const attachments = args.attachments ?? [];
+    if (attachments.length > MAX_ATTACHMENTS) {
+      throw new Error(`At most ${MAX_ATTACHMENTS} attachments per message`);
+    }
+    if (!text && attachments.length === 0) return;
     await ctx.db.insert("call_chat_messages", {
       room_key: args.room_key,
       team_id: auth.teamId,
       user_id: userId,
       text,
+      attachments: attachments.length > 0 ? attachments : undefined,
     });
     // The agents in the room hear the line too. Relayed as the transcript's
     // routes deliver (as the feed's adder, off the request path), so a
@@ -125,11 +145,16 @@ export const post = mutation({
     if (feeds.length === 0) return;
     const poster = await ctx.db.get(userId);
     const name = poster?.name ?? poster?.email ?? "Someone";
+    const imageIds = attachments.map((a) => a.storage_id);
+    const line = text
+      ? `**${name}**: ${text}`
+      : `**${name}** attached ${imageIds.length === 1 ? "an image" : `${imageIds.length} images`}.`;
     for (const feed of feeds) {
       await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
         as_user: feed.added_by,
         to: String(feed.conversation_id),
-        body: `${huddleChatLineHeader(name)}\n\n**${name}**: ${text}`,
+        body: `${huddleChatLineHeader(name)}\n\n${line}`,
+        image_storage_ids: imageIds.length > 0 ? imageIds : undefined,
       });
     }
   },

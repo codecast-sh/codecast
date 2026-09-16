@@ -9,7 +9,7 @@ import { internal } from "./_generated/api";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
-import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
+import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
@@ -707,7 +707,7 @@ export async function conversationHasLiveSession(
 export async function performSessionSend(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; image_storage_ids?: Id<"_storage">[] }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -756,22 +756,27 @@ export async function performSessionSend(
     throw new Error("--raw sends only into your own sessions (a teammate's session always gets the attributed wrapper)");
   }
 
-  // Sending into an UNOWNED teammate session claims it: the sender joins the
-  // owner set, so the thread follows them (inbox presence, idle/error
-  // notifications) until resolved or dismissed. Engaging with a thread is a
-  // statement of caring about its outcome — but never displace existing owners;
-  // reassignment stays explicit (cast own/disown). Bot accounts never own:
-  // nobody reads their inbox, and a bot claiming a thread would block the first
-  // HUMAN engager from auto-owning it.
+  // A message never claims a session a person started. The runner (user_id),
+  // or the original author if the session later moved machines, already owns
+  // the outcome; putting the sender on the owner set would move the thread
+  // into their inbox. Auto-claim remains only for bot-run threads with an
+  // empty owner set — a shared-machine session no human has taken yet.
+  // Reassignment of a person's session stays explicit (cast own / the owners
+  // menu). Bot senders never own: nobody reads their inbox, and a bot
+  // claiming a bot-run thread would block the first human engager.
   //
-  // "Unowned" means the canonical owner SET is empty. The owner_user_id cache is
-  // ALSO checked as a safety net: a legacy row written before the session_owners
-  // backfill has a cached owner but no join row, and must never be auto-claimed
-  // out from under them. Claiming writes through both.
+  // "Unowned" means the canonical owner SET is empty. The owner_user_id cache
+  // is ALSO checked as a safety net: a legacy row written before the
+  // session_owners backfill has a cached owner but no join row, and must never
+  // be auto-claimed out from under them. Claiming writes through both.
   let autoOwned = false;
   if (isCrossUser && !senderUser?.is_bot) {
     const existingOwners = await listSessionOwnerIds(ctx, target._id);
-    if (existingOwners.length === 0 && !target.owner_user_id) {
+    if (
+      existingOwners.length === 0 &&
+      !target.owner_user_id &&
+      !(await conversationHasHumanStarter(ctx, target))
+    ) {
       await addSessionOwnerRow(ctx, target._id, authUserId, authUserId);
       await syncPrimaryOwnerCache(ctx, target._id);
       autoOwned = true;
@@ -834,6 +839,7 @@ export async function performSessionSend(
       : args.direct
       ? formatUserMessage(senderName ?? "a teammate", body)
       : formatSessionMessage(fromShortId, body, fromName),
+    image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
     // never-drop semantics (your own busy session will get it when it's idle).

@@ -117,12 +117,10 @@ function RootLayout() {
 
   useEffect(() => { startCallKitBridge(); }, []);
 
-
-  useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
+  // Splash stays up past fonts. AuthProvider releases it once the SQLite
+  // cache has hydrated (clientStateInitialized) and local boot trust is
+  // ready to render — otherwise kill-and-reopen paints the inbox skeleton
+  // on an empty store. preventAutoHideAsync above is the hold.
 
   // Publish the resolved appearance (Settings choice, else the OS setting)
   // into the live palette before paint. Every screen subscribes through

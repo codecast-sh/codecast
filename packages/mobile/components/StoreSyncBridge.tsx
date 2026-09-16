@@ -29,7 +29,7 @@ export function StoreSyncBridge() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') emitSyncWake();
-      // Scheduled blob writes (idbCache.native) ride a short delay; iOS may
+      // Scheduled cache writes (idbCache.native) ride a short delay; iOS may
       // suspend or kill a backgrounded app at any moment, so land them now.
       else void flushPersistence();
     });

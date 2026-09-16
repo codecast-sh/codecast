@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { createSessionFromCli } from "./spawn";
-import { nestParentIdOf, isSubagentConversation } from "./ccAccountsShared";
+import { nestParentIdOf, isSubagentConversation, isAgentTeamWorker } from "./ccAccountsShared";
 import { rollupParentIdOf } from "@codecast/shared/contracts";
 
 const OWNER = "spawn-owner";
@@ -47,10 +47,18 @@ describe("plain spawn origin", () => {
   test("a spawned session leading its own team stays independent", async () => {
     const { row } = await spawn({ spawner_session: PARENT.session_id });
     const lead = { ...row, agent_team_name: "worker-team", agent_name: "team-lead" };
+    expect(isAgentTeamWorker(lead)).toBe(false);
     expect(nestParentIdOf(lead)).toBeNull();
     expect(rollupParentIdOf(lead)).toBeNull();
     const teammate = { ...lead, agent_name: "reviewer" };
+    expect(isAgentTeamWorker(teammate)).toBe(true);
     expect(nestParentIdOf(teammate)).toBe(PARENT._id);
     expect(rollupParentIdOf(teammate)).toBe(PARENT._id);
+  });
+
+  test("isAgentTeamWorker does not need the lead link", () => {
+    expect(isAgentTeamWorker({ agent_team_name: "t", agent_name: "reviewer" })).toBe(true);
+    expect(isAgentTeamWorker({ agent_team_name: "t", agent_name: "team-lead" })).toBe(false);
+    expect(isAgentTeamWorker({})).toBe(false);
   });
 });

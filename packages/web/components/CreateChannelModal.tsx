@@ -1,3 +1,7 @@
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { SlackLogo } from "./SlackLogo";
+import { SlackChannelBrowser } from "./chat/SlackChannelBrowser";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Hash, Lock } from "lucide-react";
@@ -42,6 +46,10 @@ export function CreateChannelModal({
   const [isPrivate, setIsPrivate] = useState(false);
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
+  // A team with Slack connected can also bring channels over instead of
+  // typing a name: the same gesture, from the other side.
+  const slack = useQueryNoThrow(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip");
+  const [slackOpen, setSlackOpen] = useState(false);
 
   const slug = slugChannelName(name);
   // Collision check scoped to the target workspace — the store caches channels
@@ -66,6 +74,16 @@ export function CreateChannelModal({
     onCreated?.(id);
     onClose();
   };
+
+  if (slackOpen && teamId) {
+    return (
+      <SlackChannelBrowser
+        teamId={teamId}
+        onClose={onClose}
+        onAdded={(channelId) => onCreated?.(channelId)}
+      />
+    );
+  }
 
   return (
     <div
@@ -142,6 +160,16 @@ export function CreateChannelModal({
         </div>
 
         <div className="px-6 py-3 border-t border-sol-border/50 flex items-center justify-end gap-2">
+          {slack?.data?.installation && (
+            <button
+              type="button"
+              onClick={() => setSlackOpen(true)}
+              className="mr-auto inline-flex items-center gap-1.5 px-1 py-1.5 text-xs text-sol-text-muted hover:text-sol-text transition-colors"
+              title="Pick channels in the connected Slack workspace; each becomes a mirrored channel here"
+            >
+              <SlackLogo className="w-3 h-3" /> Add from Slack
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}

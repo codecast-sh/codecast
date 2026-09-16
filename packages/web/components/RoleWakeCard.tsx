@@ -18,6 +18,7 @@ import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE } from "./messageMarkdown";
 import { compactAge } from "../lib/threadState";
 import { cn } from "../lib/utils";
 import type { OrgRole } from "./org/orgTypes";
+import { RoleFace } from "./org/RoleFace";
 import { ROLE_WAKE_LINE_CAP, dedupeTitles, describeWake, type RoleWakeFrame, type RoleWakeSection } from "./roleWake";
 
 export type RoleWakeCardProps = {
@@ -121,6 +122,8 @@ export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused
       <div className="flex items-center gap-2 px-3 pt-2 pb-1.5 flex-wrap">
         <BellRing className="w-3.5 h-3.5 shrink-0" style={{ color: violet }} />
         <span className="text-[11px] font-medium tracking-wide uppercase shrink-0" style={{ color: violet }}>Role wake</span>
+        {/* The role's face (S13); falls back to the initial plate before the tree is warm. */}
+        {handle && <RoleFace role={{ avatar: role?.avatar, handle, name }} size={20} className="shrink-0" />}
         <Link href={rolePath} className="min-w-0 truncate text-[12.5px] hover:underline" style={{ color: "var(--sol-text)" }} title={`Open ${name}`}>
           <span className="font-medium">{name}</span>
           {handle && <span className="ml-1" style={{ color: "var(--sol-text-muted)", fontFamily: "var(--font-mono)" }}>@{handle}</span>}

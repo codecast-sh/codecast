@@ -43,25 +43,48 @@ const settle = async (container: HTMLElement, sel: string) => {
   return false;
 };
 
-// In flight (release sweep 2026-09-15): on the Linux CI runner the search page mounts
-// but never receives the query from the tab route (value stays ""), while the same
-// test passes on macOS. The owner should pin down what the input reads the query
-// from under JSDOM before this gates a release.
-test.skip("navigating the active tab to /search?q=… renders the search page in the solo stage", async () => {
+const SEARCH_INPUT = 'input[placeholder^="Search every session"]';
+
+function mountStage() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  const render = () => act(() => root.render(<MemoryRouter><Nest.Provider value={true}><Stage /></Nest.Provider></MemoryRouter>));
+  return { container, root, render };
+}
+
+test("navigating the active tab to /search shows the loader, then the search page, never an empty pane", async () => {
+  const { container, root, render } = mountStage();
   try {
-    await act(() => root.render(<MemoryRouter><Nest.Provider value={true}><Stage /></Nest.Provider></MemoryRouter>));
+    await render();
+    // Synchronous act: the render commits before the page's import can settle,
+    // so this is the frame a real user sees while the chunk is on the wire.
+    act(() => { tabNavigate("/search?q=deploy", "push"); });
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(await settle(container, SEARCH_INPUT)).toBe(true);
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  } finally {
+    await act(() => root.unmount());
+  }
+}, { timeout: 30_000 });
+
+// In flight (release sweep 2026-09-15): on the Linux CI runner the search page mounts
+// but never receives the query from the tab route (value stays ""), while the same
+// test passes on macOS. Suspect two module instances of lib/tabParams under bun on
+// Linux (the `@/` alias vs the relative import): with no tab context the page reads
+// the MemoryRouter's empty params, writes /search back to the tab, and the query is
+// gone before the adopt effect runs. Pin that down before this gates a release.
+test.skip("the tab route's query reaches the search input", async () => {
+  const { container, root, render } = mountStage();
+  try {
+    await render();
     await act(() => { tabNavigate("/search?q=deploy", "push"); });
-    // The input mounts first and takes the query on a later effect; wait for the value too.
-    const sel = 'input[placeholder^="Search every session"]';
-    let ok = await settle(container, sel);
-    for (let i = 0; ok && i < 30 && (container.querySelector(sel) as HTMLInputElement).value !== "deploy"; i++) {
+    let ok = await settle(container, SEARCH_INPUT);
+    for (let i = 0; ok && i < 30 && (container.querySelector(SEARCH_INPUT) as HTMLInputElement).value !== "deploy"; i++) {
       await act(() => new Promise<void>((r) => setTimeout(r, 100)));
     }
     expect(ok).toBe(true);
-    expect((container.querySelector('input[placeholder^="Search every session"]') as HTMLInputElement).value).toBe("deploy");
+    expect((container.querySelector(SEARCH_INPUT) as HTMLInputElement).value).toBe("deploy");
   } finally {
     await act(() => root.unmount());
   }

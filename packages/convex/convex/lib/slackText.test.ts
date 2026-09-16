@@ -54,8 +54,8 @@ describe("slackToMarkdown", () => {
       .toBe("> quoted\n- one\n- two\n\\# not a header");
   });
   test("emoji shortcodes with and without skin tones", () => {
-    expect(slackToMarkdown("ship it :rocket: :+1::skin-tone-3: :unknown_thing:", resolve))
-      .toBe("ship it 🚀 👍 :unknown_thing:");
+    expect(slackToMarkdown(":rotating_light: ship it :rocket: :+1::skin-tone-3: :unknown_thing:", resolve))
+      .toBe("🚨 ship it 🚀 👍 :unknown_thing:");
   });
   test("a time like 10:30: is not an emoji", () => {
     expect(replaceShortcodes("at 10:30:45 sharp")).toBe("at 10:30:45 sharp");
@@ -74,7 +74,7 @@ describe("emoji", () => {
     expect(shortcodeToEmoji(":thumbsup:")).toBe("👍");
     expect(emojiToShortcode("👍🏽")).toBe("+1");
     expect(emojiToShortcode("❤")).toBe("heart");
-    expect(emojiToShortcode("🫥")).toBeNull();
+    expect(emojiToShortcode("xyz")).toBeNull();
   });
 });
 

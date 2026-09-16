@@ -1,7 +1,7 @@
-import { lazy, Suspense, ReactNode, useEffect } from "react";
+import { lazy, Suspense, ReactNode } from "react";
 import { BootFallback } from "@/components/BootFallback";
+import { RouteFallback } from "@/components/RouteFallback";
 import { Routes, Route } from "react-router";
-import NProgress from "nprogress";
 import { Providers } from "./providers";
 import { MarketingLayout } from "./layouts/MarketingLayout";
 import { TransparentWindowLayout } from "./layouts/TransparentWindowLayout";
@@ -147,14 +147,6 @@ import "@/lib/issueEventStyles";
 
 function E({ name, children }: { name: string; children: ReactNode }) {
   return <ErrorBoundary name={name} level="panel">{children}</ErrorBoundary>;
-}
-
-function RouteFallback() {
-  useEffect(() => {
-    NProgress.start();
-    return () => { NProgress.done(); };
-  }, []);
-  return null;
 }
 
 export function App() {

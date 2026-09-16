@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Whale">
+  <!-- tones: ground #9ec3d4 = sol-blue 40% over sol-bg-alt; body #1d72a7 = sol-blue 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-whale"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#9ec3d4"/>
+  <g clip-path="url(#c-whale)">
+  <path d="M-6 96C-6 60 14 36 46 36C66 36 78 46 80 60C82 72 78 84 74 96Z" fill="#1d72a7"/>
+  <path d="M-2 96C4 80 22 72 50 72C64 72 72 78 74 96Z" fill="#fdf6e3"/>
+  <path d="M70 66C80 58 84 46 82 32L92 30C94 46 92 60 80 72Z" fill="#1d72a7"/>
+  <path d="M82 33C72 28 68 16 74 10C80 16 84 18 88 16C92 10 100 12 102 20C96 26 92 30 84 34Z" fill="#1d72a7"/>
+  <circle cx="28" cy="60" r="3.6" fill="#002b36"/>
+  </g>
+</svg>

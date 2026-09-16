@@ -25,6 +25,26 @@ test("a reload before IndexedDB commits recovers the exact input", () => {
   expect(pendingMessagesFromRecords(apply(readPendingMessageJournal(disk).flatMap(b => b.writes)))).toEqual(pending);
 });
 
+test("getAllKeys is scanned once when provided, not once per stored key", () => {
+  const values = new Map<string, string>();
+  for (let i = 0; i < 200; i++) values.set(`noise-${i}`, "x");
+  values.set("cast-pending-input:v1:owner:1", JSON.stringify({ ownerId: "owner", writes: pendingMessageWrites({}, { c: [message("a")] }) }));
+  let allCalls = 0;
+  let keyCalls = 0;
+  const disk = {
+    getItem: (k: string) => values.get(k) ?? null,
+    setItem: (k: string, v: string) => { values.set(k, v); },
+    removeItem: (k: string) => { values.delete(k); },
+    key: (i: number) => { keyCalls++; return [...values.keys()][i] ?? null; },
+    get length() { return values.size; },
+    getAllKeys: () => { allCalls++; return [...values.keys()]; },
+  };
+  const batches = readPendingMessageJournal(disk);
+  expect(allCalls).toBe(1);
+  expect(keyCalls).toBe(0);
+  expect(batches).toHaveLength(1);
+});
+
 test("journal writes fail synchronously so the caller cannot clear unsaved input", () => {
   const disk = storage();
   disk.setItem = () => { throw new Error("QuotaExceededError"); };

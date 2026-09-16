@@ -85,11 +85,11 @@ describe("passive discovery and explicit shepherd lifecycle", () => {
   test("only explicit on arms a shepherd and a failing CI bot check remains actionable", async () => {
     const f = await fixture();
     await f.toggle("on");
-    const task = await f.db.get(f.pr().shepherd_task_id);
-    expect(task.run_at).toBeUndefined();
+    const task = async () => f.db.get(f.pr().shepherd_task_id);
+    expect((await task()).run_at).toBeUndefined();
     await f.check("failure");
-    expect(task.run_at).toBeGreaterThan(0);
-    expect(task.prompt).toContain("a check failed");
+    expect((await task()).run_at).toBeGreaterThan(0);
+    expect((await task()).prompt).toContain("a check failed");
     expect(f.pr().shepherd_wake_count).toBe(1);
   });
 
@@ -159,12 +159,13 @@ describe("passive discovery and explicit shepherd lifecycle", () => {
   test.each([true, false])("terminal webhook (merged=%s) saves a receipt and retires only its shepherd", async (merged) => {
     const f = await fixture();
     await f.toggle("on");
-    const task = await f.db.get(f.pr().shepherd_task_id);
+    const taskId = f.pr().shepherd_task_id;
     const watchId = await f.watch(merged ? "pr_merged" : "pr_closed");
-    await f.db.patch(task._id, { status: "running", lease_holder: "daemon-test", lease_expires_at: Date.now() + 60_000 });
+    await f.db.patch(taskId, { status: "running", lease_holder: "daemon-test", lease_expires_at: Date.now() + 60_000 });
     await f.db.insert("tasks", { _id: "unrelated", status: "in_progress" });
     await f.close(merged);
     await f.drainWatches();
+    const task = await f.db.get(taskId);
     expect(task.status).toBe("completed");
     expect(task.run_at).toBeUndefined();
     expect(task.lease_holder).toBeUndefined();

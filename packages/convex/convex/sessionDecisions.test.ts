@@ -22,6 +22,7 @@ import {
   GRANT_TTL_MS,
   edit,
   withdraw,
+  reroutePendingDecisionsForConversation,
 } from "./sessionDecisions";
 import { hashToken } from "./apiTokens";
 import * as fs from "fs";
@@ -101,16 +102,24 @@ function seed(extra: Record<string, any[]> = {}) {
       },
     ],
     conversations: [
-      // The asking session reports to the growth lead.
-      { _id: "conversations_ask", session_id: "sess-ask", user_id: HOST, team_id: TEAM, message_count: 10, org_role_id: "org_roles_lead" },
+      // The asking session reports to the growth lead. Host is the primary
+      // owner (owner_user_id + session_owners); OWNER2 is a second owner.
+      { _id: "conversations_ask", session_id: "sess-ask", user_id: HOST, owner_user_id: HOST, team_id: TEAM, message_count: 10, org_role_id: "org_roles_lead" },
       // The growth lead's own standing session.
       { _id: "conversations_lead", session_id: "sess-lead", user_id: HOST, team_id: TEAM, message_count: 3, org_role_id: "org_roles_lead" },
       // A second asker under the same role (the "2 askers" rule).
       { _id: "conversations_ask2", session_id: "sess-ask2", user_id: HOST, team_id: TEAM, message_count: 4, org_role_id: "org_roles_lead" },
       // A session with no role at all.
       { _id: "conversations_plain", session_id: "sess-plain", user_id: HOST, message_count: 1 },
+      // A standing role session owned by someone other than its runner: the
+      // parent chain must not keep questions on the founder's stack.
+      { _id: "conversations_standing", session_id: "sess-standing", user_id: HOST, owner_user_id: OWNER2, team_id: TEAM, message_count: 2, standing_role_id: "org_roles_lead" },
     ],
-    session_owners: [{ _id: "so1", conversation_id: "conversations_ask", user_id: OWNER2, added_by: HOST, added_at: NOW }],
+    session_owners: [
+      { _id: "so0", conversation_id: "conversations_ask", user_id: HOST, added_by: HOST, added_at: NOW - 1 },
+      { _id: "so1", conversation_id: "conversations_ask", user_id: OWNER2, added_by: HOST, added_at: NOW },
+      { _id: "so_stand", conversation_id: "conversations_standing", user_id: OWNER2, added_by: HOST, added_at: NOW },
+    ],
     tasks: [{ _id: "tasks_t1", short_id: "ct-7", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, title: "Ship the thing", status: "in_review", project_id: "projects_p1", task_type: "task", priority: "medium" }],
     session_decisions: [],
     decision_inbox: [],
@@ -231,6 +240,44 @@ describe("ask: people, inbox, ladder, holder", () => {
     const row = tables.session_decisions[0];
     expect(row.asked_user_ids).toEqual([HOST]);
     expect(row.hops).toEqual([]);
+  });
+
+  test("a standing session asks its owners, not the runner or the role parent", async () => {
+    const { ctx, tables } = seed();
+    const r = await askApproach(ctx, "sess-standing");
+    expect(r.error).toBeUndefined();
+    const row = tables.session_decisions[0];
+    expect(row.asked_user_ids).toEqual([OWNER2]);
+    expect(row.holder).toEqual({ kind: "user", id: OWNER2 });
+    expect(tables.decision_inbox.map((i) => i.user_id)).toEqual([OWNER2]);
+    expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([]);
+    expect((await listForUserCore(ctx, OWNER2, NOW)).map((d) => d._id)).toEqual([row._id]);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([]);
+  });
+
+  test("assigning a session moves its open questions onto the new owner's stack", async () => {
+    const { ctx, tables } = seed();
+    const r = await askApproach(ctx);
+    expect(r.error).toBeUndefined();
+    const id = tables.session_decisions[0]._id;
+    expect(new Set(tables.session_decisions[0].asked_user_ids)).toEqual(new Set([HOST, OWNER2, BOSS]));
+
+    // Hand the session to OWNER2: drop HOST from owners, clear the role
+    // pointer (the same writes performReparentSession makes on a person target).
+    await ctx.db.patch("conversations_ask", { org_role_id: undefined, owner_user_id: OWNER2 });
+    for (const row of await ctx.db.query("session_owners").withIndex("by_conversation", (q: any) => q.eq("conversation_id", "conversations_ask")).collect()) {
+      if (row.user_id !== OWNER2) await ctx.db.delete(row._id);
+    }
+    const moved = await reroutePendingDecisionsForConversation(ctx, "conversations_ask" as any, NOW);
+    expect(moved.moved).toBe(1);
+    expect(tables.session_decisions[0].asked_user_ids).toEqual([OWNER2]);
+    expect(tables.session_decisions[0].holder).toEqual({ kind: "user", id: OWNER2 });
+    expect(tables.decision_inbox.map((i) => [i.user_id, i.status])).toEqual([[OWNER2, "pending"]]);
+    expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([]);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([]);
+    expect((await listForUserCore(ctx, OWNER2, NOW)).map((d) => d._id)).toEqual([id]);
+    expect(personMayResolve(tables.session_decisions[0], HOST)).toBe(false);
+    expect(personMayResolve(tables.session_decisions[0], OWNER2)).toBe(true);
   });
 
   test("binds to a task (default station = the task's status) and creates a decision doc", async () => {

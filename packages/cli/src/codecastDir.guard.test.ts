@@ -30,7 +30,7 @@ const HANDROLLED = [
 ];
 
 /** Naming one of these writes positions.json or sync-ledger.json. */
-const STATE_WRITERS = ["setPosition(", "clearPosition(", "markSynced(", "updateSyncRecord(", "processSessionFile("];
+const STATE_WRITERS = ["setPosition(", "clearPosition(", "markSynced(", "markExamined(", "updateSyncRecord(", "processSessionFile("];
 
 /** Any of these puts the writes somewhere other than the human's ~/.codecast. */
 const REDIRECTS = [/process\.env\.CODECAST_DIR\s*=/, /CODECAST_DIR\s*:/, /isolateCodecastDir\s*\(/];

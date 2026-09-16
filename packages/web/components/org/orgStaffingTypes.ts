@@ -13,7 +13,12 @@ export type OrgRoleHealth = {
   role_id: string;
   short_id: string;
   handle: string;
-  load: { open_tasks: number; in_flight: number; active_plans: number; live_hands: number; direct_reports: number };
+  /** What reached the seat this week (orgCapacity.RoleLoad): the counts the overloaded flag reads. */
+  load: { items_per_day: number; decisions_per_day: number; live_hands: number; direct_reports: number; open_stalls: number; cap_hit_days: number };
+  /** What the scope holds today (orgCapacity.RoleLedger): context, never load. */
+  ledger: { open_tasks: number; in_flight: number; active_plans: number };
+  /** Which rows the load and the ledger were counted from, and by what rule. */
+  counted?: { rule: "scope" | "remainder"; projects: number; plans: number; tasks: number; complete: boolean; note: string };
   spend: { wakes_today: number; wakes_7d_avg: number; wakes_cap: number; tokens_today: number; tokens_7d_avg: number; tokens_cap: number; cap_hits_7d: number };
   flow: {
     decisions_7d: number;
@@ -71,7 +76,24 @@ export type OrgProposalChange = {
   applied_at?: number;
 };
 
-export type OrgProposalAuthor = { kind: "role" | "session" | "user"; id: string; name?: string; short_id?: string };
+/** Who wrote a proposal (S15). The server stores kind and id; the rest is
+ *  what a pill needs and is filled by the server when it enriches, else by
+ *  the web from the store (a session row, the org tree's role row). */
+export type OrgProposalAuthor = {
+  kind: "role" | "session" | "user";
+  id: string;
+  /** A role's or a person's name; a session's title. */
+  name?: string;
+  /** "jx7abcd" for a session, "or-N" for a role. */
+  short_id?: string;
+  /** A session's title, when the server names it apart from `name`. */
+  title?: string;
+  /** A role's handle and avatar key (orgAvatars). */
+  handle?: string;
+  avatar?: string;
+};
+
+export type OrgProposalPointer = { id: string; short_id: string; status: "open" | "resolved" | "withdrawn"; created_at: number };
 
 export type OrgProposalRow = {
   _id: string;
@@ -84,6 +106,10 @@ export type OrgProposalRow = {
   mode: OrgProposalMode;
   status: "open" | "resolved" | "withdrawn";
   evidence_doc_id?: string;
+  /** Supersession (S4): the proposal this one replaces, and the newer one
+   *  that replaced this; both named by the server on list and get. */
+  supersedes?: OrgProposalPointer;
+  superseded_by?: OrgProposalPointer;
   created_at: number;
   resolved_at?: number;
   /** orgProposals.list and get both stamp these. */

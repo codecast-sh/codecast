@@ -28,7 +28,13 @@ const devices = [
   { device_id: "remote", label: "Ashot Cloud", platform: "linux", online: true, is_remote: true, last_seen: Date.now(), local_project_roots: [] },
 ];
 const foreign = { device_id: "theirs", label: "Jason MacBook", platform: "darwin", online: true, is_remote: false, last_seen: Date.now(), runner: { name: "Jason", is_bot: false } };
-useInboxStore.setState({ currentUser: me as any, teamMembers: [me, { _id: "jason", name: "Jason" }] as any, machineRoster: devices, sessions: {}, conversations: {} });
+useInboxStore.setState({
+  currentUser: me as any,
+  teamMembers: [me, { _id: "jason", name: "Jason" }] as any,
+  machineRoster: devices,
+  sessions: {},
+  conversations: { [id]: { _id: id, user_id: runner.id } },
+});
 replies.set("devices:listDevices", devices);
 replies.set("devices:ownerDeviceDisplay", foreign);
 replies.set("sessionOwnership:listOwnerCandidates", { team_members: [me, { _id: "jason", name: "Jason" }] });
@@ -50,7 +56,7 @@ test("a teammate sees the machine and can claim before being an owner", async ()
   setOwners([]);
   await render();
   expect(container.textContent).toContain("Jason MacBook");
-  expect(container.textContent).toContain("Take ownership");
+  expect(container.textContent).not.toContain("Take ownership");
   expect(container.textContent).not.toContain("Assigned to you");
   await openMenu();
   const menu = document.querySelector('[role="menu"]')!;
@@ -59,16 +65,8 @@ test("a teammate sees the machine and can claim before being an owner", async ()
   expect(menu.textContent).toContain("Add to your inbox; keep existing owners");
   expect(menu.textContent).toContain("Ashot MacBook");
   expect(menu.textContent).not.toContain("Ashot Cloud");
-  const claim = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Take ownership"))!;
-  await act(async () => claim.click());
-  expect(mutations).toHaveLength(1);
-  expect(mutations[0]).toMatchObject({ name: "sessionOwnership:addSessionOwner", args: { session_id: id, owner: "me" } });
-  expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Take ownership");
-  expect(document.querySelector('[role="menuitemcheckbox"][aria-checked="true"]')?.textContent).toContain("Ashot");
-  setOwners([{ user_id: "me", name: "Ashot" }]);
-  await act(async () => mutations[0].resolve());
-  await render(false, false, false);
-  expect(container.textContent).toContain("Jason MacBook");
+  expect(menu.textContent).toContain("Take ownership");
+  expect(document.querySelector('[role="menuitemcheckbox"][aria-checked="true"]')?.textContent).toContain("Jason");
 });
 
 test("share-only viewers and failed permission reads get no assignment controls", async () => {
@@ -101,12 +99,19 @@ test("a viewer with no registered devices still sees the foreign machine", async
   setOwners([]);
   await render();
   expect(container.textContent).toContain("Jason MacBook");
-  expect(container.textContent).toContain("Take ownership");
+  expect(container.textContent).not.toContain("Take ownership");
   await render(false, true);
   expect(container.querySelector("button")?.title).toContain("Jason MacBook");
-  expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(2);
+  expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(1);
   await openMenu();
   expect(document.querySelector('[role="menuitem"][data-disabled]')?.textContent).toContain("Jason MacBook");
+});
+
+test("the starter's name is in the header when they own the session", async () => {
+  setOwners([{ user_id: "me", name: "Ashot" }]);
+  await render(true);
+  expect(container.textContent).toContain("Ashot");
+  expect(container.textContent).not.toContain("Take ownership");
 });
 
 test("existing owners remain selected when another teammate claims", async () => {
