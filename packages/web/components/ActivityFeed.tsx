@@ -27,6 +27,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import "./team/teamFlow.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { LivePulseDot } from "./SessionActivityLine";
 // Activity feed. Two sources, one rendering (FeedBody):
 //   • personal mode → a VIEW over store.sessions (the liberal delta cache that the
 //     inbox already syncs) — no redundant server query, instant from cache.
@@ -217,7 +218,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
           </span>
           {isActive && (
             <span className="flex items-center gap-1 shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+              <LivePulseDot className="w-1.5 h-1.5" />
               <span className="text-[8px] font-medium uppercase tracking-wider text-sol-green/70">live</span>
             </span>
           )}
@@ -332,7 +333,7 @@ function RollupHeader({ convs, compact }: {
       {stats.people > 1 && <span className="text-[11px] text-sol-text-dim/70 tabular-nums">{stats.people} people</span>}
       {stats.active > 0 && (
         <span className="flex items-center gap-1 text-[11px] text-sol-green/70 font-medium">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />{stats.active} live
+          <LivePulseDot className="w-1.5 h-1.5" />{stats.active} live
         </span>
       )}
       {stats.msgs > 0 && <span className="text-[11px] text-sol-text-dim/50 tabular-nums">{formatMsgCount(stats.msgs)} msgs</span>}
@@ -418,7 +419,7 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
         <span className={`font-semibold tracking-tight text-sol-text ${compact ? "text-[13px]" : "text-[15px]"}`}>{label}</span>
         {active > 0 && (
           <span className="flex items-center gap-1 text-[9px] text-sol-green/60 font-medium">
-            <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse" />{active} active
+            <LivePulseDot className="w-1 h-1" />{active} active
           </span>
         )}
         <div className="h-px flex-1 bg-sol-border/15" />

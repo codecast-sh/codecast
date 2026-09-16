@@ -405,7 +405,9 @@ describe("shellLead", () => {
   });
 
   it("skips setup words so the receipt names what actually ran", () => {
-    expect(shellLead('cd /Users/me/src/codecast; echo "=== tabs"; cast browser tabs')).toBe("echo");
+    expect(shellLead('cd /Users/me/src/codecast; echo "=== tabs"; cast browser tabs')).toBe("cast browser");
+    expect(shellLead("timeout 600 bun test packages/web")).toBe("bun test");
+    expect(shellLead("mkdir -p /tmp/out && cat > /tmp/out/f")).toBe("cat");
     expect(shellLead("cd packages/web && npx tsc --noEmit -p tsconfig.json")).toBe("npx tsc");
     expect(shellLead("FOO=1 sudo time bun test")).toBe("bun test");
     expect(shellLead("/opt/homebrew/bin/node -e 1")).toBe("node");
@@ -414,6 +416,7 @@ describe("shellLead", () => {
 
   it("keeps a setup-only command's first word instead of vanishing", () => {
     expect(shellLead("cd /Users/me/src/codecast")).toBe("cd");
+    expect(shellLead('echo "done"; sleep 2')).toBe("echo");
     expect(shellLead("")).toBe("");
   });
 });
