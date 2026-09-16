@@ -3,6 +3,7 @@ import {
   applyRestartingSessionStamp,
   deriveRestartStage,
   liveRestartStartedAt,
+  rebindRestartLifecycle,
   restartConfirmedLive,
   RESTART_GIVE_UP_AFTER_MS,
   type RestartProgressRow,
@@ -116,5 +117,21 @@ describe("liveRestartStartedAt", () => {
 
   it("does not read another conversation's stamp", () => {
     expect(liveRestartStartedAt({ [A]: 1000 }, B, 1000)).toBeUndefined();
+  });
+});
+
+describe("rebindRestartLifecycle", () => {
+  it("does not follow a leftover restart onto a different conversation", () => {
+    expect(rebindRestartLifecycle(B, A, { [A]: 1000 }, 1000))
+      .toEqual({ ownerId: B, phase: "idle", startedAt: null });
+  });
+
+  it("hydrates when navigating back to the conversation that is still restarting", () => {
+    expect(rebindRestartLifecycle(A, B, { [A]: 1000 }, 1000))
+      .toEqual({ ownerId: A, phase: "restarting", startedAt: 1000 });
+  });
+
+  it("is a no-op while the open conversation is unchanged", () => {
+    expect(rebindRestartLifecycle(A, A, { [A]: 1000 }, 1000)).toBeNull();
   });
 });

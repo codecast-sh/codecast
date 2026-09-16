@@ -1021,6 +1021,10 @@ export function EntityIdPill({
     },
     [revealHost, entity, handleOpen, closeNow, toggleReveal],
   );
+  // Plain click stays here: the reveal band, or a session taking the stage.
+  // The href is still real (cmd-click, copy link), but it will not produce a
+  // router transition, so the top progress bar must not start.
+  const clickStaysHere = !!entity && (revealHost || isSession);
 
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
   useEffect(() => cancelHover, [cancelHover]);
@@ -1051,6 +1055,7 @@ export function EntityIdPill({
           ref={linkRef}
           href={href}
           onClick={handleClick}
+          {...(clickStaysHere ? { "data-no-progress": "" } : {})}
           // While its band is open the full page is right below: no hover
           // card over it, and a stale timer never brings one back.
           onMouseEnter={revealOpen ? closeNow : openSoon}
@@ -1094,6 +1099,7 @@ export function EntityIdPill({
         <Link
           href={href}
           onClick={handleOpen}
+          {...(isSession && entity ? { "data-no-progress": "" } : {})}
           className="block p-3 no-underline cursor-pointer"
         >
           {entity ? (
