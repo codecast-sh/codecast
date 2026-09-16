@@ -31,7 +31,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "../proc.js";
+import { spawn, spawnSync } from "../proc.js";
+import { narrated } from "./narrate.js";
 import { browserHome } from "./profile.js";
 import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
 import { readState } from "./instance.js";
@@ -144,6 +145,14 @@ export interface EngineOptions {
   timeoutMs?: number;
   /** Stream output straight through instead of capturing it. */
   inherit?: boolean;
+  /**
+   * What this run is doing, in words for the person at the terminal. Set,
+   * the run is asynchronous and narrated (narrate.ts): a run past a second
+   * and a half says what it is waiting on and how long it has been, so a
+   * page that takes half a minute to attach and load on a loaded machine
+   * does not read as a hang. Unset, the run is synchronous and silent.
+   */
+  narrate?: string;
 }
 
 /**
@@ -291,7 +300,9 @@ export function managedPort(): number | null {
  * URL carrying the bridge token, and on macOS every user can read every
  * other user's process arguments.
  */
-export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
+export function runEngine(args: string[], opts: EngineOptions & { narrate: string }): Promise<EngineRun>;
+export function runEngine(args: string[], opts?: EngineOptions): EngineRun;
+export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun | Promise<EngineRun> {
   const binary = findEngine();
   if (!binary) {
     throw new Error(
@@ -306,21 +317,33 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
 
   const session = opts.session ?? engineSession();
   const full = [...args, "--pin-tab", "--init-script", agentTabInitScript()];
-
-  // The engine raises Chrome as a side effect of ordinary commands; if it
-  // takes the front during this call, hand focus back (focusGuard.ts).
-  const front = frontAppPid();
-  const res = spawnSync(binary, full, {
-    encoding: "utf-8",
+  const launch = {
     timeout: opts.timeoutMs ?? 120_000,
-    stdio: opts.inherit ? ["ignore", "inherit", "inherit"] : ["ignore", "pipe", "pipe"],
+    stdio: (opts.inherit ? ["ignore", "inherit", "inherit"] : ["ignore", "pipe", "pipe"]) as ["ignore", "inherit" | "pipe", "inherit" | "pipe"],
     env: {
       ...process.env,
       // The isolation that replaces our tab-ownership bookkeeping.
       AGENT_BROWSER_SESSION: session,
       AGENT_BROWSER_CDP: String(cdp),
     },
-  });
+  };
+
+  // The engine raises Chrome as a side effect of ordinary commands; if it
+  // takes the front during this call, hand focus back (focusGuard.ts).
+  const front = frontAppPid();
+  if (opts.narrate) {
+    const run = new Promise<EngineRun>((resolve, reject) => {
+      const child = spawn(binary, full, launch);
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.setEncoding("utf-8").on("data", (chunk: string) => (stdout += chunk));
+      child.stderr?.setEncoding("utf-8").on("data", (chunk: string) => (stderr += chunk));
+      child.on("error", reject);
+      child.on("close", (status) => resolve({ status: status ?? 1, stdout, stderr }));
+    });
+    return narrated(opts.narrate, run).finally(() => restoreFocusIfStolen(front));
+  }
+  const res = spawnSync(binary, full, { encoding: "utf-8", ...launch });
   restoreFocusIfStolen(front);
 
   return {
