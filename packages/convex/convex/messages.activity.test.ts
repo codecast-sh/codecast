@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { deriveActivity } from "./messages";
+import { addMessage, addMessages, deriveActivity } from "./messages";
+import { makeFakeDb } from "./testDb";
 
 // The activity line is stamped at message ingest from the newest assistant
 // tool call in a batch (addMessage / addMessages, the same transaction as
@@ -71,5 +72,45 @@ describe("deriveActivity", () => {
   test("the text is capped", () => {
     const long = deriveActivity([assistant(NOW, call("WebSearch", { query: "x".repeat(300) }))], undefined, NOW);
     expect(long!.text.length).toBeLessThanOrEqual(80);
+  });
+});
+
+// The ingest endpoints themselves, driven with the in-memory db (the
+// messages.fileChanges.test.ts pattern): the stamp lands on the conversation
+// row in the same write as the message, on both the single and the batch path.
+describe("message ingest stamps conversations.activity", () => {
+  function setup() {
+    const db = makeFakeDb({
+      conversations: [{ _id: "conversation", user_id: "owner", is_private: true }],
+      messages: [],
+      file_changes: [],
+    });
+    return { db, auth: { getUserIdentity: async () => ({ subject: "owner|session" }) }, scheduler: { runAfter: async () => {} } } as any;
+  }
+  const conv = (ctx: any) => ctx.db._tables.conversations[0];
+
+  test("addMessages stamps the newest tool call of the batch", async () => {
+    const ctx = setup();
+    await (addMessages as any)._handler(ctx, {
+      conversation_id: "conversation",
+      messages: [
+        { message_uuid: "m1", role: "assistant", timestamp: NOW - 2000, tool_calls: [call("Read", { file_path: "/x/a.ts" })] },
+        { message_uuid: "m2", role: "assistant", timestamp: NOW - 1000, tool_calls: [call("Bash", { command: "cd repo && npx tsc --noEmit" })] },
+      ],
+    });
+    expect(conv(ctx).activity).toEqual({ text: "running npx tsc", tool: "Bash", at: NOW - 1000 });
+  });
+
+  test("addMessage stamps a single tool call message and a plain reply leaves the stamp alone", async () => {
+    const ctx = setup();
+    await (addMessage as any)._handler(ctx, {
+      conversation_id: "conversation", message_uuid: "m1", role: "assistant", timestamp: NOW,
+      tool_calls: [call("Edit", { file_path: "/Users/me/src/app/chat.ts" })],
+    });
+    expect(conv(ctx).activity).toEqual({ text: "editing app/chat.ts", tool: "Edit", at: NOW });
+    await (addMessage as any)._handler(ctx, {
+      conversation_id: "conversation", message_uuid: "m2", role: "assistant", timestamp: NOW + 1000, content: "done",
+    });
+    expect(conv(ctx).activity).toEqual({ text: "editing app/chat.ts", tool: "Edit", at: NOW });
   });
 });

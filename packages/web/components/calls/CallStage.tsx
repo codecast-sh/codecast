@@ -69,6 +69,7 @@ import {
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
 import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
+import { LivePulseDot } from "../SessionActivityLine";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -386,7 +387,7 @@ export function CallStage({
           <span className="relative">
             <Captions className="h-3.5 w-3.5" />
             {live && (
-              <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sol-green animate-pulse" />
+              <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />
             )}
           </span>
           transcript
