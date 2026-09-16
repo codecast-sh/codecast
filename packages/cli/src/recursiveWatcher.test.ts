@@ -25,6 +25,34 @@ afterEach(() => {
 });
 
 describe("RecursiveWatcher", () => {
+  test("reports a known file's deletion as unlink, never a stranger's", async () => {
+    const root = tmpDir("rw-unlink");
+    fs.mkdirSync(root, { recursive: true });
+    const known = path.join(root, "known.jsonl");
+    fs.writeFileSync(known, "{}\n");
+
+    const events: { path: string; type: string }[] = [];
+    const watcher = new RecursiveWatcher({
+      path: root,
+      filter: (rel) => rel.endsWith(".jsonl"),
+      callback: (filePath, eventType) => events.push({ path: filePath, type: eventType }),
+      debounceMs: 50,
+    });
+    cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+    watcher.start();
+    await watcher.whenPrimed();
+
+    // A file that appears and vanishes inside one debounce window was never
+    // recorded, so its disappearance is not news.
+    const transient = path.join(root, "transient.jsonl");
+    fs.writeFileSync(transient, "{}\n");
+    fs.unlinkSync(transient);
+    fs.unlinkSync(known);
+    await new Promise(r => setTimeout(r, 400));
+
+    expect(events.filter(e => e.type === "unlink").map(e => e.path)).toEqual([known]);
+  });
+
   test("detects new file creation", async () => {
     const root = tmpDir("rw-create");
     fs.mkdirSync(root, { recursive: true });

@@ -35,12 +35,12 @@ import {
   type HibernationCandidate,
 } from "./hibernation.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
-import { watch as chokidarWatch } from "chokidar";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
-import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
+import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
@@ -99,7 +99,6 @@ import {
   credentialIsFresher,
   CcAccountError,
   readActiveOauth,
-  createMtimeGatedCache,
   ingestStatusLineUsage,
   extractSetupToken,
   fetchRateLimitFingerprint,
@@ -109,6 +108,7 @@ import {
   removeAccountToken,
 } from "./ccAccounts.js";
 import { STATUSLINE_HOOK_PATH, STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
+import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
@@ -193,7 +193,7 @@ import {
   classifyProcessOwnership,
   shortId,
   argvSessionId,
-  parsePsEtimeSeconds,
+  processStartSecFromEtime,
   judgeProcessIdentity,
   processDeclaredSessionId,
   registrySupersedesCachedPid,
@@ -277,7 +277,7 @@ import { handleFsBrowseHttp } from "./fs/browseHttp.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
-import { enumerateProjectRoots, enumerateAgentHomeDirs, enumerateLocalRootsAsync, MAX_PROJECT_ROOTS, PROJECT_PARENT_DIRS, AGENT_HOME_DIRS } from "./projectRoots.js";
+import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -865,7 +865,11 @@ export function classifyTickWindow(
 // and starts the clock, and the first real wake then reads "recovered after
 // 1701s down" and restarts a healthy daemon (2026-08-16, mid-delivery). A
 // suspend therefore clears the clock; a still-dead backend after wake restarts
-// it from the wake, and the 3-minute threshold applies from there.
+// it from the wake, and the 3-minute threshold applies from there. An event
+// loop stall clears it for the same reason: the daemon was not polling, so
+// the window is not a stuck connection, and restarting into the boot that
+// stalled only repeats the stall (2026-09-15: two self-heal restarts in 33
+// minutes, each one re-freezing on watcher setup).
 export class BackendOutageClock {
   private downSince = 0;
   markFailure(now = Date.now()): void { if (this.downSince === 0) this.downSince = now; }
@@ -876,7 +880,12 @@ export class BackendOutageClock {
     this.downSince = 0;
     return downFor;
   }
-  noteSuspend(): void { this.downSince = 0; }
+  /** The daemon was not running for part of the window — asleep, or its
+   *  event loop frozen — so the outage it was measuring is not evidence of
+   *  a stuck connection. A restart on a frozen loop is what turned a boot
+   *  freeze into a restart loop (2026-09-15): every self-heal re-ran the
+   *  boot that froze, and each freeze read as another outage. */
+  noteGap(): void { this.downSince = 0; }
 }
 const backendOutage = new BackendOutageClock();
 
@@ -903,12 +912,13 @@ setInterval(() => {
     if (stalled) {
       log(`Event-loop stall (${Math.round(Math.min(elapsed, monoElapsed) / 1000)}s of loop time, ${Math.round(elapsed / 1000)}s wall, ${Math.round(cpuMs / 1000)}s CPU), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
     }
-    // The outage clock asks whether the machine was awake, so a suspend clears
-    // it even when the same window also held a stall.
     if (recover) {
       log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
-      backendOutage.noteSuspend();
     }
+    // The outage clock asks whether the daemon was running, so a suspend and a
+    // stall both clear it: a poll that could not run says nothing about the
+    // connection.
+    if (stalled || recover) backendOutage.noteGap();
   }
   lastTickTime = now;
   lastTickMono = nowMono;
@@ -2810,6 +2820,19 @@ async function executeCommandBatch(
 
 let daemonCommandPollInFlight = false;
 
+// The outage clock feeds self-heal, which restarts the daemon. A failure it
+// counts must be visible in the log: on 2026-09-15 the poll failed silently for
+// 415s straight after a boot while every full heartbeat succeeded, and the
+// restart it triggered was the outage.
+let lastPollFailureLogAt = 0;
+function notePollFailure(reason: string): void {
+  backendOutage.markFailure();
+  const now = Date.now();
+  if (now - lastPollFailureLogAt < 60_000) return;
+  lastPollFailureLogAt = now;
+  log(`[POLL] heartbeat poll failed: ${reason}`);
+}
+
 async function pollDaemonCommands(): Promise<void> {
   if (daemonCommandPollInFlight) return;
   const config = readConfig();
@@ -2818,11 +2841,9 @@ async function pollDaemonCommands(): Promise<void> {
   let data: { commands?: Parameters<typeof executeCommandBatch>[0] };
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(15_000),
-      body: JSON.stringify({
+    // Body first, timer second: this poll feeds the outage clock, so a slow
+    // sync-health read must never count as a backend failure (see sendHeartbeat).
+    const body = JSON.stringify({
         api_token: config.auth_token,
         version: daemonVersion || "unknown",
         platform,
@@ -2837,15 +2858,20 @@ async function pollDaemonCommands(): Promise<void> {
         device_label: deviceLabel(),
         boot_id: BOOT_ID,
         ...await syncHealthFields(),
-      }),
+    });
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
+      body,
     });
     if (!response.ok) {
-      backendOutage.markFailure();
+      notePollFailure(`HTTP ${response.status}`);
       return;
     }
     data = await response.json();
-  } catch {
-    backendOutage.markFailure();
+  } catch (err) {
+    notePollFailure(err instanceof Error ? err.message : String(err));
     return;
   } finally {
     daemonCommandPollInFlight = false;
@@ -2873,37 +2899,15 @@ async function pollDaemonCommands(): Promise<void> {
   }
 }
 
-// Enumerate first-level children of the conventional project parent dirs
-// ("src", "dev", "projects", "repos", "code"). The server accepts both these
-// roots and projects nested below them, so monorepo-style layouts such as
-// ~/dev/union/union-mobile remain available in the recent-project picker.
-// Bounded scan: only directories that actually exist on this host.
-function computeLocalProjectRootsNow(): string[] {
-  const roots = new Set<string>([...enumerateProjectRoots(), ...enumerateAgentHomeDirs()]);
-  // Also include any project_paths we've actually started a session in — covers
-  // non-conventional locations the user has used recently.
-  for (const info of startedSessionTmux.values()) {
-    if (info.projectPath) {
-      try {
-        if (fs.statSync(info.projectPath).isDirectory()) roots.add(info.projectPath);
-      } catch {}
-    }
-  }
-  return Array.from(roots).slice(0, MAX_PROJECT_ROOTS);
-}
-// The heartbeat asks every 30s. A readdir of six parents plus a stat per
-// started session each beat was one of the sync hogs on the loop; a new
-// project under a conventional parent bumps that parent's mtime, so a dozen
-// directory stats answer the common beat, and the TTL covers a path that only
-// a started session names.
-const localProjectRootsCache = createMtimeGatedCache<string[]>(
-  () => {
-    const home = process.env.HOME || "";
-    return [...PROJECT_PARENT_DIRS, ...AGENT_HOME_DIRS].map((d) => path.join(home, d));
-  },
-  computeLocalProjectRootsNow,
-  { ttlMs: 5 * 60_000 },
-);
+// Project roots for the heartbeat: first-level children of the conventional
+// project parent dirs ("src", "dev", "projects", "repos", "code"), the agent
+// home dirs, and any project a session was started in (enumerateLocalRootsAsync).
+// The heartbeat asks every 30s and answers from a snapshot that a background
+// walk refreshes. Nothing here stats on the event loop: a dozen synchronous
+// directory stats cost 6 to 11 seconds of frozen loop under filesystem load
+// (2026-09-15, fseventsd saturated), and they ran inside the heartbeat body
+// after its abort timer had started, so every beat timed out and the outage
+// clock restarted a healthy daemon.
 let localRootsSnapshot: { home: string; data: string[]; at: number } | null = null;
 let localRootsGeneration = 0;
 let localRootsRefresh: { home: string; promise: Promise<void> } | null = null;
@@ -2926,17 +2930,15 @@ export function refreshLocalProjectRoots(): Promise<void> {
   return promise;
 }
 export function computeLocalProjectRoots(): string[] {
-  if (!daemonWorkersEnabled()) return localProjectRootsCache.get();
   const home = process.env.HOME || "";
   if (!localRootsSnapshot || localRootsSnapshot.home !== home || Date.now() - localRootsSnapshot.at > 30_000) void refreshLocalProjectRoots();
   return localRootsSnapshot?.home === home ? localRootsSnapshot.data : [];
 }
 function projectRootsHeartbeatFields(): { local_project_roots?: string[] } {
   const roots = computeLocalProjectRoots();
-  return !daemonWorkersEnabled() || localRootsSnapshot?.home === (process.env.HOME || "") ? { local_project_roots: roots } : {};
+  return localRootsSnapshot?.home === (process.env.HOME || "") ? { local_project_roots: roots } : {};
 }
 export function invalidateLocalProjectRoots(): void {
-  localProjectRootsCache.invalidate();
   localRootsGeneration++;
   localRootsRefresh = null;
   if (localRootsSnapshot) localRootsSnapshot.at = 0;
@@ -4020,7 +4022,8 @@ function maybeAutoSaveCodexAccount(): void {
 }
 
 async function sendHeartbeat(): Promise<void> {
-  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size)) touchHostActivity();
+  if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
+    [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
@@ -4040,17 +4043,18 @@ async function sendHeartbeat(): Promise<void> {
   // hash-gated, with an hourly liveness floor. See capabilities/heartbeat.ts.
   ensureCapabilityInventoryFresh();
   const capabilityPayload = pendingCapabilityPayload();
+  const capabilityContents = pendingCapabilityContents();
 
   try {
     const deviceHostname = await stableHostnameAsync();
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    // Bound the request: an untimed fetch here can hang indefinitely (observed
-    // on a long-running daemon), starving device presence. Fail fast + retry.
-    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(15000),
-      body: JSON.stringify({
+    // The body is built BEFORE the request timer starts. Its fields await
+    // subprocesses and file reads (ioreg, account files, sync backlog), and
+    // with the timer already running those ate the whole budget under load:
+    // the fetch aborted before the first byte left, the outage clock read
+    // "backend down", and self-heal restarted a healthy daemon every half
+    // hour (2026-09-15). The timer bounds the network round trip only.
+    const body = JSON.stringify({
         api_token: config.auth_token,
         version: daemonVersion || "unknown",
         platform,
@@ -4101,8 +4105,16 @@ async function sendHeartbeat(): Promise<void> {
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
+        capability_contents: capabilityContents,
         ...await syncHealthFields(),
-      }),
+    });
+    // Bound the request: an untimed fetch here can hang indefinitely (observed
+    // on a long-running daemon), starving device presence. Fail fast + retry.
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15000),
+      body,
     });
 
     if (!response.ok) {
@@ -4110,8 +4122,13 @@ async function sendHeartbeat(): Promise<void> {
       log(`Heartbeat failed: ${response.status} ${text}`);
       return;
     }
+    // Same endpoint as the command poll: a beat that lands is proof the
+    // backend is reachable, so the outage clock the poll feeds resets here
+    // too. Self-heal then needs BOTH paths down for the whole threshold.
+    backendOutage.markSuccess();
     if (modelInventory) markModelInventorySent(modelInventory.hash);
     if (capabilityPayload) markCapabilityPayloadSent(capabilityPayload.hash);
+    if (capabilityContents) markCapabilityContentsSent(capabilityContents.map((c) => c.hash));
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
@@ -6024,9 +6041,14 @@ async function executeRemoteCommand(
           }
         }
 
+        const gateWaitStarted = Date.now();
         const releaseAccountSwitch = profile
           ? await accountLifecycleGate.acquireSwitch()
           : await accountLifecycleGate.acquireResume("claude");
+        const gateWaitMs = Date.now() - gateWaitStarted;
+        if (gateWaitMs > 250) {
+          log(`[ACCOUNTS] ${profile ? `switch to "${profile}"` : "recovery"} waited ${gateWaitMs}ms for in-flight Claude launches to spawn`);
+        }
         try {
           let switched: string | null = null;
           if (profile) {
@@ -6185,13 +6207,15 @@ async function executeRemoteCommand(
         const normalizedResumeAgent = fromConvexAgentType(parsed.agent_type);
         const resumeAgentType: AgentClientId | undefined =
           normalizedResumeAgent === "claude" ? undefined : normalizedResumeAgent;
-        // Skip if a resume is already in flight for this session
-        if (resumeInFlight.has(sessionId)) {
+        // Skip if a resume is already in flight for this session. An in-place
+        // agent switch must not join that promise: it is the OLD agent, and
+        // adopting it would silently no-op the switch.
+        if (resumeInFlight.has(sessionId) && parsed.switch_agent !== true) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
           result = JSON.stringify({ skipped: true, reason: "resume_in_flight" });
           break;
         }
-        if (conversationId) {
+        if (conversationId && parsed.switch_agent !== true) {
           const convFailures = conversationResumeFailures.get(conversationId);
           if (convFailures && convFailures.count >= CONVERSATION_RESUME_MAX_FAILURES) {
             if (Date.now() - convFailures.lastFailure < CONVERSATION_RESUME_COOLDOWN_MS) {
@@ -6208,6 +6232,14 @@ async function executeRemoteCommand(
         if (parsed.switch_agent === true && conversationId && resumeAgentType !== "codex") {
           const targetAgent: AgentClientId = resumeAgentType || "claude";
           log(`[REMOTE] Agent switch conv=${conversationId.slice(0, 12)} ${sessionId.slice(0, 8)} → ${targetAgent}`);
+          resumeInFlight.delete(sessionId);
+          resumeInFlightStarted.delete(sessionId);
+          conversationResumeFailures.delete(conversationId);
+          const staleThreadId = appServerConversations.get(conversationId);
+          if (staleThreadId) {
+            removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, staleThreadId);
+          }
+          forgetPersistedAppServerConversation(conversationId);
           restartingSessionIds.set(sessionId, Date.now());
           try {
             const cwd = projectPath
@@ -6902,6 +6934,7 @@ async function executeRemoteCommand(
         let allowed = underOwnConfig || underTrackedProject();
         if (!allowed) {
           invalidateLocalProjectRoots();
+          await refreshLocalProjectRoots();
           allowed = underTrackedProject();
         }
         if (!allowed) {
@@ -11845,8 +11878,16 @@ async function findSessionProcess(sessionId: string, agentType: AgentClientId = 
 // for that pid from the session registry.
 const HOOK_CLAIM_INDEX_TTL_MS = 60_000;
 const HOOK_CLAIM_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000;
+/** A registration untouched this long names a process that is gone; the file
+ *  is removed on the next index pass. Nothing else prunes the registry, and it
+ *  had grown to 11k files (10.4k over a week old) by 2026-09-15. */
+const REGISTRY_PRUNE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 let hookClaimsByPid = new Map<number, ProcessSessionClaim[]>();
 let hookClaimsIndexedAt = 0;
+/** Per-file index state, keyed by file name: the mtime the entry was read at
+ *  and the claim it yielded (null for a file that is not a hook registration). */
+export type HookClaimFileEntry = { mtimeMs: number; pid: number | null; claim: ProcessSessionClaim | null };
+let hookClaimFiles = new Map<string, HookClaimFileEntry>();
 
 /** The SessionStart hook always records `term`; the daemon's opportunistic
  *  writes never did (and now carry `src: "daemon"`). Only the hook speaks for
@@ -11856,11 +11897,58 @@ function isHookRegistration(reg: unknown): boolean {
     && (reg as { src?: unknown }).src !== "daemon";
 }
 
+/** One pass over the registry dir. Every file is stat'ed; only a file whose
+ *  mtime moved since `previous` is read and parsed, so a steady-state pass is
+ *  a readdir plus one stat per live registration. Files past the prune age
+ *  are unlinked (the index never read them anyway: they are past the claim
+ *  cutoff), so the directory stays the size of the live fleet. Pure apart
+ *  from the unlinks — unit-tested. */
+export async function indexHookClaims(
+  dir: string,
+  previous: Map<string, HookClaimFileEntry>,
+  nowMs = Date.now(),
+): Promise<{ files: Map<string, HookClaimFileEntry>; byPid: Map<number, ProcessSessionClaim[]>; pruned: number }> {
+  const files = new Map<string, HookClaimFileEntry>();
+  const byPid = new Map<number, ProcessSessionClaim[]>();
+  const cutoffMs = nowMs - HOOK_CLAIM_MAX_AGE_MS;
+  const pruneMs = nowMs - REGISTRY_PRUNE_AGE_MS;
+  let pruned = 0;
+  let names: string[];
+  try { names = await fs.promises.readdir(dir); } catch { return { files, byPid, pruned }; }
+  for (const file of names) {
+    if (!file.endsWith(".json")) continue;
+    const full = path.join(dir, file);
+    try {
+      const mtimeMs = (await fs.promises.stat(full)).mtimeMs;
+      if (mtimeMs < pruneMs) {
+        await fs.promises.unlink(full).then(() => { pruned++; }, () => {});
+        continue;
+      }
+      if (mtimeMs < cutoffMs) continue;
+      let entry = previous.get(file);
+      if (!entry || entry.mtimeMs !== mtimeMs) {
+        const reg = JSON.parse(await fs.promises.readFile(full, "utf-8"));
+        entry = { mtimeMs, pid: null, claim: null };
+        if (isHookRegistration(reg) && typeof reg.pid === "number" && typeof reg.ts === "number") {
+          // launch_token: which launch wrote the claim (session-register.sh).
+          // Absent from an older hook script, which reads as unfenced.
+          entry.pid = reg.pid;
+          entry.claim = { sessionId: file.slice(0, -5), ts: reg.ts, ...(typeof reg.launch_token === "string" && reg.launch_token ? { launchToken: reg.launch_token } : {}) };
+        }
+      }
+      files.set(file, entry);
+      if (entry.pid !== null && entry.claim) {
+        const list = byPid.get(entry.pid) ?? [];
+        list.push(entry.claim);
+        byPid.set(entry.pid, list);
+      }
+    } catch {}
+  }
+  return { files, byPid, pruned };
+}
+
 let hookClaimsIndexing: Promise<void> | null = null;
 
-// The registry dir holds thousands of files; only the recent ones (by mtime) are
-// parsed, and the scan is async and shared so concurrent lookups don't each pay
-// for it or block the loop.
 async function hookClaimsForPid(pid: number): Promise<ProcessSessionClaim[]>;
 async function hookClaimsForPid(pid: number, opts: { fresh: true; registryDir?: string }): Promise<ProcessSessionClaim[] | null>;
 async function hookClaimsForPid(pid: number, opts?: { fresh: true; registryDir?: string }): Promise<ProcessSessionClaim[] | null> {
@@ -11886,48 +11974,60 @@ async function hookClaimsForPid(pid: number, opts?: { fresh: true; registryDir?:
   if (Date.now() - hookClaimsIndexedAt >= HOOK_CLAIM_INDEX_TTL_MS) {
     hookClaimsIndexing ??= (async () => {
       const dir = path.join(CONFIG_DIR, "session-registry");
-      const next = new Map<number, ProcessSessionClaim[]>();
-      const cutoffMs = Date.now() - HOOK_CLAIM_MAX_AGE_MS;
-      try {
-        for (const file of await fs.promises.readdir(dir)) {
-          if (!file.endsWith(".json")) continue;
-          const full = path.join(dir, file);
-          try {
-            if ((await fs.promises.stat(full)).mtimeMs < cutoffMs) continue;
-            const reg = JSON.parse(await fs.promises.readFile(full, "utf-8"));
-            if (!isHookRegistration(reg) || typeof reg.pid !== "number" || typeof reg.ts !== "number") continue;
-            const list = next.get(reg.pid) ?? [];
-            // launch_token: which launch wrote the claim (session-register.sh).
-            // Absent from an older hook script, which reads as unfenced.
-            list.push({ sessionId: file.slice(0, -5), ts: reg.ts, ...(typeof reg.launch_token === "string" && reg.launch_token ? { launchToken: reg.launch_token } : {}) });
-            next.set(reg.pid, list);
-          } catch {}
-        }
-      } catch {}
-      hookClaimsByPid = next;
+      const started = Date.now();
+      const next = await indexHookClaims(dir, hookClaimFiles, started);
+      hookClaimFiles = next.files;
+      hookClaimsByPid = next.byPid;
       hookClaimsIndexedAt = Date.now();
+      const took = hookClaimsIndexedAt - started;
+      if (next.pruned > 0 || took > 5_000) log(`[IDENTITY] hook claim index: ${next.files.size} files, ${next.pruned} pruned, ${took}ms`);
     })().finally(() => { hookClaimsIndexing = null; });
-    await hookClaimsIndexing;
+    // Only a daemon with NO index yet waits for the pass. With one in hand the
+    // caller reads it and the refresh lands behind it: a pass over a large or
+    // slow directory took 60 to 70s on 2026-09-15, longer than the TTL, so the
+    // index was always rebuilding and every delivery waited on it (the 180s
+    // delivery timeouts that read as "unresponsive sessions"). The staleness
+    // is the same class as before: an index up to one TTL old.
+    if (hookClaimsIndexedAt === 0) await hookClaimsIndexing;
   }
   return hookClaimsByPid.get(pid) ?? [];
 }
 
+/** The impure inputs of describeProcessIdentity, swappable by its test. */
+export type ProcessIdentityDeps = {
+  exec: (cmd: string) => Promise<{ stdout: string }>;
+  claims: (pid: number) => Promise<ProcessSessionClaim[]>;
+  now: () => number;
+};
+
 /** argv, start time and hook claims of a live pid — the inputs to the identity verdict. */
-async function describeProcessIdentity(pid: number): Promise<{ argvId: string | null; claims: ProcessSessionClaim[]; processStartSec: number | null }> {
+export async function describeProcessIdentity(
+  pid: number,
+  deps: ProcessIdentityDeps = {
+    exec: (cmd) => execAsync(cmd, { timeout: 3000, killSignal: "SIGKILL" }),
+    claims: (p) => hookClaimsForPid(p),
+    now: Date.now,
+  },
+): Promise<{ argvId: string | null; claims: ProcessSessionClaim[]; processStartSec: number | null }> {
   let etime = "";
   let argv = "";
+  // The start time is fixed the instant ps answers (processStartSecFromEtime);
+  // the claims scan below can take seconds on a loaded machine and must not
+  // shift it.
+  let processStartSec: number | null = null;
   try {
-    const { stdout } = await execAsync(`ps -o etime=,command= -p ${pid} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+    const { stdout } = await deps.exec(`ps -o etime=,command= -p ${pid} 2>/dev/null`);
+    const sampledAtMs = deps.now();
     const line = stdout.trim();
     const sp = line.indexOf(" ");
     etime = sp === -1 ? line : line.slice(0, sp);
     argv = sp === -1 ? "" : line.slice(sp + 1).trim();
+    processStartSec = processStartSecFromEtime(etime, sampledAtMs);
   } catch {}
-  const elapsed = parsePsEtimeSeconds(etime);
   return {
     argvId: argvSessionId(argv),
-    claims: await hookClaimsForPid(pid),
-    processStartSec: elapsed === null ? null : Math.floor(Date.now() / 1000) - elapsed,
+    claims: await deps.claims(pid),
+    processStartSec,
   };
 }
 
@@ -12361,10 +12461,13 @@ const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|
 // and spinner, so any of these BELOW a candidate menu is structural proof the
 // "menu" is scrolled conversation content, not a live dialog. The caret regex
 // exempts "❯ 1." cursor-on-option rows and the cursor parked on a synthetic row.
-const SPINNER_ROW = /^[✻✶✢✳✽·]\s+\S/;
+// "✻ Waiting for API response · will retry in 2m 40s" carries the same glyph
+// but is painted UNDER a blocking dialog (the safeguards "Session paused"
+// menu, 2026-09-15), so it proves nothing about the composer.
+const SPINNER_ROW = /^[✻✶✢✳✽·]\s+(?!Waiting for API response)\S/;
 const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
 
-function machineComposerBelow(lines: string[], fromIdx: number): boolean {
+function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
   const caret = /^\s?[❯›](?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
   const footerAfter = (idx: number) => lines.slice(idx + 1).some(line =>
     isMenuFooterRow(line) || /(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)/i.test(line));
@@ -12384,8 +12487,8 @@ function machineComposerBelow(lines: string[], fromIdx: number): boolean {
 // True when any live-composer row sits below `fromIdx` — the pane is not blocked
 // on a dialog there. Box-art rows are skipped (a dialog's right-hand preview box
 // can contain arbitrary text, including hint-like glyphs).
-function liveComposerBelow(lines: string[], fromIdx: number, machineInput = false): boolean {
-  if (machineInput) return machineComposerBelow(lines, fromIdx);
+function liveComposerBelow(lines: string[], fromIdx: number, structural = false): boolean {
+  if (structural) return structuralComposerBelow(lines, fromIdx);
   for (let i = fromIdx + 1; i < lines.length; i++) {
     if (BOX_DRAWING_CHARS.test(lines[i])) continue;
     if (COMPOSER_BAR.test(lines[i]) || SPINNER_ROW.test(lines[i]) || COMPOSER_CARET_ROW.test(lines[i])) return true;
@@ -12401,9 +12504,9 @@ function liveComposerBelow(lines: string[], fromIdx: number, machineInput = fals
 // hint-like text from the composer/status region dozens of rows further down. Walk
 // down only while rows stay dialog-shaped; anything else (an assistant ⏺ bullet,
 // the ❯ composer, a shell prompt) means we left the dialog without meeting a footer.
-export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number, machineInput = false): boolean {
+export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number, structural = false): boolean {
   for (let i = lastOptionIdx + 1, cap = Math.min(lines.length, lastOptionIdx + 41); i < cap; i++) {
-    if (!machineInput && COMPOSER_BAR.test(lines[i])) return false;
+    if (!structural && COMPOSER_BAR.test(lines[i])) return false;
     if (isMenuFooterRow(lines[i])) return true;
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
@@ -12444,7 +12547,7 @@ function extractPromptHeading(lines: string[], firstOptionIdx: number): { header
   return { header, question };
 }
 
-export function parseInteractivePrompt(text: string, machineInput = false): InteractivePrompt | null {
+export function parseInteractivePrompt(text: string, structural = false): InteractivePrompt | null {
   const lines = text.split("\n");
   // '›' (U+203A) belongs here alongside '❯': codex draws its menu cursor with it.
   // Without it the cursor ROW of a codex menu fails to parse, so a three-option
@@ -12522,8 +12625,8 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
   // proves the pane is NOT blocked on a dialog — the "menu"/"hint" is scrolled
   // conversation content. Content checks alone can't make this call (prose here
   // routinely contains literal key-hint text).
-  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx, machineInput)) {
-    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx, machineInput);
+  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx, structural)) {
+    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx, structural);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
       return { question, options, firstOptionIdx, ...(header ? { header } : {}), ...(hasCheckbox ? { multiSelect: true } : {}) };
@@ -12535,7 +12638,7 @@ export function parseInteractivePrompt(text: string, machineInput = false): Inte
   const joined = tailLines.join("\n");
   const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
   const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
-  if (enterMatch && !(machineInput ? machineComposerBelow(lines, -1) : tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l)))) {
+  if (enterMatch && !(structural ? structuralComposerBelow(lines, -1) : tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l)))) {
     // Question extraction: real interstitials (the usage-limit dialog, trust
     // prompts) draw a rule as their top edge with the question right below it.
     // Search only BELOW the last rule in the tail — the old "topmost non-hint
@@ -13153,6 +13256,42 @@ function normalizePromptText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+// Claude Code draws its prompt suggestion in an idle composer as faint text
+// (SGR 2). A plain capture drops the attribute, so a suggested "❯ continue"
+// reads exactly like a typed one, and delivery pressed Enter on it for 15 s at
+// a time (ct-51376). Every capture that asks what the composer holds is taken
+// with -e and read through this, which drops faint runs and every other escape.
+export function stripTmuxFaintText(pane: string): string {
+  let faint = false;
+  let out = "";
+  let last = 0;
+  const re = /\x1b\[([0-9;:]*)([A-Za-z])|\x1b[^[]/g;
+  for (let m = re.exec(pane); m; m = re.exec(pane)) {
+    if (!faint) out += pane.slice(last, m.index);
+    last = re.lastIndex;
+    if (m[2] !== "m") continue;
+    const params = (m[1] || "0").split(/[;:]/);
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      // 38/48/58 carry a colour: 5;N or 2;R;G;B. Their arguments are not
+      // attributes, and a truecolor "2" read as faint dropped opencode's and
+      // grok's typed text.
+      if (p === "38" || p === "48" || p === "58") {
+        i += params[i + 1] === "5" ? 2 : params[i + 1] === "2" ? 4 : 0;
+        continue;
+      }
+      if (p === "2") faint = true;
+      else if (p === "" || p === "0" || p === "22") faint = false;
+    }
+  }
+  return faint ? out : out + pane.slice(last);
+}
+
+export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: string, lines: number): Promise<string> {
+  const { stdout } = await exec(["capture-pane", "-p", "-e", "-J", "-t", target, "-S", `-${lines}`]);
+  return stripTmuxFaintText(stdout);
+}
+
 function tmuxComposerRegion(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
@@ -13329,7 +13468,7 @@ export type TmuxLiveState =
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
-  | "menu"          // unnumbered select dialog (parseSelectDialog) — only a human answers it; press nothing, hold delivery
+  | "menu"          // a select dialog (parseSelectDialog) or a numbered dialog with its cursor on an option — only a card answer moves it; press nothing, hold delivery
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
@@ -13469,6 +13608,14 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // it must be recognized before the idle rule below: a paste lands in no
   // composer there, and no key of ours is safe to press.
   if (parseSelectDialog(region.split("\n"))) return "menu";
+  // A numbered dialog whose cursor sits on an option: the AskUserQuestion menu
+  // and the safeguards "Session paused" interstitial ("❯ 1. Switch to Opus
+  // 4.8"). The cursor glyph is the same ❯ the idle rule reads as a composer,
+  // and it read so on 2026-09-15: the daemon pasted a message into the
+  // interstitial, minted a paste receipt for it, and every later message to
+  // the pane waited hours behind that receipt. Only a card answer (a poll)
+  // moves this cursor; everything else holds.
+  if (numberedCursorRow) return "menu";
   const promptVisible = region.includes("❯") || region.includes("›");
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
@@ -15075,28 +15222,32 @@ export async function selectHighlightedOption(target: string, isTarget: (line: s
   return false;
 }
 
-class MachineInputBlockedError extends Error {
+class InputBlockedError extends Error {
   constructor(reason: string) {
-    super(`AGENT_STDIN_NOT_READY: ${reason}; machine message remains pending`);
+    super(`AGENT_STDIN_NOT_READY: ${reason}; message remains pending`);
   }
 }
 
-function assertMachinePromptAbsent(pane: string): void {
-  if (!pane.trim()) throw new MachineInputBlockedError("terminal capture is empty");
-  if (parseInteractivePrompt(pane, true)) throw new MachineInputBlockedError("terminal is waiting for a human answer");
+function assertPromptAbsent(pane: string): void {
+  if (!pane.trim()) throw new InputBlockedError("terminal capture is empty");
+  if (parseInteractivePrompt(pane, true)) throw new InputBlockedError("terminal is waiting for a human answer");
 }
 
-function machineInputGuard(content: string, capture: () => Promise<string>): (() => Promise<void>) | undefined {
-  if (!isMachineDeliveredMessage(content)) return undefined;
-  let blocked: MachineInputBlockedError | undefined;
+// The check every paste runs before it touches the pane, whoever wrote the
+// message: a person in the composer or a session's cast send. The pane does
+// not care who is typing, and keying this on the author is how a typed
+// message pasted into a dialog that had just refused a session message
+// (2026-09-15). Card answers (polls) never reach this: they answer the dialog.
+function inputGuard(capture: () => Promise<string>): () => Promise<void> {
+  let blocked: InputBlockedError | undefined;
   return async () => {
     if (blocked) throw blocked;
     try {
-      assertMachinePromptAbsent(await capture());
+      assertPromptAbsent(await capture());
     } catch (err) {
-      blocked = err instanceof MachineInputBlockedError
+      blocked = err instanceof InputBlockedError
         ? err
-        : new MachineInputBlockedError(`terminal capture failed: ${err instanceof Error ? err.message : String(err)}`);
+        : new InputBlockedError(`terminal capture failed: ${err instanceof Error ? err.message : String(err)}`);
       throw blocked;
     }
   };
@@ -15134,7 +15285,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     try {
       ({ stdout, region, state } = await captureTmuxLiveState(target, glyphlessPattern, captureLines));
     } catch (err) {
-      if (inspectPane) throw new MachineInputBlockedError(`terminal capture failed: ${String(err)}`);
+      if (inspectPane) throw new InputBlockedError(`terminal capture failed: ${String(err)}`);
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
     inspectPane?.(stdout);
@@ -15364,7 +15515,7 @@ export type TmuxSubmitVerifyOpts = {
   prePaste: string;
   pasteConfirmed: boolean;
   contentPrefix: string;
-  multiline?: boolean;
+  bracketedPaste?: boolean;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15477,7 +15628,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.multiline && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15514,7 +15665,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.multiline && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -15628,7 +15779,7 @@ export async function drainTmuxComposer(
     if (cycle % 3 !== 0) continue;
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       break; // capture problems are diagnosed by the Enter gate
     }
@@ -15650,7 +15801,7 @@ export async function tmuxComposerDraft(
 ): Promise<string | null> {
   let pane: string;
   try {
-    ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    pane = await captureTmuxComposerPane(exec, target, 40);
   } catch {
     return null;
   }
@@ -15751,7 +15902,7 @@ export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
   opts: {
-    multiline?: boolean;
+    bracketedPaste?: boolean;
     prePaste?: string;
     rePaste: () => Promise<void>;
     allowRePaste?: boolean;
@@ -15782,7 +15933,7 @@ export async function awaitTmuxComposerPayload(
   while (Date.now() < deadline) {
     let pane: string;
     try {
-      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+      pane = await captureTmuxComposerPane(exec, target, 40);
     } catch {
       return "unwatchable"; // capture problems are diagnosed by the post-submit verifier
     }
@@ -15804,9 +15955,10 @@ export async function awaitTmuxComposerPayload(
     // second chip or the watched prefix showing up again behind the first, is a
     // re-paste that landed on a composer which had already taken the first, and
     // submitting it sends the message twice (ct-49753).
-    const chips = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
+    const composer = tmuxComposerRegion(pane) ?? "";
+    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && !glyphLine.slice(0, glyphLine.indexOf(chips[0])).trim()
+      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -15833,7 +15985,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
   try {
     return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
   } catch (error) {
-    if (!opts?.delivery || error instanceof MachineInputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
+    if (!opts?.delivery || error instanceof InputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
     throw new TmuxDeliveryUncertainError(String(error));
   }
 }
@@ -15943,16 +16095,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
-  const beforeInput = machineInputGuard(content, async () =>
+  const beforeInput = inputGuard(async () =>
     (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout);
-  const exec: typeof tmuxExec = beforeInput ? async (args, opts) => {
+  const exec: typeof tmuxExec = async (args, opts) => {
     if (args[0] === "send-keys" || args[0] === "paste-buffer") await beforeInput();
     return tmuxExec(args, opts);
-  } : tmuxExec;
+  };
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
-  await ensureTmuxReady(target, agentType, beforeInput ? assertMachinePromptAbsent : undefined, beforeInput ? captureLines : undefined);
+  await ensureTmuxReady(target, agentType, assertPromptAbsent, captureLines);
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text
@@ -15976,7 +16128,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let alreadyAtPrompt = false;
   let liveState: TmuxLiveState = "unknown";
   try {
-    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    const stdout = await captureTmuxComposerPane(exec, target, captureLines);
     alreadyAtPrompt = tmuxComposerHoldsPayload(stdout, sanitized);
     liveState = classifyTmuxLiveState(extractTmuxLiveRegion(stdout));
   } catch {}
@@ -16027,7 +16179,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     if (prior.phase === "paste" || settled) {
       try {
         gate = await awaitTmuxComposerPayload(target, sanitized, {
-          multiline: bracketed && sanitized.includes("\n"),
+          bracketedPaste: bracketed,
           rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
           allowRePaste: false,
           budgetMs: opts?.gateBudgetMs,
@@ -16054,8 +16206,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await drainTmuxComposer(target, exec, { onlyWhenDrafted: true });
 
     try {
-      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      prePaste = stdout;
+      prePaste = await captureTmuxComposerPane(exec, target, captureLines);
     } catch {}
 
     // Paste once
@@ -16067,7 +16218,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
     // match doubles as paste confirmation for the post-submit verifier.
     gate = await awaitTmuxComposerPayload(target, sanitized, {
-      multiline: bracketed && sanitized.includes("\n"),
+      bracketedPaste: bracketed,
       prePaste,
       rePaste: delivery ? async () => { throw new TmuxDeliveryUncertainError("the paste has not appeared intact"); } : doPaste,
       allowRePaste: !delivery,
@@ -16092,7 +16243,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     for (let attempt = 0; attempt < 4; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
-        const { stdout: postPaste } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        const postPaste = await captureTmuxComposerPane(exec, target, captureLines);
         if (postPaste !== prePaste) {
           pasteConfirmed = true;
           break;
@@ -16130,8 +16281,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   };
   const verify = await verifyTmuxSubmitAfterPaste(
     {
-      capture: async () =>
-        (await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
+      capture: () => captureTmuxComposerPane(exec, target, captureLines),
       sendEnter,
       rePaste: async () => {
         if (delivery) throw new TmuxDeliveryUncertainError("a submitted paste cannot be repeated");
@@ -16154,7 +16304,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       pasteConfirmed,
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
-      multiline: sanitized.includes("\n"),
+      bracketedPaste: bracketed,
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
@@ -16379,7 +16529,8 @@ async function injectViaAppleScript(
   const poll = keystrokes ? null : parsePollMessage(content);
 
   const app: "iTerm2" | "Terminal" = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
-  const beforeInput = keystrokes ? undefined : machineInputGuard(content, () => captureAppleScriptPane(app, normalizedTty));
+  // A card answer (a poll) answers the dialog; everything else is a paste the dialog would refuse.
+  const beforeInput = keystrokes || poll ? undefined : inputGuard(() => captureAppleScriptPane(app, normalizedTty));
   const write = async (text: string, keys: boolean, submit = true) => {
     const { script, args } = buildAppleScript(app, normalizedTty, text, poll, keys, bracketed, submit);
     const tmpFile = writeTerminalInjectionScript(script);
@@ -16463,7 +16614,7 @@ async function kittySendText(match: string, text: string, bracketed: boolean, be
       await beforeInput?.();
       await execAsync(`kitty @ send-text ${match}${pasteFlag} --from-file '${tmpFile}'`);
     } catch (err) {
-      if (err instanceof MachineInputBlockedError) throw err;
+      if (err instanceof InputBlockedError) throw err;
       log(`kitty bracketed paste failed (${err instanceof Error ? err.message : String(err)}), sending flattened`);
       // Keep the fallback file-based too: putting arbitrary prompt text in the
       // shell command leaks it through process listings and reintroduces escape
@@ -16542,7 +16693,7 @@ async function injectViaKitty(
     return;
   }
 
-  const beforeInput = machineInputGuard(content, async () =>
+  const beforeInput = inputGuard(async () =>
     (await execAsync(`kitty @ get-text ${match} --extent screen`)).stdout);
   await pasteAndSubmitText({
     paste: () => kittySendText(match, content, bracketed, beforeInput),
@@ -16644,7 +16795,7 @@ async function injectViaWezTerm(
     return;
   }
 
-  const beforeInput = machineInputGuard(content, async () =>
+  const beforeInput = inputGuard(async () =>
     (await execAsync(`wezterm cli get-text --pane-id ${paneId}`)).stdout);
   await pasteAndSubmitText({
     paste: async () => {
@@ -16733,35 +16884,7 @@ function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): 
 // non-leaf level are checked whenever their parent dir is fresh, matching the
 // old fully-recursive walk for anything recently added.
 function probeRecentCodexRollouts(sessionId: string): string | null {
-  if (daemonWorkersEnabled()) return recentSessionObservation(sessionId, true)?.path ?? null;
-  return timeSyncFs("probeRecentCodexRollouts", sessionId, () => probeRecentCodexRolloutsSync(sessionId));
-}
-function probeRecentCodexRolloutsSync(sessionId: string): string | null {
-  const since = sessionFileIndexBuiltAt - 60_000; // clock/mtime slack
-  const scan = (dir: string, depth: number): string | null => {
-    let mtimeMs: number;
-    try { mtimeMs = fs.statSync(dir).mtimeMs; } catch { return null; }
-    let entries: fs.Dirent[] | null = null;
-    if (mtimeMs >= since) {
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-      for (const e of entries) {
-        if (e.isFile() && e.name.endsWith(".jsonl") && e.name.includes(sessionId)) {
-          return path.join(dir, e.name);
-        }
-      }
-    }
-    if (depth >= 3) return null; // sessions/<year>/<month>/<day> is the leaf
-    if (!entries) {
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-    }
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      const found = scan(path.join(dir, e.name), depth + 1);
-      if (found) return found;
-    }
-    return null;
-  };
-  return scan(path.join(process.env.HOME || "", ".codex", "sessions"), 0);
+  return recentSessionObservation(sessionId, true)?.path ?? null;
 }
 
 function findSessionJsonlPath(sessionId: string): string | null {
@@ -17138,55 +17261,20 @@ function recentSessionObservation(sessionId: string, codexOnly: boolean): Sessio
   }, () => { if (recentSessionScans.get(key) === entry) recentSessionScans.delete(key); });
   return null;
 }
+export async function awaitRecentSessionFile(sessionId: string, codexOnly = false): Promise<SessionFileInfo | null> {
+  const hit = findSessionFile(sessionId, { staleOk: true });
+  if (hit) return hit;
+  recentSessionObservation(sessionId, codexOnly);
+  try { await recentSessionScans.get(`${codexOnly}:${sessionId}`)?.pending; } catch {}
+  return findSessionFile(sessionId, { staleOk: true });
+}
 export async function refreshRecentSessionFileForTests(sessionId: string, codexOnly = false): Promise<void> {
   recentSessionObservation(sessionId, codexOnly);
   await recentSessionScans.get(`${codexOnly}:${sessionId}`)?.pending;
 }
 
 function probeRecentSessionFiles(sessionId: string): SessionFileInfo | null {
-  if (daemonWorkersEnabled()) return recentSessionObservation(sessionId, false);
-  return timeSyncFs("probeRecentSessionFiles", sessionId, () => probeRecentSessionFilesSync(sessionId));
-}
-function probeRecentSessionFilesSync(sessionId: string): SessionFileInfo | null {
-  const home = process.env.HOME || "";
-  const since = sessionFileIndexBuiltAt - 60_000; // clock/mtime slack
-  const freshDirs = (parent: string): string[] => {
-    const out: string[] = [];
-    try {
-      for (const e of fs.readdirSync(parent, { withFileTypes: true })) {
-        if (!e.isDirectory()) continue;
-        const p = path.join(parent, e.name);
-        try { if (fs.statSync(p).mtimeMs >= since) out.push(p); } catch {}
-      }
-    } catch {}
-    return out;
-  };
-
-  // Store order mirrors the old walk's priority: claude, codex, gemini, pi, grok.
-  for (const dir of freshDirs(path.join(home, ".claude", "projects"))) {
-    const candidate = path.join(dir, `${sessionId}.jsonl`);
-    if (fs.existsSync(candidate)) return { path: candidate, agentType: "claude" };
-  }
-  const codex = probeRecentCodexRollouts(sessionId);
-  if (codex) return { path: codex, agentType: "codex" };
-  for (const dir of freshDirs(path.join(home, ".gemini", "tmp"))) {
-    const candidate = path.join(dir, "chats", `${sessionId}.json`);
-    if (fs.existsSync(candidate)) return { path: candidate, agentType: "gemini" };
-  }
-  for (const dir of freshDirs(path.join(home, ".pi", "agent", "sessions"))) {
-    try {
-      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (e.isFile() && e.name.endsWith(".jsonl") && e.name.includes(sessionId)) {
-          return { path: path.join(dir, e.name), agentType: "pi" };
-        }
-      }
-    } catch {}
-  }
-  for (const dir of freshDirs(path.join(home, ".grok", "sessions"))) {
-    const candidate = path.join(dir, sessionId, "updates.jsonl");
-    if (fs.existsSync(candidate)) return { path: candidate, agentType: "grok" };
-  }
-  return null;
+  return recentSessionObservation(sessionId, false);
 }
 
 // Two freshness tiers, chosen by the CALLER's tolerance:
@@ -17872,11 +17960,27 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
     if (persistedAppServerThreads.get(conversationId) !== record) continue;
     if (pendingAgentSwitches.has(conversationId)) continue;
     if ((appServerRecoveryRetryAt.get(conversationId) ?? 0) > Date.now()) continue;
+    const service = syncServiceRef;
+    if (service) {
+      const switched = await service.getConversationLifecycle(conversationId);
+      if (switched?.hideStateKnown && switched.agentType && !conversationUsesCodexAppServer(switched.agentType)) {
+        dropped++;
+        const staleThreadId = appServerConversations.get(conversationId);
+        if (staleThreadId) {
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, staleThreadId);
+        }
+        forgetPersistedAppServerConversation(conversationId);
+        log(`[codex-app-server] dropping persisted thread for ${conversationId.slice(0, 12)} — conversation is ${switched.agentType}, not Codex after switch`);
+        continue;
+      }
+    } else {
+      // Don't revive a Codex thread until we can read the conversation's agent.
+      continue;
+    }
     if (appServerConversations.has(conversationId) && (!record.activeTurnId || findActiveTurnForThread(record.threadId))) continue;
     try {
       let hasPendingMessages = false;
       if (record.activeTurnId) {
-        const service = syncServiceRef;
         if (!service) continue;
         const [lifecycle, owner] = await Promise.all([
           service.getConversationLifecycle(conversationId),
@@ -18170,6 +18274,13 @@ const resumeInFlightStarted = new Map<string, number>();
 // the readiness ceiling plus setup (kill, new-session, JSONL relocate, model
 // scan) so raising a tier can never silently re-open that window.
 export const RESUME_IN_FLIGHT_TIMEOUT_MS = MAX_RESUME_READINESS_POLL_MS + 60_000;
+
+// After `claude` is typed into the pane it reads the keychain as it starts.
+// Holding the account-switch gate for the whole readiness poll (transcript
+// replay, 30–180s) made a click-to-switch hang for minutes on a busy box
+// (2026-09-15: switch to "personal" sat 3m14s behind in-flight resumes).
+// This grace covers that read; the prompt wait runs without the hold.
+export const CLAUDE_SPAWN_CREDENTIAL_GRACE_MS = 1_500;
 
 // How long to wait for a cold-resumed agent to render its prompt before giving up.
 // A `claude --resume` replays the whole transcript on boot, so the window scales
@@ -18777,10 +18888,31 @@ async function syncGitActivityTailers(byRoot: Map<string, { conversationIds: str
     const tailer = new GitActivityTailer(root);
     if (!(await tailer.init().catch(() => false))) continue;
     gitActivityTailers.set(root, tailer);
+    // One recursive watch per path, never one per log file: logs/refs/
+    // remotes/origin holds a file per remote branch (550 on a busy repo),
+    // and under bun on macOS each fs.watch rebuilds the process's FSEvents
+    // stream under the lock the JS thread needs. A log FILE is watched
+    // through its parent directory, filtered to its own name.
     try {
-      const watcher = chokidarWatch(tailer.watchPaths(), { ignoreInitial: true, depth: 3, persistent: true });
-      watcher.on("all", () => scheduleGitActivityPoll(root));
-      gitActivityWatchers.set(root, watcher);
+      const watchers: RecursiveWatcher[] = [];
+      for (const target of tailer.watchPaths()) {
+        // A remote log dir that does not exist yet (no fetch on this
+        // checkout) is caught by the per-flush poll; the HEAD log is what
+        // init required.
+        let isFile: boolean;
+        try { isFile = (await fs.promises.stat(target)).isFile(); } catch { continue; }
+        const watcher = new RecursiveWatcher({
+          path: isFile ? path.dirname(target) : target,
+          filter: isFile ? (rel) => rel === path.basename(target) : () => true,
+          maxDepth: isFile ? 1 : 3,
+          rescanIntervalMs: 60_000,
+          callback: () => scheduleGitActivityPoll(root),
+        });
+        watcher.on("error", () => {});
+        watcher.start();
+        watchers.push(watcher);
+      }
+      gitActivityWatchers.set(root, { close: () => { for (const w of watchers) w.stop(); } });
     } catch (e) {
       log(`[GITACTIVITY] no watcher for ${root}, polling only: ${(e as Error)?.message ?? e}`);
     }
@@ -20229,6 +20361,14 @@ export type ResumeOptions = {
   delivery?: TmuxDeliveryIdentity;
   model?: string;
   effort?: string;
+  /**
+   * The process has been typed into the pane (or this resume will not spawn).
+   * Production fires this so the account-switch gate can drop before the
+   * readiness poll; the test double leaves it unset and holds until launch
+   * returns, which is how the identity tests keep a switch off an in-flight
+   * credential read.
+   */
+  onProcessSpawned?: () => void;
 };
 
 // Convex side of the gate. Runs only on resurrection paths (rare), never per
@@ -21291,7 +21431,14 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     }
     if (resumeInFlight.get(sessionId) !== promise) return false;
     expectedHibernationExits.delete(sessionId);
-    const resumed = await (resumeInnerForTests ?? autoResumeSessionInner)(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, opts);
+    const resumeOpts: ResumeOptions = {
+      ...opts,
+      onProcessSpawned: () => {
+        releaseAccountResume?.();
+        releaseAccountResume = undefined;
+      },
+    };
+    const resumed = await (resumeInnerForTests ?? autoResumeSessionInner)(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, resumeOpts);
     if (resumed && resumeInFlight.get(sessionId) === promise) clearHibernationPark(sessionId, conversationId);
     return resumed;
   });
@@ -21518,6 +21665,9 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
 }
 
 async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
+  // Drop the outer hold: JSONL relocate, the live-pane fast path, and the
+  // prompt poll do not read the keychain. The spawn below takes its own hold.
+  opts?.onProcessSpawned?.();
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -21564,7 +21714,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
     } catch (err) {
-      if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+      if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -21574,6 +21724,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // run here (the client copies state it must be able to read).
   const forkFromSessionId = opts?.forkFromSessionId;
   let sessionFile = findSessionFile(forkFromSessionId ?? sessionId);
+  if (sessionFileStaleForAgent(sessionFile?.agentType, agentTypeHint)) {
+    logDelivery(`Ignoring ${sessionFile!.agentType} transcript for ${sessionId.slice(0, 8)} — conversation is now ${agentTypeHint}`);
+    sessionFile = null;
+  }
   const config = readConfig();
   // cursor-agent and opencode each own their session store (SQLite: ~/.cursor,
   // ~/.local/share/opencode/opencode.db), and pi/grok own their JSONL trees under
@@ -21920,8 +22074,16 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // disclaimPrefix: resumed agents carry their own TCC identity, same as a
     // fresh launch (resumeEnvPrefix always starts with `env`, so the wrapper's
     // plain-argv exec contract holds).
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
+    const releaseSpawn = await accountLifecycleGate.acquireResume(agentType);
+    try {
+      await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
+      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
+      if (agentType === "claude") {
+        await new Promise(resolve => setTimeout(resolve, CLAUDE_SPAWN_CREDENTIAL_GRACE_MS));
+      }
+    } finally {
+      releaseSpawn();
+    }
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
 
@@ -21972,8 +22134,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         await new Promise(resolve => setTimeout(resolve, 250));
         try {
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
-          if (isMachineDeliveredMessage(content) && parseInteractivePrompt(paneContent, true)) {
-            throw new MachineInputBlockedError("terminal is waiting for a human answer");
+          if (!parsePollMessage(content) && parseInteractivePrompt(paneContent, true)) {
+            throw new InputBlockedError("terminal is waiting for a human answer");
           }
           // Scan only output below the echoed launch command — shell rc noise
           // above it must not read as an agent crash (see paneContentAfterLaunchEcho).
@@ -22016,7 +22178,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             break;
           }
       } catch (err) {
-        if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       }
     }
     if (!ready) {
@@ -22049,8 +22211,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         const { stdout: preInjectPane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-15"]);
         const warningPatterns = /⚠|recorded with model|weekly limit|Update available|Press enter to continue/;
         if (warningPatterns.test(preInjectPane)) {
-          await machineInputGuard(content, async () =>
-            (await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-80"])).stdout)?.();
+          if (!parsePollMessage(content)) await inputGuard(async () =>
+            (await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-80"])).stdout)();
           logDelivery(`Clearing startup warnings for ${shortId} before injection`);
           await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
           await new Promise(resolve => setTimeout(resolve, 300));
@@ -22064,7 +22226,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           }
         }
       } catch (err) {
-        if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
       }
     }
 
@@ -22078,7 +22240,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     return true;
   } catch (err) {
-    if (err instanceof MachineInputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+    if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
     logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
@@ -22115,6 +22277,25 @@ export function clientOwnsSessionStore(agentType: AgentClientId | undefined | nu
 // refusal: a message left pending is recoverable, a wrong-agent backend is not.
 export function mayMaterializeClaudeTranscript(agentType: AgentClientId | undefined | null): boolean {
   return agentType == null || agentType === "claude";
+}
+
+// Codex app-server delivery is only legal while the conversation's declared
+// agent IS Codex. After an in-place switch the divider lands immediately, but
+// the persisted thread can be rehydrated and steal the next message (jx7dj4aq:
+// "Now using Grok", then Codex's usage-limit reply). Unknown (old backend, no
+// stamp) fails open so existing Codex delivery keeps working.
+export function conversationUsesCodexAppServer(agentType: string | null | undefined): boolean {
+  if (agentType == null || agentType === "") return true;
+  return fromConvexAgentType(agentType) === "codex";
+}
+
+// A leftover transcript from the previous agent after an in-place switch.
+// Resume must ignore it and rebuild as the conversation's declared agent.
+export function sessionFileStaleForAgent(
+  fileAgent: AgentClientId | undefined | null,
+  conversationAgent: AgentClientId | undefined | null,
+): boolean {
+  return !!fileAgent && !!conversationAgent && fileAgent !== conversationAgent;
 }
 
 // Does an app-server error prove the thread is GONE? Only "thread not found" and
@@ -22687,17 +22868,39 @@ async function downloadImage(storageId: string, syncService: SyncService): Promi
   return destPath;
 }
 
+// A delivery that overruns its 180s budget has, until now, left no trace of
+// WHICH step hung: the log went quiet between "Delivering to session" and the
+// timeout. Each awaited step reports itself when it takes longer than a pane
+// round trip should, so the next hang names its cause.
+const SLOW_DELIVERY_STEP_MS = 5_000;
+async function deliveryStep<T>(messageId: string, step: string, run: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  // Report while still pending: a step that never returns (the 180s delivery
+  // budget fires first) would otherwise leave no trace at all.
+  const pending = setInterval(() => {
+    logDelivery(`[SLOW-DELIVERY] msg=${messageId.slice(0, 8)} step=${step} still running after ${Math.round((Date.now() - started) / 1000)}s`);
+  }, SLOW_DELIVERY_STEP_MS * 6);
+  try {
+    return await run();
+  } finally {
+    clearInterval(pending);
+    const took = Date.now() - started;
+    if (took >= SLOW_DELIVERY_STEP_MS) logDelivery(`[SLOW-DELIVERY] msg=${messageId.slice(0, 8)} step=${step} took ${Math.round(took / 1000)}s`);
+  }
+}
+
 async function deliverMessage(
   conversationId: string,
   content: string,
   conversationCache: ConversationCache,
   syncService: SyncService,
   messageId: string,
-  titleCache: TitleCache
+  titleCache: TitleCache,
+  agentTypeHint?: AgentClientId,
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
   const admit = createDeliveryAdmission(syncService, messageId, conversationId);
-  await admit();
+  await deliveryStep(messageId, "admit_first", admit);
   touchHostActivity();
 
   if (pendingAgentSwitches.has(conversationId)) {
@@ -22708,7 +22911,7 @@ async function deliverMessage(
   const childConvId = planHandoffChildren.get(conversationId);
   if (childConvId) {
     logDelivery(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
-    return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache);
+    return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache, agentTypeHint);
   }
 
   // Single-owner delivery guard (split-brain prevention). If a DIFFERENT live
@@ -22720,7 +22923,7 @@ async function deliverMessage(
   // An OFFLINE owner does NOT skip, so a dead owner's session can be reclaimed.
   // Fail-open on any lookup error so a transient query failure never blocks sends.
   try {
-    const ownerInfo = await syncService.getConversationOwnerInfo(conversationId);
+    const ownerInfo = await deliveryStep(messageId, "owner_info", () => syncService.getConversationOwnerInfo(conversationId));
     if (ownedByAnotherLiveDevice(ownerInfo)) {
       logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live device ${ownerInfo?.ownerDeviceId.slice(0, 8)}${ownerInfo?.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
       return false;
@@ -22745,11 +22948,22 @@ async function deliverMessage(
 
   const tryAppServerDelivery = async (): Promise<boolean> => {
     if (!codexAppServerInstance?.running) return false;
+    if (agentTypeHint && !conversationUsesCodexAppServer(agentTypeHint)) {
+      const staleThreadId = appServerConversations.get(conversationId);
+      if (staleThreadId || persistedAppServerThreads.has(conversationId)) {
+        logDelivery(`[AGENT-SWITCH] skipping app-server for conv=${conversationId.slice(0, 12)} — conversation is ${agentTypeHint}, not Codex`);
+        if (staleThreadId) {
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, staleThreadId);
+        }
+        forgetPersistedAppServerConversation(conversationId);
+      }
+      return false;
+    }
     const appServerThreadId = appServerConversations.get(conversationId);
     if (appServerThreadId) {
       try {
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
-        await admit();
+        await deliveryStep(messageId, "admit_app_server", admit);
         await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
         // Delivered input = a new turn: spend any declared settle verdict from
         // before it (codex settles key turnStartedAt by thread id — see
@@ -22791,17 +23005,19 @@ async function deliverMessage(
     return false;
   };
 
-  if (await tryAppServerDelivery()) return true;
+  if (await deliveryStep(messageId, "app_server", tryAppServerDelivery)) return true;
 
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
 
+  // This message reached delivery past the hold (a card answer, or the hold
+  // lapsed): whatever it does to the prompt, the next scan looks again.
+  releasePromptHold(conversationId);
+  // A person's typed text can answer the scraped card by naming an option;
+  // a session message carries its wrapper and is never an answer.
   if (!isMachineDeliveredMessage(content)) {
     const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
     pendingInteractivePrompts.delete(sessionId || conversationId);
-    // A person is answering the terminal: machine messages held behind the
-    // prompt may go after this one.
-    releasePromptHold(conversationId);
 
     // If there's an active poll and the message is plain text (not already a poll response),
     // check if it matches one of the poll options and convert to a poll response
@@ -22872,7 +23088,8 @@ async function deliverMessage(
         const startTime = Date.now();
         for (let i = 0; i < 60; i++) {
           await new Promise(resolve => setTimeout(resolve, 250));
-          const probe = await probeStartedPane(entry, isMachineDeliveredMessage(content) ? assertMachinePromptAbsent : undefined);
+          // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
+          const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent));
           if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
           if (probe.state === "fatal") {
             log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
@@ -22905,9 +23122,9 @@ async function deliverMessage(
         // "delivered". If we marked after and the ack won the race it would find no row and the
         // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
-        await admit();
+        await deliveryStep(messageId, "admit_started", admit);
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-        await injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } });
+        await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
@@ -22955,7 +23172,7 @@ async function deliverMessage(
         // Codex app-server startup registers asynchronously and has no tmux or
         // transcript-cache entry. Recheck its binding during the same readiness
         // wait so a pending first message cannot race ahead and create Claude.
-        if (await tryAppServerDelivery()) return true;
+        if (await deliveryStep(messageId, "app_server_retry", tryAppServerDelivery)) return true;
         const justStarted = startedSessionTmux.get(conversationId);
         if (justStarted) {
           log(`Found startedSessionTmux for ${conversationId.slice(0, 12)} after ${(i + 1) * 500}ms wait`);
@@ -22974,10 +23191,10 @@ async function deliverMessage(
       }
       if (!sessionId) {
         log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
-        sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
+        sessionId = (await deliveryStep(messageId, "materialize", () => materializeSession(conversationId, conversationCache, titleCache, syncService)))!;
         if (!sessionId) {
           logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
-          const freshEntry = await startFreshSessionForDelivery(conversationId);
+          const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
           if (freshEntry && await tryStartedTmux(freshEntry)) return true;
           log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
@@ -22986,10 +23203,10 @@ async function deliverMessage(
       }
     } else {
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
-      sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
+      sessionId = (await deliveryStep(messageId, "materialize", () => materializeSession(conversationId, conversationCache, titleCache, syncService)))!;
       if (!sessionId) {
         logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
-        const freshEntry = await startFreshSessionForDelivery(conversationId);
+        const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
         if (freshEntry && await tryStartedTmux(freshEntry)) return true;
         logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
@@ -23011,16 +23228,17 @@ async function deliverMessage(
   // Detect codex sessions by checking if the JSONL exists in codex paths
   let detectedType: AgentClientId = isGeminiSession ? "gemini" : "claude";
   if (!isGeminiSession) {
-    const sessionFile = findSessionFile(sessionId);
+    const sessionFile = await awaitRecentSessionFile(sessionId);
     if (sessionFile) detectedType = sessionFile.agentType;
   }
+  if (agentTypeHint) detectedType = agentTypeHint;
 
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
 
 
   // Find an already-live session (cached tmux / started session / live process pane) via the
   // shared resolver, so this path and autoResumeSession agree on "is it live and where".
-  const live = await resolveLiveTmuxTarget(conversationId, sessionId, detectedType);
+  const live = await deliveryStep(messageId, "resolve_live_target", () => resolveLiveTmuxTarget(conversationId, sessionId, detectedType));
   let agentDetectedDead = false;
   if (live.tmuxTarget) {
     // Bare names (cache/started) target the session's active pane via ":0.0"; a
@@ -23035,9 +23253,9 @@ async function deliverMessage(
       // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
-      await admit();
+      await deliveryStep(messageId, "admit_live", admit);
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-      await injectViaTmux(injectTarget, content, detectedType, { delivery: { messageId, conversationId } });
+      await deliveryStep(messageId, "inject_live", () => injectViaTmux(injectTarget, content, detectedType, { delivery: { messageId, conversationId } }));
       // A process-discovered pane can go stale between scan and inject — verify the agent
       // survived and fall through to auto-resume if it crashed (the original optimistic path).
       if (live.source === "process" && !(await isTmuxAgentAlive(tmuxSessionName))) {
@@ -23086,7 +23304,7 @@ async function deliverMessage(
     if (!live.proc.tty) {
       // No terminal to address. The injectors below can only fail inside their
       // capture, and for a machine message that failure reads as a held terminal
-      // (MachineInputBlockedError), not an unreachable process — which is how
+      // (InputBlockedError), not an unreachable process — which is how
       // every wake to one session retried into an empty osascript for hours on
       // 2026-09-07. Fall through to the resume paths instead.
       logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
@@ -23095,7 +23313,7 @@ async function deliverMessage(
       try {
         // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
         // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
-        await admit();
+        await deliveryStep(messageId, "admit_proc", admit);
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
         await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
           agentType: detectedType,
@@ -23104,7 +23322,7 @@ async function deliverMessage(
         return true;
       } catch (err) {
         if (err instanceof PendingDeliveryHeldError) throw err;
-        if (err instanceof MachineInputBlockedError) throw err;
+        if (err instanceof InputBlockedError) throw err;
         logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -23133,8 +23351,10 @@ async function deliverMessage(
     throw new UndeliverableMessageError(`workflow agent transcript ${workflowAgentPath}`);
   }
 
-  // Circuit breaker: skip auto-resume if this session has failed too many times recently
-  if (isSessionCircuitOpen(sessionId)) {
+  // Circuit breaker: skip auto-resume if this session has failed too many times recently.
+  // A leftover id from the previous agent after a switch is not this agent's
+  // failure history — reconstituting as the new agent must still run.
+  if (isSessionCircuitOpen(sessionId) && !sessionFileStaleForAgent(findSessionFile(sessionId)?.agentType, agentTypeHint)) {
     logDelivery(`Circuit breaker OPEN for session=${sessionId.slice(0, 8)}, skipping auto-resume (cooldown ${SESSION_CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s)`);
     return false;
   }
@@ -23152,7 +23372,7 @@ async function deliverMessage(
   // resume+inject — the same failure mode fixed on the live-tmux path above.
   await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-  const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId, undefined, { delivery: { messageId, conversationId } });
+  const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
@@ -23174,7 +23394,7 @@ async function deliverMessage(
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
   // Row is already marked "injected" from the auto-resume attempt above; repair+resume is a
   // second delivery path for the same message, so no re-mark needed.
-  const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, undefined, { delivery: { messageId, conversationId } });
+  const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
   if (repaired) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
@@ -25635,6 +25855,26 @@ async function main(): Promise<void> {
   // registers at the end of boot (setHookStatusSink).
   hookServer = startHookServer();
 
+  // Open the Convex WebSocket now, before the tmux warm restart. That scan
+  // awaits every managed pane (133s for 135 sessions on 2026-09-15) and used
+  // to be the first moment ConvexClient was constructed, so `cast status`
+  // read connected:false for the whole blackout even while HTTP heartbeats
+  // succeeded. Tracking here lets the socket come up in parallel with the
+  // scan; the live query subscriptions still attach later, once their
+  // handlers exist.
+  try {
+    bindConvexConnectionState(syncService.getSubscriptionClient(), {
+      saveConnected: (connected) => saveDaemonState({ connected }),
+      onChange: (connected) => log(`Convex WebSocket ${connected ? "connected" : "disconnected"}`),
+      onRestored: () => {
+        retryQueueRef?.notifyConnectionRestored();
+        sendHeartbeat().catch(() => {});
+      },
+    });
+  } catch (err) {
+    logWarn(`Could not subscribe to Convex connection state: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // Now that the port answers, sweep any daemon that is running without the
   // pid file. Off the loop and off the boot path: it spawns `ps`.
   void sweepOrphanDaemons();
@@ -26358,14 +26598,24 @@ async function main(): Promise<void> {
 
   watcher.start();
 
-  // Agent status hook file watcher
+  // Agent status hook file watcher. One recursive watch on the directory,
+  // not a watch per status file: under bun on macOS every fs.watch rebuilds
+  // the process's FSEvents stream under the lock the JS thread needs, and
+  // this directory holds a file per session (244 on 2026-09-15, ~200ms
+  // each while fseventsd is busy). The per-file probe debounce is what
+  // awaitWriteFinish gave: a write in progress keeps resetting it, and the
+  // read runs once the file has been quiet.
   fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
-  const statusWatcher = chokidarWatch(AGENT_STATUS_DIR, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 50, pollInterval: 20 },
-    depth: 0,
+  const statusWatcher = new RecursiveWatcher({
+    path: AGENT_STATUS_DIR,
+    filter: () => true,
+    maxDepth: 1,
+    debounceMs: 50,
+    callback: (filePath, eventType) => { if (eventType !== "unlink") handleStatusFile(filePath); },
   });
-  statusWatcher.on("add", handleStatusFile).on("change", handleStatusFile);
+  statusWatcher.on("error", (error: Error) => logError("Status watcher error", error));
+  statusWatcher.start();
+  startCapabilitySourceWatcher(process.env.HOME || require("os").homedir());
 
   // Process existing status files on startup (chokidar ignoreInitial skips
   // them). A live hook that lands first wins: the ts guards in
@@ -26835,13 +27085,15 @@ async function main(): Promise<void> {
   }
 
   if (fs.existsSync(CLAUDE_PLANS_DIR)) {
-    const planFileWatcher = chokidarWatch(CLAUDE_PLANS_DIR, {
-      ignoreInitial: true,
-      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 50 },
-      depth: 0,
+    const planFileWatcher = new RecursiveWatcher({
+      path: CLAUDE_PLANS_DIR,
+      filter: () => true,
+      maxDepth: 1,
+      debounceMs: 300,
+      callback: (p, eventType) => { if (eventType !== "unlink") void handlePlanFile(p); },
     });
-    const onPlanFile = (p: string) => { void handlePlanFile(p); };
-    planFileWatcher.on("add", onPlanFile).on("change", onPlanFile);
+    planFileWatcher.on("error", () => {});
+    planFileWatcher.start();
     log(`Plan file watcher started on ${CLAUDE_PLANS_DIR}`);
   }
 
@@ -27814,10 +28066,8 @@ async function main(): Promise<void> {
         // The terminal is waiting for a human answer: a paste would answer it,
         // so the conversation is skipped until the prompt closes or the hold
         // window lapses (see pendingPromptHold). Not a retry, not an attempt.
-        // A human's answer to the card is never held: it is what closes the
-        // prompt. A human's typed message is held only when one was already
-        // refused (a dialog no text can answer); see pendingPromptHold.
-        const holdMs = parsePollMessage(msg.content) ? 0 : promptHoldRemainingMs(msg.conversation_id, !isMachineDeliveredMessage(msg.content));
+        // Only a card answer goes through: it is what closes the prompt.
+        const holdMs = parsePollMessage(msg.content) ? 0 : promptHoldRemainingMs(msg.conversation_id);
         if (holdMs > 0) {
           logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - conv=${msg.conversation_id.slice(0, 12)} is waiting for a human answer (next try in ${Math.ceil(holdMs / 1000)}s)`);
           continue;
@@ -27891,6 +28141,7 @@ async function main(): Promise<void> {
 
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
         try {
+          const rawAgent = typeof msg.conversation_agent_type === "string" ? msg.conversation_agent_type : undefined;
           const delivered = await Promise.race([
             deliverMessage(
               msg.conversation_id,
@@ -27898,7 +28149,8 @@ async function main(): Promise<void> {
               conversationCache,
               syncService,
               msg._id,
-              titleCache
+              titleCache,
+              rawAgent ? fromConvexAgentType(rawAgent) : undefined,
             ),
             new Promise<never>((_, reject) => {
               timeoutHandle = setTimeout(
@@ -27980,13 +28232,13 @@ async function main(): Promise<void> {
           injectedMessageTs.delete(msg._id);
           if (err instanceof PendingDeliveryHeldError) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} no longer admitted; preserving it without retry`);
-          } else if (err instanceof MachineInputBlockedError || /terminal is waiting for a human answer/.test(errMsg)) {
+          } else if (err instanceof InputBlockedError || /terminal is waiting for a human answer/.test(errMsg)) {
             // Not a failed attempt: the pane shows a menu or confirmation a
             // human must answer, and a paste would answer it. Re-pend without
             // spending the retry budget, skip the conversation for a short
             // hold, and re-drive when the prompt closes.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
-            holdConversationForPrompt(msg.conversation_id, { humans: !isMachineDeliveredMessage(msg.content) });
+            holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
@@ -28053,9 +28305,8 @@ async function main(): Promise<void> {
       // Registering a subscription does NOT prove the WebSocket is up:
       // onUpdate() returns synchronously and silently queues on a dead socket,
       // so asserting connected:true here lies whenever the socket later dies
-      // mid-run (e.g. after a sleep) — the flag stays true through real
-      // outages. The truthful connected/disconnected flag is driven below by
-      // subscribeToConnectionState off the live WebSocket state instead.
+      // mid-run (e.g. after a sleep). The persisted flag is driven at boot by
+      // bindConvexConnectionState off the live WebSocket state instead.
       if (reconnectAttempt > 0) {
         sendLogImmediate("info", `[LIFECYCLE] connection_restored: after ${reconnectAttempt} attempts`, { error_code: "connection_restored" });
       }
@@ -28063,7 +28314,6 @@ async function main(): Promise<void> {
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       logError("Subscription error", error);
-      saveDaemonState({ connected: false });
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
@@ -28305,41 +28555,6 @@ async function main(): Promise<void> {
 
   setupCommandSubscription();
 
-  // Keep the persisted `connected` flag (what `cast status` shows as
-  // "Convex: connected/disconnected") honest by driving it off the live Convex
-  // WebSocket state. Without this the flag was set once at subscription
-  // registration and only cleared on startup/shutdown, so it couldn't tell a
-  // live socket from one that silently died after a sleep — reading "connected"
-  // straight through a sync outage. subscribeToConnectionState fires on every
-  // transition; ConnectionState also changes on inflight-request counts, so
-  // dedupe to socket up/down edges to avoid churning daemon.state on every
-  // mutation. Seed from the current state so we don't wait for the first change.
-  let lastConnectedWritten: boolean | undefined;
-  const publishConnectionState = (cs: { isWebSocketConnected: boolean }) => {
-    if (cs.isWebSocketConnected === lastConnectedWritten) return;
-    // A genuine false→true edge (not the initial seed from `undefined`) means
-    // the socket just came back after an outage — most commonly a laptop wake.
-    // Recover gracefully instead of letting the UI sit on scary states: drain
-    // the retry backlog now (otherwise queued ops wait out a backoff scheduled
-    // against the dead socket — up to 5 min — and surface as "sync stalled"),
-    // and refresh the heartbeat immediately so `daemon_last_seen` is current and
-    // the web "daemon offline" banner clears at once rather than after the next
-    // 30s tick.
-    const restored = lastConnectedWritten === false && cs.isWebSocketConnected;
-    lastConnectedWritten = cs.isWebSocketConnected;
-    saveDaemonState({ connected: cs.isWebSocketConnected });
-    if (restored) {
-      retryQueueRef?.notifyConnectionRestored();
-      sendHeartbeat().catch(() => {});
-    }
-  };
-  try {
-    publishConnectionState(subscriptionClient.connectionState());
-    subscriptionClient.subscribeToConnectionState(publishConnectionState);
-  } catch (err) {
-    logWarn(`Could not subscribe to Convex connection state: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
   const shutdown = async () => {
     closeDaemonWorkers();
     appServerShuttingDown = true;
@@ -28381,7 +28596,7 @@ async function main(): Promise<void> {
     log("Watchdog and reconciliation stopped");
 
     stopHookServer();
-    statusWatcher.close();
+    statusWatcher.stop();
     watcher.stop();
     cursorWatcher.stop();
     cursorTranscriptWatcher.stop();

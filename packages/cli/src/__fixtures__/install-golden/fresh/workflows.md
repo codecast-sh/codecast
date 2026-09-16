@@ -8,6 +8,8 @@ cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
 cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
 cast workflow list                          # Available templates
 cast workflow push                          # Push workflow to web UI
+cast workflow runs [--task ct-N|--plan pl-N] # Runs across workflows: status, task, current node, gate
+cast role line @handle [--set <slug>]       # Read or set the workflow a role's tasks run on (default: line)
 ```
 
 Workflow nodes can be: agent sessions (`backend=claude`), shell commands, human approval gates, or conditionals. The web dashboard shows workflow progress and gate buttons.

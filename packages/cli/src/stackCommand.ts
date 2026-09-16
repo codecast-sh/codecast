@@ -10,8 +10,13 @@
 //   cast stack ls [--all]
 //   cast stack show ds-N
 //   cast stack add ds-N sd-N
-//   cast stack policy ds-N [--auto-default 24h | --no-auto-default] [--delegate @handle]
+//   cast stack remove ds-N sd-N
+//   cast stack reorder ds-N sd-a,sd-b,…
+//   cast stack policy ds-N [--auto-default 24h | --no-auto-default] [--delegate @handle] [--due <when> | --no-due]
 //   cast stack delegate ds-N @handle
+//
+// The due time (the-line.md L10) is when the person means to have cleared the
+// stack; the queue shows it on the group header and sorts overdue first.
 //
 // Routes: /cli/stack/<verb> in http.ts (decisionStacks.ts).
 import type { Command } from "commander";
@@ -26,7 +31,7 @@ export interface StackRow {
   short_id: string;
   title: string;
   status: "open" | "done";
-  policy: { auto_default_after_ms?: number; delegate_role_id?: string };
+  policy: { auto_default_after_ms?: number; delegate_role_id?: string; due_at?: number };
   decision_ids: string[];
   total: number;
   resolved: number;
@@ -68,11 +73,57 @@ export function parsePolicyArg(raw: string): { auto_default_after_ms?: number } 
   throw new Error(`Unknown policy "${name}". Policies: auto-default:<duration>`);
 }
 
-export function describePolicy(policy: StackRow["policy"], delegateName?: string): string {
+// `--due <when>`: a duration from now (3h, 2d), "today" or "tomorrow" (end of
+// that day, local time), a date (2026-09-20, end of that day), or a full
+// date and time (2026-09-20T15:00, ISO). Returns unix milliseconds.
+export function parseDue(raw: string, now: number = Date.now()): number {
+  const text = raw.trim().toLowerCase();
+  if (!text) throw new Error("--due needs a time: 3h, tomorrow, 2026-09-20");
+  const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 0, 0).getTime();
+  if (text === "today") return endOfDay(new Date(now));
+  if (text === "tomorrow") return endOfDay(new Date(now + 86_400_000));
+  if (/^\d+(?:\.\d+)?\s*(ms|s|m|h|d)$/.test(text)) return now + parseDuration(text);
+  const bareDate = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (bareDate) {
+    const d = new Date(parseInt(bareDate[1], 10), parseInt(bareDate[2], 10) - 1, parseInt(bareDate[3], 10));
+    if (isNaN(d.getTime())) throw new Error(`"${raw}" is not a date`);
+    return endOfDay(d);
+  }
+  const parsed = Date.parse(raw.trim());
+  if (isNaN(parsed)) throw new Error(`"${raw}" is not a time (use 3h, tomorrow, 2026-09-20, or 2026-09-20T15:00)`);
+  return parsed;
+}
+
+export function formatDue(dueAt: number, now: number = Date.now()): string {
+  const when = new Date(dueAt);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  return dueAt < now ? `overdue since ${stamp}` : `due ${stamp}`;
+}
+
+export function describePolicy(policy: StackRow["policy"], delegateName?: string, now: number = Date.now()): string {
   const parts: string[] = [];
   if (policy.auto_default_after_ms) parts.push(`auto default after ${formatDuration(policy.auto_default_after_ms)}`);
   if (policy.delegate_role_id) parts.push(`delegated to ${delegateName ?? policy.delegate_role_id}`);
+  if (policy.due_at) parts.push(formatDue(policy.due_at, now));
   return parts.length ? parts.join(", ") : "no policy";
+}
+
+// `cast stack reorder ds-N sd-a,sd-b`: the wire takes raw decision ids in
+// the new order, so each short id is resolved against the stack's members.
+// Every member must appear exactly once.
+export function resolveReorderIds(members: { _id: string; short_id?: string }[], refs: string[]): string[] {
+  const ids = refs.map((ref) => {
+    const m = members.find((d) => d.short_id === ref || d._id === ref);
+    if (!m) throw new Error(`${ref} is not a member of this stack`);
+    return m._id;
+  });
+  if (new Set(ids).size !== ids.length) throw new Error("A decision appears twice in the new order");
+  if (ids.length !== members.length) {
+    const missing = members.filter((d) => !ids.includes(d._id)).map((d) => d.short_id ?? d._id);
+    throw new Error(`The new order must name every member; missing: ${missing.join(", ")}`);
+  }
+  return ids;
 }
 
 export function formatStackList(rows: StackRow[], now: number = Date.now()): string {
@@ -82,7 +133,7 @@ export function formatStackList(rows: StackRow[], now: number = Date.now()): str
       const mark = s.status === "open" ? "●" : "○";
       const progress = `${s.resolved}/${s.total}`;
       const next = s.next_short_id ? `  next ${s.next_short_id}` : "";
-      return `${mark} ${s.short_id}  ${s.title}  ${progress} resolved${next}  (${describePolicy(s.policy)}; ${formatAge(now - s.created_at)})`;
+      return `${mark} ${s.short_id}  ${s.title}  ${progress} resolved${next}  (${describePolicy(s.policy, undefined, now)}; ${formatAge(now - s.created_at)})`;
     })
     .join("\n");
 }
@@ -118,17 +169,19 @@ export function registerStackCommand(program: Command, deps: PublishDeps): void 
   program
     .command("stack")
     .description(commandGroup("stack").description)
-    .argument("[sub]", "create | ls | show | add | policy | delegate")
+    .argument("[sub]", "create | ls | show | add | remove | reorder | policy | delegate")
     .argument("[args...]", "subcommand arguments")
     .option("--policy <spec>", "create: auto-default:<duration> (advisory members answer with their default after it)")
     .option("--delegate <handle>", "create/policy: the role (@handle or or-N) that answers every open category for the stack's members")
     .option("--auto-default <duration>", "policy: set the auto default deadline (30m, 24h, 2d)")
     .option("--no-auto-default", "policy: clear the auto default deadline")
+    .option("--due <when>", "policy: when you mean to have cleared the stack (3h, tomorrow, 2026-09-20); the queue sorts overdue stacks first")
+    .option("--no-due", "policy: clear the due time")
     .option("--all", "ls: include done stacks")
     .option("--session <id>", "Session whose team scopes the stack (default: detect current)")
     .option("--json", "Machine-readable output")
     .action(async (sub: string | undefined, rest: string[], options: any) => {
-      const usage = 'Usage: cast stack create "<title>" | ls | show ds-N | add ds-N sd-N | policy ds-N … | delegate ds-N @handle';
+      const usage = 'Usage: cast stack create "<title>" | ls | show ds-N | add ds-N sd-N | remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N … | delegate ds-N @handle';
       if (!sub) fail(usage);
 
       if (sub === "create") {
@@ -188,6 +241,31 @@ export function registerStackCommand(program: Command, deps: PublishDeps): void 
         return;
       }
 
+      if (sub === "remove" || sub === "rm") {
+        const decision = rest[1];
+        if (!decision) fail("Usage: cast stack remove ds-N sd-N");
+        const result = await stackApi(deps, "remove", { stack: target, decision });
+        if (options.json) console.log(JSON.stringify(result, null, 2));
+        else console.log(`${fmt.success("Removed:")} ${decision} from ${target}. The decision stays open on its own.`);
+        return;
+      }
+
+      if (sub === "reorder") {
+        const refs = rest.slice(1).flatMap((r) => r.split(",")).map((r) => r.trim()).filter(Boolean);
+        if (refs.length === 0) fail("Usage: cast stack reorder ds-N sd-a,sd-b,… (every member, in the new order)");
+        const shown = await stackApi(deps, "show", { stack: target });
+        let decision_ids: string[];
+        try {
+          decision_ids = resolveReorderIds(shown.decisions ?? [], refs);
+        } catch (err) {
+          fail(err instanceof Error ? err.message : String(err));
+        }
+        const result = await stackApi(deps, "reorder", { stack: target, decision_ids });
+        if (options.json) console.log(JSON.stringify(result, null, 2));
+        else console.log(`${fmt.success("Reordered:")} ${target}  ${refs.join(" → ")}`);
+        return;
+      }
+
       if (sub === "policy" || sub === "delegate") {
         const body: Record<string, unknown> = { stack: target };
         if (sub === "delegate") {
@@ -203,7 +281,15 @@ export function registerStackCommand(program: Command, deps: PublishDeps): void 
               fail(err instanceof Error ? err.message : String(err));
             }
           }
-          if (Object.keys(body).length === 1) fail("Nothing to change. Pass --auto-default <duration>, --no-auto-default, or --delegate @handle.");
+          if (options.due === false) body.clear_due = true;
+          else if (typeof options.due === "string") {
+            try {
+              body.due_at = parseDue(options.due);
+            } catch (err) {
+              fail(err instanceof Error ? err.message : String(err));
+            }
+          }
+          if (Object.keys(body).length === 1) fail("Nothing to change. Pass --auto-default <duration>, --no-auto-default, --due <when>, --no-due, or --delegate @handle.");
         }
         const result = await stackApi(deps, "policy", body);
         if (options.json) console.log(JSON.stringify(result, null, 2));

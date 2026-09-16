@@ -90,11 +90,11 @@ export function shouldApplyWhileRunning(
   return isBelowMinimum(installed, opts.minVersion);
 }
 
-function plistVersion(plistPath: string): string | null {
+function plistValue(plistPath: string, key: string): string | null {
   try {
     const out = execFileSync(
       "/usr/libexec/PlistBuddy",
-      ["-c", "Print :CFBundleShortVersionString", plistPath],
+      ["-c", `Print :${key}`, plistPath],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     );
     const v = out.trim();
@@ -102,6 +102,30 @@ function plistVersion(plistPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function plistVersion(plistPath: string): string | null {
+  return plistValue(plistPath, "CFBundleShortVersionString");
+}
+
+function macosVersion(): string | null {
+  try {
+    return execFileSync("/usr/bin/sw_vers", ["-productVersion"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this Mac can launch a bundle that declares `minimum` as its
+ * LSMinimumSystemVersion. The swap replaces the working app, so installing a
+ * build the system refuses to open leaves the person with no app at all: the
+ * Electron 44 shell needs macOS 13, and a Mac on 12 must keep the build it has.
+ * Unknown on either side installs, as every earlier release did.
+ */
+export function macosMeetsMinimum(current: string | null, minimum: string | null): boolean {
+  if (!current || !minimum) return true;
+  return compareVersions(current, minimum) >= 0;
 }
 
 // Matches ONLY the app's main process (helpers live under Frameworks/… and
@@ -323,6 +347,13 @@ export async function checkForDesktopUpdate(
       return false;
     }
     if (!verifyBundleSignature(newApp, log)) {
+      rmrf(WORK_DIR);
+      return false;
+    }
+    const minimumOs = plistValue(path.join(newApp, "Contents", "Info.plist"), "LSMinimumSystemVersion");
+    const currentOs = macosVersion();
+    if (!macosMeetsMinimum(currentOs, minimumOs)) {
+      log(`desktop update: v${version} needs macOS ${minimumOs}; this Mac runs ${currentOs}; keeping v${installed}`);
       rmrf(WORK_DIR);
       return false;
     }

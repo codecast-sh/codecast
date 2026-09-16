@@ -8,6 +8,7 @@ import {
   classifySharedPidSessions,
   ensureSessionFileIndex,
   findSessionFile,
+  refreshRecentSessionFileForTests,
   resetSessionFileIndexForTests,
   resolveTurnEndStatus,
   sessionFileIndexBuiltAtForTests,
@@ -128,8 +129,12 @@ describe("resolveTurnEndStatus", () => {
     expect(reports.filter((m) => m.includes("probeRecent"))).toEqual([]);
     expect(reports.filter((m) => m.includes("walkDirsSync"))).toEqual([]);
 
-    // The sink does catch the probe: the default tier still runs it.
+    // The miss probe now runs off the loop (fs.promises / scan worker) and
+    // answers on the next look, same as the workers-on path. The settle above
+    // must not have started it; this explicit lookup does, without a sync walk.
+    expect(findSessionFile(fresh, { staleOk: true })).toBeNull();
+    await refreshRecentSessionFileForTests(fresh);
     expect(findSessionFile(fresh)?.path).toContain(fresh);
-    expect(reports.filter((m) => m.includes("probeRecentSessionFiles")).length).toBe(1);
+    expect(reports.filter((m) => m.includes("probeRecentSessionFiles"))).toEqual([]);
   }, 30_000);
 });

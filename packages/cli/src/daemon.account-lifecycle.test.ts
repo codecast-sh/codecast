@@ -94,6 +94,23 @@ function harness() {
   return { ...runtime, gate, state, hooks, events, resumeInFlight, resumeInFlightStarted, resumeSessionCache, hibernationInFlight, expectedHibernationExits };
 }
 
+test("account switch proceeds once Claude has spawned, without waiting for the prompt", async () => {
+  const h = harness(), ready = deferred();
+  h.hooks.launch = async (...args) => {
+    (args[6] as { onProcessSpawned?: () => void } | undefined)?.onProcessSpawned?.();
+    await ready.promise;
+    return true;
+  };
+  const launch = h.resume("booting", "", {}, undefined, "conv", "claude");
+  await waitFor(() => h.events.includes("launch:booting:old"));
+  const change = h.switchAccount({ profile: "new", continue_blocked: false });
+  await waitFor(() => h.events.includes("swap:new"));
+  expect(h.state.account).toBe("new");
+  ready.resolve();
+  expect((await change).error).toBeUndefined();
+  expect(await launch).toBe(true);
+});
+
 test("credentials never change until an in-flight launch reports ready", async () => {
   const h = harness(), boot = deferred();
   h.hooks.launch = async () => { await boot.promise; return true; };
@@ -158,7 +175,14 @@ test("production resume retains one reservation across account wait and cancelle
   const h = harness(), parked = deferred();
   let cancels = 0, launches = 0;
   const opts = { userInitiated: true, model: "saved-model", effort: "high" };
-  h.hooks.launch = async (...args) => { launches++; expect(args[6]).toBe(opts); return true; };
+  h.hooks.launch = async (...args) => {
+    launches++;
+    const forwarded = args[6] as { userInitiated?: boolean; model?: string; effort?: string };
+    expect(forwarded.userInitiated).toBe(opts.userInitiated);
+    expect(forwarded.model).toBe(opts.model);
+    expect(forwarded.effort).toBe(opts.effort);
+    return true;
+  };
   h.resumeSessionCache.set("same", "owned-pane");
   h.expectedHibernationExits.set("same", true);
   h.hibernationInFlight.set("same", { cancel: () => { cancels++; }, done: parked.promise });
@@ -315,4 +339,16 @@ test("daemon wires one shared account gate without wrapping the Codex app-server
   expect(switchSource).not.toContain("markAppServerConversationResumable(");
   expect(resumeSource).not.toContain("markAppServerConversationResumable(");
   expect(resumeSource).not.toContain("new CodexAppServer(");
+});
+
+test("production resume releases the account gate at spawn, before the readiness poll", () => {
+  const inner = functionBlock(source, "autoResumeSessionInner").text;
+  const spawned = inner.indexOf("onProcessSpawned");
+  const grace = inner.indexOf("CLAUDE_SPAWN_CREDENTIAL_GRACE_MS");
+  const poll = inner.indexOf("Poll for agent readiness");
+  expect(spawned).toBeGreaterThan(0);
+  expect(grace).toBeGreaterThan(spawned);
+  expect(poll).toBeGreaterThan(grace);
+  expect(source).toContain("export const CLAUDE_SPAWN_CREDENTIAL_GRACE_MS");
+  expect(resumeSource).toContain("onProcessSpawned:");
 });

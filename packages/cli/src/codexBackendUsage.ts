@@ -18,6 +18,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   foldCodexLimits,
+  isCodexWindowFilled,
   type CanonicalLimit,
   type CanonicalWindow,
   type CodexUsageSnapshot,
@@ -208,8 +209,18 @@ export function mergeCodexUsage(
   return {
     ...primary,
     ...(primary.plan_type ? {} : backend.plan_type ? { plan_type: backend.plan_type } : {}),
-    ...(primary.session ? {} : backend.session ? { session: backend.session } : {}),
-    ...(primary.weekly ? {} : backend.weekly ? { weekly: backend.weekly } : {}),
+    // A 0% window with no reset time is the placeholder Codex writes when it
+    // has no reading — treat it as a hole so a real weekly can fill it.
+    ...(isCodexWindowFilled(primary.session)
+      ? {}
+      : isCodexWindowFilled(backend.session)
+        ? { session: backend.session }
+        : {}),
+    ...(isCodexWindowFilled(primary.weekly)
+      ? {}
+      : isCodexWindowFilled(backend.weekly)
+        ? { weekly: backend.weekly }
+        : {}),
     ...(primary.reset_credits ? {} : backend.reset_credits ? { reset_credits: backend.reset_credits } : {}),
   };
 }

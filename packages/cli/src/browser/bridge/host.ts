@@ -236,7 +236,9 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
       ? `something on 127.0.0.1:${state.port} answers like a bridge host but cannot prove it holds the token — ` +
           `stop it, or set CAST_BRIDGE_PORT to move the bridge`
       : probe === "busy"
-        ? `the bridge host on 127.0.0.1:${state.port} did not answer within ${Math.round(timeoutMs / 1000)}s — the machine is busy; try again`
+        ? `something is listening on 127.0.0.1:${state.port} but did not answer within ${Math.round(timeoutMs / 1000)}s — ` +
+          `a bridge host whose event loop is stalled${state.hostPid ? ` (pid ${state.hostPid})` : ""}, or another program on the port; ` +
+          `its log is ${bridgeHostLogPath()}`
         : `no bridge host is answering on 127.0.0.1:${state.port}`,
   );
 }
@@ -493,14 +495,18 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const HELLO_TIMEOUT_MS = 15_000;
 
 /**
- * How long the extension may go silent before its socket is declared dead.
- * The worker pings every 20 s (background.js KEEPALIVE_MS) and answers ours
- * at the same rate, so three quiet cycles is a worker that is gone while
- * Chrome's network process still holds the TCP side open: without this,
- * every command timed out against a socket nobody was reading, and a new
- * worker's hello sat behind it.
+ * How long the extension may go silent before its socket is declared dead:
+ * a worker that is gone while Chrome's network process still holds the TCP
+ * side open would otherwise keep every command waiting on a socket nobody
+ * reads. Silence alone is weak evidence of that. Chrome runs the worker's
+ * process at background priority, and on a loaded Mac it can go a minute
+ * or more without CPU while alive and holding tabs (background.js holdSelf
+ * keeps Chrome from ending it). Cutting that socket failed every command in
+ * flight for no gain, because a truly dead worker is replaced sooner anyway:
+ * its successor connects within the 30 s alarm and a newer connection wins.
+ * So the budget matches Chrome's own limit for one request, five minutes.
  */
-const EXTENSION_SILENCE_MS = 65_000;
+const EXTENSION_SILENCE_MS = 5 * 60_000;
 
 /** `castGroup` as a client may send it; anything else is treated as absent. */
 function parseGroup(raw: unknown): BridgeGroup | null {
@@ -562,7 +568,16 @@ export function startBridgeHost(opts: {
       const id = nextExtId++;
       const timer = setTimeout(() => {
         extPending.delete(id);
-        reject(new Error(`${op} did not answer within ${timeoutMs}ms (last extension message ${Date.now() - extHeardAt}ms ago; Chrome or its worker may be busy)`));
+        // Not a lost connection: the socket is open and the worker's last
+        // message is dated below. Chrome runs the extension's process at
+        // background priority, which macOS schedules on the efficiency cores
+        // only; a worker that has not answered has not been given CPU.
+        reject(
+          new Error(
+            `${op} did not answer within ${timeoutMs}ms (extension last heard ${Date.now() - extHeardAt}ms ago; ` +
+              `Chrome runs the extension at background priority, so its worker was not scheduled, not lost)`,
+          ),
+        );
       }, timeoutMs);
       extPending.set(id, {
         resolve: (r) => {
@@ -1235,7 +1250,7 @@ export async function runBridgeHost(): Promise<void> {
   const state = ensureBridgeConfig();
   const standing = await probeHostPatiently(state);
   if (standing === "alive" || standing === "busy") {
-    console.error(`a bridge host is already ${standing === "alive" ? "answering" : "listening (busy)"} on 127.0.0.1:${state.port}`);
+    console.error(`a bridge host is already ${standing === "alive" ? "answering" : "listening but not answering"} on 127.0.0.1:${state.port}`);
     process.exit(0);
   }
   // Detached, this process's stderr is bridgeHostLogPath(): the only trace

@@ -17,7 +17,6 @@ import { assembleOpencodeRows, type SessionRow } from "./opencodeTranscriptAssem
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
-import { Database } from "bun:sqlite";
 import {
   type TranscriptDirEvent,
   type TranscriptDirWatcherEvents,
@@ -26,6 +25,23 @@ import {
 import { getPosition, setPosition } from "./positionTracker.js";
 import { OPENCODE_SESSION_ID_RE } from "./resumeCommand.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { rebindingStore } from "./cachedJsonStore.js";
+import { codecastPath } from "./codecastDir.js";
+import { openOpencodeDb, queryOpencodeDelta, type OpencodeDelta } from "./opencodeStorageQuery.js";
+
+export type { OpencodeDelta };
+export { queryOpencodeDelta };
+
+// Last-seen store mtime, keyed by the real db path. Survives a daemon restart
+// so an unchanged multi-gigabyte file is never opened just to rediscover that
+// nothing moved — that open is what pinned the loop for 7-23s on every boot
+// today (poll@opencodeStorage.ts, 2026-09-15). Pruned when the db is gone.
+const pollMtimes = rebindingStore<number>(() => codecastPath("opencode-poll-mtimes.json"), {
+  keepOnLoadAsync: (dbPath) => fs.promises.access(dbPath).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => error.code !== "ENOENT" && error.code !== "ENOTDIR",
+  ),
+});
 
 /** Absolute path to opencode's SQLite store, from the registry descriptor. */
 export function opencodeDbPath(): string {
@@ -33,16 +49,7 @@ export function opencodeDbPath(): string {
   return root.startsWith("~/") ? path.join(process.env.HOME || "", root.slice(2)) : root;
 }
 
-/** Open the opencode DB read-only, or null if it doesn't exist yet (opencode not
- *  installed / never run). Read-only + WAL means the daemon never blocks opencode. */
-function openDb(dbPath: string): Database | null {
-  if (!fs.existsSync(dbPath)) return null;
-  try {
-    return new Database(dbPath, { readonly: true });
-  } catch {
-    return null;
-  }
-}
+const openDb = openOpencodeDb;
 
 
 /** True when a session exists in the opencode DB — the existence check
@@ -166,8 +173,12 @@ export declare interface OpencodeStorageWatcher {
  * global max across the three tables, because session.time_updated alone is
  * insufficient (a message can be written after its session row updates, verified on
  * real rows). Cheap when idle: a stat of the db + -wal file gates the query, so an
- * unchanged store costs only two stats. Structurally mirrors cursorWatcher (readonly
- * open, poll interval, per-poll open/close, error circuit-breaker).
+ * unchanged store costs only two stats — and that mtime is persisted, so a
+ * daemon restart of an unchanged store is also two stats, not a cold open of
+ * a multi-gigabyte file. When the store HAS moved, the SQL runs on a worker
+ * thread (the mmap under swap pinned the daemon loop for 7-23s; see
+ * queryOpencodeDelta). Structurally mirrors cursorWatcher (readonly open,
+ * poll interval, per-poll open/close, in-flight skip, error circuit-breaker).
  *
  * The watermark PERSISTS across daemon restarts via positionTracker (getPosition/
  * setPosition, keyed by the db path — a real file, so the store's dead-key prune
@@ -195,12 +206,21 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
   private watermark = 0;
   private lastMtime = 0;
   private errorCount = 0;
+  private pollInFlight = false;
+  private worker: Worker | null = null;
+  private workerSeq = 0;
+  private readonly injectedQuery?: (dbPath: string, watermark: number) => OpencodeDelta | Promise<OpencodeDelta>;
   private static readonly ERROR_SUPPRESS_THRESHOLD = 3;
 
-  constructor(dbPath: string = opencodeDbPath(), pollMs = 2000) {
+  constructor(
+    dbPath: string = opencodeDbPath(),
+    pollMs = 2000,
+    opts?: { queryDelta?: (dbPath: string, watermark: number) => OpencodeDelta | Promise<OpencodeDelta> },
+  ) {
     super();
     this.dbPath = dbPath;
     this.pollMs = pollMs;
+    this.injectedQuery = opts?.queryDelta;
   }
 
   start(): void {
@@ -209,9 +229,13 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
     // makes the first poll emit every existing session (`time_updated > 0`) — the
     // one-time backfill; thereafter this is the last persisted high-water mark.
     this.watermark = getPosition(this.dbPath);
+    // Last-seen mtime from a previous run of THIS db. Matching the live mtime
+    // means nothing moved while we were down, so the first poll is two stats
+    // and does not open the file.
+    this.lastMtime = pollMtimes().get(this.dbPath) || 0;
     this.emit("ready");
-    this.pollTimer = setInterval(() => this.poll(), this.pollMs);
-    setImmediate(() => this.poll());
+    this.pollTimer = setInterval(() => { void this.poll(); }, this.pollMs);
+    setImmediate(() => { void this.poll(); });
   }
 
   stop(): void {
@@ -219,6 +243,8 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.worker?.terminate();
+    this.worker = null;
   }
 
   /** Max mtime across the db and its -wal sidecar; 0 if the db is absent. WAL writes
@@ -231,35 +257,27 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
     return m;
   }
 
-  private poll(): void {
+  // A poll still running when the next tick fires is skipped, so a slow disk
+  // makes polls sparser instead of stacking them on the daemon loop.
+  private async poll(): Promise<void> {
+    if (this.pollInFlight) return;
     const mtime = this.storeMtime();
     if (mtime === 0) return; // no db yet
-    // Skip the query when the store hasn't been touched since the last poll — but
-    // never skip the FIRST poll of this run (lastMtime 0), which must reconcile the
-    // persisted watermark against whatever changed while the daemon was down.
     if (this.lastMtime !== 0 && mtime === this.lastMtime) return;
+    this.pollInFlight = true;
     this.lastMtime = mtime;
-
-    const db = openDb(this.dbPath);
-    if (!db) return;
     try {
-      const globalMax = db.query<{ mx: number | null }, []>(
-        "SELECT MAX(mx) AS mx FROM (SELECT MAX(time_updated) mx FROM message UNION ALL SELECT MAX(time_updated) FROM part UNION ALL SELECT MAX(time_updated) FROM session)",
-      ).get()?.mx ?? 0;
-
+      const { globalMax, sessionIds } = await this.queryDelta(this.watermark);
+      // Absorb any wal touch our own open caused so the next tick does not
+      // treat it as a real write and query again.
+      this.lastMtime = this.storeMtime() || mtime;
+      pollMtimes().set(this.dbPath, this.lastMtime);
       if (globalMax <= this.watermark) return;
-
-      const changed = db.query<{ sid: string }, [number, number, number]>(
-        "SELECT DISTINCT sid FROM (" +
-          "SELECT session_id AS sid, time_updated AS t FROM message WHERE time_updated > ?1 " +
-          "UNION ALL SELECT session_id, time_updated FROM part WHERE time_updated > ?2 " +
-          "UNION ALL SELECT id, time_updated FROM session WHERE time_updated > ?3)",
-      ).all(this.watermark, this.watermark, this.watermark);
 
       this.watermark = globalMax;
       setPosition(this.dbPath, globalMax); // survive a restart at this high-water mark
       this.errorCount = 0;
-      for (const { sid } of changed) {
+      for (const sid of sessionIds) {
         // The `id` column is externally writable — any process can INSERT a session
         // row. A `startsWith("ses_")` check let `ses_; curl x|sh #` through, and that
         // string would become the convex session_id and later an unescaped resume
@@ -278,9 +296,46 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
         const suffix = this.errorCount === OpencodeStorageWatcher.ERROR_SUPPRESS_THRESHOLD ? " (suppressing further errors)" : "";
         this.emit("error", new Error(`opencode DB poll failed: ${err instanceof Error ? err.message : String(err)}${suffix}`));
       }
+      // Leave lastMtime un-persisted on failure so the next tick retries.
+      this.lastMtime = 0;
     } finally {
-      db.close();
+      this.pollInFlight = false;
     }
+  }
+
+  private queryDelta(watermark: number): Promise<OpencodeDelta> {
+    if (this.injectedQuery) return Promise.resolve(this.injectedQuery(this.dbPath, watermark));
+    return this.queryDeltaInWorker(watermark);
+  }
+
+  private queryDeltaInWorker(watermark: number): Promise<OpencodeDelta> {
+    const worker = this.ensureWorker();
+    const id = ++this.workerSeq;
+    return new Promise((resolve, reject) => {
+      const onMessage = (event: MessageEvent) => {
+        const msg = event.data;
+        if (!msg || msg.id !== id) return;
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+        if (msg.ok) resolve({ globalMax: msg.globalMax, sessionIds: msg.sessionIds });
+        else reject(new Error(msg.error || "opencode poll worker failed"));
+      };
+      const onError = (err: ErrorEvent) => {
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+        this.worker = null;
+        reject(err.error instanceof Error ? err.error : new Error(String(err.message)));
+      };
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+      worker.postMessage({ id, dbPath: this.dbPath, watermark });
+    });
+  }
+
+  private ensureWorker(): Worker {
+    if (this.worker) return this.worker;
+    this.worker = new Worker(new URL("./opencodeStorage.worker.ts", import.meta.url).href);
+    return this.worker;
   }
 
   private emitSession(sessionId: string): void {
