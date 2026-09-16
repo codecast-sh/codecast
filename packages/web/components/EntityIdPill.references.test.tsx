@@ -577,3 +577,34 @@ describe("pull request references", () => {
     expect(html).toContain("see #3263 and PR 3247");
   });
 });
+
+describe("page-load bar", () => {
+  // A same-origin <a> starts the yellow top bar (NavigationProgress). A click
+  // that opens the reveal or takes a session onto the stage never navigates,
+  // so the pill must opt out. Without a host, a task/plan/doc pill still does.
+  test("a session pill opts out: a click takes the stage, it does not route", () => {
+    const html = render("see jx7b7mx");
+    expect(html).toContain("data-no-progress");
+  });
+
+  test("a task pill without a reveal host still navigates, so the bar may start", () => {
+    const html = render("see ct-38940");
+    expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
+    expect(html).not.toContain("data-no-progress");
+  });
+
+  test("a task pill inside a reveal host opts out: a click opens the band", async () => {
+    const { RevealHostCtx } = await import("../lib/revealHost");
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <RevealHostCtx.Provider value={{ hostKey: "msg" }}>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
+            see ct-38940
+          </ReactMarkdown>
+        </RevealHostCtx.Provider>
+      </MemoryRouter>,
+    );
+    expect(html).toContain("data-no-progress");
+    expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
+  });
+});

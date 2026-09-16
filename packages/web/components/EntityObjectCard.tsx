@@ -623,6 +623,7 @@ export function ObjectCardFrame({
             <Link
               href={href}
               onClick={openObject}
+              {...(onOpen ? { "data-no-progress": "" } : {})}
               title={openLabel}
               className={`rounded p-0.5 text-sol-text-dim ${accent.hoverText}`}
             >
@@ -655,6 +656,7 @@ export function ObjectCardFrame({
             <Link
               href={href}
               onClick={openObject}
+              {...(onOpen ? { "data-no-progress": "" } : {})}
               title={openLabel}
               className={`rounded p-0.5 text-sol-text-dim opacity-0 transition-opacity ${accent.hoverText} focus-visible:opacity-100 group-hover/card:opacity-100`}
             >
@@ -705,6 +707,7 @@ export function ObjectCardFrame({
                   <Link
                     href={href}
                     onClick={openObject}
+                    {...(onOpen ? { "data-no-progress": "" } : {})}
                     className={`inline-flex items-center gap-0.5 text-[10px] ${accent.text} no-underline hover:underline`}
                   >
                     {openLabel}
@@ -768,7 +771,7 @@ export function EntityObjectCard({ refId, count, unresolved }: {
       count={count}
       ariaLabel={`${TYPE_LABEL[type]}: ${title ?? rawId}`}
       href={href}
-      onOpen={openObject}
+      onOpen={isSession ? openObject : undefined}
       openLabel={openLabel}
       footerId={(isRepoObject ? repoObjectRefOf(type, entity) : null) ?? entity?.short_id ?? rawId}
       resolved={!!entity}
