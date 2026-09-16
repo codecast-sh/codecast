@@ -106,3 +106,20 @@ test("opening a reference in another host closes the first; a host inside the ba
   expect(content.querySelector("button.b")?.getAttribute("aria-pressed")).toBe("true");
   React.act(() => root!.render(null));
 });
+
+test("wheel on the hatch lane scrolls the conversation; wheel in the frame scrolls the object", () => {
+  const { revealWheelGoesToParent } = mod;
+  const band = document.createElement("div");
+  band.className = "object-reveal";
+  const lane = document.createElement("div");
+  lane.className = "object-reveal__lane";
+  const frame = document.createElement("div");
+  frame.className = "object-reveal__frame";
+  const body = document.createElement("div");
+  body.className = "object-reveal__body";
+  frame.appendChild(body);
+  band.append(lane, frame);
+  expect(revealWheelGoesToParent(lane, band)).toBe(true);
+  expect(revealWheelGoesToParent(body, band)).toBe(false);
+  expect(revealWheelGoesToParent(band, band)).toBe(true);
+});

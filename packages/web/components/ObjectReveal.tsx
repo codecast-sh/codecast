@@ -1,8 +1,8 @@
 "use client";
 // The inline reveal: a rich object reference (a pill in prose, a shared-object
 // card) opens its FULL page right here in the conversation — a full-bleed band
-// spanning the whole scrolling surface, with the object's real page inside.
-// Reading the object no longer means leaving.
+// on a crosshatch ground, spanning the whole scrolling surface, with the
+// object's real page inside. Reading the object no longer means leaving.
 //
 // Two halves. RevealHost wraps a rendered markdown body: it renders its
 // children untouched (a fragment, so a message body's blocks stay direct
@@ -122,6 +122,15 @@ function revealBounds(el: HTMLElement): HTMLElement | null {
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
+}
+
+/** The hatch beside the framed page is the conversation-scroll lane. Wheel
+ *  inside the frame reads the object; wheel on the gutter (or its lanes)
+ *  moves the parent thread. */
+export function revealWheelGoesToParent(target: EventTarget | null, _band?: HTMLElement): boolean {
+  const start = target instanceof Element ? target : null;
+  if (!start) return true;
+  return !start.closest(".object-reveal__frame");
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;
@@ -290,12 +299,29 @@ function useOpenMotion(ref: React.RefObject<HTMLDivElement | null>, reveal: Open
   }, [ref, reveal]);
 }
 
+function useRevealWheel(ref: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!revealWheelGoesToParent(e.target, el)) return;
+      const bounds = revealBounds(el);
+      if (!bounds) return;
+      e.preventDefault();
+      bounds.scrollTop += e.deltaY / cssZoomOf(bounds);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+  }, [ref]);
+}
+
 function RevealBand({ reveal }: { reveal: OpenReveal }) {
   const { target } = reveal;
   const ref = useRef<HTMLDivElement>(null);
   useFullBleed(ref);
   useScrollHold(ref, reveal);
   useOpenMotion(ref, reveal);
+  useRevealWheel(ref);
   // Closing folds the band back into the line it grew from, then brings the
   // reference that opened it back into view if the read had scrolled past it
   // — so a toggle lands the reader where they started, not on whatever the
@@ -385,6 +411,8 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       onClick={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
     >
+      <div className="object-reveal__lane object-reveal__lane--left" title="Scroll the conversation" />
+      <div className="object-reveal__lane object-reveal__lane--right" title="Scroll the conversation" />
       <div className="object-reveal__frame">
       <div
         className="object-reveal__strip"

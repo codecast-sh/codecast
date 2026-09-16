@@ -19,11 +19,18 @@ async function verifyStaffingPane() {
   mock.module("../anchor/AnchorConversation", () => ({ AnchorConversation: ({ conversationId }: { conversationId: string }) => React.createElement("div", { "data-thread": conversationId }, "thread") }));
   mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => React.createElement("div", { "data-md": true }, content) }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
+  // The author pill (S15) reads the store and the linked session navigation;
+  // its own mount test covers it. Here it is the props the pane hands it.
+  mock.module("./ProposalAuthorPill", () => ({
+    ProposalAuthorPill: ({ author, onOpenSession }: any) => author.kind === "role"
+      ? React.createElement("a", { href: `/org/${author.short_id}`, "data-proposal-author": "role" }, author.name)
+      : React.createElement("button", { type: "button", "data-proposal-author": author.kind, onClick: () => onOpenSession?.(author.id) }, author.name ?? author.id),
+  }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { StaffingPane } = await import("./StaffingPane");
   const { ORG_FIXTURE } = await import("./orgFixture");
-  const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } = await import("./orgStaffingFixture");
+  const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_SESSION_PROPOSAL, ORG_STAFFING_FIXTURE_BIG_PROPOSAL } = await import("./orgStaffingFixture");
   const { findChiefOfStaff } = await import("./staffingModel");
   const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
   const calls: string[] = [];
@@ -36,7 +43,7 @@ async function verifyStaffingPane() {
     now: Date.now(),
     onSelectChange: (id: string | null) => calls.push(`select:${id}`),
     onDecide: (id: string, verdict: string, edits?: Record<string, unknown>) => calls.push(`decide:${id}:${verdict}${edits ? ":" + JSON.stringify(edits) : ""}`),
-    onAcceptAll: (id: string) => calls.push(`acceptAll:${id}`),
+    onAcceptAll: (id: string, opts?: { kinds?: string[] }) => calls.push(`acceptAll:${id}${opts?.kinds ? ":" + opts.kinds.join(",") : ""}`),
     onEditRole: (c: any) => calls.push(`editRole:${c._id}`),
     onSelectNode: (id: string) => calls.push(`node:${id}`),
     onOpenSession: (id: string) => calls.push(`open:${id}`),
@@ -59,11 +66,26 @@ async function verifyStaffingPane() {
   await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
   assert.equal(q("[data-staffing-mode]")!.getAttribute("data-staffing-mode"), "proposal");
   assert.match(text(), /Split growth, own the platform work, budget the reviews/);
-  assert.equal(q("[data-progress]")!.textContent, "2 of 6 decided");
+  assert.equal(q("[data-progress]")!.textContent, "2 of 8 decided");
   assert.match(text(), /Chief of Staff/);
-  assert.equal(q<HTMLAnchorElement>('a[href="/org/or-9"]')?.textContent, "Chief of Staff");
-  assert.deepEqual(qa("[data-change-group]").map((g) => g.getAttribute("data-change-group")), ["projects", "role", "project_meta", "budget", "routine"]);
-  assert.equal(qa("[data-change-row]").length, 6);
+  // S15: the author is a pill in the header, one click to its scope page.
+  assert.equal(q<HTMLAnchorElement>('[data-proposal-author="role"]')?.getAttribute("href"), "/org/or-9");
+  assert.equal(q<HTMLAnchorElement>('[data-proposal-author="role"]')?.textContent, "Chief of Staff");
+  // S9: the records group comes first, its header counts the records, each
+  // row carries the evidence line even unselected.
+  assert.deepEqual(qa("[data-change-group]").map((g) => g.getAttribute("data-change-group")), ["sync", "projects", "role", "project_meta", "budget", "routine"]);
+  assert.equal(qa("[data-change-row]").length, 8);
+  assert.match(q("[data-sync-header]")!.textContent!, /Bring records in line/);
+  assert.equal(q("[data-sync-count]")!.textContent, "2 records");
+  assert.equal(qa("[data-sync-evidence]").length, 2);
+  assert.match(q('[data-change-row="fixture-change-7"] [data-sync-evidence]')!.textContent!, /evidenceEvery task closed 19 days ago/);
+  assert.equal(qa('[data-change-group="sync"] button[aria-label="Accept"]').length, 2);
+  assert.equal(qa('[data-change-group="sync"] button[aria-label="Edit"]').length, 2);
+  assert.equal(qa('[data-change-group="sync"] button[aria-label="Skip"]').length, 2);
+  // S10: a role change carries its tenure as a chip.
+  assert.equal(q('[data-change-row="fixture-change-1"] [data-tenure]')!.getAttribute("data-tenure"), "standing");
+  assert.equal(q('[data-change-row="fixture-change-2"] [data-tenure]')!.textContent, "program · ends with pl-88, then review");
+  assert.equal(q('[data-change-row="fixture-change-4"] [data-tenure]'), null);
   // Changes come before flags: the pane's job here is deciding.
   const order = [...document.querySelectorAll("[data-change-row], [data-flag]")].map((el) => el.hasAttribute("data-flag") ? "flag" : "change");
   assert.equal(order.indexOf("flag") > order.lastIndexOf("change"), true, "flags render after the change list");
@@ -72,9 +94,9 @@ async function verifyStaffingPane() {
   assert.deepEqual(qa("[data-flag]").map((f) => f.getAttribute("data-flag")), ["overloaded", "cap_hit", "review_stall"]);
   assert.match(text(), /Flags this proposal addresses/);
   assert.equal(q("[data-rationale]"), null);
-  assert.match(text(), /Accept all remaining \(4\)/);
+  assert.match(text(), /Accept all remaining \(6\)/);
   // Only decidable rows carry the action trio.
-  assert.equal(qa('[data-change-status="proposed"] button[aria-label="Accept"]').length, 4);
+  assert.equal(qa('[data-change-status="proposed"] button[aria-label="Accept"]').length, 6);
   assert.equal(qa('[data-change-status="accepted"] button[aria-label="Accept"]').length, 0);
   assert.equal(q("[data-thread]")!.getAttribute("data-thread"), "fixture-chief-conv");
   // No kicker over the serif title: the mode sits in the meta line.
@@ -84,8 +106,14 @@ async function verifyStaffingPane() {
   const strip = q('[role="group"][aria-label="Changes, one block each"]');
   assert.ok(strip);
   assert.equal(strip!.getAttribute("aria-hidden"), null);
-  assert.equal(strip!.querySelectorAll("button[aria-label]").length, 6);
+  assert.equal(strip!.querySelectorAll("button[aria-label]").length, 8);
   assert.match(strip!.querySelector("button")!.getAttribute("aria-label")!, /^proposed · Create role/);
+  // The session author pill opens the conversation through the pane's navigation.
+  await render({ proposal: ORG_STAFFING_FIXTURE_SESSION_PROPOSAL, proposals: [ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_SESSION_PROPOSAL], selectedChangeId: null });
+  assert.equal(q('[data-proposal-author="session"]')!.textContent, "Org review, September");
+  await act(async () => q<HTMLButtonElement>('[data-proposal-author="session"]')!.click());
+  assert.equal(calls.pop(), "open:fixture-conv-review");
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
 
   // A flag on a role focuses its node.
   await act(async () => (qa('[data-flag="overloaded"]')[0] as HTMLButtonElement).click());
@@ -140,17 +168,69 @@ async function verifyStaffingPane() {
   await act(async () => q("[data-edit-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   assert.equal(calls.pop(), 'decide:fixture-change-4:accept:{"caps":{"tokens_per_day":600000}}');
 
+  // Edit on a record change (S9): the status is a closed set, the evidence a line.
+  await act(async () => qa('[data-change-row="fixture-change-7"] button[aria-label="Edit"]')[0].click());
+  assert.equal(calls.pop(), "select:fixture-change-7");
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-7" });
+  const statusSelect = q<HTMLSelectElement>('[data-edit-form] select[data-edit-select="status"]');
+  assert.ok(statusSelect, "record status select");
+  assert.deepEqual([...statusSelect!.options].map((o) => o.value), ["done", "abandoned", "active"]);
+  await act(async () => {
+    statusSelect!.value = "abandoned";
+    statusSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () => q("[data-edit-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  assert.equal(calls.pop(), 'decide:fixture-change-7:accept:{"status":"abandoned"}');
+
   // Accept all is a two step: confirm then the action; the copy names the real apply order.
-  await act(async () => button("Accept all remaining (4)").click());
-  assert.match(text(), /projects, filings, roles, charters, then moves, scope, budget, trust, routines, adopt and retire/);
-  await act(async () => button("Accept 4").click());
+  await act(async () => button("Accept all remaining (6)").click());
+  assert.match(text(), /the records first, then projects, filings, roles, charters, then moves, scope, budget, trust, routines, adopt and retire/);
+  await act(async () => button("Accept 6").click());
   assert.equal(calls.pop(), "acceptAll:fixture-proposal-7");
+
+  // ── a records group at scale (S9): one card, Accept group, Review each ──
+  await render({ proposal: ORG_STAFFING_FIXTURE_BIG_PROPOSAL, proposals: [ORG_STAFFING_FIXTURE_BIG_PROPOSAL], selectedChangeId: null });
+  assert.equal(q("[data-progress]")!.textContent, "0 of 129 decided");
+  assert.equal(q("[data-sync-count]")!.textContent, "111 records");
+  assert.ok(q("[data-sync-card]"), "a group of 111 renders as one card");
+  assert.equal(qa('[data-change-group="sync"] [data-change-row]').length, 0, "no rows behind the card");
+  assert.equal(q("[data-sync-count-line]")!.textContent, "103 tasks, 8 plans");
+  assert.equal(qa("[data-sync-top-row]").length, 3);
+  assert.match(qa("[data-sync-top-row]")[0].textContent!, /Mark plan pl-501 done · closes 4 tasks/);
+  assert.match(q("[data-sync-evidence-summary]")!.textContent!, /^evidence\d+ [a-z ]+· \d+ /);
+  assert.match(q("[data-sync-evidence-summary]")!.textContent!, /\d+ commits landed/);
+  // The rest of the proposal is still rows.
+  assert.equal(qa('[data-change-group="file"] [data-change-row]').length, 10);
+  // A top line focuses that change.
+  await act(async () => qa("[data-sync-top-row]")[1].click());
+  assert.equal(calls.pop(), "select:fixture-big-2");
+  // Accept group: a confirm, then accept all narrowed to the record kinds.
+  await act(async () => q<HTMLButtonElement>("[data-sync-accept-group]")!.click());
+  assert.match(q("[data-sync-confirm]")!.textContent!, /Bring the 111 remaining records in line now: 103 tasks, 8 plans/);
+  await act(async () => button("Accept 111").click());
+  assert.equal(calls.pop(), "acceptAll:fixture-proposal-big:plan_status,task_status,project_status");
+  // Review each: the rows, carried tasks nested under their plan, a way back.
+  await act(async () => q<HTMLButtonElement>("[data-sync-review-each]")!.click());
+  assert.equal(q("[data-sync-card]"), null);
+  assert.equal(qa('[data-change-group="sync"] [data-change-row]').length, 111 - 9, "nine carried tasks nest instead of standing alone");
+  assert.equal(q('[data-change-row="fixture-big-1"] [data-nested-tasks]')!.getAttribute("data-nested-tasks"), "4");
+  assert.equal(qa('[data-change-row="fixture-big-1"] [data-nested-task]').length, 3, "three shown unselected, the rest counted");
+  assert.match(q('[data-change-row="fixture-big-1"] [data-nested-tasks]')!.textContent!, /and 1 more/);
+  assert.equal(q('[data-change-row="fixture-big-9"]'), null, "ct-9001's own row is gone");
+  await render({ proposal: ORG_STAFFING_FIXTURE_BIG_PROPOSAL, proposals: [ORG_STAFFING_FIXTURE_BIG_PROPOSAL], selectedChangeId: "fixture-big-1" });
+  assert.equal(qa('[data-change-row="fixture-big-1"] [data-nested-task]').length, 4, "selected shows every carried task");
+  await act(async () => q<HTMLButtonElement>("[data-sync-collapse]")!.click());
+  assert.ok(q("[data-sync-card]"), "back to the summary");
+  // The small group of the ordinary fixture stays rows.
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
+  assert.equal(q("[data-sync-card]"), null);
+  assert.equal(qa('[data-change-group="sync"] [data-change-row]').length, 2);
 
   // ── a failed change stays decidable (the server's DECIDABLE set) ──
   const withFailed = { ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c._id === "fixture-change-4" ? { ...c, status: "failed" as const, applied_note: "handle growth is taken" } : c) };
   await render({ proposal: withFailed, selectedChangeId: null });
-  assert.equal(q("[data-progress]")!.textContent, "2 of 6 decided", "a failed row is not decided");
-  assert.match(text(), /Accept all remaining \(4\)/);
+  assert.equal(q("[data-progress]")!.textContent, "2 of 8 decided", "a failed row is not decided");
+  assert.match(text(), /Accept all remaining \(6\)/);
   assert.equal(qa('[data-change-status="failed"] button[aria-label="Accept"]').length, 1);
   assert.equal(q('[data-change-status="failed"] [data-failed-note]')!.textContent, "handle growth is taken");
   await act(async () => qa('[data-change-row="fixture-change-4"] button[aria-label="Skip"]')[0].click());

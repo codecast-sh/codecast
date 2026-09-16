@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Penguin">
+  <!-- tones: ground #a0ccbd = sol-cyan 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-penguin"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#a0ccbd"/>
+  <g clip-path="url(#c-penguin)">
+  <path d="M26 40C26 27 36 19 48 19C60 19 70 27 70 40C78 58 86 78 88 96L8 96C10 78 18 58 26 40Z" fill="#586e75"/>
+  <ellipse cx="38.5" cy="40" rx="9.5" ry="11" fill="#fdf6e3"/><ellipse cx="57.5" cy="40" rx="9.5" ry="11" fill="#fdf6e3"/>
+  <path d="M28 96C28 72 36 56 48 56C60 56 68 72 68 96Z" fill="#fdf6e3"/>
+  <circle cx="38" cy="40" r="2.8" fill="#002b36"/><circle cx="58" cy="40" r="2.8" fill="#002b36"/>
+  <path d="M41 46L55 46L48 57Z" fill="#cb4b16"/>
+  </g>
+</svg>

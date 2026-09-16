@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Seal">
+  <!-- tones: ground #9ec3d4 = sol-blue 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-seal"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#9ec3d4"/>
+  <g clip-path="url(#c-seal)">
+  <path d="M4 96C8 76 26 70 48 70C70 70 88 76 92 96Z" fill="#586e75"/>
+  <circle cx="48" cy="48" r="30" fill="#586e75"/>
+  <circle cx="41" cy="62" r="8.5" fill="#fdf6e3"/><circle cx="55" cy="62" r="8.5" fill="#fdf6e3"/>
+  <ellipse cx="48" cy="57" rx="4.5" ry="3" fill="#002b36"/>
+  <circle cx="36" cy="44" r="4.6" fill="#002b36"/><circle cx="60" cy="44" r="4.6" fill="#002b36"/>
+  <g fill="#002b36"><circle cx="35" cy="60" r="1.1"/><circle cx="32" cy="64" r="1.1"/><circle cx="61" cy="60" r="1.1"/><circle cx="64" cy="64" r="1.1"/></g>
+  </g>
+</svg>

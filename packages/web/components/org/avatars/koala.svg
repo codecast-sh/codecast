@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Koala">
+  <!-- tones: ground #d8b88d = sol-amber 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-koala"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#d8b88d"/>
+  <g clip-path="url(#c-koala)">
+  <path d="M8 96C12 82 30 78 48 78C66 78 84 82 88 96Z" fill="#586e75"/>
+  <circle cx="20" cy="40" r="16" fill="#586e75"/><circle cx="76" cy="40" r="16" fill="#586e75"/>
+  <circle cx="19" cy="41" r="8.5" fill="#fdf6e3"/><circle cx="77" cy="41" r="8.5" fill="#fdf6e3"/>
+  <circle cx="48" cy="50" r="26" fill="#586e75"/>
+  <ellipse cx="48" cy="58" rx="6.5" ry="9.5" fill="#002b36"/>
+  <circle cx="37" cy="46" r="2.5" fill="#002b36"/><circle cx="59" cy="46" r="2.5" fill="#002b36"/>
+  </g>
+</svg>

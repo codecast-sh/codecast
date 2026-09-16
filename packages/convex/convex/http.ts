@@ -4148,7 +4148,9 @@ cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as
 // Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
 // the proposal lifecycle. Decide, accept-all and withdraw refuse a session
 // caller on the server; the CLI passes from_session as on every org verb.
-cliRoute("/cli/org/health", async (ctx, body) => ctx.runQuery((api as any).org.health, body));
+// The fanned action (org-staffing.md S3): the decision ladder in its own
+// execution budget, so `cast org health` answers on a large workspace.
+cliRoute("/cli/org/health", async (ctx, body) => ctx.runAction((api as any).orgHealth.healthReport, body));
 cliRoute("/cli/org/propose", async (ctx, body) => ctx.runMutation((api as any).orgProposals.create, body));
 cliRoute("/cli/org/proposals", async (ctx, body) => ctx.runQuery((api as any).orgProposals.list, body));
 cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).orgProposals.get, body));
@@ -4236,6 +4238,12 @@ cliRoute("/cli/chat/slack/update", async (ctx, body) => {
 });
 cliRoute("/cli/chat/slack/unlink", async (ctx, body) => {
   return await ctx.runMutation(api.slackSync.unlinkChannel, body);
+});
+cliRoute("/cli/chat/slack/people", async (ctx, body) => {
+  return await ctx.runQuery(api.slackSync.listSlackPeople, body);
+});
+cliRoute("/cli/chat/slack/map", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.mapSlackPerson, body);
 });
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }

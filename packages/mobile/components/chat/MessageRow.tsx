@@ -48,7 +48,7 @@ export type ChatAuthorLite = {
   session?: { agentType?: string; via?: string };
   /** The author is a Slack person or app the bridge relayed (the row carries
    *  `external_author`). An app with no face gets the Slack mark as its tile. */
-  slack?: { isBot: boolean };
+  slack?: { isBot: boolean; /** Their Slack user id — the grouping identity (shared authorGroupKey). */ userId?: string };
 };
 
 export type MobileChatMessage = {
@@ -101,7 +101,7 @@ function clock(ts: number): string {
  *  the bridge identity behind `user_id` is never shown (web: slackAuthorFor). */
 export function slackFieldsFor(row: {
   user_id: unknown;
-  external?: { provider: string; direction: 'inbound' | 'outbound'; permalink?: string } | null;
+  external?: { provider: string; direction: 'inbound' | 'outbound'; permalink?: string; user?: string } | null;
   external_author?: { name: string; avatar_url?: string; is_bot?: boolean } | null;
 }): { author?: ChatAuthorLite; slack?: MobileChatMessage['slack'] } {
   const ext = row.external_author;
@@ -112,7 +112,7 @@ export function slackFieldsFor(row: {
           name: ext.name || 'Someone',
           avatarUrl: ext.avatar_url || undefined,
           isAgent: false,
-          slack: { isBot: !!ext.is_bot },
+          slack: { isBot: !!ext.is_bot, userId: row.external?.user || undefined },
         }
       : undefined,
     slack: row.external?.provider === 'slack'

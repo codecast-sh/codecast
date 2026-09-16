@@ -16,7 +16,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowUpRight, MousePointerClick, RotateCw } from "lucide-react";
+import { ArrowUpRight, RotateCw } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -25,6 +25,7 @@ import { deviceDisplayName } from "../../DeviceBadge";
 import type { SessionMachine } from "../../tmuxAttach";
 import { missingTabMessage, type BrowserStreamReport } from "../../../lib/browserWatch";
 import { BrowserStream } from "../BrowserStream";
+import { WatchAddress, WheelButton } from "../watchControls";
 import { useBrowserTabActions } from "../../../hooks/useBrowserTabActions";
 import type { BackendProps, PaneStripAction } from "./types";
 
@@ -109,24 +110,16 @@ export function StreamBackend({
 
   useWatchEffect(() => onState(paneState), [paneState, onState]);
 
-  // The strip's verbs. The wheel is the one people come here for, so it keeps
-  // the pane's `is-on` treatment; the others are the plain panel buttons.
+  // The strip's verbs: reconnect and raise the real tab. The wheel is not one
+  // of them: it is drawn over the frame with its label and state (the shared
+  // WheelButton), because a handoff should read the same here as in the dock,
+  // and the strip only has room for an icon.
   const live = status.kind === "live";
   const offerReopen = !!failed?.tabGone && !!tabUrl;
   const busy = tabActions.state.kind === "busy";
   useWatchEffect(() => {
     if (!onActions) return;
     const actions: PaneStripAction[] = [];
-    if (live && report.controlAvailable) {
-      actions.push({
-        icon: <MousePointerClick className="w-3 h-3" />,
-        label: control
-          ? "Hand the page back to the agent (Esc)"
-          : "Take the wheel: your clicks and typing go to this page",
-        active: control,
-        onClick: () => setControl((v) => !v),
-      });
-    }
     actions.push({
       icon: <RotateCw className="w-3 h-3" />,
       label: failed?.capped ? "Resume the stream" : "Reconnect the stream",
@@ -149,9 +142,6 @@ export function StreamBackend({
     return () => onActions([]);
   }, [
     onActions,
-    live,
-    report.controlAvailable,
-    control,
     failed?.capped,
     offerReopen,
     tabUrl,
@@ -177,18 +167,31 @@ export function StreamBackend({
         onReleaseControl={() => setControl(false)}
       />
       {live && (
-        <span
-          className="absolute top-2 left-2 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-full bg-sol-bg/75 border border-sol-border/40 text-[9px] font-mono tracking-wider text-sol-text-dim backdrop-blur-sm"
-          title={
-            machineName
-              ? `Streaming from ${machineName}, the machine this agent's browser runs on`
-              : "Streaming from the machine this agent's browser runs on"
-          }
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-red animate-pulse motion-reduce:animate-none" />
-          <span className="text-sol-red">LIVE</span>
-          {machineName && <span className="max-w-[120px] truncate">{machineName}</span>}
-        </span>
+        // One row over the frame: the status line on the left, the wheel on
+        // the right. The row itself lets pointer events through to the
+        // control surface; only its two children catch them.
+        <div className="absolute top-2 left-2 right-2 flex items-center gap-2 pointer-events-none">
+          <span
+            className="min-w-0 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-full bg-sol-bg/75 border border-sol-border/40 text-[9px] font-mono tracking-wider text-sol-text-dim backdrop-blur-sm pointer-events-auto"
+            title={
+              machineName
+                ? `Streaming from ${machineName}, the machine this agent's browser runs on`
+                : "Streaming from the machine this agent's browser runs on"
+            }
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-sol-red animate-pulse motion-reduce:animate-none flex-shrink-0" />
+            <span className="text-sol-red">LIVE</span>
+            {machineName && <span className="max-w-[120px] truncate">{machineName}</span>}
+            {/* The strip above already shows the address; this line only picks it
+                up once the agent navigates, so the flash has somewhere to land. */}
+            {report.nav && tabUrl && <WatchAddress url={tabUrl} nav={report.nav} className="min-w-0 tracking-normal" />}
+          </span>
+          {report.controlAvailable && (
+            <span className="ml-auto flex-shrink-0 pointer-events-auto">
+              <WheelButton on={control} onToggle={() => setControl((v) => !v)} floating />
+            </span>
+          )}
+        </div>
       )}
       {tabActions.state.kind === "note" && (
         <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-[10px] font-mono text-sol-red/80">

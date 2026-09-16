@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Goat">
+  <!-- tones: ground #d7c280 = sol-yellow 40% over sol-bg-alt; body #586e75 = sol-slate 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-goat"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#d7c280"/>
+  <g clip-path="url(#c-goat)">
+  <path d="M8 96C12 84 30 80 48 80C66 80 84 84 88 96Z" fill="#586e75"/>
+  <path d="M36 32C30 20 32 6 44 2C36 8 36 20 42 30Z" fill="#002b36"/><path d="M60 32C66 20 64 6 52 2C60 8 60 20 54 30Z" fill="#002b36"/>
+  <ellipse cx="26" cy="46" rx="6" ry="11" transform="rotate(20 26 46)" fill="#586e75"/><ellipse cx="70" cy="46" rx="6" ry="11" transform="rotate(-20 70 46)" fill="#586e75"/>
+  <path d="M30 36C28 58 38 78 48 82C58 78 68 58 66 36C60 27 52 26 48 26C44 26 36 27 30 36Z" fill="#586e75"/>
+  <path d="M42 80L48 94L54 80Z" fill="#fdf6e3"/>
+  <ellipse cx="48" cy="70" rx="9" ry="8" fill="#fdf6e3"/>
+  <ellipse cx="48" cy="75" rx="4.5" ry="2.6" fill="#002b36"/>
+  <circle cx="39" cy="50" r="2.6" fill="#002b36"/><circle cx="57" cy="50" r="2.6" fill="#002b36"/>
+  </g>
+</svg>

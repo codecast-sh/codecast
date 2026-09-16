@@ -57,6 +57,12 @@ export const BATCH_SLACK_MS = 25_000;
 // the oldest pending push has waited this long the whole batch escalates anyway
 // — the hold is a wait, never a black hole.
 export const MAX_MACHINE_HOLD_MS = 60 * 60_000;
+// A DM / @you / @here is addressed to the person. Machine-wide presence would
+// hold those until they walk away from the Mac (or an hour), so a chat they
+// missed in the toast never reached the phone. These types take the one
+// 3-minute client hold, then escalate — reading the channel still cancels
+// the outbox (chat.cancelChatPushes).
+const ADDRESSED_CHAT = new Set(["chat_mention", "chat_dm", "chat_here"]);
 
 export { isDesktopActivePresence, isMachineActivePresence } from "./presencePolicy";
 export type { MachineDevice, PresenceRow } from "./presencePolicy";
@@ -430,7 +436,13 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
     // walk away instead of escalating on a timer), or the user came back to the
     // desktop while this sat in the away debounce (one escalating hold — the
     // shipped behavior, unchanged for opted-out users).
-    if (holdForMachine || (!row.deferred && clientActive)) {
+    //
+    // Addressed chat skips the machine hold (see ADDRESSED_CHAT): one
+    // 3-minute client hold, then the phone, instead of waiting until they
+    // walk away.
+    const holdForThis =
+      (holdForMachine && !ADDRESSED_CHAT.has(row.type)) || (!row.deferred && clientActive);
+    if (holdForThis) {
       await ctx.db.patch(row._id, {
         deferred: true,
         due_at: now + HOLD_WHILE_ACTIVE_MS,

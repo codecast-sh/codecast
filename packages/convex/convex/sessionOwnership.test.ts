@@ -225,8 +225,9 @@ describe("multi-owner session ownership", () => {
     expect(result.owners.map((o) => o.user_id).sort()).toEqual([ASHOT, JASON].sort());
     // Only the newly-added owner is notified — Jason isn't re-pinged.
     expect(result.added.map(String)).toEqual([ASHOT]);
-    // Cache tracks the FIRST-added owner.
-    expect(primaryCache(db)).toBe(JASON);
+    // Adding an owner hands the session to them (org-staffing.md S11): the
+    // cache, which the org chart files by, follows the person just added.
+    expect(primaryCache(db)).toBe(ASHOT);
   });
 
   test("adding an existing owner is idempotent and notifies nobody", async () => {
@@ -236,6 +237,28 @@ describe("multi-owner session ownership", () => {
 
     expect(ownerIds(db)).toEqual([JASON]);
     expect(result.added.map(String)).toEqual([]);
+  });
+
+  test("a noted handoff to an existing co-owner re-stamps the row and notifies again", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, ASHOT as any, { session_id: "jx1abcd", owner: "jason@union.ai", note: "first look" });
+    const before = db._tables.session_owners[0];
+    expect(before.note).toBe("first look");
+    await db.patch(before._id, { seen_at: 1 }); // Jason acknowledged the first handoff
+
+    const result = await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai", note: "please finish this" });
+
+    expect(ownerIds(db)).toEqual([JASON]);
+    expect(result.added.map(String)).toEqual([JASON]);
+    const after = db._tables.session_owners[0];
+    expect(after.note).toBe("please finish this");
+    expect(String(after.added_by)).toBe(BOT);
+    expect(after.seen_at).toBeUndefined();
+
+    // Without a note nothing changes and nobody is notified.
+    const quiet = await performAddSessionOwner({ db }, ASHOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    expect(quiet.added).toEqual([]);
+    expect(db._tables.session_owners[0].note).toBe("please finish this");
   });
 
   test("removeSessionOwner drops one owner and leaves the rest", async () => {
@@ -291,6 +314,36 @@ describe("multi-owner session ownership", () => {
     expect(result.removed.map(String).sort()).toEqual([ASHOT, JASON].sort());
     expect(ownerIds(db)).toEqual([]);
     expect(primaryCache(db)).toBeUndefined();
+  });
+
+  test("assigning a session moves its pending questions onto the new owner's stack", async () => {
+    const db = fixtures();
+    db._tables.session_decisions = [{
+      _id: "sd1",
+      conversation_id: "jx1abcd_convex_id",
+      session_id: "sess-uuid-1",
+      user_id: BOT,
+      question: "Ship it?",
+      options: [{ label: "yes" }, { label: "no" }],
+      blocking: true,
+      status: "pending",
+      asked_user_ids: [BOT],
+      holder: { kind: "user", id: BOT },
+      holder_key: `user:${BOT}`,
+      created_at: 1,
+    }];
+    db._tables.decision_inbox = [
+      { _id: "di1", decision_id: "sd1", user_id: BOT, status: "pending", created_at: 1 },
+    ];
+
+    await performSetSessionOwners({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owners: ["jason@union.ai"],
+    });
+
+    expect(db._tables.session_decisions[0].asked_user_ids).toEqual([JASON]);
+    expect(db._tables.session_decisions[0].holder).toEqual({ kind: "user", id: JASON });
+    expect(db._tables.decision_inbox.map((i: any) => i.user_id)).toEqual([JASON]);
   });
 
   test("a bot may assign owners but may never BE one", async () => {

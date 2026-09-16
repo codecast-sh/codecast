@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Stag">
+  <!-- tones: ground #d8b88d = sol-amber 40% over sol-bg-alt; body #9c3335 = sol-red 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-stag"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#d8b88d"/>
+  <g clip-path="url(#c-stag)">
+  <path d="M8 96C12 84 30 80 48 80C66 80 84 84 88 96Z" fill="#9c3335"/>
+  <g stroke="#002b36" stroke-width="3.6" stroke-linecap="round" fill="none">
+  <path d="M38 34C34 26 30 18 24 8"/><path d="M31 21C26 20 22 16 20 12"/><path d="M27 14C24 10 24 6 24 2"/>
+  <path d="M58 34C62 26 66 18 72 8"/><path d="M65 21C70 20 74 16 76 12"/><path d="M69 14C72 10 72 6 72 2"/>
+  </g>
+  <ellipse cx="26" cy="40" rx="6" ry="9" transform="rotate(-25 26 40)" fill="#9c3335"/><ellipse cx="70" cy="40" rx="6" ry="9" transform="rotate(25 70 40)" fill="#9c3335"/>
+  <path d="M30 34C30 58 38 78 48 82C58 78 66 58 66 34C62 26 54 24 48 24C42 24 34 26 30 34Z" fill="#9c3335"/>
+  <ellipse cx="48" cy="72" rx="9.5" ry="8" fill="#fdf6e3"/>
+  <ellipse cx="48" cy="78" rx="5" ry="3" fill="#002b36"/>
+  <circle cx="39" cy="48" r="2.6" fill="#002b36"/><circle cx="57" cy="48" r="2.6" fill="#002b36"/>
+  </g>
+</svg>

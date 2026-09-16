@@ -21,6 +21,7 @@ import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { ChevronUp, ChevronDown, ArrowUpRight } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). Its size follows what the ask means for the thread:
@@ -499,6 +500,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
           {whoIsAsking}
           {(askedLine || documentLink) && <div className="-mt-2 mb-3 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
+          <DecisionProposalOrigin contextMd={item.contextMd} className="mb-3 text-[12px]" size="md" />
           {question && <h1 className="text-xl text-sol-text leading-snug mb-4">{question}</h1>}
           {poll?.question.detail && (
             <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3 whitespace-pre-line">{poll.question.detail}</div>

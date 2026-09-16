@@ -17,6 +17,7 @@ import {
 } from "@codecast/shared/chat";
 import { entityMentionRegex } from "@codecast/shared/entities";
 import { emailLocalHandle } from "../chatText";
+import { CHIEF_OF_STAFF_HANDLE } from "./orgAccess";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { canSendProductMessage } from "../pendingMessages";
 
@@ -93,13 +94,35 @@ export async function resolveMentions(
  *  to that bot (a plain user mention that wakes nothing) and never to the
  *  role. Retired roles are not addressable; a paused one resolves (its wake
  *  rail holds it). */
+/** The handle the workspace anchor answered to before the chief of staff. */
+export const ANCHOR_ALIAS = "anchor";
+
 export type ChatMentions = {
   users: Id<"users">[];
   roles: Doc<"org_roles">[];
   sessions: Doc<"conversations">[];
+  /** People who exist only in the team's mirrored Slack workspace. */
+  slack: Array<{ user: string; handle: string; name: string }>;
   /** The stored shape (chat_messages.mentions). */
   refs: ChatMentionRef[];
 };
+
+// A handle nobody in codecast answers to may be somebody in the team's Slack
+// workspace (slack_users, filled as people speak in mirrored channels and by
+// the People popup). Their handle is Slack's own @name. A Slack person already
+// matched to a teammate IS that teammate: the mention reaches them here, and
+// the Slack copy pages them there through the ordinary mapping.
+async function slackPersonByHandle(
+  ctx: ReadCtx,
+  workspaceId: string,
+  handle: string,
+): Promise<Doc<"slack_users"> | null> {
+  const row = await ctx.db
+    .query("slack_users")
+    .withIndex("by_workspace_handle", (q: any) => q.eq("workspace_id", workspaceId).eq("handle", handle))
+    .first();
+  return row && !row.deleted && !row.is_bot ? row : null;
+}
 
 export async function resolveChatMentions(
   ctx: ReadCtx,
@@ -107,14 +130,28 @@ export async function resolveChatMentions(
   content: string,
   senderId: Id<"users">,
 ): Promise<ChatMentions> {
-  const empty: ChatMentions = { users: [], roles: [], sessions: [], refs: [] };
+  const empty: ChatMentions = { users: [], roles: [], sessions: [], slack: [], refs: [] };
   const handles = extractMentionHandles(content);
   if (handles.length === 0) return empty;
   let users = await resolveMentions(ctx, teamId, content, senderId);
   const roster = await teamRoster(ctx, teamId);
   const roles: Doc<"org_roles">[] = [];
   const sessions: Doc<"conversations">[] = [];
+  const slack: ChatMentions["slack"] = [];
   const seen = new Set<string>();
+  // The team's Slack workspace, looked up once and only if a handle misses
+  // everything codecast knows.
+  let workspaceId: string | null | undefined;
+  const slackWorkspace = async (): Promise<string | null> => {
+    if (workspaceId === undefined) {
+      const install = await ctx.db
+        .query("slack_installations")
+        .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+        .first();
+      workspaceId = install?.workspace_id ?? null;
+    }
+    return workspaceId;
+  };
   const roleByHandle = async (handle: string): Promise<Doc<"org_roles"> | null> =>
     (await ctx.db
       .query("org_roles")
@@ -124,8 +161,12 @@ export async function resolveChatMentions(
       .query("org_roles")
       .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", senderId).eq("handle", handle))
       .first());
-  for (const handle of handles) {
-    const person = matchHandle(roster, handle);
+  for (const written of handles) {
+    // `@anchor` names the chief of staff once one stands (org-staffing.md
+    // S12): the workspace's standing agent is the chief, and the bot named
+    // Anchor is its identity, so the mention reaches the seat, not the bot.
+    const handle = written.toLowerCase() === ANCHOR_ALIAS && (await roleByHandle(CHIEF_OF_STAFF_HANDLE)) ? CHIEF_OF_STAFF_HANDLE : written;
+    const person = matchHandle(roster, written);
     if (person && !person.is_bot) continue;
     if (SESSION_SHORT_ID_RE.test(handle)) {
       const conversation = await findConversationByAnyRefWhere(
@@ -140,12 +181,30 @@ export async function resolveChatMentions(
       continue;
     }
     const role = await roleByHandle(handle);
-    if (!role || role.status === "retired") continue;
-    // The role wins over its own bot: one handle names one party.
-    if (person) users = users.filter((id) => id.toString() !== person._id.toString());
-    if (seen.has(String(role._id))) continue;
-    seen.add(String(role._id));
-    roles.push(role);
+    if (role && role.status !== "retired") {
+      // The role wins over its own bot: one handle names one party.
+      if (person) users = users.filter((id) => id.toString() !== person._id.toString());
+      if (seen.has(String(role._id))) continue;
+      seen.add(String(role._id));
+      roles.push(role);
+      continue;
+    }
+    if (person) continue;
+    const workspace = await slackWorkspace();
+    const slackPerson = workspace ? await slackPersonByHandle(ctx, workspace, handle) : null;
+    if (!slackPerson) continue;
+    if (slackPerson.codecast_user_id) {
+      // Matched to a teammate: address the teammate. Same membership gate as
+      // resolveMentions, so a mapping to someone who has since left the team
+      // cannot page them from outside it.
+      const teammate = slackPerson.codecast_user_id;
+      const member = roster.some((u) => u._id.toString() === teammate.toString());
+      if (member && !users.some((id) => id.toString() === teammate.toString())) users.push(teammate);
+      continue;
+    }
+    if (seen.has(`slack:${slackPerson.slack_user_id}`)) continue;
+    seen.add(`slack:${slackPerson.slack_user_id}`);
+    slack.push({ user: slackPerson.slack_user_id, handle: slackPerson.handle ?? handle, name: slackPerson.name });
   }
   const refs: ChatMentionRef[] = [
     ...users.map((id) => id.toString()),
@@ -155,8 +214,9 @@ export async function resolveChatMentions(
       conversation_id: c._id.toString(),
       short_id: (c as any).short_id ?? c._id.toString().slice(0, 7),
     })),
+    ...slack.map((p) => ({ kind: "slack" as const, ...p })),
   ].slice(0, MAX_MENTIONS);
-  return { users, roles, sessions, refs };
+  return { users, roles, sessions, slack, refs };
 }
 
 /** The ids inside `@[Title id]` mentions that name a session: a short id

@@ -295,7 +295,10 @@ describe("orgProposals.withdraw by a session", () => {
 // breach recording (a query snapshot, then a small write), which extends the
 // streak of every role over the model and resets the others.
 describe("orgProposals.create records the overload streak", () => {
-  const openTask = (i: number) => ({ _id: `tasks_o${i}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: `ct-o${i}`, title: `t${i}`, task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: NOW });
+  // Load, not ledger: four hands that reported blocked this week are four
+  // stalls the role must unstick, past the model's three. Twenty six open
+  // tasks would be a wide ledger, which never records a breach.
+  const openTask = (i: number) => ({ _id: `tasks_o${i}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: `ct-o${i}`, title: `t${i}`, task_type: "task", status: "in_progress", execution_status: "blocked", priority: "medium", created_at: 1, updated_at: NOW });
   test("a review schedules the recording; a request does not", async () => {
     const scheduled: any[] = [];
     const ctx = { ...ctxOf(fixtures()), scheduler: { runAfter: async (_delay: number, _fn: unknown, args: unknown) => { scheduled.push(args); } } };
@@ -305,7 +308,7 @@ describe("orgProposals.create records the overload streak", () => {
     expect(scheduled).toHaveLength(1);
   });
   test("the snapshot extends a flagged role's streak and resets an unflagged one; the write patches only what changed", async () => {
-    const db = fixtures({ tasks: Array.from({ length: 26 }, (_, i) => openTask(i)) });
+    const db = fixtures({ tasks: Array.from({ length: 4 }, (_, i) => openTask(i)) });
     const ctx = ctxOf(db);
     let rows = await performBreachSnapshot(ctx, ME as any, TEAM, NOW);
     expect(rows).toEqual([{ role_id: GROWTH as any, overload_streak: 1 }]);
@@ -341,5 +344,121 @@ describe("orgProposals.withdraw and list", () => {
     // A team member reads the team's proposals; a personal read finds none.
     expect((await readProposal(ctx, MATE as any, b.short_id)).changes[0].line).toBe("retire @growth");
     expect(await listProposals(ctx, ME as any, {})).toEqual([]);
+  });
+});
+
+// Bring records in line (docs/architecture/org-staffing.md S9): the three sync
+// change kinds apply through the same status paths a person uses.
+describe("orgProposals.decide status changes (S9)", () => {
+  async function propose(db: any, changes: any[]) {
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(changes) });
+    return { ...r, ids: r.changes.map((c: any) => String(c.id)) };
+  }
+  test("a stale plan, task and project are marked through decide, with the reason recorded", async () => {
+    const db = fixtures({
+      plans: [{ _id: "plans_loose", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Loose", status: "active", created_at: 1, updated_at: 1 }],
+      tasks: [{ _id: "tasks_open", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-9", title: "Ship it", task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: 1 }],
+    });
+    const p = await propose(db, [
+      change({ kind: "plan_status", plan: "pl-1", status: "done", reason: "every task closed" }),
+      change({ kind: "task_status", task: "ct-9", status: "done", reason: "commits landed, still open" }),
+      change({ kind: "project_status", project: "pr-2", status: "paused", reason: "no activity 30d" }),
+    ]);
+    const ctx = ctxOf(db);
+    const decide = (i: number) => performDecideChange(ctx, ME as any, { change_id: p.ids[i], verdict: "accept", provision: false });
+    expect(await decide(0)).toMatchObject({ status: "applied", note: expect.stringContaining("pl-1") });
+    expect((await db.get("plans_loose" as any)).status).toBe("done");
+    expect(await decide(1)).toMatchObject({ status: "applied", note: expect.stringContaining("ct-9") });
+    const task = await db.get("tasks_open" as any);
+    expect(task.status).toBe("done");
+    // A person's approve is outside every role, so the close passes the
+    // independent review rule and stamps the verdict.
+    expect(task.review_verdict).toMatchObject({ verdict: "approve" });
+    expect(await decide(2)).toMatchObject({ status: "applied" });
+    expect((await db.get(Q as any)).status).toBe("paused");
+  });
+});
+
+// A plan close cascades to its open tasks (S9): accepted once, applied through
+// the one task path, listed in the applied note; a task the proposal marks
+// done on its own lands first and stays done; open and backlog reopen a row
+// that was filed in bulk and never worked.
+describe("orgProposals.decide plan close cascade and reopen (S9)", () => {
+  const T = (id: string, over: Record<string, any> = {}) => ({ _id: `tasks_${id}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, plan_id: "plans_loose", short_id: id, title: id, task_type: "task", status: "in_progress", priority: "medium", created_at: 1, updated_at: 1, conversation_ids: [], ...over });
+  async function propose(db: any, changes: any[]) {
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(changes) });
+    return { ...r, ids: r.changes.map((c: any) => String(c.id)) };
+  }
+
+  test("closing a plan drops its still open tasks in the same apply and names them; a task marked done in the proposal is done, not dropped", async () => {
+    const db = fixtures({
+      tasks: [T("ct-1"), T("ct-2", { status: "open" }), T("ct-3", { status: "done", updated_at: 5 }), T("ct-10", { status: "in_review" }), T("ct-9", { conversation_ids: [S1] })],
+      conversations: [
+        { _id: S1, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: "Org analyzer", short_id: "jxanaly", session_id: "s1", project_path: "/repo", updated_at: NOW, created_at: 1, message_count: 3, active_task_id: "tasks_ct-9" },
+        { _id: S_GROWTH, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: "Growth lead", short_id: "jxgrowt", session_id: "s_growth", project_path: "/repo/growth", standing_role_id: GROWTH, anchor_id: "anchors_growth", persistent: true, updated_at: NOW, created_at: 1, message_count: 0 },
+      ],
+    });
+    const p = await propose(db, [
+      change({ kind: "plan_status", plan: "pl-1", status: "abandoned", reason: "0 of 16 done, no session, untouched 25 days" }),
+      change({ kind: "task_status", task: "ct-1", status: "done", reason: "its commit landed" }),
+    ]);
+    const ctx = ctxOf(db);
+    // Accept all follows the apply order: the task's own status first, then the plan.
+    const r = await performAcceptAll(ctx, ME as any, { proposal: p.short_id, provision: false });
+    expect(r.results.map((x: any) => [x.line, x.status])).toEqual([["mark task ct-1 done", "applied"], ["mark plan pl-1 abandoned", "applied"]]);
+    expect(r.results[1].note).toBe('pl-1 "Loose": active → abandoned; dropped its 3 open tasks: ct-2, ct-9, ct-10');
+    expect((await db.get("plans_loose" as any)).status).toBe("abandoned");
+    expect((await db.get("tasks_ct-1" as any)).status).toBe("done");
+    expect((await db.get("tasks_ct-3" as any)).status).toBe("done");
+    for (const id of ["ct-2", "ct-9", "ct-10"]) {
+      const t = await db.get(`tasks_${id}` as any);
+      expect(t.status, id).toBe("dropped");
+      expect(t.closed_at, id).toBeGreaterThan(0);
+    }
+    // The session bound to a dropped task is released.
+    expect((await db.get(S1 as any)).active_task_id).toBeUndefined();
+    // The change row carries the cascade in its applied note for the pane.
+    const rows = (await readProposal(ctx, ME as any, p.short_id)).changes;
+    expect(rows.find((c: any) => c.line === "mark plan pl-1 abandoned").applied_note).toContain("dropped its 3 open tasks: ct-2, ct-9, ct-10");
+  });
+
+  test("marking a plan done with no open tasks leaves no cascade; marking it active never cascades", async () => {
+    const db = fixtures({ tasks: [T("ct-1", { status: "done" }), T("ct-2", { status: "dropped" })] });
+    const p = await propose(db, [change({ kind: "plan_status", plan: "pl-1", status: "done", reason: "every task closed" })]);
+    const r = await performDecideChange(ctxOf(db), ME as any, { change_id: p.ids[0], verdict: "accept", provision: false });
+    expect(r.note).toBe('pl-1 "Loose": active → done');
+  });
+
+  test("re-asserting done on a plan already done sweeps the rows still open under it; a suggestion under it is left alone", async () => {
+    const db = fixtures({
+      plans: [{ _id: "plans_loose", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Loose", status: "done", created_at: 1, updated_at: 1 }],
+      tasks: [T("ct-1", { status: "open" }), T("ct-2", { status: "done" }), T("ct-3", { status: "open", source: "insight", triage_status: "suggested" })],
+    });
+    const p = await propose(db, [change({ kind: "plan_status", plan: "pl-1", status: "done", reason: "done months ago, one row still open" })]);
+    const r = await performDecideChange(ctxOf(db), ME as any, { change_id: p.ids[0], verdict: "accept", provision: false });
+    expect(r.note).toBe("pl-1 is already done; dropped its 1 open task: ct-1");
+    expect((await db.get("tasks_ct-1" as any)).status).toBe("dropped");
+    expect((await db.get("tasks_ct-3" as any)).status).toBe("open");
+    expect((await db.get("plans_loose" as any)).status).toBe("done");
+  });
+
+  test("open and backlog put a never worked in progress row back through the team status rule", async () => {
+    const db = fixtures({ tasks: [T("ct-1"), T("ct-2", { started_at: 5 })] });
+    const p = await propose(db, [
+      change({ kind: "task_status", task: "ct-1", status: "open", reason: "in progress, no session 14d" }),
+      change({ kind: "task_status", task: "ct-2", status: "backlog", reason: "in progress, no session 14d" }),
+    ]);
+    const ctx = ctxOf(db);
+    expect(await performDecideChange(ctx, ME as any, { change_id: p.ids[0], verdict: "accept", provision: false })).toMatchObject({ status: "applied", note: 'ct-1 "ct-1": in_progress → open' });
+    const t = await db.get("tasks_ct-1" as any);
+    expect(t.status).toBe("open");
+    expect(t.closed_at).toBeUndefined();
+    expect(t.review_verdict).toBeUndefined();
+    // Backlog is a status category of every board (shared/tasks/statuses), so
+    // it is always a valid write; a team's own status names refine it.
+    expect(await performDecideChange(ctx, ME as any, { change_id: p.ids[1], verdict: "accept", provision: false })).toMatchObject({ status: "applied", note: 'ct-2 "ct-2": in_progress → backlog' });
+    const b = await db.get("tasks_ct-2" as any);
+    expect(b.status).toBe("backlog");
+    expect(b.status_id).toBeUndefined();
   });
 });

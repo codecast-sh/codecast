@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Snail">
+  <!-- tones: ground #e0a989 = sol-orange 40% over sol-bg-alt; body #825e2a = sol-amber 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-snail"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#e0a989"/>
+  <g clip-path="url(#c-snail)">
+  <path d="M-4 96C0 82 12 72 30 68C42 66 52 72 56 82L56 96Z" fill="#fdf6e3"/>
+  <circle cx="28" cy="62" r="12" fill="#fdf6e3"/>
+  <path d="M24 52C22 44 20 36 16 28" stroke="#fdf6e3" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M34 52C34 44 34 36 36 28" stroke="#fdf6e3" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <circle cx="16" cy="27" r="3.4" fill="#002b36"/><circle cx="36" cy="27" r="3.4" fill="#002b36"/>
+  <circle cx="64" cy="52" r="28" fill="#825e2a"/>
+  <path d="M64 52c2 -3 6 -1 6 2c0 5 -6 7 -10 4c-5 -4 -3 -12 3 -14c8 -3 16 4 15 12c-1 11 -13 17 -22 12c-6 -3 -8 -10 -7 -16" stroke="#fdf6e3" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>

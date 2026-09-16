@@ -90,7 +90,7 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
 export async function performCreateProposal(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { team_id?: Id<"teams">; spec: unknown; from_session?: string; evidence_doc_id?: Id<"docs"> },
+  args: { team_id?: Id<"teams">; spec: unknown; from_session?: string; evidence_doc_id?: Id<"docs">; supersedes?: string },
 ): Promise<any> {
   const parsed = parseOrgProposalSpec(args.spec);
   if (!parsed.spec) throw new Error(`The proposal spec is not valid:\n- ${parsed.errors.join("\n- ")}`);
@@ -107,6 +107,20 @@ export async function performCreateProposal(
       ? { kind: "session" as const, id: String(conversation._id) }
       : { kind: "user" as const, id: String(userId) };
 
+  // Supersession: the older proposal must be open, in the same workspace,
+  // and the author's own: the same session, the same role, the role this
+  // session speaks for or a session that spoke for this role, or the same
+  // person. Anything else is refused, so a review cannot mark down a
+  // proposal it did not write.
+  const older = args.supersedes ? await findProposal(ctx, args.supersedes) : null;
+  if (args.supersedes) {
+    if (!older) throw new Error(`supersedes: proposal not found: ${args.supersedes}`);
+    if (older.status !== "open") throw new Error(`supersedes: ${older.short_id} is ${older.status}`);
+    const sameWorkspace = args.team_id ? String(older.team_id) === String(args.team_id) : !older.team_id && String(older.scope_user_id) === String(userId);
+    if (!sameWorkspace) throw new Error(`supersedes: ${older.short_id} is in another workspace`);
+    if (!(await authorOwns(ctx, userId, author, actor, older.author))) throw new Error(`supersedes: ${older.short_id} was not posted by this author, its role or the role's session; only its own author may replace it`);
+  }
+
   const now = Date.now();
   const short_id = await nextShortId(ctx.db, "op");
   const proposalId: Id<"org_proposals"> = await ctx.db.insert("org_proposals", {
@@ -120,9 +134,11 @@ export async function performCreateProposal(
     mode: spec.mode,
     status: "open",
     evidence_doc_id: args.evidence_doc_id,
+    ...(older ? { supersedes: older._id } : {}),
     created_at: now,
     updated_at: now,
   });
+  if (older) await ctx.db.patch(older._id, { superseded_by: proposalId, updated_at: now });
   // A review is the tick of the stability clock: every role flagged
   // overloaded at this review extends its streak, every other role's resets,
   // so the next review can tell a first breach from a second (S2 STABILITY).
@@ -177,16 +193,70 @@ export async function performCreateProposal(
       await ctx.db.patch(proposalId, { decision_id: asked.id });
     }
   }
-  return { id: proposalId, short_id, status: "open", author, changes, link: PROPOSAL_LINK(short_id), decision, decision_error };
+  return { id: proposalId, short_id, status: "open", author, changes, link: PROPOSAL_LINK(short_id), decision, decision_error, ...(older ? { supersedes: { id: String(older._id), short_id: older.short_id, status: "open", created_at: older.created_at } } : {}) };
+}
+
+/**
+ * Does the new author own the older proposal (supersession, S4)? The same
+ * session, the same role, the same person; a role over a session that
+ * spoke for it (the standing session's own earlier review); a session that
+ * speaks for a role over that role's proposal.
+ */
+async function authorOwns(ctx: Ctx, userId: Id<"users">, author: { kind: string; id: string }, actor: any, olderAuthor: { kind: string; id: string }): Promise<boolean> {
+  if (author.kind === olderAuthor.kind && author.id === olderAuthor.id) return true;
+  const roleId = actor.kind === "role" && actor.role ? String(actor.role._id) : null;
+  if (olderAuthor.kind === "role") return !!roleId && roleId === olderAuthor.id;
+  if (olderAuthor.kind === "session") {
+    if (!roleId) return false;
+    const conv: any = await ctx.db.get(olderAuthor.id as Id<"conversations">);
+    if (!conv) return false;
+    const older = await resolveActor(ctx as any, userId, conv);
+    return older.kind === "role" && !!older.role && String(older.role._id) === roleId;
+  }
+  return olderAuthor.kind === "user" && olderAuthor.id === String(userId);
+}
+
+/** The two supersession pointers, named: id, short id and when the other
+ *  was posted, so the pane can say "Replaced by op-6, posted 2 hours ago". */
+async function enrichSupersession(ctx: Ctx, row: ProposalRow): Promise<Record<string, unknown>> {
+  const name = async (id: unknown) => {
+    if (!id) return undefined;
+    const p: any = await ctx.db.get(id as Id<"org_proposals">);
+    return p ? { id: String(p._id), short_id: p.short_id, status: p.status, created_at: p.created_at } : undefined;
+  };
+  return { supersedes: await name(row.supersedes), superseded_by: await name(row.superseded_by) };
 }
 
 // ── Read ────────────────────────────────────────────────────────────────────
+
+/**
+ * The author, named (org-staffing.md S15). The row stores kind and id; every
+ * read hands back what the pill draws: a session's title and short id, a
+ * role's name, handle, short id and avatar, a person's name. A row whose
+ * subject is gone keeps the bare kind and id, so the pill still renders.
+ */
+async function enrichAuthor(ctx: Ctx, author: ProposalRow["author"]): Promise<Record<string, unknown>> {
+  try {
+    if (author.kind === "session") {
+      const conv: any = await ctx.db.get(author.id as Id<"conversations">);
+      return conv ? { ...author, title: conv.title ?? undefined, name: conv.title ?? undefined, short_id: conv.short_id ?? undefined } : author;
+    }
+    if (author.kind === "role") {
+      const role: any = await ctx.db.get(author.id as Id<"org_roles">);
+      return role ? { ...author, name: role.name, handle: role.handle, short_id: role.short_id, avatar: role.avatar ?? undefined } : author;
+    }
+    const user: any = await ctx.db.get(author.id as Id<"users">);
+    return user ? { ...author, name: user.name ?? user.email ?? undefined } : author;
+  } catch {
+    return author;
+  }
+}
 
 export async function readProposal(ctx: Ctx, userId: Id<"users">, ref: string): Promise<any | null> {
   const proposal = await findProposal(ctx, ref);
   if (!proposal || !(await userCanAccessRole(ctx, userId, hostShape(proposal)))) return null;
   const changes = (await changesOf(ctx, proposal._id)).map((c) => ({ ...c, line: describeOrgChange(c.change) }));
-  return { ...proposal, changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
+  return { ...proposal, ...(await enrichSupersession(ctx, proposal)), author: await enrichAuthor(ctx, proposal.author), changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
 }
 
 const countsOf = (changes: ChangeRow[]) => ({
@@ -204,7 +274,7 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
   const rank = (s: string) => (s === "open" ? 0 : s === "resolved" ? 1 : 2);
   const kept = rows.filter((p) => !args.status || p.status === args.status).sort((a, b) => rank(a.status) - rank(b.status) || b.created_at - a.created_at).slice(0, PROPOSAL_LIST_CAP);
   const out = [];
-  for (const p of kept) out.push({ ...p, link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
+  for (const p of kept) out.push({ ...p, ...(await enrichSupersession(ctx, p)), author: await enrichAuthor(ctx, p.author), link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
   return out;
 }
 
@@ -322,14 +392,17 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * runMutation's writes back); the test harness has no runMutation and runs
  * the change inline, which covers the throws that happen before any write.
  */
-export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean }): Promise<any> {
+export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[] }): Promise<any> {
   await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
   await requireAdmin(ctx, userId, proposal);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   const now = Date.now();
-  const pending = orderForApply((await changesOf(ctx, proposal._id)).filter(decidable));
+  // `kinds` narrows the sweep ("Accept group" on the pane's records card,
+  // S9): only decidable changes of those kinds, still in apply order.
+  const kinds = args.kinds?.length ? new Set(args.kinds) : null;
+  const pending = orderForApply((await changesOf(ctx, proposal._id)).filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)));
   const provision = args.provision ?? true;
   const results = [];
   for (const change of pending) {
@@ -444,14 +517,16 @@ export const create = mutation({
     team_id: v.optional(v.id("teams")),
     from_session: v.optional(v.string()),
     evidence_doc_id: v.optional(v.id("docs")),
+    /** "op-N": the proposal this one replaces (S4 supersession). */
+    supersedes: v.optional(v.string()),
     title: v.string(),
     summary_md: v.string(),
     mode: v.string(),
     changes: v.array(v.any()),
   },
-  handler: async (ctx, { api_token, team_id, from_session, evidence_doc_id, ...spec }) => {
+  handler: async (ctx, { api_token, team_id, from_session, evidence_doc_id, supersedes, ...spec }) => {
     const userId = await requireCaller(ctx, api_token, team_id);
-    return performCreateProposal(ctx, userId, { team_id, spec, from_session, evidence_doc_id });
+    return performCreateProposal(ctx, userId, { team_id, spec, from_session, evidence_doc_id, supersedes });
   },
 });
 
@@ -485,7 +560,7 @@ export const decide = mutation({
 });
 
 export const acceptAll = mutation({
-  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string() },
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), kinds: v.optional(v.array(v.string())) },
   handler: async (ctx, { api_token, ...args }) => performAcceptAll(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 

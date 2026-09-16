@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall, EyeOff, ExternalLink } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
 import { parseHuddleDigestContent } from "@codecast/shared/contracts";
-import { mentionRoles, mentionSessions, type ChatRoleMention } from "@codecast/shared/chat";
+import { mentionRoles, mentionSessions, mentionSlack, type ChatRoleMention, type ChatSlackMention } from "@codecast/shared/chat";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { remarkSanitizeInvisibleUnicode } from "../../lib/markdownPlugins";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
@@ -57,7 +57,7 @@ function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src
   );
 }
 
-function ChatAttachments({
+export function ChatAttachments({
   messageId,
   attachments,
 }: {
@@ -228,13 +228,15 @@ export const ChatMessage = memo(function ChatMessage({
     const roles = new Map<string, ChatRoleMention>();
     for (const r of mentionRoles(roleRefs)) roles.set(r.handle.toLowerCase(), r);
     const sessions = new Set(mentionSessions(roleRefs).map((s) => s.short_id.toLowerCase()));
-    return { roles: roles.size ? roles : undefined, sessions: sessions.size ? sessions : undefined };
+    const slack = new Map<string, ChatSlackMention>();
+    for (const p of mentionSlack(roleRefs)) slack.set(p.handle.toLowerCase(), p);
+    return { roles: roles.size ? roles : undefined, sessions: sessions.size ? sessions : undefined, slack: slack.size ? slack : undefined };
   }, [roleRefs]);
   const remarkPlugins = useMemo(
     () => [
       [
         remarkChatMentions,
-        { known: knownHandles, self: selfHandles, names: handleNames, roles: mentionVocab.roles, sessions: mentionVocab.sessions },
+        { known: knownHandles, self: selfHandles, names: handleNames, roles: mentionVocab.roles, sessions: mentionVocab.sessions, slack: mentionVocab.slack },
       ] as [typeof remarkChatMentions, Parameters<typeof remarkChatMentions>[0]],
       ...USER_MD_REMARK,
       remarkSanitizeInvisibleUnicode,

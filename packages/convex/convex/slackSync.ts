@@ -20,11 +20,12 @@ import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { isTeamAdmin, isTeamMember } from "./privacy";
 import { canAccessChannel } from "./chatAccess";
 import {
+  displayName,
   chatFail,
   findByClientId,
   loadChannel,
@@ -57,7 +58,8 @@ import {
   outboundSkipReason,
   slackLinkForChannel,
 } from "./lib/slackOutbound";
-import { DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions } from "./lib/slackMirror";
+import {
+  type BackfillWindow, DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions } from "./lib/slackMirror";
 import { webBaseUrl } from "./slack";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
@@ -66,7 +68,25 @@ type Install = Doc<"slack_installations">;
 
 const PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const BACKFILL_MAX_MESSAGES = 500;
+// One import brings over at most this many lines (roots and replies): a
+// ceiling so "everything" on a years old, bot heavy channel cannot run for
+// hours, high enough that a busy team channel's whole history fits. The link
+// records when it was hit.
+const BACKFILL_MAX_TOTAL = 25_000;
+// One import run stops taking new roots after this long and hands the rest to
+// the next scheduled run, so a page of long threads with files never nears the
+// action's own time limit. Progress lands on the link between runs.
+const BACKFILL_RUN_BUDGET_MS = 40_000;
+const BACKFILL_PAGE = 100;
+// An import that has not reported in this long lost its action (a deploy mid
+// run, a killed action). A run reports in within about two minutes even with a
+// long thread, so five minutes of silence is a stall; the hourly sweep marks it
+// stopped, and a Run again is allowed past the "still running" check.
+const BACKFILL_STALL_MS = 5 * 60_000;
+function importStalled(link: Link, now = Date.now()): boolean {
+  const b = link.backfill;
+  return !!b && b.status === "running" && (b.heartbeat_at ?? b.started_at) < now - BACKFILL_STALL_MS;
+}
 const JOB_MAX_ATTEMPTS = 3;
 // The canonical dedupe and lookup key for a Slack line mirrored into chat.
 export function slackClientId(workspace: string, channel: string, ts: string): string {
@@ -120,8 +140,19 @@ const optionsValidator = v.object({
   agent_lines: v.optional(v.boolean()),
   match_people_by_email: v.optional(v.boolean()),
 });
-const backfillValidator = v.union(v.literal("none"), v.literal("1d"), v.literal("7d"), v.literal("30d"));
-const BACKFILL_MS: Record<string, number> = { "1d": 86_400_000, "7d": 7 * 86_400_000, "30d": 30 * 86_400_000 };
+const backfillValidator = v.union(
+  v.literal("none"), v.literal("1d"), v.literal("7d"), v.literal("30d"), v.literal("90d"), v.literal("all"),
+);
+const BACKFILL_MS: Record<string, number> = {
+  "1d": 86_400_000, "7d": 7 * 86_400_000, "30d": 30 * 86_400_000, "90d": 90 * 86_400_000,
+};
+/** The Slack ts floor for a window: now for none, "0" for all. Slack's
+ *  history call rejects oldest=0, so a zero floor means "send no oldest". */
+export function backfillSinceTs(window: BackfillWindow, now = Date.now()): string {
+  if (window === "all") return "0";
+  const sinceMs = window === "none" ? now : now - BACKFILL_MS[window];
+  return (sinceMs / 1000).toFixed(6);
+}
 
 // ── Slack Web API ────────────────────────────────────────────────────────────
 
@@ -181,6 +212,15 @@ async function linkByWorkspaceChannel(ctx: ReadCtx, workspace: string, channel: 
   return await ctx.db
     .query("slack_channel_links")
     .withIndex("by_workspace_channel", (q: any) => q.eq("workspace_id", workspace).eq("slack_channel_id", channel))
+    .first();
+}
+
+// The person's own Slack token for this installation, if they connected their
+// account. Used only to see and open the private channels they are in.
+async function userTokenFor(ctx: ReadCtx, installationId: Id<"slack_installations">, userId: Id<"users">): Promise<Doc<"slack_user_tokens"> | null> {
+  return await ctx.db
+    .query("slack_user_tokens")
+    .withIndex("by_installation_user", (q: any) => q.eq("installation_id", installationId).eq("user_id", userId))
     .first();
 }
 
@@ -296,6 +336,9 @@ export const getTeamSlack = query({
     return {
       installation: install ? safeInstall(install) : null,
       is_admin: await isTeamAdmin(ctx, userId, args.team_id),
+      // The caller connected their own Slack account: private channels they
+      // are in can be added without a manual /invite.
+      you_connected: install ? !!(await userTokenFor(ctx, install._id, userId)) : false,
       links: visible,
       pending_jobs: await countQueued(ctx, visible),
     };
@@ -366,6 +409,8 @@ export const resolveLinkAuth = internalQuery({
       user_id: userId,
       team_id: channel.team_id,
       bot_token: install.bot_token,
+      bot_user_id: install.bot_user_id,
+      user_token: (await userTokenFor(ctx, install._id, userId))?.token ?? null,
       workspace_id: install.workspace_id,
       existing_link_id: existing?._id ?? null,
     };
@@ -382,6 +427,7 @@ export const commitLink = internalMutation({
     direction: v.optional(directionValidator),
     options: v.optional(optionsValidator),
     since_ts: v.string(),
+    backfill_window: v.optional(backfillValidator),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
@@ -415,6 +461,9 @@ export const commitLink = internalMutation({
       direction: args.direction ?? "both",
       options: mergeLinkOptions(LINK_DEFAULTS, args.options),
       since_ts: args.since_ts,
+      backfill: args.backfill_window && args.backfill_window !== "none"
+        ? { window: args.backfill_window, status: "running" as const, fetched: 0, started_at: now, heartbeat_at: now }
+        : undefined,
       created_by: userId,
       created_at: now,
       updated_at: now,
@@ -435,11 +484,17 @@ export const commitLink = internalMutation({
 
 // Link a chat channel to a Slack channel. Probes the Slack side with the
 // workspace token (joins a public channel the app is not yet in), then writes
-// atomically. Optionally backfills recent history.
+// atomically. Optionally backfills history.
+//
+// Two ways in. With `chat_channel_id`, an existing room becomes the mirror.
+// Without it (the channel browser), the room is CREATED from the Slack channel:
+// same name, Slack's purpose as the topic, so bringing a Slack channel over is
+// one gesture and the two sides match from the first line.
 export const linkChannel = action({
   args: {
     api_token: v.optional(v.string()),
-    chat_channel_id: v.id("chat_channels"),
+    chat_channel_id: v.optional(v.id("chat_channels")),
+    team_id: v.optional(v.id("teams")),
     slack_channel_id: v.string(),
     direction: v.optional(directionValidator),
     options: v.optional(optionsValidator),
@@ -449,45 +504,98 @@ export const linkChannel = action({
     ok: boolean; error?: string; link_id?: Id<"slack_channel_links">;
     // The names as they stand after the link: the chat channel now wears the
     // Slack channel's name, so a caller can print what really happened.
-    chat_channel_name?: string; slack_channel_name?: string | null;
+    chat_channel_id?: Id<"chat_channels">; chat_channel_name?: string; slack_channel_name?: string | null;
   }> => {
-    const auth = await ctx.runQuery(internal.slackSync.resolveLinkAuth, {
-      api_token: args.api_token,
-      chat_channel_id: args.chat_channel_id,
-    });
-    if (!auth.ok) return { ok: false, error: auth.error };
-    if (auth.existing_link_id) return { ok: false, error: "This channel already mirrors a Slack channel" };
-    const token = auth.bot_token;
+    let token: string;
+    let botUserId: string;
+    let userToken: string | null;
+    let chatChannelId = args.chat_channel_id;
+    if (chatChannelId) {
+      const auth = await ctx.runQuery(internal.slackSync.resolveLinkAuth, { api_token: args.api_token, chat_channel_id: chatChannelId });
+      if (!auth.ok) return { ok: false, error: auth.error };
+      if (auth.existing_link_id) return { ok: false, error: "This channel already mirrors a Slack channel" };
+      token = auth.bot_token;
+      botUserId = auth.bot_user_id;
+      userToken = auth.user_token;
+    } else {
+      if (!args.team_id) return { ok: false, error: "Name the team the new channel belongs to" };
+      const team = await ctx.runQuery(internal.slackSync.teamSlackContext, { api_token: args.api_token, team_id: args.team_id });
+      if (!team.ok) return { ok: false, error: team.error };
+      if (team.links.some((l: { slack_channel_id: string }) => l.slack_channel_id === args.slack_channel_id)) {
+        return { ok: false, error: "That Slack channel is already mirrored" };
+      }
+      token = team.bot_token;
+      botUserId = team.bot_user_id;
+      userToken = team.user_token;
+    }
 
+    // Probe as the app; a private channel the app is not in answers
+    // channel_not_found, so fall back to the person's own view of it.
     let info = await slackApi(token, "conversations.info", { channel: args.slack_channel_id });
+    if (!info.ok && userToken) info = await slackApi(userToken, "conversations.info", { channel: args.slack_channel_id });
     if (!info.ok) return { ok: false, error: `Slack: ${info.error}` };
     let ch = info.channel ?? {};
     if (ch.is_archived) return { ok: false, error: "That Slack channel is archived" };
     if (ch.is_im || ch.is_mpim) return { ok: false, error: "Only channels can be mirrored, not direct messages" };
-    if (!ch.is_member) {
+    // Is the APP in it? The user token's view reports the person's membership,
+    // so ask the app directly.
+    const appIn = await slackApi(token, "conversations.info", { channel: args.slack_channel_id });
+    if (!(appIn.ok && appIn.channel?.is_member)) {
       if (ch.is_private) {
-        return { ok: false, error: "The app is not in that private channel. In Slack, run /invite @Codecast there, then try again." };
+        // The person invites the app in, as themselves. Needs their token
+        // (groups:write) and their own membership; without either, the manual
+        // /invite is the only way.
+        const invited = userToken
+          ? await slackApi(userToken, "conversations.invite", { channel: args.slack_channel_id, users: botUserId })
+          : { ok: false, error: "no_user_token" };
+        if (!invited.ok && invited.error !== "already_in_channel") {
+          return {
+            ok: false,
+            error: userToken
+              ? `Slack would not let the app into that private channel (${invited.error}). In Slack, run /invite @Codecast there, then try again.`
+              : "The app is not in that private channel. Connect your Slack account to add private channels you are in, or run /invite @Codecast there.",
+          };
+        }
+      } else {
+        const joined = await slackApi(token, "conversations.join", { channel: args.slack_channel_id });
+        if (!joined.ok) return { ok: false, error: `Slack would not let the app join: ${joined.error}` };
       }
-      const joined = await slackApi(token, "conversations.join", { channel: args.slack_channel_id });
-      if (!joined.ok) return { ok: false, error: `Slack would not let the app join: ${joined.error}` };
       info = await slackApi(token, "conversations.info", { channel: args.slack_channel_id });
       ch = info.channel ?? ch;
     }
 
+    if (!chatChannelId) {
+      // The room is made through chat's own create, so the name rules, the
+      // per team cap and the rate limit apply exactly as for a typed name.
+      // A retried import lands on the same row through the client id.
+      try {
+        const made = await ctx.runMutation(api.chat.createChannel, {
+          api_token: args.api_token,
+          team_id: args.team_id,
+          name: ch.name,
+          topic: (ch.purpose?.value || ch.topic?.value || undefined)?.slice(0, 200),
+          client_id: `slack:${ch.id}`,
+        });
+        chatChannelId = made.channel_id;
+      } catch (error: any) {
+        return { ok: false, error: error?.data?.message ?? error?.message ?? "Could not create the channel" };
+      }
+    }
+
     const backfill = args.backfill ?? "none";
-    const sinceMs = backfill === "none" ? Date.now() : Date.now() - BACKFILL_MS[backfill];
-    const sinceTs = (sinceMs / 1000).toFixed(6);
+    const sinceTs = backfillSinceTs(backfill);
     let committed: { link_id: Id<"slack_channel_links">; chat_channel_name: string; slack_channel_name: string | null; actor_name: string | null };
     try {
       committed = await ctx.runMutation(internal.slackSync.commitLink, {
         api_token: args.api_token,
-        chat_channel_id: args.chat_channel_id,
+        chat_channel_id: chatChannelId,
         slack_channel_id: args.slack_channel_id,
         slack_channel_name: ch.name,
         slack_channel_private: !!ch.is_private,
         direction: args.direction,
         options: args.options,
         since_ts: sinceTs,
+        backfill_window: backfill,
       });
     } catch (error: any) {
       return { ok: false, error: error?.data?.message ?? error?.message ?? "Could not save the link" };
@@ -503,7 +611,13 @@ export const linkChannel = action({
     if (backfill !== "none") {
       await ctx.scheduler.runAfter(0, internal.slackSync.backfill, { link_id: committed.link_id, oldest_ts: sinceTs });
     }
-    return { ok: true, link_id: committed.link_id, chat_channel_name: committed.chat_channel_name, slack_channel_name: committed.slack_channel_name };
+    return {
+      ok: true,
+      link_id: committed.link_id,
+      chat_channel_id: chatChannelId,
+      chat_channel_name: committed.chat_channel_name,
+      slack_channel_name: committed.slack_channel_name,
+    };
   },
 });
 
@@ -514,6 +628,9 @@ export const updateLink = mutation({
     direction: v.optional(directionValidator),
     options: v.optional(optionsValidator),
     paused: v.optional(v.boolean()),
+    // Run the history import again from the link's floor. Lines already here
+    // dedupe on their Slack ts, so this only ever adds what was missing.
+    reimport: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
@@ -523,16 +640,45 @@ export const updateLink = mutation({
     if (!(await mayManageChannel(ctx, userId, channel))) chatFail("FORBIDDEN", "Not allowed to manage this channel");
     const patch: Partial<Link> = { updated_at: Date.now() };
     if (args.direction) patch.direction = args.direction;
-    if (args.options) patch.options = mergeLinkOptions(link.options, args.options);
+    let restartImport = !!args.reimport;
+    if (args.options) {
+      patch.options = mergeLinkOptions(link.options, args.options);
+      // Turning a kind of line ON after the import ran means history is
+      // missing those lines: run it again so the room fills in, rather than
+      // leaving the past with holes only new lines avoid.
+      const turnedOn = (key: "bot_messages" | "threads" | "system_messages" | "files") =>
+        !link.options[key] && patch.options![key];
+      if (link.backfill && link.backfill.status !== "running" && (turnedOn("bot_messages") || turnedOn("threads") || turnedOn("system_messages") || turnedOn("files"))) {
+        restartImport = true;
+      }
+    }
     if (typeof args.paused === "boolean") {
       patch.paused = args.paused;
       if (!args.paused) {
         patch.last_error = undefined;
         patch.last_error_at = undefined;
+        // Resuming after a failed history import runs the import again.
+        if (link.backfill?.status === "failed") restartImport = true;
       }
     }
+    if (restartImport) {
+      if (link.backfill?.status === "running" && !importStalled(link)) chatFail("INVALID", "The history import is still running");
+      const now = Date.now();
+      patch.backfill = {
+        window: link.backfill?.window ?? "all",
+        status: "running",
+        fetched: 0,
+        skipped: undefined,
+        capped: undefined,
+        error: undefined,
+        finished_at: undefined,
+        started_at: now,
+        heartbeat_at: now,
+      };
+    }
     await ctx.db.patch(link._id, patch);
-    return { link_id: link._id };
+    if (restartImport) await ctx.scheduler.runAfter(0, internal.slackSync.backfill, { link_id: link._id, oldest_ts: link.since_ts });
+    return { link_id: link._id, reimport: restartImport };
   },
 });
 
@@ -593,41 +739,66 @@ export const shareMessageToSlack = mutation({
 // ones are already mirrored, for the picker.
 export const listSlackChannels = action({
   args: { api_token: v.optional(v.string()), team_id: v.id("teams") },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string; channels?: Array<{
-    id: string; name: string; is_private: boolean; is_member: boolean; num_members: number | null;
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string; can_add_private?: boolean; channels?: Array<{
+    id: string; name: string; is_private: boolean; is_member: boolean; is_general: boolean; num_members: number | null;
+    // The CALLER is in this private channel (seen through their own token), so
+    // the app can be invited in for them.
+    you_are_in: boolean;
+    created: number | null; // Slack's creation time, ms; the browser turns it into "since <month year>"
     topic: string | null; purpose: string | null; linked_chat_channel_id: string | null; linked_chat_channel_name: string | null;
   }> }> => {
     const ctxRow = await ctx.runQuery(internal.slackSync.teamSlackContext, { api_token: args.api_token, team_id: args.team_id });
     if (!ctxRow.ok) return { ok: false, error: ctxRow.error };
-    const out: any[] = [];
+    const byId = new Map<string, any>();
+    const row = (c: any, youAreIn: boolean) => {
+      const linked = ctxRow.links.find((l: { slack_channel_id: string }) => l.slack_channel_id === c.id);
+      return {
+        id: c.id,
+        name: c.name,
+        is_private: !!c.is_private,
+        is_member: !!c.is_member,
+        is_general: !!c.is_general,
+        you_are_in: youAreIn,
+        num_members: typeof c.num_members === "number" ? c.num_members : null,
+        created: typeof c.created === "number" ? c.created * 1000 : null,
+        topic: c.topic?.value || null,
+        purpose: c.purpose?.value || null,
+        linked_chat_channel_id: linked?.chat_channel_id ?? null,
+        linked_chat_channel_name: linked?.chat_channel_name ?? null,
+      };
+    };
+    // What the app sees: every public channel, and the private ones it is in.
     let cursor: string | undefined;
     for (let page = 0; page < 5; page++) {
       const resp = await slackApi(ctxRow.bot_token, "conversations.list", {
-        types: "public_channel,private_channel",
-        exclude_archived: "true",
-        limit: "200",
-        cursor,
+        types: "public_channel,private_channel", exclude_archived: "true", limit: "200", cursor,
       });
       if (!resp.ok) return { ok: false, error: `Slack: ${resp.error}` };
-      for (const c of resp.channels ?? []) {
-        const linked = ctxRow.links.find((l: { slack_channel_id: string }) => l.slack_channel_id === c.id);
-        out.push({
-          id: c.id,
-          name: c.name,
-          is_private: !!c.is_private,
-          is_member: !!c.is_member,
-          num_members: typeof c.num_members === "number" ? c.num_members : null,
-          topic: c.topic?.value || null,
-          purpose: c.purpose?.value || null,
-          linked_chat_channel_id: linked?.chat_channel_id ?? null,
-          linked_chat_channel_name: linked?.chat_channel_name ?? null,
-        });
-      }
+      for (const c of resp.channels ?? []) byId.set(c.id, row(c, false));
       cursor = resp.response_metadata?.next_cursor || undefined;
       if (!cursor) break;
     }
-    out.sort((a, b) => a.name.localeCompare(b.name));
-    return { ok: true, channels: out };
+    // What the PERSON sees: the private channels they are in, through their
+    // own token. Those the app is not in yet appear too, addable, because the
+    // link step can invite the app for them.
+    if (ctxRow.user_token) {
+      cursor = undefined;
+      for (let page = 0; page < 5; page++) {
+        const resp = await slackApi(ctxRow.user_token, "conversations.list", {
+          types: "private_channel", exclude_archived: "true", limit: "200", cursor,
+        });
+        if (!resp.ok) break; // a revoked token costs the private list, not the whole browser
+        for (const c of resp.channels ?? []) {
+          const seen = byId.get(c.id);
+          if (seen) seen.you_are_in = true;
+          else byId.set(c.id, { ...row(c, true), is_member: false });
+        }
+        cursor = resp.response_metadata?.next_cursor || undefined;
+        if (!cursor) break;
+      }
+    }
+    const out = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return { ok: true, can_add_private: !!ctxRow.user_token, channels: out };
   },
 });
 
@@ -648,7 +819,14 @@ export const teamSlackContext = internalQuery({
       const c = await ctx.db.get(l.chat_channel_id);
       withNames.push({ slack_channel_id: l.slack_channel_id, chat_channel_id: l.chat_channel_id, chat_channel_name: c?.name ?? "" });
     }
-    return { ok: true as const, bot_token: install.bot_token, workspace_id: install.workspace_id, links: withNames };
+    return {
+      ok: true as const,
+      bot_token: install.bot_token,
+      bot_user_id: install.bot_user_id,
+      user_token: (await userTokenFor(ctx, install._id, userId))?.token ?? null,
+      workspace_id: install.workspace_id,
+      links: withNames,
+    };
   },
 });
 
@@ -864,9 +1042,17 @@ export const upsertSlackUser = internalMutation({
   },
   handler: async (ctx, args) => {
     const fields = profileFields(args.profile);
-    const mapped = args.team_id ? await teammateByEmail(ctx, args.team_id, fields.email) : null;
     const existing = await slackUserRow(ctx, args.workspace_id, args.slack_user_id);
-    const row = { ...fields, codecast_user_id: mapped ?? undefined, fetched_at: Date.now() };
+    // A mapping a teammate chose outlives every profile refresh; only the
+    // email rule is recomputed.
+    const manual = existing?.mapped_by === "manual";
+    const mapped = manual ? existing!.codecast_user_id ?? null : args.team_id ? await teammateByEmail(ctx, args.team_id, fields.email) : null;
+    const row = {
+      ...fields,
+      codecast_user_id: mapped ?? undefined,
+      mapped_by: manual ? ("manual" as const) : mapped ? ("email" as const) : undefined,
+      fetched_at: Date.now(),
+    };
     if (existing) {
       await ctx.db.patch(existing._id, row);
       return { ...existing, ...row };
@@ -884,6 +1070,7 @@ export const getSlackUser = internalQuery({
 type ResolvedPerson = {
   slack_user_id: string;
   codecast_user_id: Id<"users"> | null;
+  mapped_by: "email" | "manual" | null;
   name: string;
   handle: string | null;
   avatar_url: string | null;
@@ -906,6 +1093,7 @@ async function resolvePerson(ctx: ActionCtx, install: Install, slackUserId: stri
   return {
     slack_user_id: slackUserId,
     codecast_user_id: row?.codecast_user_id ?? null,
+    mapped_by: row?.mapped_by ?? null,
     name: row?.name ?? "Someone",
     handle: row?.handle ?? null,
     avatar_url: row?.avatar_url ?? null,
@@ -931,9 +1119,200 @@ export const teammateHandles = internalQuery({
 // email matched somebody and the link is set to honour that match. The one rule
 // behind the author of a line, the owner of a reaction and a real @mention.
 function mappedTeammate(person: ResolvedPerson | null, link: Link): Id<"users"> | null {
-  if (!person?.codecast_user_id || !link.options.match_people_by_email) return null;
+  if (!person?.codecast_user_id) return null;
+  // A mapping somebody chose by hand holds whatever the email switch says.
+  if (person.mapped_by === "manual") return person.codecast_user_id;
+  if (!link.options.match_people_by_email) return null;
   return person.codecast_user_id;
 }
+
+// ── People mapping ───────────────────────────────────────────────────────────
+//
+// Who a Slack person is in codecast. The email rule gets most of them; the rest
+// (a different address in Slack, a shared account, a contractor) are set by a
+// teammate from the People popup. A change re-attributes every line that
+// person has already sent into the team's mirrored channels, so the room reads
+// as if it had been right from the start.
+
+export const listSlackPeople = query({
+  args: { api_token: v.optional(v.string()), team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    if (!(await isTeamMember(ctx, userId, args.team_id))) return null;
+    const install = await installationForTeam(ctx, args.team_id);
+    if (!install) return { people: [], is_admin: false };
+    const rows = await ctx.db
+      .query("slack_users")
+      .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", install.workspace_id))
+      .collect();
+    const people = [];
+    for (const r of rows) {
+      if (r.is_bot || r.deleted) continue;
+      const teammate = r.codecast_user_id ? await ctx.db.get(r.codecast_user_id) : null;
+      people.push({
+        slack_user_id: r.slack_user_id,
+        name: r.name,
+        handle: r.handle ?? null,
+        real_name: r.real_name ?? null,
+        avatar_url: r.avatar_url ?? null,
+        email: r.email ?? null,
+        codecast_user_id: r.codecast_user_id ?? null,
+        codecast_user_name: teammate ? displayName(teammate) : null,
+        mapped_by: r.mapped_by ?? null,
+      });
+    }
+    people.sort((a, b) => Number(!!a.codecast_user_id) - Number(!!b.codecast_user_id) || a.name.localeCompare(b.name));
+    return { people, is_admin: await isTeamAdmin(ctx, userId, args.team_id) };
+  },
+});
+
+export const mapSlackPerson = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.id("teams"),
+    slack_user_id: v.string(),
+    // The teammate this Slack person IS; null pins "nobody, show the Slack
+    // name" against the email rule. The CLI may name the teammate instead
+    // (@handle, email or name), resolved here against the team roster.
+    codecast_user_id: v.optional(v.union(v.id("users"), v.null())),
+    teammate_ref: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    if (!(await isTeamMember(ctx, userId, args.team_id))) chatFail("FORBIDDEN", "Not a member of this team");
+    const install = await installationForTeam(ctx, args.team_id);
+    if (!install) chatFail("INVALID", "Connect a Slack workspace for this team first");
+    const row = await slackUserRow(ctx, install.workspace_id, args.slack_user_id);
+    if (!row) chatFail("NOT_FOUND", "That Slack person has not been seen yet");
+    if (args.teammate_ref !== undefined) {
+      const ref = args.teammate_ref.replace(/^@/, "").trim().toLowerCase();
+      if (!ref || ref === "none") args = { ...args, codecast_user_id: null };
+      else {
+        const hit = (await teamRoster(ctx, args.team_id)).find((u: any) =>
+          !u.is_bot && (
+            u._id.toString() === args.teammate_ref ||
+            (memberHandle({ github_username: u.github_username, email: u.email, name: u.name, is_bot: u.is_bot }) ?? "").toLowerCase() === ref ||
+            (u.email ?? "").toLowerCase() === ref ||
+            (u.name ?? "").toLowerCase() === ref));
+        if (!hit) chatFail("NOT_FOUND", `No teammate matches ${args.teammate_ref}`);
+        args = { ...args, codecast_user_id: hit._id };
+      }
+    }
+    if (args.codecast_user_id === undefined) chatFail("INVALID", "Say which teammate, or none");
+    // Attribution is team wide, so an admin may map anyone; a member may claim
+    // a Slack person as themselves, or release one that points at them.
+    const admin = await isTeamAdmin(ctx, userId, args.team_id);
+    const self = userId.toString();
+    const claimsSelf = args.codecast_user_id?.toString() === self;
+    const releasesSelf = args.codecast_user_id === null && row.codecast_user_id?.toString() === self;
+    if (!admin && !claimsSelf && !releasesSelf) chatFail("FORBIDDEN", "Only a team admin can map a Slack person to someone else");
+    if (args.codecast_user_id) {
+      const target = await ctx.db.get(args.codecast_user_id);
+      if (!target || target.is_bot || !(await isTeamMember(ctx, args.codecast_user_id, args.team_id))) {
+        chatFail("INVALID", "Map to a human member of this team");
+      }
+    }
+    await assignSlackPerson(ctx, { teamId: args.team_id, row, codecastUserId: args.codecast_user_id });
+    return { ok: true, slack_user_id: args.slack_user_id, codecast_user_id: args.codecast_user_id };
+  },
+});
+
+// Pin who a Slack person is (or that they are nobody here) and re-author their
+// past lines. "manual" because somebody or something CHOSE it: the People
+// popup, or the person proving their Slack identity by signing in with it.
+// A profile refresh leaves a chosen mapping alone (upsertSlackUser).
+async function assignSlackPerson(
+  ctx: MutationCtx,
+  opts: { teamId: Id<"teams">; row: Doc<"slack_users">; codecastUserId: Id<"users"> | null },
+): Promise<void> {
+  await ctx.db.patch(opts.row._id, { codecast_user_id: opts.codecastUserId ?? undefined, mapped_by: "manual" });
+  await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, {
+    team_id: opts.teamId, slack_user_id: opts.row.slack_user_id, link_index: 0,
+  });
+}
+
+// A teammate signed in to Slack from codecast (slack.ts storeUserToken): Slack
+// itself just said which Slack user they are, which beats any email rule. The
+// one case left alone is a mapping a teammate already chose by hand that
+// points at THIS person — nothing to change. A first sight of the person
+// (no profile row yet) seeds one under the teammate's name; the next line
+// they write refreshes the face from users.info (fetched_at 0 = stale).
+export const linkSignedInPerson = internalMutation({
+  args: { installation_id: v.id("slack_installations"), user_id: v.id("users"), slack_user_id: v.string() },
+  handler: async (ctx, args) => {
+    const install = await ctx.db.get(args.installation_id);
+    const user = await ctx.db.get(args.user_id);
+    // A personal-scope install mirrors no team channels: nothing to re-author.
+    // (Held in its own const: TypeScript does not carry an optional-chain
+    // check on install?.team_id over to later uses of install.team_id.)
+    const teamId = install?.team_id;
+    if (!install || !teamId || !user || user.is_bot) return { status: "skipped" as const };
+    let row = await slackUserRow(ctx, install.workspace_id, args.slack_user_id);
+    if (row?.codecast_user_id?.toString() === args.user_id.toString()) return { status: "already" as const };
+    if (!row) {
+      const id = await ctx.db.insert("slack_users", {
+        workspace_id: install.workspace_id,
+        slack_user_id: args.slack_user_id,
+        name: oneLine(displayName(user), 80),
+        avatar_url: user.image ?? undefined,
+        email: user.email?.toLowerCase(),
+        fetched_at: 0,
+      });
+      row = (await ctx.db.get(id))!;
+    }
+    await assignSlackPerson(ctx, { teamId, row, codecastUserId: args.user_id });
+    return { status: "linked" as const };
+  },
+});
+
+// Re-author every inbound line by one Slack person across the team's mirrored
+// channels. One channel page per run, so a big room never exceeds one
+// mutation's budget; a mapping change on a quiet person costs one run.
+export const reattributeSlackPerson = internalMutation({
+  args: {
+    team_id: v.id("teams"),
+    slack_user_id: v.string(),
+    link_index: v.number(),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    const install = await installationForTeam(ctx, args.team_id);
+    if (!install) return;
+    const row = await slackUserRow(ctx, install.workspace_id, args.slack_user_id);
+    if (!row) return;
+    const links = await ctx.db
+      .query("slack_channel_links")
+      .withIndex("by_team", (q: any) => q.eq("team_id", args.team_id))
+      .collect();
+    const link = links[args.link_index];
+    if (!link) return;
+    const page = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_external_ts", (q: any) => q.eq("channel_id", link.chat_channel_id))
+      .paginate({ numItems: 300, cursor: args.cursor ?? null });
+    const teammate = row.codecast_user_id ?? null;
+    let bridge: Id<"users"> | null = null;
+    for (const m of page.page) {
+      if (m.external?.provider !== "slack" || m.external.direction !== "inbound" || m.external.user !== args.slack_user_id) continue;
+      if (teammate) {
+        if (m.user_id.toString() === teammate.toString() && !m.external_author) continue;
+        await ctx.db.patch(m._id, { user_id: teammate, external_author: undefined });
+      } else {
+        bridge ??= await ensureBridgeUser(ctx, install);
+        await ctx.db.patch(m._id, {
+          user_id: bridge,
+          external_author: { name: row.name, handle: row.handle ?? undefined, avatar_url: row.avatar_url ?? undefined, is_bot: row.is_bot || undefined },
+        });
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { ...args, cursor: page.continueCursor });
+    } else if (args.link_index + 1 < links.length) {
+      await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { team_id: args.team_id, slack_user_id: args.slack_user_id, link_index: args.link_index + 1 });
+    }
+  },
+});
 
 // Who a Slack line is BY, in chat's terms. A Slack person whose email matches a
 // teammate IS that teammate, when the link allows it; anyone else speaks through
@@ -1343,6 +1722,10 @@ export const applyInboundMessage = internalMutation({
       },
       externalAuthor: args.external_author,
       createdAt,
+      // Only a live line is something somebody just said. The import (and a
+      // root fetched to give a live reply its thread) is history: kept, but
+      // announced to nobody — see postChatMessage.
+      history: !args.live,
     });
     await ctx.db.patch(link._id, {
       last_inbound_at: Date.now(),
@@ -1462,47 +1845,162 @@ export const applyInboundReaction = internalMutation({
 
 // ── Backfill ─────────────────────────────────────────────────────────────────
 
+// The history import, in runs. Slack pages the window with its own cursor
+// (with both bounds given it walks newest first; with only `oldest` it walks
+// from the oldest end, which is why the cursor and not a ts is the position).
+// Each run reads one page, applies as many roots (with their replies) as fit
+// in its time budget, and schedules the next run: the same page with a resume
+// point when it ran out of time, the next page otherwise. `latest` is pinned
+// to the moment the import started so live lines landing meanwhile never
+// shift the pages. A line that fails to convert is counted and skipped, never
+// allowed to end the import. Backfilled lines keep Slack's time, so the room
+// reads right whatever order they land in.
 export const backfill = internalAction({
-  args: { link_id: v.id("slack_channel_links"), oldest_ts: v.string() },
-  handler: async (ctx, args) => {
+  args: {
+    link_id: v.id("slack_channel_links"),
+    oldest_ts: v.string(),
+    latest_ts: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+    // Inside a page: lines at or above this ts were applied by the run that
+    // ran out of time; the next run skips them and carries on down the page.
+    resume_below_ts: v.optional(v.string()),
+    fetched: v.optional(v.number()),
+    skipped: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<void> => {
     const c = await ctx.runQuery(internal.slackSync.linkContext, { link_id: args.link_id });
     if (!c?.link || !c.install) return;
     const { link, install } = c;
-    const messages: any[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 5 && messages.length < BACKFILL_MAX_MESSAGES; page++) {
-      const resp = await slackApi(install.bot_token, "conversations.history", {
-        channel: link.slack_channel_id, oldest: args.oldest_ts, limit: "200", cursor, inclusive: "true",
+    if (link.backfill && link.backfill.status !== "running") return; // cancelled by an unlink, a failure, or the stall sweep
+    const runStarted = Date.now();
+    const latestTs = args.latest_ts ?? (runStarted / 1000).toFixed(6);
+    try {
+      await backfillRun(ctx, { link, install, anchor_handle: c.anchor_handle }, args, runStarted, latestTs);
+    } catch (error: any) {
+      // Anything the per line guard did not catch (Slack unreachable mid run,
+      // a bad page) ends the import as stopped, not as a silent stall.
+      console.error("[slackSync] backfill run failed", link.slack_channel_id, error);
+      await ctx.runMutation(internal.slackSync.patchBackfill, {
+        link_id: link._id, fetched: args.fetched ?? 0, skipped: args.skipped ?? 0, status: "failed",
+        error: String(error?.message ?? error).slice(0, 200),
       });
-      if (!resp.ok) {
-        await ctx.runMutation(internal.slackSync.pauseLink, { link_id: link._id, error: `Backfill failed: ${resp.error}` });
-        return;
-      }
-      messages.push(...(resp.messages ?? []));
-      cursor = resp.response_metadata?.next_cursor || undefined;
-      if (!cursor) break;
     }
-    // History is newest first; apply oldest first so stamps ascend.
-    messages.sort((a, b) => Number(a.ts) - Number(b.ts));
+  },
+});
+
+async function backfillRun(
+  ctx: ActionCtx,
+  c: { link: Link; install: Install; anchor_handle: string | null },
+  args: { link_id: Id<"slack_channel_links">; oldest_ts: string; latest_ts?: string; cursor?: string; resume_below_ts?: string; fetched?: number; skipped?: number },
+  runStarted: number,
+  latestTs: string,
+): Promise<void> {
+    const { link, install } = c;
+    const resp = await slackApi(install.bot_token, "conversations.history", {
+      channel: link.slack_channel_id,
+      ...(Number(args.oldest_ts) > 0 ? { oldest: args.oldest_ts, inclusive: "true" } : {}),
+      latest: latestTs,
+      limit: String(BACKFILL_PAGE),
+      cursor: args.cursor,
+    });
+    if (!resp.ok) {
+      await ctx.runMutation(internal.slackSync.patchBackfill, {
+        link_id: link._id, fetched: args.fetched ?? 0, skipped: args.skipped ?? 0, status: "failed", error: `Slack: ${resp.error}`,
+      });
+      await ctx.runMutation(internal.slackSync.pauseLink, { link_id: link._id, error: `Backfill failed: ${resp.error}` });
+      return;
+    }
+    const messages: any[] = [...(resp.messages ?? [])]
+      .sort((a, b) => Number(b.ts) - Number(a.ts))
+      .filter((m) => !args.resume_below_ts || Number(m.ts) < Number(args.resume_below_ts));
     const ctxRow = { install, link: { ...link, since_ts: args.oldest_ts }, anchor_handle: c.anchor_handle };
-    for (const m of messages.slice(0, BACKFILL_MAX_MESSAGES)) {
+    let fetched = args.fetched ?? 0;
+    let skipped = args.skipped ?? 0;
+    let capped = false;
+    let outOfTime = false;
+    let lastTs: string | undefined;
+    const mirrorOne = async (m: any) => {
+      try {
+        const r = await mirrorMessage(ctx, ctxRow, m, { live: false });
+        if (r.message_id) fetched++;
+      } catch (error) {
+        skipped++;
+        console.error("[slackSync] backfill: line skipped", link.slack_channel_id, m?.ts, error);
+      }
+    };
+    for (const m of messages) {
+      if (fetched >= BACKFILL_MAX_TOTAL) { capped = true; break; }
+      if (Date.now() - runStarted > BACKFILL_RUN_BUDGET_MS) { outOfTime = true; break; }
+      lastTs = m.ts;
       if (m.subtype && m.subtype !== "file_share" && m.subtype !== "thread_broadcast" && m.subtype !== "bot_message") continue;
-      await mirrorMessage(ctx, ctxRow, m, { live: false });
+      await mirrorOne(m);
       if (link.options.threads && m.reply_count > 0) {
+        // A long thread is applied whole, so the next run never revisits the
+        // root; the budget is generous (thrice the root budget) but bounded,
+        // and a thread that still overruns it is cut, counted, and logged
+        // rather than allowed to outlive the action.
         let replyCursor: string | undefined;
-        for (let page = 0; page < 5; page++) {
+        let cut = false;
+        for (let page = 0; page < 5 && fetched < BACKFILL_MAX_TOTAL; page++) {
           const replies = await slackApi(install.bot_token, "conversations.replies", {
             channel: link.slack_channel_id, ts: m.ts, limit: "200", cursor: replyCursor,
           });
           if (!replies.ok) break;
-          for (const r of (replies.messages ?? []).filter((x: any) => x.ts !== m.ts)) {
-            await mirrorMessage(ctx, ctxRow, r, { live: false });
+          for (const reply of (replies.messages ?? []).filter((x: any) => x.ts !== m.ts)) {
+            if (fetched >= BACKFILL_MAX_TOTAL) break;
+            if (Date.now() - runStarted > BACKFILL_RUN_BUDGET_MS * 3) { cut = true; break; }
+            await mirrorOne(reply);
           }
+          if (cut) break;
           replyCursor = replies.response_metadata?.next_cursor || undefined;
           if (!replyCursor) break;
         }
+        if (cut) {
+          skipped++;
+          console.error("[slackSync] backfill: thread cut short by the run budget", link.slack_channel_id, m.ts);
+        }
       }
     }
+    const nextCursor = resp.response_metadata?.next_cursor || undefined;
+    const more = !capped && (outOfTime || !!nextCursor);
+    await ctx.runMutation(internal.slackSync.patchBackfill, {
+      link_id: link._id, fetched, skipped, status: more ? "running" : "done", capped: capped || undefined,
+    });
+    if (more) {
+      await ctx.scheduler.runAfter(0, internal.slackSync.backfill, outOfTime
+        // Same page, below the last line applied.
+        ? { link_id: link._id, oldest_ts: args.oldest_ts, latest_ts: latestTs, cursor: args.cursor, resume_below_ts: lastTs, fetched, skipped }
+        : { link_id: link._id, oldest_ts: args.oldest_ts, latest_ts: latestTs, cursor: nextCursor, fetched, skipped });
+    }
+}
+
+export const patchBackfill = internalMutation({
+  args: {
+    link_id: v.id("slack_channel_links"),
+    fetched: v.number(),
+    skipped: v.optional(v.number()),
+    status: v.union(v.literal("running"), v.literal("done"), v.literal("failed")),
+    capped: v.optional(v.boolean()),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const link = await ctx.db.get(args.link_id);
+    if (!link) return;
+    const now = Date.now();
+    const prev = link.backfill ?? { window: "all", status: "running" as const, fetched: 0, started_at: now };
+    await ctx.db.patch(link._id, {
+      backfill: {
+        ...prev,
+        fetched: args.fetched,
+        skipped: args.skipped || undefined,
+        status: args.status,
+        capped: args.capped ?? prev.capped,
+        error: args.error,
+        finished_at: args.status === "running" ? undefined : now,
+        heartbeat_at: now,
+      },
+      updated_at: now,
+    });
   },
 });
 
@@ -1550,6 +2048,11 @@ export const pushContext = internalQuery({
     // Mentions written in the line, mapped to Slack people where we know them.
     const handleToSlack: Record<string, string> = {};
     for (const ref of message.mentions ?? []) {
+      // A Slack-only person: the resolver already knows who they are there.
+      if (typeof ref === "object" && ref.kind === "slack") {
+        handleToSlack[ref.handle.toLowerCase()] = ref.user;
+        continue;
+      }
       if (typeof ref !== "string") continue;
       const u = await ctx.db.get(ref as Id<"users">);
       if (!u) continue;
@@ -1800,6 +2303,19 @@ export const sweepSyncEvents = internalMutation({
         .take(500);
       for (const row of stale) await ctx.db.delete(row._id);
       deleted += stale.length;
+    }
+    // A history import that has not reported in for a while lost its action.
+    // Mark it stopped (the link keeps mirroring live lines) so the dialog
+    // offers to run it again. The heartbeat is the import's own, because
+    // updated_at also moves when a live line lands.
+    const running = await ctx.db.query("slack_channel_links").withIndex("by_team").collect();
+    for (const link of running) {
+      if (importStalled(link, now) && link.backfill) {
+        await ctx.db.patch(link._id, {
+          backfill: { ...link.backfill, status: "failed", error: "The import stopped without finishing", finished_at: now },
+          updated_at: now,
+        });
+      }
     }
     // A job stuck in "queued" past an hour lost its action; requeue once.
     const stuck = await ctx.db

@@ -24,16 +24,19 @@ import {
   Check,
   ExternalLink,
   Hash,
+  Loader2,
   Lock,
   Pause,
   Play,
   Search,
   Unlink,
+  UserRound,
   Users,
 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { DIRECTION_ARROW, LINK_DEFAULTS } from "@codecast/convex/convex/lib/slackMirror";
+import { BACKFILL_WINDOWS, DIRECTION_ARROW, LINK_DEFAULTS, type BackfillWindow } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackLogo } from "../SlackLogo";
+import { SlackPeopleDialog } from "./SlackPeopleDialog";
 import { Switch } from "../ui/switch";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
@@ -63,17 +66,11 @@ const OPTION_ROWS: OptionRow[] = [
 ];
 const ADVANCED_ROWS: OptionRow[] = [
   { key: "agent_lines", label: "Agent lines to Slack", hint: "What the anchor, roles and sessions post here goes to Slack, marked as an agent.", scope: "out" },
-  { key: "bot_messages", label: "Slack app messages", hint: "Lines other Slack apps and bots post (GitHub, Linear, alerts).", scope: "in" },
+  { key: "bot_messages", label: "Slack app messages", hint: "Lines Slack apps and bots post (an assistant, GitHub, alerts). Turning this on after the import runs it again for the missing lines.", scope: "in" },
   { key: "system_messages", label: "Join and topic notices", hint: "Who joined or left the Slack channel, topic changes, pins.", scope: "in" },
   { key: "match_people_by_email", label: "Match people by email", hint: "A Slack person with a teammate's email appears here as that teammate. Off: everyone from Slack shows under their Slack name.", scope: "in" },
 ];
 
-const BACKFILLS: { key: "none" | "1d" | "7d" | "30d"; label: string }[] = [
-  { key: "none", label: "From now" },
-  { key: "1d", label: "Last day" },
-  { key: "7d", label: "Last week" },
-  { key: "30d", label: "Last month" },
-];
 
 export function slackDeepLink(workspaceId: string, channelId: string, ts?: string): string {
   return `slack://channel?team=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(channelId)}${ts ? `&message=${encodeURIComponent(ts)}` : ""}`;
@@ -237,12 +234,15 @@ function ConnectBody({ teamId, isAdmin, channelId }: { teamId?: string; isAdmin:
 
 // ── Workspace connected, channel not mirrored ────────────────────────────────
 
-type SlackChannelOption = {
+export type SlackChannelOption = {
   id: string;
   name: string;
   is_private: boolean;
   is_member: boolean;
+  is_general?: boolean;
+  you_are_in?: boolean;
   num_members: number | null;
+  created?: number | null;
   topic: string | null;
   purpose: string | null;
   linked_chat_channel_id: string | null;
@@ -268,7 +268,7 @@ function SetupBody({
   const [picked, setPicked] = useState<SlackChannelOption | null>(null);
   const [direction, setDirection] = useState<Direction>("both");
   const [options, setOptions] = useState<Options>(LINK_DEFAULTS);
-  const [backfill, setBackfill] = useState<"none" | "1d" | "7d" | "30d">("none");
+  const [backfill, setBackfill] = useState<BackfillWindow>("none");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -414,7 +414,7 @@ function SetupBody({
         <section className="ch-slack-section">
           <div className="ch-slack-label">Bring in Slack history</div>
           <div className="ch-slack-seg" role="radiogroup" aria-label="Backfill">
-            {BACKFILLS.map((b) => (
+            {BACKFILL_WINDOWS.map((b) => (
               <button
                 key={b.key}
                 type="button"
@@ -427,7 +427,7 @@ function SetupBody({
               </button>
             ))}
           </div>
-          <p className="ch-slack-fine">Backfilled lines keep their Slack time and wake nobody. Up to 500 messages.</p>
+          <p className="ch-slack-fine">Backfilled lines keep their Slack time and wake nobody. Up to 25,000 lines per channel.</p>
         </section>
       )}
 
@@ -457,6 +457,7 @@ function LinkedBody({ link, workspaceName, onClose }: { link: ChatSlackLinkRow; 
   const activity = useQuery(api.slackSync.linkActivity, { link_id: link._id } as any);
   const now = useCoarseNow(30_000);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [people, setPeople] = useState(false);
   const paused = !!link.paused;
 
   return (
@@ -468,19 +469,40 @@ function LinkedBody({ link, workspaceName, onClose }: { link: ChatSlackLinkRow; 
             {paused ? "Paused" : "Mirroring"}
             {workspaceName && <span className="ch-slack-ws"> · {workspaceName}</span>}
           </span>
+          <button type="button" className="ch-slack-open" onClick={() => setPeople(true)} title="Who each Slack person is in codecast">
+            <UserRound className="w-3 h-3" /> People
+          </button>
           <a
-            className="ch-slack-open"
+            className="ch-slack-open ch-slack-open-next"
             href={slackDeepLink(link.workspace_id, link.slack_channel_id)}
             title="Open the Slack channel"
           >
             Open in Slack <ExternalLink className="w-3 h-3" />
           </a>
         </div>
+        {people && <SlackPeopleDialog teamId={String(link.team_id)} onClose={() => setPeople(false)} />}
         <dl className="ch-slack-facts">
           <div><dt>From Slack</dt><dd>{link.inbound_count ?? 0}{link.last_inbound_at ? ` · ${ago(now, link.last_inbound_at)}` : ""}</dd></div>
           <div><dt>To Slack</dt><dd>{link.outbound_count ?? 0}{link.last_outbound_at ? ` · ${ago(now, link.last_outbound_at)}` : ""}</dd></div>
-          <div><dt>Since</dt><dd>{new Date(Number(link.since_ts) * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</dd></div>
+          <div><dt>Since</dt><dd>{Number(link.since_ts) > 0 ? new Date(Number(link.since_ts) * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "all history"}</dd></div>
         </dl>
+        {link.backfill && (
+          <p className={`ch-slack-fine ch-slack-import ${link.backfill.status === "failed" ? "ch-slack-import-failed" : ""}`}>
+            {link.backfill.status === "running" && <><Loader2 className="w-3 h-3 animate-spin inline-block -mt-px mr-1" />Bringing in history · {link.backfill.fetched.toLocaleString()} lines so far</>}
+            {link.backfill.status === "done" && <>History brought in · {link.backfill.fetched.toLocaleString()} lines{link.backfill.capped ? " (stopped at the 25,000 line ceiling)" : ""}{link.backfill.skipped ? ` · ${link.backfill.skipped} could not be converted` : ""}</>}
+            {link.backfill.status === "failed" && <>History import stopped after {link.backfill.fetched.toLocaleString()} lines{link.backfill.error ? ` (${humanizeError(link.backfill.error)})` : ""}.</>}
+            {link.backfill.status !== "running" && (
+              <button
+                type="button"
+                className="ch-slack-quiet ch-slack-import-again"
+                onClick={() => update(link._id, { reimport: true } as any)}
+                title="Read the Slack history again from the same starting point. Lines already here are not duplicated."
+              >
+                Run again
+              </button>
+            )}
+          </p>
+        )}
         {link.last_error && (
           <div className="ch-slack-err ch-slack-err-inline">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
@@ -562,7 +584,7 @@ function pickSummary(picked: SlackChannelOption | null, chatName: string | undef
     : `Mirroring #${picked.name} with Slack.`;
 }
 
-function DirectionPicker({ value, onChange }: { value: Direction; onChange: (d: Direction) => void }) {
+export function DirectionPicker({ value, onChange }: { value: Direction; onChange: (d: Direction) => void }) {
   return (
     <div className="ch-slack-dirs" role="radiogroup" aria-label="Direction">
       {DIRECTIONS.map((d) => {

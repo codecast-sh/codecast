@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
 import Link from "next/link";
+import { RoleFace } from "./org/RoleFace";
 import {
   Target,
   ArrowUpRight,
@@ -767,6 +768,21 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   const internal = githubLocationHref(href);
   if (internal) {
     return <Link href={internal} className={(props as any).className}>{children}</Link>;
+  }
+  // A chat role pill (org-staffing.md S13) wears the role's face: the pill
+  // carries the handle, so the default-for-the-handle avatar is drawn inline
+  // before the "@handle" text (a chosen key would need the roles slice, which
+  // chat does not load — the default reads the same family). The class is the
+  // marker the mention plugin stamps.
+  if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//") && typeof (props as any).className === "string" && (props as any).className.includes("mention-role")) {
+    const roleText = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+    const roleHandle = roleText.replace(/^@/, "").trim();
+    return (
+      <Link href={href} {...props}>
+        {roleHandle && <RoleFace role={{ handle: roleHandle }} size={13} className="align-middle mr-0.5 -mt-[1px]" />}
+        {children}
+      </Link>
+    );
   }
   // A relative href names one of our own routes (a role pill's /org/<or-N>):
   // it navigates in this window, never a new tab.

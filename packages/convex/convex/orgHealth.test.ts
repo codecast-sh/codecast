@@ -82,6 +82,9 @@ function fixtures(extra: Record<string, any[]> = {}) {
     tasks: [
       ...growthTasks,
       task("ct-unfiled", { project_id: undefined }),
+      // Mined suggestions awaiting triage are not filed work: not ledger, not unfiled, not stale.
+      task("ct-suggested", { source: "insight", triage_status: "suggested", status: "in_progress", updated_at: NOW - 20 * D }),
+      task("ct-suggested-unfiled", { project_id: undefined, source: "insight", triage_status: "suggested", updated_at: NOW - 20 * D }),
       task("ct-loose1", { project_id: undefined, plan_id: "plans_loose" }),
       task("ct-loose2", { project_id: undefined, plan_id: "plans_loose", status: "done" }),
     ],
@@ -144,21 +147,34 @@ describe("org.health", () => {
     const r = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW);
     expect(r.workspace).toEqual({ kind: "team", id: TEAM });
     const growth = r.roles.find((x) => x.handle === "growth")!;
-    expect(growth.load).toEqual({ open_tasks: 27, in_flight: 9, active_plans: 1, live_hands: 6, direct_reports: 0 });
-    expect(growth.overload_ratio).toBeCloseTo(9 / 8);
+    // The ledger is what the scope holds; the load is what reached the seat
+    // this week: 29 tasks and 2 plans changed (31 / 7 a day), 6 decisions,
+    // 6 live hands, 4 stalls (3 in review past the window, 1 blocked hand),
+    // 2 cap hit days. The rows were read by the scope rule, by index.
+    expect(growth.ledger).toEqual({ open_tasks: 27, in_flight: 9, active_plans: 1 });
+    expect(growth.load).toEqual({ items_per_day: 31 / 7, decisions_per_day: 6 / 7, live_hands: 6, direct_reports: 0, open_stalls: 4, cap_hit_days: 2 });
+    // 27 open rows plus the two closes of the week; the close 20 days ago is
+    // outside the window and not read at all.
+    expect(growth.counted).toMatchObject({ rule: "scope", projects: 1, plans: 2, tasks: 29, complete: true });
+    expect(growth.counted.note).toContain("by the scope rule");
+    // Volume axes only: hands sit exactly at the line, so the ratio is 1 and
+    // the stalls and cap hits breach without making a structural split.
+    expect(growth.overload_ratio).toBeCloseTo(1);
     expect(growth.spend).toMatchObject({ wakes_today: 4, wakes_cap: 4, tokens_today: 1000, tokens_7d_avg: null, cap_hits_7d: 2 });
     // Delivered wakes only: the dropped frame spent nothing against the cap.
     expect(growth.spend.wakes_7d_avg).toBeCloseTo(4 / 7);
     // Samples: 4, 12, 20 (recommended), 30 (silent past the deadline), 40 (never answered before the person did); the 2 minute one is too young.
     expect(growth.flow).toMatchObject({
-      decisions_7d: 6, median_recommend_min: 20, escalations_7d: 0, frames_dropped_7d: 1, done_7d: 2,
+      decisions_7d: 6, items_changed_7d: 31, median_recommend_min: 20, escalations_7d: 0, frames_dropped_7d: 1, done_7d: 2,
       handoffs_7d: { done: 2, blocked: 1, needs_context: 0 }, review_stalls: 3, mentions_7d: 2,
     });
     expect(growth.flow.sends_7d).toEqual({ to: [], from: [{ role_id: BILLING, handle: "billing", n: 6 }] });
     expect(growth.last_move_at).toBe(NOW - 3 * D);
     expect(growth.idle_days).toBe(0);
-    expect(codes(growth.flags)).toEqual(["cap_hit", "chatter", "no_charter", "overloaded", "review_stall", "slow_to_recommend"]);
+    expect(codes(growth.flags)).toEqual(["cap_hit", "chatter", "no_charter", "overloaded", "review_stall", "slow_to_recommend", "wide_ledger"]);
     expect(growth.flags.find((f) => f.code === "overloaded")).toMatchObject({ severity: "blocker" });
+    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("4 open stalls (model: 3), 2 cap hit days this week (model: 1)");
+    expect(growth.flags.find((f) => f.code === "wide_ledger")!.detail).toContain("27 open tasks (frame lists: 25), 9 tasks in flight (frame lists: 8)");
     // The stability clock: no review has flagged this role yet, so the flag
     // says so and the row carries breaches 0 with overloaded_now for the
     // review that will record it.
@@ -171,7 +187,8 @@ describe("org.health", () => {
     expect(r.company.caps_total).toEqual({ hands_per_day: 12, wakes_per_day: 44, tokens_per_day: 800_000 });
 
     const billing = r.roles.find((x) => x.handle === "billing")!;
-    expect(billing.load).toEqual({ open_tasks: 0, in_flight: 0, active_plans: 0, live_hands: 0, direct_reports: 0 });
+    expect(billing.ledger).toEqual({ open_tasks: 0, in_flight: 0, active_plans: 0 });
+    expect(billing.load).toEqual({ items_per_day: 0, decisions_per_day: 1 / 7, live_hands: 0, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 });
     expect(billing.flow).toMatchObject({ decisions_7d: 1, median_recommend_min: null, escalations_7d: 1, done_7d: 0 });
     expect(billing.flow.sends_7d).toEqual({ to: [{ role_id: GROWTH, handle: "growth", n: 6 }], from: [] });
     expect(billing.idle_days).toBeNull();
@@ -188,7 +205,10 @@ describe("org.health", () => {
     expect(r.company.plans_without_goal).toEqual([{ id: "plans_launch", title: "Launch" }]);
     expect(r.company.projects_without_charter.map((p) => p.title).sort()).toEqual(["Billing", "Orphan"]);
     expect(r.company.unfiled_plans).toEqual([{ id: "plans_loose", title: "Loose", short_id: "pl-3", open_tasks: 1 }]);
-    expect(codes(r.company.flags)).toEqual(["no_charter", "no_charter", "no_charter", "unfiled_plan", "unowned", "unowned"]);
+    // Billing was last touched exactly 30 days ago and has no task, plan or
+    // session on it (S9): the company reads it as a stale project.
+    expect(r.company.stale.projects).toEqual([{ id: Q, title: "Billing", reason: "no activity 30d" }]);
+    expect(codes(r.company.flags)).toEqual(["no_charter", "no_charter", "no_charter", "stale_project", "unfiled_plan", "unowned", "unowned"]);
     expect(r.truncated).toEqual({ sessions: false, tasks: false, plans: false, projects: false, decisions: false });
     expect(r.generated_at).toBe(NOW);
   });
@@ -204,12 +224,14 @@ describe("org.health", () => {
     // Hiring the chief of staff does not turn the unowned signal off.
     expect(whole.company.unowned_projects).toEqual([{ id: R, title: "Orphan" }]);
     const cos = whole.roles.find((x) => x.handle === "chief-of-staff")!;
-    // Its load is what no narrower role covers: the unfiled task, the loose plan's open task, the two projectless plans; its idle clock is the newest event anywhere.
-    expect(cos.load).toEqual({ open_tasks: 2, in_flight: 0, active_plans: 2, live_hands: 0, direct_reports: 0 });
+    // Its ledger is what no narrower role covers: the unfiled task, the loose plan's open task, the two projectless plans; its idle clock is the newest event anywhere.
+    expect(cos.ledger).toEqual({ open_tasks: 2, in_flight: 0, active_plans: 2 });
+    expect(cos.load).toMatchObject({ items_per_day: 5 / 7, decisions_per_day: 0, live_hands: 0, open_stalls: 0, cap_hit_days: 0 });
+    expect(cos.counted).toMatchObject({ rule: "remainder", projects: 1, plans: 2, tasks: 3, complete: true });
     expect(cos.idle_days).toBe(0);
     expect(cos.flags).toEqual([]);
     // Growth's own numbers are untouched by the root seat.
-    expect(whole.roles.find((x) => x.handle === "growth")!.load.open_tasks).toBe(27);
+    expect(whole.roles.find((x) => x.handle === "growth")!.ledger.open_tasks).toBe(27);
   });
 
   test("a non member sees nothing of the team; a personal workspace reads the caller's roles", async () => {
@@ -218,6 +240,23 @@ describe("org.health", () => {
     const personal = await computeOrgHealth(ctxOf(db), ME as any, undefined, NOW);
     expect(personal.roles).toEqual([]);
     expect(personal.people.map((p) => p.name)).toEqual(["Me"]);
+  });
+
+  test("a program role whose plan is done raises program_ended (S10)", async () => {
+    // Billing becomes a program role ending with a done plan; growth stays standing.
+    const db = fixtures({
+      org_roles: [
+        { _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_growth", caps: { hands_per_day: 6, wakes_per_day: 4, tokens_per_day: 400_000 }, counters: { day: new Date(NOW).toISOString().slice(0, 10), hands: 2, wakes: 4, tokens: 1000 }, created_by: ME, created_at: NOW - 30 * D, updated_at: 1 },
+        { _id: BILLING, short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_billing", charter: "Owns billing.", tenure: { kind: "program", ends: { plan: "plans_done" }, then: "retire" }, created_by: ME, created_at: NOW - 40 * D, updated_at: 1 },
+      ],
+    });
+    const r = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW);
+    const billing = r.roles.find((x) => x.handle === "billing")!;
+    const ended = billing.flags.find((f) => f.code === "program_ended");
+    expect(ended).toMatchObject({ severity: "warn" });
+    expect(ended!.detail).toContain("its plan pl-2 is done");
+    // Growth is standing; no program_ended.
+    expect(r.roles.find((x) => x.handle === "growth")!.flags.some((f) => f.code === "program_ended")).toBe(false);
   });
 
   test("roleActivity reads the wake log the way the analyzer inputs do", async () => {
@@ -231,5 +270,34 @@ describe("org.health", () => {
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: NOW - D })).toMatchObject({ idle_days: 1, idle: false });
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: null })).toMatchObject({ idle_days: null, age_days: 20, idle: true });
     expect(HEALTH_CAPS.tasks).toBe(2000);
+  });
+});
+
+// readWorkTasks (S3): every open row by status, the week's changes by the
+// updated index, mined suggestions left out, a floor reported per slice. A
+// newest-N read of the table would drop the old open rows the stale detector
+// exists for, so the reader never takes that shape.
+describe("readWorkTasks", () => {
+  test("reads every open row whatever its age, adds the recent closes, leaves suggestions out, and reports a floor per slice", async () => {
+    const { readWorkTasks } = await import("./orgHealth");
+    const db = fixtures({
+      tasks: [
+        task("ct-old-open", { status: "open", updated_at: NOW - 200 * D, created_at: 1 }),
+        task("ct-old-prog", { status: "in_progress", updated_at: NOW - 60 * D, created_at: 1 }),
+        task("ct-backlog", { status: "backlog", updated_at: NOW - 90 * D }),
+        task("ct-done-recent", { status: "done", updated_at: NOW - 2 * D }),
+        task("ct-done-old", { status: "done", updated_at: NOW - 40 * D }),
+        task("ct-dropped-recent", { status: "dropped", updated_at: NOW - D }),
+        task("ct-sugg", { status: "open", source: "insight", triage_status: "suggested", updated_at: NOW - D }),
+        task("ct-dismissed", { status: "open", triage_status: "dismissed", updated_at: NOW - D }),
+      ],
+    });
+    const r = await readWorkTasks(ctxOf(db), ME as any, TEAM, { perStatus: 100, updatedSince: NOW - 7 * D, recentCap: 100 });
+    expect(r.tasks.map((t) => t.short_id).sort()).toEqual(["ct-backlog", "ct-done-recent", "ct-dropped-recent", "ct-old-open", "ct-old-prog"]);
+    expect(r.any_truncated).toBe(false);
+    // A slice at its cap is a floor, named per status.
+    const capped = await readWorkTasks(ctxOf(db), ME as any, TEAM, { perStatus: 2, updatedSince: NOW - 7 * D, recentCap: 100 });
+    expect(capped.truncated).toMatchObject({ open: true, in_progress: false, backlog: false, in_review: false, recent: false });
+    expect(capped.any_truncated).toBe(true);
   });
 });

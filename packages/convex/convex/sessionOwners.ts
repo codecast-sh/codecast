@@ -37,7 +37,12 @@ export async function isSessionOwner(
   return !!row;
 }
 
-// Add an owner if absent. Idempotent; returns true iff a row was newly inserted.
+// Add an owner if absent. Idempotent; returns true iff the assignee has a NEW
+// handoff to hear about: a row was inserted, or someone ELSE handed an existing
+// co-owner the session again with a note. That second case re-stamps the row
+// (who, when, what note, unacknowledged) so the note is neither lost nor
+// silent — a handoff message to a teammate who already co-owns the session is
+// still a message. A bare re-add with no note stays a no-op.
 export async function addSessionOwnerRow(
   ctx: { db: any },
   conversationId: Id<"conversations">,
@@ -45,7 +50,16 @@ export async function addSessionOwnerRow(
   addedBy: Id<"users">,
   note?: string,
 ): Promise<boolean> {
-  if (await isSessionOwner(ctx, conversationId, userId)) return false;
+  const existing = await ctx.db
+    .query("session_owners")
+    .withIndex("by_conversation_user", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("user_id", userId))
+    .first();
+  if (existing) {
+    if (!note || userId.toString() === addedBy.toString()) return false;
+    await ctx.db.patch(existing._id, { added_by: addedBy, added_at: Date.now(), note, seen_at: undefined });
+    return true;
+  }
   await ctx.db.insert("session_owners", {
     conversation_id: conversationId,
     user_id: userId,
@@ -94,16 +108,21 @@ export async function removeSessionOwnerRow(
   return true;
 }
 
-// conversations.owner_user_id is a denormalized cache of the PRIMARY
-// (first-added, still-present) owner. Recompute it from the canonical set after
-// EVERY owner write so the two can never drift. This is the one place the cache
-// is written — callers just add/remove rows and then call this.
+// conversations.owner_user_id is a denormalized cache of the PRIMARY owner:
+// the person the session reports to, whom the org chart files it under.
+// A reparent names that person (`preferred`, org-staffing.md S11: adding an
+// owner re-homes the session under them); with no preference, or when the
+// preferred person is not an owner, it is the first-added still-present
+// owner. Recompute it from the canonical set after EVERY owner write so the
+// two can never drift. This is the one place the cache is written — callers
+// just add/remove rows and then call this.
 export async function syncPrimaryOwnerCache(
   ctx: { db: any },
   conversationId: Id<"conversations">,
+  preferred?: Id<"users">,
 ): Promise<Id<"users"> | undefined> {
   const owners = await listSessionOwnerIds(ctx, conversationId);
-  const primary = owners[0];
+  const primary = (preferred && owners.find((id) => id.toString() === preferred.toString())) || owners[0];
   await ctx.db.patch(conversationId, { owner_user_id: primary ?? undefined });
   return primary;
 }

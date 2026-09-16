@@ -25,7 +25,6 @@
 import { useCallback, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { deviceDisplayName } from "../DeviceBadge";
-import { KeyCap } from "../KeyboardShortcutsHelp";
 import type { SessionMachine } from "../tmuxAttach";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import {
@@ -42,6 +41,8 @@ import {
   type WatchTabInfo,
 } from "../../lib/browserWatch";
 import { createGhostStore, ghostView, type GhostStore } from "../../lib/browserGhost";
+import { CursorArrow } from "../presence/CursorArrow";
+import { DrivingHint } from "./watchControls";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -229,17 +230,7 @@ export function BrowserStream({
       {driving && (
         <ControlSurface imgRef={imgRef} connRef={connRef} onRelease={onReleaseControl} />
       )}
-      {driving && (
-        <span
-          data-sv-driving-hint
-          className="absolute bottom-2 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sol-bg/90 border border-sol-cyan/40 text-[10px] font-mono text-sol-text-muted whitespace-nowrap pointer-events-none"
-        >
-          <span className="text-sol-cyan">You have the wheel.</span>
-          <span className="truncate">The agent keeps its session; nothing you do here is sent to it.</span>
-          <KeyCap size="xs">Esc</KeyCap>
-          <span>hands back</span>
-        </span>
-      )}
+      {driving && <DrivingHint />}
       {paused && frame && (
         <span className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-sol-bg/80 border border-sol-border/40 text-[10px] font-mono tracking-wider text-sol-text-dim">
           paused
@@ -319,15 +310,7 @@ function GhostCursor({
             className="absolute -left-[14px] -top-[14px] w-9 h-9 rounded-full border-2 border-sol-violet cc-ghost-ripple"
           />
         )}
-        <svg width="28" height="36" viewBox="0 0 28 36" className="absolute left-0 top-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.35)]">
-          <path
-            d="M3 2 L3 27 L9 21 L13 31 L17 29 L13 20 L22 20 Z"
-            fill="var(--sol-violet)"
-            stroke="var(--sol-card)"
-            strokeWidth="1.6"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <CursorArrow color="var(--sol-violet)" />
         {captionText !== null && (
           <span
             data-sv-ghost-caption

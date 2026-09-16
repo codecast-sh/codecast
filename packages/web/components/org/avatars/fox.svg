@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Fox">
+  <!-- tones: ground #e0a989 = sol-orange 40% over sol-bg-alt; body #904523 = sol-orange 70% over sol-text-secondary; cream #fdf6e3; ink #002b36 -->
+  <defs><clipPath id="c-fox"><circle cx="48" cy="48" r="48"/></clipPath></defs>
+  <circle cx="48" cy="48" r="48" fill="#e0a989"/>
+  <g clip-path="url(#c-fox)">
+  <path d="M6 96C10 84 28 78 48 78C68 78 86 84 90 96Z" fill="#904523"/>
+  <path d="M20 46L27 12L47 36Z" fill="#904523"/><path d="M76 46L69 12L49 36Z" fill="#904523"/>
+  <path d="M26 42L29 22L40 34Z" fill="#fdf6e3"/><path d="M70 42L67 22L56 34Z" fill="#fdf6e3"/>
+  <path d="M18 44C18 60 34 84 48 84C62 84 78 60 78 44C78 34 66 28 48 28C30 28 18 34 18 44Z" fill="#904523"/>
+  <path d="M28 52C30 66 40 82 48 84C56 82 66 66 68 52C62 58 55 61 48 61C41 61 34 58 28 52Z" fill="#fdf6e3"/>
+  <ellipse cx="38" cy="48" rx="2.6" ry="3.2" fill="#002b36"/><ellipse cx="58" cy="48" rx="2.6" ry="3.2" fill="#002b36"/>
+  <path d="M44 72Q48 70 52 72Q50 77 48 78Q46 77 44 72Z" fill="#002b36"/>
+  </g>
+</svg>
