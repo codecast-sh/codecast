@@ -211,7 +211,7 @@ import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
-import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
+import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
@@ -11409,7 +11409,10 @@ async function processTranscriptDeltaSessionPass(
     if (allMessages.length === 0) return;
     const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
-    if (newMessages.length === 0 && orphanUuids.length === 0) return;
+    if (newMessages.length === 0 && orphanUuids.length === 0) {
+      markExamined(ingestSource(ingest)?.file ?? filePath);
+      return;
+    }
 
     let conversationId = conversationCache[sessionId];
 

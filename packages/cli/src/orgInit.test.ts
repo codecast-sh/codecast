@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_INIT_HONESTY_RULES } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE } from "./orgInit";
 import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, findOpenOrgProposal, orderForApply, proposalUrl, propose, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { ORG_CHANGE_KINDS, orgProposalBlock, parseOrgProposalSpec } from "@codecast/shared/contracts/orgProposal";
@@ -8,7 +8,7 @@ import { ORG_CHANGE_KINDS, orgProposalBlock, parseOrgProposalSpec } from "@codec
 // built from the shared capacity model, with the three honesty rules, the
 // stability rules, the adopt offer, and the spec `cast org propose` parses.
 
-const summary = { projects: 2, plans: 1, tasks_open: 5, members: 3, sessions_30d: 40, roles: 0, git_roots: ["/Users/me/src/app"], chief_of_staff: false };
+const summary = { projects: 2, plans: 1, tasks_open: 5, members: 3, sessions_30d: 40, roles: 0, git_roots: ["/Users/me/src/app"], chief_of_staff: false, stale: { plans: 0, tasks: 0, projects: 0 } };
 const deps = (over: Partial<Parameters<typeof runAnalyzer>[0]> = {}) => ({
   cliPost: async () => null,
   readWorkspace: async () => ({ kind: "team" as const, team_id: "teams_a" }),
@@ -116,15 +116,73 @@ describe("buildOrgAnalyzerPrompt", () => {
     expect(review).toContain(STABILITY.split_on_first_breach_ratio.reason);
     expect(review).toContain("3 existing roles, a chief of staff");
   });
+  // S9: activity before records. The rules are named, the section stands
+  // between what to read and the capacity model, the activity block is the
+  // first thing read, the stale flags are answered first, and the three
+  // status kinds are the first group of a proposal.
+  test("grounds in activity before records: the rules, the read order, the status kinds and the record group first", () => {
+    for (const mode of ["init", "review"] as const) {
+      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
+      expect(p).toContain("## Ground in what is happening, not in what was filed");
+      for (const rule of Object.values(ORG_GROUNDING_RULES)) expect(p).toContain(rule);
+      expect(p).toContain("never staff around a stale record");
+      expect(p).toContain("is a sync change, not a bottleneck");
+      expect(p).toContain("A project whose path nobody touches is not a seat");
+      // The activity block is read before anything else, and the section
+      // sits after the reading list and before the capacity model.
+      const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
+      expect(at("its `activity` block first")).toBeLessThan(at("cast org health --json"));
+      expect(at("## What to read")).toBeLessThan(at("## Ground in what is happening"));
+      expect(at("## Ground in what is happening")).toBeLessThan(at("## The capacity model"));
+      expect(p).toContain("`stale_plan`, `stale_task`, `stale_project`");
+      // The status kinds, with a reason each, and the group they form.
+      expect(p).toContain('- plan_status: { plan: ref, status: "done" | "abandoned" | "active", reason }');
+      expect(p).toContain('- task_status: { task: ref, status: "done" | "dropped", reason }');
+      expect(p).toContain('- project_status: { project: ref, status: "paused" | "done" | "active", reason }');
+      expect(p).toContain("the status changes that bring records in line come first, as their own group");
+      expect(p).toContain('"Bring records in line"');
+      // Loads are sized without the stale records.
+      expect(p).toContain("the loads you size for a seat exclude it");
+    }
+    // The glance names the stale counts, so the reader expects sync changes.
+    const stale = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary: { ...summary, stale: { plans: 3, tasks: 12, projects: 0 } } });
+    expect(stale).toContain("The activity block marks 3 plans, 12 tasks as stale: those are sync changes, and they come first.");
+    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("The activity block marks no record as stale.");
+    // The review reads the stale flags before any bottleneck.
+    const review = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
+    expect(review).toContain("turn each stale record into its status change before you read anything as a bottleneck");
+  });
+  // S10: every proposed role is standing or a program, says which, and names
+  // its end; tenure rides on the role change and the spec example carries it.
+  test("decides standing versus program for every role, with the end condition, and puts tenure in the role change", () => {
+    for (const mode of ["init", "review"] as const) {
+      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
+      expect(p).toContain("## Standing and program roles");
+      expect(p).toContain(ORG_TENURE_RULE);
+      expect(p).toContain("When in doubt, a program");
+      expect(p).toContain('tenure: { kind: "standing" } | { kind: "program", ends: { plan: ref } | { project: ref } | { date: unix ms }, then: "retire" | "review" }');
+      expect(p).toContain("Every role change carries its tenure, and its rationale says why standing or why a program and what ends it");
+      expect(p).toContain("`program_ended`");
+      expect(p).toContain('horizon?: "ongoing" | "bounded"');
+      const json = p.split("```json\n")[1].split("\n```")[0];
+      const parsed = parseOrgProposalSpec(JSON.parse(json));
+      expect(parsed.errors).toEqual([]);
+      expect((parsed.spec!.changes[0].change as any).tenure).toEqual({ kind: "standing" });
+    }
+    expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).toContain("say whether the seat is standing or a program");
+    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("program roles whose end has come");
+  });
 });
 
 describe("summarizeInputs", () => {
-  test("counts open tasks, lists git roots and sees a chief of staff", () => {
+  test("counts open tasks, lists git roots, sees a chief of staff and counts the stale records", () => {
     expect(summarizeInputs({
       projects: [{}, {}], plans: [{}], tasks: { by_status: { open: 3, done: 9, in_progress: 1, dropped: 2 } },
       members: [{}], sessions: { total: 7 }, org: { roles: [{ handle: "growth" }, { handle: CHIEF_OF_STAFF_HANDLE }] }, git_roots: [{ git_root: "/a" }, { git_root: "/b" }],
-    })).toEqual({ projects: 2, plans: 1, tasks_open: 4, members: 1, sessions_30d: 7, roles: 2, git_roots: ["/a", "/b"], chief_of_staff: true });
-    expect(summarizeInputs(null)).toEqual({ projects: 0, plans: 0, tasks_open: 0, members: 0, sessions_30d: 0, roles: 0, git_roots: [], chief_of_staff: false });
+      activity: { areas: [], people: [], stale: { plans: [{ short_id: "pl-1" }], tasks: [{}, {}], projects: [] } },
+    })).toEqual({ projects: 2, plans: 1, tasks_open: 4, members: 1, sessions_30d: 7, roles: 2, git_roots: ["/a", "/b"], chief_of_staff: true, stale: { plans: 1, tasks: 2, projects: 0 } });
+    // Inputs from a backend without the activity block count nothing stale.
+    expect(summarizeInputs(null)).toEqual({ projects: 0, plans: 0, tasks_open: 0, members: 0, sessions_30d: 0, roles: 0, git_roots: [], chief_of_staff: false, stale: { plans: 0, tasks: 0, projects: 0 } });
   });
 });
 

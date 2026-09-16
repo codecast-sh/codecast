@@ -526,3 +526,52 @@ export function teammateWhereabouts(
       a.name.localeCompare(b.name),
   );
 }
+
+/**
+ * The teammates who have a conversation open right now: online, reporting
+ * this conversation on the roster, and not the viewer. Roster order, so a
+ * facepile keeps its faces in place from one push to the next. Presence here
+ * is derived: the roster only carries an id while that member's own window
+ * reported it recently, and it withholds ids of sessions the caller may not
+ * open, so a viewer list can never name a session its reader cannot see.
+ */
+export function viewersOf(
+  members: any[] | null | undefined,
+  conversationId: string | null | undefined,
+  viewerId: string | null,
+): any[] {
+  if (!conversationId) return [];
+  const out: any[] = [];
+  for (const m of members ?? []) {
+    const id = m?._id ? String(m._id) : "";
+    if (!id || id === viewerId) continue;
+    if (!m.viewing_conversation_id || String(m.viewing_conversation_id) !== conversationId) continue;
+    if (memberPresenceState(m) === "offline") continue;
+    out.push(m);
+  }
+  return out;
+}
+
+/**
+ * Wake signature for one conversation's viewers: the member ids, joined. A
+ * card or header subscribes to this string, so a roster push that changes
+ * nothing about who is here re-renders nothing.
+ */
+export function viewersSig(
+  members: any[] | null | undefined,
+  conversationId: string | null | undefined,
+  viewerId: string | null,
+): string {
+  const viewers = viewersOf(members, conversationId, viewerId);
+  return viewers.length === 0 ? "" : viewers.map((m) => String(m._id)).join(",");
+}
+
+/** "Ann is here", "Ann and Bob are here", "Ann, Bob and 2 others are here". */
+export function viewersLabel(names: readonly string[]): string {
+  const first = (n: string) => n.split(/\s+/)[0] || n;
+  if (names.length === 0) return "";
+  if (names.length === 1) return `${names[0]} is here`;
+  if (names.length === 2) return `${first(names[0])} and ${first(names[1])} are here`;
+  if (names.length === 3) return `${first(names[0])}, ${first(names[1])} and ${first(names[2])} are here`;
+  return `${first(names[0])}, ${first(names[1])} and ${names.length - 2} others are here`;
+}
