@@ -1669,12 +1669,21 @@ function startDaemon(): void {
   }
 
   // If a LaunchAgent plist exists, drive it through launchd instead of spawning
-  // a parallel process. bootstrap is idempotent on the bootout side and triggers
-  // RunAtLoad, which runs the daemon as a launchd-managed job.
+  // a parallel process. bootstrap loads a job launchd has never seen and its
+  // RunAtLoad spawns the daemon. On a job that is already loaded it is a no-op,
+  // and launchd does not respawn a loaded KeepAlive job on its own once its
+  // recent runs all ended in a crash — it holds the spawn pended. Every
+  // watchdog update-kill ends in Bun's shutdown segfault, so that count only
+  // climbs (2026-09-15: daemon dead 90 min while this printed "Daemon
+  // started"). kickstart forces the spawn regardless.
   const managedPlistPath = getManagedDaemonPlistPath();
   const launchdUid = process.getuid ? `gui/${process.getuid()}` : null;
   if (managedPlistPath && launchdUid) {
-    spawnSync("launchctl", ["bootstrap", launchdUid, managedPlistPath], { stdio: "ignore" });
+    if (getMacLaunchdDaemonStatus()?.state) {
+      kickstartManagedDaemon();
+    } else {
+      spawnSync("launchctl", ["bootstrap", launchdUid, managedPlistPath], { stdio: "ignore" });
+    }
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       if (getLaunchdDaemonPid()) {
@@ -1683,7 +1692,10 @@ function startDaemon(): void {
       }
       spawnSync("sleep", ["0.1"], { stdio: "ignore" });
     }
-    console.log("Daemon started");
+    console.error(
+      `Daemon did not start within 5s. Inspect the launchd job with 'launchctl print ${launchdUid}/sh.codecast.daemon' and ~/.codecast/launchd.err.log`,
+    );
+    process.exitCode = 1;
     return;
   }
 
@@ -18911,7 +18923,19 @@ program
   .description("Watchdog health check (internal use)")
   .action(async () => {
     const { runWatchdog } = await import("./daemon.js");
-    await runWatchdog();
+    // daemon.js arms module-level timers at import (the loop-stall monitor),
+    // so a finished pass never lets the process exit on its own, and the shell
+    // watchdog loop waits on it forever. A watchdog that never runs a second
+    // pass revives nothing: the daemon sat dead 90 min on 2026-09-15. Exit
+    // explicitly; a thrown pass still exits non-zero so the shell tries an
+    // update.
+    try {
+      await runWatchdog();
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    process.exit(0);
   });
 
 // ─── Workflow commands ────────────────────────────────────────────────────────
