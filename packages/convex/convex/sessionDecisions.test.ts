@@ -492,6 +492,19 @@ describe("stacks", () => {
     expect(tables.session_decisions[0].stack_id).toBe(s.id);
   });
 
+  test("the stack sweep closes a stack whose members are all resolved, however they resolved", async () => {
+    const { ctx, tables } = seed();
+    const a = await askApproach(ctx);
+    const s = await createStackCore(ctx, HOST, { title: "S" });
+    await addToStackCore(ctx, HOST, s.short_id, a.short_id);
+    // Resolved by a path that never told the stack: the row is patched as a
+    // dismissal would leave it, and the stack still says open.
+    await ctx.db.patch(a.id, { status: "dismissed", resolved_at: NOW });
+    expect(tables.decision_stacks[0].status).toBe("open");
+    await applyAutoDefaultsCore(ctx, NOW + 1);
+    expect(tables.decision_stacks[0].status).toBe("done");
+  });
+
   test("delegating a stack grants the role every open category and hands it the pending members", async () => {
     const { ctx, tables } = seed();
     const s = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
@@ -571,6 +584,25 @@ describe("review wave 1 regressions", () => {
     expect(byTask.error).toContain("not accessible");
     const own = await listForSessionCore(ctx, { userId: HOST }, { session_id: "sess-ask", stack: s.short_id });
     expect(own.decisions).toHaveLength(1);
+  });
+
+  test("listForSession --task lists a task's decisions with no session, so cast task show works from a plain shell", async () => {
+    const { ctx } = seed({
+      conversations: [
+        { _id: "conversations_ask", session_id: "sess-ask", user_id: HOST, team_id: TEAM, message_count: 10, org_role_id: "org_roles_lead" },
+      ],
+    });
+    await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q", options: twoOptions, context_md: "ctx", category: "approach", task: "ct-7" });
+    const noSession = await listForSessionCore(ctx, { userId: HOST }, { task: "ct-7" });
+    expect(noSession.decisions).toHaveLength(1);
+    expect(noSession.decisions[0].task_id).toBeDefined();
+    // Without a session there is no message count to measure drift against.
+    expect(noSession.decisions[0].messages_since).toBeUndefined();
+    // With the asking session, the same row carries messages_since.
+    const withSession = await listForSessionCore(ctx, { userId: HOST }, { session_id: "sess-ask", task: "ct-7" });
+    expect(withSession.decisions[0].messages_since).toBe(0);
+    // A bare list still needs the session it lists for.
+    expect((await listForSessionCore(ctx, { userId: HOST }, {})).error).toBe("Missing session_id");
   });
 
   test("removeFromStack refuses a decision that is a member of another stack", async () => {
@@ -685,8 +717,26 @@ describe("edit, withdraw and option pages (the-line.md L6, L10)", () => {
   const editCall = (ctx: any, decision_id: string, fields: Record<string, any>) =>
     (edit as any)._handler(ctx, { api_token: TOKEN, decision_id, ...fields });
 
+  const PAGES = [
+    { _id: "artifacts_a" as any, slug: "slug-a", user_id: HOST, title: "A", version: 1, kind: "html", storage_id: "s1", size: 1, created_at: NOW, updated_at: NOW },
+    { _id: "artifacts_p1" as any, slug: "p1", user_id: HOST, title: "P1", version: 1, kind: "html", storage_id: "s2", size: 1, created_at: NOW, updated_at: NOW },
+    { _id: "artifacts_p2" as any, slug: "p2", user_id: HOST, title: "P2", version: 1, kind: "html", storage_id: "s3", size: 1, created_at: NOW, updated_at: NOW },
+  ];
+
+  test("ask refuses an option page that no published page carries", async () => {
+    const { ctx } = await seedWithToken({ artifacts: PAGES });
+    const r = await askCore(ctx, { userId: HOST }, {
+      session_id: "sess-ask",
+      question: "Which mockup?",
+      options: [{ label: "A", page_slug: "mockup" }, { label: "B" }],
+      context_md: "two mockups",
+      category: "approach",
+    });
+    expect(r.error).toBe("Option 1: no page mockup");
+  });
+
   test("ask stores an option page; the CLI row shape adds its url", async () => {
-    const { ctx, tables } = await seedWithToken();
+    const { ctx, tables } = await seedWithToken({ artifacts: PAGES });
     const r = await askCore(ctx, { userId: HOST }, {
       session_id: "sess-ask",
       question: "Which mockup?",
@@ -702,7 +752,7 @@ describe("edit, withdraw and option pages (the-line.md L6, L10)", () => {
   });
 
   test("edit rebinds task and station, joins a stack once, rewrites the doc, reshapes kind and form, and re-assigns a proposed category", async () => {
-    const { ctx, tables } = await seedWithToken();
+    const { ctx, tables } = await seedWithToken({ artifacts: PAGES });
     const first = await askApproach(ctx);
     const stack = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
     const r = await editCall(ctx, first.short_id, {
