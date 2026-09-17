@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { feedLinkIsServerOwned, feedStateTone, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../scopePage";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { WorkState } from "@codecast/shared/contracts";
+import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, handsWaiting, queryProblem, roleStanding, scopeQueryRef, subtaskCounts, tokensUncounted } from "../scopePage";
 import { ORG_STATE_META } from "../../components/org/orgMeta";
 
 describe("scope page rules", () => {
@@ -51,5 +54,80 @@ describe("scope page rules", () => {
     expect(queryProblem(undefined, false, "The feed")).toBeNull();
     expect(queryProblem(new Error("Could not find public function"), true, "The feed")).toBe("The feed is not available on this backend yet.");
     expect(queryProblem(new Error("[Request ID: abc] Server Error\nboom\nstack"), false, "The brief")).toBe("The brief did not load: boom");
+  });
+});
+
+// ---------------------------------------------------------------- F4: the scope is a conversation
+
+describe("the panel answers who acts next (F4.3)", () => {
+  const hand = (id: string, state: WorkState, age: number) => ({ _id: id, state, updated_at: 1_000_000 - age });
+
+  test("hands group in the inbox's order and an empty group is dropped", () => {
+    const rows = [
+      hand("w1", "working", 10), hand("d1", "done", 50), hand("n1", "needs_input", 30),
+      hand("p1", "dormant", 5), hand("w2", "working", 60), hand("i1", "idle", 1),
+    ];
+    const groups = groupHands(rows);
+    expect(groups.map((g) => g.label)).toEqual(["Needs input", "Done", "Working", "Dormant", "Idle"]);
+    expect(groups.map((g) => g.rows.length)).toEqual([1, 1, 2, 1, 1]);
+    expect(groupHands([hand("w1", "working", 1)]).map((g) => g.state)).toEqual(["working"]);
+    expect(groupHands([])).toEqual([]);
+  });
+
+  test("a queue a person clears reads oldest first; the rest freshest first", () => {
+    const rows = [hand("n-new", "needs_input", 1), hand("n-old", "needs_input", 90), hand("w-old", "working", 90), hand("w-new", "working", 1)];
+    const byState = Object.fromEntries(groupHands(rows).map((g) => [g.state, g.rows.map((r) => r._id)]));
+    expect(byState.needs_input).toEqual(["n-old", "n-new"]);
+    expect(byState.working).toEqual(["w-new", "w-old"]);
+  });
+
+  test("each group paints the org's colour for its state", () => {
+    for (const g of groupHands(HAND_GROUPS.map((h, i) => hand(`h${i}`, h.state, i)))) expect(g.color).toBe(ORG_STATE_META[g.state].color);
+  });
+
+  test("the group order is the inbox's rendered order", () => {
+    // GlobalSessionPanel renders its status sections top down as "who acts
+    // next"; the panel must not restate that order differently.
+    const src = readFileSync(join(import.meta.dir, "../../components/GlobalSessionPanel.tsx"), "utf8");
+    const rendered = [...src.matchAll(/renderSection\("(Needs Input|Done|Working|Dormant)"/g)].map((m) => m[1].toLowerCase());
+    expect(rendered).toEqual(HAND_GROUPS.filter((g) => g.state !== "idle").map((g) => g.label.toLowerCase()));
+    expect(HAND_GROUPS[HAND_GROUPS.length - 1].state).toBe("idle");
+  });
+
+  test("the bound task is the session's own pointer, else the task listing the session", () => {
+    const tasks = [
+      { _id: "t1", conversation_ids: ["c9"] },
+      { _id: "t2", conversation_ids: ["c1", "c2"] },
+    ];
+    expect(boundTaskOf("c1", "t1", tasks)?._id).toBe("t1");
+    expect(boundTaskOf("c1", null, tasks)?._id).toBe("t2");
+    expect(boundTaskOf("c1", "t-gone", tasks)?._id).toBe("t2");
+    expect(boundTaskOf("c7", null, tasks)).toBeNull();
+  });
+
+  test("subtask counts derive live and read nothing for a task without subtasks", () => {
+    const tasks = [
+      { _id: "p", status: "in_progress" },
+      { _id: "s1", parent_id: "p", status: "done" },
+      { _id: "s2", parent_id: "p", status: "open" },
+      { _id: "s3", parent_id: "p", status: "in_review" },
+      { _id: "s4", parent_id: "p", status: "dropped" },
+      { _id: "x", parent_id: "other", status: "open" },
+    ];
+    expect(subtaskCounts("p", tasks)).toEqual({ open: 2, closed: 1 });
+    expect(subtaskCounts("x", tasks)).toBeNull();
+  });
+});
+
+describe("the panel's dot (F4.1)", () => {
+  const tree = { people: [{ counts: { needs_input: 1 } }], roles: [{ counts: { needs_input: 2 } }] };
+  test("a role counts the hands reporting to it, the root counts every session", () => {
+    expect(handsWaiting({ counts: { needs_input: 2 } }, tree, null)).toBe(2);
+    expect(handsWaiting(null, tree, null)).toBe(3);
+    expect(handsWaiting(null, null, null)).toBe(0);
+  });
+  test("sessions the scope rule pulls in count when they are more", () => {
+    expect(handsWaiting({ counts: { needs_input: 0 } }, tree, { sessions: { needs_input: 4 } })).toBe(4);
+    expect(handsWaiting({ counts: { needs_input: 5 } }, tree, { sessions: { needs_input: 4 } })).toBe(5);
   });
 });

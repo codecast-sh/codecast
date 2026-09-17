@@ -19,7 +19,7 @@ import {
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
-import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, HEARTBEAT_ALIVE_MS } from "@codecast/shared/contracts";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { sessionStructuralSig } from "../../store/inboxStore";
@@ -79,13 +79,11 @@ const WORK_STATE_STYLES: Record<WorkState, { label: string; cls: string }> = {
 
 type TriageFilter = "all" | "needs_input" | "working" | "pinned" | "dismissed";
 
-// A session is alive if its daemon heartbeat is fresh. This is the SAME signal
-// the rest of the codebase uses (HEARTBEAT_ALIVE_MS in conversations.ts, plans.ts,
-// pendingMessages.ts, …): the heartbeat refreshes every ~45s while a process tree
-// exists. We deliberately do NOT key liveness off last_metrics_at — reportMetrics
-// throttles that write to once per 5min, so a live session would otherwise flip to
-// "dead" for most of every 5-minute window.
-const HEARTBEAT_ALIVE_MS = 90 * 1000;
+// A session is alive if its daemon heartbeat is fresh — the shared
+// HEARTBEAT_ALIVE_MS, derived from the write cadence it measures, never a local
+// copy. We deliberately do NOT key liveness off last_metrics_at: reportMetrics
+// throttles that write to once per 5min, so a live session would otherwise flip
+// to "dead" for most of every 5-minute window.
 const triageSig = (s: InboxSession) => `${sessionStructuralSig(s)}|${!!s.has_pending}|${!!s.awaiting_input}|${!!s.pending_api_error}|${s.session_error ?? ""}|${!!s.is_pinned}`;
 
 type SortKey = "lastActive" | "uptime" | "messages" | "memory" | "cpu" | "name";

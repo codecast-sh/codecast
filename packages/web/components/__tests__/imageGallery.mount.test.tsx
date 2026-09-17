@@ -87,9 +87,9 @@ test("the open image offers its link and the way back to its message", async () 
   );
   await clickSrc("blob:local");
   const copy = lightbox()!.querySelector('[aria-label="Copy link to image"]');
-  const jump = lightbox()!.querySelector('a[aria-label^="Jump to the message"]') as HTMLAnchorElement;
+  const jump = lightbox()!.querySelector('button[aria-label="Locate in the conversation"]') as HTMLButtonElement;
   expect(copy).not.toBeNull();
-  expect(jump.getAttribute("href")).toBe("https://codecast.sh/conversation/conv1#msg-msg9");
+  expect(jump).not.toBeNull();
   await act(() => { jump.click(); });
   expect(jumps).toEqual(["msg9"]);
   expect(lightbox()).toBeNull();
@@ -97,5 +97,5 @@ test("the open image offers its link and the way back to its message", async () 
   // An inline base64 image outside any message scope has nowhere to link or jump.
   await clickSrc("data:image/png;base64,AAAA");
   expect(lightbox()!.querySelector('[aria-label="Copy link to image"]')).toBeNull();
-  expect(lightbox()!.querySelector('a[aria-label^="Jump to the message"]')).toBeNull();
+  expect(lightbox()!.querySelector('button[aria-label="Locate in the conversation"]')).toBeNull();
 });

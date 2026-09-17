@@ -1,17 +1,19 @@
 "use client";
-// The scope page (docs/architecture/scopes-and-feed.md F3; org-roles-standing.md
-// T6): one role, or the workspace root, as a header, a board line and tabs.
-// Paints from the orgTree store singleton (the same feeder the org page mounts)
-// plus three per view queries: the feed page, the board counts and the brief.
-// Every edit is a store action that moves the page in the same tick and rides
-// dispatch to orgRoles.*; Talk opens the standing session; Wake sends it a line.
+// The scope page (docs/architecture/scopes-and-feed.md F4; org-roles-standing.md
+// T6): one role, or the workspace root, as a conversation with the agent that
+// owns the area, and the board (F3's tabs) as one panel beside it. The
+// composer is Talk, and sending a line is the Wake: a line into the standing
+// conversation is the same pending message `orgRoles.wake` enqueues. Paints
+// from the orgTree store singleton (the same feeder the org page mounts) plus
+// two per view queries: the board counts and the brief. Every edit is a store
+// action that moves the page in the same tick and rides dispatch to orgRoles.*.
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Anchor as AnchorGlyph, Archive, ArrowLeft, Bell, BellRing, CheckSquare, FileText, Layers, ListChecks, MessageCircleQuestionMark, MessageSquare, Network, Pause, Play, Rss, ScrollText, Settings2, Terminal, Workflow } from "lucide-react";
+import { Anchor as AnchorGlyph, Archive, ArrowLeft, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -19,61 +21,42 @@ import { useSyncTasks } from "../../../hooks/useSyncTasks";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
-import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
-import { useIsPhone } from "../../../hooks/useIsPhone";
+import { useIsPhone, useMinWidth } from "../../../hooks/useIsPhone";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
-import { ScopeWakesTab } from "./ScopeWakesTab";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
-import { TaskListContent } from "../../../app/tasks/page";
 import { Avatar } from "../../tasks/TaskCommentStream";
-import { KeyCap, ShortcutTooltip } from "../../KeyboardShortcutsHelp";
-import { isMac } from "../../../shortcuts/registry";
-import { canEditRole, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
-import { StateTally } from "../OrgNodeCards";
+import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
+import { canEditRole, handsWaiting, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
+import { AnchorConversation, AnchorOnboarding } from "../../anchor/AnchorConversation";
 import { RoleFace } from "../RoleFace";
+import { RolePausedNote } from "../RolePausedNote";
 import { parentName } from "../orgMeta";
 import type { OrgAnchor, OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
-import { ScopeFeed } from "./ScopeFeed";
-import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { useScopeIds } from "../../../hooks/useScopeIds";
-import { ScopeSettings } from "./ScopeSettings";
-import { ScopeLineTab } from "./ScopeLineTab";
+import { SCOPE_PANEL_W, ScopePanel, scopeTabFromParam, type ScopePanelLayout, type ScopeTabKey } from "./ScopePanel";
 import { DEFAULT_CAPS, TRUST_META, briefFirstLine, type TrustStage } from "./scopeTypes";
 import { retireToastText } from "../RetireRoleConfirm";
 
 const api = _api as any;
 
-type TabKey = "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
-const TABS: { key: TabKey; label: string; icon: any; roleOnly?: boolean }[] = [
-  { key: "feed", label: "Feed", icon: Rss },
-  { key: "tasks", label: "Tasks", icon: ListChecks },
-  // The line (the-line.md L10): the scope's tasks by station.
-  { key: "line", label: "Line", icon: Workflow },
-  { key: "plans", label: "Plans", icon: Layers },
-  { key: "docs", label: "Docs", icon: FileText },
-  { key: "sessions", label: "Sessions", icon: Terminal },
-  { key: "decisions", label: "Decisions", icon: MessageCircleQuestionMark },
-  { key: "brief", label: "Brief", icon: ScrollText, roleOnly: true },
-  { key: "charter", label: "Charter", icon: CheckSquare, roleOnly: true },
-  { key: "wakes", label: "Wakes", icon: BellRing, roleOnly: true },
-  { key: "settings", label: "Settings", icon: Settings2, roleOnly: true },
-];
-
 const todayUtc = () => new Date().toISOString().slice(0, 10);
+
+/** The conversation needs this much beside the panel's column before the
+ *  panel gets one; narrower windows get the panel as an overlay. */
+const WIDE_MIN_W = SCOPE_PANEL_W + 620;
 
 export function ScopePageInner({ id }: { id: string }) {
   const { tree, ready } = useSyncOrgTree();
-  // The tabs paint from the store: keep the workspace's collections fed here
-  // the way the project page does.
+  // The panel's tabs paint from the store: keep the workspace's collections
+  // fed here the way the project page does.
   useSyncProjects(); useSyncTasks(); useSyncPlans(); useSyncDocs();
   const router = useRouter();
   const searchParams = useSearchParams();
   const phone = useIsPhone();
-  const openLinked = useOpenLinkedSession();
+  const wide = useMinWidth(WIDE_MIN_W);
   const now = useCoarseNow(30_000);
   const s = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
@@ -102,15 +85,22 @@ export function ScopePageInner({ id }: { id: string }) {
   const summaryProblem = queryProblem(summaryError, summaryMissing, "The board counts");
   const briefProblem = queryProblem(briefError, briefMissing, "The brief");
 
-  // -------- tabs in the URL, like the project page
-  const tabParam = searchParams.get("tab") as TabKey | null;
-  const tab: TabKey = tabParam && TABS.some((t) => t.key === tabParam && (!t.roleOnly || role)) ? tabParam : "feed";
-  const setTab = useCallback((next: TabKey) => {
+  // -------- the panel's tab in the URL, like the project page
+  const tabParam = searchParams.get("tab");
+  const tab: ScopeTabKey = scopeTabFromParam(tabParam, !!role);
+  const setTab = useCallback((next: ScopeTabKey) => {
     const params = new URLSearchParams(searchParams.toString());
     if (next === "feed") params.delete("tab"); else params.set("tab", next);
     const qs = params.toString();
     router.replace(qs ? `/org/${id}?${qs}` : `/org/${id}`);
   }, [searchParams, router, id]);
+  // The panel: open by default beside the conversation; on the phone the
+  // conversation leads and the panel is a sheet one tap away. A link straight
+  // to a tab opens the panel on it, whatever the width.
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone || !!tabParam);
+  useWatchEffect(() => { if (tabParam) setPanelOpen(true); }, [tabParam]);
+  const openTab = useCallback((next: ScopeTabKey) => { setTab(next); setPanelOpen(true); }, [setTab]);
+  const panelLayout: ScopePanelLayout = phone ? "sheet" : wide ? "side" : "overlay";
 
   // -------- permissions: admins and the host reshape; the parent also edits the brief
   const me = tree?.people.find((p) => p.is_me) ?? (meId ? tree?.people.find((p) => p.user_id === meId) : undefined);
@@ -122,6 +112,8 @@ export function ScopePageInner({ id }: { id: string }) {
   const store = useInboxStore.getState;
   const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1]) => { if (role) store().updateOrgRole(role._id, fields); }, [role, store]);
   const reparent = useCallback((target: OrgParentRef) => { if (role) store().reparentOrgRole(role._id, target); }, [role, store]);
+  // The header's Retire lands on Settings with the confirmation already open.
+  const [retireArmed, setRetireArmed] = useState(false);
   useWatchEffect(() => { if (tab !== "settings") setRetireArmed(false); }, [tab]);
   // S16: the chief's confirm says what becomes of its standing agent; keeping
   // it restores its old title, so the person is never left without the
@@ -132,35 +124,34 @@ export function ScopePageInner({ id }: { id: string }) {
     toast.success(retireToastText(role.name, standingSession));
     router.push("/org");
   }, [role, store, router]);
-  const wakeMutation = useMutation(api.orgRoles.wake);
-  const [wakeOpen, setWakeOpen] = useState(false);
-  const [wakeText, setWakeText] = useState("");
-  const [waking, setWaking] = useState(false);
-  // The header's Retire lands on Settings with the confirmation already open.
-  const [retireArmed, setRetireArmed] = useState(false);
-  const sendWake = useCallback(async () => {
-    if (!role || !wakeText.trim()) return;
-    setWaking(true);
+  // A seat never provisioned: the one gesture is to bring its agent online.
+  // The tree re-syncs with the standing session when the server is done.
+  const provisionMutation = useMutation(api.orgRoles.provision);
+  const [provisioning, setProvisioning] = useState(false);
+  const provision = useCallback(async () => {
+    if (!role) return;
+    setProvisioning(true);
     try {
-      const res = await wakeMutation({ role_id: role._id, message: wakeText.trim() });
-      if (res?.held) toast.success(`Queued for @${role.handle}; it reads this when you resume`);
-      else toast.success(`Woke @${role.handle}`);
-      setWakeOpen(false); setWakeText("");
+      await provisionMutation({ role_id: role._id });
+      toast.success(`@${role.handle} is coming online`);
     } catch (e: any) {
-      toast.error(e?.message?.replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] ?? "Wake failed");
-    } finally { setWaking(false); }
-  }, [role, wakeText, wakeMutation]);
-  const talk = useCallback(() => {
-    if (!anchor?.conversation_id) return;
-    openLinked({ _id: anchor.conversation_id, short_id: anchor.short_id, title: anchor.name });
-  }, [anchor, openLinked]);
+      toast.error(e?.message?.replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] ?? "Could not bring the role online");
+      setProvisioning(false);
+    }
+  }, [role, provisionMutation]);
+
+  // -------- the standing agent
+  // The pointer is on the role (org.tree stamps `standing` from the
+  // conversation carrying standing_role_id); the anchors row stands in for a
+  // tree that predates it, and is the root's only source.
+  const standingId = role ? (role.standing?.conversation_id ?? anchor?.conversation_id) : anchor?.conversation_id;
+  const standingState = role ? (role.standing?.state ?? anchor?.state) : anchor?.state;
 
   // -------- header facts
   // The standing session heartbeats about once a second; subscribe to the two
   // fields the header branches on, never the row, so a heartbeat cannot
   // re-render the page. updated_at is read raw: the "active N ago" clock is
   // coarse (useCoarseNow) and a 30s stale read changes nothing it shows.
-  const standingId = anchor?.conversation_id;
   const st = useTrackedStore([
     (x) => (standingId ? (x.sessions[standingId] as any)?.model : undefined),
     (x) => (standingId ? (x.sessions[standingId] as any)?.thread_state : undefined),
@@ -168,7 +159,7 @@ export function ScopePageInner({ id }: { id: string }) {
   const standing = standingId ? st.sessions[standingId] : undefined;
   const model = (standing as any)?.model ?? null;
   const hostName = role ? tree?.people.find((p) => p.user_id === role.host_user_id)?.name ?? "the host" : tree?.workspace.name ?? "";
-  const stateMeta = roleStanding(anchor?.state);
+  const stateMeta = roleStanding(standingState);
   const trust: TrustStage = role?.trust ?? "understand";
   const caps = role?.caps ?? DEFAULT_CAPS;
   const counters = role?.counters && role.counters.day === todayUtc() ? role.counters : null;
@@ -177,11 +168,12 @@ export function ScopePageInner({ id }: { id: string }) {
   const uncountedTokens = tokensUncounted({
     tokens: counters?.tokens ?? 0,
     uncounted: brief?.facts?.usage?.uncounted_sessions ?? 0,
-    sessions: (brief?.facts?.hands?.length ?? 0) + (anchor?.conversation_id ? 1 : 0),
+    sessions: (brief?.facts?.hands?.length ?? 0) + (standingId ? 1 : 0),
   });
   const boardLine = briefFirstLine(brief?.narrative);
   const standingStateLine = (standing as any)?.thread_state ? String((standing as any).thread_state).split("\n")[0] : null;
   const stripeLine = boardLine || standingStateLine;
+  const waiting = handsWaiting(role, tree, summary);
 
   // -------- not found / loading
   if (!tree) {
@@ -205,51 +197,92 @@ export function ScopePageInner({ id }: { id: string }) {
   const name = role ? role.name : anchor?.name || tree.workspace.name || "Workspace";
   const handle = role ? role.handle : "workspace";
   const paused = role?.status === "paused";
-  const noStanding = !anchor?.conversation_id;
-  const visibleTabs = TABS.filter((t) => !t.roleOnly || role);
+  const noStanding = !standingId;
   const backHref = `/org/${id}?tab=${tab}`;
+  const panelNode = (
+    <ScopePanel
+      tree={tree}
+      role={role}
+      tab={tab}
+      onTab={setTab}
+      onClose={() => setPanelOpen(false)}
+      layout={panelLayout}
+      waiting={waiting}
+      scopeRef={scopeRef}
+      scopeIds={scopeIds}
+      summary={summary}
+      summaryProblem={summaryProblem}
+      brief={brief}
+      briefProblem={briefProblem}
+      canEdit={canEdit}
+      canEditBrief={canEditBrief}
+      hostName={hostName}
+      model={model}
+      counters={counters}
+      armRetire={retireArmed}
+      now={now}
+      wakeHighlight={searchParams.get("wake")}
+      backHref={backHref}
+      onUpdate={update}
+      onReparent={reparent}
+      onRetire={retire}
+    />
+  );
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }} data-scope-page={id} data-scope-layout={panelLayout} data-scope-panel-open={panelOpen ? "1" : "0"}>
       <style>{`
         @keyframes scope-rise { from { opacity: 0; transform: translateY(6px); } }
         .scope-feed-row { animation: scope-rise .28s cubic-bezier(.2,.7,.2,1) backwards; }
-        @media (prefers-reduced-motion: reduce) { .scope-feed-row { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .scope-feed-row, .org-panel-in, .org-sheet-in { animation: none; } }
       `}</style>
 
       {/* state stripe: the standing session's work state, as a hairline the whole width */}
       <div className="shrink-0 h-[3px] w-full" style={{ background: stateMeta ? `linear-gradient(90deg, ${stateMeta.color}, color-mix(in srgb, ${stateMeta.color} 30%, transparent) 70%, transparent)` : "color-mix(in srgb, var(--sol-violet) 55%, transparent)" }} aria-hidden />
 
-      {/* header */}
-      <header className={cn("shrink-0 border-b", phone ? "px-3 pt-2.5 pb-2" : "px-6 pt-4 pb-3")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+      {/* header: the face, the name, who it reports to, the state; the composer below is Talk */}
+      <header className={cn("shrink-0 border-b", phone ? "px-3 pt-2 pb-2" : "px-5 pt-3 pb-2.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-start gap-3">
           <Link href="/org" className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the org">
             <ArrowLeft className="w-4 h-4" />
           </Link>
           {/* The role's face (S13); the root workspace has none. */}
-          {role && <RoleFace role={role} size={phone ? 36 : 44} className="shrink-0 mt-[2px]" />}
+          {role && <RoleFace role={role} size={phone ? 34 : 40} className="shrink-0 mt-[2px]" />}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <h1 className={cn("font-semibold tracking-tight leading-none truncate", phone ? "text-[18px]" : "text-[22px]")} style={{ fontFamily: "var(--font-serif)" }}>{name}</h1>
               <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{handle}</span>
-              {role && <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{role.short_id}</span>}
               {!role && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}><AnchorGlyph className="w-3 h-3" /> root anchor</span>}
               {stateMeta && (
-                <span className="inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }}>
+                <span className="inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
                   <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
                   {stateMeta.label}
                 </span>
               )}
               {paused && <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             </div>
-            <h1 className={cn("mt-1 font-semibold tracking-tight leading-none truncate", phone ? "text-[20px]" : "text-[26px]")} style={{ fontFamily: "var(--font-serif)" }}>{name}</h1>
+            {/* the state line: the brief's first line, else the standing session's own */}
+            {stripeLine ? (
+              <p className={cn("mt-1 min-w-0 truncate", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-secondary)" }} title={stripeLine} data-scope-stripe>{stripeLine}</p>
+            ) : (
+              <p className={cn("mt-1 min-w-0 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "No brief line yet.") : "Everything in the workspace, as one scope."}</p>
+            )}
             {!phone && (
-              <div className="mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap text-[12px]" style={{ color: "var(--sol-text-muted)" }}>
+              <div className="mt-1.5 flex items-center gap-x-3 gap-y-1 flex-wrap text-[11.5px]" style={{ color: "var(--sol-text-muted)" }}>
                 {role && (
                   <ShortcutTooltip label={TRUST_META[trust].sentence} side="bottom">
-                    <span className="inline-flex items-center gap-1.5 h-[22px] px-2 rounded-full border text-[11px] font-medium cursor-help" style={{ borderColor: `color-mix(in srgb, ${TRUST_META[trust].color} 50%, transparent)`, color: TRUST_META[trust].color, background: `color-mix(in srgb, ${TRUST_META[trust].color} 8%, transparent)` }}>
+                    <span className="inline-flex items-center gap-1.5 h-[20px] px-2 rounded-full border text-[10.5px] font-medium cursor-help" style={{ borderColor: `color-mix(in srgb, ${TRUST_META[trust].color} 50%, transparent)`, color: TRUST_META[trust].color, background: `color-mix(in srgb, ${TRUST_META[trust].color} 8%, transparent)` }}>
                       trust · {TRUST_META[trust].label}
                     </span>
                   </ShortcutTooltip>
+                )}
+                {role && (
+                  <span className="inline-flex items-center gap-1.5" data-scope-reports-to>
+                    <span style={{ color: "var(--sol-text-dim)" }}>reports to</span>
+                    {role.reports_to.kind === "role"
+                      ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</Link>
+                      : <Link href="/org" className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
+                  </span>
                 )}
                 <span className="inline-flex items-center gap-1.5">
                   <span style={{ color: "var(--sol-text-dim)" }}>host</span>
@@ -260,14 +293,6 @@ export function ScopePageInner({ id }: { id: string }) {
                   <span style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{model ?? (noStanding ? "none" : "…")}</span>
                 </span>
                 {role && (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span style={{ color: "var(--sol-text-dim)" }}>reports to</span>
-                    {role.reports_to.kind === "role"
-                      ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</Link>
-                      : <Link href="/org" className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
-                  </span>
-                )}
-                {role && (
                   <span className="inline-flex items-center gap-1.5 tabular-nums" title="today's wakes, hands and tokens against the daily caps">
                     <span style={{ color: "var(--sol-text-dim)" }}>today</span>
                     <span style={{ color: "var(--sol-text)" }}>{counters?.wakes ?? 0}<span style={{ color: "var(--sol-text-dim)" }}>/{caps.wakes_per_day} wakes</span></span>
@@ -277,136 +302,116 @@ export function ScopePageInner({ id }: { id: string }) {
                       : <span style={{ color: "var(--sol-text)" }}>{Math.round((counters?.tokens ?? 0) / 1000)}k<span style={{ color: "var(--sol-text-dim)" }}>/{Math.round(caps.tokens_per_day / 1000)}k tokens</span></span>}
                   </span>
                 )}
-                {anchor?.conversation_id && standing && <span style={{ color: "var(--sol-text-dim)" }}>{(() => { const a = compactAge(now - ((standing as any).updated_at ?? now)); return a === "just now" ? "active just now" : `active ${a} ago`; })()}</span>}
+                {standingId && standing && <span style={{ color: "var(--sol-text-dim)" }}>{(() => { const a = compactAge(now - ((standing as any).updated_at ?? now)); return a === "just now" ? "active just now" : `active ${a} ago`; })()}</span>}
               </div>
             )}
           </div>
-          {!phone && (
-            <div className="shrink-0 flex items-center gap-1.5">
-              <ActionButton icon={MessageSquare} label="Talk" primary disabled={noStanding} tip={noStanding ? "No standing session yet. Provision one with cast role provision." : "Open the standing session"} onClick={talk} />
-              {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet." : paused ? "Paused: the line is held until you resume" : "Send the role one line; it wakes now"} onClick={() => setWakeOpen(true)} />}
-              {role && canEdit && (
-                <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
-              )}
-              {role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); setTab("settings"); }} />}
-            </div>
-          )}
+          <div className="shrink-0 flex items-center gap-1.5">
+            {!phone && role && canEdit && (
+              <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
+            )}
+            {!phone && role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); openTab("settings"); }} />}
+            <PanelToggle open={panelOpen} waiting={waiting} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
+          </div>
         </div>
-
-        {/* board line */}
-        <div className={cn("flex items-center gap-3 flex-wrap", phone ? "mt-1.5" : "mt-3")}>
-          {stripeLine ? (
-            <p className={cn("min-w-0 flex-1 truncate", phone ? "text-[12px]" : "text-[13px]")} style={{ color: "var(--sol-text-secondary)" }} title={stripeLine}>{stripeLine}</p>
-          ) : (
-            <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[13px]")} style={{ color: "var(--sol-text-dim)" }}>{role ? "No brief line yet." : "Everything in the workspace, as one scope."}</p>
-          )}
-          {!summary && summaryProblem && !phone && <span className="shrink-0 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{summaryProblem}</span>}
-          {summary && !phone && (
-            <div className="shrink-0 flex items-center gap-2 text-[11px] tabular-nums" style={{ color: "var(--sol-text-muted)" }}>
-              <Stat n={summary.tasks.open} label="open tasks" />
-              <Stat n={summary.plans.length} label="plans" />
-              <Stat n={summary.decisions.open} label="open decisions" tone={summary.decisions.open > 0 ? "var(--sol-yellow)" : undefined} />
-              <span className="inline-flex items-center gap-1.5 h-[24px] px-2 rounded-md border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
-                <span>{summary.sessions.total} sessions</span>
-                <StateTally counts={summary.sessions} />
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* tabs */}
-        <nav className={cn("flex items-center gap-1 -mb-px overflow-x-auto cq-no-scrollbar", phone ? "mt-2" : "mt-3")} aria-label="Scope sections">
-          {visibleTabs.map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.key;
-            const count = t.key === "decisions" ? summary?.decisions.open : t.key === "tasks" ? summary?.tasks.open : undefined;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-8 px-2.5 text-[12.5px] transition-colors rounded-t-md", active ? "font-semibold" : "hover:bg-sol-bg-highlight/60")}
-                style={{ color: active ? "var(--sol-text)" : "var(--sol-text-muted)" }}
-                aria-current={active ? "page" : undefined}
-              >
-                <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-violet)" : undefined }} />
-                {t.label}
-                {count ? <span className="text-[10px] tabular-nums px-1 rounded-sm" style={{ background: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-dim)" }}>{count}</span> : null}
-                {active && <span className="absolute left-2 right-2 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-violet)" }} />}
-              </button>
-            );
-          })}
-        </nav>
       </header>
 
-      {/* body */}
-      {tab === "feed" && scopeRef && <ScopeFeed key={JSON.stringify(scopeRef)} scope={scopeRef} fill />}
-      {tab === "tasks" && (
-        <div className="flex-1 min-h-0">
-          <TaskListContent scope={scopeIds.whole ? undefined : { projectIds: scopeIds.projectIds, planIds: scopeIds.planIds }} />
+      {/* body: the conversation, the panel beside it */}
+      <div className="flex-1 min-h-0 relative flex">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-scope-conversation={standingId ?? "none"}>
+          {paused && role && <RolePausedNote name={role.name} className={cn("mx-3 mt-2")} onResume={canEdit ? () => update({ status: "active" }) : undefined} />}
+          {standingId ? (
+            <div className="flex-1 min-h-0">
+              <AnchorConversation conversationId={standingId} hideHeader seedOwnership={false} autoFocusInput={!phone} />
+            </div>
+          ) : role ? (
+            <ScopeUnseated role={role} tree={tree} canEdit={canEdit} hostName={hostName} busy={provisioning} onProvision={provision} onOpenBoard={() => setPanelOpen(true)} />
+          ) : (
+            <AnchorOnboarding scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : undefined} teamName={tree.workspace.name} compact />
+          )}
         </div>
-      )}
-      {tab !== "feed" && tab !== "tasks" && (
-        <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", phone ? "px-2 py-3" : "px-5 py-4")}>
-          <div>
-            {tab === "line" && <ScopeLineTab ids={scopeIds} teamId={tree.workspace.kind === "team" ? tree.workspace.id : undefined} />}
-            {tab === "plans" && <ScopePlansTab ids={scopeIds} />}
-            {tab === "docs" && <ScopeDocsTab ids={scopeIds} />}
-            {tab === "sessions" && <ScopeSessionsTab tree={tree} role={role} scope={scopeRef} />}
-            {tab === "decisions" && <ScopeDecisionsTab ids={scopeIds} roleId={role?._id ?? null} />}
-            {tab === "brief" && role && <ScopeBriefTab role={role} facts={brief?.facts ?? null} factsProblem={briefProblem} narrative={brief?.narrative ?? ""} canEdit={canEditBrief} backHref={backHref} />}
-            {tab === "wakes" && role && <ScopeWakesTab role={role} highlight={searchParams.get("wake")} now={now} />}
-            {tab === "charter" && role && <ScopeCharterTab role={role} charter={brief?.charter ?? role.charter ?? ""} canEdit={canEdit} backHref={backHref} onUpdateCharter={(v) => update({ charter: v })} />}
-            {tab === "settings" && role && (
-              <ScopeSettings tree={tree} role={role} canEdit={canEdit} overlaps={summary?.overlaps ?? []} hostName={hostName} model={model} counters={counters} armRetire={retireArmed} onUpdate={update} onReparent={reparent} onRetire={retire} />
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* phone actions: a bottom bar so the header stays two lines; the root keeps Talk */}
-      {phone && (
-        <div className="shrink-0 border-t px-3 py-2 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: "var(--sol-bg)" }}>
-          <ActionButton icon={MessageSquare} label="Talk" primary disabled={noStanding} tip={noStanding ? "No standing session yet" : "Open the standing session"} onClick={talk} grow />
-          {role && <ActionButton icon={Bell} label="Wake" disabled={noStanding} tip={noStanding ? "No standing session yet" : paused ? "Paused: held until you resume" : "Wake the role"} onClick={() => setWakeOpen(true)} grow />}
-          {role && canEdit && <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip="" onClick={() => update({ status: paused ? "active" : "paused" })} grow />}
-        </div>
-      )}
-
-      <Dialog open={wakeOpen} onOpenChange={setWakeOpen}>
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle style={{ fontFamily: "var(--font-serif)" }}>Wake @{handle}</DialogTitle>
-            <DialogDescription>{paused ? "The role is paused: this line waits and is the first thing it reads when you resume it." : "One line the role reads first in its next frame. It wakes now, ahead of the coalesce window."}</DialogDescription>
-          </DialogHeader>
-          <textarea
-            autoFocus
-            value={wakeText}
-            onChange={(e) => setWakeText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void sendWake(); } }}
-            rows={3}
-            placeholder="What should the role look at?"
-            className="w-full rounded-md px-2.5 py-2 border outline-none text-[13px] bg-sol-bg-alt"
-            style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text)" }}
-          />
-          <div className="flex items-center justify-end gap-2">
-            <button type="button" onClick={() => setWakeOpen(false)} className="h-8 px-3 rounded-md text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-            <button type="button" disabled={waking || !wakeText.trim()} onClick={() => void sendWake()} className="h-8 px-3.5 rounded-md text-[12.5px] font-semibold disabled:opacity-50 inline-flex items-center gap-1.5" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>
-              {waking ? "Waking…" : "Wake"} <span className="cc-bar-keys"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
-            </button>
+        {panelOpen && panelLayout === "side" && (
+          <aside className="shrink-0 border-l min-h-0" style={{ width: SCOPE_PANEL_W, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }} data-scope-aside="side">
+            {panelNode}
+          </aside>
+        )}
+        {panelOpen && panelLayout === "overlay" && (
+          <aside className="absolute right-0 top-0 bottom-0 z-20 border-l min-h-0 org-panel-in shadow-[-16px_0_40px_-24px_rgba(0,0,0,0.45)]" style={{ width: `min(${SCOPE_PANEL_W}px, 92vw)`, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }} data-scope-aside="overlay">
+            {panelNode}
+          </aside>
+        )}
+        {panelOpen && panelLayout === "sheet" && (
+          <div
+            className="absolute inset-x-0 bottom-0 z-20 rounded-t-2xl border-t shadow-[0_-12px_40px_-12px_rgba(0,0,0,0.45)] org-sheet-in"
+            style={{ height: "90%", background: "var(--sol-bg)", borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }}
+            data-scope-aside="sheet"
+          >
+            <div className="flex justify-center pt-2"><span className="w-10 h-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-border) 60%, transparent)" }} /></div>
+            <div className="h-[calc(100%-12px)]">{panelNode}</div>
           </div>
-        </DialogContent>
-      </Dialog>
+        )}
+      </div>
     </div>
   );
 }
 
-function Stat({ n, label, tone }: { n: number; label: string; tone?: string }) {
+/** The header's control for the board (F4.1). Closed, it still tells you
+ *  the one thing that matters: a hand under this scope is waiting on a person. */
+function PanelToggle({ open, waiting, compact, onClick }: { open: boolean; waiting: number; compact: boolean; onClick: () => void }) {
+  const Icon = open ? PanelRightClose : PanelRightOpen;
+  const tip = open ? "Close the board" : waiting > 0 ? `Open the board: ${waiting} hand${waiting === 1 ? "" : "s"} waiting on a person` : "Open the board: feed, tasks, plans, pages, sessions, decisions";
   return (
-    <span className="inline-flex items-center gap-1 h-[24px] px-2 rounded-md border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
-      <span className="font-semibold" style={{ color: tone ?? "var(--sol-text)" }}>{n}</span>
-      <span style={{ color: "var(--sol-text-dim)" }}>{label}</span>
-    </span>
+    <ShortcutTooltip label={tip} side="bottom">
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn("relative h-[32px] inline-flex items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium transition-colors hover:bg-sol-bg-highlight/70", compact ? "w-[32px]" : "px-3", open && "bg-sol-bg-highlight/60")}
+        style={{ border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", color: open ? "var(--sol-text)" : "var(--sol-text-muted)" }}
+        aria-pressed={open}
+        aria-label={compact ? tip : undefined}
+        data-scope-panel-toggle={open ? "open" : "closed"}
+        data-scope-waiting={waiting}
+      >
+        <Icon className="w-3.5 h-3.5" />
+        {!compact && "Board"}
+        {waiting > 0 && <span className="absolute -top-[3px] -right-[3px] w-[8px] h-[8px] rounded-full ring-2" style={{ background: "var(--sol-yellow)", ["--tw-ring-color" as any]: "var(--sol-bg)" }} aria-hidden data-scope-panel-dot />}
+      </button>
+    </ShortcutTooltip>
+  );
+}
+
+/** A seat with no standing agent yet (F4.1): say what this area is, and
+ *  offer the one gesture that makes sense. An empty composer would go nowhere. */
+function ScopeUnseated({ role, tree, canEdit, hostName, busy, onProvision, onOpenBoard }: { role: OrgRole; tree: OrgTree; canEdit: boolean; hostName: string; busy: boolean; onProvision: () => void; onOpenBoard: () => void }) {
+  const owns = [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)];
+  const charter = (role.charter ?? "").split("\n").map((l) => l.trim()).find(Boolean);
+  const retired = role.status === "retired";
+  return (
+    <div className="flex-1 min-h-0 flex items-center justify-center px-6" data-scope-unseated={role.short_id}>
+      <div className="max-w-md w-full text-center">
+        <RoleFace role={role} size={56} className="mx-auto mb-4" />
+        <h2 className="text-[17px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)" }}>{role.name} is not online yet</h2>
+        <p className="mt-2 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
+          {charter ? charter : owns.length > 0 ? `This seat owns ${owns.join(", ")}.` : "This seat owns the whole workspace."}
+          {charter && owns.length > 0 && <> It covers {owns.join(", ")}.</>}
+          {" "}It reports to <span style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>.
+        </p>
+        {retired ? (
+          <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This seat is retired. Its board is still here.</p>
+        ) : canEdit ? (
+          <>
+            <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Bring it online and this page becomes a conversation with it: ask for something here and it answers or starts a hand.</p>
+            <button type="button" onClick={onProvision} disabled={busy} className="mt-4 h-9 px-4 rounded-lg text-[13px] font-semibold disabled:opacity-60 hover:brightness-110 transition-colors" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-scope-provision>
+              {busy ? "Bringing it online…" : `Bring @${role.handle} online`}
+            </button>
+          </>
+        ) : (
+          <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-ask-host>Ask {hostName} to bring it online; until then the board beside this page is what there is.</p>
+        )}
+        <button type="button" onClick={onOpenBoard} className="mt-3 text-[12px] underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }}>Open the board</button>
+      </div>
+    </div>
   );
 }
 

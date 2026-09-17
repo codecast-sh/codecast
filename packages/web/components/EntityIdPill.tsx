@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
+import { useHoverCard } from "./ui/HoverCard";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
@@ -929,8 +930,9 @@ export function EntityIdPill({
   const repoRef = isPr || isCommit ? parseRepoObjectId(rawId) : null;
   const githubHref = repoRef ? repoObjectGitHubUrl(repoRef) : null;
 
-  const [hoverOpen, setHoverOpen] = useState(false);
-  const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The app's one hover card timing (ui/HoverCard): the pill keeps its own
+  // anchor markup for the reveal band, so it uses the hook rather than the wrapper.
+  const { open: hoverOpen, setOpen: setHoverOpen, openSoon, closeSoon, closeNow, cancel: cancelHover } = useHoverCard();
 
   // A task pill's icon is the StatusCircle at the task's status, in the
   // status's own color — the pill chrome stays one consistent task color
@@ -975,31 +977,6 @@ export function EntityIdPill({
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
 
-  const cancelHover = useCallback(() => {
-    if (hoverTimeout.current) {
-      clearTimeout(hoverTimeout.current);
-      hoverTimeout.current = null;
-    }
-  }, []);
-
-  // Always cancel any pending timer before scheduling the next one. The flicker
-  // ("disappears then comes back") was a stale close-timer surviving re-entry
-  // into the card: it fired and hid the popover even though the cursor was now
-  // inside it.
-  const openSoon = useCallback(() => {
-    cancelHover();
-    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 200);
-  }, [cancelHover]);
-
-  const closeSoon = useCallback(() => {
-    cancelHover();
-    hoverTimeout.current = setTimeout(() => setHoverOpen(false), 150);
-  }, [cancelHover]);
-
-  const closeNow = useCallback(() => {
-    cancelHover();
-    setHoverOpen(false);
-  }, [cancelHover]);
 
   // Session pills route through the same open-resolution as every other linked
   // session (useOpenLinkedSession): the conversation takes the stage, and on
@@ -1045,7 +1022,6 @@ export function EntityIdPill({
   const clickStaysHere = !!entity && (revealHost || isSession);
 
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
-  useEffect(() => cancelHover, [cancelHover]);
 
   // Unknown id shape, or a Convex id that resolved to no entity table (message
   // id, random hash) — render the caller's original element, or the raw text.

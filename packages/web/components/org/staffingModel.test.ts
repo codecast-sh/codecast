@@ -80,9 +80,9 @@ describe("proposal progress and grouping", () => {
   test("groups follow the apply order: the records first as one group, then one group per kind", () => {
     const groups = groupChanges(P.changes);
     expect(groups.map((g) => `${g.kind}:${g.changes.length}`)).toEqual(["sync:2", "projects:1", "role:2", "project_meta:1", "budget:1", "routine:1"]);
-    expect(groups[0]).toMatchObject({ sync: true, label: "Bring records in line" });
+    expect(groups[0]).toMatchObject({ sync: true, label: "Records to bring up to date" });
     expect(groups[1].sync).toBe(false);
-    expect(groups[2].label).toBe("Roles");
+    expect(groups[2].label).toBe("New standing agents");
   });
 
   test("the records group counts distinct records, and each row carries its evidence line (S9)", () => {
@@ -122,17 +122,23 @@ describe("proposal progress and grouping", () => {
   test("every kind reads as one line", () => {
     // The words are the shared describer's (the CLI walk and the ghost chips
     // read the same line); the pane only sentence cases them.
-    expect(changeLine(P.changes[0].change)).toBe("Create role Head of Platform @platform reporting to me over Platform (standing)");
-    expect(changeLine(P.changes[1].change)).toBe("Create role Content Lead @content reporting to @growth over pl-88 (program · ends with pl-88, then review)");
+    expect(changeLine(P.changes[0].change)).toBe("Add a standing agent, Head of Platform (@platform), reporting to you, looking after Platform");
+    expect(changeLine(P.changes[1].change)).toBe("Add a standing agent, Content Lead (@content), reporting to @growth, looking after pl-88");
     expect(changeLine(P.changes[6].change)).toBe("Mark plan pl-61 done");
     expect(changeLine(P.changes[7].change)).toBe("Mark task ct-4102 done");
-    expect(changeLine(P.changes[2].change)).toBe("Create project Platform");
-    expect(changeLine(P.changes[3].change)).toBe("Budget @growth tokens 800000/day");
-    expect(changeLine(P.changes[4].change)).toBe("Routine on @growth: Weekly growth review every 7d");
-    expect(changeLine(P.changes[5].change)).toBe("Charter Growth owner @growth p1: Double organic signups by December");
+    expect(changeLine(P.changes[2].change)).toBe("Create the project Platform");
+    expect(changeLine(P.changes[3].change)).toBe("@growth may use up to 800,000 tokens a day");
+    expect(changeLine(P.changes[4].change)).toBe('@growth runs "Weekly growth review" every week');
+    expect(changeLine(P.changes[5].change)).toBe("Write the charter of Growth, owned by @growth, priority p1: Double organic signups by December");
     expect(changeLine({ kind: "move", handle: "content", reports_to: "@growth" })).toBe("Move @content under @growth");
-    expect(changeLine({ kind: "retire", handle: "ops" })).toBe("Retire @ops");
-    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("Trust @growth to decide");
+    expect(changeLine({ kind: "move", handle: "content", reports_to: "me", scope_add: ["A", "B"], scope_remove: ["C"] })).toBe("Move @content under you; now also looks after A and B; no longer looks after C");
+    expect(changeLine({ kind: "scope", handle: "product", add: ["X", "Y"], remove: ["Z"] })).toBe("@product also looks after X and Y and stops looking after Z");
+    expect(changeLine({ kind: "adopt", handle: "chief-of-staff", conversation: "jx733c7" })).toBe("Make session jx733c7 the standing session of @chief-of-staff");
+    expect(changeLine({ kind: "file", plan: "pl-592", project: "Sync" })).toBe("Put plan pl-592 under the project Sync");
+    expect(changeLine({ kind: "budget", handle: "ops", caps: { hands_per_day: 1, wakes_per_day: 8, tokens_per_day: 200_000 } })).toBe("@ops may use up to 1 hand, 8 wakes and 200,000 tokens a day");
+    expect(changeLine({ kind: "routine", handle: "platform", title: "Release check", prompt: "x", every: "1d" })).toBe('@platform runs "Release check" every day');
+    expect(changeLine({ kind: "retire", handle: "ops" })).toBe("Retire @ops; its sessions go back to their owners");
+    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("@growth may decide on its own");
   });
 
   test("a change on an existing role focuses that node; a ghost has no node", () => {

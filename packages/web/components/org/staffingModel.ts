@@ -8,6 +8,7 @@ import { ORG_SYNC_KINDS, PLAN_STATUS_CHANGES, PROJECT_STATUS_CHANGES, TASK_STATU
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
 import { parentNodeId, resolveOrgParentRef } from "./orgLayout";
+import { CHANGE_KIND_META, kindLabel } from "./orgMeta";
 import type { OrgCreateRoleInput } from "../../store/orgSlice";
 import type { HireRoleInitial, HireRoleTouched } from "./HireRoleDialog";
 import {
@@ -99,9 +100,12 @@ export function proposalProgress(p: Pick<OrgProposalRow, "changes" | "counts">):
     const decided = Math.max(0, p.counts.decided - failed);
     return { decided, total, remaining: total - decided, applied, skipped, failed, fromCounts: true };
   }
-  const total = p.changes.length;
+  // A change the author removed (S18) is no longer anyone's to decide: it
+  // leaves the count the way it left the ask.
+  const live = p.changes.filter((c) => c.status !== "removed");
+  const total = live.length;
   let decided = 0, applied = 0, skipped = 0, failed = 0;
-  for (const c of p.changes) {
+  for (const c of live) {
     if (!isDecidable(c.status)) decided += 1;
     if (c.status === "applied") applied += 1;
     if (c.status === "skipped") skipped += 1;
@@ -156,7 +160,7 @@ export function recordsInLine(changes: OrgProposalChange[]): number {
   return refs.size;
 }
 
-export const SYNC_GROUP_LABEL = "Bring records in line";
+export const SYNC_GROUP_LABEL = "Records to bring up to date";
 
 /** A records group over this many changes renders as one card (count by
  *  kind, the most consequential lines, the evidence summary, Accept group and
@@ -263,7 +267,7 @@ export function syncGroupSummary(changes: OrgProposalChange[]): SyncGroupSummary
 }
 
 /** The change list grouped in apply order, empty kinds dropped. The three
- *  record kinds (S9) rank first and share one group, "Bring records in line";
+ *  record kinds (S9) rank first and share one group, "Records to bring up to date";
  *  every other kind is its own group. */
 export function groupChanges(changes: OrgProposalChange[]): ChangeGroup[] {
   const ordered = orderChanges(changes);
@@ -273,32 +277,20 @@ export function groupChanges(changes: OrgProposalChange[]): ChangeGroup[] {
     const kind: ChangeGroup["kind"] = sync ? "sync" : c.change.kind;
     const last = out[out.length - 1];
     if (last && last.kind === kind) last.changes.push(c);
-    else out.push({ kind, label: sync ? SYNC_GROUP_LABEL : KIND_LABEL[c.change.kind], changes: [c], sync });
+    else out.push({ kind, label: sync ? SYNC_GROUP_LABEL : kindLabel(c.change.kind), changes: [c], sync });
   }
   return out;
 }
 
-export const KIND_LABEL: Record<OrgChange["kind"], string> = {
-  plan_status: "Plan status",
-  task_status: "Task status",
-  project_status: "Project status",
-  projects: "Projects",
-  file: "Filing",
-  role: "Roles",
-  move: "Moves",
-  scope: "Scope",
-  budget: "Budget",
-  trust: "Trust",
-  routine: "Routines",
-  project_meta: "Charters",
-  adopt: "Adopt",
-  retire: "Retire",
-};
+/** The group header per kind: orgMeta's table, one place for the words. */
+export const KIND_LABEL: Record<OrgChange["kind"], string> = Object.fromEntries(
+  (Object.keys(CHANGE_KIND_META) as OrgChange["kind"][]).map((k) => [k, CHANGE_KIND_META[k].label]),
+) as Record<OrgChange["kind"], string>;
 
 // ---------------------------------------------------------------- one line per change
 
 /** The one line a change reads as in the list: orgMeta's, shared with the ghost chips. */
-export { changeLine, SEVERITY_COLOR } from "./orgMeta";
+export { changeLine, kindLabel, kindDescription, CHANGE_KIND_META, SEVERITY_COLOR } from "./orgMeta";
 
 /** The handle a change acts on, when it names one. */
 export function changeHandle(change: OrgChange): string | null {
@@ -322,6 +314,7 @@ export const CHANGE_STATUS_META: Record<OrgChangeStatus, { label: string; color:
   applied: { label: "applied", color: "var(--sol-green)" },
   skipped: { label: "skipped", color: "var(--sol-text-dim)" },
   failed: { label: "failed", color: "var(--sol-red)" },
+  removed: { label: "removed", color: "var(--sol-text-dim)" },
 };
 
 /** The layout node a change focuses when its subject already exists on the
@@ -399,23 +392,25 @@ export function bottleneckRoles(health: OrgHealth | null): BottleneckRow[] {
 }
 
 /** A short label for a flag code, for badges. */
+/** Each finding in the reader's words (S17): what the review saw, not the
+ *  code's name for it. The flag's own detail sentence follows it. */
 export const FLAG_LABEL: Record<HealthFlag["code"], string> = {
-  overloaded: "overloaded",
-  bypassed: "bypassed",
-  wide_span: "wide span",
-  idle: "idle",
-  slow_to_recommend: "slow to recommend",
-  review_stall: "review stall",
-  cap_hit: "cap hit",
-  unowned: "unowned",
-  no_charter: "no charter",
-  chatter: "chatter",
-  unfiled_plan: "unfiled plan",
-  program_ended: "program ended",
-  wide_ledger: "wide ledger",
-  stale_plan: "stale plan",
-  stale_task: "stale task",
-  stale_project: "stale project",
+  overloaded: "more reaching it than it can handle",
+  bypassed: "worked around",
+  wide_span: "too many reporting to one person",
+  idle: "nothing moved for a while",
+  slow_to_recommend: "slow to answer",
+  review_stall: "a review stuck waiting",
+  cap_hit: "daily limit reached",
+  unowned: "no owner",
+  no_charter: "no charter written",
+  chatter: "talks more than it delivers",
+  unfiled_plan: "plan not under a project",
+  program_ended: "its program ended",
+  wide_ledger: "too much open at once",
+  stale_plan: "plan record behind",
+  stale_task: "task record behind",
+  stale_project: "project record behind",
 };
 
 /** The `?proposal=` value a URL carries: "op-N", else null. */
@@ -693,4 +688,107 @@ export function resolveProposalAuthor(
 export function proposalRefInContext(md: string | null | undefined): string | null {
   const m = /\/org\?proposal=(op-\d+)/i.exec(md ?? "");
   return m ? m[1].toLowerCase() : null;
+}
+
+// ---------------------------------------------------------------- the summary a person reads cold (S17)
+
+/**
+ * The analyzer's summary split three ways (S17): the ask, its first
+ * paragraph, which the pane shows in front; the tail, every paragraph after
+ * it (the analyzer's real runs put about 200 words in the ask and 900 in the
+ * tail), which sits behind one control; and the one line that only carries
+ * the evidence link ("Evidence, what could not be verified, findings and
+ * escalations: https://…"), which becomes the Evidence control wherever it
+ * sat. A summary with one paragraph has no tail.
+ */
+export function splitAsk(summaryMd: string | null | undefined): { ask: string; tail: string; evidenceHref: string | null } {
+  const text = (summaryMd ?? "").trim();
+  if (!text) return { ask: "", tail: "", evidenceHref: null };
+  let evidenceHref: string | null = null;
+  const kept = text.split("\n").filter((line) => {
+    const m = line.match(/^\s*\**evidence\b[^\n]*?(https?:\/\/\S+)\**\s*$/i);
+    if (m && !evidenceHref) { evidenceHref = m[1].replace(/[.,)*]+$/, ""); return false; }
+    return true;
+  });
+  const paragraphs = kept.join("\n").split(/\n[ \t]*\n+/).map((p) => p.trim()).filter(Boolean);
+  return { ask: paragraphs[0] ?? "", tail: paragraphs.slice(1).join("\n\n"), evidenceHref };
+}
+
+export type BudgetCaps = { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
+export type BudgetLine = { handle: string; name?: string; before: Partial<BudgetCaps> | null; after: Partial<BudgetCaps> | null; note: string };
+export type BudgetArithmetic = {
+  /** Active seats' daily limits summed, today. */
+  today: BudgetCaps;
+  /** The same sum if every remaining change is accepted as proposed. */
+  after: BudgetCaps;
+  /** Seats that count today (active, with a limit). */
+  seats: number;
+  /** Paused seats, which stay outside both totals. */
+  paused: number;
+  /** One line per change that moves the total. */
+  lines: BudgetLine[];
+};
+
+const ZERO_CAPS: BudgetCaps = { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: 0 };
+const addCaps = (a: BudgetCaps, b: Partial<BudgetCaps> | undefined | null, sign = 1): BudgetCaps => ({
+  hands_per_day: a.hands_per_day + sign * (b?.hands_per_day ?? 0),
+  wakes_per_day: a.wakes_per_day + sign * (b?.wakes_per_day ?? 0),
+  tokens_per_day: a.tokens_per_day + sign * (b?.tokens_per_day ?? 0),
+});
+
+/**
+ * The budget arithmetic behind the pane's Budget control, computed from the
+ * tree and the proposal rather than quoted from the analyzer's prose: today's
+ * total across active seats, the total if every open change lands, and the
+ * lines that move it (a new seat's limit, a changed limit, a retired seat).
+ * Skipped and already applied rows are left out: applied ones are in the
+ * tree already, skipped ones never will be.
+ */
+export function budgetArithmetic(tree: OrgTree | null, changes: OrgProposalChange[]): BudgetArithmetic {
+  const roles = tree?.roles ?? [];
+  const active = roles.filter((r) => r.status === "active");
+  const paused = roles.filter((r) => r.status === "paused").length;
+  let today = ZERO_CAPS;
+  for (const r of active) today = addCaps(today, r.caps);
+  const capsOf = (h: string) => active.find((r) => r.handle === h.replace(/^@/, ""))?.caps ?? null;
+  const nameOf = (h: string) => roles.find((r) => r.handle === h.replace(/^@/, ""))?.name;
+  let after = today;
+  const lines: BudgetLine[] = [];
+  for (const c of changes) {
+    if (!isDecidable(c.status)) continue;
+    const ch = editedOrgChange(c.change, c.edits);
+    if (ch.kind === "role" && ch.caps) {
+      after = addCaps(after, ch.caps);
+      lines.push({ handle: ch.handle, name: ch.name, before: null, after: ch.caps, note: "new seat" });
+    } else if (ch.kind === "budget") {
+      const before = capsOf(ch.handle);
+      const next = { ...(before ?? {}), ...ch.caps };
+      after = addCaps(addCaps(after, before, -1), next);
+      lines.push({ handle: ch.handle, name: nameOf(ch.handle), before, after: next, note: before ? "changed limit" : "limit on a seat this proposal adds" });
+    } else if (ch.kind === "retire") {
+      const before = capsOf(ch.handle);
+      if (before) { after = addCaps(after, before, -1); lines.push({ handle: ch.handle, name: nameOf(ch.handle), before, after: null, note: "seat closed" }); }
+    }
+  }
+  return { today, after, seats: active.filter((r) => r.caps).length, paused, lines };
+}
+
+/** "6 hands, 40 wakes, 400,000 tokens": the three limits in one line, in the
+ *  order they always read. */
+export function capsLine(caps: Partial<BudgetCaps> | null | undefined): string {
+  if (!caps) return "no limit set";
+  const parts: string[] = [];
+  if (caps.hands_per_day !== undefined) parts.push(`${caps.hands_per_day} ${caps.hands_per_day === 1 ? "hand" : "hands"}`);
+  if (caps.wakes_per_day !== undefined) parts.push(`${caps.wakes_per_day} ${caps.wakes_per_day === 1 ? "wake" : "wakes"}`);
+  if (caps.tokens_per_day !== undefined) parts.push(`${caps.tokens_per_day.toLocaleString("en-US")} tokens`);
+  return parts.join(", ") || "no limit set";
+}
+
+/** Whether this person has accepted a change on any proposal in view: the
+ *  cold read intro (S17) is for someone who has not. The pref stamps the
+ *  fact for good once they accept; this covers people who accepted before
+ *  the pref existed. */
+export function hasAcceptedBefore(proposals: Pick<OrgProposalRow, "changes">[], meId: string | null | undefined): boolean {
+  if (!meId) return false;
+  return proposals.some((p) => p.changes.some((c) => c.decided_by === meId && (c.status === "accepted" || c.status === "applied" || c.status === "failed")));
 }

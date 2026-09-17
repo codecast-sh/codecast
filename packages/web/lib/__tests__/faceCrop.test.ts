@@ -275,8 +275,8 @@ describe("hitsInteractive", () => {
 });
 
 describe("the circle tiers", () => {
-  it("is 96 for one speaker, 64 in a row, 40 when squeezed", () => {
-    expect(TIER_DIAMETER).toEqual({ speaker: 96, row: 64, mini: 40 });
+  it("is 192 for one speaker, 128 in a row, 40 when squeezed", () => {
+    expect(TIER_DIAMETER).toEqual({ speaker: 192, row: 128, mini: 40 });
   });
 
   it("puts one circle at the speaker size and a row at the row size", () => {
@@ -338,13 +338,13 @@ describe("facesWindowSize", () => {
     const idle = facesWindowSize("everyone", 3);
     const hovered = facesWindowSize("everyone", 3, { hovered: true });
     expect(hovered.height - idle.height).toBe(HOVER_ROWS);
-    // The chrome carries words now, so it is wider than three 64px faces:
-    // the window widens to hold it, and never past what it needs.
+    // The chrome carries words now; three full faces may already be wider:
+    // the window is the max of the two, and never past what it needs.
     expect(hovered.width).toBe(Math.max(idle.width, CALL_CHROME_WIDTH + FACES_PADDING * 2));
   });
 
   it("is always as wide as the chrome, so nothing slides on hover", () => {
-    // One 96px face is narrower than the labeled chrome. Widening on hover
+    // One speaker face may still be narrower than the labeled chrome. Widening on hover
     // moved the circle out from under the pointer — the flicker — so the
     // width is the chrome's at rest too; the extra glass is click-through.
     const idle = facesWindowSize("speaker", 1);

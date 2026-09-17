@@ -38,7 +38,7 @@ describe("ghostsFor", () => {
     const ghost = m.get(roleNodeId(c._id))!;
     expect(ghost?.kind).toBe("role");
     if (ghost.kind !== "role") return;
-    expect(ghost.ghost).toEqual({ change_id: c._id, status: "proposed", line: "Create role Head of Platform @platform reporting to me over Platform", kind: "role", solid: false });
+    expect(ghost.ghost).toEqual({ change_id: c._id, status: "proposed", line: "Add a standing agent, Head of Platform (@platform), reporting to you, looking after Platform", kind: "role", solid: false });
     expect(ghost.role.handle).toBe("platform");
     expect(ghost.role.scope_names.projects.map((p) => p.title)).toEqual(["Platform"]);
     // Under the viewer, one level below, on a ghost edge.
@@ -110,7 +110,7 @@ describe("ghostsFor", () => {
     const { nodes } = lay([c]);
     const role = byId(nodes).get(GROWTH)!;
     if (role.kind !== "role") throw new Error("role");
-    expect(role.retire).toEqual({ change_id: c._id, status: "proposed", line: "Retire @growth" });
+    expect(role.retire).toEqual({ change_id: c._id, status: "proposed", line: "Retire @growth; its sessions go back to their owners" });
     // A role under growth, then growth retired and accepted: the child moves up to me.
     const child = change({ kind: "role", name: "SEO", handle: "seo", reports_to: "@growth" }, "applied");
     const acc = lay([child, { ...c, status: "accepted" }]);
@@ -129,10 +129,10 @@ describe("ghostsFor", () => {
     const chips = ghosts.chips[GROWTH]!;
     expect(chips.map((c) => c.kind)).toEqual(["scope", "budget", "trust", "routine"]);
     expect(chips.map((c) => c.line)).toEqual([
-      "Scope @growth +Platform",
-      "Budget @growth tokens 800000/day",
-      "Trust @growth to decide",
-      "Routine on @growth: Weekly growth review every 7d",
+      "@growth also looks after Platform",
+      "@growth may use up to 800,000 tokens a day",
+      "@growth may decide on its own",
+      '@growth runs "Weekly growth review" every week',
     ]);
     // The card grows by one chip row (on top of its standing line's row) so the layout never overlaps.
     const role = byId(nodes).get(GROWTH)!;
@@ -164,7 +164,7 @@ describe("ghostsFor", () => {
     const scoped = change({ kind: "project_meta", project: ORG_FIXTURE.roles[0].scope_names.projects[0]?.title ?? "Growth", priority: "p1" });
     const { ghosts } = lay([owned, scoped]);
     expect(ghosts.chips[GROWTH]?.map((c) => c.change_id)).toEqual([owned._id, scoped._id]);
-    expect(ghosts.chips[GROWTH]?.[0].line).toBe("Charter Anything owner @growth: Double signups");
+    expect(ghosts.chips[GROWTH]?.[0].line).toBe("Write the charter of Anything, owned by @growth: Double signups");
   });
 
   it("adopt: a ghost session under the role, 'this session' when the viewer is looking from it", () => {
@@ -254,8 +254,8 @@ describe("ghostsFor", () => {
     const projects = change({ kind: "projects", changes: [{ op: "create", title: "Platform" }, { op: "merge", from: "Old", into: "Platform" }] });
     const unknown = change({ kind: "rename", handle: "growth", to: "Growth 2" } as unknown as OrgChange);
     const { ghosts } = lay([projects, unknown]);
-    expect(ghosts.chips[ME]!.map((c) => [c.change_id, c.chip])).toEqual([[projects._id, "+ Platform, Old into Platform"], [unknown._id, "Rename (not supported in this build)"]]);
-    expect(ghosts.chips[ME]![1].line).toBe("Rename (not supported in this build)");
+    expect(ghosts.chips[ME]!.map((c) => [c.change_id, c.chip])).toEqual([[projects._id, "+ Platform, Old into Platform"], [unknown._id, 'A change this version of codecast cannot show yet ("rename")']]);
+    expect(ghosts.chips[ME]![1].line).toBe('A change this version of codecast cannot show yet ("rename")');
   });
 
   it("project_meta: with no owning role the canvas draws nothing (the scope panel's project row carries it); an owner nothing answers to warns", () => {
@@ -273,7 +273,7 @@ describe("ghostsFor", () => {
     if (stub.kind !== "role") throw new Error("role");
     expect(stub.role.name).toBe("Platform Lead");
     expect(stub.role.handle).toBe("platform-lead");
-    expect(stub.ghost?.line).toBe("Create role Platform Lead @platform-lead reporting to Samvit Jain");
+    expect(stub.ghost?.line).toBe("Add a standing agent, Platform Lead (@platform-lead), reporting to Samvit Jain");
     expect(edges.find((e) => e.target === stub.id)?.source).toBe(SAM);
     // The edited handle is what org.tree will echo: a proposal for "growth" edited to a live handle is superseded.
     const dup = { ...change({ kind: "role", name: "G", handle: "g2" }, "accepted"), edits: { handle: "growth" } };

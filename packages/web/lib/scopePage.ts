@@ -87,6 +87,84 @@ export function scopeQueryRef(
   return { scope: { project_ids: projectIds, plan_ids: [] }, ...(teamId ? { team_id: teamId } : {}) };
 }
 
+// ---------------------------------------------------------------- F4: the scope is a conversation
+
+/** F4.3: the panel's Sessions tab groups hands the way the inbox groups
+ *  sessions, in the inbox's order. GlobalSessionPanel renders Needs Input,
+ *  Done, Working, Dormant, top down as "who acts next": you (a hand waiting on
+ *  a person, a finished hand to review), the agent right now, then a machine
+ *  wake. Idle rows, which the inbox never renders, close the list so a hand
+ *  under the scope is never hidden. A source test keeps this order equal to
+ *  the inbox's. */
+export const HAND_GROUPS: { state: WorkState; label: string }[] = [
+  { state: "needs_input", label: "Needs input" },
+  { state: "done", label: "Done" },
+  { state: "working", label: "Working" },
+  { state: "dormant", label: "Dormant" },
+  { state: "idle", label: "Idle" },
+];
+
+export type HandGroup<T> = { state: WorkState; label: string; color: string; rows: T[] };
+
+/** Group hands by work state. An empty group is dropped, the way the inbox
+ *  drops an empty section. Inside a group the inbox's direction holds: a
+ *  queue a person clears reads oldest first (needs input, done); everything
+ *  else reads freshest first. */
+export function groupHands<T extends { state: WorkState; updated_at: number }>(rows: T[]): HandGroup<T>[] {
+  const out: HandGroup<T>[] = [];
+  for (const g of HAND_GROUPS) {
+    const members = rows.filter((r) => r.state === g.state);
+    if (members.length === 0) continue;
+    const oldestFirst = g.state === "needs_input" || g.state === "done";
+    members.sort((a, b) => (oldestFirst ? a.updated_at - b.updated_at : b.updated_at - a.updated_at));
+    out.push({ state: g.state, label: g.label, color: ORG_STATE_META[g.state].color, rows: members });
+  }
+  return out;
+}
+
+/** F4.1: the panel's dot. How many hands under this scope wait on a person:
+ *  the sessions reporting to the role (the tree's live counts), or for the
+ *  root every session in the tree; plus the sessions the scope rule pulls in
+ *  (bound to a task or plan here) that the summary counted, whichever is
+ *  larger, so a closed panel never says "nothing" while something waits. */
+export function handsWaiting(
+  role: { counts: { needs_input: number } } | null,
+  tree: { people: { counts: { needs_input: number } }[]; roles: { counts: { needs_input: number } }[] } | null,
+  summary: { sessions: { needs_input: number } } | null | undefined,
+): number {
+  const underRole = role
+    ? role.counts.needs_input
+    : (tree ? [...tree.people, ...tree.roles].reduce((n, b) => n + (b.counts.needs_input ?? 0), 0) : 0);
+  return Math.max(underRole, summary?.sessions.needs_input ?? 0);
+}
+
+/** The task a hand is bound to: the session row's own pointer when the store
+ *  has the row, else the task that lists the session among its conversations
+ *  (`cast task start` writes both). Null when the hand is bound to nothing. */
+export function boundTaskOf<T extends { _id: string; conversation_ids?: string[] }>(
+  sessionId: string,
+  activeTaskId: string | null | undefined,
+  tasks: T[],
+): T | null {
+  if (activeTaskId) {
+    const hit = tasks.find((t) => t._id === activeTaskId);
+    if (hit) return hit;
+  }
+  return tasks.find((t) => t.conversation_ids?.includes(sessionId)) ?? null;
+}
+
+/** A task's subtasks as open and closed counts, derived live from the store
+ *  (never a stored twin). Null when the task has no subtasks, so the row
+ *  shows nothing rather than "0/0". A dropped subtask counts for neither. */
+export function subtaskCounts(taskId: string, tasks: Array<{ _id: string; parent_id?: string | null; status: string }>): { open: number; closed: number } | null {
+  let open = 0, closed = 0;
+  for (const t of tasks) {
+    if (t.parent_id !== taskId || t.status === "dropped") continue;
+    if (t.status === "done") closed++; else open++;
+  }
+  return open + closed === 0 ? null : { open, closed };
+}
+
 /** One honest line for a per view query that will not answer. */
 export function queryProblem(error: Error | undefined, missing: boolean, what: string): string | null {
   if (!error) return null;

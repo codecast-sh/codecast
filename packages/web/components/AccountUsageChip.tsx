@@ -14,12 +14,13 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { KeyRound, TimerReset, Zap, ZapOff } from "lucide-react";
+import { KeyRound, Zap, ZapOff } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
+import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
@@ -233,8 +234,13 @@ export function AccountUsageChip() {
   };
   const activeGroups = buildGroups(allEntries.filter((e) => e.isActive));
   const otherGroups = buildGroups(allEntries.filter((e) => !e.isActive));
-  const autoOn = recovery.autoSwitch.on;
+  // The chip's bolt says whether this machine recovers on its own. Ask-first
+  // counts: it acts, it just stops for approval first — and a proposal waiting
+  // on the human is exactly what the chip should surface.
+  const mode = recovery.recovery.mode;
+  const autoOn = mode === "auto" || mode === "ask";
   const state = device.auto_switch_state;
+  const awaitingApproval = state?.last_decision?.kind === "propose";
   // Only a re-check clears the stamp, so an old one keeps claiming "everything
   // is spent" after the windows rolled — read it against the clock.
   const exhausted = isExhaustionCurrent(state?.exhausted_at, [...profiles, ...codexProfiles], now);
@@ -378,8 +384,20 @@ export function AccountUsageChip() {
         ) : autoOn ? (
           <Zap
             className="h-3 w-3"
-            style={{ color: exhausted ? "var(--sol-red)" : "var(--sol-cyan)" }}
-            aria-label="Auto-switch enabled"
+            style={{
+              color: exhausted
+                ? "var(--sol-red)"
+                : awaitingApproval
+                  ? "var(--sol-yellow)"
+                  : "var(--sol-cyan)",
+            }}
+            aria-label={
+              awaitingApproval
+                ? "An account switch is waiting for your approval"
+                : mode === "auto"
+                  ? "Switches accounts automatically on a usage limit"
+                  : "Asks before switching accounts on a usage limit"
+            }
           />
         ) : (
           active && (
@@ -478,54 +496,29 @@ export function AccountUsageChip() {
         </div>
 
         <div className="border-t border-sol-border/60 px-3 py-2.5">
-          {/* Device-level flag — shown even when the current login isn't a
-              saved profile, so the off state is always recoverable from here. */}
-          <div className="flex items-center gap-2">
-            <Zap className={`h-3.5 w-3.5 ${autoOn ? "text-sol-cyan" : "text-sol-text-dim"}`} />
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-sol-text">Auto-switch accounts</div>
-              <div className="text-[10px] leading-snug text-sol-text-dim">
-                When sessions park on a usage limit or an expired login, hop to the freshest
-                account and continue them until everything is unblocked or every account is spent.
-              </div>
-            </div>
-            <Switch
-              checked={autoOn}
-              onCheckedChange={recovery.autoSwitch.set}
-              disabled={recovery.autoSwitch.pending}
-            />
+          {/* Device-level mode — shown even when the current login isn't a
+              saved profile, so it is always reachable from here. */}
+          <div className="flex items-center gap-2 px-2">
+            <Zap className={`h-3.5 w-3.5 ${recovery.recovery.mode === "off" ? "text-sol-text-dim" : "text-sol-cyan"}`} />
+            <div className="text-xs font-medium text-sol-text">On a usage limit</div>
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <TimerReset
-              className={`h-3.5 w-3.5 ${recovery.autoContinue.on ? "text-sol-cyan" : "text-sol-text-dim"}`}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-sol-text">Resume at window reset</div>
-              <div className="text-[10px] leading-snug text-sol-text-dim">
-                Sessions parked on this account&apos;s limit continue on their own once the window
-                resets — no account change.
-              </div>
-            </div>
-            <Switch
-              checked={recovery.autoContinue.on}
-              onCheckedChange={recovery.autoContinue.set}
-              disabled={recovery.autoContinue.pending}
-            />
+          <div className="mt-1">
+            <RecoveryModeSelect control={recovery.recovery} compact />
           </div>
-          {autoOn && exhausted && (
+          {recovery.recovery.mode === "auto" && exhausted && (
             <div className="mt-1.5 rounded bg-sol-red/10 px-2 py-1 text-[10px] text-sol-red">
               {exhaustionBannerCopy([...profiles, ...codexProfiles], now)}
             </div>
           )}
-          {(autoOn || recovery.autoContinue.on) &&
-            !exhausted &&
-            state?.last_action &&
-            state.last_action_at && (
-              <div className="mt-1.5 text-[10px] text-sol-text-dim">
-                Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
-                {formatAgo(now - state.last_action_at)}
-              </div>
-            )}
+          {!exhausted && state?.last_decision && (
+            <RecoveryDecisionNote decision={state.last_decision} now={now} className="mt-1.5 px-2" />
+          )}
+          {!exhausted && !state?.last_decision && state?.last_action && state.last_action_at && (
+            <div className="mt-1.5 px-2 text-[10px] text-sol-text-dim">
+              Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
+              {formatAgo(now - state.last_action_at)}
+            </div>
+          )}
           <button
             onClick={() => {
               setOpen(false);

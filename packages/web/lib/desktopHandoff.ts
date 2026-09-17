@@ -84,16 +84,30 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 // The gate
 // ---------------------------------------------------------------------------
 
-// Paths that should never auto-hand-off to the desktop app — auth/oauth flows,
-// public share pages (often opened by people without the app), published
-// artifacts (/a/<slug>, same audience), the standalone repository pages
-// (/r/<owner>/<name>/…: code links pasted into chat, guest readable, meant to
-// stay in the browser like a GitHub link), the in-app palette popup, downloads,
-// and API routes.
+// Paths that should never auto-hand-off to the desktop app — the marketing
+// site (codecast.sh itself: the landing page and its public pages; a visitor
+// looking at the site is not opening a conversation, and parseDesktopDeepLinkPath
+// already returns null for "/"), auth/oauth flows, public share pages (often
+// opened by people without the app), published artifacts (/a/<slug>, same
+// audience), the standalone repository pages (/r/<owner>/<name>/…: code links
+// pasted into chat, guest readable, meant to stay in the browser like a GitHub
+// link), the in-app palette popup, downloads, and API routes.
 // The community rooms (/community) are a public page too: a link from the
 // marketing site or a search result opens them in the browser, whether or not
 // the reader owns the desktop app.
-const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/a\//, /^\/r(\/|$)/, /^\/community(\/|$)/, /^\/palette/, /^\/download/, /^\/api\//];
+const HANDOFF_DENY = [
+  /^\/$/,
+  /^\/(about|features|documentation|privacy|security|support|terms|changelog|pricing|download|blog|compare)(\/|$)/,
+  /^\/login/,
+  /^\/auth/,
+  /^\/oauth/,
+  /^\/share\//,
+  /^\/a\//,
+  /^\/r(\/|$)/,
+  /^\/community(\/|$)/,
+  /^\/palette/,
+  /^\/api\//,
+];
 
 export function isHandoffEligiblePath(path: string): boolean {
   if (!path) return false;

@@ -266,6 +266,7 @@ export default function TriggerDetailPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <Link
               href="/triggers"
+              data-page-head
               className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline"
             >
               <ArrowLeft className="w-3 h-3" /> All triggers
@@ -273,11 +274,11 @@ export default function TriggerDetailPage() {
 
             {/* ── Identity ── */}
             <div className="mt-4 flex items-start gap-4">
-              <div className="flex-shrink-0 w-11 h-11 rounded-xl border border-sol-orange/30 bg-sol-orange/10 flex items-center justify-center">
+              <div data-page-head className="flex-shrink-0 w-11 h-11 rounded-xl border border-sol-orange/30 bg-sol-orange/10 flex items-center justify-center">
                 <Zap className="w-5 h-5 text-sol-orange" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2.5 flex-wrap">
+                <div data-page-head className="flex items-center gap-2.5 flex-wrap">
                   <h1 className="text-xl font-semibold text-sol-text leading-tight">{title}</h1>
                   {(t.short_id || t._id) && (
                     <ShortcutTooltip label={idCopied ? "Copied" : "Copy id"}>

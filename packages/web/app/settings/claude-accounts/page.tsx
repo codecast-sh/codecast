@@ -25,7 +25,7 @@ import { Input } from "../../../components/ui/input";
 import { Switch } from "../../../components/ui/switch";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Laptop, Pin, TimerReset, Trash2, Zap } from "lucide-react";
+import { Check, Copy, KeyRound, Laptop, Pin, Trash2, Zap } from "lucide-react";
 import {
   AccountUsageBars,
   LoginExpiredBadge,
@@ -37,6 +37,7 @@ import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../compon
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
+import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
 import { machineSwitchBlock, profileIsCurrentLogin } from "../../../lib/machineAccountSwitch";
 
@@ -203,8 +204,7 @@ function SessionAccountsStatus({ device }: { device: DeviceAccounts }) {
 
 function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
   const now = useCoarseNow(30_000);
-  const { autoSwitch, autoContinue } = useAccountRecoveryToggles(device);
-  const enabled = autoSwitch.on;
+  const { recovery } = useAccountRecoveryToggles(device);
   const state = device.auto_switch_state;
   // Time-aware: the stamp is only cleared by a re-check that may never run, so
   // past the session window it needs a still-pegged account to stand on.
@@ -212,48 +212,32 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
 
   return (
     <>
-      <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
-        <Zap className={`h-4 w-4 shrink-0 ${enabled ? "text-sol-cyan" : "text-sol-text-dim"}`} />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text">Auto-switch accounts on usage limits</div>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
-            When sessions park on a usage limit, choose the saved account with the most headroom,
-            restart those Claude Code processes on that account, and continue them. Other sessions
-            keep running on their own accounts. Subagent workers are left out.
-          </p>
-        </div>
-        <Switch
-          checked={enabled}
-          onCheckedChange={autoSwitch.set}
-          disabled={autoSwitch.pending}
-          aria-label="Auto-switch accounts on usage limits"
-        />
-      </div>
-      <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
-        <TimerReset
-          className={`h-4 w-4 shrink-0 ${autoContinue.on ? "text-sol-cyan" : "text-sol-text-dim"}`}
+      <div className="flex items-start gap-2.5 px-4 py-3 sm:px-5">
+        <Zap
+          className={`mt-0.5 h-4 w-4 shrink-0 ${recovery.mode === "off" ? "text-sol-text-dim" : "text-sol-cyan"}`}
         />
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text">Resume at window reset</div>
+          <div className="text-xs font-medium text-sol-text">When a session hits a usage limit</div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
-            Sessions parked on this account&apos;s limit in the last few hours get a &quot;continue&quot;
-            on their own once the window resets — no account change. Off means they stay parked
-            until you continue them.
+            This machine runs one Claude login at a time, so changing accounts moves every session on
+            it. Subagent workers are left out of a revive.
           </p>
+          <div className="mt-2">
+            <RecoveryModeSelect control={recovery} />
+          </div>
         </div>
-        <Switch
-          checked={autoContinue.on}
-          onCheckedChange={autoContinue.set}
-          disabled={autoContinue.pending}
-          aria-label="Resume at window reset"
-        />
       </div>
-      {enabled && exhausted && (
+      {recovery.mode === "auto" && exhausted && (
         <div className="bg-sol-red/10 px-4 py-2 text-[11px] text-sol-red sm:px-5">
           {exhaustionBannerCopy(device.profiles, now)}
         </div>
       )}
-      {(enabled || autoContinue.on) && !exhausted && state?.last_action && state.last_action_at && (
+      {!exhausted && state?.last_decision && (
+        <div className="px-4 py-2 sm:px-5">
+          <RecoveryDecisionNote decision={state.last_decision} now={now} />
+        </div>
+      )}
+      {!exhausted && !state?.last_decision && state?.last_action && state.last_action_at && (
         <div className="px-4 py-2 text-[11px] text-sol-text-dim sm:px-5">
           Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
           {formatAgo(now - state.last_action_at)}.

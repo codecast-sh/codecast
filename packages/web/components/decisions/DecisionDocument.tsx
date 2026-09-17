@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { ArrowLeft, Check, ExternalLink, Layers, ShieldCheck, Undo2, User } from "lucide-react";
+import { ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -15,6 +15,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
+import { DecisionOptionList } from "./DecisionOptionList";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
 import { ladderRecommendation } from "../../lib/decisionLinks";
@@ -69,6 +70,9 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const now = useCoarseNow(30_000);
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
+  // Single, multi and rank answer on the option rows themselves; a form
+  // answers on its fields in the footer.
+  const answerInOptions = pending && answerable && (decision.kind ?? "single") !== "form";
   const chosen = new Set<number>(
     Array.isArray(decision.answer_json) ? decision.answer_json : decision.answer_index !== undefined ? [decision.answer_index] : [],
   );
@@ -217,40 +221,30 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               chosen={chosen}
             />
           </div>
-          <ol className="mt-3 space-y-3">
-            {decision.options.map((o, i) => {
-              const picked = chosen.has(i);
-              return (
-                <li key={i} className={`decision-option rounded-lg border px-4 py-3 ${picked ? "border-sol-green/50 bg-sol-green/5" : rec === i ? "border-sol-cyan/40" : "border-sol-border/70"}`}>
-                  <div className="flex items-start gap-3">
-                    <span className={`mt-0.5 w-6 h-6 shrink-0 rounded-full border flex items-center justify-center font-mono text-[11px] ${picked ? "border-sol-green text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
-                      {picked ? <Check className="w-3.5 h-3.5" /> : i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[15px] text-sol-text">{o.label.replace(" (Recommended)", "")}</span>
-                        {rec === i && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">a lead recommends</span>}
-                        {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">the agent's default</span>}
-                      </div>
-                      {o.description && <p className="mt-1 text-sm text-sol-text-muted">{o.description}</p>}
-                      {o.body_md && <div className="mt-2 text-sm text-sol-text-muted decision-option-body"><MarkdownRenderer content={o.body_md} /></div>}
-                      {(o.cost || o.risk || o.evidence?.length) ? (
-                        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[12px]">
-                          {o.cost && <span><span className="text-sol-text-dim">cost </span><span className="text-sol-text">{o.cost}</span></span>}
-                          {o.risk && <span><span className="text-sol-text-dim">risk </span><span className="text-sol-orange">{o.risk}</span></span>}
-                          {o.evidence?.map((e, k) => (
-                            <a key={k} href={e.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sol-blue hover:underline">
-                              {e.label}<ExternalLink className="w-3 h-3" />
-                            </a>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          {/* While the reader may answer, the option rows ARE the answer
+              surface (the same controls the queue card uses), so the page
+              never lists the options once to read and again to click. A
+              form's options are context for its fields, which sit in the
+              footer; a settled or held decision reads its rows plainly. */}
+          <div className="mt-3">
+            {answerInOptions ? (
+              <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+            ) : (
+              <DecisionOptionList
+                options={decision.options}
+                tone={(i) => (chosen.has(i) ? "picked" : "plain")}
+                leading={(i) => chosen.has(i) ? (
+                  <span className="w-6 h-6 rounded-full border border-sol-green text-sol-green flex items-center justify-center"><Check className="w-3.5 h-3.5" /></span>
+                ) : undefined}
+                tags={(i) => (
+                  <>
+                    {rec === i && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">a lead recommends</span>}
+                    {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">the agent's default</span>}
+                  </>
+                )}
+              />
+            )}
+          </div>
           {decision.kind === "form" && decision.form && (
             <div className="mt-3 text-[12px] text-sol-text-dim">
               Fields: {decision.form.fields.map((f) => `${f.label} (${f.type})`).join(", ")}
@@ -304,7 +298,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         </section>
 
         {/* ── Answer ── */}
-        <section className="mt-8 mb-16 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
+        {(!pending || !answerInOptions) && <section className="mt-8 mb-16 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           {pending ? (
             answerable ? (
               <>
@@ -329,7 +323,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               )}
             </>
           )}
-        </section>
+        </section>}
       </div>
     </div>
   );

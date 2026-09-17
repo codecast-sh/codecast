@@ -28,7 +28,7 @@ import {
   onVoiceMirror,
 } from "../lib/desktop";
 import { cleanNotificationBody } from "../lib/notificationText";
-import { notificationRoute } from "../lib/notificationTypes";
+import { notificationActor, notificationRoute } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
 import { isChatContextOnScreen } from "../lib/chatFocus";
 import { useOsPermission } from "../hooks/useOsPermissions";
@@ -145,7 +145,7 @@ export function DesktopProvider() {
         n.created_at >= mountedAtRef.current &&
         Date.now() - n.created_at < BANNER_FRESH_MS
       ) {
-        const actor = n.actor?.name || n.actor?.github_username;
+        const actor = notificationActor(n).name;
         const title = actor ? `${actor}` : "Codecast";
         const body = cleanNotificationBody(n.message) || n.message;
         // The same click target the bell computes: a chat banner lands on the

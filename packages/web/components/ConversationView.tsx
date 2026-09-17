@@ -124,7 +124,7 @@ import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
 import { RoleWakeBlock } from "./RoleWakeBlock";
-import { isRoleWakeFrame, parseRoleWakeFrame, type RoleWakeFrame } from "./roleWake";
+import { isRoleWakeFrame, parseRoleWakeFrame, sentToRef, type RoleWakeFrame } from "./roleWake";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, parseNotificationSummary, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function messageLink(conversationId: string | undefined, messageId: string) {
@@ -214,7 +214,7 @@ import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
 import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
-import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence, composerPresenceEnabled } from "./CollabComposer";
 import { ConversationViewers } from "./presence/ViewerFaces";
@@ -884,7 +884,7 @@ type PullRequest = {
   merged_at?: number;
 };
 
-type ConversationViewProps = {
+export type ConversationViewProps = {
   conversation: ConversationData | null | undefined;
   commits?: Commit[];
   pullRequests?: PullRequest[];
@@ -935,6 +935,15 @@ type ConversationViewProps = {
    * the floating new-session window; undefined everywhere else.
    */
   onSubmitWithIntent?: (navigate: boolean) => void;
+  /**
+   * A host that routes the composer's send elsewhere (the staffing pane sends
+   * into a proposal's thread through orgProposals.say, org-staffing.md S18):
+   * the box clears and hands the text over, the host owns the optimistic
+   * bubble and the dispatch. Undefined everywhere else.
+   */
+  onSendOverride?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>;
+  /** A host's line above the box (what the next message is about). */
+  composerNode?: React.ReactNode;
 };
 
 export interface ConversationViewHandle {
@@ -3075,6 +3084,11 @@ function classifyUserMessage(
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const directUser = parseUserMessage(t);
   if (directUser) return { kind: 'direct_user', from: directUser.from, body: directUser.body };
+  // A message from the staffing pane into a proposal's thread (S18): the
+  // person's words under a quote of the row they were looking at; the reply
+  // note the wrapper carries for the agent stays out of the bubble.
+  const proposalMsg = parseProposalMessage(t);
+  if (proposalMsg) return { kind: 'direct_user', from: proposalMsg.from, body: proposalMsg.about ? `> ${proposalMsg.about}\n\n${proposalMsg.body}` : proposalMsg.body };
   if (isRoleWakeFrame(tNoReminders)) {
     const frame = parseRoleWakeFrame(tNoReminders);
     if (frame) return { kind: 'role_wake', frame };
@@ -10337,7 +10351,7 @@ function WorkingStatusLine({ startedAt, phrase, conversationId }: { startedAt?: 
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -11361,7 +11375,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     setFitsBesideControls(fits);
   }, []);
-  useLayoutEffect(measureFitsBesideControls, [message, measureFitsBesideControls]);
+  // isMultiline is a dep because it adds and removes the expand button, and
+  // that flag lands from the textarea's ResizeObserver one render after the
+  // text: shortening a long draft would otherwise measure against a button
+  // that is about to leave, decide it does not fit, and never look again.
+  useLayoutEffect(measureFitsBesideControls, [message, isMultiline, measureFitsBesideControls]);
   useWatchEffect(() => {
     const row = controlsRowRef.current;
     if (!row) return;
@@ -12498,6 +12516,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               answer. Reading top to bottom, that is the order a person needs
               them in. */}
           {threadStateNode}
+          {composerNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const dropdown = (
               <div
@@ -12975,7 +12994,7 @@ function settleTimelineItemAtOffset(
 // that adds a hook here keeps the fiber and crashes on the shifted hook slot
 // ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const renderStart = performance.now();
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
@@ -14258,6 +14277,14 @@ const ConversationViewInner = (
     const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
     const receiptOf = new Map<string, ReceiptEntry[]>(); // owner msgId -> folded hideable tools, per source message
     const absorbed = new Set<string>();                // msgId folded into an earlier receipt
+    // Where a turn's message went (roleWake.ts, scopes-and-feed.md F4.2), keyed
+    // by the boundary user message that opened the turn: when the next turn
+    // began (so a wake card claims only the hands started inside its window),
+    // and the sessions the agent ran `cast send` to. A window that runs off
+    // the loaded page closes at the page's last message, never at "forever".
+    const routingOf = new Map<string, { until: number | null; sentTo: string[] }>();
+    let curBoundary: string | null = null;
+    let lastLoadedAt = 0;
     let curKey: string | null = null;
     let ownerId: string | null = null;                 // current segment's receipt owner
     let previousAssistant: Message | null = null;
@@ -14265,12 +14292,16 @@ const ConversationViewInner = (
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
+      if (msg.timestamp > lastLoadedAt) lastLoadedAt = msg.timestamp;
       if (msg.role === 'user') {
         // Only a genuine new prompt ends the current turn; tool-result carriers,
         // interrupts, notifications, etc. are part of the ongoing response.
         if (TURN_BOUNDARY_KINDS.has(userMsgKindMap.get(msg._id)?.kind ?? 'normal')) {
           curKey = null;
           ownerId = null;
+          if (curBoundary) routingOf.get(curBoundary)!.until = msg.timestamp;
+          curBoundary = msg._id;
+          routingOf.set(msg._id, { until: null, sentTo: [] });
         }
         continue;
       }
@@ -14278,6 +14309,13 @@ const ConversationViewInner = (
       if (isHiddenStubMessage(msg)) continue;
       const hasText = !!(msg.content && stripSystemTags(msg.content).trim().length > 0);
       const tools = msg.tool_calls ?? [];
+      if (curBoundary) {
+        const routing = routingOf.get(curBoundary)!;
+        for (const tc of tools) {
+          const ref = sentToRef(parseCastCommand(tc));
+          if (ref && !routing.sentTo.includes(ref)) routing.sentTo.push(ref);
+        }
+      }
       const hasVisible = hasText || tools.length > 0 || (!!msg.images?.length);
       if (!hasVisible) continue;
       if (previousAssistant && !sameMessageAuthor(previousAssistant, msg, messageAuthors)) {
@@ -14315,8 +14353,9 @@ const ConversationViewInner = (
         receiptOf.set(msg._id, hideable.length ? [entry] : []);
       }
     }
-    return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed };
-  }, [timeline, userMsgKindMap, messageAuthors]);
+    if (curBoundary && hasMoreBelow) routingOf.get(curBoundary)!.until = lastLoadedAt;
+    return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed, routingOf };
+  }, [timeline, userMsgKindMap, messageAuthors, hasMoreBelow]);
 
   // Pair each slash-command invocation with its expansion (the body of the command's
   // .md file, emitted by Claude Code as the next user message). They render as one
@@ -16782,7 +16821,7 @@ const ConversationViewInner = (
         case 'chat_wake':
           return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
         case 'role_wake':
-          return <RoleWakeBlock key={msg._id} frame={kind.frame} timestamp={msg.timestamp} />;
+          return <RoleWakeBlock key={msg._id} frame={kind.frame} timestamp={msg.timestamp} conversationId={conversation?._id} until={turnAggregates.routingOf.get(msg._id)?.until ?? null} sentTo={turnAggregates.routingOf.get(msg._id)?.sentTo} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -18049,7 +18088,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

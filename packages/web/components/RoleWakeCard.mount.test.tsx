@@ -21,6 +21,9 @@ async function mountCard() {
   mock.module("./messageMarkdown", () => ({ MESSAGE_MD_REHYPE: [], MESSAGE_MD_COMPONENTS: {} }));
   mock.module("../lib/remarkEntityIds", () => ({ entityRemarkPlugins: [] }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
+  // The routing strip renders each hand as the live session pill; the pill
+  // drags the resolver and the store, so here it is its label and its ref.
+  mock.module("./EntityIdPill", () => ({ EntityIdPill: ({ id, shortId, label }: any) => React.createElement("span", { "data-pill": id ?? shortId }, label ?? shortId ?? id) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { RoleWakeCard } = await import("./RoleWakeCard");
@@ -120,6 +123,38 @@ async function verifyRoleWakeCard() {
     assert.ok(text().includes("@reliability"));
     assert.ok(!$$("button").some((b) => /^(Pause|Resume)$/.test(b.textContent?.trim() ?? "")));
     assert.ok($("[data-role-wake='or-8']"));
+
+    // Where it went (F4.2): a hand the role started in this turn renders under
+    // the frame as its pill, the state word every org surface uses, its pinned
+    // line, its task and its age; a follow up it sent reads "sent to". Nothing
+    // of it while the routing is empty.
+    assert.ok(!text().includes("Where it went"));
+    const hand = { _id: "conversations_h1", short_id: "jx7h101", title: "Get codecast main CI green", state: "working", started_at: frame.at! + 60_000, updated_at: frame.at! + 60_000, task_short_id: "ct-52058", state_line: "bisecting the five red jobs", state_status: null, state_at: null };
+    await render({ routing: { hands: [hand as any], sentTo: [] } });
+    assert.ok(text().includes("Where it went"));
+    const row = $("[data-hand='conversations_h1']");
+    assert.ok(row, "the hand renders as a row");
+    assert.ok(row.textContent?.includes("started"));
+    assert.equal(row.querySelector("[data-pill='conversations_h1']")?.textContent, "Get codecast main CI green");
+    assert.equal(row.querySelector("[data-hand-state]")?.getAttribute("data-hand-state"), "working");
+    assert.ok(row.textContent?.includes("working"));
+    assert.ok(row.textContent?.includes("bisecting the five red jobs"));
+    assert.ok(row.querySelector("[data-pill='ct-52058']"));
+    assert.ok(row.textContent?.includes("4m"), "age from the hand's start against now");
+    // The word is the observed work state, the one the panel's Sessions tab
+    // groups the same hand under; a declared status changes the pinned line
+    // it shows, never the word.
+    await render({ routing: { hands: [{ ...hand, state: "needs_input", state_status: "blocked", state_line: "needs a prod key" } as any], sentTo: [] } });
+    assert.ok($("[data-hand='conversations_h1']")?.textContent?.includes("needs a prod key"));
+    assert.ok($("[data-hand='conversations_h1']")?.textContent?.includes("needs input"));
+    assert.ok(!$("[data-hand='conversations_h1']")?.textContent?.includes("working"));
+    await render({ routing: { hands: [], sentTo: ["jx7h101"] } });
+    const sent = $("[data-sent-to='jx7h101']");
+    assert.ok(sent, "a follow up names the hand it went to");
+    assert.ok(sent.textContent?.includes("sent to"));
+    assert.ok(sent.querySelector("[data-pill='jx7h101']"));
+    await render({ routing: { hands: [], sentTo: [] } });
+    assert.ok(!text().includes("Where it went"));
 
     await act(() => root.unmount());
     dom.window.close();
