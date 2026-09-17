@@ -320,10 +320,10 @@ export function registerRemoteCommand(program: Command): void {
       // cloud session there would be re-pointed at the moved snapshot by the
       // push, so ask first (the server's ownership flip re-checks).
       {
-        const { remoteMoveCwd, resolveLocalSession } = await import("./session-move.js");
+        const { remoteRepoPath, resolveLocalSession } = await import("./session-move.js");
         const { fetchRootOccupant } = await import("../cloud/prepare.js");
         const { checkoutInUseMessage } = await import("@codecast/shared/contracts");
-        const remoteCwd = remoteMoveCwd(host, resolveLocalSession(sessionId).cwd);
+        const remoteCwd = remoteRepoPath(host, resolveLocalSession(sessionId).cwd);
         const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id);
         if (occupant) {
           console.error(checkoutInUseMessage(remoteCwd, occupant));

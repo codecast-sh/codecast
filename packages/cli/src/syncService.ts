@@ -1978,6 +1978,27 @@ export class SyncService {
   }
 
   /**
+   * A `cast cloud start` child for a cloud park failed. Reported through the
+   * park's own token so a failure from a park that is already over cannot show
+   * on the card, and stamped on the row so the heartbeat re-issue leaves it
+   * alone until a human picks the host again (convex cloud.reportPlacementFailure).
+   */
+  async reportCloudPlacementFailure(conversationId: string, placementToken: string | undefined, error: string): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate(
+        "cloud:reportPlacementFailure" as any,
+        {
+          conversation_id: conversationId,
+          ...(placementToken ? { placement_token: placementToken } : {}),
+          error,
+          api_token: this.apiToken,
+        }
+      );
+    } catch {}
+  }
+
+  /**
    * Claim a conversation for this device on a successful start: stamps
    * owner_device_id and clears any stale session_error (e.g. a "clone it first"
    * refusal another device wrote when it lacked the checkout).

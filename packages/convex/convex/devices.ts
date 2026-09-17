@@ -19,6 +19,7 @@ import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
   checkoutInUseMessage,
+  deviceWakesOnUse,
   posixRepoBasename,
 } from "@codecast/shared/contracts";
 import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch";
@@ -229,6 +230,28 @@ export async function enqueueStartSession(
     ownerDeviceId: conv?.owner_device_id ?? null,
     targetDeviceId: opts.targetDeviceId ?? null,
   });
+
+  // A start that lands in a folder of the cloud host's OWN roots (the
+  // predicate calls it native, so nothing parks it) is a session in the host's
+  // checkout like any shared cloud session, and the same rule holds: one alive
+  // session per checkout. Without this, a second session could start in a
+  // checkout a shared cloud session is working in and the two would fight over
+  // one working tree. Refused as an error on the row, never a start.
+  if (target && conv) {
+    const path = projectPath ?? gitRoot;
+    const targetDevice = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", target))
+      .first();
+    if (path && targetDevice && deviceWakesOnUse(targetDevice)
+      && (targetDevice.local_project_roots ?? []).some((r: string) => pathUnderRoot(path, r))) {
+      const occupant = await findSharedCheckoutOccupant(ctx, userId, target, { projectPath: path, excludeId: opts.conversationId.toString() });
+      if (occupant) {
+        await ctx.db.patch(opts.conversationId, { session_error: checkoutInUseMessage(path, occupant), updated_at: Date.now() });
+        return null;
+      }
+    }
+  }
 
   // Keep ownership in lockstep with routing: the machine we route to becomes the
   // owner, which also lets a live device reclaim a session whose prior owner went

@@ -241,6 +241,9 @@ describe("collectMirrorFiles", () => {
     write(".local/bin/nul-script", Buffer.concat([Buffer.from("#!/bin/sh\n"), Buffer.from([0]), Buffer.from("x")]), 0o755);
     write(".local/bin/huge-script", `#!/bin/sh\n${"#".repeat(1024 * 1024)}\n`, 0o755);
     write(".local/bin/cast", "#!/bin/sh\nexec codecast\n", 0o755);
+    write(".local/bin/gh", "#!/bin/sh\nexec /opt/gh \"$@\"\n", 0o755);
+    write(".local/bin/claude", "#!/bin/sh\nexec claude-real\n", 0o755);
+    write(".local/bin/uv-tool", `#!${home}/.local/share/uv/tools/x/bin/python\nprint(1)\n`, 0o755);
     write(".local/share/tool/versions/1/tool", "#!/bin/sh\necho linked\n", 0o755);
     fs.symlinkSync(path.join(home, ".local/share/tool/versions/1/tool"), path.join(home, ".local/bin/linked-tool"));
     const inv = await collect();
@@ -255,6 +258,9 @@ describe("collectMirrorFiles", () => {
     expect(reasons[".local/bin/elf-tool"]).toBe("native binary");
     expect(reasons[".local/bin/macho-tool"]).toBe("native binary");
     expect(reasons[".local/bin/cast"]).toBe("denied");
+    expect(reasons[".local/bin/gh"]).toBe("denied");
+    expect(reasons[".local/bin/claude"]).toBe("denied");
+    expect(reasons[".local/bin/uv-tool"]).toBe("not a portable text script");
   });
 
   test("statusLine.command under ~/.claude adds that file with its exec bit", async () => {

@@ -31,6 +31,7 @@ import { keepsOwnLogin, listRealProfiles, type ChromeChannel, type RealProfile }
 import { withCdpTunnel } from "../browser/remote.js";
 import { signInHost } from "../browser/siteGuard.js";
 import type { RemoteHost } from "../remote/session-move.js";
+import { isHttpOrigin } from "@codecast/shared/contracts";
 
 // ---------------------------------------------------------------------------
 // The command's args
@@ -71,13 +72,7 @@ export function parseBrowserSyncArgs(json: string | undefined): BrowserSyncArgs 
   if (origin === null && !all) throw new Error("name an origin or all");
   if (origin !== null) {
     if (typeof origin !== "string") throw new Error("origin must be a string");
-    let u: URL;
-    try {
-      u = new URL(origin);
-    } catch {
-      throw new Error(`${origin} is not an http(s) origin`);
-    }
-    if ((u.protocol !== "http:" && u.protocol !== "https:") || u.origin !== origin) throw new Error(`${origin} is not an http(s) origin`);
+    if (!isHttpOrigin(origin)) throw new Error(`${origin} is not an http(s) origin`);
   }
   const conversationId = typeof parsed.conversation_id === "string" && parsed.conversation_id ? parsed.conversation_id : undefined;
   return { hostDeviceId, cdpPort, origin, all, ...(conversationId ? { conversationId } : {}) };
@@ -222,6 +217,9 @@ export async function carryLoginsToHost(a: BrowserSyncArgs, deps: CarryDeps = de
 
   const resolved = await deps.resolveCarryHost(a.hostDeviceId);
   if (!resolved.ok) return resolved;
+  if (a.all && resolved.cloud.browserSyncAll !== true) {
+    return { ok: false, reason: `name the site: a whole cookie jar carry into host ${resolved.cloud.id} is off unless its entry in ~/.codecast/browser/hosts.json on this laptop sets "browserSyncAll": true` };
+  }
 
   const state = deps.readState();
   const source = pickLaptopProfile(state, state?.sourceProfile ? [] : deps.listRealProfiles("chrome"));

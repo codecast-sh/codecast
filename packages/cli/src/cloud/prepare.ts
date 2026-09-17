@@ -50,6 +50,7 @@ import {
   copyAgentAuthToRemote,
   copyCredentialToRemote,
   remoteHome,
+  remoteRepoPath,
   shq,
   ssh,
   sshBase,
@@ -151,10 +152,7 @@ export interface RemoteWorkspace {
 
 type Progress = (message: string) => void;
 
-/** Where the repo lives on the box: the same basename as the local checkout. */
-export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
-  return path.posix.join(host.remoteBaseDir, path.basename(localGitRoot));
-}
+export { remoteRepoPath } from "../remote/session-move.js";
 
 /** The box's codecast device id, read from its own `cast remote hosts` line. */
 export function readHostDeviceId(host: RemoteHost): string | undefined {

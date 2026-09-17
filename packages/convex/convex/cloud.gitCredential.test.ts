@@ -53,6 +53,16 @@ const resolve = (db: any, args: Record<string, any> = {}, token: string | null =
     { ...(token ? { api_token: token } : {}), device_id: "box", repository: "ashot/codecast", ...args },
   );
 
+/** The query's answer for the fixture's installation. */
+const answered = (over: Record<string, any> = {}) => ({
+  installation_id: 4242,
+  account_login: "ashot",
+  repository: "ashot/codecast",
+  viewer_github_token: null,
+  viewer_github_login: null,
+  ...over,
+});
+
 describe("hostGitInstallation — who may ask for a push credential", () => {
   test("an unauthenticated call is refused before anything is read", async () => {
     const db = await fixture({ github_app_installations: [install({ scope_user_id: USER })] });
@@ -62,12 +72,12 @@ describe("hostGitInstallation — who may ask for a push credential", () => {
 
   test("the caller's own cloud host resolves their personal installation", async () => {
     const db = await fixture({ github_app_installations: [install({ scope_user_id: USER })] });
-    expect(await resolve(db)).toEqual({ installation_id: 4242, account_login: "ashot" });
+    expect(await resolve(db)).toEqual(answered({ personal: true }));
   });
 
-  test("a team installation answers for a member of that team", async () => {
+  test("a team installation answers for a member of that team, marked as not the caller's own", async () => {
     const db = await fixture({ github_app_installations: [install({ team_id: TEAM })] });
-    expect(await resolve(db)).toEqual({ installation_id: 4242, account_login: "ashot" });
+    expect(await resolve(db)).toEqual(answered({ personal: false }));
   });
 
   test("a laptop, another user's host, and an unknown device all get nothing", async () => {
@@ -98,12 +108,12 @@ describe("hostGitInstallation — who may ask for a push credential", () => {
       })],
     });
     expect((await resolve(elsewhere)).reason).toContain("not installed");
-    expect(await resolve(elsewhere, { repository: "ashot/other" })).toEqual({ installation_id: 4242, account_login: "ashot" });
+    expect(await resolve(elsewhere, { repository: "ashot/other" })).toEqual(answered({ personal: true, repository: "ashot/other" }));
   });
 
   test("the repository is read as owner/name, case and .git aside; anything else is refused", async () => {
     const db = await fixture({ github_app_installations: [install({ scope_user_id: USER })] });
-    expect(await resolve(db, { repository: "Ashot/Codecast.git" })).toEqual({ installation_id: 4242, account_login: "ashot" });
+    expect(await resolve(db, { repository: "Ashot/Codecast.git" })).toEqual(answered({ personal: true }));
     expect((await resolve(db, { repository: "codecast" })).reason).toContain("is not an owner/name repository");
     expect((await resolve(db, { repository: "ashot/codecast/extra" })).reason).toContain("is not an owner/name repository");
   });
@@ -111,7 +121,7 @@ describe("hostGitInstallation — who may ask for a push credential", () => {
   test("a git host other than github.com has no installation to mint from", async () => {
     const db = await fixture({ github_app_installations: [install({ scope_user_id: USER })] });
     expect((await resolve(db, { host: "gitlab.com" })).reason).toContain("is not github.com");
-    expect(await resolve(db, { host: "github.com" })).toEqual({ installation_id: 4242, account_login: "ashot" });
+    expect(await resolve(db, { host: "github.com" })).toEqual(answered({ personal: true }));
   });
 });
 
@@ -130,7 +140,7 @@ describe("hostGitCredential — the credential the helper prints", () => {
 
   test("a resolved installation becomes an x-access-token credential", async () => {
     const { result, calls } = act(
-      { installation_id: 4242, account_login: "ashot" },
+      answered({ personal: true }),
       { token: "ghs_secret", expires_at: 1234, permissions: { contents: "write" } },
     );
     expect(await result).toEqual({
@@ -154,7 +164,7 @@ describe("hostGitCredential — the credential the helper prints", () => {
 
   test("an App that cannot write the repository's contents is refused, token or not", async () => {
     const { result } = act(
-      { installation_id: 4242, account_login: "ashot" },
+      answered({ personal: true }),
       { token: "ghs_secret", expires_at: 1234, permissions: { contents: "read" } },
     );
     const answer = await result;
@@ -166,17 +176,45 @@ describe("hostGitCredential — the credential the helper prints", () => {
   test("unknown permissions are a refusal, because this answer claims push access", async () => {
     // The host reports app.write from this answer, so a yes it cannot back
     // turns every push into a 403. The device key is the path meanwhile.
-    const { result } = act({ installation_id: 4242, account_login: "ashot" }, { token: "ghs_secret", expires_at: 1234 });
+    const { result } = act(answered({ personal: true }), { token: "ghs_secret", expires_at: 1234 });
     const answer = await result;
     expect(answer.reason).toContain("contents permission is unknown");
     expect(answer.password).toBeUndefined();
+  });
+
+  test("a team installation mints only for somebody GitHub says may push", async () => {
+    const realFetch = globalThis.fetch;
+    const seen: string[] = [];
+    try {
+      // No linked GitHub account: the question cannot be asked, so nothing is minted.
+      const unlinked = act(answered({ personal: false }), { token: "ghs_secret", expires_at: 1234, permissions: { contents: "write" } });
+      expect((await unlinked.result).reason).toContain("could not confirm that you may push");
+      expect(unlinked.calls.filter((c) => c[0] === "action")).toHaveLength(0);
+
+      globalThis.fetch = (async (url: any) => {
+        seen.push(String(url));
+        return { ok: true, status: 200, json: async () => ({ permissions: { push: false } }) } as any;
+      }) as any;
+      const reader = act(answered({ personal: false, viewer_github_token: "gho_x", viewer_github_login: "reader" }), { token: "ghs_secret", expires_at: 1234, permissions: { contents: "write" } });
+      const refused: any = await reader.result;
+      expect(refused.reason).toContain("(reader) cannot push to ashot/codecast");
+      expect(refused.password).toBeUndefined();
+      expect(reader.calls.filter((c) => c[0] === "action")).toHaveLength(0);
+      expect(seen).toEqual(["https://api.github.com/repos/ashot/codecast"]);
+
+      globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ permissions: { push: true } }) }) as any) as any;
+      const pusher = act(answered({ personal: false, viewer_github_token: "gho_x", viewer_github_login: "pusher" }), { token: "ghs_secret", expires_at: 1234, permissions: { contents: "write" } });
+      expect(await pusher.result).toEqual({ username: "x-access-token", password: "ghs_secret", expires_at: 1234, installation_id: 4242 });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("a mint GitHub refuses comes back as a reason, not a thrown action", async () => {
     // A scoped mint asks for `contents: write`; GitHub answers 422 when the
     // installation does not hold it.
     const ctx = {
-      runQuery: async () => ({ installation_id: 4242, account_login: "ashot" }),
+      runQuery: async () => answered({ personal: true }),
       runAction: async () => { throw new Error("Failed to get installation token: 422 permissions not granted"); },
     };
     const answer: any = await (hostGitCredential as any)._handler(ctx, {

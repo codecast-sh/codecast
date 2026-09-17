@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { execFile, spawnSync } from "../../proc.js";
 import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
+import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
+import { GH_WRAPPER_REL } from "../ghWrapper.js";
 import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
 
 export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode", ".cursor", ".pi"] as const;
@@ -12,6 +14,15 @@ export const SKILL_STATE_FILES: readonly string[] = [".hyperframes/config.json",
 /** Personal commands on the laptop PATH. Only portable text scripts travel from here. */
 export const LOCAL_BIN_ROOT = ".local/bin";
 export const LOCAL_BIN_SCRIPT_CAP = 1024 * 1024;
+/**
+ * Commands the host installs into ~/.local/bin itself (the gh wrapper, the
+ * agent CLIs, the runtimes the host tools step installs). A laptop file of the
+ * same name would replace the host's working copy, so none of them travel.
+ */
+export const HOST_OWNED_LOCAL_BIN: readonly string[] = [
+  GH_WRAPPER_REL, ".local/bin/cast", ".local/bin/codecast",
+  ...[...INSTALLABLE_CLIENTS, "uv", "uvx", "bun", "bunx", "node", "npm", "npx"].map((name) => `${LOCAL_BIN_ROOT}/${name}`),
+];
 export const CONTEXT_SIZE_CAP = 256 * 1024 * 1024;
 export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i;
 export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
@@ -47,7 +58,7 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".config/railway", ".config/fly", ".config/supabase", ".config/vercel", ".config/netlify", ".config/.wrangler",
   ".azure", ".terraform.d", ".pulumi", ".config/doppler", ".config/op", ".password-store", ".local/share/keyrings",
   ".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zprofile", ".zshenv", ".zlogin", ".config/fish",
-  ".fig", ".cargo/env", ".inputrc", ".tmux.conf", ".vimrc", ".vim", ".config/nvim", ".local/bin/cast", ".local/bin/codecast",
+  ".fig", ".cargo/env", ".inputrc", ".tmux.conf", ".vimrc", ".vim", ".config/nvim", ...HOST_OWNED_LOCAL_BIN,
   "Dropbox", "OneDrive", "Google Drive", "GoogleDrive", ".dropbox", ".dropbox-dist",
   "Library", "Applications", ".Trash", ".mozilla", ".config/google-chrome", ".config/chromium",
   ".netrc", ".npmrc", ".pgpass", ".codecast", ".config/opencode/plugins/codecast-stable.js",
@@ -115,8 +126,17 @@ export function isNativeBinary(bytes: Buffer): boolean {
 }
 
 /** A text script that runs on any host: a shebang first line, no NUL bytes, under the script cap. */
-export function isPortableScript(bytes: Buffer): boolean {
-  return bytes.length <= LOCAL_BIN_SCRIPT_CAP && bytes.subarray(0, 2).toString() === "#!" && !bytes.includes(0);
+/**
+ * A text script with a shebang. When `home` is given, a shebang whose
+ * interpreter sits under that home (a uv, pipx or npm launcher) is not
+ * portable: the interpreter does not exist on the host.
+ */
+export function isPortableScript(bytes: Buffer, home?: string): boolean {
+  if (!(bytes.length <= LOCAL_BIN_SCRIPT_CAP && bytes.subarray(0, 2).toString() === "#!" && !bytes.includes(0))) return false;
+  if (!home) return true;
+  const end = bytes.indexOf(10);
+  const interpreter = bytes.subarray(2, end < 0 ? bytes.length : end).toString().trim().split(/\s+/)[0] ?? "";
+  return !interpreter.startsWith(`${home.replace(/\/+$/, "")}/`);
 }
 
 export function configPatterns(value: string | undefined): string[] {

@@ -172,8 +172,13 @@ describe("carryLoginsToHost — the security order, then the tunnel", () => {
     expect(calls.resolve).toEqual(["box-device-id"]);
     expect(calls.tunnel).toEqual([37121]);
   });
+  test("a whole-jar carry is refused before any ssh unless the host entry opts in", async () => {
+    const off = carryDeps();
+    expect(await carryLoginsToHost({ ...args, origin: null, all: true }, off.deps)).toEqual({ ok: false, reason: expect.stringContaining('"browserSyncAll": true') });
+    expect(off.calls.tunnel).toEqual([]);
+  });
   test("the picked profile is the laptop's source profile; a whole-jar carry passes url null", async () => {
-    const { deps, calls } = carryDeps();
+    const { deps, calls } = carryDeps({ resolveCarryHost: async () => ({ ok: true, host: remoteOf(cloud), cloud: { ...cloud, browserSyncAll: true } }) });
     await carryLoginsToHost({ ...args, origin: null, all: true }, deps);
     expect(calls.provision).toEqual([[45678, null, { profileDir: "Profile 2", channel: "chrome" }]]);
   });

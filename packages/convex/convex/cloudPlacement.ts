@@ -301,6 +301,7 @@ export async function parkOnCloudHost(
       owner_device_id: cloudDeviceId,
       cloud_placement: "pending" as const,
       cloud_placement_token: undefined,
+      cloud_placement_failed_at: undefined,
       ...(opts.startFrom ? { cloud_start_from: startFrom } : {}),
       session_error: undefined,
       updated_at: Date.now(),
@@ -332,6 +333,8 @@ export async function parkOnCloudHost(
     owner_device_id: cloudDeviceId,
     cloud_placement: "pending" as const,
     cloud_placement_token: token,
+    // A fresh pick is the retry: whatever the last park failed at is history.
+    cloud_placement_failed_at: undefined,
     ...(workspace ? { cloud_workspace: workspace } : {}),
     cloud_start_from: startFrom,
     // An isolated park never holds the root: drop a claim a failed shared
@@ -391,7 +394,10 @@ export async function cloudPlacementNeeded(
  * one holds the checkout — reusing the row's token so an in-flight `cast
  * cloud start` (if any survived) still matches. Rows without a token are not
  * this loop's to re-issue: a pathless park, or an occupancy refusal, waits for
- * an explicit re-pick.
+ * an explicit re-pick. Neither is a park whose `cast cloud start` already
+ * FAILED (cloud_placement_failed_at): re-issuing that one wakes the EC2 box,
+ * clears the error the human is reading and fails the same way, on every
+ * laptop that comes online. It waits for a re-pick too.
  */
 export async function reissueStrandedCloudSpawns(ctx: Ctx, userId: Id<"users">, localDeviceId: string): Promise<number> {
   const devices = await ctx.db
@@ -406,6 +412,7 @@ export async function reissueStrandedCloudSpawns(ctx: Ctx, userId: Id<"users">, 
       .collect();
     for (const conv of rows) {
       if (conv.cloud_placement !== "pending" || !conv.cloud_placement_token) continue;
+      if (conv.cloud_placement_failed_at) continue;
       if (!conv.project_path && !conv.git_root) continue;
       if (conv.inbox_killed_at || conv.status === "completed") continue;
       if (await liveCloudSpawnFor(ctx, userId, conv._id)) continue;

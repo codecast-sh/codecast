@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkoutInUseMessage, normalizeCloudWorkspace, sharedCheckoutOccupant, type CheckoutOccupantRow } from "./cloudWorkspace";
+import { checkoutInUseMessage, isHttpOrigin, normalizeCloudWorkspace, sharedCheckoutOccupant, type CheckoutOccupantRow } from "./cloudWorkspace";
 
 const ROOT = "/home/ubuntu/work/app";
 const row = (over: Partial<CheckoutOccupantRow> = {}): CheckoutOccupantRow => ({
@@ -64,5 +64,17 @@ describe("checkoutInUseMessage", () => {
       "the host checkout /home/ubuntu/work/app is in use by session abc1234 (shared one) — run this session isolated, or finish/kill that one",
     );
     expect(checkoutInUseMessage(ROOT, { conversation_id: "conversations_abcdef", title: "  " })).toContain("session convers (untitled)");
+  });
+});
+
+describe("isHttpOrigin", () => {
+  test("a scheme and host, nothing more", () => {
+    expect(isHttpOrigin("https://github.com")).toBe(true);
+    expect(isHttpOrigin("http://localhost:3000")).toBe(true);
+    expect(isHttpOrigin("https://github.com/")).toBe(false);
+    expect(isHttpOrigin("https://github.com/login?token=SECRET")).toBe(false);
+    expect(isHttpOrigin("ftp://example.com")).toBe(false);
+    expect(isHttpOrigin("github.com")).toBe(false);
+    expect(isHttpOrigin(undefined)).toBe(false);
   });
 });
