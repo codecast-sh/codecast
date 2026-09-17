@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly codecast pg_dump to R2 (09:00 UTC, the same slot the Railway job used)
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

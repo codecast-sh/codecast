@@ -33,6 +33,17 @@
         "reactions:write",
         "files:read",
         "team:read"
+      ],
+      "user": [
+        "channels:read",
+        "groups:read",
+        "groups:write",
+        "users:read",
+        "im:read",
+        "im:history",
+        "mpim:read",
+        "mpim:history",
+        "chat:write"
       ]
     }
   },
@@ -58,6 +69,10 @@
         "user_change",
         "app_uninstalled",
         "tokens_revoked"
+      ],
+      "user_events": [
+        "message.im",
+        "message.mpim"
       ]
     }
   }

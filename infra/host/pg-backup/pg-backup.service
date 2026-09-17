@@ -1,0 +1,14 @@
+# Nightly pg_dump of the codecast database to R2, on the host that runs Postgres.
+# Same image and script as infra/pg-backup (built here as codecast/pg-backup);
+# it joins the `codecast` docker network and reads postgres:5432 directly.
+# Env file /srv/pg-backup/.env (mode 600): DATABASE_URL, AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, R2_BUCKET, R2_ENDPOINT.
+[Unit]
+Description=pg_dump of codecast to R2
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm --name pg-backup --network codecast --env-file /srv/pg-backup/.env codecast/pg-backup
+TimeoutStartSec=6h

@@ -21,6 +21,7 @@ services:
     # headroom does not fix the growth, it only lengthens the cycle.
     mem_limit: 64g
     env_file: [.env]
+    networks: [codecast]
     volumes:
       - /srv/convex/data:/convex/data
     ports:
@@ -46,9 +47,14 @@ services:
       options: { max-size: "100m", max-file: "5" }
 
   dashboard:
-    image: ghcr.io/get-convex/convex-dashboard:latest
+    # Pinned: every dashboard image built after 2026-03 fails on boot with
+    # "Cannot find module '@radix-ui/react-icons-<hash>'" (Next 16 turbopack
+    # externals), on amd64 and arm64 alike. This tag is the last build verified
+    # to serve; it matches the dashboard Railway ran until decommission.
+    image: ghcr.io/get-convex/convex-dashboard:46bcfa00ef626afe31cc2701636bba31fe0be5bd
     restart: unless-stopped
     env_file: [.env]
+    networks: [codecast]
     ports:
       - "127.0.0.1:6791:6791"
     depends_on: [backend]
@@ -76,3 +82,10 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+
+# The database runs in its own compose project (infra/host/postgres, owned by the
+# Postgres work), so this network is created there and joined here. Without it the
+# backend cannot resolve `postgres` and dies on startup.
+networks:
+  codecast:
+    external: true
