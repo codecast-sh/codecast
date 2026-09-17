@@ -17,7 +17,7 @@ import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
-import { fromConvexAgentType, findModelOption } from "@codecast/shared/contracts";
+import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource } from "@codecast/shared/contracts";
 import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 
@@ -438,6 +438,39 @@ async function releasePreviousOwner(
 }
 
 /**
+ * Transcript divider for a box switch, inserted the moment the picker fires —
+ * same shape as switchSessionAgent's agent-switch notice. Blank sessions skip
+ * it (nothing to divide). The destination daemon may later inject a longer
+ * reorientation notice; the timeline folds the two into one rule.
+ */
+async function insertMachineSwitchDivider(
+  ctx: { db: any },
+  conv: any,
+  opts: { to: DeviceNameSource; from?: DeviceNameSource | null },
+): Promise<void> {
+  if (conv.message_count === 0) return;
+  const toLabel = deviceDisplayName(opts.to);
+  const fromLabel = opts.from ? deviceDisplayName(opts.from) : undefined;
+  const notice = formatMachineSwitchNotice({
+    toLabel,
+    fromLabel: fromLabel && fromLabel !== toLabel ? fromLabel : undefined,
+  });
+  await ctx.db.insert("messages", {
+    conversation_id: conv._id,
+    role: "user",
+    content: notice,
+    subtype: "machine_switch",
+    message_uuid: crypto.randomUUID(),
+    timestamp: Date.now(),
+  });
+  await ctx.db.patch(conv._id, {
+    message_count: (conv.message_count ?? 0) + 1,
+    last_message_role: "user",
+    updated_at: Date.now(),
+  });
+}
+
+/**
  * The CLI transfer flip (`cast remote move` / `back`): the files are already
  * on the destination, so this only re-homes ownership, resumes there, and
  * releases the source. Exported for tests; the mutation below is the wrapper.
@@ -457,6 +490,22 @@ export async function performMoveSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
   });
+
+  if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
+    const to = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) =>
+        q.eq("user_id", userId).eq("device_id", args.owner_device_id),
+      )
+      .first();
+    const from = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) =>
+        q.eq("user_id", userId).eq("device_id", priorDeviceId),
+      )
+      .first();
+    if (to) await insertMachineSwitchDivider(ctx, conv, { to, from });
+  }
 
   let commandId: string | undefined;
   if (args.resume !== false) {
@@ -554,6 +603,8 @@ export const moveToRemote = mutation({
       created_at: now,
       target_device_id: source,
     });
+    const from = devices.find((d: any) => d.device_id === source) ?? null;
+    await insertMachineSwitchDivider(ctx, conv, { to: dest, from });
     return { command_id: commandId, source, dest: dest.device_id };
   },
 });
@@ -666,6 +717,16 @@ export async function performReassignToDevice(
     status: "active" as const,
     updated_at: Date.now(),
   });
+
+  if (prevOwner && prevOwner !== args.device_id) {
+    const from = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) =>
+        q.eq("user_id", userId).eq("device_id", prevOwner),
+      )
+      .first();
+    await insertMachineSwitchDivider(ctx, conv, { to: device, from });
+  }
 
   const agentType = fromConvexAgentType(conv.agent_type);
   const commandId = await ctx.db.insert("daemon_commands", {
@@ -845,6 +906,10 @@ export async function performReparentSessionToDevice(
     patch.user_id = userId;
   }
   await ctx.db.patch(conv._id, patch);
+
+  if (deviceChanged) {
+    await insertMachineSwitchDivider(ctx, conv, { to: device, from: priorDevice });
+  }
 
   // Hand over the managed-session row with the conversation. The source
   // machine's daemon keeps heartbeating its row after the move (its tmux pane
