@@ -30,6 +30,22 @@ describe("foldLanguageTag", () => {
     expect(foldLanguageTag("123")).toBe(null);
     expect(foldLanguageTag("english")).toBe(null);
   });
+
+  test("maps OS aliases onto a code the recognizer has", () => {
+    expect(foldLanguageTag("nb-NO")).toBe("no");
+    expect(foldLanguageTag("nn")).toBe("no");
+    expect(foldLanguageTag("fil")).toBe("tl");
+    expect(foldLanguageTag("iw")).toBe("he");
+  });
+
+  test("drops a well-formed tag the recognizer would reject", () => {
+    expect(foldLanguageTag("zz")).toBe(null);
+    expect(foldLanguageTag("eu")).toBe(null);
+  });
+
+  test("keeps Armenian, which the live model accepts", () => {
+    expect(foldLanguageTag("hy-AM")).toBe("hy");
+  });
 });
 
 describe("normalizeTranscribeLanguages", () => {

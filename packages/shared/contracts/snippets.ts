@@ -184,14 +184,16 @@ You can set triggers — follow-up work that runs autonomously after this sessio
 
 The prompt is the agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass \`-\` as the prompt to read it from stdin.
 
-**Where a run happens.** A trigger created inside a session binds to that session by default: each run injects the prompt into it as a new turn, with the session's full history. Pass \`--spawn\` to start a FRESH session per run instead — no history, briefed only by your prompt, but still associated: the run's conversation links back to the trigger at the top in the UI. Use \`--spawn\` when the follow-up stands alone (a periodic audit, an independent check); write everything the agent needs into the prompt, since it arrives with none of your context. \`--for <session>\` binds a specific session from any shell.
+**Where a run happens.** Decide by what the run needs and where its result belongs. A follow-up that continues THIS work, needs what this conversation knows, and fires once or a few times belongs here: that is the default, each run arrives in this session as a new turn with the full history, and the result lands in the thread. A standing duty that repeats on a schedule (a monitor, a digest, a sweep) belongs in a fresh session per run: pass \`--spawn\`. An inline run reloads this session's whole history each time it fires, because the prompt cache has expired by then, and every firing grows the thread, so a repeating job run inline costs more each time and buries the conversation it lives in. A fresh run arrives with none of your context, so write everything it needs into the prompt; each run is handed the previous run's summary, which is the continuity most repeating jobs need.
+
+Fresh runs stay out of the human's inbox: a run that completes cleanly is read under its trigger, and a \`--spawn\` trigger that fires once posts its result into this conversation as a message, without waking it. \`--thread\` posts every run's result here; reserve it for results the human reads in this thread. \`--for <session>\` binds a specific session from any shell.
 
 \`\`\`bash
 # Set triggers (created in a session, these inject into it when they fire)
 cast trigger add "Check if CI is green on main" --in 30m
 cast trigger add "Respond to new PR review comments" --on pr_comment
 
-# Fresh session per run — no history, linked back to the trigger
+# Fresh session per run: a standing duty, briefed only by its prompt
 cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
 cast trigger add "Watch the funnel and report anything off" --every 4h --spawn --safe
 
@@ -223,14 +225,15 @@ Options:
 - \`--in <duration>\`: delay before run (30m, 2h, 1d)
 - \`--every <duration>\`: recurring interval
 - \`--on <event>\`: fire on webhook (pr_comment, pr_opened, pr_merged, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented). The \`issue_*\` events cover Linear and GitHub alike: one trigger fires wherever the issue lives.
-- \`--spawn\`: fresh session per run, no history — linked back to the trigger in the UI
+- \`--spawn\`: fresh session per run, no history; read under the trigger, not in the inbox
+- \`--thread\`: post each run's result into this conversation as a message
 - \`--for <session>\`: bind runs to a specific session (defaults to the one you're in)
 - \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 - \`--precheck <command>\`: a shell gate run in the project directory before each scheduled or recurring firing. Exit 0 runs the trigger; anything else records a skipped run and spends no session. Reach for it when the trigger should act only if something changed ("has main moved?", "is the queue non-empty?") — otherwise a whole run is burned finding out the answer is no. Event triggers ignore it.
 
-Every trigger has a short ID (\`tr-42\`) — printed when you create one and listed by \`cast trigger ls\`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call \`cast trigger complete tr-42 --summary "..."\` when done to report results back.
+Every trigger has a short ID (\`tr-42\`) — printed when you create one and listed by \`cast trigger ls\`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call \`cast trigger complete tr-42 --summary "..."\` when done. That completion is the run's declaration of who acts next: the summary is what the human reads on the trigger, so state the outcome. Add \`--needs-attention\` only when the human must read or act; it keeps the run in their inbox.
 ${TASK_SNIPPET_END}
 `;
 
@@ -647,7 +650,7 @@ What cast adds to the usual pattern:
 
 - **Evidence flows to the thread.** A failing step automatically prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation — \`--annotate\` numbers elements with their refs, \`--share\` uploads a link you can paste. \`cast browser shots on\` adds an automatic small capture after commands that change the page (off by default for agents; a \`do\` flow then captures once, at the end). Never link local file paths — the human's browser cannot read them.
 - **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL. Connection checks and tab lists create nothing; page actions need an existing page. Do not open \`about:blank\` as setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. Act only on yours, never the human's tabs. Use \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab with your session. Modal dialogs are dismissed automatically.
-- **Clean up when finished.** Before ending a task that used the browser, close the tabs you opened: use \`cast browser tabs\` to check, \`cast browser tab close <id>\` for extra tabs, then \`cast browser stop\` for this session's current tab. Do not leave tabs behind for a later session to clean up. Never close the human's tabs or another session's tabs, and do not use \`stop --all\` for routine cleanup. Keep a tab open only when the human asked you to leave it for them. When driving the desktop app's pane, \`stop\` releases control and leaves the human's pane open.
+- **Close tabs you opened.** When you are done, always close this session's tab and any others you opened, unless the human still needs them. Check with \`cast browser tabs\`, close extras with \`cast browser tab close <id>\`, then \`cast browser stop\` for this session's current tab. Do not leave tabs behind for a later session to clean up. Never close the human's tabs or another session's tabs, and do not use \`stop --all\` for routine cleanup. When driving the desktop app's pane, \`stop\` releases control and leaves the human's pane open.
 - **Connection recovery.** \`cast browser target\` reports the browser without checking the connection. Old session selections cannot switch ordinary commands away from the human's Chrome. \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection. If still disconnected, the human checks that Chrome is running and the extension is enabled. Pairing is the human's one-time \`cast browser extension setup\` step. A missing pairing, failed command, or unavailable verb is not permission to launch another browser.
 - **Pages Chrome walls off from extensions.** \`chrome://\` pages, \`chrome-extension://\` pages, the Chrome Web Store and its developer dashboard (\`chrome.google.com/webstore/...\`, \`chromewebstore.google.com\`) cannot be driven through the extension; Chrome refuses the navigation, and \`cast browser open\` says so before trying. Those pages are the human's to click through in their own Chrome: hand them the URL and the exact steps, and carry on with everything around them (other sites, the terminal, \`gh\`). Do not move the session to the agent browser for them unless the human asks.
 - **Showing the human a page.** The web's "open tab" link and \`cast browser show\` both bring this session's tab to the front of the human's screen, in whichever browser holds it. The link is theirs to click; the verb is yours, and it takes their screen, so run it only when they asked to see the page or must act in it themselves (a sign-in, a permission prompt) and you have told them what to do there. Never to check your own work, never on a loop, never while they are typing elsewhere: one raise, then wait.
@@ -780,6 +783,49 @@ export const REFERENCES_SECTION: SectionSpec = {
 export const PUBLISH_SECTION: SectionSpec = {
   headings: ["## Publishing pages", "## Publishing artifacts", "## Publishing HTML artifacts"],
   endMarker: PUBLISH_SNIPPET_END,
+};
+
+export const PR_SNIPPET_END = "<!-- /codecast-pr -->";
+export const PR_SNIPPET = `
+## Pull requests (cast pr)
+
+A pull request is a codecast object like a session or a task: it carries its checks, the reviews and threads on it, and the session that owns it until it merges. \`cast pr\` reads and steers one from the shell, so you can review a teammate's or another agent's change, and answer a review of your own, without a browser. Every verb takes the same reference: a number, \`owner/repo#123\`, a GitHub or codecast URL, or nothing, which means the pull request this session is bound to, else the one for the branch you stand on. Every read takes \`--json\`.
+
+\`\`\`bash
+cast pr ls                                  # open pull requests across your teams (--repo, --mine, --shepherded, --state)
+cast pr show [ref]                          # state, checks, reviews, open threads, the owning session
+cast pr threads [ref]                       # the open review threads, each with a short id and its file:line
+cast pr events [ref]                        # the timeline: pushes, reviews, checks, merges
+cast pr watch [ref]                         # one line per change; the first frame is silent
+cast pr open [ref]                          # the page in codecast (--print for the URL only)
+\`\`\`
+
+### Reviewing a pull request
+
+A review is a batch. Read the change, hold a note on each line you have something to say about, then send the batch as one review with one verdict. Held notes are yours alone until you submit: nobody else sees them, and nothing reaches GitHub or the author. A note names a file and a line, and says what should change or what you want to know; it never pastes the code, because the author reads the file.
+
+\`\`\`bash
+gh pr diff 123                                              # read the change (or git diff main...<branch> in a checkout)
+cast pr comment 123 --hold --file src/x.ts --line 42 "…"    # hold a note on a line for your review
+cast pr comment 123 --hold --file src/x.ts --line 42 -      # …the body from a heredoc
+cast pr notes 123                                           # what you are holding (--discard throws them away)
+cast pr review 123 --request-changes -b "…"                 # send the batch as one review: --approve | --request-changes | --comment
+cast pr comment 123 "…"                                     # say something on the conversation now, outside a review
+cast pr comment 123 --reply <thread> "…"                    # answer a thread from cast pr threads
+cast pr resolve <thread> [ref]                              # settle a thread you have answered (unresolve reopens it)
+\`\`\`
+
+The review goes out on GitHub under the account of the human you run as, so the verdict is theirs: GitHub refuses a verdict on their own pull request, and says so in its own words. When the pull request has an owning session, the whole review, verdict, summary and every note, reaches that session as one message the moment GitHub accepts it, so the author acts on it at once.
+
+### Owning a pull request
+
+\`cast pr shepherd on [ref]\` binds this session to a pull request (\`--for <session>\` binds another of yours); the /cast-ship skill does this when it opens one. The owner is woken when the pull request moves, and a review submitted through codecast arrives as a message: make each change it asks for, push to the same branch, reply on GitHub to the notes you addressed with \`cast pr comment --reply\`, and resolve the threads, so the review shows the resolution rather than going quiet. Do not merge unless a human asked you to.
+${PR_SNIPPET_END}
+`;
+
+export const PR_SECTION: SectionSpec = {
+  headings: ["## Pull requests (cast pr)", "## Pull requests"],
+  endMarker: PR_SNIPPET_END,
 };
 
 export const CHAT_SNIPPET_END = "<!-- /codecast-chat -->";
@@ -1003,6 +1049,21 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     section: { spec: MESSAGING_SECTION, body: MESSAGING_SNIPPET },
   },
   {
+    slug: "pr",
+    aliases: ["pull-requests", "pulls", "review"],
+    name: "Pull requests",
+    desc: "Review and steer pull requests from the shell (cast pr)",
+    detail:
+      "Adds `cast pr`: list and inspect pull requests, hold notes on lines of the diff and send them " +
+      "as one review with a verdict, answer and resolve review threads, and bind a session as a pull " +
+      "request's owner. A review submitted through codecast also reaches the owning session as one message.",
+    writesTo: "CLAUDE.md — a ## Pull requests section with the review loop",
+    shipped: "2026-09-16",
+    enabledKey: "pr_enabled",
+    versionKey: "pr_version",
+    section: { spec: PR_SECTION, body: PR_SNIPPET, references: true },
+  },
+  {
     slug: "forks",
     aliases: ["fork", "spawn", "sessions", "exec", "switch"],
     name: "Forks & Sessions",
@@ -1196,8 +1257,8 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "Adds `cast browser` for opening pages, reading, clicking, typing, screenshots, " +
       "and debugging in your own Chrome through the Cast extension. Agents use their " +
       "own background tabs, created only for an explicit URL; checks never create blank tabs. " +
-      "Before finishing, close extra tabs you opened with `cast browser tab close <id>`, " +
-      "then run `cast browser stop` for your current tab; leave the human's and other sessions' tabs alone. " +
+      "When you are done, always close this tab and any others you opened, unless the human still needs them. " +
+      "`cast browser tab close <id>` for extras, then `cast browser stop`. Leave the human's and other sessions' tabs alone. " +
       "All ordinary commands, including `start`, use your Chrome; " +
       "a missing or disconnected extension never launches a separate browser. " +
       "The separate agent Chrome is a last resort requiring your explicit permission, " +

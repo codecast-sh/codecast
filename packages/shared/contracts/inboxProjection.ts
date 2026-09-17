@@ -70,7 +70,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // v8: every placed row carries a sort time inside its bucket, one stamp per
 // class plus a creation grace, so order inside a section is the same on the
 // server, on web and on mobile (ct-49550).
-export const INBOX_PROJECTION_VERSION = 8 as const;
+// v9: a process that exits after the agent declared done files under done,
+// not needs_input (isExitAfterDone): the ordinary end of a headless trigger
+// run is not a death a human must read.
+export const INBOX_PROJECTION_VERSION = 9 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -261,12 +264,14 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
 
   // Dead or unresponsive with output → a human needs to read/restart it. A
   // dead daemon cannot deliver a wake, so no rest verdict survives this arm —
-  // except "done", which trustedAgentStatus never coerces to dead in the first
-  // place. Unresponsive (a hanging user message or queued work on a daemon
+  // except "done": trustedAgentStatus never coerces it to dead, and a process
+  // that reports its own exit after declaring done is the same case
+  // (isExitAfterDone). Unresponsive (a hanging user message or queued work on a daemon
   // that is gone) is the same hard block whatever is_idle says: the server
   // keeps is_idle false while work is queued, which used to drop such a row
   // into the "work in flight" arm below and file it WORKING forever (found by
   // the two-replica simulation, 2026-09-01).
+  if (isExitAfterDone(input)) return hasMsgs ? doneRest() : "idle";
   if (dead || isUnresponsive) return hasMsgs ? "needs_input" : "idle";
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
@@ -305,17 +310,34 @@ export function isDeclaredBlocked(input: Pick<WorkStateInput, "agentStatus" | "d
   return input.declaredStatus === "blocked" && (input.agentStatus === "idle" || !input.agentStatus);
 }
 
+// The process exited AFTER the agent declared the work delivered, with nothing
+// queued behind it. Nobody is owed anything: the exit is the ordinary end of a
+// headless run (every trigger run in a fresh session ends this way, and
+// `cast trigger complete` is its declaration), not a death a human must read.
+// The declaration is read off the row because the daemon's "stopped" replaced
+// the settle status that carried it. Queued work or a hanging message on a
+// dead agent still needs a restart, so those keep the dead arm.
+export function isExitAfterDone(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive">): boolean {
+  return (
+    !!input.agentStatus &&
+    DEAD_AGENT_STATUSES.has(input.agentStatus) &&
+    input.declaredStatus === "done" &&
+    !input.hasPending &&
+    !input.isUnresponsive
+  );
+}
+
 // The machine cannot proceed, or is gone: an open ask, a permission prompt, an
 // unresolved API-error banner, a dead or unresponsive agent with output, or the
 // agent's own declared block. The one condition that surfaces an anchor row out
 // of `hidden`, and what keeps a standing trigger's home from collapsing under
 // its schedule row.
-export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus">): boolean {
+export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending">): boolean {
   const hasMsgs = input.messageCount > 0;
   if (input.awaitingInput) return true;
   if (input.pendingApiError && hasMsgs) return true;
   if (input.agentStatus === "permission_blocked") return true;
-  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs) return true;
+  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input)) return true;
   if (isDeclaredBlocked(input) && hasMsgs) return true;
   return input.isUnresponsive;
 }

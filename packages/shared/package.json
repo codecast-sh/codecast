@@ -16,6 +16,7 @@
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
+    "./contracts/orgAvatars": "./contracts/orgAvatars.ts",
     "./contracts/browserPaneOffer": "./contracts/browserPaneOffer.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
@@ -25,11 +26,13 @@
     "./time": "./time/index.ts",
     "./vault": "./vault/index.ts",
     "./chat": "./chat/index.ts",
+    "./chat/dm": "./chat/dm.ts",
     "./comments": "./comments/index.ts",
     "./blame": "./blame/index.ts",
     "./ratchet": "./ratchet/index.ts",
     "./analytics": "./analytics/index.ts",
-    "./agents": "./agents/index.ts"
+    "./agents": "./agents/index.ts",
+    "./search": "./search/index.ts"
   },
   "dependencies": {
     "@platform/analytics": "file:../../platform/packages/analytics"

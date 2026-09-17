@@ -49,6 +49,8 @@ export function formatReviewNote(note: ReviewNoteLike, authorName: string): stri
   return lines.join("\n");
 }
 
+export type ReviewVerdict = "approved" | "changes_requested" | "commented";
+
 export type ReviewBatchPromptOptions = {
   actorName: string;
   notes: ReviewNoteLike[];
@@ -58,6 +60,28 @@ export type ReviewBatchPromptOptions = {
   ref?: string;
   /** The batch's page in the web app, when there is one. */
   url?: string | null;
+  /** The pull request the review is on, when it is a review and not a batch of notes. */
+  pullRequest?: { number: number; url?: string | null };
+  /** The verdict a submitted review carries. Absent for notes handed over without one. */
+  verdict?: ReviewVerdict;
+  /** The review's summary, as the reviewer wrote it. */
+  summary?: string | null;
+};
+
+const VERDICT_TEXT: Record<ReviewVerdict, string> = {
+  approved: "approved",
+  changes_requested: "requested changes on",
+  commented: "commented on",
+};
+
+/** What the agent is expected to do with a review of each verdict. */
+const VERDICT_JOB: Record<ReviewVerdict, string> = {
+  approved:
+    "The review approves the change. Answer anything the notes ask, and otherwise carry on with the merge as the pull request's own instructions say.",
+  changes_requested:
+    "The review blocks the merge until these points are met. Make each change, push to the same branch, and reply on GitHub to the notes you addressed (`cast pr comment --reply`) so the threads show the resolution.",
+  commented:
+    "The review is feedback without a verdict. Act on what asks for a change, answer what asks a question, and say what you did.",
 };
 
 /**
@@ -67,16 +91,38 @@ export type ReviewBatchPromptOptions = {
  */
 export function buildReviewBatchPrompt(opts: ReviewBatchPromptOptions): string {
   const count = opts.notes.length;
-  const where = opts.repository
-    ? ` on ${inlineForeignText(opts.repository)}${opts.ref ? `@${opts.ref.slice(0, 7)}` : ""}`
-    : "";
-  const lines: string[] = [
-    `${opts.actorName} left ${count} review ${count === 1 ? "note" : "notes"}${where}.`,
-    "",
-    `Read each spot in the repository${opts.ref ? ` at commit ${opts.ref}` : ""} before answering. ` +
-      "Where a note asks for a change, make the change and say what you did.",
-    "",
-  ];
+  const at = opts.ref ? `@${opts.ref.slice(0, 7)}` : "";
+  const where = opts.pullRequest
+    ? ` ${inlineForeignText(opts.repository ?? "")}#${opts.pullRequest.number}${at}`
+    : opts.repository
+      ? ` on ${inlineForeignText(opts.repository)}${at}`
+      : "";
+  const notesPhrase = `${count} review ${count === 1 ? "note" : "notes"}`;
+  const lines: string[] = opts.verdict
+    ? [
+        `${opts.actorName} ${VERDICT_TEXT[opts.verdict]}${where}` +
+          (count ? ` with ${notesPhrase}.` : "."),
+        "",
+        VERDICT_JOB[opts.verdict],
+        "",
+      ]
+    : [
+        `${opts.actorName} left ${notesPhrase}${where}.`,
+        "",
+        `Read each spot in the repository${opts.ref ? ` at commit ${opts.ref}` : ""} before answering. ` +
+          "Where a note asks for a change, make the change and say what you did.",
+        "",
+      ];
+  if (opts.summary?.trim()) {
+    lines.push(fenceForeignText(opts.summary.trim(), `review summary by ${opts.actorName}`, {
+      maxChars: FOREIGN_TEXT_CAPS.descriptionChars,
+    }));
+    lines.push("");
+  }
+  if (opts.verdict && count) {
+    lines.push(`Read each spot in the repository${opts.ref ? ` at commit ${opts.ref}` : ""} before answering.`);
+    lines.push("");
+  }
 
   // The batch budget is spent by dropping whole notes, never by cutting the
   // rendered string: a cut lands inside a fence and leaves it unclosed, which
@@ -99,9 +145,10 @@ export function buildReviewBatchPrompt(opts: ReviewBatchPromptOptions): string {
     lines.push(`${dropped} further ${dropped === 1 ? "note is" : "notes are"} not shown here — run \`cast review ls\`.`);
   }
 
-  if (opts.url) {
+  const link = opts.pullRequest?.url ?? opts.url;
+  if (link) {
     lines.push("");
-    lines.push(`The notes: ${opts.url}`);
+    lines.push(`${opts.verdict ? "The review" : "The notes"}: ${link}`);
   }
-  return lines.join("\n");
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
 }
