@@ -393,7 +393,7 @@ export const handsStartedBy = query({
     const states = await classifyWorkStates(ctx, userId, hands, new Map(), now);
     const out: HandStarted[] = [];
     for (const c of hands) {
-      const task = c.active_task_id ? await ctx.db.get(c.active_task_id) : null;
+      const task = c.active_task_id ? await ctx.db.get(c.active_task_id as Id<"tasks">) : null;
       out.push({
         _id: c._id,
         short_id: c.short_id ?? null,
