@@ -475,3 +475,84 @@ pointers, so the person is never left without the assistant they had.
 
 The word anchor survives only as an alias in the CLI and in chat; every
 surface reads Chief of Staff.
+
+## S17. A proposal a person can read cold
+
+The reader has never heard of a role, a scope, a charter or a budget in
+wakes. Nothing in the product may assume otherwise, and the first thing they
+meet is usually a proposal, not the documentation.
+
+**The pane leads with what this is.** Above the ask, two sentences that
+survive a cold read: what codecast is proposing (people and standing agents
+with a named area of work, so the agents know what to look after) and what
+accepting costs (nothing moves until you accept a change; each one is
+reversible except where it says otherwise). It carries one "how this works"
+link to a short page, and a dismiss that never returns. A person who has
+accepted a proposal before does not see it again.
+
+**The ask is written for that reader.** The analyzer writes the ask as the
+first paragraph of a letter to a founder who has not seen the feature: what
+it looked at, what it wants, and what changes for them. A term the product
+invented is explained the first time it is used or not used at all; a number
+carries what it means, not only its value. Jargon a reader cannot decode
+("16 plan closes that drop their own 74 leftovers") is a defect in the
+prompt, not a style preference.
+
+**Detail is behind the summary, never in front of it.** The pane shows the
+plain ask, then the groups with counts, then the changes. The evidence, the
+budget arithmetic and the findings sit behind one control each. A first
+screen that scrolls is a first screen that fails.
+
+**Every term has one place that defines it.** A glossary of the product's
+eight words, reachable from the pane, the chart and the skill, each defined
+in one sentence with an example from the reader's own workspace.
+
+## S18. The conversation is part of the proposal
+
+A structured list of changes cannot answer "why is growth in there" or take
+"growth is dead, drop it". The pane therefore carries the conversation with
+the agent that wrote the proposal, rendered inline beside the changes, not
+as a composer bolted to the bottom.
+
+**One thread per proposal.** The proposal's author (the chief of staff, or
+the session that ran the review) holds a thread bound to `op-N`. The pane
+renders it with the existing conversation view, so a person reads and writes
+there exactly as they do in a session, and the thread survives a reload.
+
+**The agent can change its own proposal.** `orgProposals.revise` lets the
+author remove, amend or add a change while the proposal is open and the
+change is still undecided. That is authoring, not deciding: accepting stays
+the person's, and a revise never touches a change they already decided. The
+pane shows what the revise changed, inline, the way an accept shows.
+
+**So the loop closes in one place.** The person says what is wrong in plain
+words, the agent answers and revises, the list updates under them, and they
+accept what is left. Nothing about that loop asks them to leave the page, to
+learn a command, or to know a word they have not been taught.
+
+**The server half.** `org_proposals.thread_conversation_id` is set at create
+to the posting session (a role's is its standing session); a person's
+proposal has none, and `get` and `list` hand back `thread: { conversation_id,
+short_id, title } | null` (derived from `author` for rows from before the
+field), so the pane renders the conversation or says there is no agent to
+talk to. `orgProposals.say({ proposal, change?, body })` puts a person's
+words into that thread as an ordinary turn on the pending message rail,
+wrapped the way a chat mention is: `<proposal-message proposal="op-N"
+change="3" from="Name">`, the shared "About op-N change 3 (...)" header, the
+words, and a tail naming `cast org revise`. `orgProposals.revise({ proposal,
+ops })` takes `{ op: "remove" | "amend", seq, edits?, rationale?, note? }` and
+`{ op: "add", change, note? }`: the caller must be the author (the session
+that posted it, or the standing session of the role that did; a person with
+no session for their own), the proposal open, and every named change still
+`proposed`, else the refusal names the change; an amend runs the same patch
+and validator as accept with edits, an add the same checks as create, and
+one bad op writes nothing. A removed change keeps its row as `status:
+"removed"` (out of every count, never decidable); an amended one keeps its
+id, the new change replaces the old and `revision.before` keeps it; an added
+one is a new row with the next seq. Every touched row carries `revision: {
+kind, note, at, before? }` and the proposal appends to `revisions: [{ op,
+seq, at, by, line, was?, note? }]`, the journal the pane and `cast org apply`
+list. A revise never resolves the proposal, even when it removes the last
+undecided change; the queue card is rewritten to the changes that remain.
+The CLI verb is `cast org revise op-N --remove <seq> | --amend <seq> --edits
+<json> --rationale <text> | --add <file> [--note <text>]`, session only.
