@@ -225,7 +225,7 @@ are top level:
 | pinned | `inbox_pinned_at` set | `inbox_pinned_at` desc | 100 |
 | dismissed | `inbox_dismissed_at` within 30 days, not killed | `inbox_dismissed_at` desc | 200 |
 | stashed | `inbox_stashed_at` within 30 days, not killed | `inbox_stashed_at` desc | 200 |
-| owned | `owned_by_me`, same status and recency rule as recent | server side only | 200 |
+| owned | `owned_by_me` — the owner row alone, no status or recency gate | server side only | 200 |
 
 The caps and sort keys are shared constants; the server scan and the client selection
 must agree, pinned by a test that runs both over one fixture set. The working set is
@@ -234,6 +234,20 @@ the union of the window survivors. When a window overflows, the server names it 
 window is dark to the proof, and the heartbeat counts it. The owned window's cap order
 is a server side detail (owner row order) the replica does not hold, so an overflowing
 owned window is likewise dropped; under the cap, ordering does not matter.
+
+**Assignment decides whose inbox a session is in.** A session whose owner set
+excludes the viewer belongs to its owners, not to the account that runs it: the
+server scan drops it from the runner's candidate set and the replica drops it
+from "mine" (`isAssignedAwayFromViewer`, `isForeignRow`), so it cannot sit in
+one of them and not the other. Two exceptions, both deliberate: a row the caller
+named by id is hydrated because they asked for it, and a teammate's row on the
+team board is there by team visibility, which its owner says nothing about. The
+mirror image is the owned window above — an owner seat needs no recency and no
+status, because a handoff nobody has opened for six weeks is exactly the one
+that must not age out. The alert follows the row: notification delivery drops
+the runner by the same rule (`isAssignedAwayFromOwnerSet`), and the handoff
+itself clears the previous holder's dismiss, stash and snooze stamps, which live
+on the row rather than per viewer.
 
 Team scope membership depends on inputs the replica does not hold (member visibility
 settings, redaction). The team overlay still delivers facts and stamps for rendering
