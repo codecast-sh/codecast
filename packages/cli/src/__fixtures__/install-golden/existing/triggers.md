@@ -43,14 +43,16 @@ You can set triggers — follow-up work that runs autonomously after this sessio
 
 The prompt is the agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass `-` as the prompt to read it from stdin.
 
-**Where a run happens.** A trigger created inside a session binds to that session by default: each run injects the prompt into it as a new turn, with the session's full history. Pass `--spawn` to start a FRESH session per run instead — no history, briefed only by your prompt, but still associated: the run's conversation links back to the trigger at the top in the UI. Use `--spawn` when the follow-up stands alone (a periodic audit, an independent check); write everything the agent needs into the prompt, since it arrives with none of your context. `--for <session>` binds a specific session from any shell.
+**Where a run happens.** Decide by what the run needs and where its result belongs. A follow-up that continues THIS work, needs what this conversation knows, and fires once or a few times belongs here: that is the default, each run arrives in this session as a new turn with the full history, and the result lands in the thread. A standing duty that repeats on a schedule (a monitor, a digest, a sweep) belongs in a fresh session per run: pass `--spawn`. An inline run reloads this session's whole history each time it fires, because the prompt cache has expired by then, and every firing grows the thread, so a repeating job run inline costs more each time and buries the conversation it lives in. A fresh run arrives with none of your context, so write everything it needs into the prompt; each run is handed the previous run's summary, which is the continuity most repeating jobs need.
+
+Fresh runs stay out of the human's inbox: a run that completes cleanly is read under its trigger, and a `--spawn` trigger that fires once posts its result into this conversation as a message, without waking it. `--thread` posts every run's result here; reserve it for results the human reads in this thread. `--for <session>` binds a specific session from any shell.
 
 ```bash
 # Set triggers (created in a session, these inject into it when they fire)
 cast trigger add "Check if CI is green on main" --in 30m
 cast trigger add "Respond to new PR review comments" --on pr_comment
 
-# Fresh session per run — no history, linked back to the trigger
+# Fresh session per run: a standing duty, briefed only by its prompt
 cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
 cast trigger add "Watch the funnel and report anything off" --every 4h --spawn --safe
 
@@ -82,13 +84,14 @@ Options:
 - `--in <duration>`: delay before run (30m, 2h, 1d)
 - `--every <duration>`: recurring interval
 - `--on <event>`: fire on webhook (pr_comment, pr_opened, pr_merged, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented). The `issue_*` events cover Linear and GitHub alike: one trigger fires wherever the issue lives.
-- `--spawn`: fresh session per run, no history — linked back to the trigger in the UI
+- `--spawn`: fresh session per run, no history; read under the trigger, not in the inbox
+- `--thread`: post each run's result into this conversation as a message
 - `--for <session>`: bind runs to a specific session (defaults to the one you're in)
 - `--safe`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.
 - `--project <path>`: set working directory (defaults to current)
 - `--max-runtime <duration>`: override max runtime (default: 10m)
 - `--precheck <command>`: a shell gate run in the project directory before each scheduled or recurring firing. Exit 0 runs the trigger; anything else records a skipped run and spends no session. Reach for it when the trigger should act only if something changed ("has main moved?", "is the queue non-empty?") — otherwise a whole run is burned finding out the answer is no. Event triggers ignore it.
 
-Every trigger has a short ID (`tr-42`) — printed when you create one and listed by `cast trigger ls`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call `cast trigger complete tr-42 --summary "..."` when done to report results back.
+Every trigger has a short ID (`tr-42`) — printed when you create one and listed by `cast trigger ls`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call `cast trigger complete tr-42 --summary "..."` when done. That completion is the run's declaration of who acts next: the summary is what the human reads on the trigger, so state the outcome. Add `--needs-attention` only when the human must read or act; it keeps the run in their inbox.
 <!-- cast @VERSION@ -->
 <!-- /codecast-tasks -->

@@ -21,6 +21,10 @@ export const TAB_AFFECTING_VERBS = new Set([
   "open", "back", "forward", "reload", "click", "press", "type", "fill", "select", "batch", "tab",
 ]);
 
+/** Reminder after a tab-affecting verb: close what you opened, unless the human still needs it. */
+export const TAB_CLEANUP_NOTE =
+  "  When you are done, always close this tab and any others you opened, unless the human still needs them. `cast browser tab close <id>` for extras, then `cast browser stop`. Never close the human's tabs or another session's tabs.";
+
 /** The lines to print, or [] when there is no active tab to name. */
 export function tabFooterLines(tabs: FooterTab[]): string[] {
   const active = tabs.find((t) => t.active && t.targetId) ?? tabs.find((t) => t.targetId);

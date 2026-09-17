@@ -12,7 +12,7 @@ import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.
 import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
 import { resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { runTriggerPrecheck } from "./precheckRunner.js";
-import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerLifecycleInstructions } from "@codecast/shared/contracts";
+import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -543,7 +543,7 @@ export class TaskScheduler {
     if (task.mode !== "apply") {
       parts.push(`- ${SAFE_MODE_MANDATE}`);
     }
-    if (task.target_conversation_id) {
+    if (runResultThreadOf(task)) {
       parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
       parts.push(`- When done, run: cast trigger complete ${handle} --summary "your full response to post in the thread"`);
       parts.push(`- Write the summary as if you are replying directly to the user in their conversation.`);
@@ -555,7 +555,7 @@ export class TaskScheduler {
     if (task.short_id) {
       parts.push(`- Refer to this trigger as ${task.short_id} in anything you write — that renders as a rich trigger reference. Never paste its 32-char id into prose.`);
     }
-    parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
+    parts.push(`- The completion is this run's declaration of who acts next. A clean one says nobody: the run stays out of the user's inbox and the summary carries the outcome. If you found something the user must read or act on, add --needs-attention: that declares the run blocked on them and keeps it in their inbox.`);
     parts.push(triggerLifecycleInstructions(task));
     parts.push('- To set a follow-up trigger: cast trigger add "..." --in <time>');
     if (task.originating_conversation_id) {

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { classifyStartedPane } from "./daemon.js";
-import { CODEX_TRUST_ACCEPTED_PANE, CODEX_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
+import { CODEX_TRUST_ACCEPTED_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 // Regression coverage for the unbound blank new session (root-caused 2026-09-02).
 //
@@ -99,6 +99,13 @@ describe("classifyStartedPane", () => {
     // would press Enter again at a live composer.
     expect(CODEX_TRUST_ACCEPTED_PANE).toContain("1. Yes, continue");
     expect(classifyStartedPane(CODEX_TRUST_ACCEPTED_PANE, codexPrompt)).not.toBe("trust");
+  });
+
+  test("grok's y/n folder-trust dialog is trust, not booting", () => {
+    const grokPrompt = AGENT_CLIENTS.grok.promptReadyPattern;
+    const grokReadiness = AGENT_CLIENTS.grok.paneReadiness;
+    expect(classifyStartedPane(GROK_TRUST_PANE, grokPrompt, grokReadiness, { alternateScreen: true, cursorVisible: true })).toBe("trust");
+    expect(classifyStartedPane(LAUNCH_ECHO + "\n" + GROK_TRUST_PANE, grokPrompt, grokReadiness, { alternateScreen: true, cursorVisible: true })).toBe("trust");
   });
 
   test("codex at its ordinary prompt is ready, not trust", () => {
@@ -213,6 +220,17 @@ describe("discovery binds the assigned session id at prompt readiness", () => {
     const delivery = daemonSource.slice(at, at + 4000);
     expect(delivery).toContain("probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent)");
     expect(delivery).not.toContain("trustPromptPatterns");
+  });
+
+  test("ensureTmuxReady answers trust before the glyphless skip", () => {
+    // The glyphless continue used to swallow grok's folder-trust dialog as
+    // "unknown" and poll until the 20s startup timeout (jx702ea).
+    const at = daemonSource.indexOf("export async function ensureTmuxReady");
+    const body = daemonSource.slice(at, daemonSource.indexOf("\n}\n", at));
+    const trustAt = body.indexOf('if (state === "trust")');
+    const skipAt = body.indexOf("if (glyphlessPattern)");
+    expect(trustAt).toBeGreaterThan(0);
+    expect(skipAt).toBeGreaterThan(trustAt);
   });
 
   test("a restarted daemon resumes discovery for persisted, still-unlinked panes", () => {

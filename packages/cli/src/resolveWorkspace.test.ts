@@ -8,9 +8,9 @@ import {
   workspaceArgs,
   workspaceLabel,
   WorkspaceUnresolved,
+  unknownTeamMessage,
   WORKSPACE_TTL_MS,
-  type WorkspaceRoster,
-} from "./resolveWorkspace";
+  type WorkspaceRoster, workspaceScope } from "./resolveWorkspace";
 
 // The CLI used to answer "which workspace" in two places at once: pass --team
 // through if given, else send nothing and let the server read
@@ -140,5 +140,36 @@ describe("WRITES must be explicit", () => {
     } catch (e: any) {
       expect(e.message).toContain("not a member of any team");
     }
+  });
+});
+
+describe("--team personal", () => {
+  test("a read names the personal workspace while the pointer is a team, and sends no team", () => {
+    for (const word of ["personal", "me", "Personal"]) {
+      const ws = resolveWorkspaceForRead(roster(), word);
+      expect(ws).toEqual({ kind: "personal" });
+      expect(workspaceArgs(ws)).toEqual({});
+    }
+  });
+
+  test("a real team named personal still wins", () => {
+    const r = roster();
+    r.teams.push({ _id: "teams_personal", name: "Personal" });
+    expect(resolveWorkspaceForRead(r, "personal")).toEqual({ kind: "team", teamId: "teams_personal", name: "Personal" });
+  });
+
+  test("a write that tolerates the personal workspace gets it; a team-only write fails and lists the teams", () => {
+    expect(resolveWorkspaceForWrite(roster(), "personal")).toEqual({ kind: "personal" });
+    expect(() => resolveWorkspaceForWrite(roster(), "personal", { teamRequired: true })).toThrow(WorkspaceUnresolved);
+  });
+
+  test("the work routes get the workspace as a positive value", () => {
+    expect(workspaceScope(resolveWorkspaceForRead(roster(), "personal"))).toEqual({ workspace: "personal" });
+    const team = resolveWorkspaceForRead(roster(), roster().teams[0].name);
+    expect(workspaceScope(team)).toEqual({ workspace: "team", team_id: roster().teams[0]._id });
+  });
+
+  test("an unknown team's message offers personal as a choice", () => {
+    expect(unknownTeamMessage(roster(), "ghost")).toContain("personal  your own workspace");
   });
 });

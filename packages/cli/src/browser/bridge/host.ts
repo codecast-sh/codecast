@@ -175,10 +175,28 @@ export async function grantTab(
   url.searchParams.set("target", targetId);
   if (opts.own) url.searchParams.set("own", "1");
   // Every real-mode verb passes through here; a host starved on a loaded
-  // machine answers late, not never, and 5 s read that as "timed out".
-  const res = await fetch(url, { method: "POST", signal: AbortSignal.timeout(30_000) });
+  // machine answers late, not never, and 5 s read that as "timed out". The
+  // host answers a grant with a tab listing from the worker, so the wait
+  // covers the worker's frozen process too, and a timeout is named as the
+  // stall it is (stall.ts retries it once).
+  const GRANT_TIMEOUT_MS = 45_000;
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", signal: AbortSignal.timeout(GRANT_TIMEOUT_MS) });
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new Error(`/grant did not answer within ${GRANT_TIMEOUT_MS}ms (the bridge host verifies a grant through the extension, whose process runs at background priority and was not scheduled)`);
+    }
+    throw err;
+  }
   if (res.ok) return true;
-  if (opts.own && res.status === 404) return false;
+  // The session's own saved tab is gone (404), or the host cannot tell
+  // whether it is an agent's (403: the extension lost its ownership marks on
+  // a reload, or the id now names a human's tab). Either way the binding is
+  // no good and the caller drops it and makes a fresh tab; the doubtful tab
+  // is never adopted, which is the whole of the rule (ct-51311).
+  if (opts.own && (res.status === 404 || res.status === 403)) return false;
   let detail = "";
   try {
     detail = String(((await res.json()) as { error?: string }).error ?? "");
@@ -909,7 +927,7 @@ export function startBridgeHost(opts: {
         const r = await extCall(
           "tabs.create",
           { url: params?.url || "about:blank", background: params?.background !== false, ...(group ? { group } : {}) },
-          15_000,
+          40_000, // the worker's process may be frozen for a while; it answers when it wakes
         );
         if (group) client.group = group;
         const tabId = r.tabId as number;

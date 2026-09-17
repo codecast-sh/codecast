@@ -926,7 +926,7 @@ describe("parseUsageResponse", () => {
     expect(snap.weekly?.percent).toBe(27);
     expect(snap.weekly_scoped?.percent).toBe(42);
     expect(snap.weekly_scoped?.label).toBe("Fable");
-    expect(snap.extra).toEqual({ percent: 78.755, enabled: true });
+    expect(snap.extra).toEqual({ percent: 78.755, enabled: true, limit: 40000, used: 31502.0 });
   });
 
   it("keeps the most utilized scoped window when several exist", () => {
@@ -959,6 +959,36 @@ describe("parseUsageResponse", () => {
     expect(parseUsageResponse(null, 1).fetched_at).toBe(1);
     expect(parseUsageResponse({ limits: "nope" }, 1).session).toBeUndefined();
     expect(parseUsageResponse({ limits: [{ kind: "session", percent: "high" }] }, 1).session).toBeUndefined();
+  });
+
+  it("keeps extra spend dollars and an over-cap flag when utilization is 100", () => {
+    const snap = parseUsageResponse(
+      {
+        extra_usage: {
+          is_enabled: false,
+          monthly_limit: 70000,
+          used_credits: 72740,
+          utilization: 100,
+          spend_limit_reached: true,
+        },
+      },
+      0,
+    );
+    expect(snap.extra).toEqual({
+      percent: 100,
+      enabled: false,
+      limit: 70000,
+      used: 72740,
+      spend_limit_reached: true,
+    });
+  });
+
+  it("stores extra spend even when utilization is null (limit configured, unused)", () => {
+    const snap = parseUsageResponse(
+      { extra_usage: { is_enabled: false, monthly_limit: 0, used_credits: 0, utilization: null } },
+      0,
+    );
+    expect(snap.extra).toEqual({ percent: 0, enabled: false, limit: 0, used: 0 });
   });
 });
 
@@ -1246,6 +1276,23 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     // Convex's ccUsageValidator accepts no unknown field: a daemon that sent
     // this would have its whole account inventory rejected.
     expect(b?.usage && "source" in b.usage).toBe(false);
+  });
+
+  it("strips extra spend dollars from the heartbeat so unknown extra keys cannot reject the inventory", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    const cache = readUsageCache();
+    cache.accounts["uuid-b"]!.extra = {
+      percent: 100,
+      enabled: false,
+      limit: 70000,
+      used: 72740,
+      spend_limit_reached: true,
+    };
+    fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify(cache));
+    invalidateAccountsCache();
+    const b = (getAccountsHeartbeatPayload()?.profiles ?? []).find((p) => p.name === "b");
+    expect(b?.usage?.extra).toEqual({ percent: 100, enabled: false });
+    expect(readUsageCache().accounts["uuid-b"]?.extra).toMatchObject({ limit: 70000, used: 72740 });
   });
 
   it("keeps the model-scoped window the poll found — the live payload has none", async () => {
