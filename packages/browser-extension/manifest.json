@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Codecast",
   "short_name": "Codecast",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw46Qcb9BYV9TSDQdsCiMwljPrj8xuWm/68v3WQ6St89FVeq4mEziHfpuokT+SxhCWh+4rq2eOD+jTFCgYHAMu5B6VRnaV3Ik9jugMYF8LHPwwKSOjnXGIKenlJDQ9VbA/cpSr9dPfhj0cd5pt3mElFEkTO/PS99ueOeq3pOX+xwUembbsaqZfyn7HtT4dpq8hivTN0+XbPl1pEsw0rZ6pe95neJi/JDl80F470U0VzsKNQIZCDbI08YHaYFBOtfkOmxiM3FJmZkLpiCBU2RwwWw95LsEOP/1aE1uF8ItC2KDlLtNQ3Rk0RNTU1BMLs3AXE59KCIShbr2LSLhKEaEBQIDAQAB",
   "description": "Lets Codecast agents open and drive their own tabs in this Chrome, in one tab group, over a local token authenticated bridge.",
   "icons": {
