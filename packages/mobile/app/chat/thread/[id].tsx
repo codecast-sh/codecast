@@ -308,7 +308,9 @@ export default function ChatThreadScreen() {
     const index = inverted.findIndex((it: any) => it.kind === 'message' && it.message?.id === target);
     if (index >= 0) {
       setHighlightId(target);
-      setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
+      if (index > 2) {
+        setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
+      }
       setTimeout(() => setHighlightId(null), 3200);
     }
   }, [targetParam, thread?.root, inverted]);
@@ -381,6 +383,7 @@ export default function ChatThreadScreen() {
           data={inverted}
           keyExtractor={(item) => item.key}
           onScrollToIndexFailed={() => {}}
+          keyboardShouldPersistTaps="always"
           renderItem={({ item }) => {
             if (item.kind !== 'message') return null;
             const view = (item.message as any).view as MobileChatMessage;

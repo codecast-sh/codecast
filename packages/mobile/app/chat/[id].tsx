@@ -381,7 +381,12 @@ export default function ChatChannelScreen() {
       const index = inverted.findIndex((it: any) => it.kind === 'message' && it.message?.id === target);
       if (index >= 0) {
         setHighlightId(target);
-        setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
+        // The inverted list already opens at the newest line. Centering a
+        // notification that named that line is a scroll away from the bottom
+        // and back — skip it. A permalink into history still jumps.
+        if (index > 2) {
+          setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
+        }
         setTimeout(() => setHighlightId(null), 3200);
       }
       return;
@@ -588,6 +593,7 @@ export default function ChatChannelScreen() {
             }
             contentContainerStyle={inverted.length === 0 ? styles.emptyList : undefined}
             keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="always"
           />
           {awayFromBottom && (
             <TouchableOpacity style={styles.jumpPill} onPress={jumpToNow} activeOpacity={0.85}>

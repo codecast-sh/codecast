@@ -15,6 +15,7 @@ import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 import {
   agentNames,
+  notificationActor,
   sessionLabel,
   sessionTypes,
   showsAgentIcon,
@@ -119,8 +120,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
 }) {
   const Theme = useTheme();
   const icon = notificationIcon(notification.type);
-  const actorName = notification.actor?.name || notification.actor?.github_username || notification.actor_name;
-  const avatarUrl = notification.actor?.github_avatar_url || notification.actor_avatar;
+  const { name: actorName, avatar: avatarUrl } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
   // Same rule as the web bell: a row wears an agent face only when it names a
   // conversation. The daemon's machine alert is a session type with no

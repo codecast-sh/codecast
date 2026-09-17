@@ -7,7 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import { AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
@@ -28,6 +28,12 @@ import { bootMark } from '@/lib/bootProfile';
 import * as Font from 'expo-font';
 
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
+
+class OverlayErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? null : this.props.children; }
+}
 
 
 // Keychain failures must degrade to "signed out", never hang auth: a rejected
@@ -116,7 +122,7 @@ function RootLayout() {
       'JetBrainsMono-Medium': require('../assets/fonts/JetBrainsMono-Medium.ttf'),
       'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
       'JetBrainsMono-Italic': require('../assets/fonts/JetBrainsMono-Italic.ttf'),
-    });
+    }).catch(() => {});
   }, [loaded]);
 
   // CallKit + PushKit bridge — mounts once, before any call surface. Safe on
@@ -250,9 +256,11 @@ function RootLayoutNav() {
                   />
                 </Stack>
                 {calls ? (
-                  <Suspense fallback={null}>
-                    <CallOverlay />
-                  </Suspense>
+                  <OverlayErrorBoundary>
+                    <Suspense fallback={null}>
+                      <CallOverlay />
+                    </Suspense>
+                  </OverlayErrorBoundary>
                 ) : null}
               </AuthGate>
             </ThemeProvider>

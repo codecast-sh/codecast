@@ -224,7 +224,9 @@ export function ChatComposerBar({
         <NativePressable
           style={[styles.send, !canSend && styles.sendDisabled, editing && styles.sendEdit]}
           onPress={submit}
-          hitSlop={8}
+          delayPressIn={0}
+          hitSlop={12}
+          pressRetentionOffset={20}
           accessibilityRole="button"
           accessibilityLabel="Send"
         >
@@ -315,9 +317,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bgAlt + '55',
   },
   send: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: Theme.blue,
     alignItems: 'center',
     justifyContent: 'center',
