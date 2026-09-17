@@ -10,6 +10,7 @@ import {
   classifyProbe, deployKeyUrl, ensureHostGitReady, githubRepo, hostAccessPath, hostGitScript, hostProbeOrigin, knownHostLinesFor, laptopIdentity, probeErrorLine,
   laptopKnownHostLines, originHost, parseHostGitOutput, parseIdentityOverride, sshConfigBlock, type HostGitState,
 } from "./hostGit";
+import { GH_WRAPPER_REL, ghWrapperScript, REAL_GH_REL } from "./ghWrapper";
 
 // Everything the script touches resolves from $HOME, and the tests redirect
 // HOME (the "host"), GIT_CONFIG_GLOBAL (the "laptop"'s global git config —
@@ -474,6 +475,18 @@ exec ${realGit} "$@"`);
     expect(helpers()).toContain("store");
     expect(helpers()).toContain("/usr/lib/git-core/git-credential-libsecret");
     expect(helpers()).toContain("manager");
+  });
+
+  test("the gh wrapper is installed at ~/.local/bin/gh, a real gh there is moved behind it, and a rerun keeps both", () => {
+    fakeBin("cast", "exit 1");
+    fs.mkdirSync(hostFile(".local/bin"), { recursive: true });
+    fs.writeFileSync(hostFile(GH_WRAPPER_REL), "#!/bin/sh\necho real gh\n", { mode: 0o755 });
+    ready();
+    expect(fs.readFileSync(hostFile(GH_WRAPPER_REL), "utf-8")).toBe(ghWrapperScript());
+    expect(fs.readFileSync(hostFile(REAL_GH_REL), "utf-8")).toContain("real gh");
+    ready();
+    expect(fs.readFileSync(hostFile(REAL_GH_REL), "utf-8")).toContain("real gh");
+    expect(fs.readFileSync(hostFile(GH_WRAPPER_REL), "utf-8")).toBe(ghWrapperScript());
   });
 
   test("the App token path: a helper that answers plus a fetch that works is push access with no key", () => {
