@@ -3335,7 +3335,9 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
         style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
         onPress={handleSend}
         activeOpacity={0.7}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        delayPressIn={0}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
         accessibilityLabel="Send"
       >
@@ -5266,8 +5268,8 @@ export default function SessionDetailScreen() {
           onViewableItemsChanged={handleViewableItemsChanged}
           viewabilityConfig={stickyViewabilityConfig}
           /* maintainVisibleContentPosition removed - was causing blank screen by fighting scroll offset */
+          keyboardShouldPersistTaps="always"
         />
-        </Animated.View>
         <MessageTickRail
           ticks={navTicks}
           promptCount={promptCount}
@@ -5307,7 +5309,10 @@ export default function SessionDetailScreen() {
               style={[
                 styles.jumpTopButtonWrap,
                 {
-                  top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + 4,
+                  // Overlay lives in the list pane (already below the pinned
+                  // header). Only the collapsing metadata strip still overlays
+                  // this pane, so offset by that, not the header again.
+                  top: floatingHeaderHeight + 4,
                   transform: [{ translateY: floatingHeaderY }, { translateY: stickyOffsetY }],
                 },
               ]}
@@ -5352,10 +5357,11 @@ export default function SessionDetailScreen() {
         </RNView>
         )}
 
-        {/* After the jump overlay in the tree, and above it in zIndex. That
-            overlay is a full-width absolute layer whose bottom inset is a
-            guessed composer height; on a new session the keyboard is open and
-            the send button sat inside that layer, so the overlay won the tap. */}
+        </Animated.View>
+        {/* Composer is a sibling of the list pane, not under the jump overlay.
+            That overlay used to be a full-width absolute layer on the KAV
+            whose bottom inset was a guessed composer height; with the
+            keyboard open the send button sat inside it and the overlay won. */}
         <RNView style={styles.composerLayer}>
           <MessageInput
             conversationId={id as Id<"conversations">}
@@ -5958,12 +5964,12 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   sendButton: {
     backgroundColor: Theme.blue,
-    minWidth: 32,
-    height: 32,
-    borderRadius: 16,
+    minWidth: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 9,
+    paddingHorizontal: 12,
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
@@ -6530,11 +6536,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   // Jump buttons
   jumpButtonsOverlay: {
-    position: 'absolute',
-    top: 6,
-    left: 0,
-    right: 0,
-    bottom: 116,
+    ...StyleSheet.absoluteFillObject,
     zIndex: 100,
   },
   composerLayer: {
