@@ -91,10 +91,26 @@ leave together, one of two ways:
 
 - **To GitHub**, as one review with a verdict and a summary
   (`reviews.submitPending` from the page, `cast pr review` from the terminal).
-  GitHub's comment ids come back and stamp the rows.
-- **To a session**, as one message built by the same prompt builder `cast
-  review send` uses (`reviews.handPendingToSession`). The notes stay pending, so
-  the same batch can still go to GitHub after the agent has acted.
+  GitHub's comment ids come back and stamp the rows. When a session owns the
+  pull request (`shepherd_conversation_id`), the same submission then hands the
+  whole review to that session as one message: the verdict, the summary and
+  every note (`reviews.deliverSubmittedReview`). The delivery is best effort and
+  reported in the result as `delivered_to`; a session that cannot take the
+  message never fails a review GitHub already holds. The delivery stamps the
+  `reviews` row with `session_delivered_at`. GitHub's webhook for the same
+  review can land before that stamp, so when the review's author holds a
+  codecast account the webhook schedules its wake 20 seconds out
+  (`prShepherd.wake` with `unless_delivered_review`) and the wake stands down
+  when it finds the stamp. The session hears such a review once. A review by
+  anyone else wakes the session at once, as before.
+- **To a session**, as one message with no verdict
+  (`reviews.handPendingToSession`). The notes stay pending, so the same batch
+  can still go to GitHub after the agent has acted.
+
+Both messages come from one builder, `buildReviewBatchPrompt` in
+`@codecast/shared/comments`, which `cast review send` also uses. A verdict
+changes the opening line and what the agent is asked to do; the notes render the
+same way on every path.
 
 `cast pr comment --hold` adds a note from the terminal, `cast pr notes` lists
 them, `cast pr review` sends them.
@@ -116,8 +132,14 @@ decision, the labels and the assignees, and carries the verbs: the review menu
 (what is waiting, the verdict, submit or send to the session), merge with its
 method and branch deletion, and the rest behind one more button.
 
-Files carry the review: a switch above a fresh line's composer chooses between
-holding the note and posting it now; a held note is drawn dashed; the tree
+Files carry the review. Every row of the diff shows a `+` in its gutter under
+the cursor, and that button opens the composer on the line; clicking a line
+number selects the line, shift click extends the run, and `+` on a selected row
+comments on the whole run. `DiffView` draws that button only for a surface that
+owns its comments (`onLineComment`): a diff inside a message keeps its single
+handle in the message's margin, which the pull request page has no room for,
+because its diff sits flush inside a clipped card. A switch above a fresh
+line's composer chooses between holding the note and posting it now; a held note is drawn dashed; the tree
 counts open threads and held notes per file and dims files marked viewed. `n`
 and `p` walk the open threads, `m` marks the file viewed and moves on, `r`
 opens the review menu. Commits is its own tab. The conversation nests each
