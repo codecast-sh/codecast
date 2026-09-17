@@ -3,6 +3,8 @@ export function triggerLifecycleInstructions(task: { _id: string; short_id?: str
   return [
     "Trigger lifecycle defaults (subordinate to this trigger's prompt, explicit user instructions, and the session's existing permissions):",
     `Save this run's verified outcome with cast trigger complete ${handle} --summary "outcome and evidence". Completing one recurring run alone does not retire its trigger.`,
+    "A finding does not survive this run on its own: the session ends with this turn, and the next firing overwrites this trigger's summary. Anything a person or another session must still act on has to leave the run before it completes. File it as a task, add it to the task or plan it already belongs to, or queue a decision when the choice is the human's. Name what you filed in the summary.",
+    "--needs-attention claims the human's eyes, so pass it only when they themselves must act, and then open the summary with the ask: what you need them to do, and by when if that matters. Work you have already given an owner does not need their eyes. A summary that leads with what passed, or that says something needs a look without naming the action, spends their attention instead of directing it.",
     `If this is a bounded trigger and its terminal condition is verified complete, save the outcome first, then cancel only this trigger with cast trigger cancel ${handle}.`,
     "Quiet or no-change results, quota errors, collector failures, unavailable sources, and pending deadlines are NOT proof of completion. Preserve future checks until their conditions are verified.",
     "Ongoing mandates remain active until explicitly ended. Do not close unrelated tasks or cancel other triggers.",

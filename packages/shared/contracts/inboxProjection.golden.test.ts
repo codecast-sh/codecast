@@ -56,6 +56,10 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v9: a stopped agent whose row declares done files under done; with queued
   // work behind it, it still needs a human (isExitAfterDone).
   9: "95cf1e642bba5962",
+  // v10: an owned row holds its window seat on the owner row alone — the
+  // `ownedold` and `ownedfailed` fixtures are members now, because assignment
+  // puts a session in that person's inbox whatever state it is in.
+  10: "f7e7f5fe5a214990",
 };
 
 type Expected = {
