@@ -14,13 +14,19 @@ import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
-import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,
+  checkoutInUseMessage,
+  normalizeCloudWorkspace,
+  posixRepoBasename,
+} from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
 import { stampBrowserPaneOfferHandled } from "./conversations";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser } from "./pendingMessages";
 import { enqueueCloudSpawn } from "./cloud";
+import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
+import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { findAgentBoxSessionCreatedBy, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import {
@@ -878,8 +884,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
+    // Dispatch args are v.any(): the mode and the seed choice are normalised at the boundary.
+    const cloudWorkspace = normalizeCloudWorkspace(opts.cloud_workspace);
+    const cloudStartFrom = effectiveStartFrom(cloudWorkspace, opts.cloud_start_from, undefined);
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
     // waits for this conversation to sync back and supersede the stub. That
@@ -925,6 +934,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
     const agentType = (opts.agent_type || "claude_code") as ConvexAgentType;
     const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.target_device_id);
+    // "Run in the cloud" names one of the RUNNER's own wake-on-use hosts; an
+    // agent box (runner ≠ caller) or a foreign/laptop device id is refused
+    // before any row exists.
+    if (opts.cloud_device_id) await resolveCloudDevice(ctx, runnerUserId, opts.cloud_device_id);
 
     const mappings = await ctx.db
       .query("directory_team_mappings")
@@ -1005,7 +1018,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // The same pair createQuickSession stamps — the web's deferred create just
       // reaches this side effect instead of that mutation.
       ...(opts.cloud_device_id
-        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const }
+        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const, cloud_workspace: cloudWorkspace, cloud_start_from: cloudStartFrom }
         : {}),
     });
 
@@ -1045,9 +1058,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // start. Queuing start_session here would race that and route the session at
     // a host with no checkout to run in.
     if (opts.cloud_device_id) {
-      await enqueueCloudSpawn(ctx, userId, {
-        conversationId,
-        cloudDeviceId: opts.cloud_device_id,
+      if (cloudWorkspace === "shared") {
+        // A busy checkout NEVER throws here: the outbox classifies a thrown
+        // create as permanent and drops it, and the stub's self-heal would
+        // re-issue the same refused create. The row stays parked with the
+        // refusal as its session_error (visible on the card) and no
+        // cloud_spawn — a pending shared row with an error holds nothing, so
+        // it frees nothing it does not have; a later re-pick re-claims.
+        const repo = resolvedGitRoot || resolvedProjectPath;
+        const occupant = repo ? await findSharedCheckoutOccupant(ctx, runnerUserId, opts.cloud_device_id, { repoBasename: posixRepoBasename(repo) }) : null;
+        if (occupant) {
+          await ctx.db.patch(conversationId, {
+            session_error: checkoutInUseMessage(occupant.cloud_checkout_path ?? occupant.project_path ?? repo!, occupant),
+            updated_at: Date.now(),
+          });
+          return conversationId;
+        }
+      }
+      const row = await ctx.db.get(conversationId);
+      await parkOnCloudHost(ctx, runnerUserId, row, opts.cloud_device_id, {
+        projectPath: resolvedProjectPath,
+        gitRoot: resolvedGitRoot,
+        workspace: cloudWorkspace,
+        startFrom: cloudStartFrom,
       });
       return conversationId;
     }
@@ -1057,6 +1090,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       projectPath: resolvedProjectPath || resolvedGitRoot,
       gitRoot: resolvedGitRoot,
       createdAt: now,
+      // The human behind the create: lets the chokepoint upgrade a dropdown
+      // pick of the runner's own cloud host to placement (mobile has no cloud
+      // toggle; it sends target_device_id alone).
+      callerUserId: userId,
       // Isolated-worktree sessions: forward the launch flag so the daemon's
       // start_session creates the git worktree up front. This is the SAME path
       // reconfigureSession/createQuickSession use; without it the "isolated

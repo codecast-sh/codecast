@@ -63,6 +63,9 @@ import {
   isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
+import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
+import { cloudHostSignInHint } from "../cloud/browserSync.js";
+import { isRemoteDevice } from "../remote/device.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { buildHostsCommand } from "../hosts/cli.js";
 import { uploadOne } from "../imageCommand.js";
@@ -99,6 +102,30 @@ async function requireDriver(): Promise<BrowserDriver> {
   } catch (err) {
     if (err instanceof BrowserNotLive) die(err.problem.message, err.problem.hint);
     die(explainConnectionLoss((err as Error).message));
+  }
+}
+
+/**
+ * A driver to a live browser, starting one when there is NONE. The
+ * "starts the browser if needed" promise of `open` and `sync`. Only a dead
+ * browser is replaced: an unresponsive one is reported, never relaunched
+ * (see requireDriver). The launch lock makes this safe under contention:
+ * concurrent auto-starts collapse into one launch that everyone reuses.
+ */
+async function ensureDriver(): Promise<BrowserDriver> {
+  try {
+    return await openDriver();
+  } catch (err) {
+    if (!(err instanceof BrowserNotLive)) die(explainConnectionLoss((err as Error).message));
+    // Auto-start only over a browser that is demonstrably gone. A silent one
+    // is `unverifiable`, and launching over it kills the tabs of every agent
+    // still using it (ct-49625).
+    if (!authorizesTeardown(err.liveness)) die(err.problem.message, err.problem.hint);
+    console.log(fmt.muted("  no managed browser is running — starting one"));
+    await startLocalBrowser({ channel: "chrome", size: "1440x900" });
+    return openDriver().catch(() => {
+      die("the browser did not come up after auto-start", "try `cast browser start` directly");
+    });
   }
 }
 
@@ -340,6 +367,18 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       }
     });
 
+  br.command("sync [url]")
+    .description("Carry your Chrome's current logins into the running agent browser (one site, or every site with no URL); on the cloud host it asks your laptop to carry the login over SSH")
+    .option("--all", "On the cloud host: carry every site (refused while a site allowlist is active)")
+    .option("--via <device-id>", "On the cloud host: the laptop that carries it (default: your most recently seen online laptop)")
+    .option("--wait <seconds>", "On the cloud host: how long to wait for the laptop; 0 returns at once", String(DEFAULT_SYNC_WAIT_S))
+    .action(async (url: string | undefined, o: { all?: boolean; via?: string; wait: string }) => {
+      // The driver's own ensure: a stale instance.json is replaced and the
+      // LIVE port is what goes in the request.
+      const ensureBrowser = async () => { (await ensureDriver()).close(); };
+      process.exit(await runBrowserSync(url, o, { ensureBrowser, me, isRemote: isRemoteDevice }));
+    });
+
   targetFlags(br.command("stop"))
     .description("Close this session's tab")
     .option("--wipe", "Also delete the cloned profile and its cookies (implies --force)")
@@ -491,24 +530,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const deny = refuseNavigation(url, me(), "open", policy);
       if (deny) die(deny.message, deny.hint);
 
-      let driver: BrowserDriver;
-      try {
-        driver = await openDriver();
-      } catch (err) {
-        if (!(err instanceof BrowserNotLive)) die(explainConnectionLoss((err as Error).message));
-        // Auto-start only over a browser that is demonstrably gone. A silent one
-        // is `unverifiable`, and launching over it kills the tabs of every agent
-        // still using it (ct-49625).
-        if (!authorizesTeardown(err.liveness)) die(err.problem.message, err.problem.hint);
-        // Keep the command's promise ("starts the browser if needed"). The
-        // launch lock makes this safe under contention: concurrent auto-starts
-        // collapse into one launch that everyone reuses.
-        console.log(fmt.muted("  no managed browser is running — starting one"));
-        await startLocalBrowser({ channel: "chrome", size: "1440x900" });
-        driver = await openDriver().catch(() => {
-          die("the browser did not come up after auto-start", "try `cast browser start` directly");
-        });
-      }
+      const driver = await ensureDriver();
       const s = driver.state;
       const sessionId = me();
       const conn = driver.conn;
@@ -602,7 +624,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // what was asked for, and if it left the allowlist, say so loudly.
         const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
         if (landed) console.log(`${WARN} ${landed}`);
-        const signIn = signInLandingNote(snap.url, keepsOwnLogin, realModeHint(me()));
+        const signIn = isRemoteDevice() ? cloudHostSignInHint(snap.url) : signInLandingNote(snap.url, keepsOwnLogin, realModeHint(me()));
         if (signIn) console.log(`${WARN} ${signIn}`);
         console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
         await emitAutoShot(page, o.shot);

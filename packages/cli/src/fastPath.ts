@@ -16,6 +16,21 @@
  * the import() is what keeps index.js's bundle lazy.
  */
 
+/**
+ * git invoking the credential helper: `cast git-credential get|store|erase`,
+ * exactly as the configured helper value spells it (cloud/hostGit.ts).
+ *
+ * git reads the helper's stdout as the credential and refuses one whose first
+ * line is not a key it knows, so anything else this process prints — the
+ * auto-update notice above all — fails every fetch and every push on the host.
+ * The verb therefore bypasses the CLI's lifecycle the way `_build-id` does.
+ * `--why`, and a human typing the verb, still go through the full CLI: nothing
+ * is reading that output as a protocol.
+ */
+export function isCredentialHelperFastPath(argv: string[]): boolean {
+  return argv[2] === "git-credential" && argv.length === 4 && ["get", "store", "erase"].includes(argv[3]!);
+}
+
 export function isStableContextFastPath(argv: string[]): boolean {
   return (
     argv[2] === "stable-context" &&
@@ -85,6 +100,17 @@ export function runFastPath(argv: string[]): boolean {
         console.log(crypto.createHash("sha256").update(tar).digest("hex"));
       })
       .catch(fail);
+    return true;
+  }
+  if (isCredentialHelperFastPath(argv)) {
+    // Stdout must be exactly the credential lines (or empty): no commander, no
+    // preAction logging or daemon startup, no update check. The module answers
+    // and exits the process itself; a failure to load is a refusal, and a
+    // refusal is silence plus exit 1, which is how git is told to try the next
+    // helper.
+    import("./cloud/gitCredential.js")
+      .then(({ runHostGitCredential }) => runHostGitCredential(argv[3]))
+      .catch(() => process.exit(1));
     return true;
   }
   if (isStableContextFastPath(argv)) {

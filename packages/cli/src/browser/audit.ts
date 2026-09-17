@@ -22,7 +22,8 @@ import * as path from "node:path";
 import { browserHome } from "./profile.js";
 import { checkUrl, isInternalUrl, loadSitePolicy, originOf, type SitePolicy } from "./policy.js";
 
-export type AuditVia = "open" | "action" | "history" | "reload" | "batch";
+/** `sync`: a login carry refused by the policy before any request left the host. */
+export type AuditVia = "open" | "action" | "history" | "reload" | "batch" | "sync";
 
 export interface AuditRecord {
   /** Epoch ms. */

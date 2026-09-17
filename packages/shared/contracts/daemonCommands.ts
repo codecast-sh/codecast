@@ -35,8 +35,25 @@ export const DAEMON_COMMANDS = [
   // an isolated worktree with `cast ws acquire` on the host, then places the
   // conversation on the host's device (cloud.placeConversation). Runs as
   // `cast cloud start <conversation>` in a child, like move_to_device. args:
-  // { conversation_id, cloud_device_id? }. Old daemons: "Unknown command".
+  // { conversation_id, cloud_device_id?, placement_token?, workspace?:
+  // "isolated"|"shared", start_from?: "checkout"|"origin_main" }. In
+  // `workspace: "shared"` mode the child claims the host's main checkout in
+  // Convex first (cloud.claimSharedCheckout) and runs `cast ws root` there
+  // instead of acquiring a worktree. `start_from` rides to `cast cloud start
+  // --from`: the isolated worktree is seeded from the preparing laptop's
+  // checkout (default) or made from origin/main. Old daemons: "Unknown command".
   "cloud_spawn",
+  // A session on the cloud host asked for the owner's browser login for one
+  // site (`cast browser sync <site>` there). The host has no Keychain, so the
+  // request is targeted at an online LOCAL daemon, which runs `cast cloud
+  // browser-sync` in a child: decrypt the laptop's cookies for that origin and
+  // inject them into the host's Chrome through an SSH port forward. args:
+  // { host_device_id, cdp_port, origin: string|null, all: boolean,
+  // conversation_id?: string } — an ORIGIN, never a URL. Result JSON:
+  // { ok, injected, sites?, rejected?, host, reason? } — counts only, never a
+  // cookie. Never parked on an offline laptop (cloud.requestBrowserSync
+  // refuses instead). Old daemons: "Unknown command".
+  "cloud_browser_sync",
   // Fork fast path: resume a fork by copying the parent's local JSONL. A
   // SEPARATE command (not resume_session) so daemons that predate it report
   // "Unknown command" and do nothing — falling into their resume_session path

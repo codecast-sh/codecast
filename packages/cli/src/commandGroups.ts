@@ -84,6 +84,14 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./cloud/cli.js").then((m) => m.registerCloudCommand),
   },
   {
+    token: "git-credential",
+    hidden: true,
+    args: ["[operation]"],
+    hasOptions: true,
+    description: `Git credential helper: a GitHub App installation token for this cloud host`,
+    load: () => import("./cloud/gitCredential.js").then((m) => m.registerGitCredentialCommand),
+  },
+  {
     token: "hosts",
     description: `Remote machines: what runs on them, and what they cost`,
     load: () => import("./hosts/cli.js").then((m) => m.registerHostsCommand),

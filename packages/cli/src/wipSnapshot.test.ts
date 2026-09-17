@@ -5,7 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   buildSnapshotMessage,
+  CLOUD_SEED_EXCLUDES,
   createWipSnapshot,
+  createWipSnapshotStrict,
   defaultRemote,
   parseSnapshotTrailer,
   remoteSnapshotScript,
@@ -13,6 +15,7 @@ import {
   isPermanentPushFailure,
   pushWipSnapshot,
   restoreWipSnapshot,
+  snapshotTree,
   wipRef,
 } from "./wipSnapshot.js";
 
@@ -323,6 +326,8 @@ describe("isPermanentPushFailure", () => {
       "remote: Write access to repository not granted. fatal: Authentication failed",
       "ERROR: Permission denied (publickey).",
       "remote: error: GH006: Forbidden",
+      // A deploy key added with GitHub's default read-only setting.
+      "ERROR: The key you are authenticating with has been marked as read only.\nfatal: Could not read from remote repository.",
     ]) {
       expect(isPermanentPushFailure(err)).toBe(true);
     }
@@ -545,5 +550,79 @@ describe("sessions sharing a checkout share one snapshot", () => {
     const { cwd, remote } = repo();
     const snap = (await createWipSnapshot(cwd))!;
     expect((await pushWipSnapshot(cwd, { remote, conversationIds: [], sha: snap.sha })).ok).toBe(true);
+  });
+});
+
+describe("createWipSnapshotStrict (the cloud seed, ct-49433)", () => {
+  test("excludes the workspace state dirs even when .gitignore does not, and keeps a tracked .codecast file as HEAD has it", async () => {
+    const { cwd } = repo();
+    // A tracked file under .codecast stays as committed; the excluded dirs never enter.
+    fs.mkdirSync(path.join(cwd, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast", "workspace.toml"), "[setup]\n");
+    git(cwd, ["add", ".codecast/workspace.toml"]);
+    git(cwd, ["commit", "-qm", "manifest"]);
+    fs.writeFileSync(path.join(cwd, ".codecast", "workspace.toml"), "[setup]\ninstall = ['x']\n"); // modified, must travel
+    fs.mkdirSync(path.join(cwd, ".codecast/workspaces/w1/chrome-profile"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast/workspaces/w1/chrome-profile/Cookies"), "COOKIE_JAR");
+    fs.mkdirSync(path.join(cwd, ".codecast/worktrees/w2"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast/worktrees/w2/f"), "another session's tree");
+    fs.mkdirSync(path.join(cwd, ".codecast/logs"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast/logs/setup.log"), "install output");
+    fs.writeFileSync(path.join(cwd, "work.txt"), "untracked work");
+    expect(git(cwd, ["status", "--porcelain"])).toContain(".codecast/workspaces/"); // not ignored on the laptop
+    const snap = (await createWipSnapshotStrict(cwd, { exclude: CLOUD_SEED_EXCLUDES }))!;
+    const files = git(cwd, ["ls-tree", "-r", "--name-only", snap.sha]).split("\n");
+    expect(files).toContain("work.txt");
+    expect(files).toContain(".codecast/workspace.toml");
+    expect(git(cwd, ["show", `${snap.sha}:.codecast/workspace.toml`])).toBe("[setup]\ninstall = ['x']");
+    expect(files.some((f) => f.includes("Cookies") || f.startsWith(".codecast/worktrees/") || f.startsWith(".codecast/logs/"))).toBe(false);
+    expect(files).not.toContain(".env");
+    expect(snap.dirty).toBe(true);
+    expect(git(cwd, ["status", "--porcelain"])).toContain(".codecast/workspaces/"); // the laptop is untouched
+  });
+
+  test("dirty is what the snapshot carries: untracked content under an excluded dir alone is clean", async () => {
+    const { cwd } = repo();
+    fs.mkdirSync(path.join(cwd, ".codecast/workspaces/w1/chrome-profile"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast/workspaces/w1/chrome-profile/Cookies"), "COOKIE_JAR");
+    fs.mkdirSync(path.join(cwd, ".codecast/logs"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast/logs/setup.log"), "install output");
+    expect(git(cwd, ["status", "--porcelain"])).toContain(".codecast/");
+    const snap = (await createWipSnapshotStrict(cwd, { exclude: CLOUD_SEED_EXCLUDES }))!;
+    expect(snap.tree).toBe(git(cwd, ["rev-parse", "HEAD^{tree}"]));
+    expect(snap.dirty).toBe(false);
+    expect(await snapshotTree(cwd, CLOUD_SEED_EXCLUDES)).toBe(snap.tree);
+    // Without the excludes the same tree is dirty, and a staged change counts too.
+    expect((await createWipSnapshotStrict(cwd))!.dirty).toBe(true);
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "staged\n");
+    git(cwd, ["add", "tracked.txt"]);
+    expect((await createWipSnapshotStrict(cwd, { exclude: CLOUD_SEED_EXCLUDES }))!.dirty).toBe(true);
+  });
+
+  test("returns null only for no HEAD; a clean tree snapshots to HEAD's own tree", async () => {
+    const empty = tmpdir("empty");
+    git(empty, ["init", "-q", "-b", "main"]);
+    expect(await createWipSnapshotStrict(empty)).toBeNull();
+    expect(await createWipSnapshotStrict(tmpdir("plain"))).toBeNull();
+    const { cwd } = repo();
+    const snap = (await createWipSnapshotStrict(cwd))!;
+    expect(snap.dirty).toBe(false);
+    expect(snap.tree).toBe(git(cwd, ["rev-parse", "HEAD^{tree}"]));
+    expect(git(cwd, ["rev-parse", `${snap.sha}^`])).toBe(snap.base);
+  });
+
+  test("a git failure after HEAD resolves throws with git's stderr, where the lenient variant returns null", async () => {
+    const { cwd } = repo();
+    fs.writeFileSync(path.join(cwd, "locked.txt"), "unreadable");
+    fs.chmodSync(path.join(cwd, "locked.txt"), 0o000);
+    try {
+      let error: any;
+      try { await createWipSnapshotStrict(cwd); } catch (e) { error = e; }
+      expect(error).toBeDefined();
+      expect(String(error.stderr ?? error.message)).toMatch(/locked\.txt|Permission denied/);
+      expect(await createWipSnapshot(cwd)).toBeNull();
+    } finally {
+      fs.chmodSync(path.join(cwd, "locked.txt"), 0o644);
+    }
   });
 });

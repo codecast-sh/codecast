@@ -193,6 +193,26 @@ export function loadSitePolicy(cwd: string = process.cwd()): SitePolicy | null {
     }
   }
 
+  const machine = loadMachinePolicy();
+  if (machine) {
+    sources.push(...machine.sources);
+    errors.push(...machine.errors);
+  }
+
+  if (!sources.length && !errors.length) return null;
+  return { sources, errors };
+}
+
+/**
+ * The machine half of the policy alone: `browser_allow` in
+ * ~/.codecast/config.json, or its parse/shape error (fail closed). For a
+ * process whose working directory is not a project — the laptop daemon's
+ * cookie-carry child — where walking up for a manifest would apply whatever
+ * project the daemon happens to run from.
+ */
+export function loadMachinePolicy(): SitePolicy | null {
+  const sources: PolicySource[] = [];
+  const errors: { file: string; message: string }[] = [];
   const configFile = path.join(defaultConfigDir(), "config.json");
   if (fs.existsSync(configFile)) {
     try {
@@ -211,7 +231,6 @@ export function loadSitePolicy(cwd: string = process.cwd()): SitePolicy | null {
       errors.push({ file: configFile, message: (err as Error).message });
     }
   }
-
   if (!sources.length && !errors.length) return null;
   return { sources, errors };
 }

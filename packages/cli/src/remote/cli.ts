@@ -19,8 +19,6 @@ import {
   pullSession,
   remotePrompt,
   resolveLocalSession,
-  ensureRemoteClaudeReady,
-  refreshRemoteCredential,
   loadRemoteHost,
   performMoveToRemote,
   verifyRemoteSync,
@@ -30,7 +28,6 @@ import {
 } from "./session-move.js";
 import { reorientationNotice } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
-import { decryptToken } from "../tokenEncryption.js";
 import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 import { learnHostDeviceId } from "../cloud/prepare.js";
@@ -65,15 +62,12 @@ async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost;
   return { host: loadRemoteHost(hostId) };
 }
 
-/** A Convex client + api_token + generated api, from the local config (move flow). */
-export async function convexClient(): Promise<{ client: any; token: string; api: any }> {
-  const cfgPath = path.join(defaultConfigDir(), "config.json");
-  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-  const token = cfg.auth_token?.startsWith("enc:") ? decryptToken(cfg.auth_token) : cfg.auth_token;
-  const { ConvexHttpClient } = await import("convex/browser");
-  const apiMod: any = await import("../../../convex/convex/_generated/api.js" as any);
-  return { client: new ConvexHttpClient(cfg.convex_url), token, api: apiMod.api };
-}
+/** A Convex client + api_token + generated api, from the local config (move flow).
+ *  Defined in remote/convexClient.ts, a leaf the credential helper's fast path
+ *  can load without this module's graph; re-exported here for every caller
+ *  that already imports it from remote/cli.js. */
+import { convexClient } from "./convexClient.js";
+export { convexClient };
 
 const SCALEWAY_DIR = path.join(defaultConfigDir(), "scaleway");
 const HOSTS_FILE = path.join(SCALEWAY_DIR, "hosts.json");
@@ -322,13 +316,27 @@ export function registerRemoteCommand(program: Command): void {
         process.exit(1);
       }
 
+      // The move lands in the host's main checkout of this repo. A shared
+      // cloud session there would be re-pointed at the moved snapshot by the
+      // push, so ask first (the server's ownership flip re-checks).
+      {
+        const { remoteMoveCwd, resolveLocalSession } = await import("./session-move.js");
+        const { fetchRootOccupant } = await import("../cloud/prepare.js");
+        const { checkoutInUseMessage } = await import("@codecast/shared/contracts");
+        const remoteCwd = remoteMoveCwd(host, resolveLocalSession(sessionId).cwd);
+        const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id);
+        if (occupant) {
+          console.error(checkoutInUseMessage(remoteCwd, occupant));
+          process.exit(1);
+        }
+      }
       console.log(`moving ${sessionId} -> ${host.user}@${host.address} (device ${macDevice.device_id.slice(0, 8)})`);
       console.log("  [1/4] transfer worktree + transcript + credential");
-      const move = await pushSession(sessionId, host);
+      console.log("  [2/4] prepare remote claude/codex (onboarding + folder trust) + host home");
+      // The same local half the daemon's move runs: one path, so the host
+      // home steps (logins, tools, mirror) never diverge between the two.
+      const move = await performMoveToRemote(host, sessionId);
       console.log(`        ${describeVerification(move.verification)}`);
-      console.log("  [2/4] prepare remote claude (onboarding + folder trust)");
-      ensureRemoteClaudeReady(host, move.remoteCwd);
-      refreshRemoteCredential(host);
       console.log("  [3/4] flip ownership + resume on the Mac");
       const r = await client.mutation(api.devices.moveSessionToDevice, {
         api_token: token, conversation_id: conv._id, owner_device_id: macDevice.device_id,

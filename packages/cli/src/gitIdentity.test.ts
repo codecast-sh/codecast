@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  DEVICE_GIT_KEY_REL,
+  deviceGitKeyPath,
+  deviceKeyComment,
   deviceKeyEnv,
   gitEnvFor,
   identityFor,
@@ -19,6 +22,8 @@ describe("isGitAuthError", () => {
     // GitHub's phrasing for an unauthorized private repo.
     expect(isGitAuthError("ERROR: Repository not found.")).toBe(true);
     expect(isGitAuthError("remote: Permission to org/repo.git denied to user.")).toBe(true);
+    // GitHub's refusal of a push over a deploy key added without write access.
+    expect(isGitAuthError("ERROR: The key you are authenticating with has been marked as read only.\nfatal: Could not read from remote repository.")).toBe(true);
   });
 
   test("network and remote breakage is NOT an auth problem", () => {
@@ -54,5 +59,19 @@ describe("per-repo identity memory", () => {
     const env = deviceKeyEnv();
     expect(env.PATH).toBe(process.env.PATH);
     expect(env.GIT_SSH_COMMAND).toBeTruthy();
+  });
+});
+
+describe("device key path and comment", () => {
+  test("the key lives at the same HOME-relative path on every machine", () => {
+    expect(DEVICE_GIT_KEY_REL).toBe(".codecast/git/id_ed25519");
+    expect(deviceGitKeyPath().endsWith(`/${DEVICE_GIT_KEY_REL}`)).toBe(true);
+  });
+
+  test("deviceKeyComment sanitizes to [A-Za-z0-9._-] and caps at 60 chars, exactly as ensureDeviceGitKey did", () => {
+    expect(deviceKeyComment("MacBook Pro (work)")).toBe("codecast-MacBook-Pro-work-");
+    expect(deviceKeyComment("i-084309c56a91e15ff")).toBe("codecast-i-084309c56a91e15ff");
+    expect(deviceKeyComment("x".repeat(80))).toBe(`codecast-${"x".repeat(60)}`);
+    expect(deviceKeyComment("a  b\tc")).toBe("codecast-a-b-c");
   });
 });

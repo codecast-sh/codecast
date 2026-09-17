@@ -8,6 +8,8 @@ import type { PaginationOptions, PaginationResult, RegisteredQuery } from "conve
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { reissueStrandedCloudSpawns } from "./cloudPlacement";
 import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -546,6 +548,8 @@ export const daemonHeartbeat = mutation({
       // then land at most 60s apart, well inside the 120s DEVICE_ONLINE_MS
       // window every routing and delivery path gates on.
       const DEVICE_WRITE_THROTTLE_MS = 45 * 1000;
+      // Read BEFORE the patch: was this machine offline until this beat?
+      const cameOnline = !existingDevice || now - existingDevice.last_seen >= DEVICE_ONLINE_MS;
       if (existingDevice) {
         const seenStale = now - existingDevice.last_seen >= DEVICE_WRITE_THROTTLE_MS;
         if (seenStale || deviceBeatChanged(existingDevice, devicePatch)) {
@@ -560,6 +564,19 @@ export const daemonHeartbeat = mutation({
           label: args.device_label || args.platform,
           ...devicePatch,
         });
+      }
+      // A LOCAL device's offline→online transition (never the per-beat path):
+      // rows parked on this user's cloud hosts whose cloud_spawn expired while
+      // no laptop was around get re-issued, preferably to this laptop
+      // (cloudPlacement.reissueStrandedCloudSpawns). Only the transition beat
+      // pays for the scan, and a catch-up failure never fails the beat.
+      const localDevice = !(args.is_remote_device ?? existingDevice?.is_remote ?? false);
+      if (cameOnline && localDevice) {
+        try {
+          await reissueStrandedCloudSpawns(ctx, auth.userId, args.device_id);
+        } catch (err) {
+          console.warn("[cloud] re-issue on heartbeat failed", err instanceof Error ? err.message : String(err));
+        }
       }
     }
 
@@ -3607,7 +3624,7 @@ export const startSession = mutation({
       createdAt: now,
     });
 
-    return { command_id: commandId, conversation_id: conversationId };
+    return { command_id: commandId ?? null, conversation_id: conversationId };
   },
 });
 

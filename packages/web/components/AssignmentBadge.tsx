@@ -35,6 +35,7 @@ import {
   RunOnDeviceItems,
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
+import { cloudSeedTitle } from "@codecast/shared/contracts";
 
 type Runner = { id?: string; name: string; image?: string | null };
 
@@ -75,6 +76,8 @@ function useRunLocation(conversationId: string) {
       return {
         worktree: row?.worktree_name ?? null,
         preparing: row?.cloud_placement === "pending",
+        shared: row?.cloud_workspace === "shared",
+        seed: row?.cloud_seed ?? null,
       };
     }),
   );
@@ -154,7 +157,12 @@ export function AssignmentBadge({
       : `${ownerList.length} owners`
     : null;
 
-  const { worktree, preparing } = useRunLocation(conversationId);
+  const { worktree, preparing, shared, seed } = useRunLocation(conversationId);
+  // "Started from feat/x @ abc1234 + uncommitted changes on <laptop>": the
+  // seeding machine's label comes from the roster when it is one of ours.
+  const seedDevice = seed?.device_id ? byId.get(seed.device_id) : undefined;
+  const seedLine = seed ? cloudSeedTitle(seed, seedDevice ? deviceDisplayName(seedDevice) : null) : "";
+  const base7 = seed ? seed.base.slice(0, 7) : "";
   // A machine that boots itself when work arrives reads differently from a
   // laptop: "offline" is its resting state, not a problem, so say so instead of
   // reporting how long ago it was seen.
@@ -163,8 +171,9 @@ export function AssignmentBadge({
     ? `Runs on ${deviceDisplayName(d)} (${cloudHost ? "cloud host, wakes on use" : deviceKindLabel(d)})`
       + `${own || !foreign ? "" : ` — ${foreignRunnerNote(foreign)}`}`
       + `${cloudHost ? "" : ` — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}`
-      + `${worktree ? `\nWorktree ${worktree}` : ""}`
-      + `${preparing ? "\nPreparing the host — its worktree is being made now." : ""}`
+      + `${worktree ? `\nWorktree ${worktree}` : shared ? "\nShared checkout on the host" : ""}`
+      + `${seedLine ? `\n${seedLine}` : ""}`
+      + `${preparing ? "\nPreparing the host — its checkout is being made now." : ""}`
     : "No machine recorded for this session.";
 
   if (!(owners.canManage ?? isOwner)) {
@@ -180,13 +189,16 @@ export function AssignmentBadge({
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
           {(loaded || d || owners.canManage) && (
-            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
+            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>
                   <DeviceIcon d={d} />
                   {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
-                  {!compact && worktree && (
-                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70 cq-sq1">{worktree}</span>
+                  {!compact && (worktree || shared) && (
+                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70 cq-sq1">{worktree ?? "shared"}</span>
+                  )}
+                  {!compact && base7 && (
+                    <span className="font-mono text-[9px] opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
                   )}
                   {/* While the host is being prepared there is nothing to be
                       online about yet — the dot would read as "offline", which is

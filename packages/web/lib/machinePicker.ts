@@ -21,6 +21,8 @@
  * Kept pure, and out of the component, so the ladder is testable.
  */
 
+import { deviceWakesOnUse, platformCanOpenPath } from "@codecast/shared/contracts";
+
 export type MachineCandidate = {
   device_id: string;
   is_remote: boolean;
@@ -32,15 +34,11 @@ export type MachineCandidate = {
 
 /**
  * A machine that boots itself when work arrives: the cloud Linux class, an EC2
- * box whose idle state is "stopped". A remote Mac cannot stop (so "offline"
- * means gone) and a laptop can only be opened by a human. One rule, read by the
- * device chips (which hold a full Device) and by the store roster (which holds
- * a MachineCandidate), so "run in the cloud" can never offer a machine the
- * mover would refuse.
+ * box whose idle state is "stopped". The shared contract owns the rule
+ * (deviceWakesOnUse — the same predicate that names a chip "Cloud Linux");
+ * this alias keeps the picker's vocabulary.
  */
-export function wakesOnUse(d: { is_remote?: boolean; platform?: string }): boolean {
-  return d.is_remote === true && /linux/i.test(d.platform ?? "");
-}
+export const wakesOnUse = deviceWakesOnUse;
 
 /**
  * Deterministic tiebreak. device_id is a stable machine fingerprint, so the same
@@ -50,19 +48,13 @@ const stable = (list: MachineCandidate[]): string | null =>
   [...list].sort((a, b) => a.device_id.localeCompare(b.device_id))[0]?.device_id ?? null;
 
 /**
- * Mirrors convex/deviceRouting's platformCanOpenPath — false only where the path
- * lives in a namespace the platform provably lacks. The picker's answer is
+ * The server's platformCanOpenPath (shared contract) — false only where the
+ * path lives in a namespace the platform provably lacks. The picker's answer is
  * STAMPED now, so defaulting to a machine that can't cd into the folder would
  * pin the mistake rather than let the server correct it.
  */
-const canOpen = (d: MachineCandidate, p?: string | null): boolean => {
-  if (!p || !d.platform) return true;
-  if (d.platform === "win32") return !p.startsWith("/");
-  if (!p.startsWith("/")) return true;
-  if (d.platform === "darwin") return !p.startsWith("/home/") && !p.startsWith("/root/");
-  if (d.platform === "linux") return !p.startsWith("/Users/");
-  return true;
-};
+const canOpen = (d: MachineCandidate, p?: string | null): boolean =>
+  !p || platformCanOpenPath(d.platform, p);
 
 /** Openable candidates if any, else the whole pool — never return nothing. */
 const preferOpenable = (list: MachineCandidate[], p?: string | null): MachineCandidate[] => {
@@ -184,21 +176,29 @@ export function defaultMachineId(
      * on your laptop, and it stays there until you say otherwise.
      */
     lastPicked?: string | null;
+    /**
+     * Rungs 1-2 accept an OFFLINE machine when this says it can still serve: a
+     * cloud host that is merely asleep boots when the session starts, so a
+     * standing pick of it (or an existing session parked on it) holds while it
+     * sleeps. Default: online only — an offline laptop or agent box is gone.
+     */
+    wakeOk?: (d: MachineCandidate) => boolean;
   } = {},
 ): string | null {
   const { ownerDeviceId, projectPath, lastPicked } = opts;
+  const canServe = (d: MachineCandidate) => d.online || !!opts.wakeOk?.(d);
 
   // 1. An existing conversation stays on the machine that owns it. This OUTRANKS
   //    your standing choice on purpose: the pick is now stamped, so defaulting an
   //    already-owned session to a different machine would silently move it just by
   //    opening it. A standing preference is about where NEW work starts.
   const owner = ownerDeviceId ? devices.find((d) => d.device_id === ownerDeviceId) : undefined;
-  if (owner?.online) return owner.device_id;
+  if (owner && canServe(owner)) return owner.device_id;
 
   // 2. Your standing choice. A stale id (machine removed or asleep) isn't
   //    selectable, so fall through rather than highlight a chip that can't serve.
   const picked = lastPicked ? devices.find((d) => d.device_id === lastPicked) : undefined;
-  if (picked?.online) return picked.device_id;
+  if (picked && canServe(picked)) return picked.device_id;
 
   const hasCheckout = (d: MachineCandidate) => !!projectPath && deviceSeesPath(d, projectPath);
 

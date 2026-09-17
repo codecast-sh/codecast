@@ -29,6 +29,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteHost } from "../remote/session-move.js";
 import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
+import { readInstalledClientVersions } from "../remote/agentAuth.js";
+import { cwdGitRoot } from "../cloud/hostGit.js";
+import { summarizeHostTools } from "../cloud/hostTools.js";
+import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
 import { remoteExec, scpTo } from "./remote.js";
 import { decryptToken } from "../tokenEncryption.js";
 import { defaultConfigDir } from "../config/configDir.js";
@@ -45,6 +49,15 @@ export const VNC_PORT = 5900;
 export const NOVNC_PORT = 6080;
 
 const MEDIAMTX_VERSION = "v1.20.1";
+
+/**
+ * The idle watchdog's version, recorded in the host registry by `cast hosts
+ * provision` (watchdogVersion). Version 2 subtracts a live SSH agent bridge
+ * (cloud/agentBridge.ts) from the inbound-ssh count, so the bridge cannot
+ * keep the box awake and billing forever; `cast hosts forward-agent` refuses
+ * to enable the bridge on a host provisioned before it.
+ */
+export const IDLE_WATCHDOG_VERSION = 2;
 
 /**
  * Everything that can be done with root and apt, in one shot. Idempotent:
@@ -172,7 +185,13 @@ sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 # Power off after N idle minutes. EC2 turns an OS shutdown into a stopped
 # instance, so this is what makes idle time cost only the disk.
 # "Active" means someone or something is genuinely using the machine:
-#   - an inbound SSH connection (a person, a CDP tunnel, a stream viewer)
+#   - an inbound SSH connection (a person, a CDP tunnel, a stream viewer),
+#     minus the laptop daemon's agent bridge: that connection exists only to
+#     forward the laptop's ssh-agent and would otherwise hold the box awake
+#     forever. Each bridge runs one sleeper with argv0 exactly
+#     "cast-agent-bridge" (exec -a), and pgrep's anchored match counts only
+#     those — the bash wrapper sshd runs also has the literal in its cmdline
+#     and must not be counted, or a real session could read as idle.
 #   - the encoder running (someone is literally watching the screen)
 #   - the codecast daemon's activity stamp is fresh: it touches
 #     ~/.codecast/host-active when a message is delivered, a transcript grows
@@ -188,7 +207,10 @@ MINUTES=$(cat /etc/cast-idle-minutes 2>/dev/null || echo 0)
 STATE=/run/cast-last-active
 STAMP=/home/ubuntu/.codecast/host-active
 active=0
-[ "$(ss -Htn state established '( sport = :22 )' | wc -l)" -gt 0 ] && active=1
+conns=$(ss -Htn state established '( sport = :22 )' | wc -l)
+bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)
+[ -n "$bridges" ] || bridges=0
+[ $(( conns - bridges )) -gt 0 ] && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
 if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
   active=1
@@ -377,6 +399,12 @@ export interface ProvisionReport {
   device: string;
   /** What the home mirror (instruction files + agent config) did. */
   mirror: string;
+  /** The host's git device key, or why there is none. */
+  git: string;
+  /** The agent CLIs on the box, one `<bin>=<version|missing>` per client, plus node. */
+  agents: string;
+  /** What the host tools check found (`N ok, M installed, K missing, U unsupported`). */
+  tools: string;
 }
 
 /**
@@ -385,7 +413,7 @@ export interface ProvisionReport {
  */
 export async function provisionLinuxHost(
   host: RemoteHost,
-  opts: { idleStopMinutes: number; skipDaemon?: boolean },
+  opts: { idleStopMinutes: number; skipDaemon?: boolean; gitIdentity?: string },
   onProgress: (m: string) => void = () => {},
 ): Promise<ProvisionReport> {
   onProgress("base stack: packages, display, stream, idle watchdog…");
@@ -413,13 +441,14 @@ export async function provisionLinuxHost(
     fs.rmSync(bundles.distDir, { recursive: true, force: true });
   }
 
-  onProgress("installing claude…");
-  remoteExec(
-    host,
-    "command -v claude >/dev/null 2>&1 || (curl -fsSL https://claude.ai/install.sh | bash) >/dev/null 2>&1; " +
-      "sudo ln -sf /home/ubuntu/.local/bin/claude /usr/local/bin/claude 2>/dev/null; claude --version",
-    300_000,
-  );
+  // The agent CLIs at the laptop's versions when missing (claude, codex,
+  // gemini, grok) and a user-local Node ≥ 20 that shadows apt's node 18 via
+  // /usr/local/bin (browser/provisionAgents.ts). Present versions are kept.
+  onProgress("installing agent CLIs (claude, codex, gemini, grok) + node…");
+  const agentsOut = runScript(host, agentCliInstallScript(readInstalledClientVersions()), 900_000);
+  if (!agentsOut.includes("AGENT-CLIS-OK")) throw new Error(`agent CLI install did not complete:\n${agentsOut.slice(-800)}`);
+  const agents = parseAgentCliReport(agentsOut);
+  onProgress(`  ${agents}`);
 
   onProgress("pushing codecast identity + claude credential…");
   pushCodecastConfig(host);
@@ -429,11 +458,28 @@ export async function provisionLinuxHost(
   // The host-home steps (cloud/prepare.ts readyHostHome), forced: a freshly
   // provisioned box has nothing, whatever the laptop's stamps say. Each step
   // is non-fatal; the mirror needs the `cast` just installed above.
-  onProgress("mirroring instruction files and agent config…");
+  // The git step (cloud/hostGit.ts) mints the device key and mirrors the
+  // laptop's identity; the repo it probes is the one provisioning runs from,
+  // when it runs from one.
+  // Step 1 there pushes the agent logins (codex, grok, gemini, opencode, pi
+  // + settings.json provider keys) and checks the project-required tools.
+  onProgress("agent logins + host tools + host git setup + mirroring instruction files and agent config…");
   let mirror = "config mirror skipped";
+  let git = "no key (host git setup did not run)";
+  let tools = "not checked";
   try {
-    const { readyHostHome } = await import("../cloud/prepare.js");
-    mirror = (await readyHostHome(host, { onProgress: (m) => onProgress(`  ${m}`), force: true })).mirror;
+    const { readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
+    const localGitRoot = cwdGitRoot();
+    const report = await readyHostHome(host, {
+      onProgress: (m) => onProgress(`  ${m}`),
+      force: true,
+      localGitRoot,
+      repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined,
+      gitIdentity: opts.gitIdentity,
+    });
+    mirror = report.mirror;
+    git = report.git ? report.git.pubkey ?? "no key (ssh-keygen missing)" : "no key (host git setup did not run)";
+    if (report.tools) tools = summarizeHostTools(report.tools);
   } catch (err) {
     mirror = `config mirror skipped: ${err instanceof Error ? err.message : String(err)}`;
     onProgress(`  (${mirror})`);
@@ -478,17 +524,24 @@ export async function provisionLinuxHost(
     device = remoteExec(host, "systemctl is-active codecast-daemon.service", 20_000);
   }
 
+  const services = remoteExec(
+    host,
+    "for s in cast-display cast-stream cast-vnc cast-novnc codecast-daemon; do printf '%s=%s ' $s $(systemctl is-active $s.service 2>/dev/null); done; printf 'idle-timer=%s' $(systemctl is-active cast-idle.timer)",
+    20_000,
+  );
+  // novnc is the reason apt's node stays: say so when its service is not up.
+  if (!/\bcast-novnc=active\b/.test(services)) onProgress(`  (cast-novnc is not active: ${services.trim()} — the machine-level VNC view will not work until it is)`);
+
   return {
     chrome: remoteExec(host, "google-chrome --version", 20_000),
     cast: remoteExec(host, "cast --version 2>/dev/null || /usr/local/bin/cast --version", 60_000),
     claude: remoteExec(host, "claude --version", 60_000),
-    services: remoteExec(
-      host,
-      "for s in cast-display cast-stream cast-vnc cast-novnc codecast-daemon; do printf '%s=%s ' $s $(systemctl is-active $s.service 2>/dev/null); done; printf 'idle-timer=%s' $(systemctl is-active cast-idle.timer)",
-      20_000,
-    ),
+    services,
     device,
     mirror,
+    git,
+    agents,
+    tools,
   };
 }
 

@@ -8,8 +8,12 @@ import * as fs from "fs";
 import * as path from "path";
 
 /** Conventional parents of a project directory. Both cases of "projects" are
- *  listed because macOS is case-insensitive but Linux is not. */
-export const PROJECT_PARENT_DIRS = ["src", "dev", "Projects", "projects", "repos", "code"] as const;
+ *  listed because macOS is case-insensitive but Linux is not. "work" is also
+ *  the cloud host's remoteBaseDir (~/work/<repo>), so its checkouts and their
+ *  worktrees must be advertised as roots for host-native routing: a session
+ *  pointed at a folder the host already holds starts there without a laptop
+ *  preparing it. */
+export const PROJECT_PARENT_DIRS = ["src", "dev", "Projects", "projects", "repos", "code", "work"] as const;
 
 /** Upper bound on what we report. High enough to cover a real machine, low
  *  enough that a home directory full of junk degrades instead of hanging. */

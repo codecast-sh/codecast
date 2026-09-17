@@ -710,6 +710,44 @@ export default defineSchema({
     // no checkout, and a laptop would claim it for itself. Cleared by
     // cloud.placeConversation together with the real start.
     cloud_placement: v.optional(v.literal("pending")),
+    // Fresh per park (cloudPlacement.parkOnCloudHost), carried in the
+    // cloud_spawn args and cleared by placeConversation / un-park. Fences a
+    // late `cast cloud start`: a placement whose token no longer matches is
+    // refused, so a row re-pointed at a laptop (or re-parked) cannot be dragged
+    // back by a child that was already mid-SSH. A pending row with NO token is
+    // one nobody is preparing (an occupancy refusal) and is never re-issued.
+    cloud_placement_token: v.optional(v.string()),
+    // Where a cloud session runs on the host: its own worktree (absent =
+    // isolated) or the host's main checkout (shared). Stamped at create
+    // (createQuickSession / dispatch.createSession / the CLI spawn) and by
+    // cloud.placeConversation.
+    cloud_workspace: v.optional(v.union(v.literal("isolated"), v.literal("shared"))),
+    // The host main checkout a SHARED row has claimed (cloud.claimSharedCheckout,
+    // or the parked insert of `cast spawn --shared`), kept through placement.
+    // The occupancy key: one checkout holds one alive shared row
+    // (@codecast/shared sharedCheckoutOccupant).
+    cloud_checkout_path: v.optional(v.string()),
+    // The launch choice for an isolated cloud worktree: the preparing laptop's
+    // checkout (absent = checkout; its branch, HEAD and uncommitted changes)
+    // or a clean origin/main. Rides the cloud_spawn as start_from. A shared
+    // row is always origin_main.
+    cloud_start_from: v.optional(v.union(v.literal("checkout"), v.literal("origin_main"))),
+    // What the worktree actually started from, stamped at placement
+    // (cloud.placeConversation, spawn.createSessionFromCli, forkFromMessage):
+    // source, the full base commit, the laptop branch (absent when detached),
+    // whether that tree was dirty, the laptop root, the preparing device and
+    // why an automatic downgrade to origin/main happened. Placement-time
+    // truth, never patched by the daemon (git_commit_hash is the live field).
+    cloud_seed: v.optional(v.object({
+      source: v.union(v.literal("checkout"), v.literal("origin_main")),
+      base: v.string(),
+      branch: v.optional(v.string()),
+      dirty: v.optional(v.boolean()),
+      laptop_root: v.optional(v.string()),
+      device_id: v.optional(v.string()),
+      reason: v.optional(v.string()),
+      at: v.number(),
+    })),
     // A bulk migration (sessionMigrations.ts) is moving this row between
     // machines. Present = FENCED: no daemon may deliver into it (the source is
     // being quiesced and its transcript transferred; the destination does not
@@ -3752,10 +3790,21 @@ export default defineSchema({
 
   github_installation_tokens: defineTable({
     installation_id: v.number(),
+    // Absent on the installation-wide token the server's own work uses. Set to
+    // `owner/name` on a token minted for one repository, which is what a cloud
+    // host's git credential gets: same installation, narrower authority, so
+    // the two are cached as separate rows and never answer for each other.
+    repository: v.optional(v.string()),
     token: v.string(),
     expires_at: v.number(),
+    // What GitHub said this token may do, as it was minted (`contents: write`
+    // is push access). Cached beside the token so a caller can refuse a push
+    // the App cannot perform without minting a second one. Absent on rows
+    // cached before this was recorded, which reads as "unknown", never "no".
+    permissions: v.optional(v.record(v.string(), v.string())),
     created_at: v.number(),
-  }).index("by_installation_id", ["installation_id"]),
+  }).index("by_installation_id", ["installation_id"])
+    .index("by_installation_repo", ["installation_id", "repository"]),
 
   message_shares: defineTable({
     share_token: v.string(),

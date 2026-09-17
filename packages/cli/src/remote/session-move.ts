@@ -19,12 +19,16 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync, keychainReadAsync, spawn } from "../proc.js";
+import { execFileSync, execSync, keychainReadAsync, spawn, spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { credentialHealth } from "../ccAccounts.js";
 import { resolveManifest } from "../workspace/resolver.js";
+import { trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.js";
+import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
+import { deviceId as localDeviceId } from "./device.js";
+import { readLocalConfig } from "../config/readLocalConfig.js";
 import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
@@ -281,10 +285,12 @@ export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath:
   git(localCwd, ["bundle", "create", bundle, "--all"]);
   const remoteBundle = `/tmp/${path.basename(bundle)}`;
   execFileSync("scp", [...sshBase(host), bundle, `${host.user}@${host.address}:${remoteBundle}`], { stdio: "pipe" });
+  // No repo-local identity: the host's ~/.gitconfig carries the mirrored
+  // laptop identity or the global codecast placeholder (cloud/hostGit.ts,
+  // run by pushSession before this), and a repo-local one would shadow it.
   ssh(host,
     `rm -rf ${shq(remotePath)} && git clone -q ${shq(remoteBundle)} ${shq(remotePath)} && ` +
-    `cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead && ` +
-    `git config user.email codecast@local && git config user.name codecast && rm -f ${shq(remoteBundle)}`,
+    `cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead && rm -f ${shq(remoteBundle)}`,
   );
   fs.rmSync(bundle, { force: true });
   repairRemoteOrigin(host, localCwd, remotePath);
@@ -340,6 +346,12 @@ function repairRemoteOrigin(host: RemoteHost, localCwd: string, remotePath: stri
  * commit behind forever — moving a session to the Mac silently rewrote the
  * history you were working on. The remote is unaffected by the switch: its
  * branch tip is the snapshot either way, with the same ancestry and tree.
+ *
+ * Must never run against a main checkout a shared cloud session occupies:
+ * the `git checkout; git reset --hard` below would re-point that session at
+ * the moved session's snapshot. The callers check (cast remote move's
+ * fetchRootOccupant pre-flight; devices.performMoveSessionToDevice
+ * authoritatively).
  */
 export async function gitPushWorktree(
   host: RemoteHost,
@@ -573,6 +585,110 @@ export async function copyProviderKeysToRemoteAsync(host: RemoteHost, blob: stri
 }
 
 // --------------------------------------------------------------------------
+// Agent logins (codex, grok, gemini, opencode, pi + provider keys from
+// settings.json): ONE bundle, ONE ssh round trip, applied on the host by the
+// python receiver (remote/agentAuthReceiver.py.ts). Same transport rules as
+// the credential push: ssh stdin only, umask 077, hard 60s kill.
+// --------------------------------------------------------------------------
+
+/** ssh argv that runs the receiver with the bundle JSON on stdin. */
+function agentAuthPushArgs(host: RemoteHost): string[] {
+  return [...sshBase(host), `${host.user}@${host.address}`, `umask 077; python3 -c ${shq(AGENT_AUTH_RECEIVER)}`];
+}
+
+export interface AgentAuthPushOutcome {
+  pushed: boolean;
+  /** Files the host kept instead of overwriting (`codex host-fresher`). */
+  kept: string[];
+  /** Why nothing landed: the host holds another user's logins (exit 3), a transport failure, an older host. */
+  reason?: string;
+  files?: number;
+  deleted?: number;
+  /** settings.json env keys the host now mirrors. */
+  env?: string[];
+  trust?: number;
+  /** Per-file errors the receiver reported (`<path>:<why>`). */
+  errors?: string[];
+  unparseableSettings?: boolean;
+}
+
+export const AGENT_AUTH_OTHER_USER_REASON = "host holds another user's logins";
+
+/** The receiver's stdout + exit status as an outcome. Exported for the daemon's and the tests' benefit. */
+export function parseAgentAuthReceiverOutput(stdout: string, status: number | null, stderr = ""): AgentAuthPushOutcome {
+  const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (status === 3 || lines.includes("refused:other-user")) return { pushed: false, kept: [], reason: AGENT_AUTH_OTHER_USER_REASON };
+  const applied = [...lines].reverse().find((l) => l.startsWith("applied "));
+  if (status !== 0 || !applied) {
+    const detail = stderr.trim().split("\n").filter(Boolean).pop() ?? lines.filter((l) => l.startsWith("error:")).pop() ?? "";
+    const older = /python3: (command )?not found|No such file/.test(stderr) ? "python3 missing on the host" : "";
+    return { pushed: false, kept: [], reason: older || `receiver exited ${status ?? "by signal"}${detail ? `: ${detail.slice(0, 200)}` : ""}` };
+  }
+  const field = (name: string) => new RegExp(`\\b${name}=(\\S*)`).exec(applied)?.[1] ?? "";
+  const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
+  const errors = lines.filter((l) => l.startsWith("error:")).map((l) => l.slice("error:".length));
+  return {
+    pushed: true,
+    kept: list(field("kept")).map((k) => k.replace(/:/g, " ")),
+    files: Number(field("files")) || 0,
+    deleted: Number(field("deleted")) || 0,
+    env: list(field("env")),
+    trust: Number(field("trust")) || 0,
+    ...(errors.length ? { errors } : {}),
+    ...(lines.includes("settings:unparseable") ? { unparseableSettings: true } : {}),
+  };
+}
+
+/**
+ * Push an agent auth bundle to a host (sync — the prepare path). Transport
+ * failures come back as `pushed:false` with a reason rather than throwing:
+ * a host with the Claude login alone is still useful.
+ */
+export function copyAgentAuthToRemote(host: RemoteHost, bundle: AgentAuthBundle): AgentAuthPushOutcome {
+  const r = spawnSync("ssh", agentAuthPushArgs(host), {
+    input: JSON.stringify(bundle), encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 60_000, maxBuffer: 16 * 1024 * 1024, env: process.env,
+  });
+  if (r.error) return { pushed: false, kept: [], reason: `ssh failed (${(r.error as NodeJS.ErrnoException).code ?? r.error.message})` };
+  return parseAgentAuthReceiverOutput(r.stdout ?? "", r.status, r.stderr ?? "");
+}
+
+/** Async twin for the daemon's timers: a sync ssh would block the event loop. Hard 60s SIGKILL. */
+export async function copyAgentAuthToRemoteAsync(host: RemoteHost, bundle: AgentAuthBundle): Promise<AgentAuthPushOutcome> {
+  return new Promise<AgentAuthPushOutcome>((resolve) => {
+    const child = spawn("ssh", agentAuthPushArgs(host), { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const done = (o: AgentAuthPushOutcome) => { if (!settled) { settled = true; clearTimeout(timer); resolve(o); } };
+    const timer = setTimeout(() => { child.kill("SIGKILL"); done({ pushed: false, kept: [], reason: "agent auth push timed out" }); }, 60_000);
+    child.stdout?.on("data", (d) => { stdout += d; });
+    child.stderr?.on("data", (d) => { stderr = (stderr + d).slice(-4000); });
+    child.on("error", (err) => done({ pushed: false, kept: [], reason: `ssh failed (${err.message})` }));
+    child.on("close", (code) => done(parseAgentAuthReceiverOutput(stdout, code, stderr)));
+    child.stdin.on("error", () => { /* the receiver exited first; close reports it */ });
+    child.stdin.write(JSON.stringify(bundle));
+    child.stdin.end();
+  });
+}
+
+/**
+ * A trust-only bundle for a moved session's top-level dir on the host
+ * (`cast remote move`): codex on 0.153.4 trusts a worktree under a trusted
+ * checkout, but a moved session's remoteCwd is its own directory under
+ * ~/work, so it needs its own `[projects."…"]` table. No files, no env, no
+ * stamp. Needs this laptop's login for the receiver's identity check.
+ */
+export function ensureRemoteCodexTrust(host: RemoteHost, remoteCwd: string, origin?: { userId: string; deviceId: string }): AgentAuthPushOutcome {
+  let who = origin;
+  if (!who) {
+    const cfg = readLocalConfig();
+    if (cfg?.user_id) who = { userId: cfg.user_id, deviceId: localDeviceId() };
+  }
+  if (!who) return { pushed: false, kept: [], reason: "not logged in on this laptop — cast login" };
+  return copyAgentAuthToRemote(host, trustOnlyBundle(who, [remoteCwd]));
+}
+
+// --------------------------------------------------------------------------
 // Push / Pull
 // --------------------------------------------------------------------------
 
@@ -635,6 +751,16 @@ export interface MoveResult {
 }
 
 /**
+ * Where a moved session lands on the host: `<remoteBaseDir>/<basename of the
+ * local cwd>` — the repo's MAIN checkout there, the same path a shared cloud
+ * session holds. Exported so `cast remote move` can ask who occupies it
+ * before pushing anything.
+ */
+export function remoteMoveCwd(host: RemoteHost, localCwd: string): string {
+  return path.posix.join(host.remoteBaseDir, path.basename(localCwd));
+}
+
+/**
  * Push a local session to the remote Mac. Returns the remote placement.
  *
  * `skipTree`: the working tree at this session's cwd was already pushed to
@@ -645,8 +771,7 @@ export interface MoveResult {
  */
 export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean } = {}): Promise<MoveResult> {
   const s = resolveLocalSession(sessionId);
-  const name = path.basename(s.cwd);
-  const remoteCwd = path.posix.join(host.remoteBaseDir, name);
+  const remoteCwd = remoteMoveCwd(host, s.cwd);
   const remoteProjectDir = path.posix.join(
     remoteHome(host), ".claude", "projects",
     cwdToSlug(remoteCwd),
@@ -659,7 +784,18 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
   if (!credPush.pushed) {
     console.error(`WARNING: credential not pushed (${credPush.reason}) — the moved session will hit "Login expired" until the local login is healthy`);
   }
-  // 2. working tree — git-over-SSH for repos (full git on the remote), else rsync
+  // 2. host git readiness BEFORE the first commit lands there: known_hosts,
+  //    the device key, and the mirrored identity (or the global placeholder)
+  //    in the host's ~/.gitconfig. Non-fatal: a move must not be lost to it.
+  if (isWorktree(s.cwd)) {
+    try {
+      const { ensureHostGitReady } = await import("../cloud/hostGit.js");
+      ensureHostGitReady(host, { localGitRoot: gitRootOf(s.cwd), repoPath: remoteCwd, onProgress: (m) => console.error(`  ${m}`) });
+    } catch (err) {
+      console.error(`WARNING: host git setup skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  // 3. working tree — git-over-SSH for repos (full git on the remote), else rsync
   let verification: SyncVerification | undefined;
   if (opts.skipTree) {
     // Nothing to push; prove the tree is still there and at the pushed tip.
@@ -674,10 +810,15 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
     ssh(host, `mkdir -p ${shq(remoteCwd)}`);
     rsyncUp(host, s.cwd, remoteCwd, { delete: true });
   }
-  // 3. transcript
+  // 4. transcript
   rsyncFileInto(host, s.jsonlPath, remoteProjectDir);
 
   return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir, verification };
+}
+
+/** The top level of the checkout a session runs in — a linked worktree's OWN root, not the main repository's. */
+function gitRootOf(cwd: string): string {
+  return gitSafe(cwd, ["rev-parse", "--show-toplevel"]).out.trim() || cwd;
 }
 
 /**
@@ -823,6 +964,10 @@ export function loadRemoteHost(hostId?: string): RemoteHost {
 export async function performMoveToRemote(host: RemoteHost, sessionId: string): Promise<MoveResult> {
   const move = await pushSession(sessionId, host);
   ensureRemoteClaudeReady(host, move.remoteCwd);
+  // codex's folder trust for the moved dir (its own `[projects."…"]` table:
+  // a top-level dir under ~/work is not a worktree under a trusted checkout).
+  const trust = ensureRemoteCodexTrust(host, move.remoteCwd);
+  if (!trust.pushed) console.error(`WARNING: codex trust for ${move.remoteCwd} not written on the host (${trust.reason})`);
   refreshRemoteCredential(host);
   // The host-home steps (cloud/prepare.ts readyHostHome): the home mirror,
   // stamp-gated and honouring cloud_mirror_enabled, plus whatever the other
@@ -830,7 +975,8 @@ export async function performMoveToRemote(host: RemoteHost, sessionId: string): 
   // must not be lost to a config push.
   try {
     const { readyHostHome } = await import("../cloud/prepare.js");
-    await readyHostHome(host, { onProgress: (m) => console.error(`  ${m}`) });
+    // The git step already ran in pushSession, with the moved repo in hand.
+    await readyHostHome(host, { onProgress: (m) => console.error(`  ${m}`), skipGit: true });
   } catch (err) {
     console.error(`WARNING: host home steps failed: ${err instanceof Error ? err.message : String(err)}`);
   }

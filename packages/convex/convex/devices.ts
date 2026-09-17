@@ -17,9 +17,14 @@ import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
-import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource } from "@codecast/shared/contracts";
+import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
+  checkoutInUseMessage,
+  posixRepoBasename,
+} from "@codecast/shared/contracts";
 import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
+import { releasePreviousOwner } from "./sessionRelease";
+import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost } from "./cloudPlacement";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -171,8 +176,13 @@ export async function enqueueStartSession(
     // worktree, applied by the daemon after the argv allowlist (the prompt
     // rides a file). Same ride-along contract: old daemons ignore it.
     definition?: AgentDefinitionSpec;
+    // The HUMAN behind this launch, when known (createQuickSession,
+    // dispatch.createSession, spawnSessionCore, reconfigureSession). The cloud
+    // upgrade below runs only when it equals the runner: a team agent box's
+    // runner is its bot, and parking a teammate's box spawn would strand it.
+    callerUserId?: Id<"users"> | null;
   },
-): Promise<Id<"daemon_commands">> {
+): Promise<Id<"daemon_commands"> | null> {
   const conv = await ctx.db.get(opts.conversationId);
   // A quiescing/fenced conversation's runtime belongs to the execution
   // coordinator; emitting a legacy start here would spawn a second, unmanaged
@@ -186,6 +196,32 @@ export async function enqueueStartSession(
   }
   const projectPath = opts.projectPath ?? conv?.project_path ?? null;
   const gitRoot = opts.gitRoot ?? conv?.git_root ?? null;
+
+  // A row parked on the cloud host receives no start_session: the laptop's
+  // `cast cloud start` places it, and placement re-reads the row's model /
+  // agent / effort — so whatever the caller just patched rides placement.
+  // Starting it here would either run it on the host's MAIN checkout (host
+  // online) or re-home it to a laptop while cloud_placement stays pending.
+  if (conv?.cloud_placement === "pending") return null;
+
+  // The one place a dropdown-targeted launch from ANY client (mobile, `cast
+  // spawn --device "Cloud Linux"`, the composer's reconfigure) is upgraded to
+  // cloud placement: the runner's own wake-on-use host, a laptop folder, the
+  // caller being the runner. The shared predicate decides; never throws for
+  // lack of an online laptop (the row parks and the next laptop heartbeat
+  // prepares it).
+  if (opts.callerUserId && opts.callerUserId === userId) {
+    const cloudTarget = await cloudPlacementNeeded(ctx, {
+      callerUserId: opts.callerUserId,
+      runnerUserId: userId,
+      conv,
+      targetDeviceId: opts.targetDeviceId,
+      paths: [gitRoot, projectPath],
+    });
+    if (cloudTarget && conv) {
+      return await parkOnCloudHost(ctx, userId, conv, cloudTarget.device_id, { projectPath, gitRoot });
+    }
+  }
 
   const target = await resolveOwnerDevice(ctx, userId, {
     projectPath,
@@ -267,9 +303,11 @@ export async function enqueueStartSession(
 }
 
 /**
- * Upsert this machine's device row. Called by the daemon on heartbeat. Per-
- * device fields (local_project_roots) live here so multiple machines don't
- * clobber each other on the shared user doc.
+ * Upsert this machine's device row. Per-device fields (local_project_roots)
+ * live here so multiple machines don't clobber each other on the shared user
+ * doc. The daemon's real beat is users.daemonHeartbeat (which upserts the row
+ * itself and runs the cloud catch-up on an offline→online transition); this
+ * mutation is the standalone upsert and carries no side effects.
  */
 export const registerDevice = mutation({
   args: {
@@ -401,42 +439,6 @@ export const resolveConversationBySession = query({
  * daemon's single-owner guard). One mutation = atomic handoff of ownership.
  */
 /**
- * Tell the machine that USED to run a conversation to tear its copy down.
- *
- * Every ownership flip needs this, whichever path flipped it: without it the
- * old machine's tmux + agent keep running, answer delivered messages in
- * parallel (split-brain), and — on a cloud box that stops itself when idle —
- * hold the machine awake indefinitely, which is a bill. Found live: a session
- * moved to EC2 and back left a claude running there after the return.
- *
- * The command goes in the PRE-MOVE runner's queue (`queueUserId`): a daemon
- * only polls its own user's queue, and across an account boundary that user
- * is not the caller. Best-effort: an offline previous owner never picks it up
- * and the command expires after the TTL.
- */
-async function releasePreviousOwner(
-  ctx: { db: any },
-  opts: {
-    queueUserId: Id<"users">;
-    conversationId: Id<"conversations">;
-    sessionId: string | undefined;
-    priorDeviceId: string | undefined;
-    newDeviceId: string;
-  },
-): Promise<void> {
-  if (!opts.priorDeviceId || opts.priorDeviceId === opts.newDeviceId) return;
-  await ctx.db.insert("daemon_commands", {
-    user_id: opts.queueUserId,
-    command: "release_session" as const,
-    args: JSON.stringify({
-      conversation_id: opts.conversationId,
-      ...(opts.sessionId ? { session_id: opts.sessionId } : {}),
-    }),
-    created_at: Date.now(),
-    target_device_id: opts.priorDeviceId,
-  });
-}
-
 /**
  * Transcript divider for a box switch, inserted the moment the picker fires —
  * same shape as switchSessionAgent's agent-switch notice. Blank sessions skip
@@ -483,6 +485,19 @@ export async function performMoveSessionToDevice(
   const conv = await ctx.db.get(args.conversation_id);
   if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
   const priorDeviceId = conv.owner_device_id as string | undefined;
+  // A move onto a HOST lands in its main checkout (`git checkout; git reset
+  // --hard` there): refused while another alive session holds it. The
+  // authoritative check — the CLI's own pre-flight cannot close the race.
+  // A laptop destination (`cast remote back`) is a folder any number of
+  // sessions share, so the checkout rule does not apply there.
+  const dest = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.owner_device_id))
+    .first();
+  if (dest?.is_remote) {
+    const occupant = await findSharedCheckoutOccupant(ctx, userId, args.owner_device_id, { projectPath: args.project_path, excludeId: args.conversation_id.toString() });
+    if (occupant) throw new Error(checkoutInUseMessage(args.project_path, occupant));
+  }
 
   await ctx.db.patch(args.conversation_id, {
     owner_device_id: args.owner_device_id,
@@ -588,6 +603,12 @@ export const moveToRemote = mutation({
       : online.find((d: any) => d.is_remote) ??
         [...devices].sort(mostRecent).find((d: any) => d.is_remote);
     if (!dest) throw new Error("No destination device (provision one: cast browser hosts provision)");
+    // Early refusal, before a command is queued: the move would land in the
+    // destination's main checkout of this repo, which a shared session may hold.
+    if (conv.project_path && dest.is_remote) {
+      const occupant = await findSharedCheckoutOccupant(ctx, userId, dest.device_id, { repoBasename: posixRepoBasename(conv.project_path), excludeId: conv._id.toString() });
+      if (occupant) throw new Error(checkoutInUseMessage(occupant.cloud_checkout_path ?? occupant.project_path ?? conv.project_path, occupant));
+    }
     const destOnline = online.some((d: any) => d.device_id === dest.device_id);
     if (!destOnline && !dest.is_remote) throw new Error("That device is offline and cannot be woken remotely");
 

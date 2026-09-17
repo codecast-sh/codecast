@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isCdpAlive } from "./cdp.js";
+import { freePort } from "./instance.js";
 import type { RemoteHost } from "../remote/session-move.js";
 
 /** The profile the remote browser uses. Never a copy of ours. */
@@ -180,7 +181,7 @@ export interface RemoteBrowser {
  */
 export async function startRemoteBrowser(
   host: RemoteHost,
-  opts: { localPort: number; remotePort?: number; windowSize?: { width: number; height: number } },
+  opts: { localPort: number; remotePort?: number; windowSize?: { width: number; height: number }; spawn?: typeof spawn },
 ): Promise<RemoteBrowser> {
   const remotePort = opts.remotePort ?? 9222;
 
@@ -259,33 +260,7 @@ export async function startRemoteBrowser(
 
   // Bind the remote CDP port to loopback here. `-N` runs no command, so the
   // process exists only to hold the forward open.
-  const tunnel = spawn(
-    "ssh",
-    [
-      // NOT the multiplexed args. The tunnel has to outlive this CLI process,
-      // and a forward that rides the shared master dies with it — the browser
-      // then looks "not running" on the very next command, having worked
-      // perfectly a second earlier. Short exec calls want multiplexing; a
-      // long-lived forward wants a connection of its own.
-      "-i", host.keyPath,
-      "-o", "IdentitiesOnly=yes",
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "ConnectTimeout=20",
-      "-o", "BatchMode=yes",
-      // Notice a dead peer instead of holding a tunnel to nothing.
-      "-o", "ServerAliveInterval=30",
-      "-o", "ServerAliveCountMax=3",
-      "-N",
-      // Bind the near end to IPv4 explicitly. Left to itself ssh may listen on
-      // [::1] only, and every probe of 127.0.0.1 then misses a tunnel that is
-      // working perfectly — which looks exactly like the remote being down.
-      "-L", `127.0.0.1:${opts.localPort}:127.0.0.1:${remotePort}`,
-      // Fail loudly if the port is taken rather than running a tunnel to nowhere.
-      "-o", "ExitOnForwardFailure=yes",
-      `${host.user}@${host.address}`,
-    ],
-    { stdio: ["ignore", "ignore", "ignore"], detached: true },
-  );
+  const tunnel = (opts.spawn ?? spawn)("ssh", cdpTunnelArgs(host, opts.localPort, remotePort), { stdio: ["ignore", "ignore", "ignore"], detached: true });
   tunnel.unref();
   if (!tunnel.pid) throw new Error("could not start the SSH tunnel");
 
@@ -310,6 +285,121 @@ export async function startRemoteBrowser(
     `the remote Chrome never answered on port ${remotePort}.` +
       (log ? `\n  Its log said:\n  ${log.split("\n").join("\n  ")}` : ""),
   );
+}
+
+/**
+ * The argv of a CDP port forward to `host`: loopback on both ends, `-N`.
+ *
+ * NOT the multiplexed args. A long-lived forward wants a connection of its
+ * own: one that rides the shared master dies with the CLI process that made
+ * it, and the browser then looks "not running" on the very next command,
+ * having worked perfectly a second earlier. Short exec calls want
+ * multiplexing; a forward does not. Shared by the remote browser launch
+ * (which keeps its tunnel open past this process) and the cookie carry into
+ * a cloud host's Chrome (withCdpTunnel, which closes it when done).
+ */
+export function cdpTunnelArgs(host: RemoteHost, localPort: number, remotePort: number): string[] {
+  return [
+    "-i", host.keyPath,
+    "-o", "IdentitiesOnly=yes",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=20",
+    "-o", "BatchMode=yes",
+    // Notice a dead peer instead of holding a tunnel to nothing.
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=3",
+    "-N",
+    // Bind the near end to IPv4 explicitly. Left to itself ssh may listen on
+    // [::1] only, and every probe of 127.0.0.1 then misses a tunnel that is
+    // working perfectly — which looks exactly like the remote being down.
+    // The far end is 127.0.0.1 too: the managed Chrome binds its debugging
+    // port to loopback only (instance.ts).
+    "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+    // Fail loudly if the port is taken rather than running a tunnel to nowhere.
+    "-o", "ExitOnForwardFailure=yes",
+    `${host.user}@${host.address}`,
+  ];
+}
+
+export interface CdpTunnelOptions {
+  /** How long CDP may take to answer through the forward (default 60 s). */
+  connectMs?: number;
+  /**
+   * A cap on the WHOLE run, `fn` included: at the deadline the tunnel is
+   * closed and the call throws. Set it below any hard kill the caller runs
+   * under, since a SIGKILL skips the `finally` that closes the forward.
+   */
+  deadlineMs?: number;
+  spawn?: typeof spawn;
+  isCdpAlive?: typeof isCdpAlive;
+}
+
+/**
+ * Run `fn` with a short-lived forward to the host Chrome's CDP port, then
+ * close it. The ssh child is not detached and is torn down in `finally`
+ * (SIGTERM, then SIGKILL after 5s), so the host's idle watchdog sees the
+ * :22 connection end when the work does. Resolves `fn`'s value; throws when
+ * ssh cannot start or exits before the forward is up, when CDP never answers
+ * through the tunnel within `connectMs`, or when the run outlives `deadlineMs`.
+ */
+export async function withCdpTunnel<T>(
+  host: RemoteHost,
+  remotePort: number,
+  fn: (localPort: number) => Promise<T>,
+  opts: CdpTunnelOptions = {},
+): Promise<T> {
+  const connectMs = opts.connectMs ?? 60_000;
+  const alive = opts.isCdpAlive ?? isCdpAlive;
+  const localPort = await freePort();
+  let stderr = "";
+  const tunnel = (opts.spawn ?? spawn)("ssh", cdpTunnelArgs(host, localPort, remotePort), { stdio: ["ignore", "ignore", "pipe"] });
+  tunnel.stderr?.on("data", (d) => { if (stderr.length < 2000) stderr += d.toString(); });
+  let exited = false;
+  let exitCode: number | null = null;
+  let spawnError: Error | null = null;
+  const exit = new Promise<void>((resolve) => {
+    tunnel.on("exit", (code) => { exited = true; exitCode = code; resolve(); });
+    tunnel.on("error", (err) => { exited = true; spawnError = err; resolve(); });
+  });
+  const close = async () => {
+    if (exited) return;
+    try { tunnel.kill("SIGTERM"); } catch { /* already gone */ }
+    await Promise.race([exit, sleep(5_000)]);
+    if (!exited) { try { tunnel.kill("SIGKILL"); } catch { /* gone */ } }
+  };
+  // The reason ssh is gone, so a laptop-side failure (no ssh binary, a bad
+  // key path, a refused connection) is never reported as the host's Chrome.
+  const sshFailure = (): string | null => {
+    if (spawnError) return `ssh could not start: ${(spawnError as Error).message}`;
+    if (!exited) return null;
+    const first = stderr.split("\n").map((l) => l.trim()).find(Boolean);
+    return `ssh exited with code ${exitCode ?? "?"} before the forward came up${first ? `: ${first}` : ""}`;
+  };
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    if (opts.deadlineMs === undefined) return;
+    deadlineTimer = setTimeout(() => reject(new Error(`the login carry did not finish within ${Math.round(opts.deadlineMs! / 1000)}s; the tunnel was closed`)), opts.deadlineMs);
+  });
+  const work = async (): Promise<T> => {
+    const until = Date.now() + connectMs;
+    for (;;) {
+      if (await alive(localPort)) break;
+      const failed = sshFailure();
+      if (failed) throw new Error(failed);
+      if (Date.now() >= until) {
+        const first = stderr.split("\n").map((l) => l.trim()).find(Boolean);
+        throw new Error(`the host's Chrome on port ${remotePort} never answered through the tunnel${first ? `: ${first}` : ""}`);
+      }
+      await sleep(400);
+    }
+    return await fn(localPort);
+  };
+  try {
+    return await Promise.race([work(), deadline]);
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    await close();
+  }
 }
 
 /** Close the tunnel and stop the remote browser. */

@@ -1,7 +1,7 @@
 /**
  * `cast workspace` CLI subcommand wiring.
  *
- * Subcommands: init, acquire, path, status, heal, destroy, ls, and the
+ * Subcommands: init, acquire, root, path, status, heal, destroy, ls, and the
  * `pool` group (status, warm, drain) for the warm worktree pool.
  * Registered via registerWorkspaceCommand(program) called from index.ts.
  */
@@ -11,11 +11,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
+  acquireRootCheckout,
   acquireWorkspace,
   healWorkspace,
   listWorkspaces,
+  readWorkspaceState,
   releaseWorkspace,
   validateWorkspace,
+  type AcquireResult,
 } from "./lifecycle.js";
 import { detectProject } from "./detect.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
@@ -78,6 +81,8 @@ export function registerWorkspaceCommand(program: Command): void {
   ws.command("acquire <name>")
     .description("Create or attach to a workspace by name")
     .option("--branch <branch>", "Override branch name")
+    .option("--start-point <ref>", "Create the branch at this commit-ish instead of the checkout's HEAD (requires --branch); a codecast WIP snapshot commit starts at its parent with the snapshot as uncommitted work")
+    .option("--alt-branch <branch>", "Branch name to use instead when --branch already exists (requires --start-point)")
     .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot")
     .option("--backend <name>", "Sandbox backend to use (default: local)")
     .option("--skip-setup", "Skip install/generate/migrate commands")
@@ -90,6 +95,8 @@ export function registerWorkspaceCommand(program: Command): void {
         name: string,
         opts: {
           branch?: string;
+          startPoint?: string;
+          altBranch?: string;
           inputRoot?: string;
           backend?: string;
           skipSetup?: boolean;
@@ -100,6 +107,14 @@ export function registerWorkspaceCommand(program: Command): void {
         },
       ) => {
         const repoRoot = findRepoRoot();
+        if (opts.startPoint && !opts.branch) {
+          console.error("--start-point needs --branch: the branch to create at that commit");
+          process.exit(1);
+        }
+        if (opts.altBranch && !opts.startPoint) {
+          console.error("--alt-branch only applies with --start-point");
+          process.exit(1);
+        }
         // Backend validation: if user passed --backend, ensure it exists.
         if (opts.backend && !defaultRegistry.has(opts.backend)) {
           console.error(
@@ -110,6 +125,8 @@ export function registerWorkspaceCommand(program: Command): void {
         try {
           const r = await acquireWorkspace(repoRoot, name, {
             branch: opts.branch,
+            startPoint: opts.startPoint,
+            altBranch: opts.altBranch,
             inputRoot: opts.inputRoot,
             skipSetup: opts.skipSetup,
             skipHooks: opts.skipHooks,
@@ -119,16 +136,7 @@ export function registerWorkspaceCommand(program: Command): void {
           const ws = r.workspace;
           const tag = r.created ? "created" : "attached";
           if (opts.json) {
-            console.log(JSON.stringify({
-              name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
-              ports: ws.ports, created: r.created,
-              contract: ws.contract ? {
-                ok: ws.contract.ok,
-                failures: ws.contract.checks.filter((c) => !c.ok && !c.name.startsWith("port-free:")),
-                warnings: ws.contract.checks.filter((c) => !c.ok && c.name.startsWith("port-free:")),
-              } : null,
-            }));
-            if (ws.contract && !ws.contract.ok) process.exit(2);
+            printAcquireJson(r);
             return;
           }
           console.log(`${tag}: ${ws.name}`);
@@ -156,23 +164,61 @@ export function registerWorkspaceCommand(program: Command): void {
     );
 
   // -----------------------------------------------------------------------
+  // cast workspace root
+  // -----------------------------------------------------------------------
+  ws.command("root")
+    .description("Prepare the main checkout as a workspace (ports, secret files, install); what a cloud session in shared mode runs in")
+    .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot (they overwrite the root's copies)")
+    .option("--skip-setup", "Skip install/generate/migrate commands")
+    .option("--skip-browser", "Do not launch the per-workspace Chrome even when the manifest enables it")
+    .option("--json", "Print the workspace as one JSON line (the same shape as `acquire --json`)")
+    .action(async (opts: { inputRoot?: string; skipSetup?: boolean; skipBrowser?: boolean; json?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      try {
+        const r = await acquireRootCheckout(repoRoot, { inputRoot: opts.inputRoot, skipSetup: opts.skipSetup, skipBrowser: opts.skipBrowser });
+        const ws = r.workspace;
+        if (opts.json) {
+          printAcquireJson(r);
+          return;
+        }
+        console.log(`${r.created ? "created" : "refreshed"}: ${ws.name}`);
+        console.log(`  path:    ${ws.path}`);
+        console.log(`  branch:  ${ws.branch}`);
+        console.log(`  state:   ${ws.state}`);
+        if (Object.keys(ws.ports).length > 0) {
+          console.log(`  ports:   ${Object.entries(ws.ports).map(([n, p]) => `${n}=${p}`).join(" ")}`);
+        }
+        if (ws.contract && !ws.contract.ok) {
+          console.error("\nContract failures:");
+          for (const c of ws.contract.checks) if (!c.ok) console.error(`  ✗ ${c.name}: ${c.reason}`);
+          process.exit(2);
+        }
+      } catch (err) {
+        console.error(`root failed: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    });
+
+  // -----------------------------------------------------------------------
   // cast workspace status <name>
   // -----------------------------------------------------------------------
   ws.command("status <name>")
     .description("Show workspace state and contract validation")
     .action(async (name: string) => {
       const repoRoot = findRepoRoot();
-      const state = readState(repoRoot, name);
-      if (!state) {
+      if (!readState(repoRoot, name)) {
         console.error(`Workspace '${name}' not found`);
         process.exit(1);
       }
+      const r = await validateWorkspace(repoRoot, name);
+      // The shared-checkout record's branch is read from the live HEAD, so
+      // the header prints the branch the root is on now.
+      const state = readWorkspaceState(repoRoot, name)!;
       console.log(`${state.name}`);
       console.log(`  state:   ${state.state}`);
       console.log(`  path:    ${state.path}`);
       console.log(`  branch:  ${state.branch}`);
       console.log(`  updated: ${state.updatedAt}`);
-      const r = await validateWorkspace(repoRoot, name);
       console.log(`  contract: ${r.ok ? "ok" : "FAIL"}`);
       for (const c of r.checks) {
         const mark = c.ok ? "✓" : "✗";
@@ -307,6 +353,24 @@ export function registerWorkspaceCommand(program: Command): void {
         );
       }
     });
+}
+
+/**
+ * The one JSON line `acquire --json` and `root --json` print: what the laptop's
+ * parseAcquireOutput (cloud/prepare.ts) reads over SSH. Exit 2 on a failed contract.
+ */
+function printAcquireJson(r: AcquireResult): void {
+  const ws = r.workspace;
+  console.log(JSON.stringify({
+    name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
+    ports: ws.ports, created: r.created,
+    contract: ws.contract ? {
+      ok: ws.contract.ok,
+      failures: ws.contract.checks.filter((c) => !c.ok && !c.name.startsWith("port-free:")),
+      warnings: ws.contract.checks.filter((c) => !c.ok && c.name.startsWith("port-free:")),
+    } : null,
+  }));
+  if (ws.contract && !ws.contract.ok) process.exit(2);
 }
 
 /**

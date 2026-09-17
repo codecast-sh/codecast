@@ -10,16 +10,31 @@
  * message delivery, resume on wake — treats it like any other device.
  */
 
-import { mutation, query } from "./functions";
+import { action, internalQuery, mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { internal } from "./_generated/api";
+import { grantsContentsWrite, installationForRepo } from "./githubApp";
+import { normalizeRepository } from "./lib/gitRefs";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { releasePreviousOwner } from "./sessionRelease";
+import { checkoutInUseMessage, fromConvexAgentType, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
+
+// The park/prepare logic moved to cloudPlacement.ts (a leaf every creator can
+// import); re-exported here for older importers.
+export { enqueueCloudSpawn } from "./cloudPlacement";
+
+// The occupancy lookup, the mode validator and the seed validators live in
+// cloudPlacement.ts (the leaf devices.ts / conversations.ts / dispatch.ts /
+// spawn.ts import); this module re-exports them beside the mutations that
+// use them.
+export { cloudSeedArg, cloudStartFromArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 
 async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Promise<Id<"users"> | null> {
   const sessionUserId = await getAuthUserId(ctx as any);
@@ -71,6 +86,10 @@ export function wakeDevicesFor(
 export async function requestRemoteWake(ctx: { db: any; scheduler?: { runAfter(delay: number, fn: any, args: any): Promise<unknown> } }, conversation: any): Promise<boolean> {
   const owner = conversation?.owner_device_id as string | undefined;
   if (!owner) return false;
+  // A row still waiting for a laptop to prepare the host has nothing for the
+  // host to do yet: its pending first message is the laptop's work, and
+  // `cast cloud start` wakes the box itself (ensureUp).
+  if (conversation?.cloud_placement === "pending") return false;
   const device = await ctx.db
     .query("devices")
     .withIndex("by_user_device", (q: any) => q.eq("user_id", conversation.user_id).eq("device_id", owner))
@@ -83,37 +102,6 @@ export async function requestRemoteWake(ctx: { db: any; scheduler?: { runAfter(d
   if (requestAt !== device.wake_requested_at) await ctx.db.patch(device._id, { wake_requested_at: requestAt });
   await scheduleCloudWake(ctx, device, requestAt);
   return true;
-}
-
-/**
- * The web asked for a session on the cloud host. The browser cannot SSH, so
- * an online LOCAL daemon does the preparation: pick the one seen most recently
- * and hand it a cloud_spawn command. Mirrors moveToRemote, which picks the
- * source daemon the same way.
- */
-export async function enqueueCloudSpawn(
-  ctx: { db: any },
-  userId: Id<"users">,
-  opts: { conversationId: Id<"conversations">; cloudDeviceId: string },
-): Promise<Id<"daemon_commands">> {
-  const now = Date.now();
-  const devices = await ctx.db
-    .query("devices")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  const preparer = devices
-    .filter((d: any) => !d.is_remote && now - d.last_seen < DEVICE_ONLINE_MS)
-    .sort((a: any, b: any) => b.last_seen - a.last_seen)[0];
-  if (!preparer) {
-    throw new Error("No online machine can prepare the cloud host — start the codecast daemon on your laptop first");
-  }
-  return await ctx.db.insert("daemon_commands", {
-    user_id: userId,
-    command: "cloud_spawn" as const,
-    args: JSON.stringify({ conversation_id: opts.conversationId, cloud_device_id: opts.cloudDeviceId }),
-    created_at: now,
-    target_device_id: preparer.device_id,
-  });
 }
 
 /**
@@ -139,6 +127,22 @@ export const placeConversation = mutation({
     model: v.optional(v.string()),
     effort: v.optional(v.string()),
     cc_account: v.optional(v.string()),
+    // The token the park stamped (placementTarget.cloud_placement_token). When
+    // given, placement is fenced: a row no longer pending, or re-parked since
+    // (different token), is refused with placed:false so a late child cannot
+    // drag a re-pointed row back. Absent = the unfenced placement older
+    // laptops perform.
+    expect_token: v.optional(v.string()),
+    // Where the session runs on the host. Absent: the row's own stamp, else
+    // isolated when a worktree is named. A SHARED placement must follow a
+    // claim (claimSharedCheckout) on the same path and is re-checked here
+    // against every other alive row (exclude-self), so a placement that lost
+    // the race is refused before the start is queued.
+    cloud_workspace: v.optional(cloudWorkspaceValidator),
+    // What the worktree started from (the laptop checkout's branch/HEAD/dirty
+    // state, or origin/main with the reason for an automatic downgrade).
+    // Stamped as cloud_seed with the placement time; absent from old CLIs.
+    seed: v.optional(cloudSeedArg),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -151,6 +155,20 @@ export const placeConversation = mutation({
       .first();
     if (!device) throw new Error(`Unknown device ${args.device_id}`);
 
+    const fence = placementFence(conv, args.expect_token);
+    if (fence) return { placed: false as const, reason: fence, command_id: null, owner_device_id: conv.owner_device_id ?? null };
+    const priorOwner: string | undefined = conv.owner_device_id;
+    const mode: CloudWorkspaceMode | undefined = args.cloud_workspace
+      ?? (conv.cloud_workspace as CloudWorkspaceMode | undefined)
+      ?? (args.worktree_name ? "isolated" : undefined);
+    if (mode === "shared") {
+      if (conv.cloud_checkout_path !== args.project_path) {
+        throw new Error(`place after claimSharedCheckout: the row claimed ${conv.cloud_checkout_path ?? "no checkout"}, not ${args.project_path}`);
+      }
+      const occupant = await findSharedCheckoutOccupant(ctx, userId, args.device_id, { projectPath: args.project_path, excludeId: args.conversation_id.toString() });
+      if (occupant) throw new Error(checkoutInUseMessage(args.project_path, occupant));
+    }
+
     await ctx.db.patch(args.conversation_id, {
       owner_device_id: args.device_id,
       project_path: args.project_path,
@@ -158,12 +176,29 @@ export const placeConversation = mutation({
       ...(args.worktree_name ? { worktree_name: args.worktree_name } : {}),
       ...(args.worktree_branch ? { worktree_branch: args.worktree_branch } : {}),
       ...(args.worktree_path ? { worktree_path: args.worktree_path, worktree_status: "active" as const } : {}),
+      ...(mode ? { cloud_workspace: mode } : {}),
+      // Only a shared row holds the checkout; an isolated placement after a
+      // failed shared attempt must not keep attributing the root to itself.
+      ...(mode && mode !== "shared" ? { cloud_checkout_path: undefined } : {}),
+      ...(args.seed ? { cloud_seed: { ...args.seed, at: Date.now() } } : {}),
       cloud_placement: undefined,
+      cloud_placement_token: undefined,
       session_error: undefined,
       updated_at: Date.now(),
     });
+    // The row was owned by another machine before the park (a laptop-owned
+    // eager row toggled to the cloud): tell it to tear its copy down.
+    if (priorOwner && priorOwner !== args.device_id) {
+      await releasePreviousOwner(ctx, {
+        queueUserId: userId,
+        conversationId: args.conversation_id,
+        sessionId: conv.session_id,
+        priorDeviceId: priorOwner,
+        newDeviceId: args.device_id,
+      });
+    }
 
-    let commandId: Id<"daemon_commands"> | undefined;
+    let commandId: Id<"daemon_commands"> | null = null;
     if (args.start) {
       commandId = await enqueueStartSession(ctx, userId, {
         conversationId: args.conversation_id,
@@ -182,9 +217,68 @@ export const placeConversation = mutation({
       const placed = await ctx.db.get(args.conversation_id);
       await enqueuePendingMessage(ctx, placed, userId, { content: prompt });
     }
-    return { command_id: commandId, owner_device_id: args.device_id };
+    return { placed: true as const, command_id: commandId, owner_device_id: args.device_id };
   },
 });
+
+/**
+ * Claim the host's main checkout for a parked row BEFORE the laptop touches
+ * it. `cast cloud start --workspace shared` runs this right after the wake and
+ * before any ssh mutation: two racing shared placements cannot both move the
+ * root's HEAD, because the loser is refused here with the winner's short id.
+ * Fenced like placeConversation (expect_token): a superseded child never gets
+ * to claim. Re-claiming the same row (a retry after a failed preparation)
+ * is allowed and clears its session_error.
+ */
+export const claimSharedCheckout = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    device_id: v.string(),
+    /** The host's main checkout (the occupancy key). */
+    project_path: v.string(),
+    expect_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) throw new Error(`Unknown device ${args.device_id}`);
+    if (conv.cloud_placement !== "pending") return { claimed: false as const, reason: "not_pending" as const };
+    const fence = placementFence(conv, args.expect_token);
+    if (fence) return { claimed: false as const, reason: fence };
+    const occupant = await findSharedCheckoutOccupant(ctx, userId, args.device_id, { projectPath: args.project_path, excludeId: args.conversation_id.toString() });
+    if (occupant) throw new Error(checkoutInUseMessage(args.project_path, occupant));
+    await ctx.db.patch(args.conversation_id, {
+      cloud_workspace: "shared" as const,
+      cloud_checkout_path: args.project_path,
+      owner_device_id: args.device_id,
+      session_error: undefined,
+      updated_at: Date.now(),
+    });
+    return { claimed: true as const };
+  },
+});
+
+/**
+ * Why a fenced placement must be refused, or null to proceed. Pure, so the
+ * park→un-park→park race is testable: two children both see "pending", but
+ * only the one holding the CURRENT token may place.
+ */
+export function placementFence(
+  conv: { cloud_placement?: string | null; cloud_placement_token?: string | null },
+  expectToken: string | undefined,
+): "not_pending" | "superseded" | null {
+  if (expectToken === undefined) return null;
+  if (conv.cloud_placement !== "pending") return "not_pending";
+  if (conv.cloud_placement_token !== expectToken) return "superseded";
+  return null;
+}
 
 /**
  * What `cast cloud start <conversation>` (the daemon's child for a web
@@ -203,6 +297,11 @@ export const placementTarget = query({
       agent_type: conv.agent_type ?? null,
       owner_device_id: conv.owner_device_id ?? null,
       cloud_placement: (conv as any).cloud_placement ?? null,
+      cloud_placement_token: (conv as any).cloud_placement_token ?? null,
+      cloud_workspace: (conv as any).cloud_workspace ?? null,
+      cloud_checkout_path: (conv as any).cloud_checkout_path ?? null,
+      cloud_start_from: (conv as any).cloud_start_from ?? null,
+      git_remote_url: conv.git_remote_url ?? null,
       worktree_name: conv.worktree_name ?? null,
       model: conv.model ?? null,
       effort: (conv as any).effort ?? null,
@@ -212,9 +311,11 @@ export const placementTarget = query({
 });
 
 /**
- * The sessions a device runs right now, for `cast hosts ls`: every
+ * The sessions a device runs right now, for `cast hosts ls` and the laptop's
+ * shared-checkout pre-flight (cloud/prepare.ts fetchRootOccupant): every
  * conversation the device owns that the user has not killed. Worktree names
- * ride along so the host list can show what each worktree is for.
+ * and the workspace mode ride along so the host list can show what each
+ * worktree — or the main checkout — is for.
  */
 export const hostSessions = query({
   args: { api_token: v.optional(v.string()), device_id: v.string() },
@@ -236,8 +337,309 @@ export const hostSessions = query({
         project_path: c.project_path ?? null,
         worktree_name: c.worktree_name ?? null,
         worktree_branch: c.worktree_branch ?? null,
+        cloud_workspace: c.cloud_workspace ?? null,
+        cloud_placement: c.cloud_placement ?? null,
+        cloud_checkout_path: c.cloud_checkout_path ?? null,
+        // A boolean, never the text: the occupancy rule only asks whether a
+        // pending shared row failed, and the message may quote paths.
+        session_error: !!c.session_error,
+        cloud_seed: c.cloud_seed
+          ? { source: c.cloud_seed.source, base: c.cloud_seed.base, branch: c.cloud_seed.branch ?? null, dirty: c.cloud_seed.dirty ?? null, device_id: c.cloud_seed.device_id ?? null, reason: c.cloud_seed.reason ?? null }
+          : null,
         updated_at: c.updated_at ?? null,
       }))
       .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Browser logins on the host: `cast browser sync <site>` from a cloud session
+// ---------------------------------------------------------------------------
+
+type CarrierDevice = { device_id: string; is_remote?: boolean; last_seen: number; label?: string };
+
+/**
+ * The laptop that carries a login into the host's browser: the most recently
+ * seen ONLINE local device, or the one named by `via` — and then ONLY when it
+ * is online and local (never a fallback). Pure, and deliberately separate
+ * from enqueueCloudSpawn's preparer ladder: that one may park a row on an
+ * offline laptop to be re-issued when it wakes, which for a cookie carry
+ * would inject logins an hour after the host CLI gave up on them.
+ */
+export function pickOnlineLocalDevice(
+  devices: CarrierDevice[],
+  now: number,
+  via?: string,
+): { device_id: string; label: string | null } | null {
+  const online = devices.filter((d) => !d.is_remote && now - d.last_seen < DEVICE_ONLINE_MS);
+  const pick = via ? online.find((d) => d.device_id === via) : [...online].sort((a, b) => b.last_seen - a.last_seen)[0];
+  return pick ? { device_id: pick.device_id, label: pick.label ?? null } : null;
+}
+
+/** Is `s` exactly an http(s) origin (scheme + host [+ port], no path, query or fragment)? */
+function isHttpOrigin(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.origin === s;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A cloud session asks the owner's laptop to carry a browser login into the
+ * host's Chrome. The row carries ids, a loopback port, an ORIGIN and a flag —
+ * never a URL (its query can hold tokens) and never a cookie: the cookies
+ * travel laptop -> host inside an SSH port forward (cloud/browserSync.ts).
+ * Authorization is the host device: it must be an is_remote device of the
+ * caller, so a teammate's laptop never sees the row and cannot place one.
+ * Refused outright when no laptop is online — a carry is never parked.
+ */
+export const requestBrowserSync = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    /** The cloud host's device id (the requester). */
+    device_id: v.string(),
+    /** The host Chrome's loopback CDP port. */
+    cdp_port: v.number(),
+    /** Exactly one of: the site origin, or `all` for the whole jar. */
+    origin: v.optional(v.string()),
+    all: v.optional(v.boolean()),
+    /** Attribution only; must be the caller's row. Dropped (not refused) when it does not run on device_id. */
+    conversation_id: v.optional(v.id("conversations")),
+    /** Carry via this laptop instead of the most recently seen one. */
+    via_device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const host = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!host || host.is_remote !== true) throw new Error(`device ${args.device_id.slice(0, 8)} is not a cloud host of yours`);
+    if (!Number.isInteger(args.cdp_port) || args.cdp_port < 1 || args.cdp_port > 65535) throw new Error(`cdp_port ${args.cdp_port} is not a port`);
+    const origin = args.origin;
+    if ((origin === undefined) === !args.all) throw new Error("name exactly one of: origin, all");
+    if (origin !== undefined && !isHttpOrigin(origin)) throw new Error(`${origin} is not an http(s) origin (scheme + host only)`);
+    // The id is attribution, never authorization (the host device is). A
+    // conversation that moved off the host, or an id inherited from another
+    // session's shell, must not block the carry: keep the ownership check and
+    // drop the id when the row does not run on this host.
+    let conversationId = args.conversation_id;
+    if (conversationId) {
+      const conv = await ctx.db.get(conversationId);
+      if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+      if (conv.owner_device_id !== args.device_id) conversationId = undefined;
+    }
+    const now = Date.now();
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const preparer = pickOnlineLocalDevice(devices, now, args.via_device_id);
+    if (!preparer) {
+      throw new Error(
+        args.via_device_id
+          ? `device ${args.via_device_id.slice(0, 8)} is not one of your online laptops`
+          : "No online laptop can carry your logins — start the codecast daemon on your laptop (or wake it) and retry",
+      );
+    }
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "cloud_browser_sync" as const,
+      args: JSON.stringify({
+        host_device_id: args.device_id,
+        cdp_port: args.cdp_port,
+        origin: origin ?? null,
+        all: !!args.all,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      }),
+      created_at: now,
+      target_device_id: preparer.device_id,
+    });
+    return { command_id: commandId, device_id: preparer.device_id, label: preparer.label };
+  },
+});
+
+/**
+ * The outcome of one browser-sync request, for the host CLI's poll. The
+ * host authenticates with its api token (users.getCommandResult is session
+ * only), and the query exposes only this feature's rows.
+ */
+export const commandOutcome = query({
+  args: { api_token: v.optional(v.string()), command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const cmd = await ctx.db.get(args.command_id);
+    if (!cmd || cmd.user_id.toString() !== userId.toString() || cmd.command !== "cloud_browser_sync") return null;
+    return {
+      executed_at: cmd.executed_at ?? null,
+      result: cmd.result ?? null,
+      error: cmd.error ?? null,
+      claimed_device: cmd.claimed_device ?? null,
+      target_device_id: cmd.target_device_id ?? null,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Git push access from the host: a GitHub App installation token
+// ---------------------------------------------------------------------------
+
+/**
+ * What the host's git credential helper prints, or why it cannot.
+ *
+ * A cloud host has no GitHub credential of its own until a human grants its
+ * device key on GitHub. The codecast GitHub App is already installed on the
+ * repositories these sessions work in, and an installation token pushes over
+ * https, so the host can ask for one per fetch and per push instead. The
+ * token is short lived (GitHub expires it within the hour), is scoped to the
+ * installation's repositories, and is never stored on the host: `cast
+ * git-credential` prints it to git on stdout and exits.
+ */
+export type HostGitCredential = {
+  username: "x-access-token";
+  password: string;
+  expires_at: number;
+  installation_id: number;
+};
+
+export type HostGitCredentialRefusal = { reason: string };
+
+/** `owner/name`, the only repository spelling an installation lookup accepts. */
+function parseRepository(value: string): string | null {
+  const repo = normalizeRepository(value.trim().replace(/\.git$/, ""));
+  return /^[a-z0-9._-]+\/[a-z0-9._-]+$/.test(repo) ? repo : null;
+}
+
+/**
+ * The installation whose token lets `device_id` push `repository`, or the
+ * reason it cannot have one.
+ *
+ * Two questions, both of them the caller's own: is this device a cloud host of
+ * theirs (an is_remote device — a laptop has the human's own credentials and
+ * needs none of this), and does a GitHub App installation THEY can reach cover
+ * that repository. The second is githubApp.installationForRepo, the same rule
+ * issue sync and the PR paths resolve through, so a host can reach exactly the
+ * repositories its owner's workspaces can.
+ */
+export async function hostGitInstallationFor(
+  ctx: { db: any; auth?: any },
+  userId: Id<"users">,
+  args: { device_id: string; repository: string; host?: string },
+): Promise<{ installation_id: number; account_login: string } | HostGitCredentialRefusal> {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+    .first();
+  if (!device || device.is_remote !== true) {
+    return { reason: `device ${args.device_id.slice(0, 8)} is not a cloud host of yours` };
+  }
+  if (args.host !== undefined && args.host !== "github.com") {
+    return { reason: `${args.host} is not github.com — the codecast app only holds GitHub credentials` };
+  }
+  const repository = parseRepository(args.repository);
+  if (!repository) return { reason: `${args.repository} is not an owner/name repository` };
+  const installation = await installationForRepo(ctx as any, { repository, user_id: userId });
+  if (!installation) {
+    return {
+      reason:
+        `the codecast GitHub App is not installed on ${repository} for you — install it on that repository ` +
+        `(codecast settings, integrations), or grant this host's device key: cast hosts key`,
+    };
+  }
+  return { installation_id: installation.installation_id, account_login: installation.account_login };
+}
+
+/** The wire spelling of the rule above; the action below is its only caller. */
+export const hostGitInstallation = internalQuery({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    repository: v.string(),
+    host: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ installation_id: number; account_login: string } | HostGitCredentialRefusal> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return await hostGitInstallationFor(ctx, userId, args);
+  },
+});
+
+/**
+ * The credential `cast git-credential` prints on the host: the username and
+ * password of a GitHub App installation token for one repository.
+ *
+ * The token is minted through githubApp.getInstallationToken, which is the one
+ * mint path and holds the shared cache (github_installation_tokens), so a host
+ * fetching every minute costs GitHub one token an hour. It is minted for the
+ * ONE repository git asked about and for push access only, so what leaks if
+ * the host is compromised is a push to that repository, not to every
+ * repository the installation covers. It is returned and never logged:
+ * nothing here prints it, and the CLI writes it only to git's stdin protocol.
+ *
+ * What this does NOT narrow: anyone holding the caller's api_token can ask for
+ * any repository the caller's own installations cover, one repository at a
+ * time. Reaching a repository still means reaching an installation the caller
+ * can reach, which is the same rule issue sync and the PR paths use.
+ *
+ * A refusal is an answer, not an error — the helper exits quietly and git
+ * falls through to its next credential helper (the device key over ssh, or the
+ * laptop's agent bridge).
+ */
+export const hostGitCredential = action({
+  args: {
+    api_token: v.optional(v.string()),
+    /** The cloud host's device id (the requester). */
+    device_id: v.string(),
+    /** `owner/name` of the repository git is authenticating for. */
+    repository: v.string(),
+    /** The git host; only github.com has an installation to mint from. */
+    host: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<HostGitCredential | HostGitCredentialRefusal> => {
+    const resolved: { installation_id: number; account_login: string } | HostGitCredentialRefusal =
+      await ctx.runQuery(internal.cloud.hostGitInstallation, {
+        ...(args.api_token ? { api_token: args.api_token } : {}),
+        device_id: args.device_id,
+        repository: args.repository,
+        ...(args.host ? { host: args.host } : {}),
+      });
+    if ("reason" in resolved) return resolved;
+    // Scoped to the repository git named, and to push access. GitHub refuses
+    // (422) when the installation does not hold that permission, so a mint
+    // that throws is a refusal the helper can print, not a crash.
+    let minted: { token: string; expires_at: number; permissions?: Record<string, string> };
+    try {
+      minted = await ctx.runAction(internal.githubApp.getInstallationToken, {
+        installation_id: resolved.installation_id,
+        repository: args.repository,
+      });
+    } catch (e) {
+      return {
+        reason:
+          `the codecast GitHub App on ${resolved.account_login} could not mint a push token for ${args.repository}: ` +
+          `${(e as Error)?.message ?? "no reason given"}`,
+      };
+    }
+    // Push access has to be PROVEN here, not assumed: this answer decides
+    // whether the host reports itself as able to push, and a yes it cannot
+    // back turns every push into a 403 nobody can explain. An unknown
+    // permission map is therefore a refusal, and the device key carries on.
+    if (grantsContentsWrite(minted.permissions) !== true) {
+      return {
+        reason:
+          `the codecast GitHub App on ${resolved.account_login} cannot write to ${args.repository} ` +
+          `(its contents permission is ${minted.permissions?.contents ?? "unknown"}) — re-install it with write access`,
+      };
+    }
+    return {
+      username: "x-access-token" as const,
+      password: minted.token,
+      expires_at: minted.expires_at,
+      installation_id: resolved.installation_id,
+    };
   },
 });

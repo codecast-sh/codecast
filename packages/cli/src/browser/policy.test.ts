@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  checkUrl, denyNavigation, findManifestFile, isInternalUrl, loadSitePolicy, originOf, parsePattern,
+  checkUrl, denyNavigation, findManifestFile, isInternalUrl, loadMachinePolicy, loadSitePolicy, originOf, parsePattern,
   type SitePolicy,
 } from "./policy.js";
 
@@ -193,6 +193,34 @@ describe("loading from disk", () => {
     const policy = loadSitePolicy(dir)!;
     expect(policy.errors).toHaveLength(1);
     expect(checkUrl(policy, "https://github.com").allowed).toBe(false);
+  });
+
+  // The machine half alone: what the laptop daemon's cookie-carry child
+  // applies, from a cwd that is not a project.
+  test("loadMachinePolicy: null without browser_allow, the config source with it, an error entry when malformed", () => {
+    expect(loadMachinePolicy()).toBeNull();
+    fs.mkdirSync(process.env.CODECAST_DIR!, { recursive: true });
+    const configFile = path.join(process.env.CODECAST_DIR!, "config.json");
+    fs.writeFileSync(configFile, JSON.stringify({ auth_token: "x" }));
+    expect(loadMachinePolicy()).toBeNull();
+    fs.writeFileSync(configFile, JSON.stringify({ browser_allow: ["codecast.sh"] }));
+    expect(loadMachinePolicy()).toEqual({ sources: [{ file: configFile, key: "browser_allow", patterns: ["codecast.sh"] }], errors: [] });
+    fs.writeFileSync(configFile, JSON.stringify({ browser_allow: "codecast.sh" }));
+    expect(loadMachinePolicy()).toEqual({ sources: [], errors: [{ file: configFile, message: "browser_allow must be an array of strings" }] });
+  });
+
+  test("loadMachinePolicy never walks up for a project manifest; loadSitePolicy still unions manifest first, machine second", () => {
+    writeManifest(dir, `[browser]\nallow = ["github.com"]\n`);
+    fs.mkdirSync(process.env.CODECAST_DIR!, { recursive: true });
+    fs.writeFileSync(path.join(process.env.CODECAST_DIR!, "config.json"), JSON.stringify({ browser_allow: ["codecast.sh"] }));
+    const prevCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      expect(loadMachinePolicy()!.sources.map((s) => s.key)).toEqual(["browser_allow"]);
+    } finally {
+      process.chdir(prevCwd);
+    }
+    expect(loadSitePolicy(dir)!.sources.map((s) => s.key)).toEqual(["[browser] allow", "browser_allow"]);
   });
 });
 

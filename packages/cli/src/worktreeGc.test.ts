@@ -5,6 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createGitCapabilityStore } from "./gitCapability";
 import { keepReason, probeWorktree, releaseSessionWorktree, type WorktreeProbe } from "./worktreeGc";
+import { acquireWorkspace } from "./workspace/lifecycle";
+import { readState } from "./workspace/contract";
 
 let savedCodecastDir: string | undefined;
 beforeEach(() => {
@@ -41,6 +43,11 @@ describe("keepReason", () => {
   test("content already on the base outranks the commit count", () => {
     expect(keepReason({ dirty: false, aheadOfOrigin: 3, contentInBase: true })).toBeNull();
     expect(keepReason({ dirty: false, aheadOfOrigin: null, contentInBase: true })).toBeNull();
+  });
+  test("a seeded worktree: no host-only work releases even when dirty and ahead; host-only work keeps; unknown falls through (ct-49433)", () => {
+    expect(keepReason({ dirty: true, aheadOfOrigin: 3, contentInBase: false, hostOnlyWork: false })).toBeNull();
+    expect(keepReason({ dirty: true, aheadOfOrigin: 3, contentInBase: false, hostOnlyWork: true })).toBe("changes since the laptop seed");
+    expect(keepReason({ dirty: true, aheadOfOrigin: 3, contentInBase: false, hostOnlyWork: null })).toBe("uncommitted changes");
   });
 });
 
@@ -250,3 +257,68 @@ exec ${JSON.stringify(realGit)} "$@"
     expect(await releaseSessionWorktree(wt)).toMatchObject({ action: "released" });
   }, 30_000);
 });
+
+describe("seeded worktrees (ct-49433): released when the laptop still holds all of it", () => {
+  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+  let savedDir: string | undefined;
+  beforeEach(() => { savedDir = process.env.CODECAST_DIR; });
+  afterEach(() => { if (savedDir === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = savedDir; });
+
+  /** A repo whose "laptop seed" is a feature commit ahead of origin/main plus a snapshot with an untracked file. */
+  async function seeded(name: string) {
+    const { repo } = makeRepo();
+    process.env.CODECAST_DIR = path.join(repo, "host-state");
+    sh(repo, "git", ["checkout", "-qb", "feat/x"]);
+    fs.writeFileSync(path.join(repo, "feature.txt"), "feature\n");
+    sh(repo, "git", ["add", "feature.txt"]);
+    sh(repo, "git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "feature"]);
+    const base = sh(repo, "git", ["rev-parse", "HEAD"]);
+    sh(repo, "git", ["checkout", "-q", "main"]);
+    const idx = path.join(repo, "seed-index");
+    const env = { ...process.env, GIT_INDEX_FILE: idx };
+    execFileSync("git", ["-C", repo, "read-tree", base], { env, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "wip.txt"), "wip\n");
+    execFileSync("git", ["-C", repo, "add", "wip.txt"], { env, stdio: "ignore" });
+    const tree = execFileSync("git", ["-C", repo, "write-tree"], { env, encoding: "utf-8" }).trim();
+    fs.rmSync(path.join(repo, "wip.txt"));
+    const snapshot = sh(repo, "git", ["commit-tree", tree, "-p", base, "-m", "codecast wip snapshot"]);
+    const ref = `refs/codecast/cloud/${name}`;
+    sh(repo, "git", ["update-ref", ref, snapshot]);
+    const r = await acquireWorkspace(repo, name, { ...opts, branch: "feat/x-" + name, startPoint: ref });
+    sh(r.workspace.path, "git", ["reset", "-q", "--mixed", base]);
+    return { repo, wt: r.workspace.path, base, ref };
+  }
+
+  test("HEAD at the seed base and a tree equal to the snapshot → released, and the seed ref + branch go with it", async () => {
+    const { repo, wt, ref } = await seeded("s1");
+    expect(sh(wt, "git", ["status", "--porcelain"])).toBe("?? wip.txt");
+    const probe = await probeWorktree(wt, readState(repo, "s1"));
+    expect(probe).toMatchObject({ dirty: true, aheadOfOrigin: 1, hostOnlyWork: false });
+    expect(await releaseSessionWorktree(wt)).toMatchObject({ action: "released" });
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(spawnSyncOk(repo, ["show-ref", "--verify", "--quiet", ref])).toBe(false);
+    expect(sh(repo, "git", ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).split("\n")).not.toContain("feat/x-s1");
+  });
+
+  test("an extra edit or a new commit is host-only work → kept with 'changes since the laptop seed'", async () => {
+    const edited = await seeded("s2");
+    fs.writeFileSync(path.join(edited.wt, "extra.txt"), "host edit\n");
+    expect(await releaseSessionWorktree(edited.wt)).toMatchObject({ action: "kept", reason: "changes since the laptop seed" });
+    expect(fs.existsSync(edited.wt)).toBe(true);
+    const committed = await seeded("s3");
+    sh(committed.wt, "git", ["add", "wip.txt"]);
+    sh(committed.wt, "git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "host commit"]);
+    expect(await releaseSessionWorktree(committed.wt)).toMatchObject({ action: "kept", reason: "changes since the laptop seed" });
+  });
+
+  test("a missing seed ref falls through to today's rules (dirty → kept)", async () => {
+    const { repo, wt, ref } = await seeded("s4");
+    sh(repo, "git", ["update-ref", "-d", ref]);
+    expect(await probeWorktree(wt, readState(repo, "s4"))).toMatchObject({ dirty: true, hostOnlyWork: null });
+    expect(await releaseSessionWorktree(wt)).toMatchObject({ action: "kept", reason: "uncommitted changes" });
+  });
+});
+
+function spawnSyncOk(repo: string, args: string[]): boolean {
+  try { execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" }); return true; } catch { return false; }
+}

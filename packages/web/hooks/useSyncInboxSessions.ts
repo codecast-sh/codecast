@@ -75,6 +75,11 @@ export function shouldPlayWaitingSound(
     // here. `continue` rather than a falsy key on purpose: leaving the id out of
     // nextWaiting makes a later revival re-observe the session fresh, so no
     // chime fires for a waiting episode that began while it was set aside.
+    // isSub (store) is the other half of the mirror: it stands down on
+    // subagents, parent-linked rows AND agent-spawned rows
+    // (isAgentSpawnedConversation), matching the server's "subagent" +
+    // "agent_spawned" reasons. A worktree is NOT a stand-down reason on
+    // either side — a human-started worktree/cloud session chimes and pushes.
     if (session.inbox_dismissed_at || session.inbox_stashed_at || session.inbox_killed_at) continue;
     const id = session._id.toString();
     const key = isSub(session) ? null : waitingSoundKey(session, queued);

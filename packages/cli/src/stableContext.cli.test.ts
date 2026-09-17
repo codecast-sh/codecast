@@ -219,12 +219,15 @@ Use --mine for only your sessions, -g for all teams.
     }
 
     // index.ts (older wrapper scripts still start here) keeps the same shape:
-    // fast path claimed first, update check gated off it.
+    // fast path claimed first, update check gated off it. Every output
+    // protocol is gated: this hook, whose output becomes Claude's prompt, and
+    // `git-credential`, whose output git reads as the credential and throws
+    // away when the first line is a notice instead of `username=`.
     const source = fs.readFileSync(cliEntry, "utf8");
-    // CODECAST_NO_AUTO_UPDATE is the second gate: the `_build-id` child that
+    // CODECAST_NO_AUTO_UPDATE is the last gate: the `_build-id` child that
     // an update spawns must not start an update of its own.
     expect(source).toContain(
-      "if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates()",
+      "if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates()",
     );
     const claimed = source.slice(source.indexOf("if (runFastPath(process.argv)) {"));
     const fallback = claimed.indexOf("} else if (process.argv[2] === \"__fugitive_blame@@\")");

@@ -56,6 +56,29 @@ export interface CloudHost {
    * first time a session is placed there (cloud/prepare.ts). Lets the daemon
    * map a wake request (a device id) back to an instance it can boot. */
   deviceId?: string;
+  /** The host's git device key (~/.codecast/git/id_ed25519.pub), as last read by the host git setup. */
+  gitPubkey?: string;
+  /** What the host's key could do against the origin last probed (cloud/hostGit.ts). */
+  gitAccess?: HostGitAccessRecord;
+  /** What a GitHub App installation token could do against the same repository, over https. */
+  gitAppAccess?: HostGitAccessRecord;
+  /** The human turned the SSH agent bridge on (`cast hosts forward-agent`). Missing = off. */
+  forwardAgent?: boolean;
+  /** The idle watchdog version `cast hosts provision` last installed (provisionLinux.ts). */
+  watchdogVersion?: number;
+  /** Refuse cookie carries into this host's browser (a host shared with
+   * teammates). Default: allowed. Set by hand in hosts.json today; a CLI
+   * switch must write it through patchHost. Read by cloud/browserSync.ts. */
+  browserSync?: boolean;
+}
+
+export interface HostGitAccessRecord {
+  origin: string;
+  read: boolean;
+  write: boolean;
+  readonly?: boolean;
+  checkedAt: number;
+  error?: string;
 }
 
 /**
@@ -88,6 +111,11 @@ function registryPath(): string {
   return path.join(defaultConfigDir(), "browser", "hosts.json");
 }
 
+/** The lock every field-level registry write takes (patchHost). Exported for tests. */
+export function registryLockPath(): string {
+  return `${registryPath()}.lock`;
+}
+
 export function readHosts(): CloudHost[] {
   try {
     return JSON.parse(fs.readFileSync(registryPath(), "utf-8")).hosts ?? [];
@@ -108,6 +136,60 @@ export function upsertHost(host: CloudHost): void {
   const hosts = readHosts().filter((h) => h.id !== host.id);
   hosts.push(host);
   writeHosts(hosts);
+}
+
+const LOCK_RETRIES = 50;
+const LOCK_RETRY_MS = 20;
+const LOCK_STALE_MS = 5_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Change ONLY the named fields of one registry entry, under a lock.
+ *
+ * Every other writer used to spread an entry it read at entry time, and
+ * `ensureUp` reads its entry before a boot wait of up to three minutes plus
+ * the ssh wait: a `cast hosts forward-agent --off` typed during that window
+ * was silently reverted to on by the address write that followed, and a
+ * fresh gitAccess dropped the same way. Re-reading inside a `wx` lockfile
+ * and merging only the patch removes the lost-update window rather than
+ * narrowing it. Returns the merged entry, or undefined (and writes nothing)
+ * when no entry has that id.
+ */
+export function patchHost(id: string, patch: Partial<CloudHost>): CloudHost | undefined {
+  const p = registryPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+  const lock = registryLockPath();
+  let fd: number | undefined;
+  for (let attempt = 0; fd === undefined; attempt++) {
+    try {
+      fd = fs.openSync(lock, "wx", 0o600);
+      fs.writeSync(fd, String(process.pid));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) { fs.unlinkSync(lock); continue; }
+      } catch { continue; /* vanished: retry immediately */ }
+      if (attempt >= LOCK_RETRIES) throw new Error(`host registry is locked (${lock}) — retry in a moment`);
+      sleepSync(LOCK_RETRY_MS);
+    }
+  }
+  try {
+    const hosts = readHosts();
+    const i = hosts.findIndex((h) => h.id === id);
+    if (i === -1) return undefined;
+    const merged = { ...hosts[i]!, ...patch } as CloudHost & Record<string, unknown>;
+    // An explicit `undefined` in the patch clears the field (gitPubkey when the host lost its key).
+    for (const [k, v] of Object.entries(patch)) if (v === undefined) delete merged[k];
+    hosts[i] = merged;
+    writeHosts(hosts);
+    return merged;
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+    try { fs.unlinkSync(lock); } catch { /* broken by another waiter */ }
+  }
 }
 
 /** The aws CLI failed to RUN (not an AWS "no" — the binary or its execution). */
@@ -353,9 +435,10 @@ export async function ensureUp(
     }
   }
 
-  const updated = { ...host, address };
-  upsertHost(updated);
-  return updated;
+  // Only the address: a field-level patch under the registry lock, so a
+  // toggle or a git-access record written during the boot wait survives.
+  patchHost(host.id, { address });
+  return { ...host, address };
 }
 
 /** Put a host to sleep. This is what makes idle cost nothing. */

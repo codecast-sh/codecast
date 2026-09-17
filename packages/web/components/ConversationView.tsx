@@ -221,7 +221,7 @@ import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem, resolveCloudStartFrom } from "../store/inboxStore";
 import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { DocDates } from "./DocDates";
@@ -270,9 +270,12 @@ import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
-import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, deviceWakesOnUse, type Device } from "./DeviceBadge";
+import { useDevices, useDeviceMoveStatus, deviceDisplayName, type Device } from "./DeviceBadge";
+import { MachineChips } from "./MachineChips";
+import { SessionModeToggles } from "./SessionModeToggles";
+import { cloudPlacementFor } from "@codecast/shared/contracts";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
-import { defaultSessionMachineId, type SessionMachine } from "../lib/sessionMachines";
+import { cloudHostOf, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, type SessionMachine } from "../lib/sessionMachines";
 import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
@@ -1203,16 +1206,10 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const storeSession = useInboxStore(useShallow((s) => {
     const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
     if (!sess) return undefined;
-    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id };
+    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id, cloud_placement: sess.cloud_placement };
   }));
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
-  const cloudMode = useInboxStore((s) => s.cloudSessionMode);
   const convex = useConvex();
-  // A cloud session always runs in its own worktree — on the HOST. So the
-  // isolated toggle reads as on while cloud mode is, but the flag itself is
-  // never written from here: turning cloud off must not strand the user with an
-  // isolated setting they never chose.
-  const isolated = isolatedToggle || cloudMode;
   const convCommand = useInboxStore((s) => s.convCommand);
 
   // --- machine row --------------------------------------------------------
@@ -1245,11 +1242,12 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // machine holding this checkout → stable tiebreak), so it can't change under
   // the user between the render that shows a chip and the send that acts on it.
   const lastPickedDeviceId = useInboxStore((s) => s.clientState.ui?.last_picked_device_id ?? null);
-  const machineOpts = {
-    ownerDeviceId: storeSession?.owner_device_id ?? (conversation as any).owner_device_id ?? null,
+  const ownerDeviceIdForPicker = storeSession?.owner_device_id ?? (conversation as any).owner_device_id ?? null;
+  const machineOpts = useMemo(() => ({
+    ownerDeviceId: ownerDeviceIdForPicker,
     projectPath: currentPath,
     lastPicked: lastPickedDeviceId,
-  };
+  }), [ownerDeviceIdForPicker, currentPath, lastPickedDeviceId]);
   // The machine this session WILL run on, plus the two things that must agree
   // with it: what gets stamped, and which machine's folders we offer. The stamp
   // already on the row is the last-resort rung — `devices` reads empty on mount
@@ -1261,6 +1259,36 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     picked: pickedDeviceId ?? defaultSessionMachineId(devices, machineOpts),
     existingStamp,
   });
+  // The machine the pill names. Offline machines stay pickable: a laptop
+  // falls back server-side to an online machine with the repo, and a cloud
+  // host boots when the session starts.
+  const routedMachine = machineChips.find((d) => d.device_id === selectedDeviceId) ?? machineChips[0];
+  // The cloud host to offer, if the user has one (offline included — a stopped
+  // host is asleep, not gone).
+  const cloudHost = useMemo(() => cloudHostOf(machineChips), [machineChips]);
+  // "Run in the cloud" is DERIVED from the routed machine, never stored beside
+  // it: two independent states (the pick and a flag) is what let the two drift
+  // — a laptop-owned eager row rendering as "Cloud Linux" without being parked,
+  // OFF memory erased by a mirror. Held across an empty-roster gap by a ref
+  // (`useDevices()` reads empty on mount and on any reconnect) so a reconnect
+  // cannot flip the toggle. The store flag below is a write-only mirror for
+  // surfaces that only need to know, reset when this composer unmounts: the
+  // toggle really is THIS composer's override.
+  const lastCloudModeRef = useRef(false);
+  const cloudMode = routedMachine ? isCloudHost(routedMachine) : lastCloudModeRef.current;
+  lastCloudModeRef.current = cloudMode;
+  const setCloudSessionMode = useInboxStore((s) => s.setCloudSessionMode);
+  useWatchEffect(() => { setCloudSessionMode(cloudMode); }, [cloudMode, setCloudSessionMode]);
+  useWatchEffect(() => () => { setCloudSessionMode(false); }, [setCloudSessionMode]);
+  // In cloud mode the isolated toggle is the WORKSPACE pick: on (default) =
+  // its own worktree on the host, off = the host's main checkout (the store's
+  // cloudSharedCheckout, reset whenever cloud mode flips). The local
+  // isolatedWorktreeMode flag is never written from cloud mode: turning cloud
+  // off must not strand the user with an isolated setting they never chose.
+  const cloudShared = useInboxStore((s) => s.cloudSharedCheckout);
+  const isolated = cloudMode ? !cloudShared : isolatedToggle;
+  // What a cloud worktree starts from (persisted per device in clientUI).
+  const cloudStartFrom = useInboxStore((s) => resolveCloudStartFrom(s.clientState.ui));
 
   // The folder list is scoped to the machine we're about to stamp, ALWAYS. The
   // unscoped query is `getOnlineLocalRoots` — a union across every online local —
@@ -1462,15 +1490,37 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // `forceDeviceId` is how a machine chip re-routes a session whose folder isn't
   // changing (undefined = "whatever the machine row has selected"; null = clear
   // back to auto-routing), so passing it also defeats the same-path no-op guard.
-  const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean, forceDeviceId?: string | null) => {
-    const trimmed = projectPath.trim();
-    if (!trimmed) return;
-    const targetDeviceId = forceDeviceId !== undefined ? forceDeviceId : scopedDeviceId;
-    if (trimmed === currentPath && !forceIsolated && forceDeviceId === undefined) return;
+  // A null/empty `projectPath` WITH a forceDeviceId means "reconfigure the
+  // machine only": a pathless eager row (a task's context chat) can still be
+  // parked on the host or un-parked back to a laptop.
+  const handleSwitch = useCallback(async (projectPath: string | null, forceIsolated?: boolean, forceDeviceId?: string | null, opts: { onlyCloudPark?: boolean } = {}) => {
+    const trimmed = (projectPath ?? "").trim();
+    const machineOnly = !trimmed && forceDeviceId !== undefined;
+    if (!trimmed && !machineOnly) return;
+    // In cloud mode the target is the host the dropdown ROUTES to (there can
+    // be more than one), falling back to the first host only if the routed
+    // machine somehow is not one.
+    const routedHostId = routedMachine && isCloudHost(routedMachine) ? routedMachine.device_id : cloudHost?.device_id ?? null;
+    const targetDeviceId = forceDeviceId !== undefined ? forceDeviceId : (cloudMode ? routedHostId : scopedDeviceId);
+    if (!machineOnly && trimmed === currentPath && !forceIsolated && forceDeviceId === undefined) return;
+    const target = targetDeviceId ? machineChips.find((d) => d.device_id === targetDeviceId) : undefined;
+    // ONE predicate (shared with createSessionFromStub and the server's start
+    // chokepoint) decides whether the host needs a laptop to prepare it. A
+    // folder the host already holds (~/work/<repo> and its worktrees) is a
+    // plain start there; "ambiguous" parks — the user chose the host from a
+    // laptop folder list, and the explicit cloud_device_id tells the server so.
+    const locals = machineChips.filter((d) => !d.is_remote && d.bot_name === undefined);
+    const cloudPark = !!target && isCloudHost(target)
+      && (!trimmed || cloudPlacementFor({ target, locals, paths: [trimmed] }) !== "native");
+    // The shared toggle only means something for a park; a native host
+    // folder has no worktree-or-root choice to re-issue.
+    if (opts.onlyCloudPark && !cloudPark) return;
     const store = useInboxStore.getState();
     const id = storeSession?._id || conversation._id;
-    const prevPath = currentPath;
-    store.updateSessionProject(id, trimmed);
+    // What to restore on failure: nothing for a machine-only reconfigure,
+    // which never touched the row's project.
+    const prevPath = machineOnly ? undefined : currentPath;
+    if (!machineOnly) store.updateSessionProject(id, trimmed);
     // Always push the switch to the daemon so it kills + recreates the tmux at
     // the new cwd. A freshly-created stub has no Convex id yet — its id arrives
     // via the in-flight create promise, so wait for that rather than dropping
@@ -1481,20 +1531,31 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       if (pending) convexId = await pending.catch(() => undefined);
     }
     if (!convexId) return;
+    // A cloud session's worktree is made on the HOST by the daemon that
+    // prepares it. Asking the local daemon for one here would make a second,
+    // unused worktree on this machine and route the session at it. Every
+    // other target ships the user's REAL toggle (isolatedToggle), never the
+    // cloud-locked `isolated`: leaving cloud mode for a laptop runs while
+    // cloudMode is still true in this closure, and shipping it would make the
+    // un-park build a laptop worktree nobody asked for (a host-native plain
+    // start would likewise ask for a worktree inside a worktree).
+    const isolatedArg = cloudPark ? undefined : (forceIsolated ?? isolatedToggle) || undefined;
+    // Read at call time, not from the closure: the shared toggle (and the
+    // start-from pick) set the flag and re-park in the same tick.
+    const cloudShared = useInboxStore.getState().cloudSharedCheckout;
+    const cloudStartFromNow = cloudShared ? "origin_main" : resolveCloudStartFrom(useInboxStore.getState().clientState.ui);
     convCommand(convexId, "reconfigureSession", {
-      project_path: trimmed,
-      git_root: trimmed,
-      // A cloud session's worktree is made on the HOST by the daemon that
-      // prepares it. Asking the local daemon for one here would make a second,
-      // unused worktree on this machine and route the session at it.
-      isolated: cloudMode ? undefined : (forceIsolated ?? isolated) || undefined,
-      ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
+      ...(machineOnly ? {} : { project_path: trimmed, git_root: trimmed }),
+      isolated: isolatedArg,
+      ...(cloudPark
+        ? { cloud_device_id: target!.device_id, cloud_workspace: cloudShared ? "shared" : "isolated", cloud_start_from: cloudStartFromNow }
+        : targetDeviceId ? { target_device_id: targetDeviceId } : {}),
     }).catch((err) => {
       if (isParkedDispatchError(err)) return;
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
-  }, [storeSession, conversation._id, convCommand, currentPath, isolated, cloudMode, scopedDeviceId]);
+  }, [storeSession, conversation._id, convCommand, currentPath, isolatedToggle, cloudMode, cloudHost, routedMachine, machineChips, scopedDeviceId]);
 
   // A picker row: a folder to switch to, or one to CREATE first. Creation is
   // optimistic — the switch goes out on the assumption the daemon's mkdir
@@ -1522,36 +1583,37 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // choice — see createSessionFromStub.
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const handleMachinePick = useCallback((d: SessionMachine) => {
-    setPickedDeviceId(d.device_id);
-    if (d.bot_name !== undefined) useInboxStore.getState().setCloudSessionMode(false);
+    // The DROPDOWN is the standing choice: every transition goes through the
+    // pure helpers so cloudMode === isCloudHost(picked) holds by construction.
+    const next = machineSelectionAfterPick(d);
+    setPickedDeviceId(next.pickedDeviceId);
     // Remember the choice: it becomes the picker's default for subsequent NEW
     // sessions, which is what makes "explicit every time" cost one click total
-    // rather than one click per session.
+    // rather than one click per session. A cloud host is a legitimate standing
+    // pick, honoured even while it sleeps.
     updateClientUI({ last_picked_device_id: d.device_id });
-    if (!currentPath) return;
     // Same project, THAT machine's checkout: keep the stored path truthful for
     // where the session now routes (the daemon would remap by repo name anyway,
-    // but the label/tooltip shouldn't show a path the machine doesn't have).
-    const remapped = d.local_project_roots?.find((r) => repoName(r) === repoName(currentPath)) ?? currentPath;
+    // but the label/tooltip shouldn't show a path the machine doesn't have). A
+    // cloud host is never remapped to its own roots: the laptop path is the
+    // evidence the placement predicate needs. No folder yet → machine only.
+    const remapped = currentPath
+      ? (isCloudHost(d) ? currentPath : d.local_project_roots?.find((r) => repoName(r) === repoName(currentPath)) ?? currentPath)
+      : null;
     handleSwitch(remapped, undefined, d.device_id);
   }, [currentPath, handleSwitch, updateClientUI]);
 
-  // The cloud host to offer, if the user has one. Only the first: one cloud box
-  // per account is the shape the product has, and choosing among several belongs
-  // in the machine row, which already lists them.
-  const cloudHost = useMemo(() => machineChips.find((d) => d.bot_name === undefined && deviceWakesOnUse(d)) ?? null, [machineChips]);
-
-  // "Run in the cloud" points the machine selection at the host through
-  // pickedDeviceId ONLY — deliberately not handleMachinePick, whose job is to
-  // remember an explicit pick as the standing default for later sessions. A mode
-  // toggle must not repoint every future new session at the cloud box. It also
-  // fires no reconfigure: the host's worktree is made when the daemon places the
-  // row, not by switching a still-local session's folder.
+  // "Run in the cloud" is THIS composer's override: it moves the component-
+  // local pick (on → the cloud host; off → what the ladder picks among the
+  // non-cloud machines) and remembers nothing — a mode toggle must not repoint
+  // every future new session at the cloud box; the dropdown does that. It DOES
+  // reconfigure an existing row: on parks it on the host, off un-parks it.
   const toggleCloudMode = useCallback(() => {
-    const turningOn = !cloudMode;
-    useInboxStore.getState().setCloudSessionMode(turningOn);
-    setPickedDeviceId(turningOn ? (cloudHost?.device_id ?? null) : null);
-  }, [cloudMode, cloudHost]);
+    const next = machineSelectionAfterCloudToggle(machineChips, machineOpts, !cloudMode);
+    if (next.pickedDeviceId === null && !cloudMode) return;
+    setPickedDeviceId(next.pickedDeviceId);
+    handleSwitch(currentPath ?? null, undefined, next.pickedDeviceId);
+  }, [cloudMode, machineChips, machineOpts, currentPath, handleSwitch]);
 
   // Stamp the selection on the stub row so it rides the deferred create — the
   // machine shown in the row is the machine it runs on, whether or not the user
@@ -1630,49 +1692,17 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   }, [pickList, hi, filter, pickOption, descendInto, exitPicker]);
 
   // Mouse-first, and hidden entirely for the single-machine case so that
-  // experience is untouched. Offline machines stay pickable: routing falls
-  // back server-side to an online machine that has the repo. Rests collapsed
-  // as one pill (the machine the session will run on); a click unfolds the
-  // full chip row.
-  const routedMachine = machineChips.find((d) => d.device_id === selectedDeviceId) ?? machineChips[0];
-  const machineUi = machineChips.length > 1 && routedMachine ? (
-    machinesOpen ? (
-      <div className="flex flex-wrap justify-end gap-1.5 max-w-[26rem]">
-        {machineChips.map((d) => {
-          const selected = d.device_id === selectedDeviceId;
-          return (
-            <button
-              key={d.device_id}
-              onClick={() => { handleMachinePick(d); setMachinesOpen(false); }}
-              title={d.online
-                ? `Run this session on ${deviceDisplayName(d)}`
-                : `${deviceDisplayName(d)} is offline — will fall back to an online machine with this repo`}
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
-                selected
-                  ? `${deviceAccentClasses(d)} font-medium`
-                  : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
-              } ${d.online ? "" : "opacity-50"}`}
-            >
-              <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
-              <span className="truncate max-w-[14rem]">{deviceDisplayName(d)}{d.bot_name !== undefined && ` · ${d.bot_name || "agent box"}`}</span>
-              <DeviceDot online={d.online} />
-            </button>
-          );
-        })}
-      </div>
-    ) : (
-      <button
-        onClick={() => setMachinesOpen(true)}
-        title={`Runs on ${deviceDisplayName(routedMachine)} — click to choose a machine`}
-        className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
-      >
-        <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />
-        <span className="truncate max-w-[14rem]">{deviceDisplayName(routedMachine)}{routedMachine.bot_name !== undefined && ` · ${routedMachine.bot_name || "agent box"}`}</span>
-        <DeviceDot online={routedMachine.online} />
-        <ChevronDown className="w-3 h-3 shrink-0 opacity-50 group-hover/machine:opacity-100 transition-opacity" />
-      </button>
-    )
-  ) : null;
+  // experience is untouched. Rests collapsed as one pill (the machine the
+  // session will run on); a click unfolds the full chip row.
+  const machineUi = (
+    <MachineChips
+      machines={machineChips}
+      selectedDeviceId={selectedDeviceId}
+      open={machinesOpen}
+      onOpen={() => setMachinesOpen(true)}
+      onPick={(d) => { handleMachinePick(d); setMachinesOpen(false); }}
+    />
+  );
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -1827,39 +1857,40 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
         <NewSessionBucketPill conversation={conversation} />
 
-        <button
-          onClick={() => {
-            if (cloudMode) return;
+        <SessionModeToggles
+          cloudHost={cloudHost}
+          cloudMode={cloudMode}
+          cloudToggleEnabled={cloudToggleAvailable(machineChips, cloudMode)}
+          onToggleCloud={toggleCloudMode}
+          isolated={isolated}
+          onToggleIsolated={() => {
             const turningOn = !isolated;
             useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
             if (turningOn && currentPath) {
               handleSwitch(currentPath, true);
             }
           }}
-          disabled={cloudMode}
-          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:cursor-default disabled:hover:text-sol-text-dim"
-          title={cloudMode
-            ? "A cloud session always gets its own worktree, made on the host"
-            : "Create session in an isolated git worktree"}
-        >
-          <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
-            <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
-          </span>
-          <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
-        </button>
-
-        {cloudHost && (
-          <button
-            onClick={toggleCloudMode}
-            className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
-            title={`Run this session on ${deviceDisplayName(cloudHost)}, in its own worktree there. The host boots itself when the session starts.`}
-          >
-            <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${cloudMode ? "bg-sol-violet/30" : "bg-sol-bg-alt"}`}>
-              <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${cloudMode ? "left-3.5 bg-sol-violet" : "left-0.5 bg-sol-text-dim"}`} />
-            </span>
-            <span className={cloudMode ? "text-sol-violet" : ""}>run in the cloud</span>
-          </button>
-        )}
+          shared={cloudMode && cloudShared}
+          onToggleShared={() => {
+            useInboxStore.getState().setCloudSharedCheckout(isolated);
+            // A row the machine pick already parked on the host re-parks with
+            // the new mode (the child in flight is superseded). A deferred
+            // stub reads the flag at send time, and a row the host already
+            // placed keeps its checkout: neither is touched here.
+            if (currentPath && storeSession?.cloud_placement === "pending" && routedMachine && isCloudHost(routedMachine)) {
+              handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true });
+            }
+          }}
+          startFrom={cloudStartFrom}
+          onSetStartFrom={(v) => {
+            useInboxStore.getState().setCloudStartFrom(v);
+            // Same rule as the shared toggle: a parked row re-parks with the
+            // new seed choice, a deferred stub reads it at send time.
+            if (currentPath && storeSession?.cloud_placement === "pending" && routedMachine && isCloudHost(routedMachine)) {
+              handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true });
+            }
+          }}
+        />
 
         {!picking && recentProjects.length > 0 && (
           <button

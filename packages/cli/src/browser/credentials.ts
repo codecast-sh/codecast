@@ -77,14 +77,18 @@ let cachedKey: Buffer | null = null;
  * already trusted for this binary. Cached for the life of the process so a
  * batch of navigations asks once.
  */
-export function chromeEncryptionKey(): Buffer | null {
+export function chromeEncryptionKey(deps: { platform?: NodeJS.Platform; exec?: typeof execFileSync } = {}): Buffer | null {
   if (cachedKey) return cachedKey;
-  if (process.platform !== "darwin") return null;
+  if ((deps.platform ?? process.platform) !== "darwin") return null;
   try {
-    const secret = execFileSync(
+    const secret = (deps.exec ?? execFileSync)(
       "security",
       ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+      // Bounded: from a daemon child the Keychain may show an on-screen prompt
+      // nobody answers (or fail at once with no GUI session); an unanswered
+      // prompt would otherwise wedge the child until its hard kill, and the
+      // caller would see a bare exit code instead of the Keychain reason.
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 45_000 },
     ).trim();
     if (!secret) return null;
     cachedKey = crypto.pbkdf2Sync(secret, KDF_SALT, KDF_ROUNDS, KDF_LEN, "sha1");

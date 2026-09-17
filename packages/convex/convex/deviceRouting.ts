@@ -19,10 +19,12 @@
 /** A device is "online" if it heartbeated within this window. */
 export const DEVICE_ONLINE_MS = 2 * 60 * 1000;
 
-/** True if `p` is at or below a known project root (`root` or a child of it). */
-export function pathUnderRoot(p: string, root: string): boolean {
-  return p === root || p.startsWith(root.endsWith("/") ? root : root + "/");
-}
+// pathUnderRoot and platformCanOpenPath live in the shared contract now
+// (@codecast/shared/contracts/cloudPlacement) so the web composer and this
+// ladder answer "can this machine open that folder" identically. Re-exported
+// so every existing importer keeps its path.
+export { pathUnderRoot, platformCanOpenPath } from "@codecast/shared/contracts";
+import { pathUnderRoot, platformCanOpenPath } from "@codecast/shared/contracts";
 
 /** Minimal device shape the routing decision needs (a subset of the `devices` row). */
 export type RoutableDevice = {
@@ -33,25 +35,6 @@ export type RoutableDevice = {
   /** `process.platform` as reported by the heartbeat: "darwin" | "linux" | "win32". */
   platform?: string;
 };
-
-/**
- * False only when the path lives in a directory namespace the device's platform
- * provably does not have — `/Users/...` on Linux, `/home/...` on a Mac. Anything
- * shared (`/opt`, `/tmp`, `/srv`, unknown platforms, relative paths) stays true:
- * this exists to stop an obviously-impossible route, not to guess at checkouts.
- *
- * Without it the checkout-less rungs pick purely on recency, so a Linux box that
- * heartbeat a second sooner could win a `/Users/<mac-user>/...` session it cannot
- * even cd into.
- */
-export function platformCanOpenPath(platform: string | undefined, p: string): boolean {
-  if (!platform) return true;
-  if (platform === "win32") return /^[A-Za-z]:[\\/]/.test(p) || !p.startsWith("/");
-  if (!p.startsWith("/")) return true;
-  if (platform === "darwin") return !p.startsWith("/home/") && !p.startsWith("/root/");
-  if (platform === "linux") return !p.startsWith("/Users/");
-  return true;
-}
 
 /**
  * Most-recently-seen device, but a device that could actually open the path

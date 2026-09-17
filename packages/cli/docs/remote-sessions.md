@@ -144,6 +144,43 @@ into the Mac's project dir. `claude --resume <sid>` continues the conversation.
 it). The token is ~1h TTL; the move always copies a fresh one. For sessions
 running >1h, re-push with `cast remote push`.
 
+The other agent logins travel the same way, as one **agent-auth bundle** per
+host (`remote/agentAuth.ts`; applied by the python3 receiver in
+`remote/agentAuthReceiver.py.ts`, run as `umask 077; python3 -c …` with the
+JSON on stdin — one ssh round trip): codex `~/.codex/auth.json`, grok
+`~/.grok/auth.json`, gemini `~/.gemini/oauth_creds.json` + `google_accounts.json`,
+opencode `~/.local/share/opencode/auth.json`, pi `~/.pi/agent/auth.json`, and
+the provider-key slice of `~/.claude/settings.json`'s `env`. Per-harness gates:
+codex ships only with a live access-token JWT (`exp` in the future — its
+refresh rotates the refresh token, so an expired blob would orphan the laptop
+copy) or an API-key login; gemini only with a `refresh_token` (Google does
+not rotate it; `expiry_date` is the hourly access token); grok with any scope
+entry that has a `key` (an `expires`/`expires_at` is honoured when present);
+opencode/pi per entry, expired `oauth` entries dropped. A file the laptop no
+longer has is deleted on the host only when this same laptop pushed it (the
+host's `~/.codecast/agent-auth-origin.json` records the pushing device per
+path; another laptop's file or a host-local login stays); a present file the
+gate refuses is skipped and logged, the host keeps its copy. The env slice is an allow-list
+(`*_API_KEY` + the provider-key registry) minus `ANTHROPIC_API_KEY`, `*_BASE_URL`,
+proxies, `CLAUDE_CONFIG_DIR`, codecast's own vars, and any value that is a
+path, loopback or contains the laptop home; it is merged read-modify-write into
+the host's `settings.json` with a manifest (`~/.codecast/mirrored-claude-env.json`)
+so removals propagate, and the file goes 0600 once it carries a mirrored key.
+
+Host rules: the receiver refuses (exit 3, nothing written) when the bundle's
+`user_id` differs from the host's `~/.codecast/config.json` (the stamp
+`~/.codecast/agent-auth-origin.json` decides only when that file has no
+user); a host `~/.codex/auth.json` with a newer `last_refresh` is kept
+(`kept: codex host-fresher` — run `codex login` on the laptop to re-own the
+grant); the host's codex profile snapshots are removed whenever codex auth is
+carried or removed; `[projects."<path>"] trust_level = "trusted"` is
+appended to `~/.codex/config.toml` for the repo checkout (worktrees under it
+inherit trust) and for a moved session's directory (`cast remote move`).
+Pushes are deduped per host on a bundle hash (codex's `last_refresh` moves
+it on every rotation), run on the credential loop's cadence plus a watch on
+the exact source filenames, and never wake a host; `cast hosts sync-auth`
+pushes on demand. See `cloud-workspaces.md` ("Logins and CLIs on the host").
+
 **Ownership**: a `devices` table in Convex tracks each machine. A session's
 `owner_device_id` determines which daemon manages it. `move` flips it to the
 Mac; `back` flips it to local. The single-owner invariant prevents both

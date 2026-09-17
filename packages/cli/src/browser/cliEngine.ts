@@ -58,6 +58,9 @@ import { tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFoot
 import { tokenize } from "./batch.js";
 import { evalInPage, grantPermissions } from "./pageEval.js";
 import { ownerKey } from "./owner.js";
+import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
+import { cloudHostSignInHint } from "../cloud/browserSync.js";
+import { isRemoteDevice } from "../remote/device.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { defaultShotPath, SHOT_TEMP_KIND } from "./shotFile.js";
 import { agentTempPath, secureTempFile } from "../tempFiles.js";
@@ -695,13 +698,24 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   return 0;
 }
 
-/** Bring this machine's current cookies for the site into the managed browser. */
-async function carryLogins(rawUrl: string): Promise<void> {
-  const state = readState();
+/**
+ * Bring this machine's current cookies for the site into the managed browser.
+ * Never on the cloud host: it has no Keychain, and its clone of the box's
+ * own `~/.config/google-chrome` carries a sourceProfile, so the state guards
+ * alone would let the carry run and fail late with a misleading Keychain
+ * reason. There the carry is a request (`cast browser sync <site>`, sync.ts).
+ */
+export async function carryLogins(
+  rawUrl: string,
+  deps: { isRemote: () => boolean; readState: () => ReturnType<typeof readState>; provision: typeof provisionLocalLogins } =
+    { isRemote: isRemoteDevice, readState, provision: provisionLocalLogins },
+): Promise<void> {
+  if (deps.isRemote()) return;
+  const state = deps.readState();
   if (!state || state.remote || !state.sourceProfile) return;
   const url = /^[a-z]+:/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
   try {
-    const r = await provisionLocalLogins(state.port, url, { profileDir: state.sourceProfile, channel: state.channel });
+    const r = await deps.provision(state.port, url, { profileDir: state.sourceProfile, channel: state.channel });
     if (r.injected) console.log(fmt.muted(`  carried ${r.injected} cookie${r.injected === 1 ? "" : "s"} for ${r.host} from your Chrome`));
   } catch {
     /* a courtesy: never fail the open over it */
@@ -733,7 +747,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
     // A login form where the work was expected. Named, with the fix, so an
     // agent does not read it as an empty page or restart the browser over it.
-    const signIn = url ? signInLandingNote(url, keepsOwnLogin, realModeHint(owner)) : null;
+    const signIn = url ? (isRemoteDevice() ? cloudHostSignInHint(url) : signInLandingNote(url, keepsOwnLogin, realModeHint(owner))) : null;
     if (signIn) console.log(`${fmt.warning("!")} ${signIn}`);
   }
 }
@@ -1365,22 +1379,13 @@ frames are superseded before anyone reads them.`,
     });
 
   targetFlags(br.command("sync [url]"))
-    .description("Carry your Chrome's current logins into the running agent browser: one site, or every site with no URL (Google excepted — it signs in on its own)")
-    .action(async (url: string | undefined, o: TargetChoice) => {
+    .description("Carry your Chrome's current logins into the running agent browser: one site, or every site with no URL (Google excepted — it signs in on its own); on the cloud host it asks your laptop to carry the login")
+    .option("--all", "On the cloud host: carry every site (refused while a site allowlist is active)")
+    .option("--via <device-id>", "On the cloud host: the laptop that carries it (default: your most recently seen online laptop)")
+    .option("--wait <seconds>", "On the cloud host: how long to wait for the laptop; 0 returns at once", String(DEFAULT_SYNC_WAIT_S))
+    .action(async (url: string | undefined, o: { all?: boolean; via?: string; wait: string } & TargetChoice) => {
       const c = await ctxFor("sync", o);
-      await ensureBrowser(c);
-      const state = readState();
-      if (!state || state.remote || !state.sourceProfile) die("no local browser started from your Chrome profile", "`cast browser start` (without --fresh) first");
-      const target = url ? (/^[a-z]+:/i.test(url) ? url : `https://${url}`) : null;
-      const r = await provisionLocalLogins(state.port, target, { profileDir: state.sourceProfile, channel: state.channel });
-      if (r.injected) {
-        const where = r.sites ? `across ${r.sites} site${r.sites === 1 ? "" : "s"}` : `for ${r.host}`;
-        const rej = r.rejected ? fmt.muted(` (${r.rejected} Chrome would not store)`) : "";
-        console.log(`${OK} carried ${r.injected} cookie${r.injected === 1 ? "" : "s"} ${where} from your Chrome${rej}`);
-      } else {
-        console.log(`${fmt.muted(icons.dot)} nothing to carry for ${r.host}${r.reason ? ` — ${r.reason}` : ""}`);
-      }
-      console.log(fmt.muted("  `open` does this for the site it opens; a login on a sibling host needs this whole-jar sync or a URL on that host"));
+      process.exit(await runBrowserSync(url, o, { ensureBrowser: () => ensureBrowser(c), me: auditOwner, isRemote: isRemoteDevice }));
     });
 
   targetFlags(br.command("tabs"))

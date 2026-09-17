@@ -3035,6 +3035,7 @@ http.route({
         cloud_device_id: body.cloud_device_id,
         cloud_project_path: body.cloud_project_path,
         cloud_worktree: body.cloud_worktree,
+        cloud_seed: body.cloud_seed,
       });
       return new Response(JSON.stringify(result), {
         status: 200,

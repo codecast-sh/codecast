@@ -5,8 +5,9 @@
 // (ConversationView) and full on the Workflows dashboard. One definition, two surfaces.
 //
 // Agent rows double as a session list, styled after the inbox's subagent sub-rows
-// (GlobalSessionPanel's isSubagent branch): violet ↳ corner arrow + faint violet left
-// border, session title as the primary text, a ">"-prefixed preview line saying what
+// (GlobalSessionPanel's isSubagent branch — real parent only; worktree rows are full
+// cards): violet ↳ corner arrow + faint violet left border, session title as the
+// primary text, a ">"-prefixed preview line saying what
 // the session is doing, and the same right-side dot vocabulary (green ping = live).
 // The daemon syncs each agent's transcript as a conversation (session_id
 // "agent-<id>"), the run queries attach it as `node.session`, and rows that have one

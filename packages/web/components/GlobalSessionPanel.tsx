@@ -2736,11 +2736,13 @@ const SessionCard = memo(function SessionCard({
   }, [session._id, displayTitle, project]);
   const handleCardDragEnd = useCallback(() => setIsDraggingCard(false), []);
 
-  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.migration_batch_id) ? (
+  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
     <SessionWorktreeChip
       name={session.worktree_name}
       branch={session.worktree_branch}
       preparing={session.cloud_placement === "pending"}
+      shared={session.cloud_workspace === "shared"}
+      seed={session.cloud_seed}
       moving={!!session.migration_batch_id}
       hostName={runHost ? deviceDisplayName(runHost) : undefined}
       hostIcon={runHost ? <DeviceIcon d={runHost} className="w-2.5 h-2.5 shrink-0" /> : undefined}

@@ -4,7 +4,33 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript, loginRaisePlan, withOrdinals, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
+import { carryLogins, lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript, loginRaisePlan, withOrdinals, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
+
+describe("carryLogins on the cloud host", () => {
+  // The host's clone of its own ~/.config/google-chrome carries a
+  // sourceProfile, so the state guards alone would run the carry and fail
+  // late on the missing Keychain. The remote guard has to come first.
+  test("returns before reading state or provisioning on a remote device", async () => {
+    let read = 0;
+    let provisioned = 0;
+    await carryLogins("github.com", {
+      isRemote: () => true,
+      readState: () => { read++; return { port: 1, sourceProfile: "Default", channel: "chrome" } as any; },
+      provision: async () => { provisioned++; return { injected: 0, host: "github.com" }; },
+    });
+    expect(read).toBe(0);
+    expect(provisioned).toBe(0);
+  });
+  test("on a laptop the same state carries", async () => {
+    const calls: any[] = [];
+    await carryLogins("github.com", {
+      isRemote: () => false,
+      readState: () => ({ port: 1, sourceProfile: "Default", channel: "chrome" } as any),
+      provision: async (...a) => { calls.push(a); return { injected: 0, host: "github.com" }; },
+    });
+    expect(calls).toEqual([[1, "https://github.com", { profileDir: "Default", channel: "chrome" }]]);
+  });
+});
 
 describe("translate: text", () => {
   test("bare text reads the whole page", () => {
