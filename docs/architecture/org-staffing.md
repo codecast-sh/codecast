@@ -556,3 +556,75 @@ list. A revise never resolves the proposal, even when it removes the last
 undecided change; the queue card is rewritten to the changes that remain.
 The CLI verb is `cast org revise op-N --remove <seq> | --amend <seq> --edits
 <json> --rationale <text> | --add <file> [--note <text>]`, session only.
+
+## S19. A proposal is a conversation with three asks, not a letter with 157 rows
+
+Written 2026-09-17 after the founder read the pane with S17 and S18 in and
+said it was still overwhelming, and asked for the conversation to lead. He is
+right, and the reason is structural, not a matter of trimming.
+
+**What is overwhelming.** The pane asks a person to decide 157 rows. The
+proposal itself asks three things, and the letter says so in its first
+paragraph: one, close the paperwork reality has passed; two, add one agent
+for Agent Quality; three, retire the Test lead. Everything else on the screen
+(the op-N pill, the provenance line, the progress strip, the link row, the
+group headers, the sticky sections, the per row icon buttons, the tenure
+chips, the evidence lines, the nested tasks, the accept all box) is machinery
+for deciding 157 things one at a time. A person does not want to decide 157
+things. They want to answer three questions and have the machine do the 157.
+
+**The shape.** The proposal page is a conversation on the left and the asks
+on the right. The conversation leads: it is wider, it is where the eye lands,
+and its first message is the proposal in the author's own voice. The right
+column holds the asks, one card each, and nothing else.
+
+**The conversation.** One thread per proposal. Its first message is the
+letter, rendered as the author's own bubble: a line of introduction the first
+time a person meets the feature (who the author is, what it does, that the
+person decides and nothing applies without them), then one short paragraph
+per ask ending in what accepting changes for the reader. The budget, the
+findings, the evidence and the rest of the letter are not sections above the
+list; they are things the author can be asked about, and things the author
+says when they matter. The person replies in plain words. A reply about one
+ask carries that ask; the author answers, revises, and the card updates under
+the reader. The thread shows the author's prose and the person's words; the
+author's working turns (tool calls, files read, commands run) fold away, so
+the thread reads as a conversation and not a transcript.
+
+**The asks.** An ask is a group of changes with a title a person can read
+cold, one sentence of why, one line of what accepting changes, and three
+controls: Accept, Skip, Ask about this. Accepting an ask applies every change
+in it through the one apply core, in `ORG_CHANGE_APPLY_RANK` order, the way
+accept all does today for a kind. Skipping skips them all. The changes are
+inside the card, folded, with a count on the fold ("105 records"); a person
+who opens the fold gets today's rows and controls, one at a time, and a
+single skipped row inside an accepted ask is the exception the fold is for.
+The header above the asks is one line: the title and "0 of 3 decided". No
+pill, no picker, no provenance line, no progress strip: the bubble on the
+left already says who wrote it and when, and the cards say what is decided.
+One line under the cards says the cost: "After: about a quarter less", with
+the arithmetic one tap away, not three scenarios in a paragraph.
+
+**Who writes the asks.** The analyzer does, at propose time: `asks: [{ title,
+why, effect, seqs }]` on the spec, every change in exactly one ask, in the
+words the letter already uses. `cast org propose` validates that partition
+and refuses a spec that leaves a change out or names one twice. A proposal
+from before this section, or one a person posted without asks, derives them
+from the groups the pane already computes (the records group is one ask; each
+role, retire, move and scope change is its own), so nothing old stops
+rendering.
+
+**The phone.** The conversation is the page. A bar at its foot says "3 to
+decide" and opens the asks as a sheet. A card's Ask about this closes the
+sheet with that ask attached to the composer.
+
+**What goes.** The intro banner, the glossary link row, the summary controls,
+the progress strip, the sticky group headers, the section label, the accept
+all box and the op-N picker leave the first screen. The glossary stays as a
+dialog reachable from the org header for a person who wants the words; the
+proposal itself no longer needs it, because the author explains itself.
+
+**The test.** A person who has never seen the feature opens a proposal and,
+without scrolling, can say what is being asked of them, what it will change,
+and what to press. If any word on the first screen needs the glossary, the
+screen failed.
