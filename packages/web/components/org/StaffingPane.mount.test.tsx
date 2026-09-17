@@ -75,7 +75,7 @@ async function verifyStaffingPane() {
   // row carries the evidence line even unselected.
   assert.deepEqual(qa("[data-change-group]").map((g) => g.getAttribute("data-change-group")), ["sync", "projects", "role", "project_meta", "budget", "routine"]);
   assert.equal(qa("[data-change-row]").length, 8);
-  assert.match(q("[data-sync-header]")!.textContent!, /Bring records in line/);
+  assert.match(q("[data-sync-header]")!.textContent!, /Records to bring up to date/);
   assert.equal(q("[data-sync-count]")!.textContent, "2 records");
   assert.equal(qa("[data-sync-evidence]").length, 2);
   assert.match(q('[data-change-row="fixture-change-7"] [data-sync-evidence]')!.textContent!, /evidenceEvery task closed 19 days ago/);

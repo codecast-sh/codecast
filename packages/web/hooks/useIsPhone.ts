@@ -16,3 +16,18 @@ export function useIsPhone(): boolean {
   });
   return phone;
 }
+
+/** True while the viewport is at least `px` wide, as a live media query. The
+ *  org page uses it to give a proposal's conversation its own column beside
+ *  the change list only when both fit (org-staffing.md S18). */
+export function useMinWidth(px: number): boolean {
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.innerWidth >= px);
+  useMountEffect(() => {
+    const mq = window.matchMedia(`(min-width: ${px}px)`);
+    const on = () => setWide(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  });
+  return wide;
+}

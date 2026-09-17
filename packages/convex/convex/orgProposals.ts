@@ -3,7 +3,7 @@ import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
-import { getAuthenticatedUserId } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { resolveSessionConversation } from "./lib/access";
 import { resolveActor } from "./lib/actor";
@@ -21,9 +21,16 @@ import {
   isOrgChangeDecidable,
   orderOrgChanges,
   orgChangeError,
+  orgChangeKey,
+  orgReviseOpError,
+  normalizeOrgSpecChange,
   parseOrgProposalSpec,
+  withAboutChange,
   type OrgChange,
+  type OrgChangeRevision,
   type OrgProposalSpec,
+  type OrgReviseOp,
+  type OrgRevision,
 } from "@codecast/shared/contracts/orgProposal";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
@@ -137,6 +144,9 @@ export async function performCreateProposal(
     status: "open",
     evidence_doc_id: args.evidence_doc_id,
     ...(older ? { supersedes: older._id } : {}),
+    // The thread a person talks to about it (S18): the posting session,
+    // which for a role is its standing session. A person's proposal has none.
+    ...(conversation ? { thread_conversation_id: conversation._id } : {}),
     created_at: now,
     updated_at: now,
   });
@@ -260,17 +270,41 @@ export async function readProposal(ctx: Ctx, userId: Id<"users">, ref: string): 
   const proposal = await findProposal(ctx, ref);
   if (!proposal || !(await userCanAccessRole(ctx, userId, hostShape(proposal)))) return null;
   const rows = await changesOf(ctx, proposal._id);
-  const depends = orgChangeDependencies(rows.map((c) => ({ seq: c.seq, change: c.change })));
+  const depends = orgChangeDependencies(rows.filter((c) => c.status !== "removed").map((c) => ({ seq: c.seq, change: c.change })));
   const changes = rows.map((c) => ({ ...c, line: describeOrgChange(c.change), depends: depends[c.seq] }));
-  return { ...proposal, ...(await enrichSupersession(ctx, proposal)), author: await enrichAuthor(ctx, proposal.author), changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
+  return { ...proposal, ...(await enrichSupersession(ctx, proposal)), ...(await enrichThread(ctx, proposal)), author: await enrichAuthor(ctx, proposal.author), changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
 }
 
-const countsOf = (changes: ChangeRow[]) => ({
-  total: changes.length,
-  decided: changes.filter((c) => c.status !== "proposed").length,
-  applied: changes.filter((c) => c.status === "applied").length,
-  failed: changes.filter((c) => c.status === "failed").length,
-  skipped: changes.filter((c) => c.status === "skipped").length,
+/** The conversation bound to a proposal (S18): the stored pointer, else,
+ *  for a row from before the field, the posting session or the standing
+ *  session of the posting role. Null for a person's proposal. */
+export async function threadOf(ctx: Ctx, proposal: ProposalRow): Promise<any | null> {
+  try {
+    if (proposal.thread_conversation_id) return (await ctx.db.get(proposal.thread_conversation_id)) ?? null;
+    if (proposal.author.kind === "session") return (await ctx.db.get(proposal.author.id as Id<"conversations">)) ?? null;
+    if (proposal.author.kind === "role") {
+      const role: any = await ctx.db.get(proposal.author.id as Id<"org_roles">);
+      const anchor: any = role?.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+      return anchor?.conversation_id ? (await ctx.db.get(anchor.conversation_id)) ?? null : null;
+    }
+  } catch { /* a gone row is no thread */ }
+  return null;
+}
+
+async function enrichThread(ctx: Ctx, proposal: ProposalRow): Promise<{ thread: { conversation_id: string; short_id?: string; title?: string } | null; thread_conversation_id?: string }> {
+  const conv = await threadOf(ctx, proposal);
+  if (!conv) return { thread: null, thread_conversation_id: undefined };
+  return { thread: { conversation_id: String(conv._id), short_id: conv.short_id ?? undefined, title: conv.title ?? undefined }, thread_conversation_id: String(conv._id) };
+}
+
+// A removed change (S18) is neither to decide nor decided: the page shows
+// it struck through, and "N of M decided" shrinks by it.
+const countsOf = (all: ChangeRow[]) => ({
+  total: all.filter((c) => c.status !== "removed").length,
+  decided: all.filter((c) => c.status !== "proposed" && c.status !== "removed").length,
+  applied: all.filter((c) => c.status === "applied").length,
+  failed: all.filter((c) => c.status === "failed").length,
+  skipped: all.filter((c) => c.status === "skipped").length,
 });
 
 /** Where a proposal came from (S15), and nothing else: the queue card and
@@ -290,7 +324,7 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
   const rank = (s: string) => (s === "open" ? 0 : s === "resolved" ? 1 : 2);
   const kept = rows.filter((p) => !args.status || p.status === args.status).sort((a, b) => rank(a.status) - rank(b.status) || b.created_at - a.created_at).slice(0, PROPOSAL_LIST_CAP);
   const out = [];
-  for (const p of kept) out.push({ ...p, ...(await enrichSupersession(ctx, p)), author: await enrichAuthor(ctx, p.author), link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
+  for (const p of kept) out.push({ ...p, ...(await enrichSupersession(ctx, p)), ...(await enrichThread(ctx, p)), author: await enrichAuthor(ctx, p.author), link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
   return out;
 }
 
@@ -509,13 +543,7 @@ export async function performWithdrawProposal(ctx: Ctx, userId: Id<"users">, arg
   // else on the org page or at a plain shell. With no session, the author's
   // account or an admin of the boundary may withdraw.
   if (args.from_session) {
-    const conversation = await resolveSessionConversation(ctx as any, userId, args.from_session);
-    if (!conversation) throw new Error("Session not found");
-    const actor = await resolveActor(ctx as any, userId, conversation);
-    const mine = proposal.author.kind === "session" ? proposal.author.id === String(conversation._id)
-      : proposal.author.kind === "role" ? !!(actor.kind === "role" && actor.role && proposal.author.id === String(actor.role._id))
-      : false;
-    if (!mine) throw new Error(`A session may withdraw only the proposal it posted; a person decides or withdraws ${proposal.short_id} on the org page or at a plain shell`);
+    if (!(await callerIsAuthor(ctx, userId, proposal, args.from_session))) throw new Error(`A session may withdraw only the proposal it posted; a person decides or withdraws ${proposal.short_id} on the org page or at a plain shell`);
   } else {
     const isAuthor = String(proposal.created_by) === String(userId);
     if (!isAuthor && !(await userCanAdminRole(ctx, userId, hostShape(proposal)))) throw new Error(`Only ${proposal.short_id}'s author or a team admin can withdraw it`);
@@ -525,6 +553,189 @@ export async function performWithdrawProposal(ctx: Ctx, userId: Id<"users">, arg
   await ctx.db.patch(proposal._id, { status: "withdrawn", resolved_at: now, updated_at: now });
   await clearDecision(ctx, proposal, now);
   return { proposal: proposal.short_id, status: "withdrawn" };
+}
+
+/**
+ * Is the caller the proposal's author? From a session: the session that
+ * posted it, or the standing session of the role that posted it (the actor
+ * a standing session resolves to IS the role). With no session: the person
+ * who posted a person's proposal. Withdraw and revise share this one reading.
+ */
+export async function callerIsAuthor(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, fromSession: string | undefined): Promise<boolean> {
+  if (!fromSession) return proposal.author.kind === "user" && proposal.author.id === String(userId);
+  const conversation = await resolveSessionConversation(ctx as any, userId, fromSession);
+  if (!conversation) throw new Error("Session not found");
+  const actor = await resolveActor(ctx as any, userId, conversation);
+  return proposal.author.kind === "session" ? proposal.author.id === String(conversation._id)
+    : proposal.author.kind === "role" ? !!(actor.kind === "role" && actor.role && proposal.author.id === String(actor.role._id))
+    : false;
+}
+
+// ── Revise (S18) ────────────────────────────────────────────────────────────
+
+/**
+ * The author removes, amends or adds changes on its own open proposal. That
+ * is authoring, never deciding: only a change nobody has decided can be
+ * removed or amended, and a decided one is refused by name. Every op is
+ * checked before the first write, so a bad list writes nothing. A removed
+ * change keeps its row as `removed` (struck through on the page, out of
+ * every count); an amend keeps the row and its id, the merged change (the
+ * same patch and validator a person's "accept with edits" uses) replaces
+ * the old and the stamp keeps it; an add is a new row with the next seq.
+ * The proposal's `revisions` journal records each op in order. Removing
+ * the last undecided change does not resolve the proposal: resolution is
+ * a person's act.
+ */
+export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args: { proposal: string; ops: unknown; from_session?: string }): Promise<any> {
+  const proposal = await findProposal(ctx, args.proposal);
+  if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
+  if (!(await callerIsAuthor(ctx, userId, proposal, args.from_session))) throw new Error(`Only ${proposal.short_id}'s author may revise it: the session that posted it, or the standing session of the role that posted it`);
+  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}; only an open proposal can be revised`);
+  if (!Array.isArray(args.ops) || !args.ops.length) throw new Error('ops is a non-empty list of { op: "remove" | "amend", seq } or { op: "add", change }');
+  const faults = args.ops.map((o, i) => { const f = orgReviseOpError(o); return f ? `ops[${i}]: ${f}` : null; }).filter(Boolean);
+  if (faults.length) throw new Error(`The revise ops are not valid:\n- ${faults.join("\n- ")}`);
+  const ops = args.ops as OrgReviseOp[];
+
+  const rows = await changesOf(ctx, proposal._id);
+  const bySeq = new Map<number, ChangeRow>(rows.map((c) => [c.seq, c]));
+  const now = Date.now();
+  const by = proposal.author;
+  const journal: OrgRevision[] = [];
+  const writes: Array<() => Promise<unknown>> = [];
+  // One change per subject, kept current through the ops (the same rule the
+  // spec parser applies at create), so an add or an amend cannot make the
+  // proposal carry the same act twice.
+  const keys = new Map<string, number>();
+  for (const c of rows) if (c.status !== "removed") { const k = orgChangeKey(c.change); if (k) keys.set(k, c.seq); }
+  const release = (change: OrgChange, seq: number) => { const k = orgChangeKey(change); if (k && keys.get(k) === seq) keys.delete(k); };
+  const claim = (change: OrgChange, seq: number, verb: string) => {
+    const k = orgChangeKey(change);
+    if (!k) return;
+    const other = keys.get(k);
+    if (other !== undefined && other !== seq) throw new Error(`${verb}: ${describeOrgChange(change)} repeats #${other}: one change per subject`);
+    keys.set(k, seq);
+  };
+  const undecided = (seq: number, verb: string): ChangeRow => {
+    const c = bySeq.get(seq);
+    if (!c) throw new Error(`${verb}: ${proposal.short_id}#${seq} does not exist`);
+    if (c.status !== "proposed") throw new Error(`${verb}: ${proposal.short_id}#${seq} (${describeOrgChange(c.change)}) is already ${c.status}; a revise never touches a change a person decided`);
+    return c;
+  };
+  let nextSeq = rows.reduce((m, c) => Math.max(m, c.seq), 0) + 1;
+
+  for (const op of ops) {
+    if (op.op === "remove") {
+      const c = undecided(op.seq, "remove");
+      release(c.change, c.seq);
+      const line = describeOrgChange(c.change);
+      const revision: OrgChangeRevision = { kind: "removed", note: op.note ?? "removed", at: now };
+      bySeq.set(c.seq, { ...c, status: "removed", revision });
+      journal.push({ op: "removed", seq: c.seq, at: now, by, line, ...(op.note ? { note: op.note } : {}) });
+      writes.push(() => ctx.db.patch(c._id, { status: "removed", revision }));
+    } else if (op.op === "amend") {
+      const c = undecided(op.seq, "amend");
+      const merged = editedChange(c.change, op.edits);
+      release(c.change, c.seq);
+      claim(merged, c.seq, "amend");
+      const was = describeOrgChange(c.change);
+      const line = describeOrgChange(merged);
+      const revision: OrgChangeRevision = { kind: "amended", note: op.note ?? (line === was ? "rationale rewritten" : `was: ${was}`), at: now, before: c.revision?.before ?? c.change };
+      const patch = { change: merged, revision, ...(op.rationale ? { rationale: op.rationale } : {}) };
+      bySeq.set(c.seq, { ...c, ...patch });
+      journal.push({ op: "amended", seq: c.seq, at: now, by, line, was, ...(op.note ? { note: op.note } : {}) });
+      writes.push(() => ctx.db.patch(c._id, patch));
+    } else {
+      const added = normalizeOrgSpecChange(op.change);
+      const seq = nextSeq++;
+      claim(added.change, seq, "add");
+      const line = describeOrgChange(added.change);
+      const revision: OrgChangeRevision = { kind: "added", note: op.note ?? "added", at: now };
+      const row = { proposal_id: proposal._id, seq, change: added.change, rationale: added.rationale, evidence: added.evidence ?? [], expected_effect: added.expected_effect, risk: added.risk, status: "proposed", revision };
+      bySeq.set(seq, row);
+      journal.push({ op: "added", seq, at: now, by, line, ...(op.note ? { note: op.note } : {}) });
+      writes.push(() => ctx.db.insert("org_proposal_changes", row));
+    }
+  }
+  for (const w of writes) await w();
+  await ctx.db.patch(proposal._id, { revisions: [...(proposal.revisions ?? []), ...journal], updated_at: now });
+  const after = await changesOf(ctx, proposal._id);
+  await refreshDecisionCard(ctx, proposal, after);
+  const depends = orgChangeDependencies(after.filter((c) => c.status !== "removed").map((c) => ({ seq: c.seq, change: c.change })));
+  return {
+    proposal: proposal.short_id,
+    status: "open",
+    revisions: journal,
+    changes: after.map((c) => ({ id: c._id, seq: c.seq, change: c.change, status: c.status, revision: c.revision, line: describeOrgChange(c.change), depends: depends[c.seq] })),
+    counts: countsOf(after),
+    link: PROPOSAL_LINK(proposal.short_id),
+  };
+}
+
+/** The queue card names the count and lists the changes; after a revise it
+ *  says what the proposal now carries. A card already answered is left. */
+async function refreshDecisionCard(ctx: Ctx, proposal: ProposalRow, all: ChangeRow[]): Promise<void> {
+  if (!proposal.decision_id) return;
+  const d = await ctx.db.get(proposal.decision_id);
+  if (d?.status !== "pending") return;
+  const live = all.filter((c) => c.status !== "removed");
+  const n = live.length;
+  const who = String(d.question ?? "").split(" proposes ")[0] || "The author";
+  await ctx.db.patch(d._id, {
+    question: `${who} proposes ${n} change${n === 1 ? "" : "s"}: ${proposal.title}`,
+    context_md: `${proposal.summary_md}\n\n[Open ${proposal.short_id} on the org page](${PROPOSAL_LINK(proposal.short_id)})\n\n${live.map((c) => `- ${describeOrgChange(c.change)}`).join("\n")}`,
+  });
+}
+
+// ── The thread (S18) ────────────────────────────────────────────────────────
+
+export const PROPOSAL_MESSAGE_TAG = "proposal-message";
+
+/**
+ * What a person's words look like when they land in the author's thread:
+ * the chat mention's wrapper shape (a tag with the attributes the reader
+ * needs, a plain first line naming what this is about, the words, a tail
+ * saying how to act), so the agent and the transcript attribute it the
+ * same way. The inner text starts with the shared "About op-N change 3"
+ * header when a change is named, which the pane parses back.
+ */
+export function formatProposalMessage(o: { short_id: string; title: string; change: { seq: number; line: string } | null; from: string; body: string }): string {
+  const q = (x: string) => x.replace(/"/g, "'");
+  const inner = o.change ? withAboutChange(o.body, o.short_id, o.change.seq, o.change.line) : `About ${o.short_id} ("${q(o.title)}"):\n\n${o.body}`;
+  const tail = `(Reply here; the org page shows this thread beside ${o.short_id}. To change the proposal run \`cast org revise ${o.short_id} --remove <n>\`, \`--amend <n> --edits '{...}'\` or \`--add change.json\`. Accepting stays the person's.)`;
+  const attrs = `proposal="${o.short_id}"${o.change ? ` change="${o.change.seq}"` : ""} from="${q(o.from)}"`;
+  return `<${PROPOSAL_MESSAGE_TAG} ${attrs}>\n${inner}\n\n${tail}\n</${PROPOSAL_MESSAGE_TAG}>`;
+}
+
+/**
+ * A person, reading the proposal on the org page, says something to the
+ * agent that wrote it. The words ride the ordinary pending message rail into
+ * the bound thread as a turn (the same rail and wrapper shape a chat mention
+ * uses), carrying the proposal and the change they were looking at. Refused
+ * when the proposal has no thread (a person posted it), when the caller
+ * cannot send into that thread, or when the change does not exist.
+ */
+export async function performSayInThread(ctx: Ctx, userId: Id<"users">, args: { proposal: string; change?: number; body: string; client_id?: string }): Promise<any> {
+  const proposal = await findProposal(ctx, args.proposal);
+  if (!proposal || !(await userCanAccessRole(ctx, userId, hostShape(proposal)))) throw new Error(`Proposal not found: ${args.proposal}`);
+  const body = (args.body ?? "").trim();
+  if (!body) throw new Error("Message body is empty");
+  const thread = await threadOf(ctx, proposal);
+  if (!thread) throw new Error(`${proposal.short_id} was posted by a person, so there is no agent to talk to about it`);
+  if (!(await canSendProductMessage(ctx, userId, thread))) throw new Error(`You cannot send into the thread of ${proposal.short_id} (${thread.short_id ?? String(thread._id)})`);
+  let change: { seq: number; line: string } | null = null;
+  if (args.change !== undefined) {
+    const row = (await changesOf(ctx, proposal._id)).find((c) => c.seq === args.change);
+    if (!row) throw new Error(`${proposal.short_id}#${args.change} does not exist`);
+    change = { seq: row.seq, line: describeOrgChange(row.change) };
+  }
+  const from = (await resolveActor(ctx as any, userId, null)).name ?? "A person";
+  const content = formatProposalMessage({ short_id: proposal.short_id, title: proposal.title, change, from, body });
+  const message_id = await enqueuePendingMessage(ctx, thread, userId, {
+    content,
+    client_id: args.client_id ?? `proposal-message:${proposal._id}:${Date.now()}`,
+    human: true,
+  });
+  return { message_id, proposal: proposal.short_id, change: change?.seq, thread: { conversation_id: String(thread._id), short_id: thread.short_id ?? undefined, title: thread.title ?? undefined } };
 }
 
 // ── Functions ───────────────────────────────────────────────────────────────
@@ -675,4 +886,18 @@ export const backfillSupersession = internalMutation({
 export const withdraw = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string() },
   handler: async (ctx, { api_token, ...args }) => performWithdrawProposal(ctx, await requireCaller(ctx, api_token, undefined), args),
+});
+
+/** The author revises its own open proposal (S18): authoring, so no human
+ *  gate; the session that posted it or the role's standing session. */
+export const revise = mutation({
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ops: v.array(v.any()) },
+  handler: async (ctx, { api_token, ...args }) => performReviseProposal(ctx, await requireCaller(ctx, api_token, undefined), args),
+});
+
+/** A person's words into the proposal's thread (S18), naming the change
+ *  they were looking at. */
+export const say = mutation({
+  args: { api_token: v.optional(v.string()), proposal: v.string(), change: v.optional(v.number()), body: v.string(), client_id: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performSayInThread(ctx, await requireCaller(ctx, api_token, undefined), args),
 });

@@ -1235,6 +1235,24 @@ export default defineSchema({
     // "Replaced by op-6" instead of leaving two open proposals with no signal.
     supersedes: v.optional(v.id("org_proposals")),
     superseded_by: v.optional(v.id("org_proposals")),
+    // The conversation a person talks to about this proposal (org-staffing.md
+    // S18): the session that posted it, or the standing session of the role
+    // that did. Unset for a proposal a person posted: there is no agent to
+    // talk to. Rows from before the field derive it from `author` on read.
+    thread_conversation_id: v.optional(v.id("conversations")),
+    // The revision journal (S18): one entry per change a revise removed,
+    // amended or added, in order, so the page can show the conversation's
+    // effect on the list. `line` is the change as it reads after the op,
+    // `was` the line an amend replaced.
+    revisions: v.optional(v.array(v.object({
+      op: v.union(v.literal("removed"), v.literal("amended"), v.literal("added")),
+      seq: v.number(),
+      at: v.number(),
+      by: v.object({ kind: v.union(v.literal("role"), v.literal("session"), v.literal("user")), id: v.string() }),
+      line: v.string(),
+      was: v.optional(v.string()),
+      note: v.optional(v.string()),
+    }))),
     created_at: v.number(),
     updated_at: v.number(),
     resolved_at: v.optional(v.number()),
@@ -1255,7 +1273,17 @@ export default defineSchema({
     risk: v.optional(v.string()),
     // proposed → accepted → applied | failed, or proposed → skipped. accepted
     // is momentary: the accept applies in the same mutation.
-    status: v.union(v.literal("proposed"), v.literal("accepted"), v.literal("skipped"), v.literal("applied"), v.literal("failed")),
+    // `removed`: the author took it back with a revise (S18); the row stays
+    // so the page can show it struck through, and no count includes it.
+    status: v.union(v.literal("proposed"), v.literal("accepted"), v.literal("skipped"), v.literal("applied"), v.literal("failed"), v.literal("removed")),
+    // What the last revise did to this row (S18): removed, amended (then
+    // `before` is the change as it read) or added, with the author's note.
+    revision: v.optional(v.object({
+      kind: v.union(v.literal("removed"), v.literal("amended"), v.literal("added")),
+      note: v.string(),
+      at: v.number(),
+      before: v.optional(v.any()),
+    })),
     // The person's edits to the change (an object patch over its keys).
     edits: v.optional(v.any()),
     decided_by: v.optional(v.id("users")),

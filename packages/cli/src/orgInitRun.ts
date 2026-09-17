@@ -14,7 +14,7 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
@@ -136,7 +136,9 @@ The output is one proposal, posted with \`cast org propose${team} --spec proposa
 ${SPEC_EXAMPLE}
 \`\`\`
 
-Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. The summary is what a founder reads on a phone before opening anything. Lead with the decision you are asking for: what to accept and why, the records to bring in line in one line, one sentence per seat with its tenure, the filings and charters in one line, and the company budget before and after. That paragraph stays under two hundred words; a seat's sizing against the model, its evidence and its caps live in the change, not here. Then the evidence, one line per finding with the numbers that matter. What you could not verify and the findings that are not changes go after it, as a short list, so the ask stays on top.
+Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it.
+
+The summary is the ask. ${ORG_ASK_RULES.reader} ${ORG_ASK_RULES.decision_first} ${ORG_ASK_RULES.invented_words} ${ORG_ASK_RULES.numbers_mean_something} ${ORG_ASK_RULES.cost_in_plain_words} ${ORG_ASK_RULES.readable_once} The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here. After the ask come the evidence, one line per finding, then what you could not verify and the findings that are not changes, as a short list; each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word.
 
 The change kinds:
 

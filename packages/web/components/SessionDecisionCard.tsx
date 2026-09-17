@@ -9,6 +9,7 @@ import { openQuestionFromMessages, lastAssistantText, visibleOptions, type Decis
 import { queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
+import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { formatTimeAgo } from "../lib/messageNavigator";
@@ -398,45 +399,27 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       {richControls && decisionRow && (
         <DecisionAnswerControls decision={decisionRow} onAnswer={answerRich} keys={!!stepper || full} size="compact" />
       )}
-      <div className={`flex flex-wrap gap-2 ${richControls ? "hidden" : ""}`}>
-        {!isInfraDialog && !richControls && options.map((o, n) => (
-          <button
-            key={o.index}
-            onClick={() => answer(o.index)}
-            className={`group flex items-center gap-2 px-3 py-2 rounded border text-sm transition-colors ${
-              n === 0
-                ? "border-sol-yellow/40 text-sol-text hover:bg-sol-yellow hover:text-sol-bg"
-                : "border-sol-border text-sol-text-muted hover:border-sol-text-dim hover:text-sol-text"
-            }`}
-            title={o.description}
-          >
-            {n < 9 && <KeyCap size="xs">{String(n + 1)}</KeyCap>}
-            <span>{o.label.replace(" (Recommended)", "")}</span>
-            {item.defaultOption === o.index && <span className="text-[10px] text-sol-text-dim">proceeding with this</span>}
-          </button>
-        ))}
-        {/* A permission prompt is answered by Approve/Deny only; an infra
-            dialog is handled in the session. Neither takes typed answers. */}
-        {!isPermissionCard && !isInfraDialog && !richControls && (
-          <button
-            onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }}
-            className="flex items-center gap-2 px-3 py-2 rounded border border-sol-border text-sm text-sol-text-muted hover:text-sol-text transition-colors"
-          >
-            <KeyCap size="xs">t</KeyCap>
-            <span>type an answer</span>
-          </button>
-        )}
-      </div>
-
-      {full && !isInfraDialog && !richControls && options.some((o) => o.description) && (
-        <div className="mt-3 space-y-1">
-          {options.filter((o) => o.description).map((o) => (
-            <div key={o.index} className="text-[12px] text-sol-text-dim">
-              <span className="text-sol-text-muted">{o.label.replace(" (Recommended)", "")}</span>
-              <span className="mx-1.5">→</span>
-              <span>{o.description}</span>
-            </div>
-          ))}
+      {/* One row per option, its meaning under its label, the row itself the
+          answer. The digits are live when the card owns the pane or sits in
+          the queue (the key handler above); docked in a plain session view
+          they belong to the thread, so the number renders as a plain badge. */}
+      {!isInfraDialog && !richControls && (
+        <div className="space-y-2">
+          {options.length > 0 && <DecisionOptionList
+            options={options}
+            keys={!!stepper || full}
+            compact={!full}
+            onPick={(n) => { const opt = options[n]; if (opt) answer(opt.index); }}
+            tone={(n) => (n === 0 ? "primary" : "plain")}
+            tags={(n) => item.defaultOption === options[n]?.index && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
+            )}
+          />}
+          {/* A permission prompt is answered by Approve/Deny only; an infra
+              dialog is handled in the session. Neither takes typed answers. */}
+          {!isPermissionCard && (
+            <TypeAnswerButton keys={!!stepper || full} onOpen={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }} />
+          )}
         </div>
       )}
 

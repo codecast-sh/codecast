@@ -80,9 +80,9 @@ describe("proposal progress and grouping", () => {
   test("groups follow the apply order: the records first as one group, then one group per kind", () => {
     const groups = groupChanges(P.changes);
     expect(groups.map((g) => `${g.kind}:${g.changes.length}`)).toEqual(["sync:2", "projects:1", "role:2", "project_meta:1", "budget:1", "routine:1"]);
-    expect(groups[0]).toMatchObject({ sync: true, label: "Bring records in line" });
+    expect(groups[0]).toMatchObject({ sync: true, label: "Records to bring up to date" });
     expect(groups[1].sync).toBe(false);
-    expect(groups[2].label).toBe("Roles");
+    expect(groups[2].label).toBe("New standing agents");
   });
 
   test("the records group counts distinct records, and each row carries its evidence line (S9)", () => {

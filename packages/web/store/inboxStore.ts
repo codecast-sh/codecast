@@ -1666,6 +1666,11 @@ export type ClientUI = {
   // toolbar reopens it by hand. Stamped LWW: a person who has read the guide
   // on one device has read it everywhere.
   org_nux_seen?: boolean;
+  // The staffing pane's cold read intro (org-staffing.md S17): the two
+  // sentences over a proposal that say what codecast is proposing and what
+  // accepting costs. Dismissed once, or stamped by the first accepted change,
+  // and never shown again. Stamped LWW: read on one device is read everywhere.
+  org_intro_seen?: boolean;
   // The review "Propose an org now" started on the org page: when, in which
   // workspace, and the session doing it (its stub id first, the real id once
   // the server names it). Kept here, not in component state, so a reload or
@@ -4867,6 +4872,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   markAllNotificationsRead: () => void;
   retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+  /** A message from the staffing pane into the thread bound to a proposal
+   *  (org-staffing.md S18): the person's words plus the change they were
+   *  looking at. The bubble paints at once in that thread; dispatch runs
+   *  orgProposals.say, which wraps it and enqueues it on the message rail
+   *  under the same client id, so the echo retires the bubble. */
+  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
@@ -8891,6 +8902,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
   retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
+
+  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string) {
+    appendOptimisticMessage(this, threadConvId, body, undefined, clientId);
+    notePendingMessageSendRequested(clientId);
+    for (const target of [this.sessions[threadConvId], this.conversations[threadConvId]]) {
+      if (target && hasThreadState(target)) Object.assign(target, clearedThreadStateFields());
+    }
+  }),
 
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     clearSessionSnoozeInDraft(this, _convId);

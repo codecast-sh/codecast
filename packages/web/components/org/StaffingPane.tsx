@@ -11,7 +11,7 @@
 // hands it.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, ChevronDown, ChevronRight, ClipboardCheck, CornerDownRight, ExternalLink, Flag as FlagGlyph, ListChecks, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
+import { ArrowRight, BookOpen, Check, ChevronDown, ChevronRight, ClipboardCheck, CornerDownRight, ExternalLink, Flag as FlagGlyph, ListChecks, MessageSquareText, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
 import { ORG_SYNC_KINDS } from "@codecast/shared/contracts/orgProposal";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
@@ -19,6 +19,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
 import { ProposalAuthorPill } from "./ProposalAuthorPill";
+import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -44,7 +45,15 @@ import {
   syncGroupSummary,
   tenureLine,
   SYNC_CARD_THRESHOLD,
+  askLead,
+  budgetArithmetic,
+  capsLine,
+  groupSummary,
+  hasAcceptedBefore,
+  splitAsk,
+  type BudgetArithmetic,
   type ChangeField,
+  type ChangeGroup,
   type HealthFlagRow,
   type SyncGroupSummary,
 } from "./staffingModel";
@@ -88,11 +97,35 @@ export type StaffingPaneProps = {
   onProposeNow: () => void;
   /** Resume a paused chief of staff (its wakes are held while paused). */
   onResumeChief?: (roleId: string) => void;
+  /** The proposal's conversation (org-staffing.md S18), built by the page
+   *  (ProposalThread). `undefined` = the proposal has no thread (a person
+   *  posted it): the pane falls back to the chief of staff's composer. `null`
+   *  = the page renders the thread itself (its own column, or the phone
+   *  sheet's second view). A node = place it under the list. */
+  threadNode?: React.ReactNode;
+  /** Phone: the list leads, and this bar at its foot opens the conversation. */
+  discuss?: { name: string; updated: number; onOpen: () => void } | null;
+  /** A row's "Ask about this": select the change and bring the composer to it. */
+  onAskAbout?: (change: OrgProposalChange) => void;
+  /** Changes the author revised since the reader last looked
+   *  (staffingRevise.revisedSince): the strip above the list says so, each
+   *  row is marked, and `onSeen` clears both. */
+  revised?: { rows: OrgProposalChange[]; who: string; onSeen: () => void };
   /** A `?proposal=op-N` link that does not resolve in the active workspace
    *  (staffingModel.resolveProposalLink): the pane is that one line, with a
    *  switch when the proposal lives in a workspace the viewer can open. The
    *  active workspace's own body would answer a question nobody asked. */
   link?: ProposalLinkLine;
+  /** The viewer's user id: whether they have accepted a change before
+   *  (staffingModel.hasAcceptedBefore) decides whether the cold read intro
+   *  shows (S17). */
+  meId?: string | null;
+  /** The intro was dismissed or the person accepted a change once: never again. */
+  introSeen?: boolean;
+  onIntroSeen?: () => void;
+  /** Open the glossary dialog (OrgGlossary) on a page: the pane's "how this
+   *  works" link and its "Words" control. */
+  onOpenGlossary?: (page: "how" | "words") => void;
 };
 
 export type ProposalLinkLine =
@@ -116,7 +149,12 @@ export function StaffingPane(props: StaffingPaneProps) {
       {mode === "proposal" && props.proposal && <ProposalBody {...props} proposal={props.proposal} />}
       {mode === "health" && <HealthBody {...props} />}
       {mode === "no_chief" && <NoChiefBody {...props} />}
-      {mode !== "no_chief" && <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} />}
+      {/* S18: with a proposal open the conversation is the author's thread, placed
+          here only when the page has no column for it; the chief of staff's
+          composer stays for the health summary and a proposal nobody agent wrote. */}
+      {mode === "proposal" ? (props.threadNode === undefined && !props.discuss ? <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} /> : props.threadNode) : null}
+      {mode === "proposal" && props.discuss && <DiscussBar {...props.discuss} />}
+      {mode === "health" && <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} />}
     </div>
   );
 }
@@ -162,8 +200,12 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
     else { props.onSelectChange(c._id); setEditing(c._id); }
   };
   const flagRows = allFlags ? flags : related;
+  // S17: the two sentences over the ask, for a person who has never accepted
+  // a change. Dismissed once or stamped by a first accept, gone for good.
+  const showIntro = !props.introSeen && !hasAcceptedBefore(props.proposals, props.meId);
   return (
     <>
+      {showIntro && <ProposalIntro onDismiss={() => props.onIntroSeen?.()} onHow={() => props.onOpenGlossary?.("how")} />}
       {/* header */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{proposal.short_id}</span>
@@ -205,14 +247,40 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         {progress.fromCounts && <span style={{ color: "var(--sol-text-dim)" }} data-progress-loading>· loading changes</span>}
       </div>
       <ProgressStrip changes={proposal.changes} selectedId={selectedChangeId} onPick={props.onSelectChange} />
-      {proposal.summary_md && (
-        <div className="mt-3 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>
-          <MarkdownRenderer content={proposal.summary_md} />
-        </div>
-      )}
+      {/* S17: the plain ask, the groups with counts, then three controls
+          (evidence, budget, findings) that keep the detail behind the
+          summary; the change list follows below. */}
+      <ProposalSummary
+        proposal={proposal}
+        tree={tree}
+        groups={groups}
+        onOpenGlossary={props.onOpenGlossary}
+        findings={
+          props.healthMissing ? (
+            <FlagList rows={[]} missing onSelectNode={props.onSelectNode} />
+          ) : props.healthError && !props.health ? (
+            <FlagList rows={[]} error={props.healthError} hasHealth={false} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
+          ) : (
+            <>
+              {flagRows.length === 0 ? (
+                <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>{flags.length === 0 ? "Nothing is flagged. The company is inside its limits." : "No finding names a role this proposal touches."}</p>
+              ) : (
+                <FlagList rows={flagRows} onSelectNode={props.onSelectNode} limit={allFlags ? 5 : 3} />
+              )}
+              {flags.length > related.length && (
+                <button type="button" onClick={() => setAllFlags((v) => !v)} className="mt-1 self-start inline-flex items-center gap-1 text-[11px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-all-flags={allFlags}>
+                  {allFlags ? "Only this proposal's findings" : `See all ${flags.length} findings in the company`}
+                </button>
+              )}
+            </>
+          )
+        }
+        findingsCount={flagRows.length}
+      />
 
       {/* changes: the pane's job in this mode, so they come first */}
       <SectionLabel right={progress.remaining > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{progress.remaining} to decide</span> : undefined}>Changes</SectionLabel>
+      {props.revised && props.revised.rows.length > 0 && <RevisedStrip rows={props.revised.rows} who={props.revised.who} onSeen={props.revised.onSeen} onPick={props.onSelectChange} />}
       {proposal.changes.length === 0 && (
         <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>{progress.fromCounts ? `Loading the ${progress.total} changes…` : "This proposal has no changes."}</p>
       )}
@@ -251,6 +319,8 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
                   tree={tree}
                   nested={g.sync && syncSummary ? syncSummary.nested[c._id] : undefined}
                   selected={c._id === selectedChangeId}
+                  revisedNew={!!props.revised?.rows.some((r) => r._id === c._id)}
+                  onAsk={props.onAskAbout ? () => props.onAskAbout!(c) : undefined}
                   editing={editing === c._id}
                   onPick={() => props.onSelectChange(c._id === selectedChangeId ? null : c._id)}
                   onAccept={() => props.onDecide(c._id, "accept")}
@@ -285,27 +355,162 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         </div>
       )}
 
-      {/* flags: the ones this proposal addresses; the company's full list one click away */}
-      <SectionLabel right={flagRows.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{flagRows.length}</span> : undefined}>{allFlags ? "All flags" : "Flags this proposal addresses"}</SectionLabel>
-      {props.healthMissing ? (
-        <FlagList rows={[]} missing onSelectNode={props.onSelectNode} />
-      ) : props.healthError && !props.health ? (
-        <FlagList rows={[]} error={props.healthError} hasHealth={false} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
-      ) : (
-        <>
-          {flagRows.length === 0 ? (
-            <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>{flags.length === 0 ? "No flags. The company is inside the capacity model." : "No flag names a role this proposal touches."}</p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- the cold read (S17)
+
+/**
+ * Two sentences a person who has never seen a proposal can read cold: what
+ * codecast is proposing and what accepting costs. One "how this works" link
+ * to the short page, one dismiss that never returns.
+ */
+function ProposalIntro({ onDismiss, onHow }: { onDismiss: () => void; onHow: () => void }) {
+  return (
+    <div className="mb-3 rounded-xl border px-3 py-2.5 flex items-start gap-2" data-proposal-intro style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 40%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 7%, transparent)" }}>
+      <div className="min-w-0 flex-1 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>
+        Codecast is proposing a set of people and standing agents, each with a named area of work, so an agent knows what to look after and what to leave alone. Nothing moves until you accept a change, and each one can be undone unless its own line says otherwise.
+        <button type="button" onClick={onHow} className="ml-1.5 font-medium underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-intro-how>How this works</button>
+      </div>
+      <button type="button" onClick={onDismiss} aria-label="Dismiss, and do not show this again" title="Do not show this again" className="w-6 h-6 -mr-1 -mt-0.5 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-intro-dismiss>
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+type SummaryControl = "evidence" | "budget" | "findings";
+
+/**
+ * The summary a person reads before the change list (S17): the ask, folded
+ * to its first lines with the whole letter one click away; the groups with
+ * counts, each a jump to its rows; and three controls that hold the detail:
+ * the evidence page, the budget arithmetic, the findings. The words link
+ * opens the glossary. On a phone this block is the first screen, so nothing
+ * here grows past what fits at 390 wide.
+ */
+function ProposalSummary({ proposal, tree, groups, findings, findingsCount, onOpenGlossary }: {
+  proposal: OrgProposalRow; tree: OrgTree | null; groups: ChangeGroup[];
+  findings: React.ReactNode; findingsCount: number;
+  onOpenGlossary?: (page: "how" | "words") => void;
+}) {
+  const [askOpen, setAskOpen] = useState(false);
+  const [control, setControl] = useState<SummaryControl | null>(null);
+  const { ask, evidenceHref } = useMemo(() => splitAsk(proposal.summary_md), [proposal.summary_md]);
+  const lead = useMemo(() => askLead(ask), [ask]);
+  const rows = useMemo(() => groupSummary(groups), [groups]);
+  const budget = useMemo(() => budgetArithmetic(tree, proposal.changes), [tree, proposal.changes]);
+  const toggle = (c: SummaryControl) => setControl((cur) => cur === c ? null : c);
+  const jump = (kind: ChangeGroup["kind"]) => {
+    const el = document.querySelector<HTMLElement>(`[data-change-group="${kind}"]`);
+    el?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+  const foldable = ask.length > lead.length + 1;
+  return (
+    <div className="mt-3" data-proposal-summary>
+      {/* the ask: the first sentence in front, the whole letter behind it */}
+      {ask && (
+        <div data-ask={askOpen ? "open" : "folded"}>
+          {askOpen ? (
+            <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>
+              <MarkdownRenderer content={ask} />
+            </div>
           ) : (
-            <FlagList rows={flagRows} onSelectNode={props.onSelectNode} limit={allFlags ? 5 : 3} />
+            <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>{lead}</p>
           )}
-          {flags.length > related.length && (
-            <button type="button" onClick={() => setAllFlags((v) => !v)} className="mt-1 self-start inline-flex items-center gap-1 text-[11px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-all-flags={allFlags}>
-              {allFlags ? "Only this proposal's flags" : `See all ${flags.length} flags in the company`}
+          {foldable && (
+            <button type="button" onClick={() => setAskOpen((v) => !v)} className="mt-0.5 inline-flex items-center gap-1 text-[11.5px] px-1 -ml-1 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-ask-toggle>
+              {askOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {askOpen ? "Fold the ask" : "Read the whole ask"}
             </button>
           )}
-        </>
+        </div>
       )}
-    </>
+
+      {/* the groups with counts: one row each, a jump to its rows */}
+      {rows.length > 0 && (
+        <div className="mt-2.5 rounded-lg border overflow-hidden" style={{ borderColor: BORDER }} data-group-summary>
+          {rows.map((r) => (
+            <button key={r.kind} type="button" onClick={() => jump(r.kind)} title={r.describe} className="w-full flex items-center gap-2 px-2.5 h-[30px] text-left border-b last:border-b-0 hover:bg-sol-bg-highlight/60 transition-colors" style={{ borderColor: BORDER }} data-group-summary-row={r.kind}>
+              <span className="min-w-0 flex-1 truncate text-[12.5px]" style={{ color: "var(--sol-text)" }}>{r.label}</span>
+              <span className="text-[12px] tabular-nums font-medium shrink-0" style={{ color: "var(--sol-text)" }}>{r.count}</span>
+              <span className="text-[10.5px] tabular-nums shrink-0 w-[62px] text-right" style={{ color: r.remaining > 0 ? "var(--sol-text-dim)" : "var(--sol-green)" }}>{r.remaining > 0 ? `${r.remaining} to decide` : "decided"}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* three controls that keep the detail behind the summary */}
+      <div className="mt-2.5 flex items-center gap-1.5 flex-wrap" data-summary-controls>
+        {evidenceHref ? (
+          <Link href={evidenceHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11.5px] font-medium hover:bg-sol-bg-highlight/60" style={{ borderColor: BORDER, color: "var(--sol-text-secondary)" }} data-summary-control="evidence">
+            Evidence <ExternalLink className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />
+          </Link>
+        ) : (
+          <SummaryToggle active={control === "evidence"} onClick={() => toggle("evidence")} name="evidence">Evidence</SummaryToggle>
+        )}
+        <SummaryToggle active={control === "budget"} onClick={() => toggle("budget")} name="budget">Budget</SummaryToggle>
+        <SummaryToggle active={control === "findings"} onClick={() => toggle("findings")} name="findings" count={findingsCount}>Findings</SummaryToggle>
+        {onOpenGlossary && (
+          <button type="button" onClick={() => onOpenGlossary("words")} className="ml-auto inline-flex items-center gap-1 h-7 px-1.5 rounded-md text-[11.5px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} title="The eight words this page uses, each in one sentence" data-summary-words>
+            <BookOpen className="w-3 h-3" /> Words
+          </button>
+        )}
+      </div>
+      {control === "evidence" && (
+        <p className="mt-2 text-[12px] px-1" style={{ color: "var(--sol-text-muted)" }} data-summary-detail="evidence">This proposal has no evidence page. Each change carries its own evidence under its line: select one to read it.</p>
+      )}
+      {control === "budget" && <BudgetSheet budget={budget} />}
+      {control === "findings" && (
+        <div className="mt-2 flex flex-col" data-summary-detail="findings">
+          <p className="text-[11px] leading-snug px-1 mb-1.5" style={{ color: "var(--sol-text-dim)" }}>What the review found about the roles this proposal touches. A finding points at a role or a person; click one to see it on the chart.</p>
+          {findings}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SummaryToggle({ active, onClick, name, count, children }: { active: boolean; onClick: () => void; name: SummaryControl; count?: number; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} aria-expanded={active} className={cn("inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11.5px] font-medium transition-colors", active ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")} style={{ borderColor: active ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : BORDER, color: active ? "var(--sol-text)" : "var(--sol-text-secondary)" }} data-summary-control={name}>
+      {children}
+      {count !== undefined && count > 0 && <span className="tabular-nums text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>{count}</span>}
+      {active ? <ChevronDown className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} /> : <ChevronRight className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />}
+    </button>
+  );
+}
+
+/**
+ * The budget arithmetic (S17), computed from the tree and the open changes
+ * rather than quoted: what the standing agents may do in a day now, what
+ * they may do if every remaining change lands, and the lines that move it.
+ */
+function BudgetSheet({ budget }: { budget: BudgetArithmetic }) {
+  const moved = budget.lines.length > 0;
+  return (
+    <div className="mt-2 rounded-lg border p-2.5" style={{ borderColor: BORDER, background: "var(--sol-card)" }} data-summary-detail="budget">
+      <p className="text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }}>What the standing agents may do in one day, added up across the {budget.seats} {budget.seats === 1 ? "agent" : "agents"} with a limit{budget.paused > 0 ? `; ${budget.paused} paused ${budget.paused === 1 ? "agent stays" : "agents stay"} outside the total` : ""}.</p>
+      <div className="mt-2 grid grid-cols-[64px_1fr] gap-x-2 gap-y-1 text-[12px]">
+        <span className="uppercase tracking-[0.08em] text-[10px] mt-[2px]" style={{ color: "var(--sol-text-dim)" }}>today</span>
+        <span className="tabular-nums" style={{ color: "var(--sol-text)" }} data-budget-today>{capsLine(budget.today)}</span>
+        <span className="uppercase tracking-[0.08em] text-[10px] mt-[2px]" style={{ color: moved ? "var(--sol-violet)" : "var(--sol-text-dim)" }}>after</span>
+        <span className="tabular-nums" style={{ color: "var(--sol-text)" }} data-budget-after>{moved ? capsLine(budget.after) : "the same: no open change moves a limit"}</span>
+      </div>
+      {moved && (
+        <div className="mt-2 flex flex-col gap-1" data-budget-lines>
+          {budget.lines.map((l, i) => (
+            <div key={i} className="text-[11.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>
+              <span className="font-medium" style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>@{l.handle.replace(/^@/, "")}</span>
+              {l.name && <span> {l.name}</span>}
+              <span style={{ color: "var(--sol-text-dim)" }}> · {l.note}</span>
+              <span className="block tabular-nums">{l.before && l.after ? `${capsLine(l.before)} → ${capsLine(l.after)}` : l.after ? `+ ${capsLine(l.after)}` : `− ${capsLine(l.before)}`}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -316,7 +521,9 @@ function Dot() {
 /** One block per change, coloured by status, in list order: the "N of M" as
  *  a strip. A real control: each block is a button named by its change, so
  *  the strip is reachable by keyboard and read by a screen reader. */
-function ProgressStrip({ changes, selectedId, onPick }: { changes: OrgProposalChange[]; selectedId: string | null; onPick: (id: string) => void }) {
+function ProgressStrip({ changes: all, selectedId, onPick }: { changes: OrgProposalChange[]; selectedId: string | null; onPick: (id: string) => void }) {
+  // A change the author removed (S18) left the ask, so it leaves the strip.
+  const changes = all.filter((c) => c.status !== "removed");
   if (changes.length === 0) return null;
   return (
     <div className="mt-2 flex gap-[3px]" role="group" aria-label="Changes, one block each">
@@ -365,26 +572,35 @@ export function StatusPill({ status }: { status: OrgChangeStatus }) {
  * decided without leaving its row (the phone sheet shows the list several
  * screens tall).
  */
-function ChangeRow({ change, tree, nested, selected, editing, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
+function ChangeRow({ change, tree, nested, selected, editing, revisedNew, onAsk, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
   change: OrgProposalChange; tree: OrgTree | null; selected: boolean; editing: boolean;
   /** Task changes this plan change closes along with the plan (S9): shown
    *  under the row, applied by the plan's own accept. */
   nested?: OrgProposalChange[];
+  /** The author revised this row since the reader last looked (S18). */
+  revisedNew?: boolean;
+  /** "Ask about this": the conversation's next message names this row. */
+  onAsk?: () => void;
   onPick: () => void; onAccept: () => void; onSkip: () => void; onEdit: () => void; onCancelEdit: () => void; onAcceptWithEdits: (edits: Record<string, unknown>) => void;
 }) {
   const open = isDecidable(change.status);
   const failed = change.status === "failed";
+  const removed = change.status === "removed";
   // S10: a role change says whether the seat is standing or a program with
   // its end. S9: a record change says what the evidence is, on the row itself.
   const tenure = tenureLine(changeTenure(change), tree);
   const evidence = syncEvidence(change.change);
   return (
-    <div className={cn("rounded-lg border transition-colors", selected ? "bg-sol-bg-highlight/70" : "hover:bg-sol-bg-highlight/40")} style={{ borderColor: selected ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "transparent" }} data-change-row={change._id} data-change-status={change.status}>
+    <div className={cn("rounded-lg border transition-colors", selected ? "bg-sol-bg-highlight/70" : "hover:bg-sol-bg-highlight/40", revisedNew && "org-pop-in")} style={{ borderColor: selected ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "transparent", ...(revisedNew ? { boxShadow: "inset 3px 0 0 var(--sol-violet)", background: "color-mix(in srgb, var(--sol-violet) 6%, transparent)" } : {}) }} data-change-row={change._id} data-change-status={change.status} data-revised={change.revision?.kind} data-revised-new={revisedNew || undefined}>
       <div className="flex items-start gap-2 px-2 py-1.5">
         <button type="button" onClick={onPick} className="flex-1 min-w-0 flex items-start gap-2 text-left" aria-pressed={selected} aria-expanded={selected}>
           <StatusPill status={change.status} />
           <span className="min-w-0 flex-1">
-            <span className={cn("block text-[12.5px] leading-snug", selected ? "break-words" : "line-clamp-2", change.status === "skipped" && "line-through opacity-60")} style={{ color: "var(--sol-text)" }} title={changeLine(change.change)}>{changeLine(change.change)}</span>
+            <span className={cn("block text-[12.5px] leading-snug", selected ? "break-words" : "line-clamp-2", (change.status === "skipped" || removed) && "line-through opacity-60")} style={{ color: "var(--sol-text)" }} title={changeLine(change.change)}>
+              {change.revision?.kind === "added" && <span className="inline-flex items-center h-[15px] px-1 mr-1.5 rounded text-[9.5px] font-semibold uppercase tracking-[0.06em] align-[1px] no-underline" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }} data-revised-tag>new</span>}
+              {changeLine(change.change)}
+            </span>
+            {change.revision && <RevisionNote change={change} selected={selected} />}
             {change.depends && <span className="block text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-change-depends>{change.depends}</span>}
             {tenure && <TenureChip line={tenure} />}
             {evidence && (
@@ -435,15 +651,74 @@ function ChangeRow({ change, tree, nested, selected, editing, onPick, onAccept, 
             </div>
           )}
           {open && !editing && (
-            <div className="mt-2.5 flex items-center gap-1.5" data-verdicts>
+            <div className="mt-2.5 flex items-center gap-1.5 flex-wrap" data-verdicts>
               <OrgButton primary size="sm" onClick={onAccept} aria-label="Accept"><Check className="w-3 h-3" /> {failed ? "Retry" : "Accept"}</OrgButton>
               <OrgButton size="sm" onClick={onEdit} aria-label="Edit"><Pencil className="w-3 h-3" /> Edit</OrgButton>
               <OrgButton size="sm" onClick={onSkip} aria-label="Skip"><X className="w-3 h-3" /> Skip</OrgButton>
+              {onAsk && <OrgButton size="sm" onClick={onAsk} aria-label="Ask about this" className="ml-auto" data-ask-about><MessageSquareText className="w-3 h-3" /> Ask about this</OrgButton>}
+            </div>
+          )}
+          {!open && onAsk && !removed && (
+            <div className="mt-2.5 flex items-center" data-verdicts>
+              <OrgButton size="sm" onClick={onAsk} aria-label="Ask about this" data-ask-about><MessageSquareText className="w-3 h-3" /> Ask about this</OrgButton>
             </div>
           )}
         </div>
       )}
       {editing && open && <EditChangeForm change={change} onCancel={onCancelEdit} onAccept={onAcceptWithEdits} />}
+    </div>
+  );
+}
+
+/** What the author's revise did to this row (S18), under its line: the word,
+ *  the author's note, and on an amend what moved, field by field. */
+function RevisionNote({ change, selected }: { change: OrgProposalChange; selected: boolean }) {
+  const r = change.revision!;
+  const moves = amendedMoves(change);
+  const tone = r.kind === "removed" ? "var(--sol-text-dim)" : "var(--sol-violet)";
+  return (
+    <span className="block mt-0.5 text-[11px] leading-snug" style={{ color: "var(--sol-text-muted)" }} data-revision={r.kind}>
+      <span className="uppercase tracking-[0.08em] text-[9.5px] mr-1 font-semibold" style={{ color: tone }}>{revisionWord(r)}</span>
+      <span className={cn(selected ? "break-words" : "line-clamp-2")} title={r.note}>{r.note}</span>
+      {moves.length > 0 && (
+        <span className="block mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5" data-revision-moves>
+          {moves.map((m) => (
+            <span key={m.key} className="inline-flex items-baseline gap-1" title={`${m.label}: was ${m.from ?? "nothing"}, now ${m.to ?? "nothing"}`}>
+              <span style={{ color: "var(--sol-text-dim)" }}>{m.label}</span>
+              {m.from !== null && <span className="line-through opacity-70">{m.from}</span>}
+              {m.to !== null && <span className="font-medium" style={{ color: "var(--sol-text)" }}>{m.to}</span>}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The author revised the list since the reader last looked (S18): said
+ *  once above the changes, in the author's name; the marked rows clear
+ *  together. Clicking a count focuses the first such row. */
+function RevisedStrip({ rows, who, onSeen, onPick }: { rows: OrgProposalChange[]; who: string; onSeen: () => void; onPick: (id: string | null) => void }) {
+  return (
+    <div className="mb-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px] org-pop-in" data-revised-strip={rows.length} style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
+      <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-violet)" }} />
+      <button type="button" onClick={() => onPick(rows[0]._id)} className="min-w-0 flex-1 text-left hover:underline">{revisedLine(rows, who)}</button>
+      <button type="button" onClick={onSeen} className="shrink-0 text-[11px] font-medium px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-revised-seen>Got it</button>
+    </div>
+  );
+}
+
+/** Phone (S18): the list leads; this bar at its foot opens the conversation
+ *  as the sheet's view, and says when the author changed rows meanwhile. */
+function DiscussBar({ name, updated, onOpen }: { name: string; updated: number; onOpen: () => void }) {
+  return (
+    <div className="sticky bottom-0 -mx-4 px-4 pt-2 pb-3 mt-4" style={{ background: "linear-gradient(to bottom, transparent, var(--sol-bg) 30%)" }} data-discuss-bar>
+      <button type="button" onClick={onOpen} className="w-full h-10 rounded-xl border flex items-center gap-2.5 px-3 text-left shadow-[0_8px_24px_-12px_rgba(0,0,0,0.5)]" style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)", background: "var(--sol-card)", color: "var(--sol-text)" }}>
+        <MessageSquareText className="w-4 h-4 shrink-0" style={{ color: "var(--sol-violet)" }} />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">Talk to {name} about this</span>
+        {updated > 0 && <span className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10.5px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{updated} changed</span>}
+        <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
+      </button>
     </div>
   );
 }
