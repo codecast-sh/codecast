@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn } from "../proc.js";
 import { resolveSpawnerConversation } from "../daemon.js";
 
 // This process plays the spawning claude session: its pid registry names
