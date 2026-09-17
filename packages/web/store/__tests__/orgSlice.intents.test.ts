@@ -63,7 +63,7 @@ describe("org intents", () => {
     const meBefore = tree.people[0].total;
     const roleBefore = tree.roles[0].total;
     let st: OrgSliceData = { orgTree: tree, orgIntents: [] };
-    st = run(st, "reparentOrgSession", beyond._id, { kind: "role", role_id: ROLE }, beyond);
+    st = run(st, "reparentOrgSession", beyond._id, { kind: "role", role_id: ROLE }, { row: beyond });
     expect(st.orgTree!.people[0].total).toBe(meBefore - 1);
     expect(st.orgTree!.roles[0].total).toBe(roleBefore + 1);
     expect(st.orgTree!.roles[0].sessions.some((s) => s._id === beyond._id)).toBe(true);
@@ -143,6 +143,39 @@ describe("org intents", () => {
     // The failed row went back to failed, not proposed.
     st = run(st, "revertOrgIntent", st.orgIntents[0].id);
     expect(st.orgProposalChanges["ch-2"].status).toBe("failed");
+  });
+
+  it("withdraw flips the list row, replays over a stale list push, settles on the server's resolved_at, and reverts on refusal", async () => {
+    const { pruneOrgIntents, applyOrgWithdrawIntent } = await import("../orgSlice");
+    const rows = () => ({
+      "p-1": { _id: "p-1", short_id: "op-1", author: { kind: "session", id: "c" }, title: "Old", summary_md: "", mode: "review", status: "open", created_at: 1, superseded_by: { id: "p-2", short_id: "op-2", status: "open", created_at: 2 } },
+      "p-2": { _id: "p-2", short_id: "op-2", author: { kind: "session", id: "c" }, title: "New", summary_md: "", mode: "review", status: "open", created_at: 2, supersedes: { id: "p-1", short_id: "op-1", status: "open", created_at: 1 } },
+    });
+    let st: OrgSliceData = { ...staffing(), orgProposals: rows() as any };
+    st = run(st, "withdrawOrgProposal", "p-1");
+    expect(st.orgProposals["p-1"].status).toBe("withdrawn");
+    expect(st.orgProposals["p-2"].status).toBe("open");
+    expect(st.orgIntents.map((i) => i.kind === "withdraw" && [i.proposal_id, i.short_id])).toEqual([["p-1", "op-1"]]);
+    // A second withdraw of a row already withdrawn adds nothing.
+    st = run(st, "withdrawOrgProposal", "p-1");
+    expect(st.orgIntents).toHaveLength(1);
+    const intent = st.orgIntents[0] as Extract<OrgIntent, { kind: "withdraw" }>;
+    // A list push that predates the mutation still says open: the replay flips it back.
+    const stale = rows() as any;
+    applyOrgWithdrawIntent(stale, intent);
+    expect(stale["p-1"].status).toBe("withdrawn");
+    // The server's resolved_at stamp is the echo: the intent leaves the journal.
+    const echoed = { ...st, orgProposals: { ...rows(), "p-1": { ...rows()["p-1"], status: "withdrawn", resolved_at: 3 } } as any };
+    pruneOrgIntents(echoed);
+    expect(echoed.orgIntents).toEqual([]);
+    // Refused: the row is open again and the person is told.
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "withdrawOrgProposal", ["p-1"]);
+    expect(reverted).toEqual([intent.id]);
+    expect(notices[0]).toMatch(/Withdrawing op-1 was refused; it is open again/);
+    st = run(st, "revertOrgIntent", reverted[0]);
+    expect(st.orgProposals["p-1"].status).toBe("open");
+    expect(st.orgIntents).toEqual([]);
   });
 
   it("accept all flips every decidable row of that proposal, and a refusal reverts them all", () => {
@@ -347,6 +380,70 @@ describe("org intents", () => {
     expect(orgIntentSatisfied(tree, { kind: "moveRole", id: "a", role_id: ROLE, reports_to: { kind: "user", user_id: ME }, at: 0 })).toBe(true);
     expect(orgIntentSatisfied(tree, { kind: "moveRole", id: "a", role_id: ROLE, reports_to: { kind: "user", user_id: SAM }, at: 0 })).toBe(false);
     expect(orgIntentSatisfied(tree, { kind: "moveRole", id: "a", role_id: "gone", reports_to: { kind: "user", user_id: SAM }, at: 0 })).toBe(true);
+  });
+
+  // ---- review findings (staffing 2, five lens pass)
+
+  it("a hand-written hire survives a stale push and clears on the server's own row", () => {
+    const input = { name: "Head of Growth", handle: "growth-2", host_user_id: ME, client_id: "orgrolestub-1" };
+    let st: OrgSliceData = { orgTree: clone(), orgIntents: [] };
+    st = run(st, "createOrgRole", input);
+    expect(st.orgIntents.map((i) => i.kind)).toEqual(["createRole"]);
+    expect(st.orgTree!.roles.some((r) => r._id === "orgrolestub-1")).toBe(true);
+
+    // A heartbeat push (any conversation write recomputes org.tree) must not
+    // take the new seat off the chart: that was the bug.
+    const stale = mergeOrgTree(clone(), st.orgIntents);
+    expect(stale.intents).toHaveLength(1);
+    expect(stale.tree.roles.some((r) => r.handle === "growth-2")).toBe(true);
+
+    // The server's own row for the handle is the acknowledgement.
+    const echo = clone();
+    echo.roles.push({ ...echo.roles[0], _id: "server-role-id", short_id: "or-9", handle: "growth-2", name: "Head of Growth" });
+    const settled = mergeOrgTree(echo, st.orgIntents);
+    expect(settled.intents).toHaveLength(0);
+    expect(settled.tree.roles.filter((r) => r.handle === "growth-2")).toHaveLength(1);
+  });
+
+  it("a refused hire says so and takes the seat off the chart", () => {
+    const input = { name: "Head of Growth", handle: "growth-2", host_user_id: ME, client_id: "orgrolestub-1" };
+    let st: OrgSliceData = { orgTree: clone(), orgIntents: [] };
+    st = run(st, "createOrgRole", input);
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent(
+      { orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) },
+      "createOrgRole",
+      [input],
+    );
+    expect(reverted).toHaveLength(1);
+    expect(notices[0]).toContain("Adding @growth-2");
+    st = run(st, "revertOrgIntent", reverted[0]);
+    expect(st.orgTree!.roles.some((r) => r._id === "orgrolestub-1")).toBe(false);
+  });
+
+  // A refused mutation writes nothing, so no push follows to undo the
+  // optimistic edit. The toast says "it is back where it was", so it must be.
+  it("a refused move is actually put back, not just claimed to be", () => {
+    const server = clone();
+    const top = server.people[0].sessions[0];
+    let st: OrgSliceData = { orgTree: server, orgTreeServer: clone(), orgIntents: [] } as OrgSliceData;
+    st = run(st, "reparentOrgSession", top._id, { kind: "role", role_id: ROLE });
+    expect(st.orgTree!.roles[0].sessions.some((s) => s._id === top._id)).toBe(true);
+
+    st = run(st, "dropOrgIntent", st.orgIntents[0].id);
+    expect(st.orgIntents).toEqual([]);
+    // Back under its person, off the role, with the counts restored.
+    expect(st.orgTree!.roles[0].sessions.some((s) => s._id === top._id)).toBe(false);
+    expect(st.orgTree!.people[0].sessions.some((s) => s._id === top._id)).toBe(true);
+    expect(st.orgTree!.roles[0].total).toBe(ORG_FIXTURE.roles[0].total);
+  });
+
+  it("a refused retire brings the role back", () => {
+    let st: OrgSliceData = { orgTree: clone(), orgTreeServer: clone(), orgIntents: [] } as OrgSliceData;
+    st = run(st, "retireOrgRole", ROLE);
+    expect(st.orgTree!.roles.some((r) => r._id === ROLE)).toBe(false);
+    st = run(st, "dropOrgIntent", st.orgIntents[0].id);
+    expect(st.orgTree!.roles.some((r) => r._id === ROLE)).toBe(true);
   });
 
   it("retiring a role carries its unseen sessions to the parent person's counts", () => {

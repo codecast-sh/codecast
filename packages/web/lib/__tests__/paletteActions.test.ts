@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { paletteActions, paletteActionForKey, paletteDigitIndex, paletteObjectPath, type PaletteTargetType } from "../paletteActions";
+import { paletteActions, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, type PaletteTargetType } from "../paletteActions";
 import { resolvePaletteTarget } from "../paletteTarget";
 
 const session = { _id: "session-1", user_id: "me", agent_type: "claude_code", message_count: 3, title: "Example" };
@@ -157,5 +157,22 @@ describe("command tree targeting", () => {
     expect(paletteDigitIndex({ ...e, ctrlKey: true }, 5)).toBe(1);
     expect(paletteDigitIndex({ ...e, metaKey: true, isComposing: true }, 5)).toBe(-1);
     expect(paletteDigitIndex({ ...e, metaKey: true }, 1)).toBe(-1);
+  });
+});
+
+describe("palette item ranking", () => {
+  test("a row that creates from the typed query loses to a real match", () => {
+    const q = "emdash";
+    const compose = paletteItemScore(`__compose__ vault new named note|||${q}`, q);
+    const search = paletteItemScore(`__search__ Cold email reply-rate|||c1`, q);
+    const entity = paletteItemScore(`__entity__ some note|||n1`, q);
+    expect(compose).toBeGreaterThan(0);
+    expect(compose).toBeLessThan(search);
+    expect(compose).toBeLessThan(entity);
+  });
+
+  test("keyword rows still hide when they do not match", () => {
+    expect(paletteItemScore("Files vault new note create markdown", "emdash")).toBe(0);
+    expect(paletteItemScore("Files vault new note create markdown", "note")).toBe(1);
   });
 });

@@ -7,7 +7,7 @@ import { useSyncDevices } from "../hooks/useSyncDevices";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { useAppOffline } from "../hooks/useAppOffline";
 import { useInboxStore } from "../store/inboxStore";
-import { deviceDisplayName } from "@codecast/shared/contracts";
+import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 // One pill for every daemon-health surface: the ping dot, the short label,
@@ -81,12 +81,14 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
     conversationId ? (s.sessions[conversationId]?.owner_device_id as string | undefined) : undefined,
   );
   // Display name, and only for a remote row — a signature, not the row ref:
-  // the roster rewrites last_seen on every heartbeat.
+  // the roster rewrites last_seen on every heartbeat. `isRemoteHost` also
+  // catches a cloud VM that never set is_remote (grok-bot-vm, AWS ip-*).
   const remoteName = useInboxStore((s) => {
     if (!ownerDeviceId) return "";
     // The wire rows carry more than the store's MachineCandidate type declares.
     const d: any = (s.machineRoster ?? []).find((r) => r.device_id === ownerDeviceId);
-    return d?.is_remote ? deviceDisplayName({ label: d.label ?? "", platform: d.platform ?? "", is_remote: true }) : "";
+    if (!d || !isRemoteHost(d)) return "";
+    return deviceDisplayName({ label: d.label ?? "", platform: d.platform ?? "", is_remote: true });
   });
   const health = useDaemonHealth(ownerDeviceId);
   const { offline: appOffline } = useAppOffline();
@@ -104,11 +106,6 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   // its messages are running late, so it may only fire on a live symptom. An
   // hour total past the SLO belongs on the header chip and the devices page.
   if (!blocksDelivery(health)) return null;
-  // A remote host sleeps when idle and wakes on demand, so a quiet or stale
-  // heartbeat is its normal parked state, not a fault (the fleet verdict
-  // excludes remotes for the same reason). Only trouble on a RUNNING remote —
-  // a fresh restart, load, or a sync backlog — is worth pinning on the session.
-  if (health.kind === "quiet" || health.kind === "offline") return null;
 
   const view = describeDaemonHealth(health);
   if (!view) return null;

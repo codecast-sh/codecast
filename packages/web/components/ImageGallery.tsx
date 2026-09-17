@@ -1,21 +1,46 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
+import { Link2, MessageSquareText } from "lucide-react";
+import { toast } from "sonner";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+
+// One image the lightbox can show. `src` is whatever paints (may be a blob: or
+// data: URL from the byte cache); `href` is the shareable address of the same
+// bytes (the storage URL or the remote markdown URL) — absent when there is
+// none, e.g. an inline base64 image. `messageId` is the transcript message the
+// image came from, when the registrar knows it.
+export type GalleryImage = { src: string; href?: string; messageId?: string };
+
 type ImageGalleryContextType = {
-  register: (src: string) => void;
+  register: (image: GalleryImage) => void;
   open: (src: string) => void;
   // Open over an explicit list (the header's full-session gallery). register()
   // only sees images that have MOUNTED — the virtualized feed never mounts most
   // of them — so a whole-session open must carry its own list. Cleared on close.
-  openList: (srcs: string[], index: number) => void;
+  openList: (images: GalleryImage[], index: number) => void;
 };
 
 const ImageGalleryContext = createContext<ImageGalleryContextType | null>(null);
 
 export function useImageGallery() {
   return useContext(ImageGalleryContext);
+}
+
+// The message a mounted image belongs to. The transcript row wraps each message
+// in this scope once, so every image renderer under it (attachments, tool
+// screenshots, markdown images, condensed thumbs) registers with the right id
+// without threading a prop through every block in between.
+const GalleryMessageContext = createContext<string | undefined>(undefined);
+
+export function GalleryMessageScope({ messageId, children }: { messageId: string | undefined; children: React.ReactNode }) {
+  return <GalleryMessageContext.Provider value={messageId}>{children}</GalleryMessageContext.Provider>;
+}
+
+export function useGalleryMessageId() {
+  return useContext(GalleryMessageContext);
 }
 
 // Minimal standalone viewer for one image outside any provider (inbox row
@@ -50,43 +75,78 @@ export function ImageLightbox({ src, onClose }: { src: string; onClose: () => vo
   );
 }
 
-export function ImageGalleryProvider({ children }: { children: React.ReactNode }) {
-  const [images, setImages] = useState<string[]>([]);
-  const [overrideList, setOverrideList] = useState<string[] | null>(null);
+// Mount-registered images, tagged with the conversation they were registered
+// under. The provider outlives a conversation switch (the inbox keeps one
+// ConversationView and swaps its data), so an untagged registry accumulated
+// every session ever viewed and an inline click browsed all of them.
+type Registry = { conversationId: string | undefined; bySrc: Map<string, GalleryImage>; order: GalleryImage[] };
+const emptyRegistry = (conversationId: string | undefined): Registry => ({ conversationId, bySrc: new Map(), order: [] });
+
+export function ImageGalleryProvider({ conversationId, onJumpToMessage, children }: {
+  // Scopes the mount registry and addresses the "jump to message" link.
+  conversationId?: string;
+  // Scroll the transcript to a message (the host's own path, which can expand
+  // a collapsed group and highlight the row). Called after the lightbox closes.
+  onJumpToMessage?: (messageId: string) => void;
+  children: React.ReactNode;
+}) {
+  const [images, setImages] = useState<GalleryImage[]>([]);
+  const [overrideList, setOverrideList] = useState<GalleryImage[] | null>(null);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const isOpen = currentIndex >= 0;
-  const imageSet = useRef(new Set<string>());
-  const imageOrder = useRef<string[]>([]);
+  const registry = useRef<Registry>(emptyRegistry(conversationId));
+  // Read by register() from child effects, which run before this component's
+  // own effects: assigning during render is what makes the first registration
+  // after a switch land in the new conversation's registry, not the old one.
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
 
   // The list the open lightbox navigates: an explicit session list wins over
-  // the mount-registered order.
-  const list = overrideList ?? images;
+  // the mount-registered order. Registered images from another conversation
+  // (state not yet refreshed after a switch) are never shown.
+  const registered = registry.current.conversationId === conversationId ? images : [];
+  const list = overrideList ?? registered;
   const listRef = useRef(list);
   listRef.current = list;
 
-  const register = useCallback((src: string) => {
-    if (!imageSet.current.has(src)) {
-      imageSet.current.add(src);
-      imageOrder.current.push(src);
-      setImages([...imageOrder.current]);
+  const register = useCallback((image: GalleryImage) => {
+    if (registry.current.conversationId !== conversationIdRef.current) {
+      registry.current = emptyRegistry(conversationIdRef.current);
     }
+    const r = registry.current;
+    const existing = r.bySrc.get(image.src);
+    if (!existing) {
+      r.bySrc.set(image.src, image);
+      r.order.push(image);
+    } else if ((image.href && !existing.href) || (image.messageId && !existing.messageId)) {
+      // A later registrar knows more (e.g. the storage URL resolved): fold it in.
+      const merged = { ...existing, ...image };
+      r.bySrc.set(image.src, merged);
+      r.order[r.order.indexOf(existing)] = merged;
+    } else {
+      return;
+    }
+    setImages([...r.order]);
   }, []);
 
   const open = useCallback((src: string) => {
-    const idx = imageOrder.current.indexOf(src);
+    const idx = registry.current.order.findIndex((i) => i.src === src);
     if (idx >= 0) setCurrentIndex(idx);
   }, []);
 
-  const openList = useCallback((srcs: string[], index: number) => {
-    if (srcs.length === 0) return;
-    setOverrideList(srcs);
-    setCurrentIndex(Math.max(0, Math.min(index, srcs.length - 1)));
+  const openList = useCallback((list: GalleryImage[], index: number) => {
+    if (list.length === 0) return;
+    setOverrideList(list);
+    setCurrentIndex(Math.max(0, Math.min(index, list.length - 1)));
   }, []);
 
   const close = useCallback(() => {
     setCurrentIndex(-1);
     setOverrideList(null);
   }, []);
+
+  // A lightbox open over one conversation must not survive a switch to another.
+  useWatchEffect(() => close(), [conversationId, close]);
 
   const goNext = useCallback(() => {
     setCurrentIndex(i => (i < listRef.current.length - 1 ? i + 1 : i));
@@ -110,10 +170,22 @@ export function ImageGalleryProvider({ children }: { children: React.ReactNode }
     if (isOpen) activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [isOpen, currentIndex]);
 
-  const currentSrc = isOpen ? list[currentIndex] : null;
+  const current = isOpen ? list[currentIndex] : null;
+  const currentSrc = current?.src ?? null;
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < list.length - 1;
   const count = list.length;
+
+  const copyLink = useCallback((href: string) => {
+    copyToClipboard(href).then(() => toast.success("Image link copied")).catch(() => toast.error("Failed to copy link"));
+  }, []);
+  const jumpToMessage = useCallback((messageId: string) => {
+    close();
+    onJumpToMessage?.(messageId);
+  }, [close, onJumpToMessage]);
+  const messageHref = current?.messageId && conversationId
+    ? `${shareOrigin()}/conversation/${conversationId}#msg-${current.messageId}`
+    : undefined;
 
   return (
     <ImageGalleryContext.Provider value={ctx}>
@@ -124,15 +196,42 @@ export function ImageGalleryProvider({ children }: { children: React.ReactNode }
           style={{ backgroundColor: "rgba(0,0,0,0.92)" }}
           onClick={close}
         >
-          <button
-            onClick={close}
-            className="absolute top-4 right-4 text-white/50 hover:text-white p-2 transition-colors z-10"
-            title="Close (Esc)"
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          {/* Quiet action cluster: the image's own link and the way back to
+              the message that produced it, faint until hovered like the
+              arrows, sitting with the close button so the eye has one corner
+              to check. Each shows only when it has somewhere to go. */}
+          <div className="absolute top-4 right-4 flex items-center gap-0.5 z-10" onClick={e => e.stopPropagation()}>
+            {current?.href && (
+              <button
+                onClick={() => copyLink(current.href!)}
+                className="text-white/35 hover:text-white p-2 transition-colors"
+                title="Copy link to image"
+                aria-label="Copy link to image"
+              >
+                <Link2 className="w-4 h-4" strokeWidth={2} />
+              </button>
+            )}
+            {current?.messageId && (onJumpToMessage || messageHref) && (
+              <a
+                href={messageHref ?? `#msg-${current.messageId}`}
+                onClick={e => { e.preventDefault(); jumpToMessage(current.messageId!); }}
+                className="text-white/35 hover:text-white p-2 transition-colors"
+                title="Jump to the message this image came from"
+                aria-label="Jump to the message this image came from"
+              >
+                <MessageSquareText className="w-4 h-4" strokeWidth={2} />
+              </a>
+            )}
+            <button
+              onClick={close}
+              className="text-white/50 hover:text-white p-2 transition-colors"
+              title="Close (Esc)"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
           {count > 1 && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/40 text-xs font-mono tabular-nums">
@@ -177,7 +276,7 @@ export function ImageGalleryProvider({ children }: { children: React.ReactNode }
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center gap-1.5 px-1.5 py-1.5">
-                {list.map((src, i) => (
+                {list.map(({ src }, i) => (
                   <button
                     key={src}
                     ref={i === currentIndex ? activeThumbRef : undefined}

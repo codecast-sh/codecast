@@ -11,12 +11,14 @@
 // hands it.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, ChevronRight, ExternalLink, Flag as FlagGlyph, Pause, Pencil, Play, Sparkles, UserRoundPlus, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ChevronRight, ClipboardCheck, CornerDownRight, ExternalLink, Flag as FlagGlyph, ListChecks, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
+import { ORG_SYNC_KINDS } from "@codecast/shared/contracts/orgProposal";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
+import { ProposalAuthorPill } from "./ProposalAuthorPill";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -28,16 +30,23 @@ import {
   changeEdits,
   changeFields,
   changeLine,
+  changeTenure,
   collectHealthFlags,
   groupChanges,
   isDecidable,
   openProposals,
   proposalProgress,
+  recordsInLine,
   relatedFlags,
   spanOfControl,
   staffingMode,
+  syncEvidence,
+  syncGroupSummary,
+  tenureLine,
+  SYNC_CARD_THRESHOLD,
   type ChangeField,
   type HealthFlagRow,
+  type SyncGroupSummary,
 } from "./staffingModel";
 
 export type StaffingPaneProps = {
@@ -45,6 +54,10 @@ export type StaffingPaneProps = {
   health: OrgHealth | null;
   /** org.health is not deployed on this backend yet. */
   healthMissing?: boolean;
+  /** The latest health read failed (a refusal, a read limit): its message. A
+   *  failed read must never paint as "no flags". */
+  healthError?: string;
+  onRetryHealth?: () => void;
   proposals: OrgProposalRow[];
   /** The proposal open in the pane; null = the health summary. */
   proposal: OrgProposalRow | null;
@@ -53,17 +66,24 @@ export type StaffingPaneProps = {
   chief: OrgRole | null;
   /** "Propose an org now" is running and no proposal has landed yet. */
   reviewing: boolean;
-  /** The session "Propose an org now" started, while it is reviewing. */
+  /** The review session finished its turn, or was closed, and posted no
+   *  proposal: the pane says so, keeps the way in, and gives the buttons back. */
+  reviewEnded?: boolean;
+  /** The session "Propose an org now" started, while it is reviewing or after it ended. */
   reviewSessionId?: string | null;
   now: number;
   onSelectChange: (changeId: string | null) => void;
   onDecide: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
-  onAcceptAll: (proposalId: string) => void;
+  /** Accept every remaining change, or with `kinds` only those kinds
+   *  ("Accept group" on the records card, S9). */
+  onAcceptAll: (proposalId: string, opts?: { kinds?: string[] }) => void;
   /** Edit on a role change opens the hire dialog prefilled (the page owns it). */
   onEditRole: (change: OrgProposalChange) => void;
   onSelectNode: (nodeId: string) => void;
   onOpenSession: (conversationId: string) => void;
   onPickProposal: (shortId: string) => void;
+  /** Withdraw an open proposal: the replaced one, from its own line (S4). */
+  onWithdraw?: (proposalId: string) => void;
   onHireChief: () => void;
   onProposeNow: () => void;
   /** Resume a paused chief of staff (its wakes are held while paused). */
@@ -134,6 +154,9 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
   const [confirmAll, setConfirmAll] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [allFlags, setAllFlags] = useState(false);
+  // A records group past the threshold is one card until "Review each".
+  const [reviewSync, setReviewSync] = useState(false);
+  const syncSummary = useMemo(() => { const g = groups.find((x) => x.sync); return g ? syncGroupSummary(g.changes) : null; }, [groups]);
   const edit = (c: OrgProposalChange) => {
     if (c.change.kind === "role") props.onEditRole(c);
     else { props.onSelectChange(c._id); setEditing(c._id); }
@@ -151,9 +174,28 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
           </select>
         )}
       </div>
+      {/* supersession (S4): the replaced proposal says so first, with Withdraw right there */}
+      {proposal.superseded_by && (
+        <div className="mt-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px]" data-superseded-by={proposal.superseded_by.short_id} style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
+          <Undo2 className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-orange)" }} />
+          <span className="min-w-0 flex-1">
+            Replaced by <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>{proposal.superseded_by.short_id}</button>, posted {compactAge(now - proposal.superseded_by.created_at)} ago{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}.
+          </span>
+          {proposal.status === "open" && props.onWithdraw && (
+            <OrgButton size="sm" onClick={() => props.onWithdraw!(proposal._id)} data-withdraw>Withdraw</OrgButton>
+          )}
+        </div>
+      )}
       <h2 className="mt-2 text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
+      {proposal.supersedes && (
+        <div className="mt-1 flex items-center gap-1 text-[11.5px]" data-supersedes={proposal.supersedes.short_id} style={{ color: "var(--sol-text-muted)" }}>
+          <ArrowRight className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />
+          Replaces <button type="button" onClick={() => props.onPickProposal(proposal.supersedes!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>{proposal.supersedes.short_id}</button>{proposal.supersedes.status !== "open" ? <span style={{ color: "var(--sol-text-dim)" }}> · {proposal.supersedes.status}</span> : null}
+        </div>
+      )}
+      {/* provenance (S15): who wrote it, one click from here */}
       <div className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[11.5px]" style={{ color: "var(--sol-text-muted)" }}>
-        <AuthorLink author={proposal.author} onOpenSession={props.onOpenSession} />
+        <ProposalAuthorPill author={proposal.author} onOpenSession={props.onOpenSession} />
         <Dot />
         <span>{MODE_WORD[proposal.mode] ?? proposal.mode}</span>
         <Dot />
@@ -177,12 +219,37 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
       <div className="flex flex-col gap-3">
         {groups.map((g) => (
           <div key={g.kind} data-change-group={g.kind}>
-            <div className="sticky top-0 z-[1] text-[10px] font-medium uppercase tracking-[0.08em] py-1 px-1" style={{ color: "var(--sol-text-dim)", background: "var(--sol-bg)" }}>{g.label}</div>
+            {g.sync ? (
+              // S9: the records the evidence says are already finished come
+              // first, as their own group; the header counts them.
+              <div className="sticky top-0 z-[1] flex items-center gap-1.5 py-1 px-1" style={{ background: "var(--sol-bg)" }} data-sync-header>
+                <ClipboardCheck className="w-3 h-3 shrink-0" style={{ color: "var(--sol-green)" }} />
+                <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: "var(--sol-green)" }}>{g.label}</span>
+                <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-sync-count>{recordsInLine(g.changes)} {recordsInLine(g.changes) === 1 ? "record" : "records"}</span>
+              </div>
+            ) : (
+              <div className="sticky top-0 z-[1] text-[10px] font-medium uppercase tracking-[0.08em] py-1 px-1" style={{ color: "var(--sol-text-dim)", background: "var(--sol-bg)" }}>{g.label}</div>
+            )}
+            {g.sync && syncSummary && g.changes.length > SYNC_CARD_THRESHOLD && !reviewSync ? (
+              <SyncGroupCard
+                summary={syncSummary}
+                onAcceptGroup={() => props.onAcceptAll(proposal._id, { kinds: [...ORG_SYNC_KINDS] })}
+                onReview={() => setReviewSync(true)}
+                onPick={(id) => props.onSelectChange(id)}
+              />
+            ) : (
             <div className="flex flex-col gap-1">
-              {g.changes.map((c) => (
+              {g.sync && reviewSync && (
+                <button type="button" onClick={() => setReviewSync(false)} className="self-start inline-flex items-center gap-1 text-[11px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-sync-collapse>
+                  <ChevronDown className="w-3 h-3" /> Back to the summary
+                </button>
+              )}
+              {(g.sync && syncSummary ? syncSummary.rows : g.changes).map((c) => (
                 <ChangeRow
                   key={c._id}
                   change={c}
+                  tree={tree}
+                  nested={g.sync && syncSummary ? syncSummary.nested[c._id] : undefined}
                   selected={c._id === selectedChangeId}
                   editing={editing === c._id}
                   onPick={() => props.onSelectChange(c._id === selectedChangeId ? null : c._id)}
@@ -194,6 +261,7 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
                 />
               ))}
             </div>
+            )}
           </div>
         ))}
       </div>
@@ -206,7 +274,7 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
           ) : (
             <div className="rounded-lg p-3 border" style={{ borderColor: "color-mix(in srgb, var(--sol-cyan) 40%, transparent)", background: "color-mix(in srgb, var(--sol-cyan) 6%, transparent)" }}>
               <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>
-                Apply the {progress.remaining} remaining changes now, in the apply order: projects, filings, roles, charters, then moves, scope, budget, trust, routines, adopt and retire. Each applies as proposed{progress.failed > 0 ? `; the ${progress.failed} failed ${progress.failed === 1 ? "one is" : "ones are"} retried` : ""}.
+                Apply the {progress.remaining} remaining changes now, in the apply order: the records first, then projects, filings, roles, charters, then moves, scope, budget, trust, adopt, routines and retire. Each applies as proposed{progress.failed > 0 ? `; the ${progress.failed} failed ${progress.failed === 1 ? "one is" : "ones are"} retried` : ""}.
               </p>
               <div className="mt-2 flex items-center gap-2">
                 <button type="button" onClick={() => { setConfirmAll(false); props.onAcceptAll(proposal._id); }} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>Accept {progress.remaining}</button>
@@ -221,6 +289,8 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
       <SectionLabel right={flagRows.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{flagRows.length}</span> : undefined}>{allFlags ? "All flags" : "Flags this proposal addresses"}</SectionLabel>
       {props.healthMissing ? (
         <FlagList rows={[]} missing onSelectNode={props.onSelectNode} />
+      ) : props.healthError && !props.health ? (
+        <FlagList rows={[]} error={props.healthError} hasHealth={false} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
       ) : (
         <>
           {flagRows.length === 0 ? (
@@ -266,17 +336,6 @@ function ProgressStrip({ changes, selectedId, onPick }: { changes: OrgProposalCh
   );
 }
 
-function AuthorLink({ author, onOpenSession }: { author: OrgProposalRow["author"]; onOpenSession: (id: string) => void }) {
-  const name = author.name ?? (author.kind === "role" ? "a role" : author.kind === "session" ? (author.short_id ?? "a session") : "a person");
-  if (author.kind === "role" && author.short_id) {
-    return <Link href={`/org/${author.short_id}`} className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-violet)" }}><Sparkles className="w-3 h-3" />{name}</Link>;
-  }
-  if (author.kind === "session") {
-    return <button type="button" onClick={() => onOpenSession(author.id)} className="font-medium hover:underline" style={{ color: "var(--sol-cyan)", fontFamily: "var(--font-mono)" }}>{name}</button>;
-  }
-  return <span className="font-medium" style={{ color: "var(--sol-text)" }}>{name}</span>;
-}
-
 function Fact({ k, v, tone }: { k: string; v: string; tone?: string }) {
   return (
     <div className="mt-1.5 text-[12px] leading-snug">
@@ -306,12 +365,19 @@ export function StatusPill({ status }: { status: OrgChangeStatus }) {
  * decided without leaving its row (the phone sheet shows the list several
  * screens tall).
  */
-function ChangeRow({ change, selected, editing, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
-  change: OrgProposalChange; selected: boolean; editing: boolean;
+function ChangeRow({ change, tree, nested, selected, editing, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
+  change: OrgProposalChange; tree: OrgTree | null; selected: boolean; editing: boolean;
+  /** Task changes this plan change closes along with the plan (S9): shown
+   *  under the row, applied by the plan's own accept. */
+  nested?: OrgProposalChange[];
   onPick: () => void; onAccept: () => void; onSkip: () => void; onEdit: () => void; onCancelEdit: () => void; onAcceptWithEdits: (edits: Record<string, unknown>) => void;
 }) {
   const open = isDecidable(change.status);
   const failed = change.status === "failed";
+  // S10: a role change says whether the seat is standing or a program with
+  // its end. S9: a record change says what the evidence is, on the row itself.
+  const tenure = tenureLine(changeTenure(change), tree);
+  const evidence = syncEvidence(change.change);
   return (
     <div className={cn("rounded-lg border transition-colors", selected ? "bg-sol-bg-highlight/70" : "hover:bg-sol-bg-highlight/40")} style={{ borderColor: selected ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "transparent" }} data-change-row={change._id} data-change-status={change.status}>
       <div className="flex items-start gap-2 px-2 py-1.5">
@@ -319,6 +385,25 @@ function ChangeRow({ change, selected, editing, onPick, onAccept, onSkip, onEdit
           <StatusPill status={change.status} />
           <span className="min-w-0 flex-1">
             <span className={cn("block text-[12.5px] leading-snug", selected ? "break-words" : "line-clamp-2", change.status === "skipped" && "line-through opacity-60")} style={{ color: "var(--sol-text)" }} title={changeLine(change.change)}>{changeLine(change.change)}</span>
+            {change.depends && <span className="block text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-change-depends>{change.depends}</span>}
+            {tenure && <TenureChip line={tenure} />}
+            {evidence && (
+              <span className={cn("block text-[11px] leading-snug mt-0.5", selected ? "break-words" : "line-clamp-2")} style={{ color: "var(--sol-text-muted)" }} data-sync-evidence title={evidence}>
+                <span className="uppercase tracking-[0.08em] text-[9.5px] mr-1" style={{ color: "var(--sol-green)" }}>evidence</span>{evidence}
+              </span>
+            )}
+            {nested && nested.length > 0 && (
+              <span className="block mt-1" data-nested-tasks={nested.length}>
+                <span className="block text-[10.5px] uppercase tracking-[0.08em]" style={{ color: "var(--sol-green)" }}>closes {nested.length} {nested.length === 1 ? "task" : "tasks"} with it</span>
+                {(selected ? nested : nested.slice(0, 3)).map((t) => (
+                  <span key={t._id} className="flex items-start gap-1 text-[11px] leading-snug mt-0.5" style={{ color: "var(--sol-text-muted)" }} data-nested-task={t._id}>
+                    <CornerDownRight className="w-3 h-3 shrink-0 mt-[1px]" style={{ color: "var(--sol-text-dim)" }} />
+                    <span className={cn("min-w-0 flex-1", selected ? "break-words" : "truncate")} title={changeLine(t.change)}>{changeLine(t.change)}</span>
+                  </span>
+                ))}
+                {!selected && nested.length > 3 && <span className="block text-[10.5px] mt-0.5 pl-4" style={{ color: "var(--sol-text-dim)" }}>and {nested.length - 3} more</span>}
+              </span>
+            )}
             {failed && !selected && change.applied_note && (
               <span className="block truncate text-[11px] leading-snug mt-0.5" style={{ color: CHANGE_STATUS_META.failed.color }} data-failed-note>{change.applied_note}</span>
             )}
@@ -363,6 +448,73 @@ function ChangeRow({ change, selected, editing, onPick, onAccept, onSkip, onEdit
   );
 }
 
+/**
+ * A records group past the threshold (S9): one card instead of a hundred
+ * rows. The count by kind, the three most consequential lines (a click
+ * focuses that change), the evidence the reasons rest on as counts, then
+ * Accept group (a confirm first: it applies every remaining record) and
+ * Review each, which expands to the rows.
+ */
+function SyncGroupCard({ summary, onAcceptGroup, onReview, onPick }: { summary: SyncGroupSummary; onAcceptGroup: () => void; onReview: () => void; onPick: (changeId: string) => void }) {
+  const [confirm, setConfirm] = useState(false);
+  const decided = summary.total - summary.remaining;
+  return (
+    <div className="rounded-xl border p-3" style={{ borderColor: "color-mix(in srgb, var(--sol-green) 35%, transparent)", background: "color-mix(in srgb, var(--sol-green) 5%, transparent)" }} data-sync-card>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--sol-text)", fontFamily: "var(--font-serif)" }} data-sync-count-line>{summary.countLine}</span>
+        <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{decided > 0 ? `${decided} decided · ` : ""}{summary.remaining} to decide</span>
+      </div>
+      <p className="mt-1 text-[11.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>Records the evidence says are already finished. They apply through the same update paths a person uses, and count nothing against a seat once in line.</p>
+      <div className="mt-2.5 flex flex-col gap-1" data-sync-top>
+        {summary.top.map((c) => {
+          const ev = syncEvidence(c.change);
+          const nested = summary.nested[c._id]?.length ?? 0;
+          return (
+            <button key={c._id} type="button" onClick={() => onPick(c._id)} className="text-left rounded-lg px-2 py-1.5 hover:bg-sol-bg-highlight/70 transition-colors" data-sync-top-row={c._id}>
+              <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{changeLine(c.change)}{nested > 0 ? <span style={{ color: "var(--sol-green)" }}> · closes {nested} {nested === 1 ? "task" : "tasks"}</span> : null}</span>
+              {ev && <span className="block text-[11px] leading-snug line-clamp-2 mt-0.5" style={{ color: "var(--sol-text-muted)" }} title={ev}>{ev}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {summary.evidence.length > 0 && (
+        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap text-[11px]" data-sync-evidence-summary>
+          <span className="uppercase tracking-[0.08em] text-[9.5px]" style={{ color: "var(--sol-green)" }}>evidence</span>
+          {summary.evidence.slice(0, 4).map((e, i) => (
+            <span key={e.label} style={{ color: "var(--sol-text-muted)" }}>{i > 0 && <span style={{ color: "var(--sol-text-dim)" }}>· </span>}<span className="tabular-nums font-medium" style={{ color: "var(--sol-text)" }}>{e.count}</span> {e.label}</span>
+          ))}
+        </div>
+      )}
+      {!confirm ? (
+        <div className="mt-3 flex items-center gap-1.5">
+          <OrgButton primary size="sm" onClick={() => setConfirm(true)} disabled={summary.remaining === 0} data-sync-accept-group><Check className="w-3 h-3" /> Accept group ({summary.remaining})</OrgButton>
+          <OrgButton size="sm" onClick={onReview} data-sync-review-each><ListChecks className="w-3 h-3" /> Review each</OrgButton>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-lg p-2.5 border" style={{ borderColor: "color-mix(in srgb, var(--sol-cyan) 40%, transparent)", background: "color-mix(in srgb, var(--sol-cyan) 6%, transparent)" }} data-sync-confirm>
+          <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>Bring the {summary.remaining} remaining records in line now: {summary.countLine}. Each applies as proposed; the rest of the proposal waits for you.</p>
+          <div className="mt-2 flex items-center gap-2">
+            <button type="button" onClick={() => { setConfirm(false); onAcceptGroup(); }} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>Accept {summary.remaining}</button>
+            <button type="button" onClick={() => setConfirm(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "standing" or "program · ends with pl-3, then retire" (S10), as a chip on
+ *  a role change; the same words the node chip and the hire form use. */
+export function TenureChip({ line }: { line: string }) {
+  const program = line.startsWith("program");
+  const tone = program ? "var(--sol-orange)" : "var(--sol-blue)";
+  return (
+    <span className="inline-flex items-center gap-1 max-w-full mt-1 h-[16px] px-1.5 rounded text-[10px] font-medium" style={{ background: `color-mix(in srgb, ${tone} 12%, transparent)`, color: tone }} data-tenure={program ? "program" : "standing"} title={line}>
+      <span className="truncate">{line}</span>
+    </span>
+  );
+}
+
 function IconButton({ label, tone, onClick, children }: { label: string; tone?: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button type="button" onClick={onClick} aria-label={label} title={label} className="w-6 h-6 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: tone ?? "var(--sol-text-dim)" }}>
@@ -382,13 +534,25 @@ export function EditChangeForm({ change, onCancel, onAccept }: { change: OrgProp
       {fields.map((f, i) => (
         <label key={f.key} className="grid grid-cols-[110px_1fr] items-center gap-2 text-[11px]">
           <span className="truncate" style={{ color: "var(--sol-text-dim)" }} title={f.key}>{f.label}</span>
-          <input
-            value={f.value}
-            type={f.kind === "number" ? "number" : "text"}
-            onChange={(e) => setFields((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
-            className="h-7 rounded-md px-2 border outline-none text-[12px] bg-sol-bg-alt"
-            style={{ borderColor: BORDER, color: "var(--sol-text)" }}
-          />
+          {f.kind === "select" && f.options ? (
+            <select
+              value={f.value}
+              onChange={(e) => setFields((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+              className="h-7 rounded-md px-1.5 border outline-none text-[12px] bg-sol-bg-alt"
+              style={{ borderColor: BORDER, color: "var(--sol-text)" }}
+              data-edit-select={f.key}
+            >
+              {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input
+              value={f.value}
+              type={f.kind === "number" ? "number" : "text"}
+              onChange={(e) => setFields((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+              className="h-7 rounded-md px-2 border outline-none text-[12px] bg-sol-bg-alt"
+              style={{ borderColor: BORDER, color: "var(--sol-text)" }}
+            />
+          )}
         </label>
       ))}
       <div className="flex items-center justify-end gap-1.5 mt-1">
@@ -409,13 +573,18 @@ function SeverityDot({ severity }: { severity: HealthFlag["severity"] }) {
   return <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-[6px]" aria-hidden style={m.dot === "filled" ? { background: m.color } : { border: `1.5px solid ${m.color}` }} />;
 }
 
-function FlagList({ rows, missing, onSelectNode, limit = 5 }: { rows: HealthFlagRow[]; missing?: boolean; onSelectNode: (nodeId: string) => void; limit?: number }) {
+function FlagList({ rows, missing, error, hasHealth, onRetry, onSelectNode, limit = 5 }: { rows: HealthFlagRow[]; missing?: boolean; error?: string; hasHealth?: boolean; onRetry?: () => void; onSelectNode: (nodeId: string) => void; limit?: number }) {
   const [all, setAll] = useState(false);
   if (missing) return <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Health is not deployed on this backend yet.</p>;
-  if (rows.length === 0) return <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>No flags. The company is inside the capacity model.</p>;
+  const retry = onRetry ? <button type="button" onClick={onRetry} className="ml-1.5 underline underline-offset-2" style={{ color: "var(--sol-blue)" }}>Retry</button> : null;
+  // A read that failed with nothing cached says so; it never reads as a clean company.
+  if (error && !hasHealth) return <p className="text-[12px] px-1" style={{ color: "var(--sol-red)" }} data-health-error>Health could not be read: {error}{retry}</p>;
+  const stale = error ? <p className="text-[11px] px-1" style={{ color: "var(--sol-yellow)" }} data-health-stale>Showing the last copy; the latest read failed: {error}{retry}</p> : null;
+  if (rows.length === 0) return <>{stale}<p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>No flags. The company is inside the capacity model.</p></>;
   const shown = all ? rows : rows.slice(0, limit);
   return (
     <div className="flex flex-col gap-1" data-flags>
+      {stale}
       {shown.map((r) => {
         const subject = r.subject.kind === "role" ? `@${r.subject.handle}` : r.subject.kind === "person" ? r.subject.name : "company";
         const m = SEVERITY_META[r.flag.severity];
@@ -460,11 +629,12 @@ function HealthBody(props: StaffingPaneProps) {
     <>
       <h2 className="text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>Company health</h2>
       <p className="mt-1 text-[12px]" style={{ color: "var(--sol-text-muted)" }}>
-        {props.reviewing ? "The chief of staff is reviewing the company; a proposal appears here when it lands." : "No open proposal. What the flow signals say right now."}
+        {props.reviewing ? "A review of the company is running; a proposal appears here when it lands." : "No open proposal. What the flow signals say right now."}
       </p>
       {props.reviewing && props.reviewSessionId && <ReviewSessionLink id={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
+      {props.reviewEnded && <ReviewEndedLine sessionId={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
       <SectionLabel right={flags.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{flags.length}</span> : undefined}>Flags</SectionLabel>
-      <FlagList rows={flags} missing={props.healthMissing} onSelectNode={props.onSelectNode} />
+      <FlagList rows={flags} missing={props.healthMissing} error={props.healthError} hasHealth={!!props.health} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
 
       <SectionLabel>Span of control</SectionLabel>
       {span.length === 0 ? <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nobody here yet.</p> : (
@@ -525,6 +695,7 @@ function NoChiefBody(props: StaffingPaneProps) {
         </div>
       ) : (
         <div className="mt-4 flex flex-col gap-2">
+          {props.reviewEnded && <ReviewEndedLine sessionId={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
           <OrgButton primary onClick={props.onHireChief} className="justify-center h-9">
             <UserRoundPlus className="w-3.5 h-3.5" /> Hire a Chief of Staff
           </OrgButton>
@@ -535,6 +706,17 @@ function NoChiefBody(props: StaffingPaneProps) {
         </div>
       )}
       <FlagsPreview {...props} />
+    </div>
+  );
+}
+
+/** A review that stopped with nothing posted: said plainly, with the way in
+ *  to see why, above the buttons that start another. */
+function ReviewEndedLine({ sessionId, onOpenSession }: { sessionId?: string | null; onOpenSession: (id: string) => void }) {
+  return (
+    <div className="rounded-lg border px-3 py-2 text-[12px] flex items-center gap-2 flex-wrap" data-review-ended style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
+      <span className="min-w-0 flex-1">The review session stopped without posting a proposal.</span>
+      {sessionId && <button type="button" onClick={() => onOpenSession(sessionId)} className="shrink-0 inline-flex items-center gap-1 hover:underline" style={{ color: "var(--sol-violet)" }}>See why <ExternalLink className="w-3 h-3" /></button>}
     </div>
   );
 }
@@ -552,11 +734,11 @@ function ReviewSessionLink({ id, onOpenSession }: { id: string; onOpenSession: (
 /** With no chief and no proposal, the flags still tell the person something. */
 function FlagsPreview(props: StaffingPaneProps) {
   const flags = useMemo(() => collectHealthFlags(props.health, props.tree), [props.health, props.tree]);
-  if (flags.length === 0 && !props.healthMissing) return null;
+  if (flags.length === 0 && !props.healthMissing && !props.healthError) return null;
   return (
     <>
       <SectionLabel>Flags</SectionLabel>
-      <FlagList rows={flags} missing={props.healthMissing} onSelectNode={props.onSelectNode} limit={3} />
+      <FlagList rows={flags} missing={props.healthMissing} error={props.healthError} hasHealth={!!props.health} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} limit={3} />
     </>
   );
 }

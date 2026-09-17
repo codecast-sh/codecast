@@ -27,9 +27,12 @@ import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
+import { parseSearchTerms } from "@codecast/shared/search";
 import { compressImage } from "../lib/compressImage";
+import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
-import { useStorageImageSrc, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { imageBytes } from "../lib/imageByteCache";
 import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
@@ -88,7 +91,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
-import { RevealAncestryCtx, useRevealAncestryWith } from "../lib/revealHost";
+import { RevealAncestryCtx, RevealInBandCtx, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -171,7 +174,7 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
-import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
+import { AssignedToYouBanner, HandoffPicker, OwnerAvatar, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
 import { SessionDaemonChip } from "./DaemonStatusChip";
@@ -194,7 +197,7 @@ import { SentFileBlock, type SentFileData } from "./tools/SentFileBlock";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { MessagePromptPreview } from "./MessagePromptPreview";
-import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
+import { useImageGallery, useGalleryMessageId, ImageGalleryProvider, GalleryMessageScope, type GalleryImage } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, TextWithMentions } from "./EntityIdPill";
@@ -205,13 +208,17 @@ import { THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
+import { HighlightContext } from "./HighlightContext";
+import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearchPages, type MatchInstance, type PendingHit } from "../lib/conversationSearch";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
 import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { useJumpToSendingMessage } from "../hooks/useJumpToSendingMessage";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
-import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
+import { CollabComposer, CollabRequestBanner, OwnerComposerPresence, composerPresenceEnabled } from "./CollabComposer";
+import { ConversationViewers } from "./presence/ViewerFaces";
+import { anchorFromRects } from "../lib/follow";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
@@ -259,7 +266,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionSuggestion } from "./editor/MentionSuggestion";
 import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -348,8 +355,23 @@ function isStaleSentDraft(conversationId: string, text: string | null | undefine
 
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
-const EMPTY_MATCH_IDS: string[] = [];
-const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number; timestamp: number }[] = [];
+const EMPTY_ID_SET: ReadonlySet<string> = new Set();
+const EMPTY_MATCH_INSTANCES: MatchInstance[] = [];
+
+/** Search marks for one message inside its virtualizer row. Scoped to the
+ *  message's own block when it has one; a message folded into another row
+ *  (condensed density) has none, so the whole row is the scope. */
+function searchMarksIn(rowEl: Element | null, messageId: string): HTMLElement[] {
+  if (!rowEl) return [];
+  const scope = rowEl.querySelector(`#msg-${CSS.escape(messageId)}`) ?? rowEl;
+  return Array.from(scope.querySelectorAll<HTMLElement>('mark[data-search-highlight]'));
+}
+
+/** Exactly one mark in the feed carries the active look (globals.css). */
+function markActive(container: Element, target: HTMLElement) {
+  container.querySelectorAll('mark[data-search-active]').forEach((m) => { if (m !== target) m.removeAttribute('data-search-active'); });
+  target.setAttribute('data-search-active', 'true');
+}
 const EMPTY_QUEUE: string[] = [];
 
 // Skips a Convex query for the first paint after the keyed value (e.g. conversation id)
@@ -375,19 +397,6 @@ function safeString(value: any): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   try { return JSON.stringify(value); } catch { return String(value); }
 }
-
-function parseSearchTerms(query: string): string[] {
-  const terms: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    const term = match[1] || match[2];
-    if (term) terms.push(term.toLowerCase());
-  }
-  return terms;
-}
-
-const HighlightContext = createContext<string | undefined>(undefined);
 
 // toolCallId → the page URL and driven tab a `cast browser` row was on,
 // carried forward from earlier rows when the row's own output doesn't restate
@@ -674,19 +683,19 @@ type ImageData = {
 // only knows images the virtualized feed has actually mounted. Rendered inside
 // ImageGalleryProvider (a child, not the ConversationView body, which sits
 // outside the provider).
-function SessionGalleryButton({ srcs }: { srcs: string[] }) {
+function SessionGalleryButton({ images }: { images: GalleryImage[] }) {
   const gallery = useImageGallery();
-  if (srcs.length === 0) return null;
+  if (images.length === 0) return null;
   return (
-    <ShortcutTooltip label={`View ${srcs.length === 1 ? "image" : `${srcs.length} images`}`} side="bottom">
+    <ShortcutTooltip label={`View ${images.length === 1 ? "image" : `${images.length} images`}`} side="bottom">
       <button
-        onClick={() => gallery?.openList(srcs, srcs.length - 1)}
+        onClick={() => gallery?.openList(images, images.length - 1)}
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30 hover:bg-sol-magenta/20 transition-colors"
       >
         <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <span className="tabular-nums">{srcs.length}</span>
+        <span className="tabular-nums">{images.length}</span>
       </button>
     </ShortcutTooltip>
   );
@@ -985,6 +994,46 @@ function TimelineRule({
       <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
       {children}
       <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
+    </div>
+  );
+}
+
+// One handoff, drawn where it landed in the timeline: the rule names who
+// passed the session to whom, and the note they wrote sits under it as a
+// message from the assigner. Every viewer sees it — it is the record of the
+// transfer, not a private ping (that is AssignedToYouBanner, for the assignee
+// until they acknowledge). A transfer still in flight renders dimmed.
+function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: string }) {
+  const from = handoff.from === meId ? "You" : handoff.from_name;
+  const to = handoff.to === meId ? "you" : handoff.to_name;
+  return (
+    <div className={`mt-2 mb-3 ${handoff.pending ? "opacity-70" : ""}`} data-handoff-marker={handoff.to}>
+      <TimelineRule color="var(--sol-violet)" className="mb-2" label={`${from} handed this to ${to}`}>
+        <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoff.at)}>
+          <span className="flex items-center -space-x-1.5">
+            <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-5 h-5" /></span>
+            <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-5 h-5" /></span>
+          </span>
+          {from} handed this to {to} · {formatRelativeTime(handoff.at)}
+        </span>
+      </TimelineRule>
+      {handoff.note && (
+        <div className="mx-auto max-w-[640px] rounded-lg border border-sol-violet/35 bg-sol-violet/[0.07] px-3.5 py-2.5">
+          <div className="flex items-center gap-2 mb-1.5 text-[11px]">
+            <OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-4 h-4" />
+            <span className="font-semibold text-sol-text">{handoff.from_name}</span>
+            <ArrowRightLeft className="w-3 h-3 text-sol-violet" />
+            <OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-4 h-4" />
+            <span className="font-semibold text-sol-text">{handoff.to_name}</span>
+            {handoff.seen && handoff.to !== meId && (
+              <span className="ml-auto text-[10px] text-sol-text-dim">seen</span>
+            )}
+          </div>
+          <div className="text-sm text-sol-text leading-relaxed [&_p]:my-0">
+            <MessageMarkdown content={handoff.note} userText />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -6111,7 +6160,7 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
           className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold border ${badge.cls}`}
           title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined}
         >
-          {watching && <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />}
+          {watching && <LivePulseDot />}
           {badge.label}
         </span>
       </div>
@@ -6637,11 +6686,16 @@ function useSwipeToDismiss(onDismiss: () => void) {
 // re-subscribing and re-flashing "Loading…". Bytes are cache-first too
 // (useStorageImageSrc): a seen image paints from the local byte cache, and the
 // history prefetch warms it before the block ever mounts.
-function useImageSrc(image: ImageData): { src: string | undefined; storageResolved: boolean; storageMissing: boolean } {
-  // storageSrc: undefined = still resolving, null = not found, string = src
-  const storageSrc = useStorageImageSrc(image.storage_id);
+function useImageSrc(image: ImageData): { src: string | undefined; href: string | undefined; storageResolved: boolean; storageMissing: boolean } {
+  // storageUrl: undefined = still resolving, null = not found, string = the
+  // serving URL (the image's shareable address). storageSrc is the cache-first
+  // paint src for it — an object URL once the bytes are local.
+  const storageUrl = useStorageImageUrl(image.storage_id);
+  const cachedSrc = imageBytes.useSrc(typeof storageUrl === "string" ? storageUrl : undefined);
+  const storageSrc = typeof storageUrl === "string" ? cachedSrc : storageUrl;
   const storageResolved = image.storage_id ? storageSrc !== undefined : true;
   const storageMissing = Boolean(image.storage_id) && storageSrc === null;
+  const href = typeof storageUrl === "string" ? storageUrl : undefined;
 
   // While uploading we only have the local blob: preview. After the upload
   // resolves we prefer the real storage src but fall back to the preview until
@@ -6653,12 +6707,13 @@ function useImageSrc(image: ImageData): { src: string | undefined; storageResolv
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : image.preview_url || undefined;
-  return { src, storageResolved, storageMissing };
+  return { src, href, storageResolved, storageMissing };
 }
 
 function ImageBlock({ image }: { image: ImageData }) {
-  const { src, storageResolved, storageMissing } = useImageSrc(image);
+  const { src, href, storageResolved, storageMissing } = useImageSrc(image);
   const gallery = useImageGallery();
+  const messageId = useGalleryMessageId();
 
   // Seed "loaded" from the module cache so an already-decoded image skips the
   // overlay on remount instead of flashing it while the HTTP-cached bytes decode.
@@ -6671,8 +6726,8 @@ function ImageBlock({ image }: { image: ImageData }) {
   }, [src]);
 
   useWatchEffect(() => {
-    if (src && gallery) gallery.register(src);
-  }, [src, gallery]);
+    if (src && gallery) gallery.register({ src, href, messageId });
+  }, [src, href, messageId, gallery]);
 
   // Keep the same reserved height when a stored image is missing or undecodable.
   // Returning null here used to collapse image-heavy transcript rows after load,
@@ -8778,11 +8833,12 @@ function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { co
 // chip as a small thumbnail. Clicking opens the shared lightbox (with arrow-key
 // browsing across every registered image) WITHOUT expanding the tool group.
 function CondensedImageThumb({ image }: { image: ImageData }) {
-  const { src, storageMissing } = useImageSrc(image);
+  const { src, href, storageMissing } = useImageSrc(image);
   const gallery = useImageGallery();
+  const messageId = useGalleryMessageId();
   useWatchEffect(() => {
-    if (src && gallery) gallery.register(src);
-  }, [src, gallery]);
+    if (src && gallery) gallery.register({ src, href, messageId });
+  }, [src, href, messageId, gallery]);
   if (storageMissing) return null;
   if (!src) {
     return <span className="h-7 w-10 shrink-0 rounded-sm border border-sol-border/50 bg-sol-bg-alt animate-pulse" aria-hidden />;
@@ -10331,6 +10387,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
   const { user: mentionUser } = useCurrentUser();
+  // Hand-off: the composed text becomes the note that travels with the
+  // assignment (OwnersBadge.HandoffPicker). Real sessions only — a comment
+  // box, a workflow gate and a chat room have nobody to hand to.
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const owners = useOwnersFromStore(conversationId);
+  const canHandoff = !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
   // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
@@ -10772,7 +10834,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Durable send: routes through the store's dispatch outbox so a reload
   // mid-send survives and is redriven on next load (idempotent on client_id).
   const sendMessage = useInboxStore((s) => s.sendMessage);
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const convex = useConvex();
 
   // Best-effort enrichment, hard-bounded so it can NEVER block the durable send:
@@ -11222,9 +11283,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -11262,6 +11323,53 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     observer.observe(el);
     return () => observer.disconnect();
   }, [composeMode]);
+
+  // Where the send controls sit. Beside a short draft they share its line;
+  // once the draft would wrap against them, the whole cluster drops to its own
+  // right-aligned row under the text, so the field gets the full width instead
+  // of a gutter as tall as the box. The trigger measures the draft's text
+  // width against the room beside the controls rather than reading the
+  // rendered height: tucking widens the field, which can make the same text
+  // fit on one line again, and a height check would then pull the controls
+  // back up, wrap the text, and repeat forever. A measurement that undershoots
+  // (an unparsed font, say) only leaves the text wrapping beside the controls
+  // as before; it can never oscillate.
+  const controlsRowRef = useRef<HTMLDivElement>(null);
+  const [fitsBesideControls, setFitsBesideControls] = useState(true);
+  const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const measureFitsBesideControls = useCallback(() => {
+    const ta = textareaRef.current;
+    const row = controlsRowRef.current;
+    if (!ta || !row) return;
+    const text = messageRef.current;
+    let fits = !text.includes("\n");
+    if (fits && text) {
+      const ctx = (measureCtxRef.current ??= document.createElement("canvas").getContext("2d"));
+      if (ctx) {
+        const font = getComputedStyle(ta);
+        ctx.font = `${font.fontStyle} ${font.fontWeight} ${font.fontSize} ${font.fontFamily}`;
+        // The cluster's own box is useless here: tucked, it spans the row.
+        // Sum the buttons instead (gap-1 between them), so the reading is
+        // the same in either state. gap-x-2 sits between the field and the
+        // cluster, plus one character of slack so subpixel rounding never
+        // lets the browser wrap text we measured as fitting.
+        const buttons = Array.from(sendRef.current?.children ?? []) as HTMLElement[];
+        const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4;
+        const room = row.clientWidth - controls - 8 - ctx.measureText("M").width;
+        fits = ctx.measureText(text).width <= room;
+      }
+    }
+    setFitsBesideControls(fits);
+  }, []);
+  useLayoutEffect(measureFitsBesideControls, [message, measureFitsBesideControls]);
+  useWatchEffect(() => {
+    const row = controlsRowRef.current;
+    if (!row) return;
+    const observer = new ResizeObserver(measureFitsBesideControls);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [composeMode, measureFitsBesideControls]);
+  const controlsTucked = !fitsBesideControls;
 
   const resetTextareaHeight = () => {
     if (FIELD_SIZING_SUPPORTED) return;
@@ -11419,34 +11527,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return next;
     });
     const promise = (async (): Promise<string | null> => {
-      try {
-        // Shrink large pastes before they hit the wire (preview above already
-        // rendered from the original blob, so this stays invisible to the user).
-        const uploaded = await compressImage(file);
-        const uploadUrl = await generateUploadUrl({});
-        const result = await fetch(uploadUrl, {
-          method: "POST",
-          headers: { "Content-Type": uploaded.type },
-          body: uploaded,
-        });
-        if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
-        const { storageId } = await result.json();
+      // Shrink large pastes before they hit the wire (preview above already
+      // rendered from the original blob, so this stays invisible to the user).
+      // The shared helper retries a transient failure; a paste that reaches
+      // the composer is sacred input and one dropped connection must not lose
+      // it. It never throws — null means every attempt failed.
+      const uploaded = await compressImage(file);
+      const storageId = await uploadBlobToStorage(convex, uploaded, uploaded.type) as Id<"_storage"> | null;
+      if (storageId) {
         // Draft first — it lands even if this composer instance has unmounted
         // (a state updater on a dead instance is a silent no-op).
         settleDraftImageUpload(previewUrl, storageId as string);
         setPastedImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
         return storageId as string;
-      } catch (err: any) {
-        console.error("[uploadImage] failed:", err);
-        toast.error(err?.message?.includes("Authentication") ? "Upload failed: not authenticated" : `Failed to upload image: ${err?.message || "unknown error"}`);
-        settleDraftImageUpload(previewUrl, null);
-        clearImageByPreview(previewUrl);
-        return null;
       }
+      console.error("[uploadImage] failed after retries");
+      toast.error("Failed to upload image");
+      settleDraftImageUpload(previewUrl, null);
+      clearImageByPreview(previewUrl);
+      return null;
     })();
     pendingImageUploads.set(previewUrl, promise);
     return previewUrl;
-  }, [generateUploadUrl, conversationId, addImagePlaceholder, clearImageByPreview]);
+  }, [convex, conversationId, addImagePlaceholder, clearImageByPreview]);
 
   useWatchEffect(() => {
     if (onDropFiles) {
@@ -11470,8 +11573,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [uploadImage]);
 
+  // Set when a submit could not commit its send (the optimistic row + outbox
+  // enqueue refused). Read synchronously right after handleSubmit() is called:
+  // everything up to the commit runs before its first await, so a caller that
+  // dismisses its host on send (the compose popup) can tell a committed send
+  // from a refused one without waiting for delivery.
+  const submitRefusedRef = useRef(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    submitRefusedRef.current = false;
     setAcTrigger(null);
     // In compose mode, read content from the TipTap editor
     let message = composeMode && composeRef.current
@@ -11603,6 +11713,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       messageRef.current = message;
       if (composeMode) composeRef.current?.setMarkdown(message);
       toast.error(error instanceof Error ? error.message : "Could not save your message. Please try again.");
+      submitRefusedRef.current = true;
       return false;
     }
     if (draftTimerRef.current) {
@@ -11784,8 +11895,38 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     onMessageSent?.();
   };
 
+  // Hand off: the box empties the moment a teammate is picked (the marker is
+  // drawn optimistically), and the text comes back only if the server refuses.
+  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean) => {
+    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
+    const text = raw.trim();
+    sendingRef.current = true;
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    composeRef.current?.clear();
+    setMessage("");
+    messageRef.current = "";
+    useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
+    textareaRef.current?.focus();
+    void owners.handoffTo(target.id, text, { keepSelf }).then((ok) => {
+      if (ok) { onMessageSent?.(); return; }
+      if (composeMode && composeRef.current) composeRef.current.setMarkdown?.(text);
+      setMessage(text);
+      messageRef.current = text;
+    });
+  };
+  const openHandoff = (open: boolean) => {
+    setHandoffOpen(open);
+    if (!open) requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
   const acScrollRef = useRef(false);
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
+      e.preventDefault();
+      setHandoffOpen(true);
+      return;
+    }
     if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -12037,7 +12178,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // outbox enqueue run synchronously at the top of handleSubmit, so the send
       // is already committed by the time this returns. DON'T await it: dismiss the
       // popup on the same tick so it never lingers behind a slow create/send.
+      // A REFUSED commit (the row could not be saved) must not dismiss: the
+      // popup would close over an unsent message and its error toast, and the
+      // typed text would be gone with it. Keep the popup up so the toast is
+      // seen and Enter can be pressed again.
       void handleSubmit(e);
+      if (submitRefusedRef.current) return;
       onSubmitWithIntent(navigate);
       return;
     }
@@ -12099,6 +12245,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Outside the popup (no onSubmitWithIntent) this is exactly handleSubmit.
   const handleFormSubmit = (e: React.FormEvent) => {
     void handleSubmit(e);
+    if (submitRefusedRef.current) return;
     onSubmitWithIntent?.(false);
   };
 
@@ -12534,6 +12681,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           </button>
                         </ShortcutTooltip>
                       )}
+                      {canHandoff && (
+                        <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+                          <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+                          <button
+                            type="button"
+                            className={`w-7 h-7 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                            aria-label="Hand off to a teammate"
+                            onClick={() => openHandoff(!handoffOpen)}
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </button>
+                          </ShortcutTooltip>
+                        </HandoffPicker>
+                      )}
                       {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                         <button
                           type="button"
@@ -12557,7 +12718,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   </div>
                 </div>
               ) : (
-                <div className="flex items-end gap-2">
+                <div ref={controlsRowRef} className="flex flex-wrap items-end gap-x-2 gap-y-1">
                   {/* One grid cell for the textarea and the ghost suggestion: the
                       cell takes the taller of the two, so a wrapped suggestion
                       grows the box and the textarea stretches to cover it. */}
@@ -12593,7 +12754,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     />
                   )}
                   </div>
-                  <div ref={sendRef} className="shrink-0 flex items-end gap-1">
+                  <div ref={sendRef} className={`shrink-0 flex items-end gap-1 ${controlsTucked ? "basis-full justify-end" : ""}`}>
                     {isMultiline && (
                       <button
                         type="button"
@@ -12615,6 +12776,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           <Archive className="w-3.5 h-3.5" />
                         </button>
                       </ShortcutTooltip>
+                    )}
+                    {canHandoff && (
+                      <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+                        <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+                        <button
+                          type="button"
+                          className={`w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                          aria-label="Hand off to a teammate"
+                          onClick={() => openHandoff(!handoffOpen)}
+                        >
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                        </button>
+                        </ShortcutTooltip>
+                      </HandoffPicker>
                     )}
                     {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                       <button
@@ -12889,13 +13064,23 @@ const ConversationViewInner = (
     }
   }, [isRenaming]);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
-  const [matchInstances, setMatchInstances] = useState<{ messageId: string; localIndex: number; timestamp: number }[]>([]);
+  const [matchingMessageIds, setMatchingMessageIds] = useState<ReadonlySet<string>>(EMPTY_ID_SET);
+  const [matchInstances, setMatchInstances] = useState<MatchInstance[]>(EMPTY_MATCH_INSTANCES);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [searchStatus, setSearchStatus] = useState<"idle" | "searching" | "done" | "error">("idle");
+  // The hit the view is bringing into view right now. Navigation points at
+  // it; the activation loop (after the virtualizer) consumes it. Declared
+  // here, above the session-switch reset that clears it during render.
+  const pendingHitRef = useRef<PendingHit | null>(null);
+  // The hit currently shown as active. State, not a DOM attribute set once:
+  // the virtualizer remounts rows and streaming re-renders markdown, and
+  // either one recreates the <mark> without the attribute. An effect below
+  // re-applies it after every render.
+  const [activeHit, setActiveHit] = useState<{ messageId: string; localIndex: number } | null>(null);
+  const activationSeqRef = useRef(0);
   const [isLocalSearchOpen, setIsLocalSearchOpen] = useState(false);
   const [localSearchQuery, setLocalSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-  const [navTrigger, setNavTrigger] = useState(0);
   const localSearchInputRef = useRef<HTMLInputElement>(null);
   useWatchEffect(() => {
     if (!localSearchQuery) { setDebouncedSearchQuery(""); return; }
@@ -13019,9 +13204,12 @@ const ConversationViewInner = (
     setDiffExpanded(false);
     setShowThinking(false);
     setHighlightedMessageId(null);
-    setAllMatchingMessageIds([]);
-    setMatchInstances([]);
+    setMatchingMessageIds(EMPTY_ID_SET);
+    setMatchInstances(EMPTY_MATCH_INSTANCES);
     setCurrentMatchIndex(0);
+    setSearchStatus("idle");
+    pendingHitRef.current = null;
+    setActiveHit(null);
     setIsLocalSearchOpen(false);
     setLocalSearchQuery("");
     setDebouncedSearchQuery("");
@@ -13881,24 +14069,27 @@ const ConversationViewInner = (
     () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
     [timeline, unreadAnchorAt, enteredAt],
   );
-  // The handoff anchor, drawn the same way: the "assigned to you" line sits
-  // above the first row at or after the moment a teammate made you an owner.
-  // A session handed over after its last message (the usual case: a finished
-  // thread passed on) anchors below the final row instead. -1 = no handoff.
-  const handoff = useOwnersFromStore(pendingConvId).handoff;
-  const handoffAt = handoff?.added_at ?? 0;
-  const handoffIndex = useMemo(() => {
-    if (!handoffAt || timeline.length === 0) return -1;
-    const idx = timeline.findIndex((it) => it.timestamp >= handoffAt);
-    return idx === -1 ? timeline.length : idx;
-  }, [timeline, handoffAt]);
-  const handoffRule = handoff && handoffIndex >= 0 && (
-    <TimelineRule color="var(--sol-violet)" label="Assigned to you">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoffAt)}>
-        {handoff.added_by_name || "A teammate"} assigned this to you · {formatRelativeTime(handoffAt)}
-      </span>
-    </TimelineRule>
-  );
+  // Handoff markers, drawn the same way: each transfer sits above the first
+  // row at or after the moment it happened, with the assigner's note under
+  // the rule. A session handed over after its last message (the usual case:
+  // a finished thread passed on) anchors below the final row instead — index
+  // timeline.length. Every viewer sees every handoff; the assignee's own
+  // "Got it" strip is the header banner.
+  const ownersApi = useOwnersFromStore(pendingConvId);
+  const handoffMeId = ownersApi.currentUser?._id?.toString?.();
+  const handoffsByIndex = useMemo(() => {
+    const byIndex = new Map<number, HandoffInfo[]>();
+    if (timeline.length === 0) return byIndex;
+    for (const h of ownersApi.handoffs) {
+      const idx = timeline.findIndex((it) => it.timestamp >= h.at);
+      const at = idx === -1 ? timeline.length : idx;
+      byIndex.set(at, [...(byIndex.get(at) ?? []), h]);
+    }
+    return byIndex;
+  }, [timeline, ownersApi.handoffs]);
+  const handoffRulesAt = (index: number) => handoffsByIndex.get(index)?.map((h) => (
+    <HandoffMarker key={`${h.to}:${h.at}`} handoff={h} meId={handoffMeId} />
+  ));
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
@@ -14386,138 +14577,78 @@ const ConversationViewInner = (
     knownItemIdsRef.current = currentIds;
   }, [timeline]);
 
-  // Track if we've already scrolled for this highlight query
-  const hasScrolledToHighlight = useRef(false);
-
-  // Fetch ALL matches across the whole conversation (not just loaded messages).
-  // Without this, a match in a message outside the current pagination window is invisible.
-  const cleanedHighlight = highlightQuery?.trim();
-  const globalMatches = useQuery(
-    api.messages.findAllMessagesByContent,
-    convexConvId && cleanedHighlight
-      ? { conversation_id: convexConvId, search_term: cleanedHighlight, ...shareTokenArg(convexConvId) }
-      : "skip"
-  );
-
-  // Build match instances from the global list so the counter and next/prev
-  // work across unloaded messages too.
-  useWatchEffect(() => {
-    if (!highlightQuery) {
-      setHighlightedMessageId(null);
-      setAllMatchingMessageIds(EMPTY_MATCH_IDS);
-      setMatchInstances(EMPTY_MATCH_INSTANCES);
-      setCurrentMatchIndex(0);
-      hasScrolledToHighlight.current = false;
-      return;
-    }
-    if (!globalMatches) return;
-
-    const matchingIds: string[] = [];
-    const instances: { messageId: string; localIndex: number; timestamp: number }[] = [];
-    for (const m of globalMatches) {
-      matchingIds.push(m.message_id);
-      for (let i = 0; i < m.match_count; i++) {
-        instances.push({ messageId: m.message_id, localIndex: i, timestamp: m.timestamp });
-      }
-    }
-
-    setAllMatchingMessageIds(matchingIds);
-    setMatchInstances(instances);
-    if (instances.length > 0) {
-      setHighlightedMessageId(instances[0].messageId);
-      setCurrentMatchIndex(prev => (prev < instances.length ? prev : 0));
-    } else {
-      setHighlightedMessageId(null);
-      setCurrentMatchIndex(0);
-    }
-  }, [highlightQuery, globalMatches]);
-
   // Ref of loaded message IDs for fast membership checks during navigation.
   const loadedIdsRef = useRef<Set<string>>(new Set());
   loadedIdsRef.current = useMemo(() => new Set(messages.map((m: Message) => m._id)), [messages]);
+  const matchInstancesRef = useRef(matchInstances);
+  matchInstancesRef.current = matchInstances;
+  const currentMatchIndexRef = useRef(currentMatchIndex);
+  currentMatchIndexRef.current = currentMatchIndex;
 
-  const navigateToMatch = useCallback((index: number) => {
-    if (matchInstances.length === 0) return;
-    const target = matchInstances[index];
+  const [activationTick, setActivationTick] = useState(0);
+  const navigateToHit = useCallback((index: number, dir: 1 | -1, instances: MatchInstance[]) => {
+    const target = instances[index];
+    if (!target) return;
     setCurrentMatchIndex(index);
     setHighlightedMessageId(target.messageId);
-    hasScrolledToHighlight.current = false;
-    setNavTrigger(t => t + 1);
-  }, [matchInstances]);
-
+    pendingHitRef.current = { ...target, dir, startedAt: Date.now(), jumped: false, skipped: 0 };
+    setActivationTick((t) => t + 1);
+  }, []);
   const goToNextMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
-    navigateToMatch((currentMatchIndex + 1) % matchInstances.length);
-  }, [matchInstances, currentMatchIndex, navigateToMatch]);
-
+    navigateToHit(stepIndex(currentMatchIndex, 1, matchInstances.length), 1, matchInstances);
+  }, [matchInstances, currentMatchIndex, navigateToHit]);
   const goToPrevMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
-    navigateToMatch(currentMatchIndex === 0 ? matchInstances.length - 1 : currentMatchIndex - 1);
-  }, [matchInstances, currentMatchIndex, navigateToMatch]);
+    navigateToHit(stepIndex(currentMatchIndex, -1, matchInstances.length), -1, matchInstances);
+  }, [matchInstances, currentMatchIndex, navigateToHit]);
 
-  // Activate the specific mark in the DOM after navigation
-  // Track pending scroll target; survives until the target message renders so that
-  // navigating to an unloaded match still scrolls once the jump loads the messages.
-  const pendingScrollRef = useRef<{ messageId: string; localIndex: number } | null>(null);
-
+  // Every hit across the whole conversation, one bounded server page at a
+  // time (messages.findAllMessagesByContent), so a match outside the loaded
+  // window still counts. A one-shot walk, not a live subscription: a live
+  // query over a long transcript re-ran the full scan on every new message
+  // and yanked the counter back to hit 1 each time. The first page that
+  // carries a hit shows it at once; later pages only grow the counter.
+  const cleanedHighlight = highlightQuery?.trim();
+  const searchGenRef = useRef(0);
   useWatchEffect(() => {
-    void navTrigger;
-    if (matchInstances.length === 0 || !containerRef.current) return;
-    const instance = matchInstances[currentMatchIndex];
-    if (!instance) return;
-    pendingScrollRef.current = { messageId: instance.messageId, localIndex: instance.localIndex };
-    const isLoaded = loadedIdsRef.current.has(instance.messageId);
-    // If the target message is outside the current pagination window, trigger
-    // a server jump so the activation effect can scroll to it once it loads.
-    if (!isLoaded && onJumpToTimestamp) {
-      onJumpToTimestamp(instance.timestamp);
+    const gen = ++searchGenRef.current;
+    pendingHitRef.current = null;
+    setActiveHit(null);
+    setMatchInstances(EMPTY_MATCH_INSTANCES);
+    setMatchingMessageIds(EMPTY_ID_SET);
+    setCurrentMatchIndex(0);
+    if (!convexConvId || !cleanedHighlight) {
+      setHighlightedMessageId(null);
+      setSearchStatus("idle");
+      return;
     }
-  }, [currentMatchIndex, matchInstances, navTrigger, onJumpToTimestamp]);
-
-  // Activate the pending mark whenever the DOM for the target message is ready.
-  // Messages are virtualized: the wrapper may render before its text/marks do.
-  // Scroll the wrapper in first (triggers virtualizer to render content), then
-  // retry finding marks. Runs on navigation AND when `messages` changes (post-jump).
-  useWatchEffect(() => {
-    const pending = pendingScrollRef.current;
-    if (!pending || !containerRef.current) return;
-    if (!loadedIdsRef.current.has(pending.messageId)) return;
-    let scrolledWrapper = false;
-    const activate = () => {
-      if (!containerRef.current || !pendingScrollRef.current) return;
-      const p = pendingScrollRef.current;
-      containerRef.current.querySelectorAll('mark[data-search-active]').forEach(m => {
-        m.removeAttribute('data-search-active');
-        (m as HTMLElement).style.cssText = '';
-      });
-      const msgEl = containerRef.current.querySelector(`#msg-${CSS.escape(p.messageId)}`);
-      if (!msgEl) return;
-      const marks = Array.from(msgEl.querySelectorAll('mark[data-search-highlight]'));
-      if (marks.length === 0) {
-        // Virtualizer hasn't rendered the message content yet — scroll the wrapper
-        // so it mounts; a later retry (50/200/500/1000ms) will find the marks.
-        if (!scrolledWrapper) {
-          msgEl.scrollIntoView({ block: 'center', behavior: 'auto' });
-          scrolledWrapper = true;
+    setSearchStatus("searching");
+    let shown = false;
+    walkSearchPages(
+      (after) => convex.query(api.messages.findAllMessagesByContent, {
+        conversation_id: convexConvId,
+        search_term: cleanedHighlight,
+        after_ts: after,
+        ...shareTokenArg(convexConvId),
+      }),
+      (all, done) => {
+        const instances = instancesFromMatches(all);
+        setMatchInstances(instances);
+        setMatchingMessageIds(new Set(all.map((m) => m.message_id)));
+        if (done) setSearchStatus("done");
+        if (!shown && instances.length > 0) {
+          shown = true;
+          navigateToHit(0, 1, instances);
         }
-        return;
-      }
-      const target = marks[p.localIndex] ?? marks[0];
-      if (target) {
-        target.setAttribute('data-search-active', 'true');
-        (target as HTMLElement).style.backgroundColor = 'rgb(245 158 11)';
-        (target as HTMLElement).style.borderRadius = '2px';
-        (target as HTMLElement).style.boxShadow = '0 0 0 1px rgb(245 158 11)';
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        pendingScrollRef.current = null;
-      }
-    };
-    const t1 = setTimeout(activate, 50);
-    const t2 = setTimeout(activate, 200);
-    const t3 = setTimeout(activate, 500);
-    const t4 = setTimeout(activate, 1000);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
-  }, [navTrigger, messages, highlightedMessageId]);
+      },
+      () => gen !== searchGenRef.current,
+    ).catch((err: unknown) => {
+      if (gen !== searchGenRef.current) return;
+      console.warn("[ConversationView] conversation search failed", { conversationId: convexConvId, err });
+      setSearchStatus("error");
+    });
+  }, [convexConvId, cleanedHighlight]);
 
   const jumpToStoryMessage = useCallback((messageId: string, timestamp: number) => {
     setDensity("full");
@@ -15227,6 +15358,17 @@ const ConversationViewInner = (
         rects.push({ index: v.index, top: r.top, bottom: r.bottom });
       }
       const { topVisibleIndex, visible } = topVisibleIndexFromRects(rects, containerRect.top, containerRect.bottom);
+      // Follow mode: while someone mirrors this window, its place in the
+      // transcript rides the same measurement the sticky prompt takes. Read
+      // off the store without subscribing; a window nobody follows writes
+      // nothing here.
+      {
+        const st = useInboxStore.getState();
+        if (st.followedBy.length > 0 && conversation?._id) {
+          const a = anchorFromRects(rects, topVisibleIndex, containerRect.top, timelineMessageIds);
+          st.setViewAnchor(a ? { conversationId: String(conversation._id), ...a } : null);
+        }
+      }
       const navId = resolveNavigatorCurrentId(
         navigatorTimelineIndices,
         timelineMessageIds,
@@ -15783,37 +15925,146 @@ const ConversationViewInner = (
 
   useEventListener("hashchange", () => scrollToHash());
 
-  // Scroll to highlighted message from search
+  // Rows that hold a hit at the current density — a folded tool message maps
+  // to the row it shows inside — so the dimming of everything else does not
+  // grey out the very row the active mark lives in.
+  const matchRowIds = useMemo(() => {
+    if (matchingMessageIds.size === 0) return EMPTY_ID_SET;
+    const rows = new Set<string>();
+    const aggregates = { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf };
+    for (const id of matchingMessageIds) rows.add(jumpRowForMessage(id, feedDensity, aggregates).scrollToId);
+    return rows;
+  }, [matchingMessageIds, feedDensity, turnAggregates, nudgeRuns]);
+
+  // Bring the pending search hit into view. One owner for the whole motion:
+  // ask the server for the window when the message is not loaded, open the
+  // fold it sits in at this density, scroll the virtualizer to its row, then
+  // scroll the mark itself into view once the row has rendered its text. A
+  // short poll rather than fixed timers, so a slow mount (a long transcript
+  // under load) still lands; a hit that never renders a mark (a row the
+  // transcript hides, text inside a tag the renderer strips) is skipped in
+  // the direction of travel. planActivation (lib/conversationSearch) decides
+  // each step; this effect only reads the DOM and acts.
   useWatchEffect(() => {
-    if (highlightedMessageId && timeline.length > 0 && !hasScrolledToHighlight.current) {
-      const itemIndex = timeline.findIndex(item => {
-        if (item.type === 'message') {
-          return item.data._id === highlightedMessageId;
-        }
-        return false;
+    void activationTick; void messages; void expandedGroups;
+    if (!pendingHitRef.current) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      if (cancelled) return;
+      const hit = pendingHitRef.current;
+      const container = containerRef.current;
+      if (!hit || !container) return;
+      const jump = jumpRowForMessage(hit.messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
+      const rowIndex = timeline.findIndex((item) => item.type === 'message' && item.data._id === jump.scrollToId);
+      // The virtualizer's wrapper, not `#msg-<id>`: command cards, plan and
+      // skill blocks and system rows carry no message id, but their marks
+      // live inside the wrapper all the same.
+      const rowEl = rowIndex >= 0 ? container.querySelector(`[data-index="${rowIndex}"]`) : null;
+      const marks = searchMarksIn(rowEl, hit.messageId);
+      const loaded = loadedIdsRef.current.has(hit.messageId);
+      const now = Date.now();
+      if (loaded && hit.loadedAt === undefined) hit.loadedAt = now;
+      const step = planActivation(hit, {
+        loaded,
+        rowIndex,
+        expandKey: jump.expandKey,
+        expanded: jump.expandKey ? expandedGroups.has(jump.expandKey) : false,
+        mounted: !!rowEl,
+        markCount: marks.length,
+        canJump: !!onJumpToTimestamp,
+        elapsedMs: now - hit.startedAt,
+        sinceLoadedMs: hit.loadedAt === undefined ? 0 : now - hit.loadedAt,
       });
-      if (itemIndex >= 0) {
-        hasScrolledToHighlight.current = true;
-        setUserScrolled(true);
-        // react-virtual's scrollToIndex assigns scrollTop but relies on the
-        // scroll event to recompute its visible range. Programmatic scrollTop
-        // writes don't always emit that event reliably (same-value writes,
-        // batching), so we nudge the range ourselves. Retries handle the case
-        // where item-size estimates for unmeasured items above shift the
-        // target offset — once those items render and measure, the next
-        // scrollToIndex corrects onto the real position.
-        const align = { align: "center" as const, behavior: "auto" as const };
-        const retry = () => {
-          virtualizer.scrollToIndex(itemIndex, align);
-          containerRef.current?.dispatchEvent(new Event('scroll', { bubbles: true }));
-        };
-        setTimeout(retry, 150);
-        setTimeout(retry, 300);
-        setTimeout(retry, 500);
-        setTimeout(retry, 900);
+      switch (step.kind) {
+        case "jump":
+          hit.jumped = true;
+          onJumpToTimestamp?.(hit.timestamp);
+          break;
+        case "expand":
+          setExpandedGroups((prev) => {
+            if (prev.has(step.key)) return prev;
+            const next = new Set(prev);
+            next.add(step.key);
+            return next;
+          });
+          return; // the effect re-runs on expandedGroups
+        case "scrollRow":
+          setUserScrolled(true);
+          virtualizer.scrollToIndex(step.index, { align: "start", behavior: "auto" });
+          container.dispatchEvent(new Event('scroll', { bubbles: true }));
+          break;
+        case "wait":
+          break;
+        case "dead": {
+          const next = skipDeadHit(hit, currentMatchIndexRef.current, matchInstancesRef.current, Date.now());
+          if (!next) { pendingHitRef.current = null; return; }
+          pendingHitRef.current = next.hit;
+          setCurrentMatchIndex(next.index);
+          setHighlightedMessageId(next.hit.messageId);
+          break;
+        }
+        case "activate": {
+          const target = marks[step.markIndex];
+          markActive(container, target);
+          setActiveHit({ messageId: hit.messageId, localIndex: step.markIndex });
+          setUserScrolled(true);
+          // Scroll the feed itself (not every ancestor, as scrollIntoView
+          // would) so the mark sits in the band the reader can actually see:
+          // below the sticky prompt that floats over the top of the feed.
+          const placeInBand = () => {
+            const c = container.getBoundingClientRect();
+            const top = Math.max(c.top, stickyElRef.current?.getBoundingClientRect().bottom ?? c.top);
+            const r = target.getBoundingClientRect();
+            if (r.top >= top + 8 && r.bottom <= c.bottom - 8) return;
+            const goal = top + (c.bottom - top) * 0.4;
+            container.scrollTop += r.top + r.height / 2 - goal;
+          };
+          placeInBand();
+          pendingHitRef.current = null;
+          // The virtualizer re-measures rows as their content mounts (code
+          // blocks, images), and a server jump scrolls to its own center a
+          // beat later; either can shove the mark out of view. Look again,
+          // until a newer hit takes over or the reader moves the feed
+          // themselves. Its own token, not the effect's cancel flag: this
+          // effect re-runs on every new message.
+          const seq = ++activationSeqRef.current;
+          let readerMoved = false;
+          const onReader = () => { readerMoved = true; };
+          const readerEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const;
+          for (const ev of readerEvents) container.addEventListener(ev, onReader, { passive: true, once: true });
+          const settle = (last: boolean) => {
+            if (last) for (const ev of readerEvents) container.removeEventListener(ev, onReader);
+            if (readerMoved || seq !== activationSeqRef.current || !target.isConnected) return;
+            placeInBand();
+          };
+          for (const ms of [250, 700, 1500, 3000]) setTimeout(() => settle(ms === 3000), ms);
+          return;
+        }
       }
-    }
-  }, [highlightedMessageId, timeline, virtualizer]);
+      // A jump in flight resolves through `messages`, which re-runs this
+      // effect; polling it fast only burns the main thread.
+      timer = setTimeout(tick, step.kind === "wait" && !loadedIdsRef.current.has(hit.messageId) ? 500 : 100);
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [activationTick, messages, expandedGroups, timeline, feedDensity]);
+
+  // Keep the active hit painted. Runs after every render while a hit is
+  // active (two selector lookups): a row that scrolled out and back, or a
+  // message that re-rendered, comes back with plain marks.
+  const activeRowIndex = useMemo(() => {
+    if (!activeHit) return -1;
+    const rowId = jumpRowForMessage(activeHit.messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf }).scrollToId;
+    return timeline.findIndex((item) => item.type === 'message' && item.data._id === rowId);
+  }, [activeHit, timeline, feedDensity, turnAggregates, nudgeRuns]);
+  useWatchEffect(() => {
+    const container = containerRef.current;
+    if (!activeHit || activeRowIndex < 0 || !container) return;
+    const marks = searchMarksIn(container.querySelector(`[data-index="${activeRowIndex}"]`), activeHit.messageId);
+    const target = marks[Math.min(activeHit.localIndex, marks.length - 1)];
+    if (target && !target.hasAttribute('data-search-active')) markActive(container, target);
+  });
 
   useWatchEffect(() => {
     if (!targetMessageId || timeline.length === 0 || hasScrolledToTarget.current) {
@@ -16112,6 +16363,14 @@ const ConversationViewInner = (
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
+  const openReveal = useOpenReveal();
+  const inRevealBand = useContext(RevealInBandCtx);
+  const [hostingReveal, setHostingReveal] = useState(false);
+  useLayoutEffect(() => {
+    const root = headerRef.current?.closest("[data-cc-conversation]");
+    setHostingReveal(!!(openReveal && root && root.contains(openReveal.slot)));
+  }, [openReveal]);
+  const compactChrome = inRevealBand || hostingReveal;
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -16182,13 +16441,16 @@ const ConversationViewInner = (
     [sessionImageEntries]
   );
   const sessionImageUrls = useStorageImageUrls(sessionImageStorageIds);
-  const sessionGallerySrcs = useMemo(() => {
-    const srcs: string[] = [];
+  const sessionGalleryImages = useMemo(() => {
+    const images: GalleryImage[] = [];
     for (const e of sessionImageEntries) {
       const src = e.src ?? (e.storage_id ? sessionImageUrls[e.storage_id] : undefined);
-      if (src) srcs.push(src);
+      if (!src) continue;
+      // An inline base64 image has no address anyone else could open.
+      const href = src.startsWith("data:") ? undefined : src;
+      images.push({ src, href, messageId: e.message_id });
     }
-    return srcs;
+    return images;
     // sessionImageUrls is rebuilt per render; its content only grows as the
     // batched resolution fills in, so keying on its size is exact.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -16748,9 +17010,9 @@ const ConversationViewInner = (
     <BrowserSessionContext.Provider value={browserSession}>
     <RevealAncestryCtx.Provider value={revealAncestry}>
     <ChatWakeContext.Provider value={chatWakeMap}>
-    <ImageGalleryProvider>
+    <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById}>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main data-cc-conversation className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation data-reveal-chrome={compactChrome ? "" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -16957,6 +17219,10 @@ const ConversationViewInner = (
 
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
+                {/* Who has this session open right now: teammates' faces off
+                    the roster's viewing field. A solo session shows nothing. */}
+                {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} />}
+
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
                     unconfigured — SessionHuddleButton gates itself). */}
@@ -16978,7 +17244,7 @@ const ConversationViewInner = (
                     fleet chip deliberately ignores remote machines. */}
                 {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
 
-                {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
+                {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
 
                 {/* The project's files, one click away regardless of what the
                     transcript happens to mention. Opens beside on surfaces
@@ -17011,9 +17277,10 @@ const ConversationViewInner = (
                     ) : (
                       <span className="max-w-[100px] truncate">{highlightQuery}</span>
                     )}
+                    {searchStatus === "searching" && <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-70" />}
                     {matchInstances.length > 0 && (
                       <>
-                        <span className="text-[10px] opacity-70 ml-1">
+                        <span className="text-[10px] opacity-70 ml-1 tabular-nums whitespace-nowrap">
                           {currentMatchIndex + 1}/{matchInstances.length}
                         </span>
                         <button
@@ -17036,8 +17303,11 @@ const ConversationViewInner = (
                         </button>
                       </>
                     )}
-                    {matchInstances.length === 0 && highlightQuery && (
-                      <span className="text-[10px] opacity-70 ml-1">0 matches</span>
+                    {matchInstances.length === 0 && highlightQuery && searchStatus === "done" && (
+                      <span className="text-[10px] opacity-70 ml-1 whitespace-nowrap">No matches</span>
+                    )}
+                    {searchStatus === "error" && (
+                      <span className="text-[10px] ml-1 whitespace-nowrap text-sol-red">Search failed</span>
                     )}
                     <button
                       onClick={onClearHighlight}
@@ -17484,6 +17754,7 @@ const ConversationViewInner = (
                 <MessagePromptPreview
                   content={cleanStickyContent(activeStickyMsg.content)}
                   images={stickyImages}
+                  messageId={activeStickyMsg.id && activeStickyMsg.id !== '__fallback__' ? activeStickyMsg.id : undefined}
                   variant="sticky"
                   textRef={stickyTextRef}
                   textClassName={`text-sm text-sol-text whitespace-pre-wrap ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
@@ -17624,7 +17895,9 @@ const ConversationViewInner = (
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
-              const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
+              // Only once the scan is complete: pages land oldest first, so dimming
+              // earlier would grey out recent rows whose hits are not counted yet.
+              const isSearchDimmed = searchStatus === "done" && matchRowIds.size > 0 && item.type === 'message' && !matchRowIds.has((item.data as Message)._id);
               const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isToolRow = item.type === 'message' && isToolReceiptRow(item.data as Message, showThinking);
@@ -17645,20 +17918,20 @@ const ConversationViewInner = (
                   }}
                 >
                   {content && (
-                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} ${isSearchDimmed ? "search-dimmed" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
                         <TimelineRule color="var(--sol-orange)" label="New messages">
                           <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === handoffIndex && handoffRule}
-                      {content}
+                      {handoffRulesAt(virtualItem.index)}
+                      <GalleryMessageScope messageId={item.type === 'message' ? (item.data as Message)._id : undefined}>{content}</GalleryMessageScope>
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
                         <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffIndex === timeline.length && handoffRule}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffRulesAt(timeline.length)}
                     </div>
                   )}
                 </div>
@@ -17753,8 +18026,11 @@ const ConversationViewInner = (
             />
           ) : (
             <>
-              {conversation.share_token && (
-                <OwnerComposerPresence conversationId={conversation._id.toString()} />
+              {/* Who else is in this box: a teammate's live draft above the
+                  composer on every real conversation, and "is here" for a
+                  share link guest with no face on the roster. */}
+              {composerPresenceEnabled(conversation) && (
+                <OwnerComposerPresence conversationId={conversation._id.toString()} showHere={!!conversation.share_token} />
               )}
               <CollabRequestBanner conversationId={conversation._id.toString()} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (

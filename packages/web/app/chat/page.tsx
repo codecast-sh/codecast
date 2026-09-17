@@ -261,7 +261,10 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const feed = useChannelMessagesSync(activeChannelId);
-  const messages = useChannelMessages(activeChannelId);
+  // Only the rows the feed has paged to without a gap: a cached row from an
+  // earlier visit or a line imported behind the pages waits until paging
+  // reaches it, instead of rendering as a hole in the room.
+  const messages = useChannelMessages(activeChannelId, feed.floor);
 
   // ── Push to talk ──────────────────────────────────────────────────────────
   // DMs only in v1: a burst is spoken into the DM's own room, and a channel-wide
@@ -352,15 +355,15 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   // ── The unread rule ───────────────────────────────────────────────────────
   // Frozen at channel entry. If it tracked the live read mark, the rule would
   // vanish the moment the reader's own scrolling advanced it — erasing the place
-  // they came back to, mid-read. See the note in ChatMessageList.
+  // they came back to, mid-read. The list still draws it; opening the room pins
+  // to the newest messages, not to this mark. See the note in ChatMessageList.
   const [frozenReadAt, setFrozenReadAt] = useState<number | undefined>(undefined);
   const frozenForRef = useRef<string | undefined>(undefined);
   useWatchEffect(() => {
     // Wait for a RESOLVED channel, not merely for an id. On a cold load of
     // /chat/<id> — a reload, or a link from a notification — the id is known on
     // the first commit while the rail is still hydrating, and freezing there
-    // stamped `undefined` forever: no rule, no landing on it, on exactly the
-    // paths the rule is for.
+    // stamped `undefined` forever: no rule on exactly the paths it is for.
     if (!activeChannelId || !activeChannel) return;
     if (frozenForRef.current === activeChannelId) return;
     frozenForRef.current = activeChannelId;
@@ -759,7 +762,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               teamId={community ? undefined : activeChannel?.teamId}
               walkieRoomKey={walkieRoomKey}
               walkieRing={activeChannel?.dmMemberIds}
-              slackChannelName={slackOutbound ? (slackLink?.slack_channel_name ?? slackLink?.slack_channel_id) : undefined}
+              slackChannelName={slackOutbound ? (slackLink?.kind === "dm" ? "Slack" : slackLink?.slack_channel_name ?? slackLink?.slack_channel_id) : undefined}
               placeholder={
                 activeChannel?.kind === "dm"
                   ? `Message ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`

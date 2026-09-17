@@ -11,7 +11,7 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { create as mutate } from "mutative";
 import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Trash2, Pencil } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { createOrgSlice, orgRoleReparentMakesCycle, type OrgUpdateRoleInput } from "../../store/orgSlice";
+import { createOrgSlice, orgRoleReparentMakesCycle, reparentToastLine, type OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useSyncOrgHealth } from "../../hooks/useSyncOrgHealth";
 import { useSyncOrgProposals, useSyncOrgProposal } from "../../hooks/useSyncOrgProposals";
@@ -33,8 +33,13 @@ import { cn } from "../../lib/utils";
 import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
 import { OrgScopePanel, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
+import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
-import { changeNodeId, composeParam, findChiefOfStaff, openProposals, orgPreviewEnabled, pickProposal, proposalParam, proposalProgress, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
+import { OrgEmptyCanvas, OrgGuide, orgGuideSteps } from "./OrgFirstOpen";
+import { orgTreeReadState } from "./orgReadState";
+import { retireToastText, type UnseatChoice } from "./RetireRoleConfirm";
+import { reviewRunState, type OrgReviewRun } from "./staffingModel";
+import { changeNodeId, composeParam, findChiefOfStaff, orgPreviewEnabled, pickProposal, proposalParam, proposalProgress, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
 import { StateTally } from "./OrgNodeCards";
@@ -51,10 +56,6 @@ const PAGE = 8;
 const ORG_PREVIEW_DEV = !!import.meta.env.DEV;
 /** The desktop panel overlays the canvas; the graph fits to what is left. */
 const PANEL_W = 380;
-/** "Propose an org now" shows a reviewing state until a proposal lands or
- *  this long passes: a review that ends without one (the session died, the
- *  analyzer found nothing) must give the buttons back. */
-const REVIEW_TTL_MS = 15 * 60_000;
 
 type MoveSubject = { kind: "session" | "role"; id: string; title: string };
 
@@ -101,8 +102,8 @@ function SessionsUnderPager({ parentId, teamId, cursor, onPage, preview }: {
 // ---------------------------------------------------------------- page
 
 export function OrgPageInner() {
-  const { tree: storeTree, ready, missing } = useSyncOrgTree();
-  const { health: storeHealth, missing: healthMissing } = useSyncOrgHealth();
+  const { tree: storeTree, ready, missing, refused, error: treeError, retry: retryTree } = useSyncOrgTree();
+  const { health: storeHealth, missing: healthMissing, error: healthError, refresh: refreshHealth } = useSyncOrgHealth();
   useSyncOrgProposals();
   // Proposals are two collections (list rows, and the changes of opened
   // proposals) joined at render; the focus scalar is what a ghost click and
@@ -116,6 +117,13 @@ export function OrgPageInner() {
     (st) => st.orgIntentNotice?.at,
     (st) => st.currentSessionId,
     (st) => st.teams,
+    (st) => st.clientState.ui?.org_nux_seen,
+    (st) => st.clientState.ui?.org_review_run?.since,
+    (st) => st.clientState.ui?.org_review_run?.session_id,
+    // The review session's liveness, two fields of one row (never the row):
+    // a finished turn or a closed session with no proposal is "ended".
+    (st) => { const id = st.clientState.ui?.org_review_run?.session_id; return id ? st.sessions[id]?.is_idle : undefined; },
+    (st) => { const id = st.clientState.ui?.org_review_run?.session_id; return id ? st.sessions[id]?.status : undefined; },
   ]);
   const storeFocusChangeId = s.orgFocusChangeId;
   // The journal put an edit back on its own (no echo within its TTL): say
@@ -164,6 +172,9 @@ export function OrgPageInner() {
   const [pendingMove, setPendingMove] = useState<OrgReparentRequest | null>(null);
   const [movePicker, setMovePicker] = useState<MoveSubject | null>(null);
   const [addRoleOpen, setAddRoleOpen] = useState(false);
+  // S16: the seat-the-existing-agent moment, opened by hireChief when a
+  // standing agent already exists.
+  const [seatDialog, setSeatDialog] = useState<{ name: string; shortId?: string; convId: string; messageCount?: number } | null>(null);
   const [resetKey, setResetKey] = useState(0);
   const menu = useContextMenu<OrgLayoutNode>();
   const phone = useIsPhone();
@@ -181,15 +192,21 @@ export function OrgPageInner() {
   const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId || composeText ? "staffing" : "node");
   const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId || !!composeText);
   const [editRoleChange, setEditRoleChange] = useState<OrgProposalChange | null>(null);
-  const [reviewingSince, setReviewingSince] = useState<number | null>(null);
-  /** The session "Propose an org now" started: its stub id at once, the real
-   *  id once the server names it, so "Open the review session" always lands. */
-  const [reviewSession, setReviewSession] = useState<string | null>(null);
+  // The review "Propose an org now" started lives in the prefs bag
+  // (ClientUI.org_review_run), so a reload or a visit elsewhere does not
+  // forget it and offer a second one. The preview keeps its own copy: it
+  // must never write a pref.
+  const [previewRun, setPreviewRun] = useState<OrgReviewRun | null>(null);
   /** A node the chart should bring into view (a flag row, a change on an
    *  existing role): OrgGraph pans to it the way it pans to a focused ghost. */
   const [graphFocus, setGraphFocus] = useState<OrgFocusTarget | null>(null);
   const focusSeq = useRef(0);
   const askFocus = useCallback((kind: OrgFocusTarget["kind"], id: string) => setGraphFocus({ kind, id, seq: ++focusSeq.current }), []);
+  // First open (org-staffing.md S14): the three step guide over the canvas.
+  // Opens on its own once, when the tree lands with no roles and the pref is
+  // unset; "How this page works" reopens it; Done or dismiss writes the pref.
+  const [guide, setGuide] = useState<{ step: number } | null>(null);
+  const guideOffered = useRef(false);
   const proposals = useMemo<OrgProposalRow[]>(() => preview ? previewProposals : joinProposals(s.orgProposals, s.orgProposalChanges), [preview, previewProposals, s.orgProposals, s.orgProposalChanges]);
   const workspaceProposals = useMemo(() => {
     const wanted = tree?.workspace;
@@ -216,7 +233,11 @@ export function OrgPageInner() {
   const chief = useMemo(() => findChiefOfStaff(tree), [tree]);
   // Reviewing until a proposal newer than the click lands, or the TTL passes
   // (`now` is the coarse clock, so the state falls back on its own).
-  const reviewing = reviewingSince !== null && now - reviewingSince < REVIEW_TTL_MS && !openProposals(workspaceProposals).some((p) => p.created_at >= reviewingSince);
+  const reviewRun: OrgReviewRun | null = preview ? previewRun : s.clientState.ui?.org_review_run ?? null;
+  const reviewRow = reviewRun?.session_id ? s.sessions[reviewRun.session_id] : undefined;
+  const reviewState = reviewRunState(reviewRun, now, tree?.workspace.id ?? null, workspaceProposals, reviewRow ? { is_idle: reviewRow.is_idle, status: reviewRow.status } : null);
+  const reviewing = reviewState === "reviewing";
+  const reviewSession = reviewState === "none" ? null : reviewRun?.session_id ?? null;
   const setProposalParam = useCallback((shortId: string | null) => {
     const params = new URLSearchParams(searchParams.toString());
     if (shortId) params.set("proposal", shortId); else params.delete("proposal");
@@ -252,6 +273,9 @@ export function OrgPageInner() {
   const view = useMemo<OrgLayoutView>(() => ({ collapsed, expanded }), [collapsed, expanded]);
   const layout = useMemo(() => (tree ? layoutOrgTree(tree, view) : null), [tree, view]);
   const selectedNode = useMemo(() => layout?.nodes.find((n) => n.id === selectedId) ?? null, [layout, selectedId]);
+  // What the canvas says about the read itself (orgReadState.ts): a failure
+  // or a refusal is said, never painted as an empty chart.
+  const readState = useMemo(() => orgTreeReadState({ hasTree: !!tree, hasNodes: !!layout && layout.nodes.length > 0, ready, missing, refused: !preview && refused, error: preview ? null : treeError }), [tree, layout, ready, missing, refused, treeError, preview]);
   if (selectedId && layout && !selectedNode) setSelectedId(null);
 
   // -------- store actions (or the preview equivalent)
@@ -272,6 +296,28 @@ export function OrgPageInner() {
     return !!r && (isAdmin || r.host_user_id === (me?.user_id ?? meId));
   }, [tree, isAdmin, me, meId]);
   const canMoveSession = useCallback((sess: OrgSession) => isAdmin || sess.owner_user_id === (me?.user_id ?? meId), [isAdmin, me, meId]);
+
+  // -------- first open (S14)
+  const liveRoles = tree ? tree.roles.filter((r) => r.status !== "retired").length : 0;
+  const meNodeId = me ? parentNodeId({ kind: "user", user_id: me.user_id }) : null;
+  const nuxSeen = s.clientState.ui?.org_nux_seen === true;
+  useWatchEffect(() => {
+    if (guideOffered.current || !tree || preview || liveRoles > 0 || nuxSeen) return;
+    guideOffered.current = true;
+    setGuide({ step: 0 });
+  }, [tree, preview, liveRoles, nuxSeen]);
+  // The first step is the person's own node: bring it into view.
+  useWatchEffect(() => {
+    if (guide?.step === 0 && meNodeId) askFocus("node", meNodeId);
+  }, [guide?.step, meNodeId, askFocus]);
+  const closeGuide = useCallback(() => {
+    setGuide(null);
+    if (!preview && !nuxSeen) useInboxStore.getState().updateClientUI({ org_nux_seen: true });
+  }, [preview, nuxSeen]);
+  // With a proposal open, the last step points at it (the remaining count is
+  // read where staffingCount is, below; the steps only need the two facts).
+  const guideProposal = proposal?.status === "open" ? { short_id: proposal.short_id, remaining: proposalProgress(proposal).remaining } : null;
+  const guideSteps = useMemo(() => orgGuideSteps(meNodeId, liveRoles > 0, guideProposal), [meNodeId, liveRoles, guideProposal?.short_id, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Which cards may be picked up at all: no drag that would only snap back. */
   const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
 
@@ -376,13 +422,23 @@ export function OrgPageInner() {
       // lists so it is drawn once, under the target.
       const row = findSession(req.subject.id);
       setExpanded((e) => moveExpandedSession(e, req.subject.id, parentNodeId(req.target), row));
-      run("reparentOrgSession", req.subject.id, req.target, row);
+      if (preview) run("reparentOrgSession", req.subject.id, req.target, { row });
+      else void useInboxStore.getState().reparentOrgSession(req.subject.id, req.target, { row })
+        .then((r) => { if (r) toast.success(reparentToastLine(r.short_id ?? row?.short_id ?? "The session", req.targetTitle, "session", r.told)); })
+        .catch(() => {});
     } else {
-      run("reparentOrgRole", req.subject.id, req.target);
+      // One toast says both things (S11): the role, and how many hands were told.
+      if (preview) run("reparentOrgRole", req.subject.id, req.target);
+      else {
+        const handle = tree?.roles.find((r) => r._id === req.subject.id)?.handle;
+        void useInboxStore.getState().reparentOrgRole(req.subject.id, req.target)
+          .then((r) => { if (r) toast.success(reparentToastLine(handle ? `@${handle}` : req.subject.title, req.targetTitle, "role", r.told)); })
+          .catch(() => {});
+      }
     }
     setPendingMove(null);
     setResetKey((k) => k + 1);
-  }, [run, findSession]);
+  }, [run, findSession, preview, tree]);
   const cancelMove = useCallback(() => { setPendingMove(null); setResetKey((k) => k + 1); }, []);
 
   const currentParentOf = useCallback((subject: MoveSubject): OrgParentRef | null => {
@@ -411,7 +467,14 @@ export function OrgPageInner() {
   }, [currentParentOf, tree, commitMove]);
 
   const updateRole = useCallback((roleId: string, fields: OrgUpdateRoleInput) => run("updateOrgRole", roleId, fields), [run]);
-  const retireRole = useCallback((roleId: string) => { run("retireOrgRole", roleId); setSelectedId(null); }, [run]);
+  /** The panel's retire (its confirm asks keep or retire for the chief of
+   *  staff, S16); the choice rides the store action to orgRoles.retire. */
+  const retireRole = useCallback((roleId: string, standingSession?: UnseatChoice) => {
+    const name = tree?.roles.find((r) => r._id === roleId)?.name ?? "the role";
+    run("retireOrgRole", roleId, standingSession);
+    toast.success(retireToastText(name, standingSession));
+    setSelectedId(null);
+  }, [run, tree]);
 
   // -------- staffing actions
   /** The preview decides on its local copy; live, the store action flips the
@@ -423,12 +486,24 @@ export function OrgPageInner() {
     }
     useInboxStore.getState().decideOrgProposalChange(changeId, verdict, edits);
   }, [preview]);
-  const acceptAll = useCallback((proposalId: string) => {
+  /** Withdraw the replaced proposal from its own line (S4): the preview
+   *  flips its local copy; live, the store action rides dispatch to
+   *  orgProposals.withdraw. */
+  const withdrawProposal = useCallback((proposalId: string) => {
     if (preview) {
-      setPreviewProposals((rows) => rows.map((p) => p._id !== proposalId ? p : { ...p, changes: p.changes.map((c) => c.status === "proposed" ? { ...c, status: "applied" as const, decided_at: Date.now() } : c) }));
+      setPreviewProposals((rows) => rows.map((p) => p._id === proposalId ? { ...p, status: "withdrawn" as const, resolved_at: Date.now() } : p));
       return;
     }
-    useInboxStore.getState().acceptAllOrgProposal(proposalId);
+    useInboxStore.getState().withdrawOrgProposal(proposalId);
+    toast.success("Withdrawn; the newer proposal stays open");
+  }, [preview]);
+  const acceptAll = useCallback((proposalId: string, opts?: { kinds?: string[] }) => {
+    const kinds = opts?.kinds?.length ? new Set(opts.kinds) : null;
+    if (preview) {
+      setPreviewProposals((rows) => rows.map((p) => p._id !== proposalId ? p : { ...p, changes: p.changes.map((c) => c.status === "proposed" && (!kinds || kinds.has(c.change.kind)) ? { ...c, status: "applied" as const, decided_at: Date.now() } : c) }));
+      return;
+    }
+    useInboxStore.getState().acceptAllOrgProposal(proposalId, opts);
   }, [preview]);
   /** Click on a change: focus its ghost (the scalar) and, when its subject
    *  already exists on the chart, highlight that node. */
@@ -443,7 +518,10 @@ export function OrgPageInner() {
   /** A paused chief holds every line sent to it until resumed (orgRoles
    *  wakeIsHeld); the composer says so and this is its Resume. */
   const resumeChief = useCallback((roleId: string) => updateRole(roleId, { status: "active" }), [updateRole]);
-  const hireChief = useCallback(() => {
+  // Staff the chief (S16). `seat` says what to do with the workspace's existing
+  // standing agent: seat it (default, nothing restarts) or start fresh and
+  // retire the old one. After a seat, route to the thread and say what changed.
+  const doStaffChief = useCallback((seat?: ChiefSeatChoice) => {
     const host = me?.user_id ?? meId;
     if (!tree || !host) return;
     // The provisioned standing session starts in a project, like every
@@ -457,15 +535,50 @@ export function OrgPageInner() {
       recentProjects: st.recentProjects,
       machineRoster: st.machineRoster,
     });
-    run("staffChiefOfStaff", { ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}), ...(projectPath ? { project_path: projectPath } : {}), host_user_id: host, client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}` });
-    toast.success("Hiring the chief of staff: its first review lands as a proposal here");
-  }, [tree, me, meId, run]);
+    const input = { ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}), ...(projectPath ? { project_path: projectPath } : {}), host_user_id: host, client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`, ...(seat ? { seat } : {}) };
+    if (preview) { run("staffChiefOfStaff", input); toast.success("Hiring the chief of staff: its first review lands as a proposal here"); return; }
+    void useInboxStore.getState().staffChiefOfStaff(input).then((r) => {
+      // Route to the thread and say what changed (S16). A seat keeps the agent;
+      // a fresh start replaces it. When no thread came back, the review still
+      // lands as a proposal on this page.
+      const convId = r?.standing?.conversation_id;
+      const open = convId ? { label: "Open the thread", onClick: () => openSession(convId) } : undefined;
+      if (convId) openSession(convId);
+      if (r?.seated === "existing") {
+        // The contract's own words (S16): name what it was, what it is, and
+        // that nothing restarted, so seating never reads as a takeover.
+        const was = r?.previous_title?.trim();
+        toast.success(`Your agent${was ? `, formerly ${was},` : ""} is now your Chief of Staff. Nothing restarted.`, { action: open });
+      } else if (r?.seated === "fresh") {
+        toast.success("Your new Chief of Staff is running. The old agent was retired, its thread kept and linked from its page.", { action: open });
+      } else {
+        toast.success("Hiring the chief of staff: its first review lands as a proposal here", { action: open });
+      }
+    }).catch(() => {});
+  }, [tree, me, meId, run, preview, openSession]);
+  const hireChief = useCallback(() => {
+    if (!tree) return;
+    // The explained moment (S16): a workspace with a standing agent already
+    // opens the seat dialog; an empty one hires fresh straight away. The
+    // existing agent is the root anchor (not a role's standing session).
+    const roleAnchorIds = new Set(tree.roles.map((r) => r.anchor_id).filter(Boolean));
+    const wsAnchor = tree.anchors.find((a) => a.conversation_id && !roleAnchorIds.has(a.anchor_id));
+    if (wsAnchor?.conversation_id) {
+      const convId = String(wsAnchor.conversation_id);
+      const count = (useInboxStore.getState().sessions as Record<string, { message_count?: number } | undefined>)?.[convId]?.message_count;
+      setSeatDialog({ name: wsAnchor.name, shortId: wsAnchor.short_id, convId, messageCount: count });
+    } else {
+      doStaffChief();
+    }
+  }, [tree, doStaffChief]);
   /** "Propose an org now": one review from a fresh session, no hire (S8).
    *  Rides the same spawn route as every session the web starts. */
   const proposeNow = useCallback(() => {
-    setReviewingSince(Date.now());
-    setReviewSession(null);
+    const workspace = tree?.workspace.id;
+    if (!workspace) return;
+    const since = Date.now();
     if (preview) {
+      setPreviewRun({ since, session_id: null, workspace });
       // The fixture lands after a beat so the reviewing state can be seen.
       setTimeout(() => setPreviewProposals((rows) => rows.length ? rows : [{ ...ORG_STAFFING_FIXTURE_PROPOSAL, created_at: Date.now() }]), 1500);
       return;
@@ -484,12 +597,15 @@ export function OrgPageInner() {
       projectPath: projectPath ?? undefined,
       failureLabel: "Failed to start the org review",
     });
-    setReviewSession(stubId);
+    st.updateClientUI({ org_review_run: { since, session_id: stubId, workspace } });
     // The stub is re-keyed when the server names the row; follow it so the
-    // link still opens the session after that.
-    void st.awaitConvexId(stubId).then((id) => { if (id) setReviewSession(String(id)); }).catch(() => {});
+    // link still opens the session after that, and its liveness can be read.
+    void st.awaitConvexId(stubId).then((id) => {
+      const cur = useInboxStore.getState().clientState.ui?.org_review_run;
+      if (id && cur?.since === since) useInboxStore.getState().updateClientUI({ org_review_run: { ...cur, session_id: String(id) } });
+    }).catch(() => {});
     toast.success("Reviewing the company in a fresh session");
-  }, [preview]);
+  }, [preview, tree?.workspace.id]);
   const closePanel = useCallback(() => {
     setSelectedId(null);
     setGraphFocus(null);
@@ -527,11 +643,14 @@ export function OrgPageInner() {
       tree={tree}
       health={health}
       healthMissing={!preview && healthMissing}
+      healthError={!preview && !healthMissing ? healthError?.message : undefined}
+      onRetryHealth={refreshHealth}
       proposals={workspaceProposals}
       proposal={proposal}
       selectedChangeId={focusChangeId}
       chief={chief}
       reviewing={reviewing}
+      reviewEnded={reviewState === "ended"}
       reviewSessionId={reviewSession}
       now={now}
       onSelectChange={selectChange}
@@ -541,6 +660,7 @@ export function OrgPageInner() {
       onSelectNode={focusNode}
       onOpenSession={openSession}
       onPickProposal={setProposalParam}
+      onWithdraw={withdrawProposal}
       onHireChief={hireChief}
       onProposeNow={proposeNow}
       onResumeChief={resumeChief}
@@ -577,9 +697,12 @@ export function OrgPageInner() {
             Org
             {tree && <span className="text-[13px] font-normal mt-1 truncate" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>/ {tree.workspace.name || (tree.workspace.kind === "user" ? "personal" : "team")}</span>}
           </h1>
-          <p className="mt-1.5 text-[12.5px] truncate" style={{ color: "var(--sol-text-muted)" }}>
-            <span className="hidden sm:inline">Who reports to whom: people, the roles they created, standing anchors, every session. Drag a card to move it.</span>
-            <span className="sm:hidden">Who reports to whom. Drag a card to move it.</span>
+          <p className="mt-1.5 text-[12.5px] truncate flex items-center gap-2" style={{ color: "var(--sol-text-muted)" }}>
+            <span className="hidden sm:inline truncate">Who reports to whom: people, the roles they created, standing agents, every session. Drag a card to move it.</span>
+            <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
+            {tree && (
+              <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -606,6 +729,7 @@ export function OrgPageInner() {
             style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}
             title={proposal ? `${proposal.short_id}: ${staffingCount} to decide` : "Company health and the chief of staff"}
             aria-pressed={staffingOpen && panelMode === "staffing"}
+            data-org-guide="staffing"
           >
             Staffing
             {staffingCount > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{staffingCount}</span>}
@@ -621,7 +745,7 @@ export function OrgPageInner() {
             <MapIcon className="w-4 h-4" />
           </button>
           {tree && isAdmin !== false && (
-            <button type="button" onClick={() => setAddRoleOpen(true)} title="A seat that sessions and other roles report to, with a scope of projects and plans" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>
+            <button type="button" onClick={() => setAddRoleOpen(true)} title="A seat that sessions and other roles report to, with a scope of projects and plans" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-org-guide="hire">
               <Plus className="w-3.5 h-3.5" /> Add a role
             </button>
           )}
@@ -632,6 +756,14 @@ export function OrgPageInner() {
         <div className="shrink-0 px-4 sm:px-6 py-1.5 text-[11.5px] flex items-center gap-2 border-b" style={{ background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)", borderColor: "color-mix(in srgb, var(--sol-yellow) 25%, transparent)", color: "var(--sol-text-muted)" }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--sol-yellow)" }} />
           Preview data (dev only, ?preview=1). Edits here stay on this page.
+        </div>
+      )}
+
+      {readState.kind === "stale" && (
+        <div className="shrink-0 px-4 sm:px-6 py-1.5 text-[11.5px] flex items-center gap-2 border-b" data-org-read="stale" style={{ background: "color-mix(in srgb, var(--sol-red) 7%, transparent)", borderColor: "color-mix(in srgb, var(--sol-red) 25%, transparent)", color: "var(--sol-text-muted)" }}>
+          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "var(--sol-red)" }} />
+          <span className="min-w-0 flex-1 truncate" title={readState.message}>The chart could not be refreshed, so this is the last copy: {readState.message}</span>
+          <button type="button" onClick={retryTree} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }}>Try again</button>
         </div>
       )}
 
@@ -666,14 +798,30 @@ export function OrgPageInner() {
               onEditRoleChange={setEditRoleChange}
             />
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center">
-              {missing && !tree ? (
+            <div className="absolute inset-0 flex items-center justify-center" data-org-read={readState.kind}>
+              {readState.kind === "missing" ? (
                 <div className="text-center max-w-xs px-6">
                   <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-text-dim)" }} />
                   <div className="text-sm font-medium">The org backend is not deployed yet</div>
                   <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>This page will fill in on its own once it is.</p>
                 </div>
-              ) : !ready && !tree ? (
+              ) : readState.kind === "error" ? (
+                // A read that failed is said as one, with the server's own
+                // sentence: an empty chart or an endless skeleton would read
+                // as "nobody works here".
+                <div className="text-center max-w-sm px-6">
+                  <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-red)" }} />
+                  <div className="text-sm font-medium">The org chart could not be read</div>
+                  <p className="mt-1 text-[12.5px] break-words" style={{ color: "var(--sol-text-muted)" }}>{readState.message}</p>
+                  <div className="mt-3 flex justify-center"><OrgButton size="sm" onClick={retryTree}>Try again</OrgButton></div>
+                </div>
+              ) : readState.kind === "refused" ? (
+                <div className="text-center max-w-xs px-6">
+                  <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-orange)" }} />
+                  <div className="text-sm font-medium">You cannot read this workspace's org chart</div>
+                  <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>You may have left the team, or the workspace was removed. Switch workspace from the menu at the top left.</p>
+                </div>
+              ) : readState.kind === "loading" ? (
                 <div className="flex flex-col items-center gap-3" style={{ color: "var(--sol-text-dim)" }}>
                   <Network className="w-8 h-8 animate-pulse" style={{ color: "var(--sol-violet)" }} />
                   <span className="text-sm">Drawing the tree…</span>
@@ -685,6 +833,10 @@ export function OrgPageInner() {
                 </div>
               )}
             </div>
+          )}
+          {/* S14: no roles yet. The person's own node is on the canvas; this is the paragraph and the two buttons that start a proposal. */}
+          {tree && layout && liveRoles === 0 && !proposal && !(phone && panelOpen) && (
+            <OrgEmptyCanvas me={me ?? null} reviewing={reviewing} reviewEnded={reviewState === "ended"} onOpenReview={reviewSession ? () => openSession(reviewSession) : undefined} onHireChief={hireChief} onProposeNow={proposeNow} />
           )}
           <div className="pointer-events-none absolute bottom-3 hidden lg:flex items-center gap-2 text-[10.5px] whitespace-nowrap transition-[right] duration-200" style={{ color: "var(--sol-text-dim)", right: panelWidth + 12 }}>
             <span>drag to move · double click to open</span>
@@ -733,6 +885,19 @@ export function OrgPageInner() {
         />
       )}
 
+      {/* seat the chief (S16) */}
+      {seatDialog && (
+        <ChiefSeatDialog
+          open
+          onClose={() => setSeatDialog(null)}
+          teamId={tree?.workspace.kind === "team" ? tree.workspace.id : undefined}
+          agentName={seatDialog.name}
+          threadShortId={seatDialog.shortId}
+          messageCount={seatDialog.messageCount}
+          onConfirm={(seat: ChiefSeatChoice) => doStaffChief(seat)}
+        />
+      )}
+
       {/* add role */}
       {tree && addRoleOpen && (
         <HireRoleDialog
@@ -767,6 +932,9 @@ export function OrgPageInner() {
           }}
         />
       )}
+
+      {/* first open guide (S14) */}
+      {guide && tree && <OrgGuide steps={guideSteps} step={guide.step} onStep={(i) => setGuide({ step: i })} onDone={closeGuide} onAction={(id) => { if (id === "open_proposal") setPanelMode("staffing"); }} />}
 
       {/* context menu */}
       <ContextMenu state={menu}>
@@ -808,7 +976,10 @@ function MoveConfirm({ req, onConfirm, onCancel }: { req: OrgReparentRequest; on
         </div>
         <div className="mt-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
           {req.subject.kind === "session"
-            ? req.target.kind === "user" ? "The session becomes owned by this person." : "The session keeps its owners and reports to this role."
+            // A drop on a person ADDS them as an owner and hands them the
+            // reporting line; it no longer replaces whoever else owns it
+            // (performReparentSession defaults a bare user target to `add`).
+            ? req.target.kind === "user" ? "This person also owns the session, and it reports to them." : "The session keeps its owners and reports to this role."
             : "The role and everything under it move together."}
         </div>
         <div className="mt-2.5 flex items-center justify-end gap-1.5">

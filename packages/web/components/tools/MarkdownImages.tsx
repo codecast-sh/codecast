@@ -1,7 +1,7 @@
 import type { Components } from "react-markdown";
 import { useState, Children } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useImageGallery } from "../ImageGallery";
+import { useImageGallery, useGalleryMessageId } from "../ImageGallery";
 import { isRemoteImageSrc } from "../../lib/trustedImageOrigins";
 
 const MD_IMAGE_COLLAPSED_HEIGHT = 160;
@@ -35,6 +35,7 @@ export function CollapsibleImage({
   // User opt-in for a remote image: nothing hits the network until the click.
   const [revealed, setRevealed] = useState(false);
   const gallery = useImageGallery();
+  const messageId = useGalleryMessageId();
 
   // A remote http(s) image that the viewer hasn't opted into. Until then we
   // render neither the <img> nor a gallery registration, so the browser issues
@@ -42,8 +43,8 @@ export function CollapsibleImage({
   const blocked = !!src && !revealed && !trusted && isRemoteImageSrc(src);
 
   useWatchEffect(() => {
-    if (src && gallery && !blocked) gallery.register(src);
-  }, [src, gallery, blocked]);
+    if (src && gallery && !blocked) gallery.register({ src, href: src, messageId });
+  }, [src, messageId, gallery, blocked]);
 
   if (!src || errored) return null;
 

@@ -11,6 +11,7 @@
 import { Suspense, useMemo } from "react";
 import { lazyPage } from "../lib/tabLazyPages";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
+import { RouteFallback } from "./RouteFallback";
 import { TabParamsCtx, parseTabLocation } from "../lib/tabParams";
 
 const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
@@ -212,7 +213,7 @@ export function RoutePane({
 
   const page = (
     <TabParamsCtx.Provider value={ctxValue}>
-      <Suspense>
+      <Suspense fallback={<RouteFallback />}>
         <Component />
       </Suspense>
     </TabParamsCtx.Provider>

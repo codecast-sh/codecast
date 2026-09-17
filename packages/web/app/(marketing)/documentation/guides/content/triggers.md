@@ -18,9 +18,13 @@ Event triggers need the GitHub integration and fire on `pr_comment`, `pr_opened`
 
 ## Where a run happens
 
-A trigger created inside a session binds to that session by default: each run injects the prompt into it as a new turn, with the session's full history behind it. That is the right shape for follow-through on work the session already did.
+The choice turns on what the run needs and where its result belongs.
 
-`--spawn` starts a fresh session per run instead — no history, briefed only by the prompt, but still linked back to the trigger at the top of the run's conversation. Use it when the follow-up stands alone: a periodic audit, an independent check. Because a spawned run arrives with none of your context, the snippet insists the prompt carry everything: goal, numbered steps, constraints, written as structured markdown. Humans read these prompts in the dashboard, rendered as markdown, so a good brief serves both audiences. Pass `-` as the prompt to feed a heredoc.
+A follow-up that continues the session's own work, needs what that conversation knows, and fires once or a few times runs inline. That is the default for a trigger created inside a session: each run arrives there as a new turn with the full history behind it, and the result lands in the thread.
+
+A standing duty that repeats on a schedule runs in a fresh session: pass `--spawn`. An inline run reloads its session's whole history every time it fires, because the prompt cache has expired by then, and each firing grows the thread. A repeating job run inline therefore costs more each time and buries the conversation it lives in. A fresh run arrives with none of that context, so the snippet insists the prompt carry everything: goal, numbered steps, constraints, written as structured markdown. Each run is also handed the previous run's summary, which is the continuity most repeating jobs need. Humans read these prompts in the dashboard, rendered as markdown, so a good brief serves both audiences. Pass `-` as the prompt to feed a heredoc.
+
+Fresh runs stay out of the inbox. A run that completes cleanly is read under its trigger, where the run history lists every firing. A `--spawn` trigger that fires once posts its result back into the conversation that armed it, as a message that does not wake the session. `--thread` does the same for every run of a repeating trigger.
 
 `--for <session>` binds a specific session from any shell, and `--safe` makes a spawned run read-only — write tools removed, state-changing commands blocked. The default is permissive; a run injecting into an existing session inherits that session's rules either way.
 
@@ -43,7 +47,7 @@ When a run finishes, it reports back:
 cast trigger complete tr-42 --summary "CI green; merged the backport"
 ```
 
-The summary lands in the trigger's history, so the human scanning the dashboard sees outcomes, not just schedules.
+The summary lands in the trigger's history, so the human scanning the dashboard sees outcomes, not just schedules. The completion is also the run's declaration of who acts next. A clean one says nobody, and the run rests under its trigger. `--needs-attention` says the human must read or act: the run declares itself blocked and stays in the inbox until they have.
 
 ## Judgment
 

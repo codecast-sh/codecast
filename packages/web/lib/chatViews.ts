@@ -16,7 +16,7 @@ import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import type { ChatAuthor, ChatChannelView, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
-import { dmOtherIds, mentionUserIds } from "@codecast/shared/chat";
+import { dmOtherIds, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
 
 export type ChatMember = {
   _id: string;
@@ -290,7 +290,7 @@ export function slackAuthorFor(row: ChatMessageRow): ChatAuthor | null {
     avatarUrl: ext.avatar_url || undefined,
     handle: ext.handle || undefined,
     isAgent: false,
-    slack: { isBot: !!ext.is_bot },
+    slack: { isBot: !!ext.is_bot, userId: row.external?.user || undefined },
   };
 }
 
@@ -306,23 +306,52 @@ export function mentionsViewer(row: ChatMessageRow, viewerId: string): boolean {
  *  A rollup on a root message is the ONLY reason the channel needs to know its
  *  threads exist, so computing it here keeps selectChannelMessages a plain
  *  filter — and one pass beats one scan per visible root. */
+/** One replier on the thread link. A Slack person's face rides on the row
+ *  (`external_author`); everyone else is looked up in the roster by id. The
+ *  same shape the server's summary sends (chat.ts ThreadSummary.reply_faces). */
+export type ThreadFace = { user_id: string; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } };
+
 export type ThreadRollup = {
   replyCount: number;
   lastReplyAt: number;
-  /** Distinct repliers, oldest first — the faces on the thread link. */
-  faces: string[];
+  /** Distinct repliers, oldest first — the faces on the thread link. Distinct
+   *  by the rendered identity (shared threadFaceKey): every line mirrored in
+   *  from Slack shares the bridge user id, and keying on that drew one bridge
+   *  face for three Slack people. */
+  faces: ThreadFace[];
 };
+
+export function threadFaceFor(row: Pick<ChatMessageRow, "user_id" | "external" | "external_author">): ThreadFace {
+  const ext = row.external_author;
+  return ext
+    ? { user_id: row.user_id, slack: { user: row.external?.user, name: ext.name, avatar_url: ext.avatar_url, is_bot: ext.is_bot } }
+    : { user_id: row.user_id };
+}
+
+/** The identity of one face — the same key the rollups dedupe on. */
+export function threadFaceId(f: ThreadFace): string {
+  return threadFaceKey({ user_id: f.user_id, external: f.slack ? { user: f.slack.user } : undefined, external_author: f.slack });
+}
 
 export function threadRollups(messages: Iterable<ChatMessageRow>): Map<string, ThreadRollup> {
   const out = new Map<string, ThreadRollup>();
+  const keys = new Map<string, Set<string>>();
   for (const row of messages) {
     const root = row.thread_root_id;
     if (!root || row.deleted_at) continue;
     let entry = out.get(root);
-    if (!entry) out.set(root, (entry = { replyCount: 0, lastReplyAt: 0, faces: [] }));
+    if (!entry) {
+      out.set(root, (entry = { replyCount: 0, lastReplyAt: 0, faces: [] }));
+      keys.set(root, new Set());
+    }
     entry.replyCount++;
     if (row.created_at > entry.lastReplyAt) entry.lastReplyAt = row.created_at;
-    if (!entry.faces.includes(row.user_id)) entry.faces.push(row.user_id);
+    const key = threadFaceKey(row);
+    const seen = keys.get(root)!;
+    if (!seen.has(key)) {
+      seen.add(key);
+      entry.faces.push(threadFaceFor(row));
+    }
   }
   return out;
 }
@@ -342,6 +371,9 @@ export type ViewContext = {
     reply_count: number;
     last_reply_at: number;
     reply_user_ids: string[];
+    /** Absent from a summary written before faces carried Slack snapshots;
+     *  the ids then stand in. */
+    reply_faces?: ThreadFace[];
     agent_status?: "thinking" | "streaming" | "error";
   }>;
   /** "sent" | "pending" | "failed" for a row — store/chatSlice's chatSendState. */
@@ -358,7 +390,9 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
   const useSummary = !!summary && (!local || summary.last_reply_at > local.lastReplyAt);
   const replyCount = useSummary ? summary!.reply_count : local?.replyCount;
   const lastReplyAt = useSummary ? summary!.last_reply_at : local?.lastReplyAt;
-  const faceIds = useSummary ? summary!.reply_user_ids : local?.faces;
+  const faces: ThreadFace[] | undefined = useSummary
+    ? summary!.reply_faces ?? summary!.reply_user_ids.map((user_id) => ({ user_id }))
+    : local?.faces;
   const state = ctx.sendState?.(row) ?? "sent";
   const reactions = ctx.reactionsFor?.(row._id);
   return {
@@ -410,8 +444,9 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     agentStatus: row.agent_status,
     replyCount: replyCount || undefined,
     lastReplyAt: lastReplyAt || undefined,
-    replyFaces: faceIds?.slice(0, 4).map((id) => {
-      const a = authorFor(id, undefined, ctx.members);
+    replyFaces: faces?.slice(0, 4).map((f) => {
+      if (f.slack) return { id: threadFaceId(f), name: f.slack.name, avatarUrl: f.slack.avatar_url || undefined };
+      const a = authorFor(f.user_id, undefined, ctx.members);
       return { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent };
     }),
     threadAgentStatus: useSummary ? summary!.agent_status : undefined,

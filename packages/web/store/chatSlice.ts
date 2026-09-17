@@ -91,6 +91,24 @@ export type ChatChannelRow = {
 
 /** One mirrored pair: a chat channel and the Slack channel it mirrors, with the
  *  direction and every content control (convex slack_channel_links). */
+/** A person in the team's Slack workspace (slack_users), for the composer's
+ *  @ popup and the People popup. `_id` is their Slack user id. A person
+ *  matched to a teammate carries `codecast_user_id`; the popup then offers the
+ *  teammate, never a second entry. */
+export type ChatSlackPersonRow = {
+  _id: string;
+  team_id: string;
+  slack_user_id: string;
+  name: string;
+  handle: string | null;
+  real_name: string | null;
+  avatar_url: string | null;
+  email: string | null;
+  codecast_user_id: string | null;
+  codecast_user_name: string | null;
+  mapped_by: "email" | "manual" | null;
+};
+
 export type ChatSlackLinkRow = {
   _id: string;
   team_id: string;
@@ -100,6 +118,9 @@ export type ChatSlackLinkRow = {
   slack_channel_name?: string;
   slack_channel_private?: boolean;
   chat_channel_id: string;
+  /** A channel mirror, or one person's direct message (read and written as them). */
+  kind?: "channel" | "dm";
+  owner_user_id?: string;
   direction: SlackDirection;
   options: SlackLinkOptions;
   paused?: boolean;
@@ -110,6 +131,18 @@ export type ChatSlackLinkRow = {
   outbound_count?: number;
   last_error?: string;
   last_error_at?: number;
+  /** The history import, while and after it runs (convex slack_channel_links.backfill). */
+  backfill?: {
+    window: string;
+    status: "running" | "done" | "failed";
+    fetched: number;
+    skipped?: number;
+    started_at: number;
+    heartbeat_at?: number;
+    finished_at?: number;
+    capped?: boolean;
+    error?: string;
+  };
   created_by: string;
   created_at: number;
   updated_at: number;
@@ -226,6 +259,8 @@ export type ChatThreadSummaryRow = {
   reply_capped?: boolean;
   last_reply_at: number;
   reply_user_ids: string[];
+  /** The repliers with the face to draw (lib/chatViews ThreadFace). */
+  reply_faces?: Array<{ user_id: string; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } }>;
   agent_status?: "thinking" | "streaming" | "error";
 };
 
@@ -237,6 +272,7 @@ export type ChatRailRow = {
     author_kind?: "user" | "agent";
     created_at: number;
     preview: string;
+    thread_root_id?: string;
   } | null;
   /** DM rooms only: the newest message from the other person (null when the
    *  viewer alone has spoken). Absent on channels. */
@@ -362,6 +398,7 @@ export type ChatSliceData = {
   chatReactions: Record<string, ChatReactionRow>;
   chatReads: Record<string, ChatReadRow>;
   chatSlackLinks: Record<string, ChatSlackLinkRow>;
+  chatSlackPeople: Record<string, ChatSlackPersonRow>;
   chatRail: ChatRailRow[];
   chatThreadSummaries: Record<string, ChatThreadSummaryRow>;
   /** The Threads inbox (threads.listMine): one row per thread the viewer is
@@ -376,6 +413,8 @@ export type ChatSliceData = {
 };
 
 export type ChatSlackLinkPatch = {
+  /** Run the history import again from the link's floor. */
+  reimport?: boolean;
   direction?: ChatSlackLinkRow["direction"];
   options?: Partial<ChatSlackLinkRow["options"]>;
   paused?: boolean;
@@ -597,6 +636,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatReactions: {},
     chatReads: {},
     chatSlackLinks: {},
+    chatSlackPeople: {},
     chatRail: [],
     chatThreadSummaries: {},
     threadInbox: {},
@@ -1175,6 +1215,9 @@ export const CHAT_SYNC_REGISTRY = {
   // The complete set for the team rides every listChannels push: snapshot, so
   // an unlink prunes.
   chatSlackLinks: { isDelta: false },
+  // Everyone the team's Slack workspace has shown us (slackSync.listSlackPeople):
+  // the complete set per push, so a person who leaves the workspace prunes.
+  chatSlackPeople: { isDelta: false },
   // Server thread rollups (listMessages.threads): a derived snapshot cache,
   // transient — overlaid at render, the local rows winning when fresher.
   // Delta: each page contributes its roots without pruning other channels'.

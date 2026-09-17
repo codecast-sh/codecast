@@ -32,3 +32,31 @@ export function isResentCopyOfSentMessage(
     return sent === t || (sent.length > t.length && sent.startsWith(t));
   });
 }
+
+// After send, a native iOS TextInput can fire onChangeText with the previous
+// value (IME composition, blur, a mid-string selection). That is residue, not
+// a new thought. The length floor matches STALE_DRAFT_MIN_LENGTH so short
+// follow-ups like "continue" are never eaten.
+export function isResurrectedComposerText(
+  next: string,
+  justSent: string | null | undefined,
+): boolean {
+  if (!justSent) return false;
+  const t = next.trim();
+  if (!t) return false;
+  const sent = justSent.trim();
+  if (sent === t) return true;
+  if (t.length < STALE_DRAFT_MIN_LENGTH) return false;
+  return sent.startsWith(t) || sent.includes(t);
+}
+
+// The native box still held the sent text and the user typed more — keep only
+// the new suffix. null means this is not that case.
+export function composerTextAfterSend(
+  next: string,
+  justSent: string | null | undefined,
+): string | null {
+  if (!justSent) return null;
+  if (!next.startsWith(justSent)) return null;
+  return next.slice(justSent.length).replace(/^\s+/, "");
+}

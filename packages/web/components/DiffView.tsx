@@ -482,6 +482,13 @@ export const DiffView = memo(function DiffView({
   const [fullyExpanded, setFullyExpanded] = useState(false);
   // Hover affordance and per-row wiring turn on for either comment model.
   const interactive = !!commentContext || !!onLineComment;
+  // Where the affordance lives. Inside a message the diff has a gutter beside
+  // it and one handle glides down that margin. A surface that owns the
+  // comments (the pull request page) has no margin: its diff sits flush in a
+  // clipped card, where a handle hung outside the block is invisible. Those
+  // rows carry their own "+" in the line-number gutter instead, the way a
+  // reader expects a diff to work.
+  const rowPlus = !!onLineComment;
 
   const { items, totalCodeLines, gutterCh } = useMemo(() => {
     let items: DisplayItem[];
@@ -675,9 +682,7 @@ export const DiffView = memo(function DiffView({
 
   useWatchEffect(() => cancelClear, [cancelClear]);
 
-  const commentOnHoveredRow = useCallback(() => {
-    const line = hoveredLine.current;
-    if (!line) return;
+  const commentOnLine = useCallback((line: FlatDiffLine) => {
     // A row the reader can comment on is on one side or the other; a context
     // row counts as the new side, which is what a reader is reading.
     const anchor = lineAnchors(line)[0];
@@ -692,13 +697,17 @@ export const DiffView = memo(function DiffView({
     });
   }, [addLineComment, selection]);
 
+  const commentOnHoveredRow = useCallback(() => {
+    if (hoveredLine.current) commentOnLine(hoveredLine.current);
+  }, [commentOnLine]);
+
   return (
     <div
       className={`code-block-resizable group font-mono text-[13px] leading-[22px] ${interactive ? "relative" : ""}`}
-      onMouseOver={interactive ? trackRow : undefined}
-      onMouseLeave={interactive ? untrackRow : undefined}
+      onMouseOver={interactive && !rowPlus ? trackRow : undefined}
+      onMouseLeave={interactive && !rowPlus ? untrackRow : undefined}
     >
-      {interactive && (
+      {interactive && !rowPlus && (
         <button
           ref={handleRef}
           type="button"
@@ -773,8 +782,22 @@ export const DiffView = memo(function DiffView({
           const row = (
             <div
               data-diff-row={interactive ? i : undefined}
-              className={`${rowBg} whitespace-pre ${selected ? "cc-diff-selected" : ""}`}
+              className={`${rowBg} whitespace-pre ${selected ? "cc-diff-selected" : ""} ${rowPlus ? "cc-diff-row" : ""}`}
             >
+              {rowPlus && (
+                <button
+                  type="button"
+                  className="cc-row-plus"
+                  tabIndex={-1}
+                  disabled={!rowAnchor}
+                  title={selected ? "Comment on the selected lines" : "Comment on this line"}
+                  aria-label={selected ? "Comment on the selected lines" : "Comment on this line"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => commentOnLine(line)}
+                >
+                  +
+                </button>
+              )}
               {showLineNumbers && (
                 <span
                   className={`select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30 ${

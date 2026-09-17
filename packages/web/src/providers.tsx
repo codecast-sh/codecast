@@ -36,9 +36,15 @@ function GestureBridge() {
   useMountEffect(() => {
     const currentUserId = () => useInboxStore.getState().currentUser?._id?.toString?.() ?? null;
     const bind = () =>
-      subscribeGestures(currentUserId(), currentUserId, (msg) =>
-        useInboxStore.getState().applyGestureBridge(msg),
-      );
+      subscribeGestures(currentUserId(), currentUserId, (msg) => {
+        // Follow state is ephemeral window state, not a row: it never enters
+        // the draft, so it takes its own path to the setter.
+        if (msg.kind === "follow") {
+          useInboxStore.getState().setFollowLeader(msg.leaderId, { fromBridge: true });
+          return;
+        }
+        useInboxStore.getState().applyGestureBridge(msg);
+      });
     let boundTo = currentUserId();
     let stop = bind();
     const unsubscribe = useInboxStore.subscribe(() => {

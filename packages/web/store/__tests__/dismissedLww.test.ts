@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { mergeStampedBagLww, useInboxStore } from "../inboxStore";
+import { mergeStampedBagLww, PER_DEVICE_UI_KEYS, useInboxStore } from "../inboxStore";
 
 // The `dismissed` preference bag syncs per-key last-writer-wins via ":ts"
 // stamps (mergeStampedBagLww) instead of blanket local_wins. Regression for
@@ -40,11 +40,9 @@ describe("mergeStampedBagLww", () => {
   });
 });
 
-// The ui bag rides the same stamped-LWW merge, but only for the whitelisted
-// inbox-VIEW keys (STAMPED_UI_KEYS): the toolbar configuration (scope, view
-// mode, subagents/old toggles) follows the user across devices, while
-// layout-ish per-device prefs (sidebar, zen mode, theme) stay on exact legacy
-// local_wins semantics by staying unstamped.
+// The ui bag rides stamped LWW by default. Per-device keys (this window,
+// this hardware) opt out and keep local_wins. A new preference must persist
+// without joining a whitelist — that whitelist is what dropped sidebar pins.
 describe("updateClientUI stamped view keys", () => {
   beforeEach(() => {
     useInboxStore.setState({ clientState: {}, clientStateInitialized: true, pending: {} });
@@ -143,6 +141,26 @@ describe("updateClientUI stamped view keys", () => {
       ui: { sidebar_pins: pins, "sidebar_pins:ts": Date.now() },
     });
     expect(useInboxStore.getState().clientState.ui?.sidebar_pins).toEqual(pins);
+  });
+
+  it("stamps a ui key that was never on the old whitelist", () => {
+    const before = Date.now();
+    useInboxStore.getState().updateClientUI({ comments_enabled: true, pr_note_mode: "now" });
+    const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
+    expect(ui["comments_enabled:ts"]).toBeGreaterThanOrEqual(before);
+    expect(ui["pr_note_mode:ts"]).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("PER_DEVICE_UI_KEYS", () => {
+  it("names keys that exist on ClientUI", async () => {
+    const src = await Bun.file(new URL("../inboxStore.ts", import.meta.url)).text();
+    const block = src.match(/export type ClientUI = \{([\s\S]*?)\n\};/);
+    expect(block).toBeTruthy();
+    const keys = new Set([...block![1].matchAll(/^\s+([a-z_]+)\?:/gm)].map((m) => m[1]));
+    for (const k of PER_DEVICE_UI_KEYS) {
+      expect(keys.has(k)).toBe(true);
+    }
   });
 });
 

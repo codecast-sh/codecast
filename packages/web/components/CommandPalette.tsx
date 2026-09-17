@@ -4,7 +4,7 @@ import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
 import { useTeamFeature, useCallsAvailable } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
-import { useState, useCallback, useMemo, useRef, memo } from "react";
+import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
 import { useTheme } from "./ThemeProvider";
@@ -50,8 +50,17 @@ import {
 import { popOutPeople } from "./people/popOutPeople";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { openForwardToChat } from "../lib/forwardToChat";
+import { settleComposerAttachments } from "../lib/draftImages";
+import type { ChatAttachment } from "../store/chatSlice";
+import "./chat/chat.css";
+
+// Loaded only on the confirm step so the search palette does not pull the
+// conversation module (and the HMR cycle that comes with an eager import).
+const PaletteMessageInput = lazy(() =>
+  import("./ConversationView").then((m) => ({ default: m.MessageInput })),
+);
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
-import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, type PaletteTargetType } from "../lib/paletteActions";
+import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, type PaletteTargetType } from "../lib/paletteActions";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { captureException } from "@sentry/react";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -121,6 +130,7 @@ import {
   PictureInPicture2,
   Users,
   Sparkles,
+  ImagePlus,
   LayoutDashboard,
   Plus,
   RefreshCw,
@@ -152,6 +162,10 @@ const TARGETLESS_MODES = new Set<ActionMode>(["view", "layout_save", "layout_upd
 const isLayoutMode = (m: ActionMode) => m.startsWith("layout_");
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
+
+// Draft key for the palette confirm-step composer. One pick at a time, so a
+// single slot is enough — and going back to the list keeps the note.
+const PALETTE_PICK_DRAFT = "palette-pick";
 
 function isTask(item: any): item is TaskItem {
   return item && "status" in item && "short_id" in item;
@@ -342,36 +356,46 @@ export function TeammateItem({
   row,
   className,
   onGo,
+  following = false,
 }: {
   row: TeammateWhereabouts;
   className: string;
-  onGo: (conv: { _id: string; title?: string }) => void;
+  /** Start (or stop) following the teammate; the session they have open, if
+   *  any, is handed along so the follow starts where they are at once. */
+  onGo: (row: TeammateWhereabouts, conv: { _id: string; title?: string } | null) => void;
+  /** This window already follows them: the row offers to stop. */
+  following?: boolean;
 }) {
   const id = row.conversationId;
   const fetched = useMissingSessionRow(id && !row.inStore ? id : null);
   if (!id) {
+    // Around but in no session: still followable (the mirror covers every
+    // route, not only sessions), so the row reads like the others.
     return (
       <CommandPrimitive.Item
-        value={`__teammate__ ${row.name}|||${row.id}`}
-        disabled
-        className={`${className} opacity-60`}
+        value={`__teammate__ follow ${row.name}|||${row.id}`}
+        onSelect={() => onGo(row, null)}
+        className={className}
       >
         <MemberFace member={row.member} size={16} title="" showHuddle={false} />
-        <span className="truncate flex-1">{row.name} is around, not in a session</span>
+        <div className="flex-1 min-w-0">
+          <div className="truncate">{following ? `Stop following ${row.name}` : `Follow ${row.name}`}</div>
+          <div className="truncate text-[11px] text-sol-text-dim mt-0.5">around, not in a session</div>
+        </div>
       </CommandPrimitive.Item>
     );
   }
   const title = row.title ?? fetched?.title;
   return (
     <CommandPrimitive.Item
-      value={`__teammate__ go where ${row.name} is|||${row.id}`}
+      value={`__teammate__ follow ${row.name}|||${row.id}`}
       data-palette-type="session" data-palette-id={id} data-palette-title={title}
-      onSelect={() => onGo(fetched ?? useInboxStore.getState().sessions[id] ?? { _id: id })}
+      onSelect={() => onGo(row, fetched ?? useInboxStore.getState().sessions[id] ?? { _id: id })}
       className={className}
     >
       <MemberFace member={row.member} size={16} title="" showHuddle={false} />
       <div className="flex-1 min-w-0">
-        <div className="truncate">Go where {row.name} is</div>
+        <div className="truncate">{following ? `Stop following ${row.name}` : `Follow ${row.name}`}</div>
         <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
           {title ? cleanTitle(title) : fetched === null ? "a session that no longer opens" : "a session"}
         </div>
@@ -1433,11 +1457,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // (e.g. "new agent session") sit on top.
   const picking = !!pick;
   const pickAllows = useCallback((kind: PalettePickKind) => !pick || pick.kinds.includes(kind), [pick]);
-  const [pickNote, setPickNote] = useState("");
   // Two-step pick (pick.notePlaceholder set): the chosen target waits here
   // while the confirm step collects the optional note. The query is captured
-  // at choose time — needsQuery extras read it from the search box.
+  // at choose time — needsQuery extras read it from the search box. The note
+  // itself lives in MessageInput's draft under PALETTE_PICK_DRAFT.
   const [pickChosen, setPickChosen] = useState<{ target: PalettePickTarget; query: string } | null>(null);
+  const pickConfirmRef = useRef<HTMLDivElement>(null);
+  const pickDropRef = useRef<((files: File[]) => void) | null>(null);
+  const pickPickerRef = useRef<HTMLInputElement>(null);
   const closePalette = useInboxStore((s) => s.closePalette);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
 
@@ -1448,6 +1475,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const { killWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
+  const followLeaderId = useInboxStore((s) => s.followLeaderId);
 
   const open = standalone || paletteOpen;
 
@@ -1659,6 +1687,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const seen = new Set(msgRows.map((r: any) => r.conversationId));
     return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
   }, [searchData, titleData]);
+  // cmdk keeps the first row it selected. Full-search / new-session / new-note
+  // always match, so if they mount before conversation search answers, Enter
+  // never opens a hit. Hold them until there is a hit, or both title and
+  // content searches have finished (content may error while titles are still
+  // in flight).
+  const titlesReady = titleData != null;
+  const contentReady = searchData != null || !!searchError;
+  const searchAwaiting = query.trim().length >= 2 && searchRows.length === 0 && !(titlesReady && contentReady);
 
   // Chat rooms by name — a SNAPSHOT read (getState), not a subscription: the
   // channel map churns with every unread tick and the palette must not
@@ -1718,7 +1754,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!open || picking) return [] as TeammateWhereabouts[];
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
-    return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions).slice(0, 6);
+    return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions, state.followLeaderId ?? null).slice(0, 6);
   }, [open, query, picking]);
 
   // Chat message hits ride the same debounced non-throwing lane as
@@ -1762,8 +1798,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       setQuery(paletteInitialQuery || "");
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
       setEnteredViaRoot(false);
-      setPickNote("");
       setPickChosen(null);
+      useInboxStore.getState().clearDraft(PALETTE_PICK_DRAFT);
     }
   }, [open, initialMode, paletteInitialQuery]);
 
@@ -1926,12 +1962,22 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     },
     [pick, query, closePalette],
   );
-  const sendPick = useCallback(() => {
+  const sendPick = useCallback((note?: string, attachments?: ChatAttachment[]) => {
     if (!pick || !pickChosen) return;
-    const note = pickNote.trim();
-    pick.onPick(pickChosen.target, { note: note || undefined, query: pickChosen.query });
+    const trimmed = (note ?? "").trim();
+    pick.onPick(pickChosen.target, {
+      note: trimmed || undefined,
+      query: pickChosen.query,
+      attachments: attachments?.length ? attachments : undefined,
+    });
     closePalette();
-  }, [pick, pickChosen, pickNote, closePalette]);
+  }, [pick, pickChosen, closePalette]);
+  const submitPickConfirm = useCallback(() => {
+    const form = pickConfirmRef.current?.querySelector("form");
+    const submit = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (form && submit && !submit.disabled) form.requestSubmit();
+    else sendPick("");
+  }, [sendPick]);
   const chooseSession = useCallback(
     (conv: Parameters<typeof navigateToSession>[0], opts?: Parameters<typeof navigateToSession>[1]) => {
       if (pick) return finishPick({ kind: "session", id: conv._id, label: cleanTitle(conv.title || "Untitled") });
@@ -2226,8 +2272,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       ) : (
         <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-violet" />
       );
+    const chatTarget = target.kind === "channel" || target.kind === "person";
     const confirmContent = (
-      <div className="w-[580px] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col">
+      <div
+        ref={pickConfirmRef}
+        className="w-[580px] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-visible flex flex-col"
+      >
         <div className="px-4 pt-3">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
         </div>
@@ -2241,32 +2291,66 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           {tag && <span className="text-[10px] text-sol-text-dim flex-shrink-0">{tag}</span>}
           <span className="text-[11px] text-sol-text-muted flex-shrink-0">change</span>
         </button>
-        <div className="px-3 pt-2 pb-3">
-          <input
-            value={pickNote}
-            onChange={(e) => setPickNote(e.target.value)}
-            placeholder={pick.notePlaceholder}
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                sendPick();
-              } else if (e.key === "Backspace" && !pickNote) {
-                e.preventDefault();
-                setPickChosen(null);
-              }
-            }}
-            className="w-full rounded-lg border border-sol-border bg-sol-bg-inset px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim focus:border-sol-violet focus:outline-none"
-          />
+        <div
+          className="ch-composer ch-composer-flush mx-3 mt-2 [&_form_button[type=submit]]:hidden"
+          onKeyDownCapture={(e) => {
+            if (e.key !== "Backspace") return;
+            const t = e.target as HTMLTextAreaElement;
+            if (!(t instanceof HTMLTextAreaElement) || t.value !== "" || t.selectionStart !== 0) return;
+            const images = useInboxStore.getState().drafts[PALETTE_PICK_DRAFT]?.draft_image_storage_ids as unknown[] | undefined;
+            if (images && images.length > 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setPickChosen(null);
+          }}
+        >
+          <Suspense fallback={<div className="h-10" />}>
+            <PaletteMessageInput
+              key={PALETTE_PICK_DRAFT}
+              conversationId={PALETTE_PICK_DRAFT}
+              bareComposer
+              chatMentionMode={chatTarget}
+              mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
+              composerPlaceholder={pick.notePlaceholder}
+              autoFocusInput
+              onDropFiles={pickDropRef}
+              onGateSend={async (text, images) => {
+                const attachments = await settleComposerAttachments(images);
+                sendPick(text, attachments);
+              }}
+            />
+          </Suspense>
+          <div className="ch-composer-foot">
+            <button
+              type="button"
+              className="ch-composer-attach"
+              title="Attach an image"
+              onClick={() => pickPickerRef.current?.click()}
+            >
+              <ImagePlus className="w-3.5 h-3.5" />
+            </button>
+            <input
+              ref={pickPickerRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                if (files.length) pickDropRef.current?.(files);
+                e.target.value = "";
+              }}
+            />
+          </div>
         </div>
-        <div className="px-3 pb-3 flex items-center justify-between">
+        <div className="px-3 py-3 flex items-center justify-between">
           <span className="flex items-center gap-1 text-[10px] text-sol-text-dim">
             <KeyCap size="xs">&#9003;</KeyCap>
             back
           </span>
           <button
             type="button"
-            onClick={sendPick}
+            onClick={submitPickConfirm}
             className="sol-btn-primary flex items-center gap-2 border border-sol-border"
           >
             {pick.confirmLabel ?? "Send"}
@@ -2297,13 +2381,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         if (action) { e.preventDefault(); e.stopPropagation(); handleRootAction(action.key); }
       }}
       className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col"
-      filter={(value, search) => {
-        // Async search results and compose are always relevant — bypass cmdk filter
-        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__") || value.startsWith("__chat__") || value.startsWith("__pick__") || value.startsWith("__teammate__")) return 1;
-        const idx = value.indexOf("|||");
-        const searchable = idx >= 0 ? value.slice(0, idx) : value;
-        return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
-      }}
+      filter={paletteItemScore}
       loop
     >
       {drilled && <div className="flex items-center gap-2 px-4 pt-3 text-xs text-sol-text-dim"><button aria-label="Back to search" className="flex items-center gap-1 hover:text-sol-text" onClick={() => { setQuery(drilled.query); setDrilled(null); }}><KeyCap size="xs">←</KeyCap> Search</button><span aria-hidden>›</span><span className="truncate">{contextLabel}</span></div>}
@@ -2534,7 +2612,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {teammateRows.length > 0 && (
           <CommandPrimitive.Group heading="Teammates" className={groupClass}>
             {teammateRows.map((row) => (
-              <TeammateItem key={`mate-${row.id}`} row={row} className={itemClass} onGo={navigateToSession} />
+              <TeammateItem
+                key={`mate-${row.id}`}
+                row={row}
+                className={itemClass}
+                following={followLeaderId === row.id}
+                onGo={(r, conv) => {
+                  const st = useInboxStore.getState();
+                  if (st.followLeaderId === r.id) {
+                    st.setFollowLeader(null);
+                    closePalette();
+                    return;
+                  }
+                  st.setFollowLeader(r.id);
+                  if (conv) navigateToSession(conv);
+                  else closePalette();
+                }}
+              />
             ))}
           </CommandPrimitive.Group>
         )}
@@ -2991,30 +3085,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <Waypoints className="w-4 h-4 text-sol-cyan flex-shrink-0" />
               <span className="truncate">Files: Open graph</span>
             </CommandPrimitive.Item>
-            {query.trim() && (
-              <CommandPrimitive.Item
-                key="vault-new-named"
-                value={`__entity__ vault new named note|||${query.trim()}`}
-                onSelect={() => {
-                  const name = query.trim().replace(/^\/+/, "");
-                  const path = MARKDOWN_RE.test(name) ? name : `${name}.md`;
-                  const s = useVaultStore.getState();
-                  // Name already taken → this is an open, not a create.
-                  if (s.files[path]) { openVaultNote(path); return; }
-                  closePalette();
-                  void s.createFile(path).then(() => {
-                    s.noteOpened(path);
-                    navigate(filesHref({ path }));
-                  }).catch(() => toast.error(`Couldn't create ${path}`));
-                }}
-                className={itemClass}
-              >
-                <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-                <span className="truncate flex-1">
-                  Files: New note &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
-                </span>
-              </CommandPrimitive.Item>
-            )}
           </CommandPrimitive.Group>
         )}
 
@@ -3055,7 +3125,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               key="cmd-browser-pane"
               // A typed address never fuzzy-matches the keywords ("3200" is in
               // none of them), so while one is typed the row takes the always
-              // shown `__entity__` form, exactly as "New note" does.
+              // shown `__entity__` form.
               value={
                 browserPaneUrl
                   ? `__entity__ open url in a pane|||${browserPaneUrl}`
@@ -3217,7 +3287,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && query.trim().length >= 2 && (
+        {!picking && query.trim().length >= 2 && !searchAwaiting && (
           <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
               value="__search__page"
@@ -3270,7 +3340,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && query.trim() && (
+        {!picking && query.trim() && !searchAwaiting && (
           <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
               value="__compose__"
@@ -3284,6 +3354,30 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               </span>
               <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
             </CommandPrimitive.Item>
+            {vaultReady && (
+              <CommandPrimitive.Item
+                key="vault-new-named"
+                value={`__compose__ vault new named note|||${query.trim()}`}
+                onSelect={() => {
+                  const name = query.trim().replace(/^\/+/, "");
+                  const path = MARKDOWN_RE.test(name) ? name : `${name}.md`;
+                  const s = useVaultStore.getState();
+                  // Name already taken → this is an open, not a create.
+                  if (s.files[path]) { openVaultNote(path); return; }
+                  closePalette();
+                  void s.createFile(path).then(() => {
+                    s.noteOpened(path);
+                    navigate(filesHref({ path }));
+                  }).catch(() => toast.error(`Couldn't create ${path}`));
+                }}
+                className={itemClass}
+              >
+                <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+                <span className="truncate flex-1">
+                  Files: New note &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                </span>
+              </CommandPrimitive.Item>
+            )}
           </CommandPrimitive.Group>
         )}
       </CommandPrimitive.List>
