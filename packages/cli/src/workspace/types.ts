@@ -195,6 +195,10 @@ export interface Workspace {
   contract?: ContractResult;
   /** Chrome instance bound to this workspace, if browser.enabled. */
   chrome?: ChromeBinding;
+  /** The ref/commit the branch was created at (a cloud seed: refs/codecast/cloud/<name>). */
+  startPoint?: string;
+  /** The commit HEAD is reset to after setup (the laptop's HEAD for a seeded worktree). */
+  seedBase?: string;
 }
 
 /** Options accepted by acquire(). */
@@ -202,6 +206,15 @@ export interface AcquireOptions {
   inputRoot?: string;
   /** Override branch name (default: `codecast/<name>`). */
   branch?: string;
+  /**
+   * Create the branch at this commit-ish instead of the checkout's HEAD
+   * (requires `branch`). With a start point the worktree is never attached to
+   * an existing branch or directory: a name collision is an error unless
+   * `altBranch` names the fallback.
+   */
+  startPoint?: string;
+  /** Second branch name, tried once only when `branch` already exists (only with `startPoint`). */
+  altBranch?: string;
   /** Override resource index (default: auto-allocated). */
   resourceIndex?: number;
   /** Skip install/generate/migrate (assume already done). */

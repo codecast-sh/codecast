@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import * as crypto from "node:crypto";
-import { cookieHostKeys, decryptCookieValue, OWN_LOGIN_REASON, provisionCredentials, provisionLocalLogins } from "./credentials.js";
+import { chromeEncryptionKey, cookieHostKeys, decryptCookieValue, OWN_LOGIN_REASON, provisionCredentials, provisionLocalLogins } from "./credentials.js";
 
 /** Encrypt like Chrome does on macOS, to test the reverse. */
 function chromeEncrypt(plaintext: string, key: Buffer, withDomainHash = false): Buffer {
@@ -99,6 +99,30 @@ describe("decryptCookieValue", () => {
   test("handles a value long enough to span several blocks", () => {
     const long = "j".repeat(500);
     expect(decryptCookieValue(chromeEncrypt(long, key), key)).toBe(long);
+  });
+});
+
+describe("the Chrome key lives in the macOS Keychain only", () => {
+  // The cloud host relies on this: off darwin there is no key to read, so
+  // the host's `cast browser sync` is a request to the laptop, never a local
+  // decrypt. The Keychain runner is injected so the guard is proven by what
+  // it never runs, not by an ENOENT that the catch would also swallow.
+  test("chromeEncryptionKey returns null on a non-darwin platform without running `security`", () => {
+    const calls: unknown[][] = [];
+    const exec = ((...a: unknown[]) => { calls.push(a); throw new Error("must not run"); }) as any;
+    expect(chromeEncryptionKey({ platform: "linux", exec })).toBeNull();
+    expect(calls).toEqual([]);
+  });
+  test("on darwin it reads the Chrome Safe Storage password with a 45 s cap and no stdin", () => {
+    const calls: unknown[][] = [];
+    // Throwing keeps the module's key cache empty for the other tests.
+    const exec = ((...a: unknown[]) => { calls.push(a); throw new Error("no keychain here"); }) as any;
+    expect(chromeEncryptionKey({ platform: "darwin", exec })).toBeNull();
+    expect(calls).toEqual([[
+      "security",
+      ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 45_000 },
+    ]]);
   });
 });
 

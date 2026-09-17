@@ -8,7 +8,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./notificationRouter";
-import { isAgentSpawnedConversation } from "./ccAccountsShared";
+import { isAgentSpawnedConversation, isSubagentConversation } from "./ccAccountsShared";
 import { listSessionOwnerIds } from "./sessionOwners";
 import {
   trustedAgentStatus,
@@ -812,11 +812,21 @@ export async function performNeedsInputCheck(
   // ── Push etiquette (chime only) ────────────────────────────────────────────
   // The sound skips pinned (isSessionWaitingForInput's !is_pinned arms).
   if (conv.inbox_pinned_at) return { notified: false, reason: "pinned" };
-  // Mirror of the web's isSub guard (inboxStore) — the idle sound skips these,
-  // so the push does too: subagents and any parent-linked or worktree session
-  // (orchestration workers). Broader than the "hidden subagent" test on
-  // purpose; parity with the sound is the contract here.
-  if (conv.is_subagent || conv.is_workflow_sub || conv.parent_conversation_id || conv.worktree_name) {
+  // Mirror of the web's isSub guard (inboxStore): the SAME two shared
+  // predicates, in the same order — isSubagentConversation here (reason
+  // "subagent": is_subagent / parent link; a workflow sub keeps this reason
+  // too, though isAgentSpawnedConversation would also catch it) and the
+  // isAgentSpawnedConversation gate just below (reason "agent_spawned"). The
+  // idle sound skips these, so the push does too. A worktree (local
+  // --isolated, path-stamped, or a cloud host's) is a LOCATION, not a parent,
+  // so a human-started worktree session pushes. Agent fan-out in worktrees
+  // (cast spawn --isolated/--cloud from inside a session, agent-team fleets)
+  // still stands down at the agent_spawned gate because those rows carry
+  // spawned_by_conversation_id / agent_name; a fan-out started from a plain
+  // terminal has no spawner and pushes per worker — intended: human-started
+  // fan-out is first-class. The schedule_run stand-down further down is
+  // server-only (the chime has no agent_task_id case).
+  if (isSubagentConversation(conv) || conv.is_workflow_sub) {
     return { notified: false, reason: "subagent" };
   }
   // The bar is "a session the USER was driving is waiting on THEM". Machine-

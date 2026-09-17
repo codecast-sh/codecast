@@ -159,8 +159,23 @@ describe("command groups stay off the boot graph", () => {
     // through the barrel, importing nothing; no subsystem arrived with it.
     // 220 after the 2026-09-15 sweep: convexConnectionState.ts, a leaf the
     // CLI command tree reads for connection copy.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(220);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3032);
+    //
+    // 227 files and 3,145 KB after the cloud host landing (pl-549). Seven new
+    // leaves, none a command group: remote/agentAuth.ts,
+    // agentAuthReceiver.py.ts, agentSpawnPath.ts and config/readLocalConfig.ts
+    // arrive through remote/session-move.ts (the trust-only push a session
+    // move runs needs the bundle shape and the receiver script);
+    // codexAuthDecode.ts is the auth.json decoder split out of
+    // codexAccounts.ts so that bundle does not drag the codex usage cluster
+    // off this graph; shared/contracts/cloudPlacement.ts and cloudWorkspace.ts
+    // come through the contracts barrel. The rest of the bytes are the cloud
+    // placement, seed and `cast git-credential` fast path code written into
+    // files already here (cloud/cli.ts, cloud/prepare.ts, cloud/transfer.ts,
+    // hosts/cli.ts, fastPath.ts, index.ts). The credential helper's own module
+    // stays off this graph: it is a COMMAND_GROUPS entry that fastPath reaches
+    // through a dynamic import, which assertOffGraph above proves.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(227);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3145);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -194,7 +209,14 @@ describe("command groups stay off the boot graph", () => {
     // reached through taskScheduler.ts which already sat on this graph.
     // 310 after the 2026-09-15 sweep: idleProbe, keepalive, convexConnectionState
     // and watchActions, the daemon's own cloud and browser-watch work.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(310);
+    // 318 after the cloud host landing (pl-549): the same leaves index.ts
+    // picked up through remote/session-move.ts (remote/agentAuth.ts, its
+    // receiver script, codexAuthDecode.ts, config/readLocalConfig.ts, the two
+    // cloud contracts) plus cloud/agentBridge.ts, imported by daemon.ts
+    // directly. The agent logins fan out and the ssh agent bridge are the
+    // daemon's own work (it runs both on its credential tick), so these are
+    // leaves it legitimately gained rather than a subsystem arriving sideways.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(318);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

@@ -83,21 +83,83 @@ export const generateAppJWT = internalAction({
   },
 });
 
+/**
+ * The permissions GitHub reported for a minted token, keeping only the entries
+ * we can compare. The map decides what the token may do, so a caller that
+ * needs a write (pushing a branch from a cloud host) can refuse before git
+ * meets a 403 it cannot explain.
+ */
+export function stringPermissions(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string") out[key] = value;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * May a token with these permissions push? GitHub spells push access as
+ * `contents: write`. Undefined means the answer is unknown — a token cached
+ * before permissions were recorded — and an unknown answer must not be read
+ * as a refusal.
+ */
+export function grantsContentsWrite(permissions: Record<string, string> | undefined): boolean | undefined {
+  if (!permissions) return undefined;
+  return permissions.contents === "write";
+}
+
+/**
+ * The repository name GitHub wants in a scoped mint: `name`, never
+ * `owner/name`. An installation belongs to one account, so the owner is
+ * already decided by installation_id.
+ */
+export function mintRepositoryName(repository: string | undefined): string | undefined {
+  if (!repository) return undefined;
+  const name = normalizeRepository(repository.trim().replace(/\.git$/, "")).split("/")[1];
+  return name && /^[a-z0-9._-]+$/.test(name) ? name : undefined;
+}
+
 export const getInstallationToken = internalAction({
   args: {
     installation_id: v.number(),
+    /**
+     * Narrow the token to one repository and to push access, as `owner/name`.
+     *
+     * Without it the token carries the installation's whole repository
+     * selection, which on an organisation install is every repository the org
+     * owns. That is right for the server's own work (issue sync walks many
+     * repositories), and wrong for a credential handed to a machine: a cloud
+     * host asks for the repository git named, so that is all it gets.
+     */
+    repository: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ token: string; expires_at: number }> => {
+  handler: async (ctx, args): Promise<{ token: string; expires_at: number; permissions?: Record<string, string> }> => {
+    // Scoped tokens are cached apart from the installation-wide one: same
+    // installation, different authority, so they must never answer for each
+    // other.
+    const repository = args.repository ? normalizeRepository(args.repository.trim().replace(/\.git$/, "")) : undefined;
+    const name = mintRepositoryName(args.repository);
+    if (args.repository && !name) throw new Error(`Not an owner/name repository: ${args.repository}`);
     const cachedToken = await ctx.runQuery(internal.githubApp.getCachedToken, {
       installation_id: args.installation_id,
+      ...(repository ? { repository } : {}),
     });
 
     if (cachedToken && cachedToken.expires_at > Date.now() + 5 * 60 * 1000) {
-      return { token: cachedToken.token, expires_at: cachedToken.expires_at };
+      return {
+        token: cachedToken.token,
+        expires_at: cachedToken.expires_at,
+        ...(cachedToken.permissions ? { permissions: cachedToken.permissions } : {}),
+      };
     }
 
     const jwt = await ctx.runAction(internal.githubApp.generateAppJWT, {});
 
+    // GitHub refuses a scoped mint that asks for more than the installation
+    // holds (422), so a read-only App cannot yield a token this path would
+    // call a push credential.
+    const scoped = name ? { repositories: [name], permissions: { contents: "write" } } : undefined;
     const response = await fetch(
       `${GITHUB_API_BASE}/app/installations/${args.installation_id}/access_tokens`,
       {
@@ -106,7 +168,9 @@ export const getInstallationToken = internalAction({
           Authorization: `Bearer ${jwt}`,
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
+          ...(scoped ? { "Content-Type": "application/json" } : {}),
         },
+        ...(scoped ? { body: JSON.stringify(scoped) } : {}),
       }
     );
 
@@ -117,25 +181,31 @@ export const getInstallationToken = internalAction({
 
     const data = await response.json();
     const expiresAt = new Date(data.expires_at).getTime();
+    const permissions = stringPermissions(data.permissions);
 
     await ctx.runMutation(internal.githubApp.cacheToken, {
       installation_id: args.installation_id,
+      ...(repository ? { repository } : {}),
       token: data.token,
       expires_at: expiresAt,
+      ...(permissions ? { permissions } : {}),
     });
 
-    return { token: data.token, expires_at: expiresAt };
+    return { token: data.token, expires_at: expiresAt, ...(permissions ? { permissions } : {}) };
   },
 });
 
 export const getCachedToken = internalQuery({
   args: {
     installation_id: v.number(),
+    /** Absent means the installation-wide token; a value means that repository's. */
+    repository: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     return await ctx.db
       .query("github_installation_tokens")
-      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .withIndex("by_installation_repo", (q) =>
+        q.eq("installation_id", args.installation_id).eq("repository", args.repository))
       .first();
   },
 });
@@ -143,25 +213,31 @@ export const getCachedToken = internalQuery({
 export const cacheToken = internalMutation({
   args: {
     installation_id: v.number(),
+    repository: v.optional(v.string()),
     token: v.string(),
     expires_at: v.number(),
+    permissions: v.optional(v.record(v.string(), v.string())),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
       .query("github_installation_tokens")
-      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .withIndex("by_installation_repo", (q) =>
+        q.eq("installation_id", args.installation_id).eq("repository", args.repository))
       .first();
 
     if (existing) {
       await ctx.db.patch(existing._id, {
         token: args.token,
         expires_at: args.expires_at,
+        permissions: args.permissions,
       });
     } else {
       await ctx.db.insert("github_installation_tokens", {
         installation_id: args.installation_id,
+        ...(args.repository ? { repository: args.repository } : {}),
         token: args.token,
         expires_at: args.expires_at,
+        ...(args.permissions ? { permissions: args.permissions } : {}),
         created_at: Date.now(),
       });
     }
@@ -258,11 +334,15 @@ export async function deleteInstallationRows(
   installation: { _id?: Id<"github_app_installations">; installation_id: number },
 ): Promise<void> {
   if (installation._id) await ctx.db.delete(installation._id);
-  const token = await ctx.db
+  // Every cached token of this installation, not just the first: the cache
+  // holds one row per repository a cloud host asked for beside the
+  // installation-wide row, and a row left behind would answer after the
+  // installation it came from is gone.
+  const tokens = await ctx.db
     .query("github_installation_tokens")
     .withIndex("by_installation_id", (q: any) => q.eq("installation_id", installation.installation_id))
-    .first();
-  if (token) await ctx.db.delete(token._id);
+    .collect();
+  for (const token of tokens) await ctx.db.delete(token._id);
 }
 
 /**
@@ -454,39 +534,48 @@ export const getPersonalInstallationForRepo = internalQuery({
  * personal one — and fails loudly if the caller is not in it. Omitting it
  * answers for the person: their personal install, else an install routing to
  * any team they belong to.
+ *
+ * The rule is a plain function so another server path can ask the same
+ * question inside its own query (the cloud host's git credential does), and
+ * the internalQuery below is the wire spelling of it. One rule, two doors.
  */
+export async function installationForRepo(
+  ctx: QueryCtx,
+  args: { repository: string; user_id: Id<"users">; team_id?: Id<"teams"> },
+): Promise<Doc<"github_app_installations"> | null> {
+  // A named team is an assertion about the caller's workspace, so verify it
+  // before it can narrow anything — a caller naming a team they are not in is
+  // a bug or an attack, not a miss.
+  if (args.team_id) {
+    await requireTeamMembership(ctx, args.user_id, args.team_id);
+  }
+
+  const covering = await installationsCoveringRepo(ctx, args.repository);
+  if (args.team_id) {
+    for (const installation of covering) {
+      const team = await installationTeam(ctx, installation);
+      if (team && String(team) === String(args.team_id)) return installation;
+    }
+    return await personalInstallationForRepo(ctx, args.user_id, args.repository);
+  }
+
+  const personal = await personalInstallationForRepo(ctx, args.user_id, args.repository);
+  if (personal) return personal;
+  for (const installation of covering) {
+    const team = await installationTeam(ctx, installation);
+    if (!team || !(await isTeamMember(ctx, args.user_id, team))) continue;
+    return installation;
+  }
+  return null;
+}
+
 export const getInstallationForRepo = internalQuery({
   args: {
     repository: v.string(),
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
   },
-  handler: async (ctx, args) => {
-    // A named team is an assertion about the caller's workspace, so verify it
-    // before it can narrow anything — a caller naming a team they are not in is
-    // a bug or an attack, not a miss.
-    if (args.team_id) {
-      await requireTeamMembership(ctx, args.user_id, args.team_id);
-    }
-
-    const covering = await installationsCoveringRepo(ctx, args.repository);
-    if (args.team_id) {
-      for (const installation of covering) {
-        const team = await installationTeam(ctx, installation);
-        if (team && String(team) === String(args.team_id)) return installation;
-      }
-      return await personalInstallationForRepo(ctx, args.user_id, args.repository);
-    }
-
-    const personal = await personalInstallationForRepo(ctx, args.user_id, args.repository);
-    if (personal) return personal;
-    for (const installation of covering) {
-      const team = await installationTeam(ctx, installation);
-      if (!team || !(await isTeamMember(ctx, args.user_id, team))) continue;
-      return installation;
-    }
-    return null;
-  },
+  handler: async (ctx, args) => await installationForRepo(ctx, args),
 });
 
 /**

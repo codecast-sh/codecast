@@ -99,7 +99,9 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
   // a TRANSPORT omission (show_all:false omits below-fold row bodies), and no
   // projection stamp ever rides a row. This pins the exact key set of an
   // un-flagged row so an accidental field move fails CI instead of shipping a
-  // torn channel.
+  // torn channel. Adding a key is fine (older bundles ignore JSON fields they
+  // do not read — is_workflow_sub joined the row this way for the web chime
+  // mirror); moving or dropping one is the change this list exists to catch.
   test("row key set is pinned", async () => {
     const { sessions, hidden_count, truncated } = await computeInboxSessions({ db: db() }, ME as any, {});
     expect(hidden_count).toBe(0);
@@ -109,12 +111,12 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "_id", "acting_user_id", "active_plan", "active_task", "activity", "agent_name", "agent_started_at",
       "agent_status", "agent_status_boundary", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
-      "awaiting_input", "browser_pane_offer", "character_avatar", "character_name", "cloud_placement", "context_tokens", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
+      "awaiting_input", "browser_pane_offer", "character_avatar", "character_name", "cloud_placement", "cloud_seed", "cloud_workspace", "context_tokens", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
       "has_pending", "hibernated_at", "icon", "icon_color", "idle_summary", "image_preview_url",
       "implementation_session", "inbox_dismissed_at", "inbox_killed_at",
       "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_anchor", "is_connected",
       "is_deferred", "is_favorite", "is_idle", "is_pinned", "is_private",
-      "is_subagent", "is_unresponsive", "is_workflow_primary", "last_comment_at",
+      "is_subagent", "is_unresponsive", "is_workflow_primary", "is_workflow_sub", "last_comment_at",
       "last_comment_author", "last_comment_author_id", "last_comment_excerpt", "last_heartbeat", "last_model_call_at",
       "last_role_is_user", "last_user_message", "loop_state", "message_count", "migration_batch_id", "model",
       "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",

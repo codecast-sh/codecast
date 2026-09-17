@@ -15,6 +15,8 @@ import * as path from "node:path";
 
 const WORKTREE_SEGMENT = "/.codecast/worktrees/";
 const KEEP = /^(PORT_[A-Z0-9_]+|CODECAST_PORT_[A-Z0-9_]+|CODECAST_WORKTREE_(PATH|NAME)|CODECAST_BRANCH|CODECAST_RESOURCE_INDEX)$/;
+/** The reserved record `cast ws root` writes for the main checkout (workspace/lifecycle.ts ROOT_WORKSPACE_NAME). */
+const ROOT_WORKSPACE_NAME = "shared-checkout";
 
 /** The repo root and worktree name for a cwd inside `<repo>/.codecast/worktrees/<name>[/...]`. */
 export function locateWorktree(cwd: string): { repoRoot: string; name: string } | null {
@@ -26,15 +28,44 @@ export function locateWorktree(cwd: string): { repoRoot: string; name: string } 
   return { repoRoot: cwd.slice(0, i), name };
 }
 
-/** The exported env of a worktree's workspace state, or {} when there is none. */
-export function worktreeEnv(cwd: string, readFile: (p: string) => string = (p) => fs.readFileSync(p, "utf-8")): Record<string, string> {
-  const wt = locateWorktree(cwd);
-  if (!wt) return {};
+/**
+ * The repo root whose main checkout carries a `shared-checkout` record, for a
+ * cwd at or below it: a cloud session in shared mode runs in the root itself,
+ * so there is no worktree segment to find — the state file is the only mark.
+ * Walks up from cwd; the first directory holding the record wins.
+ */
+export function locateRootWorkspace(cwd: string, exists: (p: string) => boolean = fs.existsSync): { repoRoot: string; name: typeof ROOT_WORKSPACE_NAME } | null {
+  let dir = cwd;
+  for (;;) {
+    if (exists(path.join(dir, ".codecast", "workspaces", ROOT_WORKSPACE_NAME, "state.json"))) return { repoRoot: dir, name: ROOT_WORKSPACE_NAME };
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * The exported env of a worktree's workspace state, or {} when there is none.
+ * A cwd inside `.codecast/worktrees/<x>` reads that worktree's state; any
+ * other cwd falls back to the main checkout's `shared-checkout` record when
+ * one exists (and its recorded path is that root), so a shared cloud session
+ * sees the same PORT_* / AGENT_RESOURCE_INDEX an isolated one does. The root
+ * never gets the BUN_INSTALL_* override: it keeps bun's global store.
+ */
+export function worktreeEnv(cwd: string, readFile: (p: string) => string = (p) => fs.readFileSync(p, "utf-8"), exists: (p: string) => boolean = fs.existsSync): Record<string, string> {
+  let wt = locateWorktree(cwd);
+  let root = false;
+  if (!wt) {
+    wt = locateRootWorkspace(cwd, exists);
+    if (!wt) return {};
+    root = true;
+  }
   try {
     const state = JSON.parse(readFile(path.join(wt.repoRoot, ".codecast", "workspaces", wt.name, "state.json")));
+    if (root && state?.path !== wt.repoRoot) return {};
     const env = (state?.env ?? {}) as Record<string, unknown>;
     const out: Record<string, string> = {};
-    if (env.CODECAST_CLOUD_WORKSPACE === "1") {
+    if (!root && env.CODECAST_CLOUD_WORKSPACE === "1") {
       out.BUN_INSTALL_GLOBAL_STORE = "0";
       out.BUN_INSTALL_CACHE_DIR = path.join(wt.repoRoot, ".codecast", "workspaces", wt.name, "bun-cache");
     }

@@ -827,8 +827,9 @@ export function isRemoteAuthBlocked(
 // A subagent for REVIVE purposes: spawned by/for another session. These are
 // excluded from the default revive — a worker whose parent moved on is work
 // nobody is waiting for, and resuming it burns the fresh account's window.
-// Deliberately narrower than the inbox's isSub (which also nests by
-// worktree_name): a worktree session can be a first-class task of its own.
+// The narrow REVIVE predicate. The inbox's isSub (waiting chime) is this OR
+// isAgentSpawnedConversation below; worktree_name never marks a subagent — a
+// worktree session is a first-class task of its own.
 // Shared verbatim by the server selection and the web banner so the counts
 // shown always match what the actions touch.
 export function isSubagentConversation(conv: {

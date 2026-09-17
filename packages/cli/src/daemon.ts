@@ -21,6 +21,7 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync, whichBin } from "./proc.js";
+import type { ChildProcess } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
@@ -44,8 +45,13 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
-import { hostForDevice, listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
+import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
+import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
+import { hostForDevice, listCloudRemoteHosts, readHosts, sshReachable, toRemoteHost } from "./browser/cloudHost.js";
+import {
+  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv, nextBridgeBackoff,
+  shouldRunBridge, type BridgeBackoff,
+} from "./cloud/agentBridge.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { releaseSessionWorktree } from "./worktreeGc.js";
@@ -2581,6 +2587,14 @@ function isAutostartEnabled(): boolean {
   return false;
 }
 
+// `cast cloud start` children in flight, by conversation. The poll, the
+// heartbeat and the subscription each run their own command batch, so two
+// cloud_spawns for one row (a re-park after the first child's poll TTL
+// lapsed) would otherwise prepare the same host concurrently — both
+// refreshing its main checkout, both acquiring a worktree. The later one
+// waits its turn; the placement token then tells it whether it still applies.
+const cloudSpawnInFlight = new Map<string, Promise<unknown>>();
+
 // A command this daemon has already taken off the queue. Two sets because the
 // three delivery paths were built separately; both are module scope so the
 // claim can UNDO the marking when another daemon wins the command, and a
@@ -3143,6 +3157,69 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
   }
 }
 
+// Agent logins fan-out (remote/agentAuth.ts): codex, grok, gemini, opencode
+// and pi logins plus the settings.json provider keys, ONE bundle per host
+// over ssh stdin to the python receiver, on the credential loop's cadence.
+// The hash gate is PER HOST (user@address → the hash last attempted there),
+// never global: a host that slept through a change comes back on a new
+// address with no entry and converges on the next 60-s tick instead of the
+// 30-min backfill. A host whose push failed is left alone until the bundle
+// changes or the periodic tick (a push retried every minute keeps a broken
+// box awake); an exit-3 refusal (another user's logins on the box) is logged
+// once per host. Codex's own `last_refresh` field moves the hash on every
+// rotation, so a laptop re-login lands within a minute.
+let remoteAgentAuthPushInFlight = false;
+const lastPushedAgentAuthHashByHost = new Map<string, string>();
+const agentAuthRefusalLogged = new Set<string>();
+const agentAuthKeptLogged = new Set<string>();
+let lastAgentAuthSkipKey: string | null = null;
+
+async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice() || remoteAgentAuthPushInFlight) return;
+  remoteAgentAuthPushInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config?.user_id) return;
+    const home = laptopHome();
+    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, now: Date.now(), userId: config.user_id, deviceId: deviceId() });
+    assertNoLaptopPaths(bundle, home);
+    // Skipped sources once per distinct set, not every tick: the state is
+    // what matters ("codex is logged out here"), not the polling.
+    const skipKey = [...skipped.map((s) => `${s.id}:${s.reason}`), ...envSkipped.map((e) => `env ${e.key}:${e.reason}`)].sort().join("|") || null;
+    if (skipKey !== lastAgentAuthSkipKey) {
+      lastAgentAuthSkipKey = skipKey;
+      if (skipped.length) log(`[REMOTE-AUTH] agent logins skipped: ${skipped.map((s) => `${s.id} ${s.reason}`).join(", ")}`);
+      if (envSkipped.length) log(`[REMOTE-AUTH] settings.json env keys not mirrored: ${envSkipped.map((e) => `${e.key} (${e.reason})`).join(", ")}`);
+    }
+    const hash = bundleHash(bundle);
+    const hosts = planAgentAuthPush(await reachableTransferHosts(), hash, lastPushedAgentAuthHashByHost, opts);
+    for (const host of hosts) {
+      const key = agentAuthHostKey(host);
+      const res = await copyAgentAuthToRemoteAsync(host, bundle);
+      const changed = lastPushedAgentAuthHashByHost.get(key) !== hash;
+      lastPushedAgentAuthHashByHost.set(key, hash);
+      if (!res.pushed) {
+        if (res.reason?.includes("another user")) {
+          if (!agentAuthRefusalLogged.has(key)) { agentAuthRefusalLogged.add(key); log(`[REMOTE-AUTH] ${key} refused the agent logins: ${res.reason}`, "warn"); }
+        } else log(`[REMOTE-AUTH] agent logins push to ${key} failed (${reason}): ${res.reason}`, "warn");
+        continue;
+      }
+      agentAuthRefusalLogged.delete(key);
+      for (const k of res.kept) {
+        const kk = `${key}:${k}`;
+        if (!agentAuthKeptLogged.has(kk)) { agentAuthKeptLogged.add(kk); log(`[REMOTE-AUTH] ${key} kept its own ${k} — run \`codex login\` on this machine to re-own the grant`); }
+      }
+      if (!res.kept.length) for (const kk of [...agentAuthKeptLogged]) if (kk.startsWith(`${key}:`)) agentAuthKeptLogged.delete(kk);
+      for (const e of res.errors ?? []) log(`[REMOTE-AUTH] ${key}: ${e}`, "warn");
+      if (changed) log(`[REMOTE-AUTH] pushed agent logins (${describeBundle(bundle)}) to ${key} (${reason})`);
+    }
+  } catch (err) {
+    log(`[REMOTE-AUTH] agent logins push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteAgentAuthPushInFlight = false;
+  }
+}
+
 // Home mirror fan-out (cloud/mirror): this laptop's instruction files and
 // agent config to every reachable host, on the credential loop's cadence.
 // Hash-gated on the fast tick, stamp-verified on the periodic one, and a
@@ -3167,6 +3244,90 @@ async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: b
     log(`[MIRROR] mirror push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     remoteMirrorPushInFlight = false;
+  }
+}
+
+// SSH agent bridge (cloud/agentBridge.ts): for every registry host the human
+// turned forward-agent on, hold ONE dedicated ssh connection with agent
+// forwarding, so processes on the box can sign with this laptop's keys. The
+// registry is re-read every tick (a `--off` closes the bridge within a
+// minute); the host is probed, never woken; a host that refuses forwarding
+// (exit 3) is left alone until the toggle changes; other exits back off
+// exponentially to five minutes (nextBridgeBackoff) so a broken bridge
+// cannot keep a box awake; a bridge whose host changed address (a reboot)
+// is closed so the next tick reopens it at the new one.
+const AGENT_BRIDGE_CLOSE_GRACE_MS = 5_000;
+interface AgentBridge { child: ChildProcess; address: string; startedAt: number }
+const agentBridges = new Map<string, AgentBridge>();
+const agentBridgeBackoff = new Map<string, BridgeBackoff>();
+const agentBridgeRefused = new Set<string>();
+let agentBridgeNoAgentLogged = false;
+let agentBridgesInFlight = false;
+
+function closeAgentBridge(hostId: string, why: string): void {
+  const b = agentBridges.get(hostId);
+  if (!b) return;
+  agentBridges.delete(hostId);
+  log(`[AGENT-BRIDGE] closing the bridge to ${hostId} (${why})`);
+  // EOF on stdin makes the remote `cat` exit and the symlink go; the kill is
+  // the backstop for a connection that no longer delivers it.
+  try { b.child.stdin?.end(); } catch { /* already gone */ }
+  const timer = setTimeout(() => { try { b.child.kill(); } catch { /* exited */ } }, AGENT_BRIDGE_CLOSE_GRACE_MS);
+  b.child.once("exit", () => clearTimeout(timer));
+}
+
+async function maintainAgentBridges(): Promise<void> {
+  if (isRemoteDevice() || agentBridgesInFlight) return;
+  agentBridgesInFlight = true;
+  try {
+    const hosts = readHosts();
+    // Bridges to hosts that are no longer on, or no longer registered.
+    for (const [hostId, b] of agentBridges) {
+      const h = hosts.find((x) => x.id === hostId);
+      if (!h || h.forwardAgent !== true) { closeAgentBridge(hostId, h ? "forward-agent is off" : "host was removed"); agentBridgeRefused.delete(hostId); }
+      else if (h.address && h.address !== b.address) closeAgentBridge(hostId, `its address changed ${b.address} -> ${h.address}`);
+    }
+    for (const h of hosts) {
+      if (h.forwardAgent !== true) { agentBridgeRefused.delete(h.id); agentBridgeBackoff.delete(h.id); continue; }
+      if (!h.address || agentBridges.has(h.id) || agentBridgeRefused.has(h.id)) continue;
+      const laptopAgent = process.env.SSH_AUTH_SOCK;
+      if (!laptopAgent) {
+        if (!agentBridgeNoAgentLogged) { log(`[AGENT-BRIDGE] forward-agent is on for ${h.id} but this daemon has no SSH_AUTH_SOCK — nothing to forward`); agentBridgeNoAgentLogged = true; }
+        continue;
+      }
+      const backoff = agentBridgeBackoff.get(h.id);
+      if (backoff && Date.now() < backoff.notBefore) continue;
+      const remote = toRemoteHost(h);
+      const reachable = await sshReachable(remote);
+      if (!shouldRunBridge(h, reachable, laptopAgent)) continue;
+      const child = spawn("ssh", agentBridgeArgs(remote), { stdio: ["pipe", "ignore", "pipe"], env: process.env });
+      const bridge: AgentBridge = { child, address: h.address, startedAt: Date.now() };
+      agentBridges.set(h.id, bridge);
+      let stderr = "";
+      child.stderr?.on("data", (d: Buffer) => { stderr = (stderr + d.toString()).slice(-2000); });
+      child.on("error", (err) => log(`[AGENT-BRIDGE] bridge to ${h.id} could not start: ${err.message}`, "warn"));
+      child.on("exit", (code, signal) => {
+        const mine = agentBridges.get(h.id) === bridge;
+        if (mine) agentBridges.delete(h.id);
+        if (code === AGENT_BRIDGE_REFUSED_EXIT) {
+          agentBridgeRefused.add(h.id);
+          log(`[AGENT-BRIDGE] host ${h.id} refused agent forwarding (sshd AllowAgentForwarding?) — not retried until forward-agent is toggled`, "warn");
+          return;
+        }
+        if (!mine) return; // closed on purpose
+        // The count is only reset by a bridge that lived (nextBridgeBackoff),
+        // never at spawn: a reset there made every failure the first one.
+        const next = nextBridgeBackoff(agentBridgeBackoff.get(h.id), Date.now() - bridge.startedAt);
+        agentBridgeBackoff.set(h.id, next);
+        const wait = next.notBefore - Date.now();
+        log(`[AGENT-BRIDGE] bridge to ${h.id} exited (${signal ?? `exit ${code}`})${stderr.trim() ? `: ${stderr.trim().split("\n").pop()}` : ""} — retrying in ${Math.round(wait / 1000)}s (failure ${next.failures})`);
+      });
+      log(`[AGENT-BRIDGE] bridge to ${h.id} (${h.address}) is up — this laptop's ssh-agent is usable there until forward-agent --off`);
+    }
+  } catch (err) {
+    log(`[AGENT-BRIDGE] maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    agentBridgesInFlight = false;
   }
 }
 
@@ -3825,11 +3986,14 @@ function noteStaleCodexPanes(): void {
 // the active account via the real ~/.codex (RPC + rollout-log model mix), then
 // probe each dormant profile via its CODEX_HOME snapshot dir. Shares the
 // cc-usage cadence; the heartbeat reads the cache file via its mtime-keyed
-// payload. Codex logins are per-machine (never pushed to remotes), so every
-// device reports its own inventory.
+// payload. Codex logins are pushed one-way from the primary
+// (remote/agentAuth.ts); a remote never probes or snapshots its copy — the
+// app-server probe can refresh tokens, and a host that refreshes on a timer
+// is a host that rotates the laptop's grant.
 let codexUsageRefreshInFlight = false;
 
 async function maintainCodexUsageSnapshot(reason: string, opts: { force?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice()) return;
   if (codexUsageRefreshInFlight) return;
   codexUsageRefreshInFlight = true;
   try {
@@ -3995,9 +4159,13 @@ function maybeEnableLimitsGuidance(): void {
 // Same per-beat enrollment for the Codex login: a fresh `codex login` appears
 // in the inventory on the next heartbeat instead of waiting for the usage
 // cycle. One attempt per account per daemon lifetime, mirroring the CC path.
+// Remote devices run a pushed COPY of the primary's login (agentAuth.ts), so
+// profiles are only ever saved on the primary — the same guard as
+// maybeAutoSaveAccount.
 const codexAutoSaveDecided = new Set<string>();
 let codexProfileNamesMigrated = false;
 function maybeAutoSaveCodexAccount(): void {
+  if (isRemoteDevice()) return;
   if (!codexProfileNamesMigrated) {
     codexProfileNamesMigrated = true;
     try {
@@ -4338,7 +4506,7 @@ export function startMigrationRunner(batchId: string): { started: boolean; pid?:
 
 function runCastCommand(
   args: string[],
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; killGroup?: boolean } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -4352,12 +4520,19 @@ function runCastCommand(
         // anything it execs (a browser driver, claude) need the agent PATH.
         env: { ...process.env, PATH: agentSpawnPath() },
         stdio: ["ignore", "pipe", "pipe"],
+        // killGroup: the child leads its own process group so the cap can
+        // take its grandchildren with it (an `ssh -N` forward survives its
+        // parent's SIGKILL and would hold the host awake otherwise). Such a
+        // child also outlives a daemon death, but only until its own
+        // deadline (BROWSER_SYNC_CARRY_DEADLINE_MS), which closes the forward.
+        ...(opts.killGroup ? { detached: true } : {}),
       });
     } catch (err) {
       resolve({ code: -1, stdout, stderr: String(err) });
       return;
     }
     const timer = setTimeout(() => {
+      if (opts.killGroup && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already gone */ } }
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
     }, timeoutMs);
     child.stdout?.on("data", (d) => { stdout += d.toString(); });
@@ -5343,7 +5518,9 @@ async function executeRemoteCommand(
         // before placing the session here. A session can then bind the port it
         // was allocated (vite --port "$PORT_WEB") instead of guessing from the
         // index. Same shell-safe token rule as the stable env above.
-        const wtEnvRaw = worktreeEnvPrefix(cwd);
+        // On the host, plus the laptop's forwarded ssh-agent while a bridge
+        // is up (cloud/agentBridge.ts) — "" everywhere else.
+        const wtEnvRaw = [worktreeEnvPrefix(cwd), hostAgentSocketEnv()].filter(Boolean).join(" ");
         const wtEnv = wtEnvRaw ? ` ${wtEnvRaw}` : "";
         // Which launch this pane is running (ct-49532): recorded before the
         // command is built, so a hook post from the process that occupied this
@@ -7084,11 +7261,26 @@ async function executeRemoteCommand(
           error = "cloud_spawn: missing conversation_id";
           break;
         }
-        log(`[CLOUD] placing ${conversationId.slice(0, 12)} on the cloud host (async child)`);
-        const res = await runCastCommand(
-          ["cloud", "start", conversationId, ...(cloudDeviceId ? ["--device", cloudDeviceId] : [])],
+        const earlier = cloudSpawnInFlight.get(conversationId);
+        if (earlier) {
+          log(`[CLOUD] ${conversationId.slice(0, 12)} already being prepared — waiting for that child first`);
+          await earlier.catch(() => {});
+        }
+        const { cloudStartArgs } = await import("./cloud/cli.js");
+        const workspace: string | undefined = parsed.workspace;
+        const startFrom: string | undefined = parsed.start_from;
+        log(`[CLOUD] placing ${conversationId.slice(0, 12)} on the cloud host (${workspace === "shared" ? "shared checkout" : `isolated worktree from ${startFrom === "origin_main" ? "origin/main" : "this checkout"}`}, async child)`);
+        const child = runCastCommand(
+          cloudStartArgs({ conversation_id: conversationId, cloud_device_id: cloudDeviceId, workspace, start_from: startFrom }),
           { timeoutMs: 25 * 60 * 1000 },
         );
+        cloudSpawnInFlight.set(conversationId, child);
+        let res: Awaited<typeof child>;
+        try {
+          res = await child;
+        } finally {
+          if (cloudSpawnInFlight.get(conversationId) === child) cloudSpawnInFlight.delete(conversationId);
+        }
         if (res.code === 0) {
           result = res.stdout.trim().split("\n").reverse().find((l) => l.startsWith("{")) ?? JSON.stringify({ placed: true });
           log(`[CLOUD] placed ${conversationId.slice(0, 12)}: ${result}`);
@@ -7098,6 +7290,17 @@ async function executeRemoteCommand(
           log(`[CLOUD] FAILED ${conversationId.slice(0, 12)}: ${error}`, "warn");
           syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
         }
+        break;
+      }
+      case "cloud_browser_sync": {
+        // A cloud session asked for this laptop's browser login for one site.
+        // Laptop only, command-driven (no timer, no retry), one tunnel per
+        // host at a time; the handler and its in-flight map live in
+        // cloud/browserSync.ts. The child's line holds counts, never a cookie.
+        const { handleBrowserSyncCommand } = await import("./cloud/browserSync.js");
+        const out = await handleBrowserSyncCommand(commandArgs, { isRemoteDevice, runCastCommand, log, childErrorDetail });
+        result = out.result;
+        error = out.error;
         break;
       }
       case "migrate_sessions": {
@@ -21325,7 +21528,7 @@ export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToke
   const token = launchTokenEnv(launchToken);
   const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : `${AGENT_ENV_SCRUB}${token}`;
-  const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
+  const workspaceEnv = [cwd ? worktreeEnvPrefix(cwd) : "", hostAgentSocketEnv()].filter(Boolean).join(" ");
   return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
 
@@ -25766,6 +25969,12 @@ async function main(): Promise<void> {
   clearDaemonExitStamp(CONFIG_DIR);
   ensureCastAlias();
 
+  // On the host, every git/ssh the daemon itself runs (the gitPlane sweep,
+  // WIP snapshot pushes) looks for the laptop's forwarded agent at the path
+  // the bridge links (cloud/agentBridge.ts). A dangling path is ignored by
+  // ssh, which falls through to the ssh config block's IdentityFile.
+  if (isRemoteDevice() && !process.env.SSH_AUTH_SOCK) process.env.SSH_AUTH_SOCK = HOST_AGENT_SOCK;
+
   if (!acquireLock()) {
     const existingPid = fs.readFileSync(PID_FILE, "utf-8").trim();
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
@@ -26075,6 +26284,31 @@ async function main(): Promise<void> {
   setTimeout(() => { pushMirrorToRemoteHosts("daemon start", { verifyRemote: true }).catch(() => {}); }, 64_000);
   setInterval(() => { pushMirrorToRemoteHosts("mirror_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
   setInterval(() => { pushMirrorToRemoteHosts("periodic", { verifyRemote: true }).catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
+  // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
+  setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000);
+  setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
+  // Agent logins (remote/agentAuth.ts) on the same cadence: a start backfill,
+  // the 30-minute unconditional push, a per-host hash-gated fast tick, and a
+  // watch on each source directory filtered to the exact filenames (the
+  // whole ~/.codex would fire on codex's SQLite WAL churn).
+  setTimeout(() => { pushAgentAuthToRemoteHosts("daemon start").catch(() => {}); }, 64_000);
+  setInterval(() => { pushAgentAuthToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
+  setInterval(() => { pushAgentAuthToRemoteHosts("login_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  if (!isRemoteDevice()) {
+    for (const dir of agentAuthWatchDirs(laptopHome())) {
+      // fs.watch throws ENOENT for a source dir this laptop lacks (no grok
+      // login, say): that is the skip, and it costs no stat on the hot path.
+      try {
+        fs.watch(dir, (_event, filename) => {
+          if (typeof filename === "string" && AGENT_AUTH_WATCH_FILES.has(path.basename(filename))) {
+            pushAgentAuthToRemoteHosts("login file changed", { onlyIfChanged: true }).catch(() => {});
+          }
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") log(`[REMOTE-AUTH] could not watch ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
   // Near-instant sync: when the local store file changes (a `cast keys set/rm`, or a
   // web edit the daemon applied), push immediately. fs.watch can double-fire, so the
   // in-flight lock + hash gate keep it to one real push.

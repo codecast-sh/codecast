@@ -4,10 +4,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  acquireRootCheckout,
   acquireWorkspace,
   healWorkspace,
   listWorkspaces,
+  readWorkspaceState,
   releaseWorkspace,
+  ROOT_WORKSPACE_NAME,
   validateWorkspace,
 } from "./lifecycle.js";
 import { readState, setState, writeState } from "./contract.js";
@@ -568,6 +571,105 @@ run = ["touch ${repoRoot}/tornDown.txt"]
   test("releasing an unknown workspace is a no-op (doesn't throw)", async () => {
     await releaseWorkspace(repoRoot, "never-existed");
     // no throw
+  });
+});
+
+describe("acquireRootCheckout — the main checkout as the shared-checkout workspace (ct-49428)", () => {
+  const manifest = `
+[setup]
+copy = [".env"]
+install = ["printf '%s|%s|%s' \\"$PORT_WEB\\" \\"$BUN_INSTALL_GLOBAL_STORE\\" \\"$CODECAST_CLOUD_WORKSPACE\\" > setup-env"]
+[ports.web]
+base = 45100
+range = 100
+`;
+  const withManifest = () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), manifest);
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), ".env\nsetup-env\nhost-state/\n.codecast/workspaces/\n.codecast/worktrees/\n");
+    execSync("git add . && git commit -q -m manifest", { cwd: repoRoot });
+  };
+
+  test("state.path is the repo root, ports skip a worktree's reservation, the tracked manifest is untouched, a rerun keeps the index", async () => {
+    withManifest();
+    const tracked = fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8");
+    const wt = await acquireWorkspace(repoRoot, "iso", { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true });
+    const r = await acquireRootCheckout(repoRoot, { skipBrowser: true });
+    expect(r.created).toBe(true);
+    expect(r.workspace.name).toBe(ROOT_WORKSPACE_NAME);
+    expect(r.workspace.path).toBe(fs.realpathSync(repoRoot));
+    expect(r.workspace.state).toBe("ready");
+    expect(r.workspace.ports.web).not.toBe(wt.workspace.ports.web);
+    expect(r.workspace.env.CODECAST_CLOUD_WORKSPACE).toBeUndefined();
+    expect(r.workspace.env.BUN_INSTALL_GLOBAL_STORE).toBeUndefined();
+    expect(r.workspace.env.BUN_INSTALL_CACHE_DIR).toBeUndefined();
+    // Setup saw the root's port and no CODECAST_CLOUD_WORKSPACE (the middle
+    // field is whatever the test runner's own environment carries).
+    expect(fs.readFileSync(path.join(repoRoot, "setup-env"), "utf8")).toMatch(new RegExp(`^${r.workspace.ports.web}\\|[^|]*\\|$`));
+    expect(fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8")).toBe(tracked);
+    const state = readState(repoRoot, ROOT_WORKSPACE_NAME)!;
+    expect(state.path).toBe(fs.realpathSync(repoRoot));
+    expect(state.branch).toBe("main");
+    expect(state.manifest.backend).toBe("local");
+    const again = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(again.created).toBe(false);
+    expect(again.workspace.resourceIndex).toBe(r.workspace.resourceIndex);
+    expect(again.workspace.ports).toEqual(r.workspace.ports);
+    expect(listWorkspaces(repoRoot).map((w) => w.name).sort()).toEqual(["iso", ROOT_WORKSPACE_NAME]);
+  });
+
+  test("an input snapshot's secret overwrites the root's copy; the manifest is read from it but never written into the root", async () => {
+    withManifest();
+    fs.writeFileSync(path.join(repoRoot, ".env"), "host copy\n");
+    const inputs = fs.mkdtempSync(path.join(os.tmpdir(), "ws-root-inputs-"));
+    extraRepos.push(inputs);
+    fs.mkdirSync(path.join(inputs, ".codecast"));
+    fs.writeFileSync(path.join(inputs, ".codecast/workspace.toml"), manifest.replace("[ports.web]", "[env]\nSNAP = \"one\"\n[ports.web]"));
+    fs.writeFileSync(path.join(inputs, ".env"), "laptop copy\n");
+    const before = fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8");
+    const r = await acquireRootCheckout(repoRoot, { inputRoot: inputs, skipSetup: true, skipBrowser: true });
+    expect(fs.readFileSync(path.join(repoRoot, ".env"), "utf8")).toBe("laptop copy\n");
+    expect(fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8")).toBe(before);
+    expect(r.workspace.env.SNAP).toBe("one");
+    expect(r.workspace.env.CODECAST_WORKSPACE_INPUT_ROOT).toBe(fs.realpathSync(inputs));
+    expect(execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf8" })).toBe("");
+  });
+
+  test("branch follows HEAD across runs; validateWorkspace and heal pass after a branch switch", async () => {
+    withManifest();
+    await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
+    execSync("git checkout -q -b codecast/cloud-abc123", { cwd: repoRoot });
+    expect((await validateWorkspace(repoRoot, ROOT_WORKSPACE_NAME)).ok).toBe(true);
+    // validate holds no lock, so it reads the live HEAD without rewriting the record.
+    expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
+    // The read paths (`cast ws status`, `cast ws ls`) report the live HEAD, not the file.
+    expect(readWorkspaceState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("codecast/cloud-abc123");
+    expect(listWorkspaces(repoRoot).find((w) => w.name === ROOT_WORKSPACE_NAME)!.branch).toBe("codecast/cloud-abc123");
+    expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
+    execSync("git checkout -q -b codecast/cloud-def456", { cwd: repoRoot });
+    const r = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(r.workspace.branch).toBe("codecast/cloud-def456");
+    expect(r.created).toBe(false);
+    execSync("git checkout -q main", { cwd: repoRoot });
+    const healed = await healWorkspace(repoRoot, ROOT_WORKSPACE_NAME);
+    expect(healed.state).toBe("ready");
+    expect(healed.branch).toBe("main");
+  });
+
+  test("acquireWorkspace refuses the reserved name; releaseWorkspace drops only the state dir and never the repo", async () => {
+    withManifest();
+    await expect(acquireWorkspace(repoRoot, ROOT_WORKSPACE_NAME, { skipPool: true })).rejects.toThrow(/reserved for the main checkout/);
+    const r = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(fs.existsSync(path.join(repoRoot, ".codecast/workspaces", ROOT_WORKSPACE_NAME, "state.json"))).toBe(true);
+    await releaseWorkspace(repoRoot, ROOT_WORKSPACE_NAME);
+    expect(fs.existsSync(path.join(repoRoot, ".codecast/workspaces", ROOT_WORKSPACE_NAME))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, ".git"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "README.md"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, ".codecast/workspace.toml"))).toBe(true);
+    // The freed ports are reusable by a worktree.
+    const wt = await acquireWorkspace(repoRoot, "after", { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true });
+    expect(wt.workspace.ports.web).toBe(r.workspace.ports.web);
   });
 });
 

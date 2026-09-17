@@ -10,7 +10,7 @@ for (const fastFieldsInOverlay of [false, true]) {
       users: [{ _id: "users_me", name: "Me", email: "me@example.com" }],
       conversations: [
         { ...common, _id: "conversations_parent" },
-        { ...common, _id: "conversations_child", is_subagent: true, parent_conversation_id: "conversations_parent", owner_device_id: "cloud-device", worktree_name: "cloud-a", worktree_branch: "codecast/cloud-a", cloud_placement: "pending" },
+        { ...common, _id: "conversations_child", is_subagent: true, parent_conversation_id: "conversations_parent", owner_device_id: "cloud-device", worktree_name: "cloud-a", worktree_branch: "codecast/cloud-a", cloud_placement: "pending", cloud_seed: { source: "checkout", base: "abc1234def0000000000000000000000000000000", branch: "feat/x", dirty: true, at: now } },
         { ...common, _id: "conversations_local", is_subagent: true, parent_conversation_id: "conversations_parent" },
       ],
       session_owners: [], managed_sessions: [], messages: [],
@@ -22,8 +22,11 @@ for (const fastFieldsInOverlay of [false, true]) {
     expect(child?.cloud_placement).toBe("pending");
     expect(child?.worktree_name).toBe("cloud-a");
     expect(child?.worktree_branch).toBe("codecast/cloud-a");
+    // The seed survives projection (ct-49433); a row without one projects null.
+    expect(child?.cloud_seed).toEqual({ source: "checkout", base: "abc1234def0000000000000000000000000000000", branch: "feat/x", dirty: true, at: now });
     const local = sessions.find((s: any) => s._id === "conversations_local");
     expect(local?.owner_device_id).toBeNull();
     expect(local?.cloud_placement).toBeNull();
+    expect(local?.cloud_seed).toBeNull();
   });
 }

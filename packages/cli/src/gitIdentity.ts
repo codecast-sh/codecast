@@ -30,6 +30,10 @@ import { defaultConfigDir } from "./config/configDir.js";
 
 const execFileAsync = promisify(execFile);
 
+/** The device key's path relative to HOME — the SAME path on every machine,
+ * so the host git setup (cloud/hostGit.ts) mints into the file this module
+ * publishes through the heartbeat. */
+export const DEVICE_GIT_KEY_REL = ".codecast/git/id_ed25519";
 const GIT_DIR = path.join(defaultConfigDir(), "git");
 const KEY_PATH = path.join(GIT_DIR, "id_ed25519");
 
@@ -54,15 +58,23 @@ export function deviceGitPubkey(): string | undefined {
 }
 
 /**
- * Mint the device keypair if absent; returns the public key. The comment names
- * the device so the key is recognizable in a GitHub key list years later.
+ * The key comment: names the device so the key is recognizable in a GitHub
+ * key list years later. Sanitized to what a comment can safely carry, capped
+ * so a long label does not overflow the listing.
+ */
+export function deviceKeyComment(deviceLabel: string): string {
+  return `codecast-${deviceLabel.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60)}`;
+}
+
+/**
+ * Mint the device keypair if absent; returns the public key.
  */
 export async function ensureDeviceGitKey(deviceLabel: string): Promise<string | undefined> {
   const existing = deviceGitPubkey();
   if (existing) return existing;
   try {
     fs.mkdirSync(GIT_DIR, { recursive: true, mode: 0o700 });
-    const comment = `codecast-${deviceLabel.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60)}`;
+    const comment = deviceKeyComment(deviceLabel);
     await execFileAsync("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", comment, "-f", KEY_PATH, "-q"], {
       timeout: 20_000,
     });
@@ -108,7 +120,12 @@ export function resetGitIdentityState(): void {
  * remote is broken"? Only auth failures justify switching identities; network
  * failures must stay on the default identity and simply retry later.
  * "Repository not found" is included deliberately: GitHub reports unauthorized
- * private repos exactly that way rather than admitting they exist.
+ * private repos exactly that way rather than admitting they exist. "read only"
+ * is GitHub's refusal of a push over a deploy key added without write access
+ * ("The key you are authenticating with has been marked as read only") — an
+ * authorization failure, so gitPlane's needs_access and hostGit's probe
+ * classify it with the rest (the WIP snapshot push has its own list,
+ * wipSnapshot.isPermanentPushFailure, which carries the same phrase).
  */
 export function isGitAuthError(stderr: string): boolean {
   const s = stderr.toLowerCase();
@@ -120,6 +137,7 @@ export function isGitAuthError(stderr: string): boolean {
     s.includes("repository not found") ||
     s.includes("access denied") ||
     s.includes("permission to") ||
+    s.includes("read only") ||
     s.includes("403")
   );
 }

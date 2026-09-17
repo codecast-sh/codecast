@@ -18,17 +18,26 @@
  * are all ordinary states here, not failures.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import { fmt, icons } from "../colors.js";
 import { formatAgeShort } from "../publishCommand.js";
 import {
-  ensureUp, hostState, inspectHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
+  ensureUp, hostState, inspectHost, patchHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
+import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
+import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, githubRepo, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
+import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
+import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";
 import { ssh } from "../remote/session-move.js";
+import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
+import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
+import { cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 
@@ -149,6 +158,26 @@ export const REMOTE_WORKSPACE_LIST_SCRIPT =
  * Anything that is not four columns is dropped, which is how a shell warning
  * or a stray error line on stderr fails to become a phantom worktree.
  */
+/**
+ * Every checkout's seed refs (refs/codecast/cloud/<name>) that have no
+ * workspace state dir: a `## <path>` header per checkout, one name per line.
+ */
+export const REMOTE_DANGLING_SEEDS_SCRIPT =
+  'for d in ~/work/*/; do [ -d "$d/.git" ] || continue; ' +
+  `(cd "$d" && echo "## $d" && ${DANGLING_SEED_REFS_SCRIPT}); done; exit 0`;
+
+export function parseDanglingSeeds(out: string): Array<{ repo: string; name: string }> {
+  const rows: Array<{ repo: string; name: string }> = [];
+  let repo = "";
+  for (const raw of out.split("\n")) {
+    const line = raw.replace(/\x1b\[[0-9;]*m/g, "").trim();
+    const header = /^##\s+(.*)$/.exec(line);
+    if (header) { repo = path.posix.basename(header[1].trim().replace(/\/+$/, "")); continue; }
+    if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(line)) rows.push({ repo, name: line });
+  }
+  return rows;
+}
+
 export function parseRemoteWorkspaceList(out: string): RemoteWorktree[] {
   const rows: RemoteWorktree[] = [];
   let repo = "";
@@ -174,6 +203,7 @@ export function parseRemoteWorkspaceList(out: string): RemoteWorktree[] {
 // --------------------------------------------------------------------------
 
 export interface HostSession {
+  conversation_id: string;
   short_id: string;
   title: string | null;
   status: string | null;
@@ -181,6 +211,16 @@ export interface HostSession {
   worktree_name: string | null;
   worktree_branch: string | null;
   project_path: string | null;
+  /** Own worktree (isolated / null) or the host's main checkout (shared). */
+  cloud_workspace: "isolated" | "shared" | null;
+  /** "pending" while a laptop is still preparing the host for this row. */
+  cloud_placement: string | null;
+  /** The main checkout a shared row claimed (the occupancy key). */
+  cloud_checkout_path: string | null;
+  /** The row carries a session_error (a failed preparation frees a pending shared claim). */
+  session_error: boolean;
+  /** What the worktree started from (cloud.placeConversation's stamp), or null before placement / on old rows. */
+  cloud_seed?: { source: "checkout" | "origin_main"; base: string; branch: string | null; dirty: boolean | null; device_id: string | null; reason: string | null } | null;
   updated_at: number | null;
 }
 
@@ -193,13 +233,27 @@ export function sessionWorktreeNames(sessions: HostSession[]): Set<string> {
  * Tag each worktree with whether a session is still in it. An untagged one is
  * an orphan: a checkout and its ports held on the box by nothing, which is the
  * thing worth seeing in a listing, because it is what quietly fills the disk.
+ * The `shared-checkout` record (`cast ws root`) has no worktree name on any
+ * session; it is attributed by PATH to the session whose project_path or
+ * claimed checkout equals it.
  */
 export function markOrphanWorktrees(
   worktrees: RemoteWorktree[],
   sessions: HostSession[],
 ): Array<RemoteWorktree & { hasSession: boolean }> {
   const taken = sessionWorktreeNames(sessions);
-  return worktrees.map((w) => ({ ...w, hasSession: taken.has(w.name) }));
+  const paths = new Set(sessions.flatMap((s) => [s.project_path, s.cloud_checkout_path]).filter((p): p is string => !!p));
+  return worktrees.map((w) => ({ ...w, hasSession: taken.has(w.name) || (!!w.path && paths.has(w.path)) }));
+}
+
+/**
+ * The listing's note for a worktree nobody sits in. The `shared-checkout`
+ * record is the repo's main checkout holding ports, not a leaked worktree:
+ * free, never an orphan.
+ */
+export function worktreeNote(w: RemoteWorktree & { hasSession: boolean }): string {
+  if (w.hasSession) return "";
+  return w.name === ROOT_WORKSPACE_NAME ? "main checkout, free" : "no session (orphan)";
 }
 
 export interface HostReport {
@@ -220,9 +274,128 @@ export interface HostReport {
   sessionsError?: string;
   worktrees: Array<RemoteWorktree & { hasSession: boolean }>;
   worktreesNote?: string;
+  /** Seed refs (refs/codecast/cloud/<name>) in a host checkout with no workspace state behind them. */
+  danglingSeeds?: Array<{ repo: string; name: string }>;
   cost: HostCost & { instanceType: string | null; volumeGiB: number | null };
+  /** The host's home-mirror stamp (~/.codecast/mirror.json), when it is awake and has one. */
   mirror?: HostMirrorStamp | null;
   mirrorNote?: string;
+  /** Git push access from the host, as the registry last recorded it (no ssh). */
+  git: HostGitReport;
+  /** The host's last tools check (~/.codecast/host-tools.json), when it is awake and has one. */
+  tools?: HostToolsReport | null;
+  toolsNote?: string;
+}
+
+export interface HostGitReport {
+  pubkey: string | null;
+  /** null = never probed. */
+  read: boolean | null;
+  write: boolean | null;
+  readonly?: boolean;
+  origin?: string;
+  checkedAt?: number;
+  error?: string;
+  forwardAgent: boolean;
+  /** The GitHub App token path, as the last probe found it. */
+  app?: { origin: string; read: boolean; write: boolean; error?: string };
+  /** Which credential this host pushes with now. */
+  path: HostAccessPath;
+  /** Why none does, when path is "none". */
+  pathReason?: string;
+}
+
+/** The registry's git facts for a host — what `ls` prints without waking it. */
+export function hostGitReport(host: CloudHost): HostGitReport {
+  const a = host.gitAccess;
+  const app = host.gitAppAccess;
+  const key = {
+    read: a ? a.read : null,
+    write: a ? a.write : null,
+    ...(a?.readonly ? { readonly: true } : {}),
+    ...(a?.error ? { error: a.error } : {}),
+  };
+  const { path, reason } = hostAccessPath(
+    key,
+    app ? { write: app.write, ...(app.error ? { error: app.error } : {}) } : undefined,
+    host.forwardAgent === true,
+  );
+  return {
+    pubkey: host.gitPubkey ?? null,
+    ...key,
+    ...(a?.origin ? { origin: a.origin } : {}),
+    ...(a?.checkedAt ? { checkedAt: a.checkedAt } : {}),
+    ...(app ? { app: { origin: app.origin, read: app.read, write: app.write, ...(app.error ? { error: app.error } : {}) } } : {}),
+    forwardAgent: host.forwardAgent === true,
+    path,
+    ...(reason ? { pathReason: reason } : {}),
+  };
+}
+
+/**
+ * The `git` line of a host block: which of the four access paths is live, and
+ * what to do when none is. A read-only deploy key (GitHub's default) fetches
+ * fine and fails every push, so it keeps its own sentence with the fix.
+ */
+export function gitStatusLine(git: HostGitReport, hostId: string, now = Date.now()): string {
+  const bridge = git.forwardAgent && git.path !== "agent-bridge" ? "  agent bridge on" : "";
+  const age = git.checkedAt ? `, checked ${formatAgeShort(now - git.checkedAt)} ago` : "";
+  if (git.path === "app-token") return `app-token: pushes ${git.app!.origin} with a codecast GitHub App token — no key needed${age}${bridge}`;
+  if (git.path === "device-key") return `device-key: push access to ${git.origin}${age}${bridge}`;
+  if (git.path === "agent-bridge") return `agent-bridge: pushes through your laptop's ssh agent while the bridge is up — cast hosts key ${hostId} for a standing key`;
+  if (git.write === null || !git.origin) return `none: unknown until a session is placed — cast hosts key ${hostId}${bridge}`;
+  if (git.readonly) return `none: read-only key for ${git.origin} — re-add it with write access: cast hosts key ${hostId}${bridge}`;
+  return `none: needs access to ${git.origin}${git.pathReason ? ` (${git.pathReason})` : ""} — cast hosts key ${hostId}${bridge}`;
+}
+
+/** Why `cast hosts forward-agent` must refuse to enable the bridge, or null. */
+export function forwardAgentRefusal(host: CloudHost): string | null {
+  if ((host.watchdogVersion ?? 0) >= AGENT_BRIDGE_MIN_WATCHDOG) return null;
+  return `run \`cast hosts provision ${host.id}\` first so the idle watchdog ignores the bridge (its watchdog is version ${host.watchdogVersion ?? 1}, the bridge needs ${AGENT_BRIDGE_MIN_WATCHDOG})`;
+}
+
+export const AGENT_BRIDGE_SECURITY_NOTE =
+  "while the bridge is up, every key in your laptop's ssh-agent is usable by any process on the host — an agent session included. Turn it off when the work is done: cast hosts forward-agent <id> --off";
+
+export const GH_NOT_LOGGED_IN_MESSAGE = "gh is not logged in — run `gh auth login` first, or add the key by hand at the URL above";
+
+export const KEY_ALREADY_IN_USE_MESSAGE =
+  "this key is already registered on GitHub (another repo's deploy key or an account key) — remove it there, or add it as an account key at " +
+  `${ACCOUNT_KEY_URL} (broad access: every repo you can reach)`;
+
+/**
+ * `gh repo deploy-key add` for the host's key, with write access, after
+ * `gh auth status` says gh can act at all (its own login error names the
+ * API call, not the precondition). GitHub registers a public key ONCE across
+ * deploy keys and account keys, so the second repo's add fails with "key is
+ * already in use" — reported as such instead of as a raw API error, with the
+ * choice the human has to make.
+ */
+export function grantDeployKey(
+  pubkey: string,
+  origin: string,
+  hostId: string,
+  gh = "gh",
+): { ok: boolean; alreadyInUse?: boolean; error?: string } {
+  const repo = githubRepo(origin);
+  if (!repo) return { ok: false, error: `${origin} is not a GitHub repository; add the key by hand` };
+  const auth = spawnSync(gh, ["auth", "status"], { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
+  if (auth.error) return { ok: false, error: (auth.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : auth.error.message };
+  if (auth.status !== 0) return { ok: false, error: GH_NOT_LOGGED_IN_MESSAGE };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-deploy-key-"));
+  const file = path.join(dir, "key.pub");
+  try {
+    fs.writeFileSync(file, `${pubkey}\n`, { mode: 0o600 });
+    const r = spawnSync(gh, ["repo", "deploy-key", "add", file, "--allow-write", "--title", `codecast-${hostId}`, "-R", repo],
+      { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
+    if (r.error) return { ok: false, error: (r.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : r.error.message };
+    if (r.status === 0) return { ok: true };
+    const err = `${r.stderr ?? ""}${r.stdout ?? ""}`;
+    if (/already in use/i.test(err)) return { ok: false, alreadyInUse: true, error: KEY_ALREADY_IN_USE_MESSAGE };
+    return { ok: false, error: err.trim().split("\n").filter(Boolean).pop() ?? `gh exited ${r.status}` };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export interface HostMirrorStamp {
@@ -233,6 +406,7 @@ export interface HostMirrorStamp {
   complete?: boolean;
 }
 
+/** The host's ~/.codecast/mirror.json as the verify command returned it, or null when it has none. */
 export function parseHostMirrorStamp(out: string): HostMirrorStamp | null {
   const line = out.trim();
   if (!line) return null;
@@ -251,6 +425,10 @@ export function parseHostMirrorStamp(out: string): HostMirrorStamp | null {
   }
 }
 
+/**
+ * The `config mirror` line of a host block: never, or "<age> ago (hash8,
+ * N files)", with a suffix when another laptop owns the host's config.
+ */
 export function mirrorStatusLine(
   mirror: HostMirrorStamp | null | undefined,
   localDeviceId: string,
@@ -354,12 +532,17 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
 
   let worktrees: Array<RemoteWorktree & { hasSession: boolean }> = [];
   let worktreesNote: string | undefined;
+  let danglingSeeds: Array<{ repo: string; name: string }> = [];
   if (live && address) {
     const listed = await guard(() =>
       parseRemoteWorkspaceList(ssh(toRemoteHost(current), REMOTE_WORKSPACE_LIST_SCRIPT, 60_000)),
     );
     if (listed.error) worktreesNote = `unknown (${listed.error})`;
     worktrees = markOrphanWorktrees(listed.value ?? [], sessions);
+    // Seed refs left behind by a failed acquire or a worktree removed by
+    // hand: nothing frees them but `git update-ref -d`, so they are listed.
+    const seeds = await guard(() => parseDanglingSeeds(ssh(toRemoteHost(current), REMOTE_DANGLING_SEEDS_SCRIPT, 60_000)));
+    danglingSeeds = seeds.value ?? [];
   } else {
     // Asleep, so the host cannot be asked. Its sessions still remember which
     // worktree they were in, which is a partial answer and is labelled as one:
@@ -374,13 +557,27 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
 
   let mirror: HostMirrorStamp | null | undefined;
   let mirrorNote: string | undefined;
+  let tools: HostToolsReport | null | undefined;
+  let toolsNote: string | undefined;
   if (live && address) {
+    // The mirror stamp comes back verified against the disk (mirror/push.ts).
     const { readRemoteMirrorStamp } = await import("../cloud/mirror/push.js");
     const stamp = await guard(async () => parseHostMirrorStamp(JSON.stringify(await readRemoteMirrorStamp(toRemoteHost(current), 5_000, undefined, undefined, true))));
     if (stamp.error) mirrorNote = stamp.error;
     else mirror = stamp.value ?? null;
+    // A short cap: a hung sshd must not stall the whole listing. One ssh for
+    // both stamps, split on a marker line.
+    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null", 5_000));
+    if (stamps.error) toolsNote = stamps.error;
+    else {
+      const [toolsOut, mcpOut] = (stamps.value ?? "").split("__CAST_MCP__\n");
+      tools = parseHostToolsStamp(toolsOut ?? "");
+      // The MCP manifest rides beside the tools stamp: the summary line names the pinned servers.
+      if (tools && (mcpOut ?? "").trim()) tools.mcpOverrides = parseHostMcpOverrides(mcpOut!);
+    }
   } else {
     mirrorNote = "asleep";
+    toolsNote = "asleep";
   }
 
   const cost = facts.error
@@ -403,8 +600,12 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(sessionsError ? { sessionsError } : {}),
     worktrees,
     ...(worktreesNote ? { worktreesNote } : {}),
+    ...(danglingSeeds.length ? { danglingSeeds } : {}),
     ...(mirror !== undefined ? { mirror } : {}),
     ...(mirrorNote ? { mirrorNote } : {}),
+    ...(tools !== undefined ? { tools } : {}),
+    ...(toolsNote ? { toolsNote } : {}),
+    git: hostGitReport(host),
     cost: {
       ...cost,
       instanceType: facts.value?.instanceType ?? null,
@@ -413,11 +614,26 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   };
 }
 
-function sessionLine(s: HostSession): string {
-  const where = s.worktree_name ?? (s.project_path ? path.basename(s.project_path) : "");
+/** Where a session runs, for the `ls` line: its worktree, or `<repo> (shared[, pending])` for the main checkout. */
+export function sessionWhere(s: HostSession): string {
+  if (s.worktree_name) return s.worktree_name;
+  const repo = s.cloud_checkout_path ?? s.project_path;
+  const base = repo ? path.basename(repo) : "";
+  if (s.cloud_workspace === "shared") return `${base} (shared${s.cloud_placement === "pending" ? ", pending" : ""})`;
+  return base;
+}
+
+/** `feat/x@abc1234+` for a checkout seed, `origin/main@abc1234` for an origin seed, empty without one. */
+export function sessionSeed(s: HostSession): string {
+  return s.cloud_seed ? cloudSeedLabel(s.cloud_seed) : "";
+}
+
+export function sessionLine(s: HostSession): string {
+  const where = sessionWhere(s);
+  const seed = sessionSeed(s);
   const title = (s.title ?? "").trim() || (s.project_path ? path.basename(s.project_path) : "(untitled)");
   const work = s.work_state ?? s.status ?? "";
-  return `${fmt.id(s.short_id.padEnd(8))} ${fmt.muted(where.padEnd(16))} ${title.slice(0, 44).padEnd(44)} ${fmt.muted(work)}`;
+  return `${fmt.id(s.short_id.padEnd(8))} ${fmt.muted(`${where}${seed ? `  ${seed}` : ""}`.padEnd(30))} ${title.slice(0, 44).padEnd(44)} ${fmt.muted(work)}`;
 }
 
 /** The daemon on the box: which device it is, and whether it is answering. */
@@ -431,7 +647,25 @@ function deviceText(dev: HostReport["device"]): string {
   return `${label} — ${health}  ${fmt.muted(dev.id)}${dev.note ? `  ${fmt.muted(dev.note)}` : ""}`;
 }
 
-function printHostReport(r: HostReport): void {
+/** The `tools` line of a host block: the last check's summary, or why there is none. */
+export function toolsStatusLine(tools: HostToolsReport | null | undefined, note?: string): string {
+  if (note) return `unknown (${note})`;
+  if (!tools) return "never checked — cast hosts tools";
+  return `${summarizeHostTools(tools)}${tools.at ? `, checked ${tools.at}` : ""}`;
+}
+
+/** The per-source lines `cast hosts wake` / `sync-auth` print for the logins push. */
+export function loginsReportLines(r: AgentLoginsReport | undefined): string[] {
+  if (!r) return ["agent logins: not pushed"];
+  const lines: string[] = [];
+  lines.push(r.pushed ? `agent logins: pushed ${r.shipped || "nothing"}` : `agent logins: not pushed${r.reason ? ` (${r.reason})` : ""}`);
+  lines.push(`claude credential: ${r.claude.pushed ? "pushed" : `not pushed (${r.claude.reason ?? "unknown"})`}`);
+  for (const k of r.kept) lines.push(`kept on the host: ${k}`);
+  for (const sk of r.skipped) lines.push(`skipped ${sk.id}: ${sk.reason}`);
+  return lines;
+}
+
+function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void {
   const mark =
     r.state === "running" ? fmt.success("awake")
     : r.state === "stopped" ? fmt.muted("asleep")
@@ -452,13 +686,21 @@ function printHostReport(r: HostReport): void {
   const wtNote = r.worktreesNote ? fmt.muted(r.worktreesNote) : r.worktrees.length ? "" : fmt.muted("none");
   console.log(`  worktrees  ${wtNote}`.trimEnd());
   for (const w of r.worktrees) {
-    const orphan = w.hasSession ? "" : fmt.warning("  no session (orphan)");
+    const note = worktreeNote(w);
+    const orphan = !note ? "" : w.name === ROOT_WORKSPACE_NAME ? fmt.muted(`  ${note}`) : fmt.warning(`  ${note}`);
     const cols = [w.repo, w.name, w.state, w.branch].filter(Boolean);
     console.log(`    ${cols.join("  ")}${orphan}`);
   }
+  for (const d of r.danglingSeeds ?? []) console.log(`    ${d.repo}  ${d.name}${fmt.warning("  seed ref only (orphan)")}`);
 
   const mirror = mirrorStatusLine(r.mirror, deviceId(), Date.now(), r.mirrorNote);
   console.log(`  config mirror  ${mirror.startsWith("never") || mirror.startsWith("unknown") ? fmt.muted(mirror) : mirror}`);
+  const gitLine = gitStatusLine(r.git, r.id);
+  console.log(`  git        ${r.git.write ? gitLine : r.git.write === null ? fmt.muted(gitLine) : fmt.warning(gitLine)}`);
+  const toolsLine = toolsStatusLine(r.tools, r.toolsNote);
+  const toolsBad = !!r.tools && (r.tools.missing.length > 0 || r.tools.unsupported.length > 0);
+  console.log(`  tools      ${!r.tools ? fmt.muted(toolsLine) : toolsBad ? fmt.warning(toolsLine) : toolsLine}`);
+  if (opts.verbose && r.tools) for (const l of hostToolsDetailLines(r.tools)) console.log(`    ${fmt.muted(l)}`);
   console.log(`  cost       ${r.cost.line}`);
 }
 
@@ -474,6 +716,61 @@ function pick(id: string | undefined, what: string): CloudHost {
   return h;
 }
 
+/** Remember what the host git setup found, so `ls` can say it without ssh. */
+function recordGitState(hostId: string, state: HostGitState): void {
+  const { origin, read, write, readonly, error } = state.access;
+  const app = state.app;
+  patchHost(hostId, {
+    gitPubkey: state.pubkey ?? undefined,
+    ...(origin ? { gitAccess: { origin, read, write, ...(readonly ? { readonly } : {}), checkedAt: state.checkedAt, ...(error ? { error } : {}) } } : {}),
+    ...(app
+      ? { gitAppAccess: { origin: app.origin, read: app.read, write: app.write, checkedAt: state.checkedAt, ...(app.error ? { error: app.error } : {}) } }
+      : {}),
+  });
+}
+
+/**
+ * What `cast hosts key` prints: the key, where to add it (a single-repo
+ * deploy key with WRITE access first; the account key labelled for what it
+ * is), and what the probe found. A denied probe on a key the registry says
+ * grants another repo names the one-key-one-repo rule, because that is the
+ * choice the person has to make.
+ */
+export function keyReportLines(host: CloudHost, state: HostGitState, origin: string, opts: { check?: boolean } = {}): string[] {
+  const lines: string[] = [];
+  const a = state.access;
+  // A live App token makes the key optional, so say that first and do not
+  // print a key for anyone to paste.
+  if (state.app?.write) {
+    lines.push(`${OK} ${host.id} pushes ${state.app.origin} with a codecast GitHub App token — no key to add`);
+    lines.push(`  ${fmt.muted(`the device key is the fallback for repositories the App does not cover: cast hosts key ${host.id} --check prints it`)}`);
+  }
+  if (a.write) lines.push(`${OK} ${host.id} has push access to ${origin}`);
+  else if (a.readonly) lines.push(`${fmt.warning(icons.cross)} ${host.id}'s key is read-only for ${origin} — delete it on GitHub and re-add it with write access`);
+  else if (a.read) lines.push(`${fmt.warning(icons.cross)} ${host.id} can read ${origin} but not push (${a.error ?? "push refused"})`);
+  else lines.push(`${fmt.warning(icons.cross)} ${host.id} has no access to ${origin} yet${a.error ? ` (${a.error})` : ""}`);
+  const prior = host.gitAccess;
+  // Compared with the PROBED origin: an https request is recorded as its ssh form.
+  if (!a.write && prior?.write && prior.origin !== (a.origin || origin)) {
+    lines.push(`  ${fmt.muted(`this key already grants ${prior.origin}; one deploy key attaches to one repo — use an account key for several, or a second host`)}`);
+  }
+  if (a.origin && a.origin !== origin) lines.push(`  ${fmt.muted(`probed as ${a.origin} — the host's key works over ssh only; its checkout's origin is set to that form`)}`);
+  lines.push(`  ${fmt.muted(`identity: ${state.identity}${state.identity === "placeholder" ? " (no laptop identity to mirror — pass --git-identity \"Name <email>\")" : ""}`)}`);
+  if (opts.check || a.write || state.app?.write || !state.pubkey) return lines;
+  lines.push("");
+  lines.push(state.pubkey);
+  const deploy = deployKeyUrl(origin);
+  if (deploy) lines.push(`Recommended: add it as a deploy key with WRITE access (one repo): ${fmt.highlight(deploy)}`);
+  else lines.push(`Add it wherever ${origin} takes keys, with write access`);
+  lines.push(fmt.muted(`Account-level key (broad: every repo you can reach): ${ACCOUNT_KEY_URL}`));
+  if (deploy) lines.push(fmt.muted(`or: cast hosts key ${host.id} --grant   (uses gh, adds it with write access)`));
+  return lines;
+}
+
+function printKeyReport(host: CloudHost, state: HostGitState, origin: string, opts: { check?: boolean }): void {
+  for (const l of keyReportLines(host, state, origin, opts)) console.log(l);
+}
+
 /**
  * Attach the whole group to a parent command. `cast hosts` and
  * `cast browser hosts` both call this, so neither can drift from the other.
@@ -486,7 +783,8 @@ export function buildHostsCommand(parent: Command): Command {
     .command("ls", { isDefault: true })
     .description("List remote hosts: state, device, sessions, worktrees and cost")
     .option("--json", "Machine-readable report")
-    .action(async (o: { json?: boolean }) => {
+    .option("--verbose", "Also list what the last tools check found missing or unsupported on each host")
+    .action(async (o: { json?: boolean; verbose?: boolean }) => {
       const rows = readHosts();
       if (!rows.length) {
         if (o.json) console.log("[]");
@@ -504,7 +802,7 @@ export function buildHostsCommand(parent: Command): Command {
         return;
       }
       for (const r of reports) {
-        printHostReport(r);
+        printHostReport(r, { verbose: o.verbose });
         console.log("");
       }
       console.log(
@@ -538,23 +836,27 @@ export function buildHostsCommand(parent: Command): Command {
     .description("Set up a Linux host as a full remote service: display, live stream, idle auto-stop, codecast daemon")
     .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables)", "20")
     .option("--no-daemon", "Skip the codecast daemon (browser + stream only; sessions cannot move there)")
-    .action(async (id: string | undefined, o: { idle: string; daemon: boolean }) => {
+    .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
+    .action(async (id: string | undefined, o: { idle: string; daemon: boolean; gitIdentity?: string }) => {
       const h = pick(id, "no linux host registered");
       const idle = parseInt(o.idle, 10);
-      const { provisionLinuxHost } = await import("../browser/provisionLinux.js");
+      const { provisionLinuxHost, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
       console.log(`provisioning ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       try {
-        const report = await provisionLinuxHost(toRemoteHost(up), { idleStopMinutes: idle, skipDaemon: !o.daemon }, (m) =>
+        const report = await provisionLinuxHost(toRemoteHost(up), { idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity }, (m) =>
           console.log(fmt.muted(`  ${m}`)),
         );
-        upsertHost({ ...up, idleStopMinutes: idle });
+        patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION });
         console.log(`${OK} ${h.id} is a full remote service`);
         console.log(`  chrome:   ${report.chrome.trim()}`);
         console.log(`  cast:     ${report.cast.trim()}`);
         console.log(`  claude:   ${report.claude.trim()}`);
         console.log(`  services: ${report.services.trim()}`);
         console.log(`  daemon:   ${report.device.trim()}`);
+        console.log(`  git key:  ${report.git.trim()}`);
+        console.log(`  agents:   ${report.agents.trim()}`);
+        console.log(`  tools:    ${report.tools.trim()}`);
         console.log(fmt.muted(`  idle auto-stop: ${idle ? `${idle}m` : "disabled"} — it powers itself off and costs only its disk`));
         console.log(fmt.muted(`  watch it: cast hosts view`));
       } catch (err) {
@@ -570,17 +872,138 @@ export function buildHostsCommand(parent: Command): Command {
       try {
         const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
         console.log(`${OK} ${up.id} is awake at ${fmt.highlight(up.address ?? "(no address)")}`);
-        const { learnHostDeviceId, readyHostHome } = await import("../cloud/prepare.js");
+        const { learnHostDeviceId, readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
         const hostDevice = await learnHostDeviceId(up, toRemoteHost(up));
         console.log(
           hostDevice
             ? `  device: ${fmt.muted(hostDevice)}`
             : fmt.muted("  no codecast daemon answered — `cast hosts provision` if sessions should run there"),
         );
-        await readyHostHome(toRemoteHost(up), { cloudId: up.id, onProgress: (m) => console.log(fmt.muted(`  ${m}`)) });
+        // The host-home steps; step 1 pushes the agent logins, so a wake
+        // from here refreshes them without the daemon (which never sees this
+        // path). Skipped on a box with no daemon: nothing to log in to yet.
+        const localGitRoot = cwdGitRoot();
+        const home = await readyHostHome(toRemoteHost(up), {
+          cloudId: up.id, localGitRoot, repoPath: localGitRoot ? remoteRepoPath(toRemoteHost(up), localGitRoot) : undefined,
+          onProgress: (m) => console.log(fmt.muted(`  ${m}`)), skipLogins: !hostDevice,
+        });
+        for (const l of loginsReportLines(home.logins)) console.log(`  ${l}`);
+        if (home.tools) console.log(`  tools: ${summarizeHostTools(home.tools)}`);
       } catch (err) {
         die((err as Error).message);
       }
+    });
+
+  // The operator's manual repair and the e2e check for the agent-auth push.
+  hosts
+    .command("sync-auth [id]", { hidden: true })
+    .description("Push this laptop's agent logins (codex, grok, gemini, opencode, pi + settings.json provider keys) to a host now")
+    .option("--json", "Machine-readable outcome")
+    .action(async (id: string | undefined, o: { json?: boolean }) => {
+      const h = pick(id, "no host registered");
+      const say = (m: string) => { if (!o.json) console.log(fmt.muted(`  ${m}`)); };
+      try {
+        const { learnHostDeviceId, pushAgentLoginsNow } = await import("../cloud/prepare.js");
+        const up = await ensureUp(h, say);
+        const remote = toRemoteHost(up);
+        await learnHostDeviceId(up, remote);
+        const r = pushAgentLoginsNow(remote, { localGitRoot: cwdGitRoot(), onProgress: say });
+        if (o.json) { console.log(JSON.stringify({ host: up.id, ...r }, null, 2)); return; }
+        for (const l of loginsReportLines(r)) console.log(`${l.startsWith("agent logins: pushed") ? OK : l.startsWith("agent logins") ? fmt.warning(icons.cross) : " "} ${l}`);
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
+    .command("tools [id]")
+    .description("Check (and install, user-locally) the runtimes and tools the repo here and your mirrored hooks/skills need on a host")
+    .option("--check", "Report only; install nothing")
+    .option("--json", "Machine-readable report")
+    .action(async (id: string | undefined, o: { check?: boolean; json?: boolean }) => {
+      const h = pick(id, "no host registered");
+      const say = (m: string) => { if (!o.json) console.log(fmt.muted(`  ${m}`)); };
+      try {
+        const { toolsForPrepare } = await import("../cloud/prepare.js");
+        const up = await ensureUp(h, say);
+        const report = toolsForPrepare(toRemoteHost(up), say, { localGitRoot: cwdGitRoot(), install: !o.check });
+        if (!report) die("the host did not answer the tools check");
+        if (o.json) { console.log(JSON.stringify({ host: up.id, ...report }, null, 2)); return; }
+        const bad = report.missing.length > 0 || report.unsupported.length > 0;
+        console.log(`${bad ? fmt.warning(icons.cross) : OK} ${up.id}  tools: ${summarizeHostTools(report)}`);
+        for (const t of [...report.ok, ...report.installed]) console.log(`  ${fmt.muted(`${report.installed.includes(t) ? "installed" : "ok"} ${t.tool}${t.version ? ` ${t.version}` : ""}`)}`);
+        for (const m of report.mcp ?? []) if (m.status === "ok") console.log(`  ${fmt.muted(`mcp ${m.harness}/${m.name} ok (${m.command})`)}`);
+        for (const l of hostToolsDetailLines(report).filter((l) => !l.startsWith("installed"))) console.log(`  ${fmt.warning(l)}`);
+        if (report.mcpOverridesWritten) console.log(fmt.muted("  ~/.codecast/host-mcp-overrides.json rewritten on the host — the next mirror push applies it"));
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
+    .command("key [id]")
+    .description("The host's git device key: print it, check what it can reach, or grant it on GitHub with gh")
+    .option("--repo <origin>", "The origin to probe/grant (default: this directory's `git remote get-url origin`)")
+    .option("--check", "Probe read/write access only; print nothing to paste")
+    .option("--grant", "Add it as a deploy key with write access through `gh` (checks `gh auth status` first)")
+    .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
+    .action(async (id: string | undefined, o: { repo?: string; check?: boolean; grant?: boolean; gitIdentity?: string }) => {
+      const h = pick(id, "no linux host registered");
+      const localGitRoot = cwdGitRoot();
+      const origin = o.repo ?? repoOrigin(localGitRoot);
+      if (!origin) die("no repository here to probe against", "run it inside a repo, or pass --repo <origin>");
+      const say = (m: string) => console.log(fmt.muted(`  ${m}`));
+      try {
+        const { ensureHostGitReady } = await import("../cloud/hostGit.js");
+        const { learnHostDeviceId, remoteRepoPath } = await import("../cloud/prepare.js");
+        const up = await ensureUp(h, say);
+        const remote = toRemoteHost(up);
+        await learnHostDeviceId(up, remote);
+        const probe = () => ensureHostGitReady(remote, {
+          localGitRoot,
+          origin,
+          repoPath: localGitRoot ? remoteRepoPath(remote, localGitRoot) : undefined,
+          gitIdentity: o.gitIdentity,
+          identitiesOnly: readHosts().find((r) => r.id === h.id)?.gitAccess?.write === true,
+          keyComment: h.id,
+          onProgress: say,
+        });
+        let state = probe();
+        recordGitState(h.id, state);
+        if (!state.pubkey) die("the host minted no key", "ssh-keygen is missing there — `cast hosts provision` installs the base packages");
+        if (o.grant && !state.access.write) {
+          const r = grantDeployKey(state.pubkey, origin, h.id);
+          if (r.ok) {
+            say("deploy key added with write access — re-probing");
+            state = probe();
+            recordGitState(h.id, state);
+          } else {
+            console.log(`${fmt.warning(icons.cross)} ${r.error}`);
+          }
+        }
+        printKeyReport(h, state, origin, { check: o.check });
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
+    .command("forward-agent <id>")
+    .description("Forward this laptop's ssh-agent to the host over one held connection (opt-in; the host can then use every key in it)")
+    .option("--off", "Stop forwarding; the daemon closes the bridge within a minute")
+    .action((id: string, o: { off?: boolean }) => {
+      const h = pick(id, "no host registered");
+      if (o.off) {
+        patchHost(h.id, { forwardAgent: false });
+        console.log(`${OK} agent bridge to ${h.id} is off — the daemon closes it within a minute`);
+        return;
+      }
+      const refusal = forwardAgentRefusal(h);
+      if (refusal) die(`cannot enable the agent bridge to ${h.id}`, refusal);
+      if (!process.env.SSH_AUTH_SOCK) console.log(fmt.warning("  this shell has no SSH_AUTH_SOCK; the daemon forwards its own agent, if it has one"));
+      patchHost(h.id, { forwardAgent: true });
+      console.log(`${OK} agent bridge to ${h.id} is on — the daemon opens it within a minute while the host is awake`);
+      console.log(fmt.warning(`  ${AGENT_BRIDGE_SECURITY_NOTE}`));
     });
 
   hosts

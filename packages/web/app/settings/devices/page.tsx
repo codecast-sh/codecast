@@ -70,12 +70,15 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
       {d.git_pubkey ? (
         <>
           <p className="text-[11px] text-sol-text-muted">
-            Add its key on GitHub — either your account&apos;s{" "}
+            Recommended: add its key as the repo&apos;s <strong>deploy key with write access</strong>{" "}
+            (GitHub&apos;s default is read-only, which fetches but cannot push) — that grants just
+            that repo. The alternative is your account&apos;s{" "}
             <a href="https://github.com/settings/ssh/new" target="_blank" rel="noreferrer" className="text-sol-blue hover:underline">
               SSH keys
             </a>{" "}
-            (grants everything you can reach) or the repo&apos;s deploy keys with write access
-            (grants just that repo). It starts working within minutes; nothing else to run.
+            (broad access — every repo you can reach). A key already registered elsewhere on GitHub
+            must be removed there first: one key, one place. It starts working within minutes;
+            nothing else to run.
           </p>
           <div className="flex items-start gap-2">
             <code className="flex-1 text-[10px] font-mono text-sol-text-secondary bg-sol-bg-alt rounded px-2 py-1.5 break-all select-all">

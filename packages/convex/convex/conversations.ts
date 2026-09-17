@@ -3,6 +3,12 @@ import { mutation, query, internalMutation, internalQuery, type QueryCtx, type M
 import { enqueueRoleEvent } from "./orgEvents";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
+import { parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns } from "./cloudPlacement";
+import { cloudSeedArg, cloudStartFromArg, effectiveStartFrom, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
+import { cloudPlacementFor, deviceWakesOnUse,
+  checkoutInUseMessage,
+  posixRepoBasename,
+} from "@codecast/shared/contracts";
 import { enqueueCloudSpawn } from "./cloud";
 import { isConversationSafetyBlocked, safetyBlockPatch } from "./conversationSafety";
 import { onFreshApiErrorPark } from "./accountSwitch";
@@ -1184,6 +1190,13 @@ export const createQuickSession = mutation({
     // "Run in the cloud": the row is parked on this remote device until a local
     // daemon prepares the host and places it (cloud_spawn → cast cloud start).
     cloud_device_id: v.optional(v.string()),
+    // With cloud_device_id: its own worktree on the host (absent = isolated)
+    // or the host's main checkout (shared; refused up front when another
+    // alive session holds that repo's checkout there).
+    cloud_workspace: v.optional(cloudWorkspaceValidator),
+    // With cloud_device_id: what the worktree starts from — the preparing
+    // laptop's checkout (absent) or origin/main. Shared forces origin_main.
+    cloud_start_from: v.optional(cloudStartFromArg),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1198,6 +1211,15 @@ export const createQuickSession = mutation({
     const agentType = args.agent_type || "claude_code";
 
     const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
+    if (args.cloud_device_id) await resolveCloudDevice(ctx, userId, args.cloud_device_id);
+    const cloudWorkspace = args.cloud_device_id ? (args.cloud_workspace ?? "isolated") : undefined;
+    const cloudStartFrom = args.cloud_device_id ? effectiveStartFrom(cloudWorkspace, args.cloud_start_from, undefined) : undefined;
+    if (args.cloud_device_id && cloudWorkspace === "shared") {
+      // A direct mutation: the caller sees the refusal, so throw before any row exists.
+      const repo = args.git_root || args.project_path;
+      const occupant = repo ? await findSharedCheckoutOccupant(ctx, userId, args.cloud_device_id, { repoBasename: posixRepoBasename(repo) }) : null;
+      if (occupant) throw new Error(checkoutInUseMessage(occupant.cloud_checkout_path ?? occupant.project_path ?? repo!, occupant));
+    }
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
@@ -1211,7 +1233,7 @@ export const createQuickSession = mutation({
       ...privacy,
       status: "active",
       ...(args.cloud_device_id
-        ? { owner_device_id: args.cloud_device_id, cloud_placement: "pending" as const }
+        ? { owner_device_id: args.cloud_device_id, cloud_placement: "pending" as const, cloud_workspace: cloudWorkspace, cloud_start_from: cloudStartFrom }
         : {}),
     });
 
@@ -1220,7 +1242,13 @@ export const createQuickSession = mutation({
     });
 
     if (args.cloud_device_id) {
-      await enqueueCloudSpawn(ctx, userId, { conversationId, cloudDeviceId: args.cloud_device_id });
+      const inserted = await ctx.db.get(conversationId);
+      await parkOnCloudHost(ctx, userId, inserted, args.cloud_device_id, {
+        projectPath: args.project_path,
+        gitRoot: args.git_root,
+        workspace: cloudWorkspace,
+        startFrom: cloudStartFrom,
+      });
       return conversationId;
     }
 
@@ -1233,6 +1261,7 @@ export const createQuickSession = mutation({
       isolated: args.isolated,
       worktreeName: args.worktree_name,
       createdAt: now,
+      callerUserId: userId,
     });
 
     return conversationId;
@@ -2496,6 +2525,8 @@ export const listConversations = query({
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
+            cloud_workspace: c.cloud_workspace || null,
+            cloud_seed: c.cloud_seed ?? null,
             migration_batch_id: c.migration?.batch_id || null,
           };
         }
@@ -2527,6 +2558,8 @@ export const listConversations = query({
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
+            cloud_workspace: c.cloud_workspace || null,
+            cloud_seed: c.cloud_seed ?? null,
             migration_batch_id: c.migration?.batch_id || null,
           };
         }
@@ -2592,6 +2625,8 @@ export const listConversations = query({
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
+            cloud_workspace: c.cloud_workspace || null,
+            cloud_seed: c.cloud_seed ?? null,
             migration_batch_id: c.migration?.batch_id || null,
           };
         }
@@ -2749,6 +2784,8 @@ export const listConversations = query({
           worktree_name: c.worktree_name || null,
           worktree_branch: c.worktree_branch || null,
           cloud_placement: c.cloud_placement || null,
+          cloud_workspace: c.cloud_workspace || null,
+          cloud_seed: c.cloud_seed ?? null,
           migration_batch_id: c.migration?.batch_id || null,
         };
       })
@@ -5427,6 +5464,9 @@ export const forkFromMessage = mutation({
       branch: v.optional(v.string()),
       path: v.optional(v.string()),
     })),
+    // What that worktree started from (the parent checkout's branch/HEAD/
+    // dirty state, or origin/main); stamped as cloud_seed with the fork time.
+    cloud_seed: v.optional(cloudSeedArg),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -5646,6 +5686,8 @@ export const forkFromMessage = mutation({
       worktree_branch: args.cloud_worktree ? args.cloud_worktree.branch : original.worktree_branch,
       worktree_path: args.cloud_worktree ? args.cloud_worktree.path : original.worktree_path,
       worktree_status: args.cloud_worktree ? ("active" as const) : original.worktree_status,
+      ...(args.cloud_worktree ? { cloud_workspace: "isolated" as const } : {}),
+      ...(args.cloud_seed ? { cloud_seed: { ...args.cloud_seed, at: now } } : {}),
       fork_status: "copying",
       fork_copy_total: totalToCopy,
       fork_copied: 0,
@@ -8340,8 +8382,13 @@ async function enrichInboxSessionRow(
     worktree_name: conv.worktree_name,
     worktree_branch: conv.worktree_branch,
     cloud_placement: (conv as any).cloud_placement ?? null,
+    cloud_workspace: (conv as any).cloud_workspace ?? null,
+    cloud_seed: (conv as any).cloud_seed ?? null,
     migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
+    // Read by the web's isSub (inboxStore) via isAgentSpawnedConversation so
+    // the waiting chime stands down on a workflow sub as the push does.
+    is_workflow_sub: conv.is_workflow_sub || false,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
     workflow_run_name,
@@ -8487,10 +8534,13 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     agent_name: child.agent_name ?? null,
     owner_device_id: child.owner_device_id ?? null,
     cloud_placement: child.cloud_placement ?? null,
+    cloud_workspace: child.cloud_workspace ?? null,
+    cloud_seed: child.cloud_seed ?? null,
     migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
     workflow_run_id: null,
+    is_workflow_sub: child.is_workflow_sub || false,
     is_workflow_primary: false,
     workflow_run_status: null,
     workflow_run_name: null,
@@ -11468,8 +11518,20 @@ export const reconfigureSession = mutation({
     isolated: v.optional(v.boolean()),
     // The machine picked on the new-session page. Routing honours it while it's
     // online and otherwise falls back, so ownership follows the resolved route
-    // (stamped by enqueueStartSession) rather than the request.
+    // (stamped by enqueueStartSession) rather than the request. Naming a
+    // NON-cloud device for a row parked on the cloud host UN-PARKS it; naming
+    // the host itself re-decides the placement for the (new) folder: a folder
+    // the host already holds starts there plainly, anything else re-parks.
     target_device_id: v.optional(v.string()),
+    // "Run in the cloud" for a (blank) existing row: park it on this host
+    // (cloudPlacement.parkOnCloudHost). Runner-only — co-owners are refused.
+    cloud_device_id: v.optional(v.string()),
+    // With cloud_device_id: the workspace the park should prepare (absent =
+    // the row's own stamp, else isolated).
+    cloud_workspace: v.optional(cloudWorkspaceValidator),
+    // With cloud_device_id: what the worktree starts from (absent = the row's
+    // own stamp, else checkout). A change re-parks like a folder change.
+    cloud_start_from: v.optional(cloudStartFromArg),
     // Launch model/effort for the (blank) session — option keys from the
     // shared contract. "default" clears the stamp and omits the flag. Launch
     // flags leave no transcript echo, so the stamp here is the only record
@@ -11489,8 +11551,46 @@ export const reconfigureSession = mutation({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || (conv.user_id !== userId && !(await isSessionOwner(ctx, conv._id, userId)))) throw new Error("Not found");
     if ((conv.message_count ?? 0) > 0) throw new Error("Cannot reconfigure session with messages");
+    // What the row said BEFORE this call's patch — the placed-row rule below
+    // compares the requested folder against it.
+    const priorProjectPath = conv.project_path;
+    if (args.cloud_device_id) {
+      if (userId !== conv.user_id) throw new Error("Only the session's runner can move it to the cloud");
+      await resolveCloudDevice(ctx, conv.user_id, args.cloud_device_id);
+    }
+    // Re-pointing a parked row is the runner's call, like parking it: a
+    // co-owner may pick a model on a preparing row but not cancel or move
+    // the runner's placement.
+    if (conv.cloud_placement === "pending" && args.target_device_id && userId !== conv.user_id) {
+      throw new Error("Only the session's runner can move it off the cloud");
+    }
+    // Un-park: a row parked on the cloud host pointed back at a laptop. The
+    // placement is cancelled (a late `cast cloud start` is fenced by the
+    // token and removes the worktree it acquired), the live cloud_spawn is
+    // superseded, and the normal start below sees a non-pending row.
+    //
+    // The same row pointed at the HOST again (the web sends target_device_id
+    // for a folder the shared predicate calls native, cloud_device_id
+    // otherwise) is re-decided below once the folder is known: native →
+    // un-park to the host (a plain start there), else → re-park.
+    let unpark = false;
+    let hostTarget: any = null;
+    if (!args.cloud_device_id && conv.cloud_placement === "pending" && args.target_device_id) {
+      const target = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", args.target_device_id))
+        .first();
+      if (target && !deviceWakesOnUse(target)) unpark = true;
+      else if (target && target.device_id === conv.owner_device_id) hostTarget = target;
+    }
 
     const patch: Record<string, any> = { updated_at: Date.now() };
+    if (unpark) {
+      patch.cloud_placement = undefined;
+      patch.cloud_placement_token = undefined;
+      patch.owner_device_id = undefined;
+      patch.session_error = undefined;
+    }
     if (args.agent_type) patch.agent_type = args.agent_type;
     // An agent flip invalidates the previous agent's model/effort stamps
     // (claude-opus on a codex session is nonsense; effort scales differ too).
@@ -11531,6 +11631,27 @@ export const reconfigureSession = mutation({
       patch.auto_shared = autoShared || undefined;
     }
 
+    // A pending row re-pointed at its host: with the folder it will have
+    // AFTER this patch, does the host already hold it? Then the placement is
+    // done with (no laptop needs to prepare anything) and the row starts on
+    // the host like any native launch. Otherwise it stays parked — re-parked
+    // when the folder moved, a no-op while a live cloud_spawn is preparing.
+    let unparkToHost = false;
+    if (hostTarget) {
+      const devices = await ctx.db
+        .query("devices")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id))
+        .collect();
+      const locals = devices.filter((d: any) => !d.is_remote);
+      const paths = [patch.git_root ?? conv.git_root, patch.project_path ?? conv.project_path];
+      unparkToHost = cloudPlacementFor({ target: hostTarget, locals, paths }) === "native";
+      if (unparkToHost) {
+        patch.cloud_placement = undefined;
+        patch.cloud_placement_token = undefined;
+        patch.session_error = undefined;
+      }
+    }
+
     await ctx.db.patch(args.conversation_id, patch);
     // A project-path change re-resolves team/privacy; if the access inputs
     // actually moved, advance the comment view head (matrix SRV-02). Guarded
@@ -11540,6 +11661,12 @@ export const reconfigureSession = mutation({
         (patch.team_id !== undefined && patch.team_id !== conv.team_id))) {
       await advanceCommentsAccessRevision(ctx, conv);
     }
+
+    if (unpark || unparkToHost) await supersedeCloudSpawns(ctx, conv.user_id, args.conversation_id);
+    // The folder moved under a park: the cloud_spawn a laptop may already be
+    // running was chosen for (and would place) the OLD repo — supersede it and
+    // ask again with a fresh token.
+    const pathChanged = args.project_path !== undefined && args.project_path !== priorProjectPath;
 
     // start_session is now idempotent on the daemon: it kills any tmux with the
     // deterministic name `cc-<agent>-<convId-suffix>` and respawns it. One
@@ -11555,18 +11682,53 @@ export const reconfigureSession = mutation({
       const key = modelAgentKey(daemonAgentType === "codex" ? "codex" : "claude_code") === "claude" && m.startsWith("claude-") ? m.slice("claude-".length) : m;
       return launchCfg?.models.some((o) => o.key === key && o.cliAlias) ? key : undefined;
     })();
-    await enqueueStartSession(ctx, conv.user_id, {
+    const launch = {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
       projectPath: updated.project_path || updated.git_root,
       gitRoot: updated.git_root,
       sessionId: updated.session_id,
-      isolated: args.isolated,
-      targetDeviceId: args.target_device_id ?? null,
       ...(stampedModelKey ? { model: stampedModelKey } : {}),
       ...(updated.effort && launchCfg?.efforts.includes(updated.effort) ? { effort: updated.effort } : {}),
       ...(args.stable_mode ? { stableMode: args.stable_mode } : {}),
       ...(args.stable_exclude?.length ? { stableExclude: args.stable_exclude } : {}),
+      callerUserId: userId,
+    };
+    if (args.cloud_device_id) {
+      // A row the host already PLACED (it holds a worktree there): the same
+      // folder re-launches as a plain start on the host; another folder would
+      // orphan a running worktree, so it is refused rather than re-parked.
+      // A shared row holds the main checkout the same way (cloud_checkout_path).
+      const holdsCheckout = !!conv.worktree_path || (conv.cloud_workspace === "shared" && !!conv.cloud_checkout_path);
+      const placed = holdsCheckout && conv.owner_device_id === args.cloud_device_id && !conv.cloud_placement;
+      if (placed) {
+        if (args.project_path !== undefined && args.project_path !== priorProjectPath) {
+          throw new Error("This session is already placed on the host — start a new session for another folder");
+        }
+        await enqueueStartSession(ctx, conv.user_id, { ...launch, targetDeviceId: args.cloud_device_id });
+        return;
+      }
+      await parkOnCloudHost(ctx, conv.user_id, updated, args.cloud_device_id, {
+        projectPath: updated.project_path,
+        gitRoot: updated.git_root,
+        force: pathChanged,
+        workspace: args.cloud_workspace,
+        startFrom: args.cloud_start_from,
+      });
+      return;
+    }
+    if (hostTarget && !unparkToHost) {
+      await parkOnCloudHost(ctx, conv.user_id, updated, hostTarget.device_id, {
+        projectPath: updated.project_path,
+        gitRoot: updated.git_root,
+        force: pathChanged,
+      });
+      return;
+    }
+    await enqueueStartSession(ctx, conv.user_id, {
+      ...launch,
+      isolated: args.isolated,
+      targetDeviceId: args.target_device_id ?? null,
     });
   },
 });
@@ -12196,6 +12358,7 @@ export const listDismissedSessions = query({
         implementation_session: implementationSession,
         worktree_name: conv.worktree_name,
         worktree_branch: conv.worktree_branch,
+        cloud_seed: conv.cloud_seed ?? null,
         icon: conv.icon,
         icon_color: conv.icon_color,
         dismissed_at: conv.inbox_dismissed_at,

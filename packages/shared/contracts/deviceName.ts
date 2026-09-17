@@ -10,6 +10,8 @@
  * already says whose machine it is, so the kind is enough to tell it apart
  * from a laptop.
  */
+import { deviceWakesOnUse } from "./cloudPlacement";
+
 export type DeviceNameSource = {
   label: string;
   platform: string;
@@ -60,7 +62,9 @@ export function deviceKindLabel(d: DeviceNameSource): string {
 /** A clean display name: cloud boxes by kind, hostname for a laptop/desktop. */
 export function deviceDisplayName(d: DeviceNameSource | undefined | null): string {
   if (!d) return "Unknown device";
-  if (d.is_remote && /linux/i.test(d.platform)) return "Cloud Linux";
+  // The same predicate that decides "this machine boots when work arrives",
+  // so the name and the placement rule cannot diverge.
+  if (deviceWakesOnUse(d)) return "Cloud Linux";
   if (d.is_remote) return "Remote Mac";
   const host = hostnameFromLabel(d.label);
   if (AWS_AUTO_HOSTNAME.test(host)) return `AWS ${deviceKindLabel(d)}`;

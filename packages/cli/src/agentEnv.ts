@@ -32,6 +32,12 @@ export const AGENT_SCRUBBED_ENV_VARS = [
 // warning clears and JSONL is written).
 export const FORCE_PERSISTENCE_VAR = "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE";
 
+// settings.json env keys codecast itself owns on a machine: never mirrored
+// laptop -> host by the agent-auth push (remote/agentAuth.ts), whatever the
+// allow-list says — the host pins its own persistence var and must never
+// inherit a laptop's leaked session markers.
+export const MIRROR_EXCLUDED_ENV_VARS: readonly string[] = [FORCE_PERSISTENCE_VAR, ...AGENT_SCRUBBED_ENV_VARS];
+
 // Launch prefix typed into every agent pane. Besides dropping the markers it
 // pins transcript persistence ON, so no marker that slips past the scrub can
 // silence a daemon-launched claude. Pane-content detection keys off the

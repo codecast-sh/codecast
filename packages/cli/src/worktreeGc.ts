@@ -10,7 +10,13 @@
  * The rule: a worktree is released only when its tree is clean AND its
  * branch holds no content that is not already on origin's default branch.
  * Dirty or unpushed work is kept and logged; a person (or `cast ws destroy`)
- * decides about that. `releaseWorkspace` does the removal (teardown hooks,
+ * decides about that. A worktree SEEDED from a laptop checkout (workspace
+ * state carries startPoint/seedBase) is always dirty and always ahead of
+ * origin/main by construction, so for it the question is different: has the
+ * host made anything since the seed? HEAD still at the seed base and a tree
+ * still equal to the seed snapshot means the laptop still holds all of it,
+ * and the worktree is released (the workspace release drops the seed ref and
+ * the branch). `releaseWorkspace` does the removal (teardown hooks,
  * Chrome, `git worktree remove`, state file) when the workspace module
  * tracks the worktree; a legacy worktree with no state gets a plain
  * `git worktree remove`.
@@ -33,6 +39,7 @@ import {
 } from "./gitCapability.js";
 import { execFileAsync } from "./proc.js";
 import { locateWorktree } from "./worktreeEnv.js";
+import { CLOUD_SEED_EXCLUDES, snapshotTree } from "./wipSnapshot.js";
 
 export type GcVerdict =
   | { action: "released"; name: string; path: string }
@@ -60,10 +67,18 @@ export type WorktreeProbe = {
   aheadOfOrigin: number | null;
   /** True when merging the branch into the base changes the base tree not at all. */
   contentInBase: boolean;
+  /**
+   * Seeded worktrees only: the host changed something since the laptop seed
+   * (a commit past the seed base, or a tree that differs from the snapshot).
+   * null = not seeded, or the seed ref is gone / git failed (today's rules apply).
+   */
+  hostOnlyWork?: boolean | null;
 };
 
 /** Why a worktree must be kept, or null when it may go. Pure over git output. */
 export function keepReason(probe: WorktreeProbe): string | null {
+  if (probe.hostOnlyWork === false) return null;
+  if (probe.hostOnlyWork === true) return "changes since the laptop seed";
   if (probe.dirty) return "uncommitted changes";
   // Why: a squash or rebase merge rewrites the commits, so the branch still
   // counts as ahead while its content is already on the base (ct-49542).
@@ -141,10 +156,16 @@ async function contentAlreadyInBase(
   }
 }
 
+/**
+ * `startPoint`/`seedBase` (a seeded workspace's state) switch the verdict to
+ * the host-only-work question; the other options belong to the fetch and
+ * the merge-tree probe.
+ */
 export async function probeWorktree(
   worktreePath: string,
-  opts: { capabilities?: GitCapabilityStore; repoKey?: string } = {},
+  opts: { capabilities?: GitCapabilityStore; repoKey?: string; startPoint?: string; seedBase?: string } | null = {},
 ): Promise<WorktreeProbe> {
+  opts ??= {};
   const dirty = (await git(worktreePath, ["status", "--porcelain"])).length > 0;
   await fetchPrune(worktreePath, opts.repoKey ?? worktreePath);
   let aheadOfOrigin: number | null = null;
@@ -160,7 +181,25 @@ export async function probeWorktree(
   } catch {
     aheadOfOrigin = null;
   }
-  return { dirty, aheadOfOrigin, contentInBase };
+  if (!opts.startPoint || !opts.seedBase) return { dirty, aheadOfOrigin, contentInBase };
+  return { dirty, aheadOfOrigin, contentInBase, hostOnlyWork: await hostOnlyWorkSince(worktreePath, opts.startPoint, opts.seedBase) };
+}
+
+/**
+ * Has the host made anything since the seed? A commit past the seed base is
+ * work; otherwise the worktree's tree is written the same way the laptop's
+ * snapshot was (temp index, same exclusions) and compared with the seed ref's.
+ * null when the ref is gone or git fails: the caller falls through to the
+ * dirty/ahead rules, which keep the worktree.
+ */
+async function hostOnlyWorkSince(worktreePath: string, startPoint: string, seedBase: string): Promise<boolean | null> {
+  try {
+    if ((await git(worktreePath, ["rev-parse", "HEAD"])) !== seedBase) return true;
+    const seedTree = await git(worktreePath, ["rev-parse", `${startPoint}^{tree}`]);
+    return (await snapshotTree(worktreePath, CLOUD_SEED_EXCLUDES)) !== seedTree;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -189,8 +228,11 @@ export async function releaseSessionWorktree(
   let probe: WorktreeProbe;
   try {
     // The repo root keys the fetch: releasing ten worktrees of one repo in a
-    // reaper pass fetches once, not ten times.
-    probe = await probeWorktree(worktreePath, { repoKey: wt.repoRoot });
+    // reaper pass fetches once, not ten times. A seeded workspace's state
+    // carries the seed the verdict is judged against.
+    const ws = await import("./workspace/index.js");
+    const state = ws.readState(wt.repoRoot, wt.name);
+    probe = await probeWorktree(worktreePath, { repoKey: wt.repoRoot, startPoint: state?.startPoint, seedBase: state?.seedBase });
   } catch (err) {
     return { action: "kept", name: wt.name, path: worktreePath, reason: `git probe failed: ${(err as Error).message.split("\n")[0]}` };
   }

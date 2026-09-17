@@ -127,7 +127,7 @@ export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport, SessionActivity } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
-import { isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -172,6 +172,7 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
+import { cloudPlacementFor } from "@codecast/shared/contracts";
 import { conversationTabPath, urlSessionId } from "../lib/pathLabel";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
 import {
@@ -688,11 +689,25 @@ export type InboxSession = {
   // there (cloud_spawn). Cleared by cloud.placeConversation, so its absence is
   // the honest "this session is placed and running".
   cloud_placement?: "pending" | null;
+  // Where a cloud session runs on the host: its own worktree (absent/null =
+  // isolated) or the host's main checkout ("shared"). Stamped at create and by
+  // placement; the card's chip and the header badge read it.
+  cloud_workspace?: "isolated" | "shared" | null;
+  // What a cloud worktree started from (stamped once, at placement): the
+  // laptop branch/commit it was seeded with, whether that tree was dirty, or
+  // origin/main with the reason for an automatic downgrade. The chip shows
+  // `@<base7>`, the header tooltip the "Started from …" line.
+  cloud_seed?: { source: "checkout" | "origin_main"; base: string; branch?: string | null; dirty?: boolean | null; laptop_root?: string | null; device_id?: string | null; reason?: string | null; at: number } | null;
   // A bulk migration (Settings → Migration) is moving this session between
   // machines: the row is fenced (messages queue) until the destination owns
   // it. The batch id links the card to its progress row.
   migration_batch_id?: string | null;
   workflow_run_id?: string | null;
+  // A dynamic-workflow agent conversation (server-emitted beside
+  // workflow_run_id, always a boolean — `|| false`). Read by isSub via
+  // isAgentSpawnedConversation so the chime stands down on it exactly as the
+  // needs-input push does.
+  is_workflow_sub?: boolean;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
   workflow_run_name?: string | null;
@@ -1634,6 +1649,10 @@ export type ClientUI = {
   // UNSTAMPED, i.e. per-device: "where should this run" is answered differently
   // from a phone than from the laptop that holds the checkouts.
   last_picked_device_id?: string;
+  // The composer's "start from" pick for cloud sessions: the preparing
+  // laptop's checkout (absent = checkout) or origin/main. Per-device like
+  // last_picked_device_id: it is a statement about this machine's checkouts.
+  cloud_start_from?: "checkout" | "origin_main";
   // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
   // drag handle). Layout pref → unstamped, per-device local_wins.
   trigger_prompt_height?: number;
@@ -2630,8 +2649,22 @@ export function getSessionRenderKey(
   return (session as InboxSession).session_id || session._id;
 }
 
+// Sole consumer: the waiting chime (hooks/useSyncInboxSessions.ts). A true
+// mirror of convex/notifications.ts checkNeedsInput's two stand-downs — reason
+// "subagent" (isSubagentConversation: is_subagent / parent link) and reason
+// "agent_spawned" (isAgentSpawnedConversation: spawned_by, non-lead agent
+// identity, workflow subs, parentless subagents) — built from the same two
+// shared predicates the server calls. The server's third stand-down
+// (agent_task_id → "schedule_run") has no chime counterpart: a schedule run
+// is never in the inbox as a waiting card. A worktree_name is a
+// LOCATION, not a parent: a human-started --isolated / cloud / path-stamped
+// session chimes like any other card. Machine-initiated rows — Task
+// subagents, workflow subs, cast-spawn fan-out with a spawner, agent-team
+// members other than the lead — stay silent, as they already do for the push.
+// The one caveat, same as the server: `cast spawn` from a plain terminal
+// records no spawner and so is treated as human-started.
 export function isSub(s: InboxSession): boolean {
-  return !!s.is_subagent || !!s.parent_conversation_id || !!s.worktree_name;
+  return isSubagentConversation(s) || isAgentSpawnedConversation(s);
 }
 
 export function isFork(s: InboxSession): boolean {
@@ -2726,6 +2759,8 @@ export function sessionStructuralSig(s: InboxSession): string {
     s.worktree_branch || "",
     s.owner_device_id || "",
     s.cloud_placement || "",
+    s.cloud_workspace || "",
+    s.cloud_seed?.base || "",
     s.migration_batch_id || "",
     rowLastTurnAllowsPark(s) ? 1 : 0,
     // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
@@ -4019,6 +4054,13 @@ export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): bo
   return ui?.inbox_show_old ?? true;
 }
 
+// What a cloud worktree starts from, as the composer last picked it: the
+// laptop checkout (default) or origin/main. One reader (the composer, the
+// create payload) so the two cannot disagree.
+export function resolveCloudStartFrom(ui: { cloud_start_from?: "checkout" | "origin_main" } | undefined): "checkout" | "origin_main" {
+  return ui?.cloud_start_from === "origin_main" ? "origin_main" : "checkout";
+}
+
 // Resolve what the inbox opens on when no conversation is selected: the fleet
 // board (default) or the chronological feed. Shared by the boot adoption below
 // and the inbox stage so they can't land on different surfaces.
@@ -4772,11 +4814,22 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   currentConversation: CurrentConversationContext;
   isolatedWorktreeMode: boolean;
   setIsolatedWorktreeMode: (val: boolean) => void;
-  // "Run in the cloud" for the next session: the same ephemeral, global shape as
-  // the isolated toggle. A cloud session is always an isolated worktree, but on
-  // the host — so this flag replaces `isolated` at create rather than joining it.
+  // Mirror of the composer's DERIVED cloud mode (ProjectSwitcher writes it
+  // from `isCloudHost(routedMachine)` and resets it on unmount). Read by
+  // nothing load-bearing: the create decides cloud-ness from the machine
+  // stamped on the stub, never from this flag.
   cloudSessionMode: boolean;
   setCloudSessionMode: (val: boolean) => void;
+  // While cloud mode is on, the isolated toggle drives THIS flag instead of
+  // isolatedWorktreeMode: off = the session runs in the host's main checkout
+  // (cloud_workspace "shared"), on (default) = its own worktree there. Reset
+  // whenever cloud mode is toggled either way, so isolated is the default on
+  // entering cloud mode and leaving it clears the choice; never persisted.
+  cloudSharedCheckout: boolean;
+  setCloudSharedCheckout: (val: boolean) => void;
+  // The "start from" pick (clientUI.cloud_start_from, read through
+  // resolveCloudStartFrom): the preparing laptop's checkout or origin/main.
+  setCloudStartFrom: (val: "checkout" | "origin_main") => void;
 
   // -- Unified command palette --
   palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
@@ -4914,7 +4967,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -7714,6 +7767,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   currentConversation: {},
   isolatedWorktreeMode: false,
   cloudSessionMode: false,
+  cloudSharedCheckout: false,
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
@@ -9045,7 +9099,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; agent_definition?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -9085,7 +9139,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // The server insert stamps the same pair; placeConversation clears the
       // placement once the host actually has the worktree.
       ...(opts.cloud_device_id
-        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const }
+        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const, cloud_workspace: opts.cloud_workspace ?? "isolated" }
         : {}),
     } as InboxSession;
     nextSession._launchSnapshot = launchSnapshotFromRow(nextSession);
@@ -9125,16 +9179,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // coin flip. The selection is now deterministic and always stamped, so
     // there is nothing left to second-guess.
     const targetDeviceId = cur?.target_device_id as string | null | undefined;
-    // "Run in the cloud": the session is created parked on a machine that boots
-    // itself when work arrives, and a local daemon prepares the host. Prefer the
-    // machine the picker stamped (the toggle selects the cloud host, so this is
-    // normally the same device); fall back to the first cloud host on the roster
-    // so the toggle still works if the stamp never landed. No cloud host in the
-    // roster means the toggle could not have been shown — create locally.
+    // "Run in the cloud" is decided by the machine STAMPED on the stub, never by
+    // the store flag (a mirror of the composer's derived mode). A stamped
+    // wake-on-use host parks the row unless the folder is one the host already
+    // holds (cloudPlacementFor === "native" — ~/work/<repo> and its worktrees),
+    // in which case it is a plain start there. The same predicate the composer's
+    // reconfigure and the server's start chokepoint apply, so all three agree.
     const roster: MachineCandidate[] = s.machineRoster;
-    const cloudDevice = s.cloudSessionMode
-      ? (roster.find((d: MachineCandidate) => d.device_id === targetDeviceId && wakesOnUse(d))
-        ?? roster.find(wakesOnUse))
+    const stamped = targetDeviceId ? roster.find((d: MachineCandidate) => d.device_id === targetDeviceId) : undefined;
+    const locals = roster.filter((d: MachineCandidate) => !d.is_remote);
+    const cloudDevice = stamped && wakesOnUse(stamped)
+      && (!projectPath || cloudPlacementFor({ target: stamped, locals, paths: [gitRoot || projectPath] }) !== "native")
+      ? stamped
       : undefined;
     return s.createSession({
       agent_type: agentType,
@@ -9149,8 +9205,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(cur?.effort ? { effort: cur.effort } : {}),
       // A cloud session's worktree is made on the HOST, by the daemon that
       // prepares it — so `isolated` (which asks a local daemon to make one
-      // here) must not ride along with it.
-      ...(cloudDevice ? { cloud_device_id: cloudDevice.device_id } : {}),
+      // here) must not ride along with it. The composer's cloud-mode toggle
+      // picks the workspace instead: its own worktree there (isolated, the
+      // default) or the host's main checkout (shared).
+      // The seed choice rides beside the workspace: a shared checkout is
+      // always origin/main, an isolated worktree starts from whatever the
+      // composer last picked (the laptop checkout by default).
+      ...(cloudDevice
+        ? {
+            cloud_device_id: cloudDevice.device_id, target_device_id: cloudDevice.device_id,
+            cloud_workspace: s.cloudSharedCheckout ? "shared" as const : "isolated" as const,
+            cloud_start_from: s.cloudSharedCheckout ? "origin_main" as const : resolveCloudStartFrom(s.clientState.ui),
+          }
+        : {}),
       ...(s.isolatedWorktreeMode && !cloudDevice ? { isolated: true } : {}),
       // Stable-context prefs stamped on the stub by the new-session context
       // picker (setStableContextPrefs) — same lifecycle as model/effort.
@@ -10284,7 +10351,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   setCloudSessionMode: action(function (this: Draft, val: boolean) {
     this.cloudSessionMode = val;
+    // Entering cloud mode starts isolated; leaving it drops the choice. The
+    // isolated flag itself is never touched from here.
+    this.cloudSharedCheckout = false;
   }),
+
+  setCloudSharedCheckout: action(function (this: Draft, val: boolean) {
+    this.cloudSharedCheckout = val;
+  }),
+
+  setCloudStartFrom: (val: "checkout" | "origin_main") => get().updateClientUI({ cloud_start_from: val }),
 
   clearCurrentConversation: action(function (this: Draft) {
     this.currentConversation = {};

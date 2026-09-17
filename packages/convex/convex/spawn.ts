@@ -6,8 +6,9 @@ import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { UNATTENDED_MANDATE, fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
+import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
@@ -29,26 +30,42 @@ async function getAuthenticatedUserId(
 }
 
 /**
- * Resolve a `cast spawn --device <value>` selector against the user's devices.
- * The value is whatever the human typed: a device_id, or the label they see in
- * the UI (matched case-insensitively, so `--device nose` finds "Nose").
- * device_id wins outright — a label that happens to equal another machine's id
- * must not shadow the id.
+ * Resolve a `cast spawn --device <value>` selector against the user's devices
+ * (and, for id/label only, the team agent boxes they may target). The value is
+ * whatever the human typed: a device_id, the stored label, or the name the UI
+ * shows (deviceDisplayName — "Cloud Linux" for the host whose stored label is
+ * "Linux - ip-172-31-40-243"), the last two matched case-insensitively.
+ * device_id wins outright, then the stored label — a display name that
+ * happens to equal another machine's label must not shadow it.
+ *
+ * Display names are matched against the user's OWN devices only: a teammate's
+ * agent box (is_remote + linux) also displays as "Cloud Linux", and a user
+ * without a host of their own must not land on it by name. A display name is
+ * not unique either (two remote Linux boxes), so more than one match throws
+ * rather than picking whichever came first.
  *
  * Throws on an unknown value rather than falling back to auto-routing: a typo'd
  * `--device` silently starting the session on the laptop is exactly the failure
  * the flag exists to prevent.
  */
 export function resolveDeviceSelector(
-  devices: { device_id: string; label?: string }[],
+  devices: { device_id: string; label?: string; platform?: string; is_remote?: boolean }[],
   value: string,
+  boxes: { device_id: string; label?: string; platform?: string; is_remote?: boolean }[] = [],
 ): string {
   const wanted = value.trim();
-  const byId = devices.find((d) => d.device_id === wanted);
+  const all = [...devices, ...boxes];
+  const byId = all.find((d) => d.device_id === wanted);
   if (byId) return byId.device_id;
-  const byLabel = devices.find((d) => (d.label ?? "").toLowerCase() === wanted.toLowerCase());
+  const byLabel = all.find((d) => (d.label ?? "").toLowerCase() === wanted.toLowerCase());
   if (byLabel) return byLabel.device_id;
-  const known = devices.map((d) => d.label || d.device_id).join(", ") || "(none registered)";
+  const byDisplayName = devices.filter((d) =>
+    deviceDisplayName({ label: d.label ?? d.device_id, platform: d.platform ?? "", is_remote: d.is_remote }).toLowerCase() === wanted.toLowerCase());
+  if (byDisplayName.length > 1) {
+    throw new Error(`"${wanted}" names ${byDisplayName.length} of your devices — use the device id: ${byDisplayName.map((d) => d.device_id).join(", ")}`);
+  }
+  if (byDisplayName.length === 1) return byDisplayName[0].device_id;
+  const known = all.map((d) => d.label || d.device_id).join(", ") || "(none registered)";
   throw new Error(`Unknown device "${wanted}". Your devices: ${known}`);
 }
 
@@ -97,7 +114,13 @@ export async function spawnSessionCore(
     // A worktree that already exists on the target device (`cast spawn
     // --cloud` acquires it over SSH before creating the row): stamped on the
     // row so the header and the host list show it from the first frame.
-    worktree?: { name: string; branch?: string; path?: string };
+    worktree?: { name: string; branch?: string; path?: string; seed?: { source: "checkout" | "origin_main"; base: string; branch?: string; dirty?: boolean; laptop_root?: string; device_id?: string; reason?: string } };
+    // `cast spawn --cloud --shared`: the row is created PARKED on the host
+    // (owner = the host, cloud_placement pending, no start, no seed) as the
+    // atomic claim of its main checkout — the CLI then prepares the host and
+    // places the row with the prompt. Refused here, before any insert, when
+    // another alive session holds that checkout.
+    cloudPark?: { deviceId: string; workspace: CloudWorkspaceMode; checkoutPath: string };
     // Team/privacy resolve from THIS path when project_path lives on another
     // machine — the directory mappings are keyed by the laptop's checkouts.
     privacyPath?: string;
@@ -117,6 +140,10 @@ export async function spawnSessionCore(
   const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.targetDeviceId);
 
   const privacy = await resolveCreationPrivacy(ctx, userId, opts.privacyPath || opts.gitRoot || opts.projectPath);
+  if (opts.cloudPark?.workspace === "shared") {
+    const occupant = await findSharedCheckoutOccupant(ctx, runnerUserId, opts.cloudPark.deviceId, { projectPath: opts.cloudPark.checkoutPath });
+    if (occupant) throw new Error(checkoutInUseMessage(opts.cloudPark.checkoutPath, occupant));
+  }
 
   const conversationId = await ctx.db.insert("conversations", {
     user_id: runnerUserId,
@@ -138,6 +165,16 @@ export async function spawnSessionCore(
           worktree_branch: opts.worktree.branch,
           worktree_path: opts.worktree.path,
           worktree_status: "active" as const,
+          cloud_workspace: "isolated" as const,
+          ...(opts.worktree.seed ? { cloud_seed: { ...opts.worktree.seed, at: now } } : {}),
+        }
+      : {}),
+    ...(opts.cloudPark
+      ? {
+          owner_device_id: opts.cloudPark.deviceId,
+          cloud_placement: "pending" as const,
+          cloud_workspace: opts.cloudPark.workspace,
+          cloud_checkout_path: opts.cloudPark.checkoutPath,
         }
       : {}),
     status: "active",
@@ -146,6 +183,9 @@ export async function spawnSessionCore(
   const shortId = conversationId.toString().slice(0, 7);
   await ctx.db.patch(conversationId, { short_id: shortId });
   await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+  // A parked row starts nowhere yet: the CLI places it (cloud.placeConversation)
+  // with the prompt once the host has the checkout ready.
+  if (opts.cloudPark) return { conversationId, shortId };
 
   const daemonAgentType = fromConvexAgentType(agentType);
   await enqueueStartSession(ctx, runnerUserId, {
@@ -161,6 +201,9 @@ export async function spawnSessionCore(
     createdAt: now,
     targetDeviceId: opts.targetDeviceId ?? null,
     definition: opts.definition,
+    // The cloud upgrade fires only when the spawner runs its own session
+    // (runnerUserId === userId); a team agent box target keeps a plain start.
+    callerUserId: userId,
   });
 
   // Seed the first turn as a plain user message (raw, not wrapped as a
@@ -246,8 +289,15 @@ export const createSessionFromCli = mutation({
     // A worktree the CLI already acquired on the target device (--cloud).
     worktree_branch: v.optional(v.string()),
     worktree_path: v.optional(v.string()),
+    // What that worktree started from (with worktree_path + worktree_name).
+    cloud_seed: v.optional(cloudSeedArg),
     // Local git root for team/privacy resolution when project_path is remote.
     privacy_path: v.optional(v.string()),
+    // `cast spawn --cloud --shared`: all three together park the row on the
+    // host as the claim of its main checkout (see spawnSessionCore.cloudPark).
+    cloud_device_id: v.optional(v.string()),
+    cloud_workspace: v.optional(cloudWorkspaceValidator),
+    cloud_checkout_path: v.optional(v.string()),
     // A device_id or label; routes start_session at that machine (see
     // resolveDeviceSelector).
     device: v.optional(v.string()),
@@ -283,7 +333,7 @@ export const createSessionFromCli = mutation({
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
       const boxes = await listAgentBoxDevices(ctx, userId);
-      targetDeviceId = resolveDeviceSelector([...devices, ...boxes.map(({ device }) => device)], args.device);
+      targetDeviceId = resolveDeviceSelector(devices, args.device, boxes.map(({ device }) => device));
     }
 
     const subagentFields = args.parent_session
@@ -305,6 +355,14 @@ export const createSessionFromCli = mutation({
     const handProject: any = handTask?.project_id ? await ctx.db.get(handTask.project_id) : null;
     const prompt = roleGate ? handBriefing(roleGate, asDef.prompt, handTask?.short_id ?? undefined, handProject) : asDef.prompt;
 
+    let cloudPark: { deviceId: string; workspace: CloudWorkspaceMode; checkoutPath: string } | undefined;
+    if (args.cloud_workspace === "shared") {
+      if (!args.cloud_device_id || !args.cloud_checkout_path) {
+        throw new Error("a shared cloud spawn needs cloud_device_id and cloud_checkout_path");
+      }
+      cloudPark = { deviceId: args.cloud_device_id, workspace: "shared", checkoutPath: args.cloud_checkout_path };
+    }
+
     const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
       agentType: asDef.agentType ?? args.agent_type,
       projectPath: args.project_path,
@@ -316,8 +374,9 @@ export const createSessionFromCli = mutation({
       definition: asDef.definition,
       worktreeName: args.worktree_name,
       worktree: args.worktree_path && args.worktree_name
-        ? { name: args.worktree_name, branch: args.worktree_branch, path: args.worktree_path }
+        ? { name: args.worktree_name, branch: args.worktree_branch, path: args.worktree_path, seed: args.cloud_seed }
         : undefined,
+      cloudPark,
       privacyPath: args.privacy_path,
       targetDeviceId,
       subagentFields,

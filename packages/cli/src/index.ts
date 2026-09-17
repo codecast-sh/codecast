@@ -95,7 +95,7 @@ import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPa
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getSkillsVersion, getPrVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
-import { isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
+import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
@@ -11081,6 +11081,7 @@ program
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
   .option("--all-branches", "Make every direction a branch and keep this thread out of the fan-out (default with two or more directions: this thread takes the first)")
   .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id. This thread's own direction stays here unless --all-branches")
+  .option("--start-from <source>", "With --cloud: what each worktree starts from — checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -11216,29 +11217,37 @@ program
       console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
       process.exit(1);
     }
+    if (options.startFrom && !options.cloud) {
+      console.error("--start-from picks what a cloud worktree starts from; it needs --cloud");
+      process.exit(1);
+    }
     // --cloud: same preparation as `cast spawn --cloud`, then each branch is
     // created ALREADY pointed at its worktree on the host (owner = the host's
     // device, project_path = the worktree), so the seed below lands there and
     // the deferred resume rebuilds the branch from the server copy on the
-    // host. The parent's checkout on this machine is what gets synced.
-    let cloud: { prepared: import("./cloud/prepare.js").PreparedHost } | null = null;
+    // host. The parent's checkout on this machine is what gets synced, and
+    // (by default) what every worktree starts from: its branch, HEAD and
+    // uncommitted changes, snapshotted ONCE for the whole fan-out.
+    let cloud: { prepared: import("./cloud/prepare.js").PreparedHost; seed: import("./cloud/prepare.js").CloudSeed } | null = null;
     if (options.cloud) {
-      let localGitRoot = process.cwd();
-      try {
-        localGitRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
-      } catch {}
       const say = (m: string) => { if (!options.json) console.log(`  ${m}`); };
       try {
-        const { prepareCloudHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
+        const { parseStartFrom, prepareCloudHost, resolveSeedRoots, seedForHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
         const { convexClient } = await import("./remote/cli.js");
+        const startFrom = parseStartFrom(options.startFrom);
+        const { seedCwd, repoRoot } = resolveSeedRoots(process.cwd());
         const prepared = await prepareCloudHost({
           hostArg: typeof options.cloud === "string" ? options.cloud : undefined,
-          localGitRoot,
+          seedCwd,
+          repoRoot,
+          startFrom,
           onProgress: say,
         });
         const cc = await convexClient();
         await waitForDeviceOnline(cc.client, cc.api, cc.token, prepared.deviceId, say);
-        cloud = { prepared };
+        const seed = await seedForHost(prepared, { startFrom });
+        if (seed.reason) say(`starting from origin/main: ${seed.reason}`);
+        cloud = { prepared, seed };
       } catch (err) {
         console.error(`Cloud host not ready: ${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);
@@ -11252,15 +11261,17 @@ program
         let worktreeName: string | undefined;
         if (cloud) {
           const { acquireRemoteWorkspace, freshWorktreeName } = await import("./cloud/prepare.js");
+          const { seedPlacementArg } = await import("./cloud/cli.js");
           const name = freshWorktreeName();
           if (!options.json) console.log(`  acquiring worktree ${name} on ${cloud.prepared.cloud.id}`);
           try {
-            const ws = await acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
+            const ws = await acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.seedCwd, cloud.seed);
             worktreeName = ws.name;
             cloudPlacement = {
               cloud_device_id: cloud.prepared.deviceId,
               cloud_project_path: ws.path,
               cloud_worktree: { name: ws.name, branch: ws.branch, path: ws.path },
+              cloud_seed: seedPlacementArg(ws.seed),
             };
           } catch (err) {
             console.error(`Fork failed for "${direction}": ${err instanceof Error ? err.message : String(err)}`);
@@ -11452,6 +11463,7 @@ program
     "  cast spawn --subagent --isolated \"refactor the store\" \"rewrite the router\"\n" +
     "  cast spawn --subagent --device nose \"run the nightly backfill\"\n" +
     "  cast spawn --subagent --agent codex \"review the diff\"   # codex subagent under THIS session\n" +
+    "  cast spawn --cloud --shared \"run the migration\"   # in the host's main checkout, not a worktree\n" +
     "  cast spawn \"independent thread the human asked to steer\"\n" +
     "  cast spawn --subagent -- - <<'EOF'\n" +
     "  Multi-line briefing with headings and code blocks,\n" +
@@ -11471,6 +11483,8 @@ program
   .option("--worktree <name>", "Name the worktree (implies --isolated; one task only)")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
+  .option("--shared", "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)")
+  .option("--from <source>", "With --cloud: what each worktree starts from — checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
   .option("--label <name>", "File each spawned session under a label (created if new)")
   .option("--unattended", "Run as an unattended principal: reversible actions proceed, protected decisions go through cast decide, no inline questions (the briefing every line hand gets)")
   .option("--json", "Machine-readable output")
@@ -11532,49 +11546,182 @@ program
       console.error("--cloud already picks the machine; drop --device");
       process.exit(1);
     }
+    if (options.shared && !options.cloud) {
+      console.error("--shared runs in the cloud host's main checkout; it needs --cloud");
+      process.exit(1);
+    }
+    if (options.shared && prompts.length > 1) {
+      console.error("--shared runs ONE task in the host's main checkout; spawn a single task with it, or drop it and let each task get its own worktree");
+      process.exit(1);
+    }
+    if (options.shared && options.worktree) {
+      console.error("--shared uses the host's main checkout, not a worktree; drop --worktree");
+      process.exit(1);
+    }
+    if (options.from && !options.cloud) {
+      console.error("--from picks what a cloud worktree starts from; it needs --cloud");
+      process.exit(1);
+    }
+    if (options.shared && options.from && options.from !== "origin-main" && options.from !== "origin_main") {
+      console.error("--shared runs in the host's main checkout at origin/main; it cannot start from this checkout (drop --from, or drop --shared)");
+      process.exit(1);
+    }
 
     // --cloud: the host is prepared ONCE (wake, refresh the checkout, copy the
     // manifest's gitignored files), then every task acquires its own worktree
     // there with the host's `cast ws acquire`, so N tasks get N worktrees with
     // ports the host itself allocated. The row is created only after the
     // worktree exists, pointed straight at it — no interim state a daemon could
-    // misread. See cloud/prepare.ts.
+    // misread. See cloud/prepare.ts. By default every worktree starts from
+    // THIS checkout (branch, HEAD, uncommitted changes), snapshotted once for
+    // the whole fan-out; `--from origin-main` is the clean-room opt-out.
     const say = (m: string) => { if (!options.json) console.log(`  ${c.dim}${m}${c.reset}`); };
-    let cloud: { prepared: import("./cloud/prepare.js").PreparedHost } | null = null;
+    let cloud: { prepared: import("./cloud/prepare.js").PreparedHost; seed: import("./cloud/prepare.js").CloudSeed | null } | null = null;
     if (options.cloud) {
-      const { prepareCloudHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
+      const { parseStartFrom, prepareCloudHost, resolveSeedRoots, seedForHost, wakeCloudHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
       const { convexClient } = await import("./remote/cli.js");
       try {
-        const prepared = await prepareCloudHost({
+        const startFrom = options.shared ? "origin_main" as const : parseStartFrom(options.from);
+        const { seedCwd, repoRoot } = resolveSeedRoots(gitRoot);
+        // --shared touches the checkout only AFTER its Convex claim (below):
+        // wake and home steps now, the refresh once the row holds the checkout.
+        const prepared = await (options.shared ? wakeCloudHost : prepareCloudHost)({
           hostArg: typeof options.cloud === "string" ? options.cloud : undefined,
-          localGitRoot: gitRoot,
+          seedCwd,
+          repoRoot,
+          startFrom,
           onProgress: say,
         });
+        if (prepared.git && prepared.git.access.origin && !prepared.git.access.write) {
+          say(`no push access on ${prepared.cloud.id} yet (${prepared.git.access.readonly ? "read-only key" : "key not granted"}) — cast hosts key ${prepared.cloud.id}`);
+        }
         const cc = await convexClient();
         await waitForDeviceOnline(cc.client, cc.api, cc.token, prepared.deviceId, say);
-        cloud = { prepared };
+        // The shared path refreshes after its claim; its seed is computed there.
+        const seed = options.shared ? null : await seedForHost(prepared, { startFrom });
+        if (seed?.reason) say(`starting from origin/main: ${seed.reason}`);
+        else if (seed) say(seed.source === "checkout" ? `seeding every worktree from ${seed.branch ?? "detached HEAD"} @ ${seed.base.slice(0, 8)}${seed.dirty ? " with uncommitted changes" : ""}` : `starting every worktree from origin/main @ ${seed.base.slice(0, 8)}`);
+        cloud = { prepared, seed };
       } catch (err) {
         console.error(`Cloud host not ready: ${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);
       }
     }
 
-    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string; worktree?: string; ports?: Record<string, number> }[] = [];
-    for (const prompt of prompts) {
+    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string; worktree?: string; workspace?: "isolated" | "shared"; branch?: string; ports?: Record<string, number>; seed?: Record<string, unknown> }[] = [];
+
+    // --cloud --shared: the row is created PARKED first (the /cli/spawn insert
+    // is the atomic claim of the host's main checkout — a refusal here means
+    // another session holds it, and nothing on the host has been touched),
+    // then the checkout is moved to origin/main on a fresh branch, prepared
+    // with the host's `cast ws root`, and the row placed with the prompt.
+    if (cloud && options.shared) {
+      const prompt = prompts[0]!;
+      const { acquireRemoteRootCheckout, armInterruptGuard, freshWorktreeName, refreshCloudCheckout, seedForHost } = await import("./cloud/prepare.js");
+      const { seedPlacementArg } = await import("./cloud/cli.js");
+      const { convexClient } = await import("./remote/cli.js");
+      const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          project_path: dir,
+          git_root: gitRoot,
+          privacy_path: gitRoot,
+          agent_type: agentType,
+          model: options.model,
+          effort: options.effort,
+          cc_account: options.account,
+          parent_session: parentSession,
+          spawner_session: spawnerSession,
+          cloud_device_id: cloud.prepared.deviceId,
+          cloud_workspace: "shared",
+          cloud_checkout_path: cloud.prepared.repoPath,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        console.error(`Spawn failed for "${promptGist(prompt)}": ${body.error || resp.statusText}`);
+        process.exit(1);
+      }
+      const row = await resp.json() as { conversation_id: string; short_id: string; parent_short_id?: string };
+      say(`claimed the host checkout ${cloud.prepared.repoPath} for ${row.short_id}`);
+      const cc = await convexClient();
+      // The row now holds the checkout, and nothing times a CLI park out: a
+      // Ctrl-C during the minutes of ssh below must stamp the row (which
+      // frees the checkout) rather than exit with the claim intact.
+      const guard = armInterruptGuard();
+      const keepWithError = async (message: string) => {
+        // Let a signal that landed during a blocking ssh dispatch first.
+        await new Promise((resolve) => setImmediate(resolve));
+        const interrupted = guard.reason();
+        const text = interrupted ? `${interrupted}: ${message}` : message;
+        try {
+          await cc.client.mutation(cc.api.conversations.setSessionError, { api_token: cc.token, conversation_id: row.conversation_id, error: text });
+        } catch {}
+        console.error(`Spawn failed for "${promptGist(prompt)}": ${text}`);
+        console.error(`row ${row.short_id} kept with the error — retry: cast cloud start ${row.conversation_id} --workspace shared, or cast kill ${row.short_id}`);
+        process.exit(1);
+      };
+      const checkInterrupted = async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        const reason = guard.reason();
+        if (reason) throw new Error("stopped before the row was placed");
+      };
+      let ws: import("./cloud/prepare.js").RemoteWorkspace;
+      let sharedSeed: import("./cloud/prepare.js").CloudSeed;
+      try {
+        refreshCloudCheckout(cloud.prepared, { moveHead: true }, say);
+        await checkInterrupted();
+        const branch = `codecast/${freshWorktreeName()}`;
+        say(`preparing the host checkout on ${branch} (cast ws root: ports, secret files, install)`);
+        ws = await acquireRemoteRootCheckout(cloud.prepared.host, cloud.prepared.repoPath, cloud.prepared.seedCwd, branch, { onProgress: say, cloudId: cloud.prepared.cloud.id, previousAddress: cloud.prepared.previousAddress });
+        sharedSeed = await seedForHost(cloud.prepared, { startFrom: "origin_main" });
+        await checkInterrupted();
+      } catch (err) {
+        await keepWithError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      try {
+        await cc.client.mutation(cc.api.cloud.placeConversation, {
+          api_token: cc.token,
+          conversation_id: row.conversation_id,
+          device_id: cloud.prepared.deviceId,
+          project_path: ws.path,
+          git_root: ws.path,
+          worktree_branch: ws.branch,
+          cloud_workspace: "shared",
+          seed: seedPlacementArg(sharedSeed),
+          start: true,
+          prompt,
+          model: options.model,
+          effort: options.effort,
+          cc_account: options.account,
+        });
+      } catch (err) {
+        await keepWithError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      guard.disarm();
+      roster.push({ short_id: row.short_id, conversation_id: row.conversation_id, prompt, parent_short_id: row.parent_short_id, workspace: "shared", branch: ws.branch, ports: ws.ports, seed: seedPlacementArg(sharedSeed) });
+    }
+
+    for (const prompt of cloud && options.shared ? [] : prompts) {
       let placement: Record<string, unknown> = {};
-      let worktree: { name: string; ports: Record<string, number> } | undefined;
+      let worktree: { name: string; ports: Record<string, number>; branch: string; seed: Record<string, unknown> } | undefined;
       if (cloud) {
         const { acquireRemoteWorkspace, freshWorktreeName } = await import("./cloud/prepare.js");
+        const { seedPlacementArg } = await import("./cloud/cli.js");
         const name = options.worktree || freshWorktreeName();
         say(`acquiring worktree ${name} on ${cloud.prepared.cloud.id} (install runs there)`);
-        let ws: import("./cloud/prepare.js").RemoteWorkspace;
+        let ws: import("./cloud/prepare.js").AcquiredRemoteWorkspace;
         try {
-          ws = await acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.localGitRoot);
+          ws = await acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name, cloud.prepared.seedCwd, cloud.seed ?? undefined, { onProgress: say });
         } catch (err) {
           console.error(`Spawn failed for "${promptGist(prompt)}": ${err instanceof Error ? err.message : String(err)}`);
           process.exit(1);
         }
-        worktree = { name: ws.name, ports: ws.ports };
+        worktree = { name: ws.name, ports: ws.ports, branch: ws.branch, seed: seedPlacementArg(ws.seed) };
         placement = {
           device: cloud.prepared.deviceId,
           project_path: ws.path,
@@ -11582,6 +11729,7 @@ program
           worktree_name: ws.name,
           worktree_branch: ws.branch,
           worktree_path: ws.path,
+          cloud_seed: worktree.seed,
           privacy_path: gitRoot,
         };
       } else if (options.worktree) {
@@ -11613,7 +11761,7 @@ program
         process.exit(1);
       }
       const result = await resp.json() as any;
-      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id, worktree: worktree?.name, ports: worktree?.ports });
+      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id, worktree: worktree?.name, ...(cloud ? { workspace: "isolated" as const } : {}), branch: worktree?.branch, ports: worktree?.ports, seed: worktree?.seed });
     }
 
     let labelResult: { createdLabel: boolean; failures: number } | null = null;
@@ -11644,9 +11792,10 @@ program
       `${c.dim}${dirNote}${c.reset} — ${placement}${labelNote}`
     );
     for (const s of roster) {
-      const wt = s.worktree
-        ? `  ${c.yellow}${s.worktree}${c.reset}${Object.keys(s.ports ?? {}).length ? c.dim + " " + Object.entries(s.ports!).map(([n, p]) => `${n}=${p}`).join(" ") + c.reset : ""}`
-        : "";
+      const portsNote = Object.keys(s.ports ?? {}).length ? c.dim + " " + Object.entries(s.ports!).map(([n, p]) => `${n}=${p}`).join(" ") + c.reset : "";
+      const wt = s.workspace === "shared"
+        ? `  ${c.yellow}shared checkout ${s.branch}${c.reset}${portsNote}`
+        : s.worktree ? `  ${c.yellow}${s.worktree}${c.reset}${portsNote}` : "";
       console.log(`  ${c.cyan}${s.short_id}${c.reset}${wt}  ${promptGist(s.prompt)}`);
     }
     if (labelResult?.failures) {
@@ -19815,12 +19964,15 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking). The SessionStart hook is an
-// output protocol: even a cached notice would become part of Claude's prompt,
-// so its hidden fast path never enters this lifecycle.
+// Check for updates in background (non-blocking). The SessionStart hook and
+// git's credential helper are output protocols: a cached notice would become
+// part of Claude's prompt in the first case and the credential git reads in
+// the second, so neither enters this lifecycle. Their fast paths claim them
+// before index.ts loads; the guard here is for a wrapper script that still
+// starts at index.ts, which reaches runFastPath only after this line.
 // CODECAST_NO_AUTO_UPDATE is set on the `_build-id` child an update spawns:
 // without it that child could start its own update, which recurses.
-if (!isStableContextFastPath && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates().then(async (available) => {
+if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates().then(async (available) => {
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);

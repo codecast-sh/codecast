@@ -3,8 +3,9 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, daemonUnitScript, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE } from "./provisionLinux.js";
+import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport } from "./provisionLinux.js";
 import * as remote from "./remote.js";
+import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
 import { listCloudRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
 import { remoteHome, type RemoteHost } from "../remote/session-move.js";
 
@@ -228,6 +229,25 @@ describe("idle watchdog and the daemon's activity stamp", () => {
     expect(script).toContain("sport = :22");
     expect(script).toContain("x11grab");
   });
+
+  test("the SSH rule subtracts live agent bridges (argv0-anchored pgrep) and never goes negative-active", () => {
+    // The bridge's own connection must not keep the box awake; the anchored
+    // pattern matches only the `exec -a cast-agent-bridge cat` sleeper, not
+    // the `bash -c '<remote command>'` wrapper whose cmdline also holds the
+    // literal — counting that would subtract two per bridge and let a real
+    // inbound session read as idle.
+    expect(script).toContain("conns=$(ss -Htn state established '( sport = :22 )' | wc -l)");
+    expect(script).toContain("bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)");
+    expect(script).toContain('[ -n "$bridges" ] || bridges=0');
+    expect(script).toContain("[ $(( conns - bridges )) -gt 0 ] && active=1");
+    expect(script).not.toContain('[ "$(ss -Htn state established');
+    expect(script).not.toContain("${");
+  });
+
+  test("the watchdog version the bridge needs is the one provisioning installs", () => {
+    expect(IDLE_WATCHDOG_VERSION).toBe(2);
+    expect(AGENT_BRIDGE_MIN_WATCHDOG).toBe(IDLE_WATCHDOG_VERSION);
+  });
 });
 
 describe("remoteHome", () => {
@@ -265,5 +285,16 @@ describe("cloud host registry", () => {
       if (prev === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = prev;
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("ProvisionReport", () => {
+  test("carries the agent CLI versions and the tools summary beside the mirror and git lines (type-level)", () => {
+    const report: ProvisionReport = {
+      chrome: "c", cast: "c", claude: "c", services: "cast-novnc=active", device: "active", mirror: "m", git: "ssh-ed25519 …",
+      agents: "claude=2.1.263 (Claude Code)  codex=codex-cli 0.153.4  gemini=missing  grok=missing  node=v22.12.0",
+      tools: "5 ok, 1 installed, 0 missing, 0 unsupported",
+    };
+    expect(Object.keys(report).sort()).toEqual(["agents", "cast", "chrome", "claude", "device", "git", "mirror", "services", "tools"]);
   });
 });

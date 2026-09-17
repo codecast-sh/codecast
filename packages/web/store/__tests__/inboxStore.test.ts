@@ -2833,28 +2833,199 @@ describe("inboxStore.beginOptimisticSession", () => {
     });
 
     // "Run in the cloud" reaches the create as cloud_device_id — the field that
-    // parks the row on the host and hands a local daemon the preparation. It
-    // REPLACES isolated rather than joining it: the worktree is made on the host,
-    // so asking a local daemon for one too would make a second, unused one.
-    it("createSessionFromStub forwards cloud_device_id when the cloud toggle is on", async () => {
+    // parks the row on the host and hands a local daemon the preparation. It is
+    // decided by the machine STAMPED on the stub (the composer derives cloud mode
+    // from the same stamp), never by the cloudSessionMode flag, and REPLACES
+    // isolated rather than joining it: the worktree is made on the host.
+    const stubOn = (target: string | undefined, path = "/Users/me/repo") => ({
+      _id: "stub1", session_id: "stub1", project_path: path, git_root: path, agent_type: "claude_code",
+      updated_at: 1, message_count: 0, is_idle: true, has_pending: false,
+      ...(target ? { target_device_id: target } : {}),
+    }) as InboxSession;
+    const rosterWithHost = [
+      { device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin", local_project_roots: ["/Users/me/repo"] },
+      { device_id: "cloud-linux", is_remote: true, online: false, last_seen: 1, platform: "linux", local_project_roots: ["/home/ubuntu/work/repo"] },
+    ];
+
+    it("createSessionFromStub parks on the stamped cloud host for a laptop folder (flag off)", async () => {
       useInboxStore.setState({
-        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        sessions: { stub1: stubOn("cloud-linux") },
         isolatedWorktreeMode: true,
-        cloudSessionMode: true,
-        machineRoster: [
-          { device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin" },
-          { device_id: "cloud-linux", is_remote: true, online: false, last_seen: 1, platform: "linux" },
-        ],
+        cloudSessionMode: false,
+        machineRoster: rosterWithHost,
       });
       const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
       await done;
-      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", project_path: "/repo", session_id: "stub1" });
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", target_device_id: "cloud-linux", project_path: "/Users/me/repo", session_id: "stub1" });
+      expect(calls[0].isolated).toBeUndefined();
+    });
+
+    it("createSessionFromStub sends cloud_workspace 'isolated' by default on a cloud host and no isolated flag (ct-49428)", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("cloud-linux") },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        cloudSharedCheckout: false,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", cloud_workspace: "isolated" });
+      expect(calls[0].isolated).toBeUndefined();
+    });
+
+    it("createSessionFromStub sends cloud_workspace 'shared' when the composer picked the host's checkout (ct-49428)", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("cloud-linux") },
+        isolatedWorktreeMode: false,
+        cloudSessionMode: true,
+        cloudSharedCheckout: true,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", cloud_workspace: "shared" });
+      expect(calls[0].isolated).toBeUndefined();
+      // The optimistic row carries the mode beside the park, so the card's chip is right from t=0.
+      const row = useInboxStore.getState().sessions[REAL_ID] ?? useInboxStore.getState().sessions.stub1;
+      expect(row?.cloud_workspace ?? "shared").toBe("shared");
+    });
+
+    it("createSessionFromStub forwards cloud_start_from: checkout by default, origin_main when picked, origin_main under a shared checkout, nothing without a cloud device (ct-49433)", async () => {
+      useInboxStore.setState({ sessions: { stub1: stubOn("cloud-linux") }, cloudSessionMode: true, cloudSharedCheckout: false, machineRoster: rosterWithHost, clientState: { ui: {} } as any });
+      const a = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await a.done;
+      expect(a.calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", cloud_workspace: "isolated", cloud_start_from: "checkout" });
+
+      useInboxStore.setState({ sessions: { stub1: stubOn("cloud-linux") }, cloudSessionMode: true, cloudSharedCheckout: false, machineRoster: rosterWithHost });
+      useInboxStore.getState().setCloudStartFrom("origin_main");
+      expect(useInboxStore.getState().clientState.ui?.cloud_start_from).toBe("origin_main");
+      const b = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await b.done;
+      expect(b.calls[0]).toMatchObject({ cloud_start_from: "origin_main" });
+
+      useInboxStore.setState({ sessions: { stub1: stubOn("cloud-linux") }, cloudSessionMode: true, cloudSharedCheckout: true, machineRoster: rosterWithHost });
+      useInboxStore.getState().setCloudStartFrom("checkout");
+      const c = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await c.done;
+      expect(c.calls[0]).toMatchObject({ cloud_workspace: "shared", cloud_start_from: "origin_main" });
+
+      useInboxStore.setState({ sessions: { stub1: stubOn("laptop") }, cloudSessionMode: false, machineRoster: rosterWithHost });
+      const d = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await d.done;
+      expect(d.calls[0].cloud_start_from).toBeUndefined();
+      expect(d.calls[0].cloud_device_id).toBeUndefined();
+    });
+
+    it("no wake-on-use host: the isolated flag rides along and no cloud_workspace is sent (ct-49428)", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("laptop") },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: false,
+        cloudSharedCheckout: true,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ target_device_id: "laptop", isolated: true });
+      expect(calls[0].cloud_workspace).toBeUndefined();
+      expect(calls[0].cloud_device_id).toBeUndefined();
+    });
+
+    it("setCloudSessionMode resets cloudSharedCheckout either way and leaves isolatedWorktreeMode untouched (ct-49428)", () => {
+      useInboxStore.setState({ isolatedWorktreeMode: true, cloudSessionMode: false, cloudSharedCheckout: false });
+      useInboxStore.getState().setCloudSessionMode(true);
+      expect(useInboxStore.getState().cloudSharedCheckout).toBe(false);
+      useInboxStore.getState().setCloudSharedCheckout(true);
+      expect(useInboxStore.getState().cloudSharedCheckout).toBe(true);
+      expect(useInboxStore.getState().isolatedWorktreeMode).toBe(true);
+      useInboxStore.getState().setCloudSessionMode(false);
+      expect(useInboxStore.getState().cloudSharedCheckout).toBe(false);
+      expect(useInboxStore.getState().isolatedWorktreeMode).toBe(true);
+      useInboxStore.getState().setCloudSharedCheckout(true);
+      useInboxStore.getState().setCloudSessionMode(true);
+      expect(useInboxStore.getState().cloudSharedCheckout).toBe(false);
+    });
+
+    it("createSession stamps cloud_workspace on the optimistic cloud row (ct-49428)", async () => {
+      useInboxStore.setState({ sessions: {}, conversations: {}, machineRoster: rosterWithHost });
+      const orig = useInboxStore.getState().createSession;
+      // The real createSession seeds the optimistic row before the server call; a rejected
+      // server call is fine here — the row is what this test reads.
+      const p = orig({ agent_type: "claude_code", project_path: "/Users/me/repo", session_id: "stub-ws", cloud_device_id: "cloud-linux", target_device_id: "cloud-linux", cloud_workspace: "shared" }).catch(() => {});
+      const row = useInboxStore.getState().sessions["stub-ws"];
+      expect(row).toMatchObject({ owner_device_id: "cloud-linux", cloud_placement: "pending", cloud_workspace: "shared" });
+      await p;
+    });
+
+    it("createSessionFromStub starts natively for a folder the host already holds", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("cloud-linux", "/home/ubuntu/work/repo/.codecast/worktrees/x") },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ target_device_id: "cloud-linux", isolated: true });
+      expect(calls[0].cloud_device_id).toBeUndefined();
+    });
+
+    it("createSessionFromStub treats a /home path no Mac could open as host-native", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("cloud-linux", "/home/ubuntu/elsewhere") },
+        isolatedWorktreeMode: false,
+        cloudSessionMode: true,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ target_device_id: "cloud-linux" });
+      expect(calls[0].cloud_device_id).toBeUndefined();
+      expect(calls[0].isolated).toBeUndefined();
+    });
+
+    it("createSessionFromStub ignores the flag when the stamp names a laptop", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("laptop") },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ target_device_id: "laptop", isolated: true });
+      expect(calls[0].cloud_device_id).toBeUndefined();
+    });
+
+    it("createSessionFromStub parks a pathless stub stamped on the host", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { ...stubOn("cloud-linux"), project_path: undefined, git_root: undefined } as InboxSession },
+        isolatedWorktreeMode: false,
+        cloudSessionMode: false,
+        machineRoster: rosterWithHost,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", target_device_id: "cloud-linux" });
+    });
+
+    it("createSessionFromStub parks a laptop path on a host-only roster (no local device) rather than starting it in the host's main checkout", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: stubOn("cloud-linux") },
+        isolatedWorktreeMode: false,
+        cloudSessionMode: false,
+        machineRoster: [rosterWithHost[1]],
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", target_device_id: "cloud-linux", project_path: "/Users/me/repo" });
       expect(calls[0].isolated).toBeUndefined();
     });
 
     it("createSessionFromStub omits cloud_device_id when no machine wakes on use", async () => {
       useInboxStore.setState({
-        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        sessions: { stub1: stubOn("laptop", "/repo") },
         isolatedWorktreeMode: true,
         cloudSessionMode: true,
         machineRoster: [{ device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin" }],

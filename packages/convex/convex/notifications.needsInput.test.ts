@@ -448,6 +448,8 @@ describe("needs-input push — permission blocks", () => {
 describe("needs-input push — exclusions (mirrors the idle sound's guards)", () => {
   test.each([
     ["subagent", { is_subagent: true }],
+    ["subagent", { parent_conversation_id: "convP" }],
+    ["subagent", { is_workflow_sub: true }],
     ["pinned", { inbox_pinned_at: 1 }],
     // A hidden row with a PLAIN finished turn stays hidden — quiet progress is
     // what the hide asked for. (A hard stall un-hides; see the stall tests.)
@@ -466,6 +468,51 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.notified).toBe(false);
     expect(res.reason).toBe(reason);
+    expect(tables.notifications.length).toBe(0);
+  });
+
+  // A worktree is a LOCATION, not a parent (ct-49429): a human-started
+  // --isolated / cloud / path-stamped session is first-class and pushes like
+  // any other card. Fan-out from INSIDE a session still stands down — those
+  // workers carry a spawner (reason agent_spawned), not because of the tree.
+  test("a human-started worktree session pushes", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(true);
+    expect(tables.notifications.length).toBe(1);
+    expect(tables.notifications[0].type).toBe("session_idle");
+  });
+
+  // A parked cloud row is what conversations.createConversation inserts for
+  // cloud_device_id: message_count 0, the first message queued as pending, no
+  // managed session yet (placeConversation clears cloud_placement before the
+  // host's session starts). It exits at no_content — before any etiquette
+  // guard — so parking is never a stand-down reason of its own; once the host
+  // binds a session and the row settles idle it is the human-started worktree
+  // case above and pushes.
+  test("a parked cloud session (placement pending) exits at no_content, not as a subagent", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: {
+        cloud_placement: "pending", owner_device_id: "dev-cloud",
+        message_count: 0, has_pending_messages: true, last_message_role: "user",
+      },
+      extra: { managed_sessions: [] },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(false);
+    expect(res.reason).toBe("no_content");
+    expect(tables.notifications.length).toBe(0);
+  });
+
+  test("a worktree worker spawned from inside a session still stands down as agent_spawned", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { worktree_name: "cloud-d03aaa", spawned_by_conversation_id: "convX" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(false);
+    expect(res.reason).toBe("agent_spawned");
     expect(tables.notifications.length).toBe(0);
   });
 

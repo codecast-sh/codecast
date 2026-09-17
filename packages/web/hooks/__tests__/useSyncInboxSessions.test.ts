@@ -93,6 +93,57 @@ describe("shouldPlayWaitingSound", () => {
   // Killed rows leave nextWaiting entirely (the `continue`), so a revival is
   // re-observed from scratch — no chime for a waiting episode that began while
   // the session was retired. Same shape as the dismiss path.
+  // isSub (store) stands down on exactly what the server's push does — reason
+  // "subagent" (is_subagent / parent link / workflow sub) and reason
+  // "agent_spawned" (a spawner, or non-lead agent identity). A worktree is a
+  // location, not a parent, so a human-started worktree session chimes.
+  // ct-49429.
+  function episode(overrides: Partial<InboxSession>) {
+    const notified = new Map<string, string>();
+    let result = apply([{ ...baseSession, ...overrides, agent_status: "working", awaiting_input: false }], null, notified);
+    result = apply([{ ...baseSession, ...overrides, agent_status: "working", awaiting_input: true }], result.nextWaiting, notified);
+    return result;
+  }
+
+  it("chimes for a human-started worktree session (cloud or local --isolated)", () => {
+    const result = episode({ worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa" });
+    expect(result.play).toBe(true);
+    expect(result.nextWaiting.get("conv1")).toBe(true);
+  });
+
+  it("chimes for a parked cloud row waiting on placement", () => {
+    const result = episode({ cloud_placement: "pending", owner_device_id: "cloud-linux" });
+    expect(result.play).toBe(true);
+  });
+
+  it.each([
+    ["a parent-linked row", { parent_conversation_id: "p" }],
+    ["an is_subagent row", { is_subagent: true }],
+    ["a workflow sub", { is_workflow_sub: true }],
+    ["a worktree worker spawned from inside a session", { worktree_name: "cloud-d03aaa", spawned_by_conversation_id: "lead" }],
+    ["an agent-team teammate in a worktree", { worktree_name: "cloud-d03aaa", agent_name: "researcher", agent_team_name: "t", spawned_by_conversation_id: "lead" }],
+    // New parity: a plain cast-spawn row with a spawner used to chime while the
+    // push already stood down on it (reason agent_spawned).
+    ["a plain cast-spawn row with a spawner", { spawned_by_conversation_id: "lead" }],
+    ["a non-lead agent identity without a spawner", { agent_name: "researcher" }],
+  ] as Array<[string, Partial<InboxSession>]>)("never chimes for %s", (_label, overrides) => {
+    const result = episode(overrides);
+    expect(result.play).toBe(false);
+    expect(result.nextWaiting.get("conv1")).toBe(false);
+  });
+
+  it("chimes for the team lead (human-driven, no spawner)", () => {
+    const result = episode({ agent_name: "team-lead", agent_team_name: "t" });
+    expect(result.play).toBe(true);
+  });
+
+  it("chimes for a fork / plan handoff (parent link WITH a parent message)", () => {
+    // isSubagentConversation still catches the parent link, so a handoff row
+    // stays silent — the same verdict the push reaches (reason "subagent").
+    const result = episode({ parent_conversation_id: "p", parent_message_uuid: "plan-handoff" });
+    expect(result.play).toBe(false);
+  });
+
   it("does not chime on the sync right after a killed-and-waiting session is revived", () => {
     const notified = new Map<string, string>();
 

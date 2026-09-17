@@ -18,6 +18,47 @@ describe("resolveDeviceSelector — cast spawn --device", () => {
     expect(resolveDeviceSelector(devices, "Mac Mini")).toBe("dev-remote-2");
   });
 
+  test("the display name the UI shows resolves too: --device \"cloud linux\"", () => {
+    const withHost = [
+      ...devices,
+      { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true },
+      { device_id: "dev-mini-5", label: "macOS - mini", platform: "darwin", is_remote: true },
+    ];
+    expect(resolveDeviceSelector(withHost, "cloud linux")).toBe("dev-host-4");
+    expect(resolveDeviceSelector(withHost, "Cloud Linux")).toBe("dev-host-4");
+    expect(resolveDeviceSelector(withHost, "remote mac")).toBe("dev-mini-5");
+    // The stored label still resolves as before.
+    expect(resolveDeviceSelector(withHost, "linux - ip-172-31-40-243")).toBe("dev-host-4");
+  });
+
+  test("a stored label wins over another machine's display name", () => {
+    const collision = [
+      { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true },
+      { device_id: "dev-laptop-1", label: "Cloud Linux", platform: "darwin", is_remote: false },
+    ];
+    expect(resolveDeviceSelector(collision, "cloud linux")).toBe("dev-laptop-1");
+  });
+
+  test("a display name never resolves to a team agent box, and a box still resolves by id/label", () => {
+    const mine = [{ device_id: "dev-laptop-1", label: "Nose", platform: "darwin", is_remote: false }];
+    const boxes = [{ device_id: "dev-box-9", label: "Linux - ip-10-0-0-9", platform: "linux", is_remote: true }];
+    expect(() => resolveDeviceSelector(mine, "Cloud Linux", boxes)).toThrow('Unknown device "Cloud Linux"');
+    expect(resolveDeviceSelector(mine, "dev-box-9", boxes)).toBe("dev-box-9");
+    expect(resolveDeviceSelector(mine, "linux - ip-10-0-0-9", boxes)).toBe("dev-box-9");
+    // With a host of their own the name resolves to THAT one, box or no box.
+    const withHost = [...mine, { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true }];
+    expect(resolveDeviceSelector(withHost, "Cloud Linux", boxes)).toBe("dev-host-4");
+  });
+
+  test("a display name shared by two of the user's devices is ambiguous and names the ids", () => {
+    const twoHosts = [
+      { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true },
+      { device_id: "dev-host-5", label: "Linux - ip-172-31-40-244", platform: "linux", is_remote: true },
+    ];
+    expect(() => resolveDeviceSelector(twoHosts, "Cloud Linux")).toThrow('"Cloud Linux" names 2 of your devices — use the device id: dev-host-4, dev-host-5');
+    expect(resolveDeviceSelector(twoHosts, "dev-host-5")).toBe("dev-host-5");
+  });
+
   test("a device_id wins over another machine's identical label", () => {
     const shadowed = [
       { device_id: "dev-bare-3", label: "workhorse" },

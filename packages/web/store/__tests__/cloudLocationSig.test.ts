@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { sessionStructuralSig, sessionsWakeSig, type InboxSession } from "../inboxStore";
 
 const base: InboxSession = { _id: "cloud-row", session_id: "native-session", updated_at: 1000, agent_type: "codex", message_count: 1, is_idle: true, has_pending: false, owner_device_id: "cloud-a", worktree_name: "work-a", worktree_branch: "codecast/work-a", cloud_placement: "pending" };
-for (const change of [{owner_device_id: "cloud-b"}, {worktree_name: "work-b"}, {worktree_branch: "codecast/work-b"}, {cloud_placement: null}]) {
+for (const change of [{owner_device_id: "cloud-b"}, {worktree_name: "work-b"}, {worktree_branch: "codecast/work-b"}, {cloud_placement: null}, {cloud_workspace: "shared" as const}, {cloud_seed: { source: "checkout" as const, base: "abc1234def0000000000000000000000000000000", at: 1 }}]) {
   test(`cloud location change wakes the memoized card: ${Object.keys(change)[0]}`, () => {
     const next = {...base,...change};
     expect(sessionStructuralSig(next)).not.toBe(sessionStructuralSig(base));

@@ -178,6 +178,14 @@ describe("durable cloud wake queue", () => {
     expect(await recoverPendingCloudWake(f.ctx, f.args)).toBe(false);
   });
 
+  test("a row still waiting for a laptop to prepare the host is skipped", async () => {
+    const f = fixture({ wake_requested_at: undefined });
+    f.ctx.db._tables.conversations = [{ _id: "conv", user_id: "user1", owner_device_id: "box", has_pending_messages: true, cloud_placement: "pending" }];
+    f.ctx.db._tables.pending_messages = [{ _id: "pending", conversation_id: "conv", status: "pending" }];
+    expect(await recoverPendingCloudWake(f.ctx, f.args)).toBe(false);
+    expect(f.scheduled).toHaveLength(0);
+  });
+
   test.each(["delivered", "injected", "failed", "undeliverable", "cancelled"])("does not reconstruct wake intent from %s messages", async (status) => {
     const f = fixture({ wake_requested_at: undefined });
     f.ctx.db._tables.conversations = [{ _id: "conv", user_id: "user1", owner_device_id: "box", has_pending_messages: true }];

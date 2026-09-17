@@ -288,3 +288,117 @@ describe("resolveOwnerDeviceView", () => {
     ).toEqual({ owner_device_id: "ec2-mac", owner_is_remote: false, owner_online: false });
   });
 });
+
+describe("enqueueStartSession cloud placement chokepoint", () => {
+  const USER = "users_1" as any;
+  const BOT = "users_bot" as any;
+  const CONVERSATION = "conversations_1" as any;
+  const host = (user = USER) => ({ _id: `dev_host_${user}`, user_id: user, device_id: `host-${user}`, label: "Linux - ip-1-2-3-4", platform: "linux", is_remote: true, last_seen: stale, local_project_roots: ["/home/ubuntu/work/app"] });
+  const laptop = (user = USER) => ({ _id: `dev_laptop_${user}`, user_id: user, device_id: `laptop-${user}`, label: "mac", platform: "darwin", is_remote: false, last_seen: fresh, local_project_roots: ["/Users/me/src/app"] });
+  const row = (over: Record<string, any> = {}) => ({ _id: CONVERSATION, user_id: USER, session_id: "sess", project_path: "/Users/me/src/app", git_root: "/Users/me/src/app", owner_device_id: `laptop-${USER}`, ...over });
+  const db = (conv: any, devices = [host(), laptop()], users: any[] = [{ _id: USER }]) =>
+    makeFakeDb({ users, conversations: [conv], devices, daemon_commands: [] });
+  const commands = (d: any) => d._tables.daemon_commands.map((c: any) => c.command);
+
+  test("a pending row gets no start_session and its owner stays untouched", async () => {
+    const d = db(row({ owner_device_id: `host-${USER}`, cloud_placement: "pending", cloud_placement_token: "t" }));
+    expect(await enqueueStartSession({ db: d } as any, USER, { conversationId: CONVERSATION, agentType: "claude", model: "opus" })).toBeNull();
+    expect(d._tables.daemon_commands).toEqual([]);
+    expect((await d.get(CONVERSATION)).owner_device_id).toBe(`host-${USER}`);
+  });
+
+  test("caller=runner + own cloud host + a laptop folder → parked with a cloud_spawn, no start", async () => {
+    const d = db(row());
+    const id = await enqueueStartSession({ db: d } as any, USER, {
+      conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${USER}`, callerUserId: USER,
+    });
+    expect(id).toBeTruthy();
+    expect(commands(d)).toEqual(["cloud_spawn", "release_session"]);
+    expect(await d.get(CONVERSATION)).toMatchObject({ owner_device_id: `host-${USER}`, cloud_placement: "pending" });
+  });
+
+  test("a row already holding a worktree starts plainly at the host", async () => {
+    const d = db(row({ owner_device_id: `host-${USER}`, project_path: "/home/ubuntu/work/app/.codecast/worktrees/x", git_root: "/home/ubuntu/work/app/.codecast/worktrees/x", worktree_path: "/home/ubuntu/work/app/.codecast/worktrees/x" }));
+    await enqueueStartSession({ db: d } as any, USER, { conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${USER}`, callerUserId: USER });
+    expect(commands(d)).toEqual(["start_session"]);
+    expect(d._tables.daemon_commands[0].target_device_id).toBe(`host-${USER}`);
+  });
+
+  test("no callerUserId (a relaunch path) keeps the plain start", async () => {
+    const d = db(row());
+    await enqueueStartSession({ db: d } as any, USER, { conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${USER}` });
+    expect(commands(d)).toEqual(["start_session"]);
+    expect((await d.get(CONVERSATION)).cloud_placement).toBeUndefined();
+  });
+
+  test("a bot runner never parks", async () => {
+    const d = db(row({ user_id: BOT, owner_device_id: `laptop-${BOT}` }), [host(BOT), laptop(BOT)], [{ _id: BOT, is_bot: true }]);
+    await enqueueStartSession({ db: d } as any, BOT, { conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${BOT}`, callerUserId: BOT });
+    expect(commands(d)).toEqual(["start_session"]);
+  });
+});
+
+// The laptop offline→online re-issue of stranded cloud_spawns lives in
+// users.daemonHeartbeat (the beat the daemon actually sends) — see
+// users.cloudReissue.test.ts. registerDevice is the bare upsert.
+
+describe("moves onto an occupied shared checkout are refused (ct-49428)", () => {
+  const USER = "users_1" as any;
+  const ROOT = "/home/ubuntu/work/app";
+  const ctx = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: `${USER}|session` }) } });
+  const holder = (over: Record<string, any> = {}) => ({
+    _id: "conv_holder", user_id: USER, session_id: "held", short_id: "holder1", title: "shared", owner_device_id: "box",
+    project_path: ROOT, cloud_workspace: "shared", cloud_checkout_path: ROOT, status: "active", ...over,
+  });
+  const mover = () => ({ _id: "conv_move", user_id: USER, session_id: "moving", short_id: "mover01", owner_device_id: "laptop", project_path: "/Users/me/app", agent_type: "claude_code" });
+  const db = (rows: any[]) => makeFakeDb({
+    users: [{ _id: USER }],
+    devices: [
+      { _id: "dev_host", user_id: USER, device_id: "box", platform: "linux", is_remote: true, last_seen: Date.now() },
+      { _id: "dev_laptop", user_id: USER, device_id: "laptop", platform: "darwin", is_remote: false, last_seen: Date.now() },
+    ],
+    conversations: rows,
+    daemon_commands: [],
+  });
+
+  test("performMoveSessionToDevice refuses an exact-path occupant on the destination and allows once it is killed", async () => {
+    const { performMoveSessionToDevice } = await import("./devices");
+    const busy = db([holder(), mover()]);
+    await expect(performMoveSessionToDevice(ctx(busy), USER, { conversation_id: "conv_move" as any, owner_device_id: "box", project_path: ROOT }))
+      .rejects.toThrow(/is in use by session holder1/);
+    expect((await busy.get("conv_move")).owner_device_id).toBe("laptop");
+    expect(busy._tables.daemon_commands).toEqual([]);
+
+    const freed = db([holder({ inbox_killed_at: 1 }), mover()]);
+    const r = await performMoveSessionToDevice(ctx(freed), USER, { conversation_id: "conv_move" as any, owner_device_id: "box", project_path: ROOT });
+    expect(r.ok).toBe(true);
+    expect((await freed.get("conv_move")).owner_device_id).toBe("box");
+    // A worktree under the root is not the root.
+    const beside = db([holder(), mover()]);
+    await performMoveSessionToDevice(ctx(beside), USER, { conversation_id: "conv_move" as any, owner_device_id: "box", project_path: `${ROOT}/.codecast/worktrees/x` });
+    expect((await beside.get("conv_move")).owner_device_id).toBe("box");
+  });
+
+  test("`cast remote back` onto a laptop folder other sessions share is not a checkout move", async () => {
+    const { performMoveSessionToDevice } = await import("./devices");
+    const LOCAL = "/Users/me/src/app";
+    const sibling = { _id: "conv_other", user_id: USER, session_id: "other", short_id: "other01", title: "other", owner_device_id: "laptop", project_path: LOCAL, status: "active" };
+    const back = { ...mover(), owner_device_id: "box", project_path: ROOT };
+    const store = db([sibling, back]);
+    const r = await performMoveSessionToDevice(ctx(store), USER, { conversation_id: "conv_move" as any, owner_device_id: "laptop", project_path: LOCAL });
+    expect(r.ok).toBe(true);
+    expect((await store.get("conv_move")).owner_device_id).toBe("laptop");
+    expect(store._tables.daemon_commands.map((c: any) => c.command)).toEqual(["resume_session", "release_session"]);
+  });
+
+  test("moveToRemote refuses on a basename occupant before any command is queued", async () => {
+    const { moveToRemote } = await import("./devices");
+    const busy = db([holder(), mover()]);
+    await expect((moveToRemote as any)._handler(ctx(busy), { conversation_id: "conv_move", to_device_id: "box" })).rejects.toThrow(/is in use by session holder1/);
+    expect(busy._tables.daemon_commands).toEqual([]);
+    const free = db([holder({ status: "completed" }), mover()]);
+    const r = await (moveToRemote as any)._handler(ctx(free), { conversation_id: "conv_move", to_device_id: "box" });
+    expect(r.dest).toBe("box");
+    expect(free._tables.daemon_commands.map((c: any) => c.command)).toEqual(["move_to_device"]);
+  });
+});

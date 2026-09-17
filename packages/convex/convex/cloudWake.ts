@@ -154,6 +154,8 @@ export async function recoverPendingCloudWake(ctx: WakeCtx, args: { ownerUserId:
     .paginate({ cursor: args.cursor ?? null, numItems: 50 });
   for (const conversation of page.page) {
     if (!conversation.has_pending_messages || conversation.inbox_killed_at) continue;
+    // Parked on the host but not yet prepared: the laptop's work, not the host's.
+    if (conversation.cloud_placement === "pending") continue;
     const pending = await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) =>
       q.eq("conversation_id", conversation._id).eq("status", "pending")).first();
     if (!pending) continue;

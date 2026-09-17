@@ -46,6 +46,10 @@ export interface PersistedWorkspaceState {
   contract?: ContractResult;
   /** Chrome process bound to this workspace, when browser.enabled. */
   chrome?: ChromeBinding;
+  /** The ref/commit the worktree branch was created at (a cloud seed's hidden ref). */
+  startPoint?: string;
+  /** The commit HEAD is reset to after setup (the laptop HEAD of a seeded worktree). */
+  seedBase?: string;
 }
 
 /** Canonical projection of persisted state back into a Workspace. */
@@ -61,6 +65,8 @@ export function stateToWorkspace(s: PersistedWorkspaceState): Workspace {
     state: s.state,
     contract: s.contract,
     chrome: s.chrome,
+    ...(s.startPoint ? { startPoint: s.startPoint } : {}),
+    ...(s.seedBase ? { seedBase: s.seedBase } : {}),
   };
 }
 

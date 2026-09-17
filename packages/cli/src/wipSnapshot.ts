@@ -100,8 +100,11 @@ export function buildSnapshotMessage(opts: { branch: string }): string {
   // the IDENTICAL commit object, so git uploads it once and the siblings are
   // free ref updates. A per-session trailer made every sibling's commit unique
   // and forced one full push per session.
-  return [`codecast wip snapshot`, ``, `${BRANCH_TRAILER}: ${opts.branch}`].join("\n");
+  return [WIP_SNAPSHOT_SUBJECT, ``, `${BRANCH_TRAILER}: ${opts.branch}`].join("\n");
 }
+
+/** The subject line of every snapshot commit: how a seeded worktree tells a snapshot start point from a plain commit. */
+export const WIP_SNAPSHOT_SUBJECT = "codecast wip snapshot";
 
 /** Read a trailer back out of a snapshot message. Returns undefined when absent
  * (an unrecognized/foreign ref must degrade, never throw). */
@@ -111,20 +114,42 @@ export function parseSnapshotTrailer(message: string, key: string): string | und
 }
 
 /**
- * Capture the working tree as a dangling commit. Returns null when `cwd` isn't a
- * git worktree or has no commits (nothing to parent onto).
- *
- * Always creates a commit, even on a clean tree: the destination needs the branch
- * name and any unpushed commits regardless of dirtiness, and a uniform "snapshot
- * always has HEAD as its parent" shape removes a whole class of conditional at the
- * restore end. A clean snapshot is cheap — it reuses HEAD's existing tree object.
+ * What a cloud seed leaves out of the laptop tree on top of .gitignore: the
+ * workspace state dirs hold per-workspace Chrome profiles (cookies),
+ * worktrees hold other sessions' trees, and the setup logs are what the
+ * workspace's own install wrote — nothing laptop-side writes them into
+ * .git/info/exclude (only the host's reserveInputs does). Pathspec excludes
+ * keep tracked content under .codecast as HEAD has it and keep the untracked
+ * state out. The worktree GC snapshots with the same list, so a setup log on
+ * the host never counts as host-made work.
  */
-export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null> {
-  const head = await gitTry(cwd, ["rev-parse", "HEAD"]);
+export const CLOUD_SEED_EXCLUDES = [".codecast/workspaces", ".codecast/worktrees", ".codecast/logs"];
+
+/**
+ * Capture the working tree as a dangling commit — the strict variant. Returns
+ * null ONLY when `cwd` has no HEAD to parent onto (not a repo, or no commits);
+ * every other git failure (an unreadable file, a broken GIT_DIR, a missing
+ * identity) propagates with git's stderr, so a caller that promised "my
+ * checkout" can fail loudly instead of quietly degrading. `opts.exclude` are
+ * pathspec excludes applied to the `add -A` (the cloud seed passes
+ * CLOUD_SEED_EXCLUDES).
+ *
+ * Always creates a commit, even on a clean tree: the destination needs the
+ * branch name and any unpushed commits regardless of dirtiness, and a uniform
+ * "snapshot always has HEAD as its parent" shape removes a whole class of
+ * conditional at the restore end. A clean snapshot is cheap — it reuses HEAD's
+ * existing tree object.
+ */
+export async function createWipSnapshotStrict(cwd: string, opts: { exclude?: string[] } = {}): Promise<WipSnapshot | null> {
+  const head = await gitTry(cwd, ["rev-parse", "--verify", "HEAD"]);
   if (!head) return null; // not a repo, or no commits yet
 
   const branch = (await gitTry(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])) ?? "HEAD";
-  const dirty = !!(await gitTry(cwd, ["status", "--porcelain"]));
+  const tree = await snapshotTree(cwd, opts.exclude);
+  // Dirty is what the SNAPSHOT carries beyond HEAD, not what `git status`
+  // lists: untracked content under an excluded dir never reaches the
+  // destination, so it must not claim uncommitted work either.
+  const dirty = tree !== (await git(cwd, ["rev-parse", `${head}^{tree}`]));
 
   // Sibling sessions in one checkout must produce the IDENTICAL commit object so
   // git uploads it once (see buildSnapshotMessage). Commit dates default to the
@@ -133,33 +158,49 @@ export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null
   // both dates to HEAD's makes the snapshot a pure function of tree + parent.
   const snapshotDate = (await gitTry(cwd, ["log", "-1", "--format=%cI", head])) || "1970-01-01T00:00:00Z";
 
-  // A temp index is what makes this invisible to the source: `git add -A` stages
-  // into THIS file, leaving the real .git/index untouched, so a staged-but-
-  // uncommitted change in the user's index survives unharmed.
-  const indexDir = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-wip-"));
-  const indexFile = path.join(indexDir, "index");
-  try {
-    const env = { ...process.env, GIT_INDEX_FILE: indexFile };
-    await git(cwd, ["read-tree", "HEAD"], env);
-    await git(cwd, ["add", "-A"], env); // respects .gitignore — secrets excluded by git itself
-    const tree = await git(cwd, ["write-tree"], env);
+  // commit-tree writes a dangling object: no ref moves, no branch advances.
+  const sha = await git(cwd, [
+    "commit-tree",
+    tree,
+    "-p",
+    head,
+    "-m",
+    buildSnapshotMessage({ branch }),
+  ], { ...process.env, GIT_AUTHOR_DATE: snapshotDate, GIT_COMMITTER_DATE: snapshotDate });
+  return { sha, base: head, branch, dirty, tree };
+}
 
-    // commit-tree writes a dangling object: no ref moves, no branch advances.
-    const sha = await git(cwd, [
-      "commit-tree",
-      tree,
-      "-p",
-      head,
-      "-m",
-      buildSnapshotMessage({ branch }),
-    ], { ...process.env, GIT_AUTHOR_DATE: snapshotDate, GIT_COMMITTER_DATE: snapshotDate });
-    return { sha, base: head, branch, dirty, tree };
-  } catch {
-    return null;
+/**
+ * The working tree as a tree object: `git add -A` under .gitignore (secrets
+ * excluded by git itself) plus pathspec excludes for the named dirs, staged
+ * into a temp index so the real .git/index — and any staged-but-uncommitted
+ * change in it — is untouched. Writes only the tree (and its blobs), never a
+ * commit: the worktree GC compares trees and needs nothing more.
+ */
+export async function snapshotTree(cwd: string, exclude: string[] = []): Promise<string> {
+  const indexDir = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-wip-"));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: path.join(indexDir, "index") };
+    await git(cwd, ["read-tree", "HEAD"], env);
+    await git(cwd, ["add", "-A", "--", ".", ...exclude.map((p) => `:(exclude)${p}`)], env);
+    return await git(cwd, ["write-tree"], env);
   } finally {
     try {
       fs.rmSync(indexDir, { recursive: true, force: true });
     } catch {}
+  }
+}
+
+/**
+ * The lenient snapshot the move path and the WIP sweep use: any failure is
+ * null (the caller keeps the plain clone). See createWipSnapshotStrict for
+ * the recipe and its properties.
+ */
+export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null> {
+  try {
+    return await createWipSnapshotStrict(cwd);
+  } catch {
+    return null;
   }
 }
 
@@ -220,7 +261,10 @@ export function isPermanentPushFailure(stderr: string): boolean {
     s.includes("access denied") ||
     s.includes("authentication failed") ||
     s.includes("forbidden") ||
-    s.includes("read-only")
+    s.includes("read-only") ||
+    // GitHub's refusal of a push over a deploy key added without write
+    // access: "The key you are authenticating with has been marked as read only."
+    s.includes("read only")
   );
 }
 
