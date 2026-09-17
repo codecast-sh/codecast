@@ -1,6 +1,6 @@
 /**
  * The "agent CLIs" step of `cast hosts provision`: install claude, codex,
- * gemini and grok on the box at the laptop's versions when missing, plus a
+ * gemini, grok, opencode and pi on the box at the laptop's versions when missing, plus a
  * user-local Node that shadows apt's node 18 through /usr/local/bin without
  * replacing the distro package novnc depends on.
  *
@@ -51,6 +51,7 @@ echo AGENT-CLIS-OK`);
 
 /** The `<bin>=<version>` lines of the script's output as one report line. */
 export function parseAgentCliReport(out: string): string {
-  const pairs = out.split("\n").map((l) => l.trim()).filter((l) => /^(claude|codex|gemini|grok|node)=/.test(l));
+  const names = new Set<string>([...INSTALLABLE_CLIENTS, "node"]);
+  const pairs = out.split("\n").map((l) => l.trim()).filter((l) => names.has(l.split("=")[0]) && l.includes("="));
   return pairs.join("  ");
 }

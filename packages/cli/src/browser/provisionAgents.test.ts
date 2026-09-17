@@ -6,13 +6,16 @@ import * as path from "node:path";
 import { agentCliInstallScript, NODE_22_VERSION, parseAgentCliReport } from "./provisionAgents";
 
 describe("agentCliInstallScript", () => {
-  const script = agentCliInstallScript({ claude: "2.1.263", codex: "0.153.4", gemini: "0.58.0", grok: "1.2.3" });
+  const script = agentCliInstallScript({ claude: "2.1.263", codex: "0.153.4", gemini: "0.58.0", grok: "1.2.3", opencode: "1.18.3", pi: "0.73.1" });
 
   test("pins each client to the laptop's version through its own installer", () => {
     expect(script).toContain("bun install -g @openai/codex@0.153.4");
     expect(script).toContain("bun install -g @google/gemini-cli@0.58.0");
     expect(script).toContain("https://claude.ai/install.sh | bash -s 2.1.263");
     expect(script).toContain("https://x.ai/cli/install.sh | bash -s 1.2.3");
+    expect(script).toContain("https://opencode.ai/install | bash -s -- --no-modify-path --version 1.18.3");
+    expect(script).toContain('ln -sf "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"');
+    expect(script).toContain("bun install -g @mariozechner/pi-coding-agent@0.73.1");
   });
 
   test("the node guard: below major 20, the nodejs.org tarball, a temp-dir extract, ~/.local/bin and /usr/local/bin symlinks", () => {
@@ -28,7 +31,7 @@ describe("agentCliInstallScript", () => {
   });
 
   test("command -v guards before every install; ends with AGENT-CLIS-OK; no template placeholder survives", () => {
-    for (const bin of ["claude", "codex", "gemini", "grok"]) expect(script).toContain(`command -v ${bin} >/dev/null 2>&1 ||`);
+    for (const bin of ["claude", "codex", "gemini", "grok", "opencode", "pi"]) expect(script).toContain(`command -v ${bin} >/dev/null 2>&1 ||`);
     expect(script.trim().endsWith("echo AGENT-CLIS-OK")).toBe(true);
     // A JS member expression left in the text means a constant failed to interpolate.
     expect(script).not.toMatch(/\$\{[A-Za-z_]+\.[A-Za-z_]/);
@@ -37,12 +40,15 @@ describe("agentCliInstallScript", () => {
   });
 
   test("a malformed version is not interpolated: no @ suffix, no -s argument", () => {
-    const s = agentCliInstallScript({ codex: "latest; rm -rf /", claude: "2.1", gemini: undefined, grok: "v1.2.3" });
+    const s = agentCliInstallScript({ codex: "latest; rm -rf /", claude: "2.1", gemini: undefined, grok: "v1.2.3", opencode: "1.18; id", pi: "x" });
     expect(s).toContain("bun install -g @openai/codex >/dev/null");
     expect(s).not.toContain("rm -rf /");
     expect(s).toContain("https://claude.ai/install.sh | bash -s) >/dev/null");
     expect(s).toContain("bun install -g @google/gemini-cli >/dev/null");
     expect(s).toContain("https://x.ai/cli/install.sh | bash -s) >/dev/null");
+    expect(s).toContain("https://opencode.ai/install | bash -s -- --no-modify-path) >/dev/null 2>&1; [ -x");
+    expect(s).toContain("bun install -g @mariozechner/pi-coding-agent >/dev/null");
+    expect(s).not.toContain("; id");
   });
 
   test("runs to AGENT-CLIS-OK in a fresh HOME with no ~/.local, node 18, no network, and a CLI whose --version fails", () => {
@@ -68,8 +74,10 @@ describe("agentCliInstallScript", () => {
       expect(r.stderr).toBe("");
       expect(r.status).toBe(0);
       expect(r.stdout).toContain("AGENT-CLIS-OK");
-      expect(parseAgentCliReport(r.stdout)).toMatch(/^claude=2\.1\.263 \(Claude Code\)  codex=codex-cli 0\.153\.4  gemini=  grok=1\.2\.3  node=v18\.19\.1 \(curl: \(6\) Could not resolve host/);
+      expect(parseAgentCliReport(r.stdout)).toMatch(/^claude=2\.1\.263 \(Claude Code\)  codex=codex-cli 0\.153\.4  gemini=  grok=1\.2\.3  opencode=missing  pi=missing  node=v18\.19\.1 \(curl: \(6\) Could not resolve host/);
       expect(fs.existsSync(path.join(home, ".local", "bin"))).toBe(true);
+      // A failed opencode download leaves no dangling link behind.
+      expect(fs.existsSync(path.join(home, ".local", "bin", "opencode"))).toBe(false);
       expect(fs.readdirSync(path.join(home, ".local")).filter((n) => n.startsWith(".node-download"))).toEqual([]);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

@@ -34,7 +34,7 @@ import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, githubRepo, hostAccessPath, 
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";
-import { ssh } from "../remote/session-move.js";
+import { ssh, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
 import { cloudSeedLabel } from "@codecast/shared/contracts";
@@ -135,6 +135,17 @@ export interface RemoteWorktree {
   state: string;
   branch: string;
   path: string;
+  /** Where the checkout is NOW, read with git on the host: `branch` above is only what it started on. */
+  live?: WorktreeGitState;
+}
+
+export interface WorktreeGitState {
+  /** The checked out branch, empty when HEAD is detached. */
+  branch: string;
+  /** Full HEAD commit, empty on an unborn branch. */
+  head: string;
+  /** Uncommitted changes, untracked files included. */
+  dirty: boolean;
 }
 
 /**
@@ -148,9 +159,18 @@ export interface RemoteWorktree {
 // loop's final command, the loop exits 1, and ssh reports the whole listing as
 // a failure. Seen live: one non-checkout directory on the box turned every
 // worktree into "unknown".
+//
+// The same round trip reads each git worktree of the checkout (the main
+// checkout first) as a `@@<TAB>path<TAB>branch<TAB>head<TAB>dirty` line, so
+// the listing shows where every worktree is now, not where it started.
 export const REMOTE_WORKSPACE_LIST_SCRIPT =
   'for d in ~/work/*/; do [ -f "$d/.codecast/workspace.toml" ] || continue; ' +
-  '(cd "$d" && echo "## $d" && cast ws ls); done; exit 0';
+  '(cd "$d" && echo "## $d" && cast ws ls); ' +
+  'git -C "$d" worktree list --porcelain 2>/dev/null | sed -n "s/^worktree //p" | while IFS= read -r p; do ' +
+  '[ -d "$p" ] || continue; ' +
+  'b=$(git -C "$p" symbolic-ref --short -q HEAD 2>/dev/null); h=$(git -C "$p" rev-parse -q --verify HEAD 2>/dev/null); ' +
+  's=$(git -C "$p" status --porcelain 2>/dev/null | head -c 1); ' +
+  'printf "@@\\t%s\\t%s\\t%s\\t%s\\n" "$p" "$b" "$h" "${s:+dirty}"; done; done; exit 0';
 
 /**
  * Parse the concatenated `cast ws ls` output. Each checkout is announced by a
@@ -180,12 +200,21 @@ export function parseDanglingSeeds(out: string): Array<{ repo: string; name: str
 
 export function parseRemoteWorkspaceList(out: string): RemoteWorktree[] {
   const rows: RemoteWorktree[] = [];
+  const live = new Map<string, WorktreeGitState>();
+  const checkouts: Array<{ repo: string; path: string }> = [];
   let repo = "";
   for (const raw of out.split("\n")) {
+    const git = /^@@\t([^\t]+)\t([^\t]*)\t([0-9a-f]*)\t(dirty)?$/.exec(raw);
+    if (git) {
+      live.set(git[1].replace(/\/+$/, ""), { branch: git[2], head: git[3], dirty: !!git[4] });
+      continue;
+    }
     const line = raw.replace(/\x1b\[[0-9;]*m/g, "").trimEnd();
     const header = /^##\s+(.*)$/.exec(line);
     if (header) {
-      repo = path.posix.basename(header[1].trim().replace(/\/+$/, ""));
+      const checkout = header[1].trim().replace(/\/+$/, "");
+      repo = path.posix.basename(checkout);
+      checkouts.push({ repo, path: checkout });
       continue;
     }
     const t = line.trim();
@@ -195,7 +224,28 @@ export function parseRemoteWorkspaceList(out: string): RemoteWorktree[] {
     const [name, state, branch, ...rest] = cells;
     rows.push({ repo, name, state, branch, path: rest.join("  ") });
   }
-  return rows;
+  // The main checkout is listed even when no `cast ws root` record names it.
+  for (const c of checkouts) {
+    if (live.has(c.path) && !rows.some((r) => r.path.replace(/\/+$/, "") === c.path)) {
+      rows.push({ repo: c.repo, name: ROOT_WORKSPACE_NAME, state: "", branch: "", path: c.path });
+    }
+  }
+  return rows.map((r) => {
+    const state = live.get(r.path.replace(/\/+$/, ""));
+    return state ? { ...r, live: state } : r;
+  });
+}
+
+/** Every managed worktree on the host with its live git state: one ssh round trip. */
+export function readRemoteWorktrees(host: RemoteHost, timeoutMs = 60_000): RemoteWorktree[] {
+  return parseRemoteWorkspaceList(ssh(host, REMOTE_WORKSPACE_LIST_SCRIPT, timeoutMs));
+}
+
+/** `feat/x@abc1234, uncommitted changes`: where a host worktree is now. */
+export function worktreeGitLabel(live: WorktreeGitState): string {
+  if (!live.head) return `${live.branch || "detached HEAD"}, no commits`;
+  const at = cloudSeedLabel({ source: "checkout", base: live.head, branch: live.branch, dirty: false });
+  return live.dirty ? `${at}, uncommitted changes` : at;
 }
 
 // --------------------------------------------------------------------------
@@ -534,9 +584,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let worktreesNote: string | undefined;
   let danglingSeeds: Array<{ repo: string; name: string }> = [];
   if (live && address) {
-    const listed = await guard(() =>
-      parseRemoteWorkspaceList(ssh(toRemoteHost(current), REMOTE_WORKSPACE_LIST_SCRIPT, 60_000)),
-    );
+    const listed = await guard(() => readRemoteWorktrees(toRemoteHost(current)));
     if (listed.error) worktreesNote = `unknown (${listed.error})`;
     worktrees = markOrphanWorktrees(listed.value ?? [], sessions);
     // Seed refs left behind by a failed acquire or a worktree removed by
@@ -688,7 +736,8 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
   for (const w of r.worktrees) {
     const note = worktreeNote(w);
     const orphan = !note ? "" : w.name === ROOT_WORKSPACE_NAME ? fmt.muted(`  ${note}`) : fmt.warning(`  ${note}`);
-    const cols = [w.repo, w.name, w.state, w.branch].filter(Boolean);
+    const started = w.live && w.branch && w.branch !== w.live.branch ? fmt.muted(`started on ${w.branch}`) : "";
+    const cols = [w.repo, w.name, w.state, w.live ? worktreeGitLabel(w.live) : w.branch, started].filter(Boolean);
     console.log(`    ${cols.join("  ")}${orphan}`);
   }
   for (const d of r.danglingSeeds ?? []) console.log(`    ${d.repo}  ${d.name}${fmt.warning("  seed ref only (orphan)")}`);

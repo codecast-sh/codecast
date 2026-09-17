@@ -416,8 +416,12 @@ export function planAgentAuthPush(hosts: RemoteHost[], hash: string, lastByHost:
 // Installed client versions (for provisioning the same CLIs on the host)
 // ---------------------------------------------------------------------------
 
-export type InstallableClient = "claude" | "codex" | "gemini" | "grok";
-export const INSTALLABLE_CLIENTS: readonly InstallableClient[] = ["claude", "codex", "gemini", "grok"];
+/**
+ * Every launchable agent whose login the bundle ships gets its CLI too: a
+ * cloud session with `--agent opencode` must not find an auth file and no binary.
+ */
+export type InstallableClient = "claude" | "codex" | "gemini" | "grok" | "opencode" | "pi";
+export const INSTALLABLE_CLIENTS: readonly InstallableClient[] = ["claude", "codex", "gemini", "grok", "opencode", "pi"];
 
 /** The first `x.y.z` in a `--version` output ("2.1.263 (Claude Code)", "codex-cli 0.153.4"). */
 export function parseClientVersion(out: string): string | undefined {
@@ -426,13 +430,15 @@ export function parseClientVersion(out: string): string | undefined {
 
 /**
  * `<bin> --version` for each agent CLI on this laptop's spawn PATH
- * (agentSpawnPath: the daemon's launchd PATH lacks every install dir);
+ * (agentSpawnPath: the daemon's launchd PATH lacks every install dir; opencode
+ * and grok install into their own ~/.opencode/bin and ~/.grok/bin);
  * absent binaries are left out. `opts.path` replaces the PATH entirely
  * (tests: a dir of stubs).
  */
 export function readInstalledClientVersions(opts: { path?: string; env?: NodeJS.ProcessEnv } = {}): Partial<Record<InstallableClient, string>> {
   const out: Partial<Record<InstallableClient, string>> = {};
-  const spawnEnv = { ...(opts.env ?? process.env), PATH: opts.path ?? agentSpawnPath() };
+  const home = (opts.env ?? process.env).HOME;
+  const spawnEnv = { ...(opts.env ?? process.env), PATH: opts.path ?? agentSpawnPath(home && `${home}/.opencode/bin`, home && `${home}/.grok/bin`) };
   for (const bin of INSTALLABLE_CLIENTS) {
     const which = spawnSync("which", [bin], { encoding: "utf-8", env: spawnEnv });
     const found = which.status === 0 ? which.stdout.trim() : "";
