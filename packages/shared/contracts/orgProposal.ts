@@ -248,7 +248,7 @@ export type OrgEvidenceLink = { label: string; href?: string };
 
 /** A change row's status (S4). `accepted` is the optimistic beat between a
  *  verdict and its apply; `failed` is a refusal the apply core returned. */
-export type OrgChangeStatus = "proposed" | "accepted" | "skipped" | "applied" | "failed";
+export type OrgChangeStatus = "proposed" | "accepted" | "skipped" | "applied" | "failed" | "removed";
 
 /** The statuses a person can still decide (S4): a failed change stays open
  *  so it can be retried with edits or skipped. The server's decide, acceptAll
@@ -259,6 +259,41 @@ export function isOrgChangeDecidable(status: string): boolean {
   return (ORG_DECIDABLE_STATUSES as readonly string[]).includes(status);
 }
 
+// ── The conversation is part of the proposal (S18) ──────────────────────────
+
+/** The author's thread bound to a proposal: the chief of staff's standing
+ *  session, or the session that ran the review. The pane embeds it. */
+export type OrgProposalThread = { conversation_id: string; short_id?: string };
+
+/** What `orgProposals.revise` did to a change (S18). A removed change keeps
+ *  its row with `status: "removed"`, struck through with the note; an
+ *  amended one keeps its row and id, the new change replaces the old and
+ *  `before` keeps what it read as; an added one is a new row. Revise is
+ *  authoring, never deciding: a decided change is refused. */
+export type OrgChangeRevision = {
+  kind: "removed" | "amended" | "added";
+  /** What the author said about it, one line. */
+  note: string;
+  at: number;
+  before?: OrgChange;
+};
+
+/** A message sent from the pane opens with the change the person was looking
+ *  at, so the agent answers about the right row. One line, then a blank line,
+ *  then the person's words. Both sides read this one format. */
+export function aboutChangeHeader(proposalShortId: string, seq: number, line: string): string {
+  return `About ${proposalShortId} change ${seq} ("${line.replace(/"/g, "'")}"):`;
+}
+export function withAboutChange(content: string, proposalShortId: string, seq: number, line: string): string {
+  return `${aboutChangeHeader(proposalShortId, seq, line)}\n\n${content}`;
+}
+const ABOUT_RE = /^About (op-\d+) change (\d+) \("([^\n]*)"\):\n\n?/;
+/** The change a message names, and the words after the header; null when it names none. */
+export function parseAboutChange(content: string): { proposal: string; seq: number; line: string; body: string } | null {
+  const m = ABOUT_RE.exec(content);
+  return m ? { proposal: m[1], seq: Number(m[2]), line: m[3], body: content.slice(m[0].length) } : null;
+}
+
 /** One change as the spec carries it, with the reader's side. */
 export type OrgSpecChange = {
   change: OrgChange;
@@ -266,6 +301,78 @@ export type OrgSpecChange = {
   evidence?: OrgEvidenceLink[];
   expected_effect?: string;
   risk?: string;
+};
+
+/** The faults of one spec change (the shape `changes[i]` takes). Shared by
+ *  the spec parser and by revise's add, so a change added to an open
+ *  proposal passes exactly the checks a change created with it passed. */
+export function orgSpecChangeErrors(c: any): string[] {
+  if (!c || typeof c !== "object" || Array.isArray(c)) return ["an object with change and rationale"];
+  const errors: string[] = [];
+  const fault = orgChangeError(c.change);
+  if (fault) errors.push(fault);
+  if (!nonEmpty(c.rationale)) errors.push("rationale is required");
+  if (c.evidence !== undefined && !(Array.isArray(c.evidence) && c.evidence.every((e: any) => e && nonEmpty(e.label) && optString(e.href)))) errors.push("evidence is a list of { label, href? }");
+  if (!optString(c.expected_effect) || !optString(c.risk)) errors.push("expected_effect and risk are strings");
+  return errors;
+}
+
+/** A validated spec change with only the keys the row stores. */
+export function normalizeOrgSpecChange(c: any): OrgSpecChange {
+  return { change: c.change, rationale: c.rationale, ...(c.evidence ? { evidence: c.evidence } : {}), ...(c.expected_effect ? { expected_effect: c.expected_effect } : {}), ...(c.risk ? { risk: c.risk } : {}) };
+}
+
+/**
+ * One revise op (org-staffing.md S18): the author of an open proposal removes
+ * a change, amends one, or adds one. `seq` names the change as the page and
+ * the CLI do ("#3"); an amend's `edits` is the same object patch a person's
+ * "accept with edits" takes, laid over the change with editedOrgChange and
+ * checked with orgChangeError, and may also rewrite the rationale. An add is
+ * a whole spec change. `note` is the author's own words for the row ("growth
+ * is dead, dropping it"); the page shows it beside the change. Only an
+ * undecided change can be removed or amended.
+ */
+export type OrgReviseOp =
+  | { op: "remove"; seq: number; note?: string }
+  | { op: "amend"; seq: number; edits?: Record<string, unknown>; rationale?: string; note?: string }
+  | { op: "add"; change: OrgSpecChange; note?: string };
+export const ORG_REVISE_OPS = ["remove", "amend", "add"] as const;
+
+/** The shape faults of one op; the server checks the proposal's own state
+ *  (open, undecided, no duplicate subject) on top of this. */
+export function orgReviseOpError(raw: any): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "an op is an object: { op: \"remove\" | \"amend\", seq } or { op: \"add\", change }";
+  if (!(ORG_REVISE_OPS as readonly string[]).includes(raw.op)) return `op is one of ${ORG_REVISE_OPS.join(", ")}`;
+  if (raw.note !== undefined && !nonEmpty(raw.note)) return `${raw.op}: note is a non-empty string`;
+  if (raw.op === "add") {
+    const faults = orgSpecChangeErrors(raw.change);
+    return faults.length ? `add: ${faults.join("; ")}` : null;
+  }
+  if (!Number.isInteger(raw.seq) || raw.seq < 1) return `${raw.op}: seq is the change's number (1, 2, …)`;
+  if (raw.op === "amend") {
+    const hasEdits = raw.edits !== undefined && raw.edits !== null;
+    if (hasEdits && (typeof raw.edits !== "object" || Array.isArray(raw.edits))) return "amend: edits is an object patch over the change's own keys";
+    if (raw.rationale !== undefined && !nonEmpty(raw.rationale)) return "amend: rationale is a non-empty string";
+    if (!hasEdits && raw.rationale === undefined) return "amend: give edits, a rationale, or both";
+  }
+  return null;
+}
+
+/**
+ * One line of a proposal's revision journal: what a revise did to which
+ * change, when and by whom (the proposal's author shape). `line` is the
+ * change as it reads after the op (for a remove, as it read), `was` the line
+ * an amend replaced. The org page lists these inline beside the changes so a
+ * reader sees the conversation's effect on the list.
+ */
+export type OrgRevision = {
+  op: "removed" | "amended" | "added";
+  seq: number;
+  at: number;
+  by: { kind: "role" | "session" | "user"; id: string };
+  line: string;
+  was?: string;
+  note?: string;
 };
 
 export type OrgProposalMode = "init" | "review" | "request";
@@ -326,7 +433,40 @@ export function orgChangeDependencies(rows: ReadonlyArray<{ seq: number; change:
   return out;
 }
 
-export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; errors: [] } | { spec: null; errors: string[] } {
+/** Two rows about one subject that agree fold into one: the fields union,
+ *  the prose (rationale, reason, effect, risk) joins when it differs, the
+ *  evidence concatenates. Rows that disagree on a field are refused, naming
+ *  it, because one row cannot carry both. The analyzer builds a spec from
+ *  lists, and a project that sits in its charter list and its owner list is
+ *  the ordinary way two rows meet; folding here means the post never refuses
+ *  what one row could have carried, and the note says what was folded. */
+export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: string[]; errors: string[] } {
+  const out: any[] = []; const notes: string[] = []; const errors: string[] = [];
+  const at = new Map<string, { out: number; src: number }>();
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const prose = (a?: string, b?: string) => !a ? b : !b || a.trim() === b.trim() ? a : `${a}\n\n${b}`;
+  rows.forEach((row, i) => {
+    const key = orgChangeKey(row.change);
+    const hit = key ? at.get(key) : undefined;
+    if (!hit) { if (key) at.set(key, { out: out.length, src: i }); out.push(row); return; }
+    const first = out[hit.out];
+    const conflict = Object.keys(row.change).find((k) => k !== "reason" && k in first.change && !same(first.change[k], row.change[k]));
+    if (conflict) { errors.push(`changes[${i}] (${describeOrgChange(row.change)}) repeats changes[${hit.src}] with a different ${conflict}: one change per subject`); return; }
+    const evidence = [...(first.evidence ?? []), ...(row.evidence ?? []).filter((e: any) => !(first.evidence ?? []).some((f: any) => same(e, f)))];
+    out[hit.out] = {
+      ...first,
+      change: { ...first.change, ...row.change, ...("reason" in first.change || "reason" in row.change ? { reason: prose(first.change.reason, row.change.reason) } : {}) },
+      rationale: prose(first.rationale, row.rationale),
+      ...(evidence.length ? { evidence } : {}),
+      ...(prose(first.expected_effect, row.expected_effect) ? { expected_effect: prose(first.expected_effect, row.expected_effect) } : {}),
+      ...(prose(first.risk, row.risk) ? { risk: prose(first.risk, row.risk) } : {}),
+    };
+    notes.push(`changes[${i}] (${describeOrgChange(row.change)}) folded into changes[${hit.src}]: one change per subject`);
+  });
+  return { changes: out, notes, errors };
+}
+
+export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; errors: []; notes?: string[] } | { spec: null; errors: string[] } {
   const errors: string[] = [];
   const r: any = raw;
   if (!r || typeof r !== "object" || Array.isArray(r)) return { spec: null, errors: ["the spec is a JSON object with title, summary_md, mode and changes"] };
@@ -336,21 +476,15 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
   if (!Array.isArray(r.changes) || r.changes.length === 0) errors.push("changes is a non-empty list");
   else r.changes.forEach((c: any, i: number) => {
     const at = `changes[${i}]${c?.change?.kind ? ` (${c.change.kind})` : ""}`;
-    if (!c || typeof c !== "object") { errors.push(`${at}: an object with change and rationale`); return; }
-    const fault = orgChangeError(c.change);
-    if (fault) errors.push(`${at}: ${fault}`);
-    if (!nonEmpty(c.rationale)) errors.push(`${at}: rationale is required`);
-    if (c.evidence !== undefined && !(Array.isArray(c.evidence) && c.evidence.every((e: any) => e && nonEmpty(e.label) && optString(e.href)))) errors.push(`${at}: evidence is a list of { label, href? }`);
-    if (!optString(c.expected_effect) || !optString(c.risk)) errors.push(`${at}: expected_effect and risk are strings`);
+    errors.push(...orgSpecChangeErrors(c).map((e) => `${at}: ${e}`));
   });
+  let changes: any[] = r.changes;
+  let notes: string[] = [];
   if (!errors.length) {
-    const seen = new Map<string, number>();
-    r.changes.forEach((c: any, i: number) => {
-      const key = orgChangeKey(c.change);
-      if (!key) return;
-      if (seen.has(key)) errors.push(`changes[${i}] (${describeOrgChange(c.change)}) repeats changes[${seen.get(key)}]: one change per subject`);
-      else seen.set(key, i);
-    });
+    const folded = foldRepeatedSubjects(r.changes);
+    errors.push(...folded.errors);
+    changes = folded.changes;
+    notes = folded.notes;
   }
   if (errors.length) return { spec: null, errors };
   return {
@@ -358,9 +492,10 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
       title: r.title.trim(),
       summary_md: r.summary_md,
       mode: r.mode,
-      changes: r.changes.map((c: any) => ({ change: c.change, rationale: c.rationale, ...(c.evidence ? { evidence: c.evidence } : {}), ...(c.expected_effect ? { expected_effect: c.expected_effect } : {}), ...(c.risk ? { risk: c.risk } : {}) })),
+      changes: changes.map(normalizeOrgSpecChange),
     },
     errors: [],
+    ...(notes.length ? { notes } : {}),
   };
 }
 

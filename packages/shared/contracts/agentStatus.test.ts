@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { AGENT_IDLE_GRACE_MS, isLivenessStale, isQuietSettled, isStatusTrustStale, STATUS_TRUST_TTL_MS } from "./agentStatus";
+import { deriveLiveAt } from "./inboxProjection";
+import { AGENT_IDLE_GRACE_MS, HEARTBEAT_ALIVE_MS, HEARTBEAT_FLUSH_INTERVAL_MS, HEARTBEAT_REFRESH_MS, HEARTBEAT_WRITE_CADENCE_MS, isLivenessStale, isQuietSettled, isStatusTrustStale, STATUS_TRUST_TTL_MS } from "./agentStatus";
 
 // isStatusTrustStale is the single staleness predicate shared by the inbox
 // bucket (categorizeSessions) and every UI "working" dot (GlobalSessionPanel
@@ -115,5 +116,53 @@ describe("isLivenessStale", () => {
     // Regression guard: the killed branch must not swallow the existing logic.
     expect(isLivenessStale({ message_count: 5, updated_at: NOW - 10 * 60 * 1000, inbox_killed_at: null }, NOW)).toBe(true);
     expect(isLivenessStale({ agent_status: "working", is_idle: false, message_count: 5, updated_at: NOW - 10 * 60 * 1000, inbox_killed_at: null }, NOW)).toBe(false);
+  });
+});
+
+// The heartbeat window measures the heartbeat WRITES, and those land on the
+// first flush past the server's throttle — never on the flush cadence alone.
+// When the window did not clear that interval, a session running a long silent
+// tool call read as a dead daemon and filed under Needs Input while its daemon
+// was beating (2026-09-17: writes measured 60s apart in steady state and 85s
+// behind a late flush, against a 90s window).
+describe("heartbeat liveness window", () => {
+  it("is derived from the cadence it measures", () => {
+    expect(HEARTBEAT_WRITE_CADENCE_MS).toBe(HEARTBEAT_REFRESH_MS + HEARTBEAT_FLUSH_INTERVAL_MS);
+  });
+
+  it("clears the write cadence by a whole extra flush", () => {
+    expect(HEARTBEAT_ALIVE_MS - HEARTBEAT_WRITE_CADENCE_MS).toBeGreaterThan(HEARTBEAT_FLUSH_INTERVAL_MS);
+  });
+
+  // The window is applied to last_heartbeat by deriveLiveAt, which is the path
+  // both the server stamp and every replica render take.
+  const quietWorkingSession = (heartbeatAge: number) =>
+    deriveLiveAt(
+      {
+        status: "active",
+        updated_at: NOW - 5 * 60_000, // a long silent tool call: no output for minutes
+        message_count: 2668,
+        has_pending_messages: false,
+        agent_status: "working",
+        agent_status_updated_at: NOW - 5 * 60_000,
+        last_heartbeat: NOW - heartbeatAge,
+        daemon_alive_until: NOW - heartbeatAge + HEARTBEAT_ALIVE_MS,
+        last_role_is_user: false,
+      } as any,
+      NOW,
+    );
+
+  it("keeps a quiet working session alive across a late flush", () => {
+    // The measured worst case on a busy account: the heartbeat write ran 85s
+    // late while the daemon was beating the whole time. The replica reads that
+    // write some seconds later still — it re-derives at its own clock over a
+    // fact it received — so the age it sees clears 90s and the old window
+    // called this live session dead.
+    expect(quietWorkingSession(85_000).agent_status).toBe("working");
+    expect(quietWorkingSession(95_000).agent_status).toBe("working");
+  });
+
+  it("still calls a genuinely gone daemon stopped", () => {
+    expect(quietWorkingSession(10 * 60_000).agent_status).toBe("stopped");
   });
 });

@@ -9,6 +9,9 @@
 // into English show up in every language we transcribe.
 
 export const LIVE_TRANSCRIBE_MODEL = "gpt-live-transcribe";
+/** The recognizer a huddle used before the live model. It closes turns on
+ *  server VAD by itself, and the mint that named it did not 400. */
+export const FALLBACK_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
 
 /**
  * The session body the mint posts and the live socket updates with.
@@ -23,7 +26,15 @@ export function asrTranscriptionSession(model: string, languages: string[] = [])
       input: {
         format: { type: "audio/pcm" as const, rate: 24000 },
         transcription,
-        turn_detection: { type: "server_vad" as const, silence_duration_ms: 600 },
+        // Full VAD object: type plus the three knobs the Realtime docs send.
+        // A body with only silence_duration_ms 400'd the live-model mint and
+        // left huddles on "ASR session mint failed (400)".
+        turn_detection: {
+          type: "server_vad" as const,
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 600,
+        },
       },
     },
   };

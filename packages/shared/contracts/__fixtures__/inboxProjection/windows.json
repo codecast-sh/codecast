@@ -189,7 +189,7 @@
         "questions": 0,
         "pinned": 3,
         "new": 0,
-        "needs_input": 4,
+        "needs_input": 6,
         "done": 0,
         "dormant": 0,
         "working": 0,
@@ -214,7 +214,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "ce0591d4a81409d2",
+    "set_digest": "c07565caf839c404",
     "placements": {
       "dismissedoldrowz1500000000000000": [
         "dismissed",
@@ -244,6 +244,16 @@
       "killeddismissedpinnedz2100000000": [
         "dismissed",
         "idle",
+        false
+      ],
+      "ownedfailedz11000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "ownedoldz80000000000000000000000": [
+        "needs_input",
+        "needs_input",
         false
       ],
       "ownedrecentz11000000000000000000": [
@@ -294,6 +304,8 @@
       "everythingz100000000000000000000": -28800000,
       "horizonedgeinz130000000000000000": -2592000000,
       "killeddismissedpinnedz2100000000": -3456000000,
+      "ownedfailedz11000000000000000000": -3600000,
+      "ownedoldz80000000000000000000000": -3456000000,
       "ownedrecentz11000000000000000000": -25200000,
       "pinfailedz9000000000000000000000": -3600000,
       "pinoldz6000000000000000000000000": -3456000000,
@@ -312,10 +324,12 @@
         "killeddismissedpinnedz2100000000"
       ],
       "needs_input": [
+        "ownedfailedz11000000000000000000",
         "recentonlyz100000000000000000000",
         "recentcompletedz1500000000000000",
         "ownedrecentz11000000000000000000",
-        "horizonedgeinz130000000000000000"
+        "horizonedgeinz130000000000000000",
+        "ownedoldz80000000000000000000000"
       ],
       "pinned": [
         "pinfailedz9000000000000000000000",

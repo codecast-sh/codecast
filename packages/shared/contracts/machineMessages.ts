@@ -109,6 +109,32 @@ export function parseUserMessage(rawContent: string | null | undefined): { from:
   return { from: m[1].trim(), body: m[2].trim() };
 }
 
+// A person's message sent from the org page's staffing pane into the thread
+// bound to a proposal (org-staffing.md S18): `orgProposals.say` wraps it as
+// <proposal-message proposal="op-N" change="3" from="Name">. The body opens
+// with the "About op-N change 3 (…):" header and closes with a reply note for
+// the agent; the transcript shows the person's own words under a quote of
+// the header, so the bubble reads as theirs and names the row.
+export function isProposalMessage(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  return /^<proposal-message\s/.test(stripInjectionNoise(rawContent));
+}
+export function parseProposalMessage(rawContent: string | null | undefined): { proposal: string; change: number | null; from: string; about: string | null; body: string } | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  const m = text.match(/^<proposal-message\s+([^>]*)>([\s\S]*?)(?:<\/proposal-message>\s*$|$)/);
+  if (!m) return null;
+  const attr = (k: string) => { const a = m[1].match(new RegExp(`${k}="([^"]*)"`)); return a ? a[1] : ""; };
+  let body = m[2].trim();
+  // The trailing reply note is for the agent, not the reader.
+  body = body.replace(/\n*\(Reply here;[\s\S]*\)\s*$/, "").trim();
+  let about: string | null = null;
+  const head = body.match(/^(About \S+ change \d+ \("[^\n]*"\):)\s*\n+/);
+  if (head) { about = head[1]; body = body.slice(head[0].length).trim(); }
+  const change = attr("change");
+  return { proposal: attr("proposal"), change: change ? Number(change) : null, from: attr("from").trim(), about, body };
+}
+
 // The multi-agent harness wraps a message from another agent in
 // <teammate-message teammate_id="…"> tags, plus a fixed boilerplate lead-in
 // ("Another Claude session sent a message:") and trailing disclaimer ("This

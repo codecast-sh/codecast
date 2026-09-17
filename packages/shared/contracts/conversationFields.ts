@@ -69,6 +69,15 @@ export const CONVERSATION_FIELDS = {
 
   // ── Plain fields the client may edit ─────────────────────────────────────
   title: { send: true, dispatch: true },
+  // The session's character (docs/architecture/session-characters.md S1): a
+  // face key and a name a person chose; absent = the hash default. Both write
+  // paths normalize them (normalizeCharacterFields).
+  character_avatar: { send: true, dispatch: true, patch: true },
+  character_name: { send: true, dispatch: true, patch: true },
+  // Org pointers are server-owned (immutable on the rail) but the row carries
+  // them so a session can resolve its identity to the role it belongs to.
+  org_role_id: { send: true },
+  standing_role_id: { send: true },
   is_favorite: { send: true, dispatch: true },
   // Per-user and delivered on its own path, so it is writable but never part
   // of the shared row.

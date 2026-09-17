@@ -245,10 +245,41 @@ export function isLivenessStale(
   return isStatusTrustStale(s, now) || isQuietSettled(s, now);
 }
 
+// ── The heartbeat cadence, and the window derived from it ───────────────────
+//
+// Three numbers used to live in three packages and had to agree by hand. They
+// did not: the window was 90s while the writes it measures land up to 85s
+// apart, so a session that was provably working read as dead with under five
+// seconds to spare. The cadence is the cause, so the window is DERIVED from it
+// here and both writers import their own term back.
+
+// How often the daemon flushes every live session's heartbeat in one batched
+// mutation (packages/cli/src/daemon.ts).
+export const HEARTBEAT_FLUSH_INTERVAL_MS = 30 * 1000;
+
+// How stale the stored stamp must be before a flush actually writes it
+// (convex/managedSessions.ts). Every managed_sessions write invalidates the
+// inbox readers, so the throttle exists to keep that churn down.
+export const HEARTBEAT_REFRESH_MS = 45 * 1000;
+
+// The interval between two WRITES that follows from those two: the write lands
+// on the first flush after the throttle expires, so the stamp advances every
+// HEARTBEAT_REFRESH_MS plus up to one flush — never on the flush cadence alone.
+export const HEARTBEAT_WRITE_CADENCE_MS = HEARTBEAT_REFRESH_MS + HEARTBEAT_FLUSH_INTERVAL_MS;
+
 // The daemon liveness window: a managed row whose heartbeat is older than this
 // has no process behind it. Shared by the needs-input check, the inbox scan,
 // the projection deadlines and the replica's live derivation (deriveLiveAt).
-export const HEARTBEAT_ALIVE_MS = 90 * 1000;
+//
+// It must clear the write cadence, and clear it by enough that an ordinary
+// late flush is not read as a death. Measured on a busy account (93 live
+// sessions, heartbeats batched 25 per transaction): writes 60s apart in steady
+// state, 85s when a flush ran late. So the window carries one whole extra
+// flush over the cadence, plus a few seconds for the write to replicate and
+// the replica to re-render — the replica re-derives this at its own clock over
+// a fact it received, so its budget is spent before it starts counting.
+export const HEARTBEAT_ALIVE_MS =
+  HEARTBEAT_WRITE_CADENCE_MS + HEARTBEAT_FLUSH_INTERVAL_MS + 15 * 1000;
 
 // Collapse a stale "active" status so every consumer agrees on what the agent
 // is doing. The agent_status field is read in three independent places — the
@@ -265,11 +296,12 @@ export const HEARTBEAT_ALIVE_MS = 90 * 1000;
 //     miss heartbeats for minutes while provably alive — syncing messages every
 //     few seconds. Coercing on heartbeat age alone filed every actively-working
 //     session under NEEDS INPUT during such a stall (2026-07-20). Fresh message
-//     traffic is proof of life that vetoes the coercion. Residual gap: a turn
-//     sitting in a long, SILENT tool call (nothing synced for 90s+) during a
-//     heartbeat stall still reads stopped — accepted, because the daemon-side
-//     fix (liveness sends decoupled from slow maintenance passes) makes stalls
-//     rare and the next synced output self-corrects the row.
+//     traffic is proof of life that vetoes the coercion. The turn sitting in a
+//     long SILENT tool call has no such traffic to veto with, so for it the
+//     window is the only defence and it has to clear the real write cadence —
+//     which is what HEARTBEAT_ALIVE_MS is now derived to do. It did not before:
+//     a session running subagents, quiet for five minutes, read as stopped and
+//     filed under NEEDS INPUT while its daemon was beating (2026-09-17).
 //   - conversation quiet past the trust TTL with a live heartbeat → the daemon
 //     lost the turn's idle transition and re-asserts "working" forever; reads as
 //     "idle" (not "stopped") because the fresh heartbeat means the process is

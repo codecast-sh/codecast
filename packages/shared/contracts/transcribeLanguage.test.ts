@@ -154,4 +154,13 @@ describe("asrTranscriptionSession", () => {
       languages: ["en", "ja"],
     });
   });
+
+  test("sends the full VAD object the live mint requires", () => {
+    expect(asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL).audio.input.turn_detection).toEqual({
+      type: "server_vad",
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 600,
+    });
+  });
 });
