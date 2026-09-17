@@ -48,6 +48,13 @@ describe("filterInboxScope — mine", () => {
     expect(ids(out)).toEqual([cid(3)]);
   });
 
+  it("drops a session I run that is assigned to someone else", () => {
+    const handed = mk(cid(10), { user_id: ME, owner_user_id: THEM, owned_by_me: false });
+    const stillMine = mk(cid(11), { user_id: ME, owner_user_id: ME });
+    const out = filterInboxScope(byId([handed, stillMine]), "mine", ME);
+    expect(ids(out)).toEqual([cid(11)]);
+  });
+
   it("keeps optimistic stubs and thin rows with no known author", () => {
     const stub = mk("stub-local-1"); // non-Convex id → mid-create, always mine
     const thin = mk(cid(4)); // no user_id → legacy/thin row, don't hide

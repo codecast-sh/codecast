@@ -75,6 +75,7 @@ import {
   rowLastTurnAllowsPark,
   emptyInboxTally,
   isOrphanOrSubagent,
+  isAssignedAwayFromViewer,
   rollupParentIdOf,
   rideLeadPlacements,
   isHardBlocked,
@@ -482,6 +483,9 @@ export type PrStatus = {
   at: number;
 };
 
+/** The role a session row belongs to, as the server snapshots it on the row. */
+export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program" };
+
 export type InboxSession = {
   _id: string;
   session_id: string;
@@ -732,6 +736,16 @@ export type InboxSession = {
   fork_copied?: number;
   icon?: string;
   icon_color?: string;
+  // The session's character (docs/architecture/session-characters.md S1): the
+  // chosen face key and name, absent for the hash default. Read only through
+  // lib/sessionIdentity.
+  character_avatar?: string | null;
+  character_name?: string | null;
+  // Org pointers and, when one is set, a snapshot of that role so the row can
+  // wear the role's face and name without the org tree loaded.
+  org_role_id?: string | null;
+  standing_role_id?: string | null;
+  role?: SessionRoleSnapshot | null;
   // Kept-for-later flag. Drives the Favorites top-level view (a long-term set,
   // grouped by project) — the same session cache, filtered. Set optimistically
   // by toggleFavorite and carried on both the inbox and favorites server rows.
@@ -1646,6 +1660,10 @@ export type ClientUI = {
   // Show each session's agent client icon (Claude Code, opencode, …) next to
   // its title in the inbox list. On by default; read as `!== false`.
   show_agent_icon?: boolean;
+  // Give EVERY session a character — an animal face and a name — instead of
+  // only the ones somebody personified by hand (session-characters.md S2).
+  // Off by default: a face is a choice, not something that happens to you.
+  personify_sessions?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
@@ -1666,6 +1684,11 @@ export type ClientUI = {
   // toolbar reopens it by hand. Stamped LWW: a person who has read the guide
   // on one device has read it everywhere.
   org_nux_seen?: boolean;
+  // The staffing pane's cold read intro (org-staffing.md S17): the two
+  // sentences over a proposal that say what codecast is proposing and what
+  // accepting costs. Dismissed once, or stamped by the first accepted change,
+  // and never shown again. Stamped LWW: read on one device is read everywhere.
+  org_intro_seen?: boolean;
   // The review "Propose an org now" started on the org page: when, in which
   // workspace, and the session doing it (its stub id first, the real id once
   // the server names it). Kept here, not in component state, so a reload or
@@ -2095,15 +2118,19 @@ export function partitionWorkingSet(
   return { visibleSessions, oldCount };
 }
 
-// Is this cached row definitively someone ELSE's session — i.e. not the caller's
-// to see in the personal inbox? A row is "mine" if it's my own authored session,
-// one routed to me to steer (owner), an optimistic stub not yet server-keyed, or
-// a thin row with no known author. Everything else is a teammate's row that only
-// entered the shared cache via team mode / a deep-link / search, and must not
-// linger in "mine".
+// Is this cached row outside the caller's personal inbox? Two ways in: it is a
+// teammate's session that only entered the shared cache via team mode, a
+// deep-link or search — or it is a session the caller RUNS but has assigned to
+// someone else, which belongs in that person's inbox and not here (the server
+// scan drops it from the payload; this is the same rule over the never-pruned
+// client cache, which would otherwise keep rendering the last copy it saw).
+// A row is "mine" if I authored it and still own it (or nobody does), if it is
+// routed to me to steer, if it is an optimistic stub, or if it is a thin row
+// with no known author.
 export function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
   if (!meId) return false; // unknown viewer → don't hide anything
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
+  if (isAssignedAwayFromViewer(s, meId)) return true;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
   return isForeignSession(s, undefined, meId);
 }
@@ -3052,7 +3079,14 @@ function deriveInboxAsking(
 ): InboxAsking {
   const decisions = state.sessionDecisions ?? (EMPTY_PLACEMENT_OBJ as Record<string, SessionDecisionItem>);
   const pendingDecide = pendingDecisionConvIds(decisions, meId);
-  const asks = (s: InboxSession) => pendingDecide.has(s._id) || sessionHasOpenQuestion(s, state.questionResolutions);
+  const asks = (s: InboxSession) => {
+    if (pendingDecide.has(s._id)) return true;
+    // An AskUserQuestion / permission prompt follows the session's owners, not
+    // the account that runs it. A focused deep-link keeps the row in scope, but
+    // it is not this viewer's question.
+    if (meId && isForeignRow(s, meId)) return false;
+    return sessionHasOpenQuestion(s, state.questionResolutions);
+  };
   const askingChildParents = new Set<string>();
   for (const s of Object.values(mineAll)) {
     if (s.inbox_killed_at) continue;
@@ -3071,7 +3105,8 @@ function deriveInboxAsking(
   // permission). A pending `cast decide` or a child's ask is not answered by
   // typing into the parent, so those keep the row in QUESTIONS.
   const ownPromptOnly = (s: InboxSession) =>
-    !pendingDecide.has(s._id) && !askingChildParents.has(s._id) && sessionHasOpenQuestion(s, state.questionResolutions);
+    !pendingDecide.has(s._id) && !askingChildParents.has(s._id) && !(meId && isForeignRow(s, meId))
+    && sessionHasOpenQuestion(s, state.questionResolutions);
   return { mineAll, askingOf, ownPromptOnly };
 }
 
@@ -4851,6 +4886,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   wakeSnoozedSession: (id: string) => void;
   pinSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
+  setSessionCharacter: (id: string, next: { avatar?: string | null; name?: string | null }) => void;
+  setSessionCharacters: (entries: Array<{ id: string; avatar?: string | null; name?: string | null }>) => void;
   switchProject: (convId: string, path: string) => void;
   patchConversation: (id: string, fields: Record<string, any>) => void;
   flushResolvedSessionFields: (id: string, fields: Record<string, any>) => void;
@@ -4867,6 +4904,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   markAllNotificationsRead: () => void;
   retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+  /** A message from the staffing pane into the thread bound to a proposal
+   *  (org-staffing.md S18): the person's words plus the change they were
+   *  looking at. The bubble paints at once in that thread; dispatch runs
+   *  orgProposals.say, which wraps it and enqueues it on the message rail
+   *  under the same client id, so the echo retires the bubble. */
+  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
@@ -7147,6 +7190,18 @@ function stampSyncAckInDraft(
   return true;
 }
 
+/** Writes a character onto both row shapes a session has in the store
+ *  (docs/architecture/session-characters.md S2). A key absent from `next` is
+ *  left alone; an explicit null clears it, which the dispatch rail sends as a
+ *  field removal so the id's hash default returns. */
+function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string | null; name?: string | null }) {
+  for (const row of [draft.sessions[id], draft.conversations[id]] as Array<Record<string, unknown> | undefined>) {
+    if (!row) continue;
+    if (next.avatar !== undefined) row.character_avatar = next.avatar;
+    if (next.name !== undefined) row.character_name = next.name;
+  }
+}
+
 function announceHide(
   draft: any,
   mode: "stash" | "kill",
@@ -8690,6 +8745,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  // A session's character (docs/architecture/session-characters.md S2). Both
+  // parts are optional and independent: pass a value to choose it, null to
+  // fall back to the id's hash default. The fields ride the generic
+  // conversation patch rail, so there is no named side effect; the server
+  // normalizes an unknown face key or a blank name to a clear.
+  setSessionCharacter: action(function (this: Draft, id: string, next: { avatar?: string | null; name?: string | null }) {
+    writeCharacterInDraft(this, id, next);
+  }),
+
+  // One gesture over a ticked selection: one action, so N rows ride a single
+  // dispatch. The caller decides the policy (one face for all, or a distinct
+  // face each) and hands over the resolved pairs — this only writes them.
+  setSessionCharacters: action(function (this: Draft, entries: Array<{ id: string; avatar?: string | null; name?: string | null }>) {
+    for (const e of entries) writeCharacterInDraft(this, e.id, e);
+  }),
+
   switchProject: action(function (this: Draft, convId: string, path: string) {
     if (this.sessions[convId]) {
       this.sessions[convId].project_path = path;
@@ -8891,6 +8962,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
   retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
+
+  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string) {
+    appendOptimisticMessage(this, threadConvId, body, undefined, clientId);
+    notePendingMessageSendRequested(clientId);
+    for (const target of [this.sessions[threadConvId], this.conversations[threadConvId]]) {
+      if (target && hasThreadState(target)) Object.assign(target, clearedThreadStateFields());
+    }
+  }),
 
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     clearSessionSnoozeInDraft(this, _convId);

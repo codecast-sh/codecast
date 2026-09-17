@@ -107,6 +107,20 @@ export const typeColors: Record<string, string> = {
   daemon_overloaded: "text-sol-orange",
 };
 
+/** Who a notification is FROM. A snapshot on the row (Slack person, anonymous
+ *  commenter, session-typed line) wins over the live user, which for Slack
+ *  inbound is the workspace bridge rather than who posted. */
+export function notificationActor(n: {
+  actor?: { name?: string; github_username?: string; github_avatar_url?: string } | null;
+  actor_name?: string;
+  actor_avatar?: string;
+}): { name: string | undefined; avatar: string | undefined } {
+  return {
+    name: n.actor_name || n.actor?.name || n.actor?.github_username,
+    avatar: n.actor_avatar || n.actor?.github_avatar_url,
+  };
+}
+
 export const agentNames: Record<string, string> = {
   claude_code: "claude",
   codex: "codex",

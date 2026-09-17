@@ -1,4 +1,7 @@
 import { FolderGit2 } from "lucide-react";
+import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
+import { characterNameFor } from "@codecast/shared/contracts/sessionCharacter";
+import { AVATAR_LABELS, RoleAvatar } from "./org/avatars";
 import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
@@ -152,7 +155,7 @@ const api = _api as any;
 
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 
-type ActionMode = "device" | "snooze" | "rename" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -567,6 +570,16 @@ export function ActionSubmenu({
   const items = useMemo(() => {
     const q = search.toLowerCase();
     if (mode === "snooze") return SESSION_SNOOZE_CHOICES.filter((item) => item.label.includes(q)).map((item) => ({ ...item, icon: Clock }));
+    // A character is picked by typing the animal (or a name to give them), so
+    // the whole set is one keystroke away without a grid to arrow around.
+    if (mode === "character") {
+      const faces = AVATAR_KEYS
+        .filter((k) => AVATAR_LABELS[k].toLowerCase().includes(q))
+        .map((k) => ({ key: k, label: AVATAR_LABELS[k], face: k }));
+      const typed = q.trim();
+      const naming = typed && !faces.length ? [{ key: "__name__", label: `Name them "${search.trim()}"`, icon: Pencil }] : [];
+      return [...naming, ...faces];
+    }
 
     if (isLayoutMode(mode)) {
       const trimmed = search.trim();
@@ -795,6 +808,21 @@ export function ActionSubmenu({
   const selectItem = useCallback((index: number) => {
     const item = items[index] as any;
     if (!item) return;
+    if (mode === "character") {
+      const store = useInboxStore.getState();
+      const ids = targets.map((t) => t._id);
+      if (item.key === "__name__") {
+        const name = search.trim();
+        store.setSessionCharacters(ids.map((id) => ({ id, name })));
+        toast.success(ids.length > 1 ? `Named ${ids.length} sessions` : `Named ${name}`);
+      } else {
+        // Picking a face also personifies the row, which is the opt in.
+        store.setSessionCharacters(ids.map((id) => ({ id, avatar: item.key, name: characterNameFor(id, item.key) })));
+        toast.success(ids.length > 1 ? `${ids.length} sessions are now ${item.label}s` : `Now a ${item.label}`);
+      }
+      onClose();
+      return;
+    }
     if (mode === "snooze") {
       const until = sessionSnoozeUntil(item.key as SessionSnoozeKey);
       for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
@@ -1129,6 +1157,7 @@ export function ActionSubmenu({
   }, [highlightIndex]);
 
   const modeLabel =
+    mode === "character" ? "Pick an animal, or type a name…" :
     mode === "snooze" ? "Snooze session for…" :
     mode === "rename" ? "Enter a new name…" :
     mode === "deadline" ? "Target date (YYYY-MM-DD)…" :
@@ -1290,6 +1319,8 @@ export function ActionSubmenu({
                 // Same shape convention as the chip row: square = manual label,
                 // round = auto-derived project.
                 <span className={`w-3 h-3 flex-shrink-0 ${item.kind === "project" ? "rounded-full" : "rounded-[3px]"} ${item.dot}`} />
+              ) : item.face ? (
+                <RoleAvatar avatar={item.face} size={18} className="flex-shrink-0" />
               ) : Icon ? (
                 <Icon className={`w-4 h-4 flex-shrink-0 ${item.color || ""}`} />
               ) : null}

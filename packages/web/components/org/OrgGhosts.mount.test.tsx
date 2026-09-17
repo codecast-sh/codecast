@@ -97,7 +97,7 @@ async function verifyGhostCards() {
   assert.ok(growth.querySelector("[data-ghost-chip='c-budget']")?.getAttribute("aria-pressed") === "true");
   // A chip carries the delta, not the sentence; the sentence is its title.
   assert.equal(growth.querySelector("[data-ghost-chip='c-budget']")?.textContent?.trim(), "tokens 800k");
-  assert.ok(growth.querySelector("[data-ghost-chip='c-budget']")?.getAttribute("title")?.startsWith("Budget @growth"));
+  assert.ok(growth.querySelector("[data-ghost-chip='c-budget']")?.getAttribute("title")?.startsWith("@growth may use up to"));
   assert.equal(growth.querySelector("[data-ghost-chip='c-routine']")?.textContent?.trim(), "every 7d · Weekly review");
   // Health dots on growth: its two warnings as rings; the info flag draws
   // none (the pane lists it).

@@ -17,9 +17,16 @@ import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE } from "./messageMarkdown";
 import { compactAge } from "../lib/threadState";
 import { cn } from "../lib/utils";
+import type { HandStarted } from "../hooks/useHandsStartedBy";
+import { EntityIdPill } from "./EntityIdPill";
+import { ORG_STATE_META } from "./org/orgMeta";
 import type { OrgRole } from "./org/orgTypes";
 import { RoleFace } from "./org/RoleFace";
 import { ROLE_WAKE_LINE_CAP, dedupeTitles, describeWake, type RoleWakeFrame, type RoleWakeSection } from "./roleWake";
+
+/** Where the message went, from what the role did in this turn (roleWake.ts):
+ *  the hands it started, and the hands it sent a follow up to. */
+export type RoleWakeRouting = { hands: HandStarted[]; sentTo: string[] };
 
 export type RoleWakeCardProps = {
   frame: RoleWakeFrame;
@@ -31,7 +38,45 @@ export type RoleWakeCardProps = {
   /** Whether the viewer may pause and resume the role (lib/scopePage canEditRole). */
   canEdit: boolean;
   onSetPaused?: (paused: boolean) => void;
+  routing?: RoleWakeRouting;
 };
+
+// The card under a person's message (scopes-and-feed.md F4.2): each hand the
+// role started in this turn as the live session reference, with the state
+// word and colour the panel's Sessions tab groups it under (ORG_STATE_META on
+// the observed work state, so a card here and a row there never disagree),
+// its pinned line, its task, and its age; then each hand a follow up was sent
+// to. Rows that exist, rendered; nothing here comes from the role's prose.
+function WhereItWent({ routing, now }: { routing: RoleWakeRouting; now: number }) {
+  if (routing.hands.length === 0 && routing.sentTo.length === 0) return null;
+  return (
+    <div className="border-t px-3 py-2 space-y-1.5" style={{ borderColor: soft(18) }} data-routing>
+      <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Where it went</div>
+      {routing.hands.map((h) => {
+        const meta = ORG_STATE_META[h.state] ?? ORG_STATE_META.idle;
+        return (
+          <div key={h._id} className="flex items-center gap-2 min-w-0 text-[12.5px]" data-hand={h._id}>
+            <span className="shrink-0" style={{ color: "var(--sol-text-muted)" }}>started</span>
+            <EntityIdPill type="session" id={h._id} label={h.title || h.short_id || "a hand"} />
+            <span className="inline-flex items-center gap-1 shrink-0 text-[10.5px] font-medium" style={{ color: meta.color }} data-hand-state={h.state}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }} aria-hidden />
+              {meta.label}
+            </span>
+            {h.state_line && <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--sol-text-muted)" }} title={h.state_line}>{h.state_line}</span>}
+            {h.task_short_id && <EntityIdPill shortId={h.task_short_id} compact />}
+            <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(h.started_at).toLocaleString()}>{compactAge(Math.max(0, now - h.started_at))}</span>
+          </div>
+        );
+      })}
+      {routing.sentTo.map((ref) => (
+        <div key={ref} className="flex items-center gap-2 min-w-0 text-[12.5px]" data-sent-to={ref}>
+          <span className="shrink-0" style={{ color: "var(--sol-text-muted)" }}>sent to</span>
+          <EntityIdPill type="session" shortId={ref} />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const violet = "var(--sol-violet)";
 const soft = (pct: number) => `color-mix(in srgb, var(--sol-violet) ${pct}%, transparent)`;
@@ -109,7 +154,7 @@ function FooterButton({ icon: Icon, label, href, onClick, title, disabled }: { i
   return <button type="button" onClick={onClick} className={cls} style={style} title={title} disabled={disabled}>{inner}</button>;
 }
 
-export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused }: RoleWakeCardProps) {
+export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused, routing }: RoleWakeCardProps) {
   const at = frame.at ?? (timestamp && timestamp > 0 ? timestamp : null);
   const name = role?.name ?? frame.you?.name ?? frame.roleShortId;
   const handle = role?.handle ?? frame.you?.handle;
@@ -153,6 +198,7 @@ export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused
           <RoleWakeSectionGroup key={`${section.key}-${i}`} section={section} defaultOpen={section.key === "why"} />
         ))}
       </div>
+      {routing && <WhereItWent routing={routing} now={now} />}
       <div className="flex items-center gap-1.5 px-3 py-2 flex-wrap border-t" style={{ borderColor: soft(18) }}>
         <FooterButton icon={ArrowUpRight} label="Open role" href={rolePath} title="The role's page: brief, charter, hands, settings" />
         {canEdit && role && !retired && (

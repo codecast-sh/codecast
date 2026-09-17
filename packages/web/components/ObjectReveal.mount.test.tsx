@@ -30,6 +30,14 @@ beforeAll(async () => {
   mock.module("../shortcuts", () => ({ hasOpenModal: () => false, isEditableTarget: () => false }));
   mock.module("../store/inboxStore", () => ({ useInboxStore: { getState: () => ({ sessions: {} }) } }));
   mock.module("../hooks/useOpenLinkedSession", () => ({ useOpenLinkedSession: () => () => {} }));
+  mock.module("../lib/stage", () => ({
+    canOpenBeside: () => true,
+    paneSessionId: (p: string) => {
+      const m = /^\/conversation\/([^/?#]+)/.exec(p);
+      return m ? m[1] : null;
+    },
+  }));
+  mock.module("../lib/openIntent", () => ({ openIn() {} }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
   mock.module("next/navigation", () => ({ useRouter: () => ({ push() {}, replace() {} }) }));
   ({ createRoot } = await import("react-dom/client"));
@@ -69,14 +77,14 @@ test("the band portals into a slot right under the reference's paragraph and the
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
   // The grip is there for the resize; the foot is a plain click to close.
   expect(band.querySelector(".object-reveal__grip-bar")).not.toBeNull();
+  expect(band.querySelectorAll(".object-reveal__open").length).toBe(1);
+  expect(band.querySelector(".object-reveal__open-beside")?.getAttribute("title")).toBe("Open beside");
   click(band.querySelector(".object-reveal__foot")!);
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
-  // The header strip closes as well; the open-the-page bars do not.
+  // The header strip closes as well; the open-the-page hit does not.
   click(content.querySelector("button")!);
-  const opens = content.querySelectorAll(".object-reveal__open");
-  expect(opens.length).toBe(2);
-  click(opens[0]!);
+  click(content.querySelector(".object-reveal__open a")!);
   expect(content.querySelector(".object-reveal")).not.toBeNull();
   click(content.querySelector(".object-reveal__strip")!);
   expect(content.querySelector(".object-reveal")).toBeNull();

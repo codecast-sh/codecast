@@ -498,7 +498,7 @@ export function ghostChipOf(c: OrgProposalChange, unresolved = false): OrgGhostC
 export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], opts: OrgGhostOptions = {}): OrgGhostPlan {
   const merged: OrgTree = { ...tree, people: tree.people.map((p) => ({ ...p })), roles: tree.roles.map((r) => ({ ...r, sessions: [...r.sessions] })), anchors: [...tree.anchors] };
   const plan: OrgGhostPlan = { merged, stubs: {}, retires: {}, moves: [], chips: {} };
-  const open = changes.filter((c) => c.status !== "skipped");
+  const open = changes.filter((c) => c.status !== "skipped" && c.status !== "removed");
   if (open.length === 0) return plan;
   const me = merged.people.find((p) => p.is_me) ?? merged.people[0];
   const meNode = me ? personNodeId(me.user_id) : null;

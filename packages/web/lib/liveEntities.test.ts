@@ -44,6 +44,19 @@ describe("isForeignSession", () => {
     expect(isForeignSession({ user_id: ME }, undefined, ME)).toBe(false);
   });
 
+  it("a session I run that is assigned to someone else is foreign", () => {
+    expect(isForeignSession({ user_id: ME, owner_user_id: OTHER }, undefined, ME)).toBe(true);
+    expect(
+      isForeignSession({ user_id: ME, owner_user_id: OTHER }, { is_own: true }, ME),
+    ).toBe(true);
+  });
+
+  it("a co-owner still sees a session another person primarily owns", () => {
+    expect(
+      isForeignSession({ user_id: ME, owner_user_id: OTHER, owned_by_me: true }, undefined, ME),
+    ).toBe(false);
+  });
+
   it("thin row with no signals: author_name is the last-resort foreign marker", () => {
     expect(isForeignSession({ author_name: "Samvit" }, undefined, ME)).toBe(true);
     expect(isForeignSession({}, undefined, ME)).toBe(false);

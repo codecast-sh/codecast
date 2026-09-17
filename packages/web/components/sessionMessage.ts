@@ -41,6 +41,7 @@ export {
   isAgentMessage,
   isUserMessage,
   parseUserMessage,
+  parseProposalMessage,
   formatUserMessage,
   isTeammateMessage,
   stripTeammateFraming,

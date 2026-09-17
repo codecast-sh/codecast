@@ -33,8 +33,9 @@
 //   5. The retry ladder for programmatic scrolls (frame, then 100/300/600ms),
 //      because the target offset is computed from estimates that keep moving as
 //      rows measure in. It bails the moment the reader scrolls on purpose.
-//   6. The initial landing, held for up to 8s against late images and fonts,
-//      bailing permanently on a real scroll.
+//   6. The initial landing, in useLayoutEffect so the first paint is already
+//      at the tail, held for up to 8s against late images and fonts, bailing
+//      permanently on a real scroll.
 //   7. Pixel exact pagination: capture the topmost visible row and its viewport
 //      offset before a page loads, restore that exact offset in a layout effect
 //      after it mounts, re pin on the next frame. Loading is armed by WHEEL, one
@@ -537,16 +538,23 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
   }, [count]);
 
   // ── Initial landing ───────────────────────────────────────────────────────
-  // Held for a while rather than trusted once: late images, fonts and the drift
-  // reconciler keep changing heights for seconds after the first paint. It bails
-  // permanently the moment the reader scrolls somewhere on purpose.
+  // useLayoutEffect, not useEffect: a chat notification (and any cold open)
+  // must paint already at the tail. After-paint landing is the jump the reader
+  // sees — mid transcript, then a scroll down as estimates settle. The
+  // virtualizer flushSyncs on the scroll we dispatch, so the tail rows are in
+  // the DOM before the browser paints. Held for a while rather than trusted
+  // once: late images, fonts and the drift reconciler keep changing heights
+  // for seconds. It bails permanently the moment the reader scrolls on purpose.
   const landedRef = useRef<string | null>(null);
-  useWatchEffect(() => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
     if (count === 0) return;
-    // A permalink is in flight: do not pin to the tail, and do not follow an
-    // append, or the named row is pulled off screen the moment anything lands.
-    // Mark the landing consumed so clearing the link later cannot yank the
-    // reader to the tail.
+    // A permalink into HISTORY is in flight: do not pin to the tail, and do
+    // not follow an append, or the named row is pulled off screen the moment
+    // anything lands. Mark the landing consumed so clearing the link later
+    // cannot yank the reader to the tail. A named row that already sits on
+    // the tail does not hold — that is a notification, and the tail is the
+    // landing.
     if (holdLanding) {
       landedRef.current = resetKey;
       setUserScrolled(true);

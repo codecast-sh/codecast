@@ -230,6 +230,26 @@ describe("the questions bucket", () => {
     expect(ids(mine.needsInput)).toEqual(["h1"]);
   });
 
+  it("an open prompt on a session assigned to someone else does not file under QUESTIONS", () => {
+    const ME = "u1000000000000000000000000000001";
+    const THEM = "u2000000000000000000000000000002";
+    const hosted = row("h1", {
+      user_id: ME,
+      owner_user_id: THEM,
+      awaiting_input: true,
+      agent_status: "permission_blocked",
+    });
+    const mine = placeSections(
+      Object.fromEntries([[hosted._id, hosted]]),
+      new Set(),
+      undefined,
+      { currentUser: { _id: ME } },
+    );
+    expect(ids(mine.questions)).toEqual([]);
+    expect(ids(mine.needsInput)).toEqual([]);
+    expect(ids(mine.sorted)).toEqual([]);
+  });
+
   it("an open AskUserQuestion qualifies without any decide row, once", () => {
     const asking = row("a1", { awaiting_input: true });
     const silent = row("b1");

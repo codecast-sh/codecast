@@ -5,7 +5,7 @@ import { useMutation } from "convex/react";
 import { useRouter, usePathname } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { FOLLOW_RENEW_MS } from "@codecast/convex/convex/follow";
+import { FOLLOW_RENEW_MS } from "@codecast/shared/contracts/follow";
 import { useInboxStore } from "../store/inboxStore";
 import { subscribeNavEvents } from "../store/viewNav";
 import { useQueryNoThrow } from "./useQueryNoThrow";

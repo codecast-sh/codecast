@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
-import { memo, useCallback, useMemo, useRef } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useBottomAnchoredList, prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { authorGroupKey, buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
+import { shouldHoldChatLanding } from "./chatLanding";
 import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -24,9 +25,11 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 //     you glanced at the room, re-entering mid read would erase your place.
 //     So the rule is computed from a lastReadAt frozen at entry, not from the
 //     live read mark that your own reading is busy advancing.
-//  3. A permalink (`?m=<id>`) is the exception: that row is the place someone
-//     sent you. The list holds still until the row is on screen, so the bottom
-//     pin cannot yank the link away.
+//  3. A permalink (`?m=<id>`) into HISTORY is the exception: that row is the
+//     place someone sent you. A notification names the line that just arrived,
+//     which is already on the tail — centering it puts the newest line in the
+//     middle of the viewport, then the pin walks it down. The tail still opens
+//     at the bottom; the named row flashes if it is on screen.
 
 type Row = TimelineRow<{
   id: string;
@@ -157,6 +160,15 @@ export const ChatMessageList = memo(function ChatMessageList({
     [messages, lastReadAt, viewerId, now, inThread, hasHeader],
   );
 
+  const targetIndex = useMemo(
+    () =>
+      targetMessageId
+        ? rows.findIndex((r) => r.kind === "message" && r.message.id === targetMessageId)
+        : -1,
+    [rows, targetMessageId],
+  );
+  const holdTarget = shouldHoldChatLanding(targetIndex, rows.length);
+
   const list = useBottomAnchoredList({
     count: rows.length,
     getItemKey: (i) => rows[i]?.key ?? String(i),
@@ -175,9 +187,11 @@ export const ChatMessageList = memo(function ChatMessageList({
     },
     paddingStart: 12,
     paddingEnd: 8,
-    // Always the tail. A permalink holds the pin until that row is on screen.
+    // Always the tail. A permalink into history holds the pin until that row
+    // is on screen. A notification names the newest line, which is already
+    // here — holding it was the mid-page-then-scroll jump.
     resetKey: channelId,
-    holdLanding: !!targetMessageId,
+    holdLanding: holdTarget,
     hasMoreAbove,
     isLoadingOlder,
     onLoadOlder,
@@ -253,20 +267,15 @@ export const ChatMessageList = memo(function ChatMessageList({
 
   // Land on a permalinked message. Two steps, because the row may be virtualized
   // out of the DOM: scroll the virtualizer to its index first, then flash the
-  // element once it has actually mounted.
+  // element once it has actually mounted. A target already on the tail does not
+  // scroll — the bottom pin put it on screen, and centering it is the jump.
   //
+  // Layout, not after paint: a history jump must not flash the tail first.
   // The dependency list is deliberately narrow — the target id and whether it is
   // in the list at all. `rows` is a fresh array on every render and the list
   // handle is a fresh object, so depending on either re-runs this effect
   // continuously; the cleanup would then cancel the 60ms timer before it ever
   // fired and the flash would never appear. (It didn't, until this.)
-  const targetIndex = useMemo(
-    () =>
-      targetMessageId
-        ? rows.findIndex((r) => r.kind === "message" && r.message.id === targetMessageId)
-        : -1,
-    [rows, targetMessageId],
-  );
   const targetFound = targetIndex >= 0;
   const targetIndexRef = useRef(targetIndex);
   targetIndexRef.current = targetIndex;
@@ -275,10 +284,12 @@ export const ChatMessageList = memo(function ChatMessageList({
   // Fired once per target: re-flashing would make the message strobe while it is
   // being read.
   const flashedRef = useRef<string | null>(null);
-  useWatchEffect(() => {
+  useLayoutEffect(() => {
     if (!targetMessageId || !targetFound || flashedRef.current === targetMessageId) return;
     flashedRef.current = targetMessageId;
-    listRef.current.scrollToIndex(targetIndexRef.current, { align: "center" });
+    if (holdTarget) {
+      listRef.current.scrollToIndex(targetIndexRef.current, { align: "center" });
+    }
     const timer = setTimeout(() => {
       const el = document.getElementById(`chatmsg-${targetMessageId}`);
       if (!el) return;
@@ -286,7 +297,7 @@ export const ChatMessageList = memo(function ChatMessageList({
       setTimeout(() => el.classList.remove("ch-msg-flash"), 1600);
     }, 60);
     return () => clearTimeout(timer);
-  }, [targetMessageId, targetFound]);
+  }, [targetMessageId, targetFound, holdTarget]);
 
   const items = list.virtualizer.getVirtualItems();
 

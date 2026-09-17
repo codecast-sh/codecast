@@ -127,6 +127,7 @@ const CHIP_STATUS: Record<OrgChangeStatus, { border: string; color: string }> = 
   applied: { border: "1.5px solid color-mix(in srgb, var(--sol-green) 60%, transparent)", color: "var(--sol-green)" },
   skipped: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
   failed: { border: "1.5px dashed color-mix(in srgb, var(--sol-red) 70%, transparent)", color: "var(--sol-red)" },
+  removed: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
 };
 
 /** A small dashed tag: "proposed", "retire", "this session", "accepted". */

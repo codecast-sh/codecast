@@ -165,3 +165,35 @@ export function describeWake(frame: Pick<RoleWakeFrame, "causes" | "held">): str
   const head = n === 0 ? "woke on nothing queued" : `woke on ${n} ${n === 1 ? "change" : "changes"}`;
   return frame.held > 0 ? `${head}, ${frame.held} held` : head;
 }
+
+// ── Where a message went (scopes-and-feed.md F4.2) ──────────────────────────
+//
+// The role says the routing in its own words; the card under the wake shows
+// it from what the role actually did in that turn, never from what it said.
+// A hand it started is a conversation row spawned by the standing session
+// whose start falls inside the turn: from this wake until the next turn
+// boundary. A hand it sent to is a `cast send <id>` the role ran in the turn.
+
+/** A person wrote into the scope: the wake carries a "<name> wrote:" cause. */
+export function personWrote(frame: Pick<RoleWakeFrame, "sections">): boolean {
+  return causeLines(frame.sections.find((s) => s.key === "why")).some((l) => /^- (?:\(held\) )?(?:\(passive\) )?.+ wrote:/.test(l));
+}
+
+/** The hands whose start falls inside one turn: at or after the wake, before
+ *  the next turn boundary (`until` null = the turn is the latest). Oldest first. */
+export function handsStartedInTurn<T extends { started_at: number }>(hands: readonly T[], at: number | null, until: number | null): T[] {
+  if (at == null) return [];
+  return hands.filter((h) => h.started_at >= at && (until == null || h.started_at < until)).sort((a, b) => a.started_at - b.started_at);
+}
+
+/** The session a `cast send` reached: the first bare word after the verb
+ *  (flags such as --wake may come first). Null for any other cast command. */
+export function sentToRef(cmd: { category: string; subcommand: string; args: string } | null | undefined): string | null {
+  if (!cmd || cmd.category !== "send") return null;
+  const words = [cmd.subcommand, ...cmd.args.split(/\s+/)].filter(Boolean);
+  for (const w of words) {
+    if (w.startsWith("-")) continue;
+    return /^[A-Za-z0-9]{5,}$/.test(w) ? w : null;
+  }
+  return null;
+}

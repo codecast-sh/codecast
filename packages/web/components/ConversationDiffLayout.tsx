@@ -4,7 +4,7 @@ import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
-import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
+import { ConversationView, ConversationData, ConversationViewHandle, type ConversationViewProps } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
@@ -24,7 +24,7 @@ const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
 
 type Layout = { [key: string]: number };
 
-interface ConversationDiffLayoutProps {
+export interface ConversationDiffLayoutProps {
   conversation: ConversationData;
   embedded?: boolean;
   headerExtra?: React.ReactNode;
@@ -59,6 +59,9 @@ interface ConversationDiffLayoutProps {
   // A host that already carries the conversation's identity (the anchor
   // slide-over) drops the inner header rather than showing two.
   hideHeader?: boolean;
+  /** See ConversationViewProps: a host that owns the send (the staffing pane). */
+  onSendOverride?: ConversationViewProps["onSendOverride"];
+  composerNode?: React.ReactNode;
 }
 
 const EMPTY_LIST: any[] = [];
@@ -96,6 +99,8 @@ export function ConversationDiffLayout({
   onBack,
   subHeaderContent,
   hideHeader,
+  onSendOverride,
+  composerNode,
 }: ConversationDiffLayoutProps) {
   devRenderCount("ConversationDiffLayout");
   const heightClass = "h-full";
@@ -225,6 +230,8 @@ export function ConversationDiffLayout({
     onBack,
     subHeaderContent,
     hideHeader,
+    onSendOverride,
+    composerNode,
   };
 
   // Mobile: tabs layout

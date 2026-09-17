@@ -52,13 +52,116 @@ export function parentName(tree: OrgTree, ref: OrgParentRef): string {
     : tree.roles.find((r) => r._id === ref.role_id)?.name ?? "a role";
 }
 
-/** The one line a change reads as in the pane's list and in a chip's title:
- *  the shared describer (the words the CLI walk uses too), sentence cased.
- *  Total: a kind this build does not know (a newer server) still reads as a
- *  line, so the pane and the chart degrade to a chip instead of throwing. */
+/**
+ * What each kind of change is, in the reader's words (org-staffing.md S17):
+ * the group header the pane shows, and the one sentence that says what
+ * accepting one does. The reader has never heard of a role, a scope or a
+ * budget, so every label names the thing in plain words and the sentence
+ * carries the mechanism. The glossary is the one place a word is defined;
+ * these sentences use the words, they do not define them.
+ */
+export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; describe: string }> = {
+  plan_status: { label: "Plans to close or reopen", describe: "Marks a plan finished, abandoned or active again, because the evidence says the record is behind what happened." },
+  task_status: { label: "Tasks to close or reopen", describe: "Marks a task done, dropped, open or backlog, so the board says what actually happened to it." },
+  project_status: { label: "Projects to pause or close", describe: "Marks a project paused, finished or active again." },
+  projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
+  file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
+  role: { label: "New standing agents", describe: "Adds a standing agent with a name, an area of work to look after, and a daily limit." },
+  move: { label: "Reporting line changes", describe: "Moves a standing agent under a different person or agent, and can change what it looks after." },
+  scope: { label: "Area of work changes", describe: "Adds or removes the projects and plans a standing agent looks after." },
+  budget: { label: "Daily limit changes", describe: "Raises or lowers how much an agent may do in one day." },
+  trust: { label: "Trust changes", describe: "Changes how far an agent may act on its own: understand, decide, or direct." },
+  routine: { label: "Scheduled routines", describe: "Gives an agent a job it runs on a schedule." },
+  project_meta: { label: "Project charters", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
+  adopt: { label: "Sessions adopted as standing agents", describe: "Makes an existing session the standing session of an agent." },
+  retire: { label: "Agents retired", describe: "Closes a seat; its sessions fall back to their owners." },
+};
+
+/** The kind's label, total: a kind this build does not know still reads as a
+ *  sentence, never as a build error. */
+export function kindLabel(kind: string | undefined): string {
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.label ?? "Changes this version cannot show yet";
+}
+
+/** The kind's one sentence, total, with the unknown kind named so the reader
+ *  can quote it. */
+export function kindDescription(kind: string | undefined): string {
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update, or ask the agent what it does.`;
+}
+
+/**
+ * The one line a change reads as in the pane's list and in a chip's title
+ * (org-staffing.md S17): a sentence addressed to the reader, in the pane's
+ * own words (standing agent, area of work, daily limit), never the CLI
+ * walk's command syntax (describeOrgChange keeps that for the terminal).
+ * The row is where a person decides, so the row must read as a sentence.
+ * Total: a kind this build does not know (a newer server) still reads as a
+ * sentence, so the pane and the chart degrade to a readable row instead of
+ * throwing or printing a build error.
+ */
 export function changeLine(change: OrgChange): string {
-  const line = describeOrgChange(change) ?? `${String((change as { kind?: unknown }).kind ?? "change")} (not supported in this build)`;
+  const line = webChangeLine(change);
   return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+/** "you" for the reader, else the parent as the proposal names it. */
+const who = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref;
+/** "a, b and c" */
+const andList = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+const number = (n: number) => n.toLocaleString("en-US");
+/** The three limits in words, in one order: "2 hands, 8 wakes and 800,000 tokens". */
+export function capsWords(caps: { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number }): string {
+  const parts: string[] = [];
+  if (caps.hands_per_day !== undefined) parts.push(`${number(caps.hands_per_day)} ${caps.hands_per_day === 1 ? "hand" : "hands"}`);
+  if (caps.wakes_per_day !== undefined) parts.push(`${number(caps.wakes_per_day)} ${caps.wakes_per_day === 1 ? "wake" : "wakes"}`);
+  if (caps.tokens_per_day !== undefined) parts.push(`${number(caps.tokens_per_day)} tokens`);
+  return andList(parts);
+}
+/** "1d" reads as every day, "7d" as every week, "12h" as every 12 hours. */
+export function everyWords(every: string): string {
+  const m = every.trim().match(/^(\d+)\s*([dhwm])$/i);
+  if (!m) return `every ${every}`;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  if (unit === "d" && n === 1) return "every day";
+  if (unit === "d" && n === 7) return "every week";
+  if (unit === "w" && n === 1) return "every week";
+  const word = { d: "day", h: "hour", w: "week", m: "minute" }[unit as "d" | "h" | "w" | "m"];
+  return n === 1 ? `every ${word}` : `every ${n} ${word}s`;
+}
+const TRUST_WORDS: Record<string, string> = {
+  understand: "may read and report, not act on its own",
+  decide: "may decide on its own",
+  direct: "may direct work on its own",
+};
+
+function webChangeLine(c: OrgChange): string {
+  switch (c.kind) {
+    case "role": {
+      const scope = [...(c.scope?.projects ?? []), ...(c.scope?.plans ?? [])];
+      return `add a standing agent, ${c.name} (${at(c.handle)}), reporting to ${who(c.reports_to)}${scope.length ? `, looking after ${andList(scope)}` : ""}`;
+    }
+    case "projects": return c.changes.map((x) => x.op === "create" ? `create the project ${x.title}${x.horizon ? ` (${x.horizon})` : ""}` : `fold the project ${x.from} into ${x.into}`).join("; ");
+    case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${who(c.reports_to)}` : ""}${c.scope_add?.length ? `; now also looks after ${andList(c.scope_add)}` : ""}${c.scope_remove?.length ? `; no longer looks after ${andList(c.scope_remove)}` : ""}`;
+    case "retire": return `retire ${at(c.handle)}; its sessions go back to their owners`;
+    case "scope": {
+      const parts: string[] = [];
+      if (c.add?.length) parts.push(`also looks after ${andList(c.add)}`);
+      if (c.remove?.length) parts.push(`stops looking after ${andList(c.remove)}`);
+      return `${at(c.handle)} ${parts.join(" and ") || "keeps its area of work"}`;
+    }
+    case "budget": return `${at(c.handle)} may use up to ${capsWords(c.caps)} a day`;
+    case "trust": return `${at(c.handle)} ${TRUST_WORDS[c.trust] ?? `may ${c.trust} on its own`}`;
+    case "routine": return `${at(c.handle)} runs "${c.title}" ${everyWords(c.every)}`;
+    case "project_meta": return `write the charter of ${c.project}${c.owner ? `, owned by ${at(c.owner)}` : ""}${c.priority ? `, priority ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
+    case "adopt": return `make session ${c.conversation} the standing session of ${at(c.handle)}`;
+    case "file": return `put plan ${c.plan} under the project ${c.project}`;
+    case "plan_status": case "task_status": case "project_status": return describeOrgChange(c);
+    default: {
+      const kind = (c as { kind?: unknown }).kind;
+      return `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;
+    }
+  }
 }
 
 const at = (h: string) => `@${h.replace(/^@/, "")}`;

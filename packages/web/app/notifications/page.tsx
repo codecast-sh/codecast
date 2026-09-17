@@ -14,6 +14,7 @@ import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../components/ui/context-menu";
 import {
   agentNames,
+  notificationActor,
   notificationRoute,
   sessionLabel,
   sessionTypes,
@@ -235,10 +236,7 @@ export default function NotificationsPage() {
             <div className="space-y-px rounded-lg border border-sol-border overflow-hidden">
               {filteredNotifications.map((notification: any) => {
                 const label = sessionLabel(notification.conversation);
-                // Actors without an account (anonymous page commenters) carry
-                // their display identity on the row itself.
-                const actorName = notification.actor?.name || notification.actor?.github_username || (notification as any).actor_name;
-                const actorAvatar = notification.actor?.github_avatar_url || (notification as any).actor_avatar;
+                const { name: actorName, avatar: actorAvatar } = notificationActor(notification);
                 const agentType = notification.conversation?.agent_type || "claude_code";
                 const agentIcon = showsAgentIcon(notification);
                 const typeLabel = typeLabels[notification.type] || notification.type;
@@ -266,9 +264,13 @@ export default function NotificationsPage() {
                         </div>
                       ) : (
                         <div className="w-10 h-10 rounded-full flex-shrink-0 mt-0.5 bg-sol-bg-alt border border-sol-border flex items-center justify-center">
-                          <svg className="w-4 h-4 text-sol-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
+                          {actorName ? (
+                            <span className="text-sm font-medium text-sol-text-muted">{actorName.charAt(0).toUpperCase()}</span>
+                          ) : (
+                            <svg className="w-4 h-4 text-sol-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                            </svg>
+                          )}
                         </div>
                       )}
                       <div className="flex-1 min-w-0">

@@ -9,7 +9,7 @@ import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
-import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
+import { ContextMenu, CursorPopover, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu } from "./BulkMoveSessions";
 import { selectionGesture, useInboxSelection } from "../lib/inboxSelection";
@@ -36,7 +36,7 @@ import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { LivePulseDot, SessionActivityLine, useLinger } from "./SessionActivityLine";
 import { activitySig, liveActivityOf } from "../lib/sessionActivity";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatIdle, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { rankByHeadroom, isStashHidden, USER_RESTS, type UserRest } from "@codecast/shared/contracts";
@@ -59,6 +59,10 @@ import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from 
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
+// Who is speaking on each row (docs/architecture/session-characters.md S3).
+import { IdentityFace, SessionIdentityLine } from "./identity";
+import { CharacterPicker } from "./identity/CharacterPicker";
+import { sessionIdentity } from "../lib/sessionIdentity";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
@@ -731,11 +735,13 @@ function BlockedSessionsBanner({
     activeSinceFor: (sess) => executorFor(sess)?.active_since,
   });
   const switchTarget = (opt: AccountOption) => (opt.email ? { email: opt.email } : { profile: opt.name });
-  // "82% used" / "at limit" — enough to steer the pick, nothing more.
+  // "82% used" / "at limit" / "stale" — the SAME standing the bars render, so
+  // the account this picker ranks first is the one a person would point to on
+  // the meters. A stale account never shows a confident green number here.
   const usageNote = (usage?: CcUsage): string => {
-    if (isUsageExhausted(usage, now)) return " — at limit";
-    const pct = usage ? worstUsagePercent(usage, now) : null;
-    return pct != null ? ` — ${Math.round(pct)}% used` : "";
+    const s = usageStanding(usage, now);
+    if (s.percent === null && !s.stale) return ""; // no data at all
+    return ` — ${standingLabel(usage, now)}`;
   };
 
   // Every way the banner closes goes through here: snooze 24h AND drop the
@@ -2302,7 +2308,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -2336,7 +2342,22 @@ function UnreadDot() {
   );
 }
 
-export const SessionCard = memo(function SessionCard({
+export /**
+ * The rows a card-level gesture acts on: the ticked selection when the clicked
+ * card is part of it, else that card alone — the same targeting a ⌘K on the
+ * selection uses. Shared by the right-click menu and the character picker so
+ * the two cannot disagree about what "this card" means.
+ */
+function selectionTargets(session: InboxSession): InboxSession[] {
+  const picked = useInboxSelection.getState().ids;
+  if (!picked.includes(session._id)) return [session];
+  const rows = useInboxStore.getState().sessions;
+  return picked
+    .map((id) => (id === session._id ? session : rows[id]))
+    .filter((row): row is InboxSession => !!row);
+}
+
+const SessionCard = memo(function SessionCard({
   session,
   isActive,
   isParentActive,
@@ -2350,6 +2371,7 @@ export const SessionCard = memo(function SessionCard({
   onKill,
   onNavigateToSession,
   onCardContextMenu,
+  onPickCharacter,
   variant = "default",
   forkColorKey,
   sessionLabel,
@@ -2375,6 +2397,8 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession?: (id: string) => void;
   /** Right-click: the panel owns ONE cursor-anchored menu for all cards. */
   onCardContextMenu?: (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => void;
+  /** Clicking the face: the panel owns ONE picker for all cards, the same way. */
+  onPickCharacter?: (session: InboxSession, e: React.MouseEvent) => void;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
@@ -2501,6 +2525,12 @@ export const SessionCard = memo(function SessionCard({
   // begins/ends. The stamp is read at isRowRestarting below.
   const showModelBadge = st.clientState?.ui?.show_model_badge === true;
   const showAgentIcon = st.clientState?.ui?.show_agent_icon !== false;
+  // Personification is opt in (session-characters.md S2): a session shows a
+  // face once somebody gives it one, or when the workspace asks for every
+  // session to have one. A role's standing session always has one — the role
+  // IS the identity. Read here, where the card already reads its UI prefs, so
+  // the identity components stay pure.
+  const isPersonified = sessionIdentity(session, st.clientState?.ui?.personify_sessions === true).kind !== "plain";
   // Row thumbnail for sessions that contain images (server-denormalized
   // image_preview_url). Independent of simple view — applies in both.
   // Clicking it zooms the image (ImageLightbox), not the session. It lives on
@@ -2929,22 +2959,48 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          {session.is_anchor ? (
+          {/* Who is speaking (docs/architecture/session-characters.md S3).
+              Personified rows get a face: the session's character, or its
+              role's when the row is a role's standing session. Clicking it
+              opens the picker; hovering it says who they are, and the agent
+              brand rides it as a corner badge so one glyph carries both. A
+              row nobody opted in keeps the icon it has always had. 22px: at
+              18 the painted faces were a smudge. */}
+          {isPersonified ? (
+            <IdentityFace
+              row={session}
+              size={22}
+              onPick={(e) => onPickCharacter?.(session, e)}
+              side="bottom"
+              align="start"
+              className="mt-[1px]"
+              badge={showAgentIcon ? <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" /> : undefined}
+            />
+          ) : session.is_anchor ? (
             <span className="flex-shrink-0 flex items-center text-sol-cyan" title="Anchor — a standing agent member">
               <AnchorGlyph className="w-3.5 h-3.5" />
             </span>
-          ) : showAgentIcon && (
+          ) : showAgentIcon ? (
             <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
               <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
             </span>
-          )}
+          ) : null}
           {isStashed && isStashHidden(session) && (
             <span className="flex-shrink-0 flex items-center text-sol-text-dim" title="Stashed and hidden — trigger wakes don't bring it back; only an ask does">
               <EyeOff className="w-3 h-3" />
             </span>
           )}
           {isUnread && !isActive && <UnreadDot />}
-          <span data-sv-title className={`truncate min-w-0 ${isUnread && !isActive ? "font-semibold text-sol-text" : ""}`}>{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
+          {/* Name, then the title: "Ember: Fixing the auth race". The name is
+              the row's identity and never truncates; the title does. */}
+          <SessionIdentityLine
+            row={session}
+            title={displayTitle}
+            face={false}
+            className="min-w-0 flex-1"
+            nameClassName={isUnread && !isActive ? "font-semibold" : ""}
+            titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}
+          />
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
@@ -4488,16 +4544,24 @@ function SessionListPanelImpl({
   const openSessionCtxMenu = sessionCtxMenu.open;
   const handleCardContextMenu = useCallback(
     (e: React.MouseEvent, session: InboxSession, isForeign: boolean) => {
-      // The selection travels with the right-click when the clicked card is
-      // part of it — the same targeting a ⌘K on the selection uses.
-      const picked = useInboxSelection.getState().ids;
-      const rows = useInboxStore.getState().sessions;
-      const sessions = picked.includes(session._id)
-        ? picked.map((id) => (id === session._id ? session : rows[id])).filter((row): row is InboxSession => !!row)
-        : [session];
-      openSessionCtxMenu(e, { session, isForeign, sessions });
+      openSessionCtxMenu(e, { session, isForeign, sessions: selectionTargets(session) });
     },
     [openSessionCtxMenu],
+  );
+  // Clicking a face opens the character picker (session-characters.md S2).
+  // One instance for the whole list, like the menu: a popover per row would
+  // mount one per card. A ticked selection travels with the click, so the
+  // picker serves the whole squad.
+  const characterPicker = useContextMenu<InboxSession[]>();
+  const openCharacterPicker = characterPicker.open;
+  const closeCharacterPicker = characterPicker.close;
+  const handlePickCharacter = useCallback(
+    (session: InboxSession, e: React.MouseEvent) => {
+      // force: the face is a button, and the guard that stands down for links
+      // and inputs would otherwise swallow the open.
+      openCharacterPicker(e, selectionTargets(session), { force: true });
+    },
+    [openCharacterPicker],
   );
   // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
   // 3s) since it tears down every stashed agent at once. Kills the top-level
@@ -4687,6 +4751,7 @@ function SessionListPanelImpl({
                   globalIndex={-1}
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
+                  onPickCharacter={handlePickCharacter}
                   onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                   onKill={onKill}
                   variant={variant}
@@ -4717,6 +4782,7 @@ function SessionListPanelImpl({
                     globalIndex={-1}
                     onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
+                  onPickCharacter={handlePickCharacter}
                     onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
@@ -4902,6 +4968,7 @@ function SessionListPanelImpl({
                   globalIndex={0}
                   onSelect={opts?.onSelect ?? handleSelect}
                   onCardContextMenu={handleCardContextMenu}
+                  onPickCharacter={handlePickCharacter}
                   onDismiss={handleAnimatedDismiss}
                   onStash={handleAnimatedStash}
                   onDefer={s.deferSession}
@@ -4942,6 +5009,7 @@ function SessionListPanelImpl({
                     globalIndex={0}
                     onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
+                  onPickCharacter={handlePickCharacter}
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
@@ -5294,6 +5362,7 @@ function SessionListPanelImpl({
                   globalIndex={0}
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
+                  onPickCharacter={handlePickCharacter}
                   onDismiss={handleAnimatedDismiss}
                   onStash={handleAnimatedStash}
                   onDefer={s.deferSession}
@@ -5440,6 +5509,9 @@ function SessionListPanelImpl({
           onOpenSession={handleSelect}
         />
       )}
+      <CursorPopover state={characterPicker}>
+        {(rows) => <CharacterPicker rows={rows} onDone={closeCharacterPicker} />}
+      </CursorPopover>
       <ContextMenu state={sessionCtxMenu}>
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems
@@ -5455,6 +5527,13 @@ function SessionListPanelImpl({
             onOpen={() => handleSelect(session)}
             onStash={() => handleAnimatedStash(session._id)}
             onKill={() => handleAnimatedDismiss(session._id)}
+            onPickCharacter={() => {
+              // Hand off under the cursor: close the menu, open the picker where
+              // the menu stood, on the same targets the menu was acting on.
+              const at = sessionCtxMenu.menu;
+              sessionCtxMenu.close();
+              if (at) characterPicker.openAt(at.x, at.y, sessions);
+            }}
             onRename={() => {
               handleSelect(session);
               useInboxStore.setState({ renamingSessionId: session._id });

@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
-import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus } from "lucide-react";
+import { sessionIdentity } from "./sessionIdentity";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { isForeignSession } from "./liveEntities";
@@ -16,6 +17,13 @@ export type PaletteAction = {
 export function paletteObjectPath(type: PaletteTargetType, target: any): string {
   const route = { session: "conversation", task: "tasks", doc: "docs", plan: "plans", project: "projects", trigger: "triggers" }[type];
   return `/${route}/${target._id}`;
+}
+
+/** A row already wearing a character, for the verb's wording. Reads the row
+ *  alone: the palette does not know the workspace switch, and "Change" on a
+ *  row that only has a face because of that switch is still honest. */
+function isPersonified(target: { _id: string; character_avatar?: string | null; character_name?: string | null; standing_role_id?: string | null; role?: unknown }): boolean {
+  return sessionIdentity(target as never, false).kind !== "plain";
 }
 
 export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false): PaletteAction[] {
@@ -38,6 +46,9 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("agent_fork", "Fork session as…", GitBranch, "f"),
       ...(canControlModel(target.agent_type, (target.message_count ?? 0) === 0) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
       row("rename", "Rename session…", Pencil, "r", "session.rename"),
+      // Personifying is opt in, so the verb names what it does for a row that
+      // has no character yet (session-characters.md S2).
+      row("character", isPersonified(target) ? (single ? "Change character…" : `Change character for ${targets.length} sessions…`) : (single ? "Give it a character…" : `Give ${targets.length} sessions characters…`), Smile, "e"),
       row("session_pin", target.is_pinned ? "Unpin session" : "Pin session", target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? "Remove from favorites" : "Add to favorites", Star, "v", "conv.favorite"),
       row("bucket", "Label session…", Tag, "l", "session.moveToBucket"),

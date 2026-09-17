@@ -86,10 +86,22 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/tasks/ct-1")).toBe(true);
     expect(isHandoffEligiblePath("/repo/acme/demo")).toBe(true);
     expect(isHandoffEligiblePath("/routines")).toBe(true);
-    expect(isHandoffEligiblePath("/")).toBe(true);
+    expect(isHandoffEligiblePath("/inbox")).toBe(true);
   });
 
-  test("blocks auth, share, artifact, palette, download and api routes", () => {
+  test("blocks the marketing site — the root is the landing page, not an app route", () => {
+    expect(isHandoffEligiblePath("/")).toBe(false);
+    expect(isHandoffEligiblePath("/about")).toBe(false);
+    expect(isHandoffEligiblePath("/pricing")).toBe(false);
+    expect(isHandoffEligiblePath("/blog")).toBe(false);
+    expect(isHandoffEligiblePath("/blog/an-inbox-for-your-agents")).toBe(false);
+    expect(isHandoffEligiblePath("/documentation/triggers")).toBe(false);
+    expect(isHandoffEligiblePath("/compare/cursor")).toBe(false);
+    expect(isHandoffEligiblePath("/download")).toBe(false);
+    expect(isHandoffEligiblePath("/download/mac")).toBe(false);
+  });
+
+  test("blocks auth, share, artifact, palette and api routes", () => {
     expect(isHandoffEligiblePath("/login")).toBe(false);
     expect(isHandoffEligiblePath("/auth/callback")).toBe(false);
     expect(isHandoffEligiblePath("/oauth/github")).toBe(false);
@@ -101,7 +113,6 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/r/union-ai/union-mobile/commits/HEAD")).toBe(false);
     expect(isHandoffEligiblePath("/r/acme/demo/commit/abc123")).toBe(false);
     expect(isHandoffEligiblePath("/palette")).toBe(false);
-    expect(isHandoffEligiblePath("/download/mac")).toBe(false);
     expect(isHandoffEligiblePath("/api/x")).toBe(false);
   });
 });
@@ -156,6 +167,11 @@ describe("shouldAttemptHandoff", () => {
   test("skips auth/share/etc. paths", () => {
     expect(shouldAttemptHandoff({ ...PASSING, path: "/share/abc" })).toBe(false);
     expect(shouldAttemptHandoff({ ...PASSING, path: "/login" })).toBe(false);
+  });
+
+  test("skips the marketing root — visiting codecast.sh must not yank the desktop app", () => {
+    expect(shouldAttemptHandoff({ ...PASSING, path: "/" })).toBe(false);
+    expect(shouldAttemptHandoff({ ...PASSING, path: "/pricing" })).toBe(false);
   });
 
   test("skips oauth callbacks carrying code + state", () => {
@@ -777,6 +793,12 @@ describe("preBootVerdict", () => {
     expect(preBootVerdict({ ...PRE, mirror: null, foreground: false })).toBe("boot");
     expect(preBootVerdict({ ...PRE, path: "/share/abc", foreground: false })).toBe("boot");
     expect(preBootVerdict({ ...PRE, isDesktopShell: true })).toBe("boot");
+  });
+
+  test("the marketing root boots — never handed off, never held for later", () => {
+    expect(preBootVerdict({ ...PRE, path: "/" })).toBe("boot");
+    expect(preBootVerdict({ ...PRE, path: "/", foreground: false })).toBe("boot");
+    expect(preBootVerdict({ ...PRE, path: "/pricing" })).toBe("boot");
   });
 });
 

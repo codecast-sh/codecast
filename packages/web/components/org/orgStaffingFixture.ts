@@ -14,6 +14,7 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
   short_id: "op-7",
   team_id: "fixture-team",
   author: { kind: "role", id: "fixture-role-chief", name: "Chief of Staff", short_id: "or-9" },
+  thread: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" },
   title: "Split growth, own the platform work, budget the reviews",
   summary_md: "Growth is past its in-flight limit and the platform project has no owner. Two hires, one move and one budget change remove both bottlenecks.",
   mode: "review",
@@ -73,6 +74,60 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
       change: { kind: "task_status", task: "ct-4102", status: "done", reason: "Three commits landed on the branch it names; the session that held it declared done 14 days ago." },
       rationale: "An open task whose work shipped keeps a seat looking busier than it is.",
       evidence: [{ label: "ct-4102", href: "/tasks/ct-4102" }],
+    },
+  ],
+};
+
+/** The chief of staff's proposal after a conversation (S18): the author
+ *  removed one change on the person's word, amended another and added a
+ *  third, and the thread bound to it is the chief's standing session. The
+ *  pane's revise rows and the strip pin on this. */
+export const ORG_STAFFING_FIXTURE_REVISED_PROPOSAL: OrgProposalRow = {
+  _id: "fixture-proposal-9",
+  short_id: "op-9",
+  team_id: "fixture-team",
+  author: { kind: "role", id: "fixture-role-chief", name: "Chief of Staff", short_id: "or-9" },
+  thread: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" },
+  title: "Own the platform work, budget the reviews",
+  summary_md: "The platform project has no owner and growth runs out of budget most afternoons. One hire and one budget change fix both.",
+  mode: "review",
+  status: "open",
+  created_at: T0 - 3 * 3_600_000,
+  changes: [
+    {
+      _id: "fixture-change-91", proposal_id: "fixture-proposal-9", seq: 1, status: "proposed",
+      change: { kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me", scope: { projects: ["Platform"] }, charter: "Owns the sync layer, the daemon and every release of the CLI.", tenure: { kind: "standing" } },
+      rationale: "The Platform project has 14 open tasks and no owner role; its sessions report straight to you.",
+      evidence: [{ label: "14 open tasks in Platform", href: "/tasks?project=Platform" }],
+    },
+    {
+      _id: "fixture-change-92", proposal_id: "fixture-proposal-9", seq: 2, status: "removed",
+      change: { kind: "role", name: "Content Lead", handle: "content", reports_to: "@growth", scope: { plans: ["pl-88"] }, charter: "Owns the SEO plan and the weekly post.", tenure: { kind: "program", ends: { plan: "pl-88" }, then: "review" } },
+      rationale: "Growth carries 11 tasks in flight against a limit of 8; the SEO plan is half of them.",
+      evidence: [{ label: "11 in flight under @growth", href: "/org/or-1?tab=tasks" }],
+      revision: { kind: "removed", note: "You said the SEO plan is winding down, so a seat for it would outlive the work.", at: T0 - 40 * 60_000 },
+    },
+    {
+      _id: "fixture-change-93", proposal_id: "fixture-proposal-9", seq: 3, status: "proposed",
+      change: { kind: "budget", handle: "growth", caps: { tokens_per_day: 800_000 } },
+      rationale: "Growth hit its token cap on four of the last seven days; the afternoon flush held its wakes each time.",
+      evidence: [{ label: "4 cap hits in 7 days", href: "/org/or-1?tab=settings" }],
+      risk: "Doubles the role's daily spend ceiling.",
+      revision: { kind: "amended", note: "Raised to what four afternoons a week of held wakes need, per your note.", at: T0 - 30 * 60_000, before: { kind: "budget", handle: "growth", caps: { tokens_per_day: 600_000 } } },
+    },
+    {
+      _id: "fixture-change-94", proposal_id: "fixture-proposal-9", seq: 4, status: "applied",
+      change: { kind: "projects", changes: [{ op: "create", title: "Platform", description: "The sync layer, the daemon, the CLI." }] },
+      rationale: "Twenty two of your direct sessions touch ~/src/platform and none of them file under a project.",
+      evidence: [],
+      decided_at: T0 - 2 * 3_600_000, applied_at: T0 - 2 * 3_600_000,
+    },
+    {
+      _id: "fixture-change-95", proposal_id: "fixture-proposal-9", seq: 5, status: "proposed",
+      change: { kind: "routine", handle: "platform", title: "Release check", prompt: "Read the release workflow runs since yesterday and post what failed.", every: "1d" },
+      rationale: "Two of the last five CLI releases failed on the finalize step and nobody saw it for a day.",
+      evidence: [{ label: "2 failed releases", href: "/releases" }],
+      revision: { kind: "added", note: "You asked who watches the releases; this is the answer.", at: T0 - 20 * 60_000 },
     },
   ],
 };

@@ -18,7 +18,7 @@ import { Hourglass, TimerReset, Zap } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { exhaustionBannerCopy, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, formatCountdown, isUsageExhausted, rankByHeadroom, worstUsagePercent } from "@codecast/shared/contracts";
+import { describeDecision, formatAgo, formatCountdown, isUsageExhausted, rankByHeadroom, standingLabel } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
@@ -60,13 +60,26 @@ export function LimitParkCard({
   const active = profiles.find((p) => p.email && p.email === device?.active_email);
   const accountLabel = active?.name ?? device?.active_email;
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
+  // A switch the machine recommended and is waiting on. Only while this park
+  // is still live — a settled session's old proposal is history, not an ask.
+  const decision = device?.auto_switch_state?.last_decision;
+  const proposal = live && decision?.kind === "propose" ? decision : null;
   // The freshest OTHER saved account with room left — the one manual recovery
-  // worth a button. Expired logins and pegged accounts are not offers.
-  const best = rankByHeadroom(
-    profiles.filter((p) => p.email && p.email !== device?.active_email && !p.login_expired_at && !isUsageExhausted(p.usage, now)),
-    now,
-  )[0];
-  const bestPct = best?.usage ? worstUsagePercent(best.usage, now) : null;
+  // worth a button. Expired logins and pegged accounts are not offers. When the
+  // machine has PROPOSED a target, the button is that proposal's approval, so
+  // it offers the proposed account itself: the sentence the card just read out
+  // and the account the click switches to are one value, never two rankings
+  // that could disagree.
+  const eligible = profiles.filter(
+    (p) => p.email && p.email !== device?.active_email && !p.login_expired_at && !isUsageExhausted(p.usage, now),
+  );
+  const proposed = proposal?.target_email
+    ? eligible.find((p) => p.email === proposal.target_email)
+    : undefined;
+  const best = proposed ?? rankByHeadroom(eligible, now)[0];
+  // The standing shown on the button matches the meters: "stale" when a rolled
+  // window is unmeasured, never a confident green percent the switcher distrusts.
+  const bestNote = best ? standingLabel(best.usage, now) : null;
   const canSwitch = !!best && !!device && device.online && !device.is_remote && !!conversationId;
 
   // Continue THIS session on another account: paint the "continue" it is
@@ -125,6 +138,15 @@ export function LimitParkCard({
     next = "Parked until the window resets — send a message after that.";
   } else if (device.auto_switch && exhausted) {
     next = exhaustionBannerCopy(profiles, now);
+  } else if (proposal) {
+    // Ask-first with a recommendation on the table: the card states the whole
+    // ask — which window closed, and where it wants to move — so approving is
+    // an informed click rather than a leap.
+    nextIcon = <Zap className="h-3 w-3 shrink-0 text-sol-yellow" />;
+    next = describeDecision(proposal) ?? "Waiting for you to approve an account switch.";
+  } else if (device.ask_first) {
+    nextIcon = <Zap className="h-3 w-3 shrink-0 text-sol-text-muted" />;
+    next = "This machine asks before changing accounts — nothing has been proposed yet.";
   } else if (device.auto_switch) {
     nextIcon = <Zap className="h-3 w-3 shrink-0 text-sol-cyan" />;
     next = "Auto-switch is on — continues on the freshest saved account by itself.";
@@ -182,10 +204,18 @@ export function LimitParkCard({
                 type="button"
                 onClick={() => void switchAndContinue()}
                 disabled={busy}
-                title={`Switch ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`}
+                title={
+                  proposal
+                    ? `Approve the switch this machine proposed: move ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
+                    : `Switch ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
+                }
                 className="rounded border border-amber-500/40 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 disabled:opacity-60"
               >
-                {busy ? "Switching…" : `Continue on ${best?.name}${bestPct != null ? ` (${Math.round(bestPct)}% used)` : ""}`}
+                {busy
+                  ? "Switching…"
+                  : proposal
+                    ? `Approve switch to ${best?.name}${bestNote ? ` (${bestNote})` : ""}`
+                    : `Continue on ${best?.name}${bestNote ? ` (${bestNote})` : ""}`}
               </button>
             )}
             <Link href="/settings/claude-accounts" className="text-[11px] text-sol-cyan hover:underline">

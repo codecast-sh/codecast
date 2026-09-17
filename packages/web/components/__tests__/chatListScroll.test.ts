@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { shouldHoldChatLanding } from "../chat/chatLanding";
 
 const css = readFileSync(new URL("../chat/chat.css", import.meta.url), "utf8");
 const list = readFileSync(new URL("../chat/ChatMessageList.tsx", import.meta.url), "utf8");
@@ -45,9 +46,25 @@ describe("chat list scrolling", () => {
 
   test("opening a list pins to the bottom unless a message link names a row", () => {
     expect(list).not.toMatch(/const initialIndex = newRuleIndex/);
-    expect(list).toMatch(/holdLanding:\s*!!targetMessageId/);
+    expect(list).toMatch(/holdLanding:\s*holdTarget/);
+    expect(list).toMatch(/shouldHoldChatLanding\(targetIndex, rows\.length\)/);
     expect(hook).toMatch(/holdLanding\?: boolean/);
     expect(hook).toMatch(/if \(holdLanding\) \{/);
+    expect(hook).toMatch(/must paint already at the tail/);
+  });
+
+  test("a named row on the tail does not hold the bottom pin", () => {
+    expect(shouldHoldChatLanding(-1, 40)).toBe(false);
+    expect(shouldHoldChatLanding(39, 40)).toBe(false);
+    expect(shouldHoldChatLanding(35, 40)).toBe(false);
+    expect(shouldHoldChatLanding(20, 40)).toBe(true);
+    expect(shouldHoldChatLanding(0, 3)).toBe(false);
+  });
+
+  test("a tail target does not center-scroll", () => {
+    expect(list).toMatch(/if \(holdTarget\) \{/);
+    expect(list).toMatch(/scrollToIndex\(targetIndexRef\.current, \{ align: "center" \}\)/);
+    expect(list).toMatch(/useLayoutEffect\(\(\) => \{\n    if \(!targetMessageId/);
   });
 
   test("the list wraps the sizer in the fill", () => {

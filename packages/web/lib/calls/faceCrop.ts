@@ -291,7 +291,7 @@ export function hitsInteractive(regions: HitRegion[], x: number, y: number): boo
  */
 export type FaceTier = "speaker" | "row" | "mini";
 
-export const TIER_DIAMETER: Record<FaceTier, number> = { speaker: 96, row: 64, mini: 40 };
+export const TIER_DIAMETER: Record<FaceTier, number> = { speaker: 192, row: 128, mini: 40 };
 
 /** The gap between circles in a row. */
 export const FACE_GAP = 8;
@@ -374,7 +374,7 @@ export function tierForWidth(width: number, mode: FacesMode, faces: number): Fac
  * `hovered` is where the name and the controls get their room, and it costs
  * nothing while the pointer is away. It adds the two rows below the circles,
  * and it widens the window where four buttons are wider than the faces — one
- * 96px circle is narrower than the chrome, and a window that clipped its own
+ * speaker circle is narrower than the chrome, and a window that clipped its own
  * controls is a call you cannot leave. The circles keep their place at the top
  * of the window through both, so nothing under the pointer moves.
  */

@@ -83,6 +83,11 @@ type SessionAuthor = { name: string; avatar?: string | null } | null;
  * owned_by_me outranks a NEGATIVE is_own verdict deliberately: is_own is stamped
  * on view, owned_by_me on every inbox delivery — after "assign to me" the meta
  * from a pre-assignment view is stale exactly when the flag is fresh.
+ *
+ * This answers "whose ACCOUNT is this", not "whose inbox is it in". A session I
+ * run and then assign to a teammate is still mine by this test — it keeps its
+ * owner controls and its author chip — and leaves my inbox through the scope
+ * rule instead (isForeignRow, which adds isAssignedAwayFromViewer).
  */
 export function isForeignSession(
   session: { user_id?: string; author_name?: string | null; owned_by_me?: boolean; owner_user_id?: string | null },

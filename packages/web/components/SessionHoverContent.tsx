@@ -5,7 +5,9 @@ import {
 } from "./entityDisplay";
 import { abbrevModel, relativeTime } from "../lib/entityDisplay";
 
-export function SessionHoverContent({ session }: { session: any }) {
+/** `identity={false}` drops the title header: the caller (SessionHoverCard)
+ *  already painted the face, the name and the title above this body. */
+export function SessionHoverContent({ session, identity = true }: { session: any; identity?: boolean }) {
   const isActive = session.status === "active";
   const model = abbrevModel(session.model);
   const projectName = session.project_path?.split("/").pop() ?? null;
@@ -19,7 +21,7 @@ export function SessionHoverContent({ session }: { session: any }) {
 
   return (
     <div className="space-y-2">
-      <div className="flex items-start gap-2">
+      {identity && <div className="flex items-start gap-2">
         <div className="relative flex-shrink-0 mt-0.5">
           {isForeign ? (
             <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={16} />
@@ -52,18 +54,18 @@ export function SessionHoverContent({ session }: { session: any }) {
             )}
           </div>
         </div>
-      </div>
+      </div>}
 
-      <SessionSummaryBlock session={session} className="pl-[22px]" />
+      <SessionSummaryBlock session={session} className={identity ? "pl-[22px]" : ""} />
 
       {metaParts.length > 0 && (
-        <div className="flex items-center gap-2 pl-[22px] text-[10px] text-gray-500 font-mono">
+        <div className={`flex items-center gap-2 ${identity ? "pl-[22px]" : ""} text-[10px] text-gray-500 font-mono`}>
           {metaParts.map((part, index) => <span key={index}>{part}</span>)}
         </div>
       )}
 
       {projectName && (
-        <div className="flex items-center gap-1.5 pl-[22px]">
+        <div className={`flex items-center gap-1.5 ${identity ? "pl-[22px]" : ""}`}>
           <FolderOpen className="w-2.5 h-2.5 text-gray-500 flex-shrink-0" />
           <span className="text-[10px] text-gray-400 font-mono truncate">{projectName}</span>
         </div>
