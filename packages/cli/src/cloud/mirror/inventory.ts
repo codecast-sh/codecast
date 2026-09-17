@@ -1,7 +1,9 @@
 /**
  * What the home mirror ships: the human-authored parts of ~/.claude,
- * ~/.codex, ~/.grok, ~/.gemini, ~/.agents, ~/.config/opencode plus a
- * rendered, allowlisted ~/.gitconfig and the global gitignore.
+ * ~/.codex, ~/.grok, ~/.gemini, ~/.agents, ~/.config/opencode, ~/.cursor,
+ * ~/.pi, the state files installed skills read, the portable text scripts
+ * in ~/.local/bin, plus a rendered, allowlisted ~/.gitconfig and the global
+ * gitignore.
  *
  * Collection is pure over a `home`: an lstat walk that follows in-home
  * symlinks (a dotfiles repo is the common skill setup), refuses anything that
@@ -20,8 +22,8 @@ import {
 } from "./transform.js";
 
 import {
-  AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, commandCompatibilityWarnings, configPatterns,
-  activeContextReferences, contextReferences, isAccessError, isAccountDataPath, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern,
+  AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
+  activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern,
 } from "./discovery.js";
 
 export { CONTEXT_DENYLIST as MIRROR_DENYLIST, DEFAULT_EXCLUDES, globToRegExp, isDeniedPath, isDefaultExcluded } from "./discovery.js";
@@ -140,6 +142,8 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
   const addFile = async (rel: string, kind: MirrorKind, real: string, stat: fs.Stats) => {
     if (entries.has(rel) || excluded(rel)) return;
     if (!stat.isFile()) { skip(rel, "not a regular file"); return; }
+    const script = rel.startsWith(`${LOCAL_BIN_ROOT}/`);
+    if (script && stat.size > LOCAL_BIN_SCRIPT_CAP) { skip(rel, "not a portable text script"); return; }
     const fd = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     let bytes: Buffer;
     try {
@@ -156,6 +160,7 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
       totalBytes += stat.size;
       bytes = await fd.readFile();
     } finally { await fd.close(); }
+    if (script && !isPortableScript(bytes)) { totalBytes -= stat.size; skip(rel, "not a portable text script"); return; }
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { totalBytes -= stat.size; skip(rel, credential); return; }
     const text = portableText(bytes);
@@ -188,7 +193,7 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
     }
   };
 
-  for (const src of MIRROR_SOURCES) await collect(src.path);
+  for (const rel of [...MIRROR_SOURCES.map((src) => src.path), ...SKILL_STATE_FILES, LOCAL_BIN_ROOT]) await collect(rel);
   for (const name of await fs.promises.readdir(home)) if (INSTRUCTION_FILE_RE.test(name) || name === ".mcp.json") await collect(name);
   for (const inc of includes) await collect(inc);
 

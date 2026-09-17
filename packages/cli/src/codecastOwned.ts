@@ -72,6 +72,8 @@ export const CODECAST_OWNED_HOME_PATHS: readonly string[] = [
   ...CODECAST_SKILL_NAMES.map((name) => `.claude/skills/${name}`),
   ...ORCH_AGENT_FILES.map((f) => `.claude/agents/${f}`),
   ...CODECAST_HOOK_SCRIPTS.map((f) => `.claude/hooks/${f}`),
+  // The rules file older codecast releases wrote; `cast uninstall` still removes it.
+  ".cursor/rules/codecast.mdc",
   ".codecast",
 ];
 

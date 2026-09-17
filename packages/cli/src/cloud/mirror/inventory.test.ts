@@ -60,6 +60,7 @@ describe("denylist", () => {
     ".codex/models_cache.json", ".codex/installation_id",
     ".gemini/oauth_creds.json", ".config/gh/hosts.yml", ".config/gcloud/x", ".ssh/id_ed25519", ".aws/credentials", ".gnupg/x",
     ".kube/config", ".docker/config.json", ".netrc", ".npmrc", ".pgpass", ".codecast/config.json",
+    ".cursor/extensions/ext/package.json", ".cursor/projects/p/t.txt", ".cursor/cli-config.json", ".pi/agent/auth.json", ".pi/agent/sessions/s/a.jsonl",
     ".claude/skills/x/server.pem", ".claude/skills/x/id_rsa", ".claude/skills/x/private.key", ".claude/skills/x/credentials-prod.json",
   ])("%s is denied", (rel) => {
     expect(isDeniedPath(rel)).toBe(true);
@@ -139,6 +140,19 @@ describe("collectMirrorFiles", () => {
     write(".config/opencode/command/c.md", "c");
     write(".config/opencode/plugins/mine.js", "js");
     write(".config/opencode/plugins/codecast-stable.js", "owned");
+    write(".cursor/rules/mine.mdc", "rule");
+    write(".cursor/rules/codecast.mdc", "owned");
+    write(".cursor/skills/c/SKILL.md", "c");
+    write(".cursor/hooks.json", "{}");
+    write(".cursor/mcp.json", "{}");
+    write(".cursor/extensions/ext/package.json", "SECRET");
+    write(".cursor/projects/p/agent-transcripts/t.txt", "SECRET");
+    write(".cursor/cli-config.json", "SECRET");
+    write(".pi/agent/settings.json", "{}");
+    write(".pi/agent/AGENTS.md", "# pi\n");
+    write(".pi/agent/skills/p/SKILL.md", "p");
+    write(".pi/agent/auth.json", "SECRET");
+    write(".pi/agent/sessions/slug/s.txt", "SECRET");
     write(".config/gh/hosts.yml", "SECRET");
     write(".ssh/id_ed25519", "SECRET");
     write(".aws/credentials", "SECRET");
@@ -158,6 +172,8 @@ describe("collectMirrorFiles", () => {
       ".grok/user-settings.json": "json-remap", ".gemini/GEMINI.md": "claude-md", ".gemini/settings.json": "gemini-settings", ".gemini/commands/c.toml": "toml-remap",
       ".agents/skills/a/SKILL.md": "verbatim", ".config/opencode/opencode.json": "opencode-json", ".config/opencode/AGENTS.md": "agents-md",
       ".config/opencode/agent/a.md": "verbatim", ".config/opencode/command/c.md": "verbatim", ".config/opencode/plugins/mine.js": "verbatim",
+      ".cursor/rules/mine.mdc": "verbatim", ".cursor/skills/c/SKILL.md": "verbatim", ".cursor/hooks.json": "codex-hooks", ".cursor/mcp.json": "json-remap",
+      ".pi/agent/settings.json": "json-remap", ".pi/agent/AGENTS.md": "agents-md", ".pi/agent/skills/p/SKILL.md": "verbatim",
     };
     for (const [p, kind] of Object.entries(expectKinds)) expect(byPath.get(p)?.kind, p).toBe(kind);
     expect(byPath.get(".claude/hooks/mine.sh")?.mode).toBe("0700");
@@ -175,6 +191,8 @@ describe("collectMirrorFiles", () => {
       ".codex/auth.json", ".codex/state_5.sqlite", ".codex/sessions/a.jsonl",
       ".grok/sessions/a", ".gemini/oauth_creds.json", ".config/opencode/plugins/codecast-stable.js",
       ".config/gh/hosts.yml", ".ssh/id_ed25519", ".aws/credentials", ".codecast/config.json", ".netrc",
+      ".cursor/rules/codecast.mdc", ".cursor/extensions/ext/package.json", ".cursor/projects/p/agent-transcripts/t.txt", ".cursor/cli-config.json",
+      ".pi/agent/auth.json", ".pi/agent/sessions/slug/s.txt",
     ]) expect(shipped, p).not.toContain(p);
     expect(inv.skipped.map((s) => s.path)).toEqual(expect.arrayContaining([".ssh", ".claude/.credentials.json", ".claude.json", ".netrc", ".codex/auth.json"]));
     expect(inv.skipped.find((s) => s.path === ".ssh")?.reason).toBe("denied");
@@ -196,6 +214,47 @@ describe("collectMirrorFiles", () => {
     const inv = await collect({ cloud_mirror_exclude: ".claude/skills/private-*/**, .codex/prompts/**" });
     expect(inv.entries.map((e) => e.path)).toEqual([".claude/skills/public/SKILL.md"]);
     expect(inv.excludesApplied.sort()).toEqual([".claude/skills/private-*/**", ".codex/prompts/**"]);
+  });
+
+  test("skill state files travel as single files; the rest of their directories stays home", async () => {
+    write(".hyperframes/config.json", '{"telemetryEnabled":false}');
+    write(".hyperframes/cache/render.json", "{}");
+    write(".media/preferences.json", '{"version":1}');
+    write(".media/library/clip.json", "{}");
+    const inv = await collect();
+    const shipped = inv.entries.map((e) => e.path);
+    expect(shipped).toEqual(expect.arrayContaining([".hyperframes/config.json", ".media/preferences.json"]));
+    expect(shipped.filter((p) => p.startsWith(".hyperframes/") || p.startsWith(".media/")).sort()).toEqual([".hyperframes/config.json", ".media/preferences.json"]);
+    expect(inv.entries.find((e) => e.path === ".media/preferences.json")!.bytes.toString()).toBe('{"version":1}');
+    // Absent state files are not an error and not reported.
+    fs.rmSync(path.join(home, ".hyperframes"), { recursive: true });
+    const again = await collect();
+    expect(again.skipped.some((s) => s.path.startsWith(".hyperframes"))).toBe(false);
+  });
+
+  test("~/.local/bin ships portable text scripts with their exec bit and nothing else", async () => {
+    write(".local/bin/deploy-site", "#!/usr/bin/env bash\necho deploy\n", 0o755);
+    write(".local/bin/note.py", "#!/usr/bin/env python3\nprint(1)\n", 0o644);
+    write(".local/bin/readme.txt", "no shebang here\n", 0o644);
+    write(".local/bin/elf-tool", Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]), Buffer.alloc(64)]), 0o755);
+    write(".local/bin/macho-tool", Buffer.concat([Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), Buffer.alloc(64)]), 0o755);
+    write(".local/bin/nul-script", Buffer.concat([Buffer.from("#!/bin/sh\n"), Buffer.from([0]), Buffer.from("x")]), 0o755);
+    write(".local/bin/huge-script", `#!/bin/sh\n${"#".repeat(1024 * 1024)}\n`, 0o755);
+    write(".local/bin/cast", "#!/bin/sh\nexec codecast\n", 0o755);
+    write(".local/share/tool/versions/1/tool", "#!/bin/sh\necho linked\n", 0o755);
+    fs.symlinkSync(path.join(home, ".local/share/tool/versions/1/tool"), path.join(home, ".local/bin/linked-tool"));
+    const inv = await collect();
+    const bin = inv.entries.filter((e) => e.path.startsWith(".local/bin/"));
+    expect(bin.map((e) => e.path).sort()).toEqual([".local/bin/deploy-site", ".local/bin/linked-tool", ".local/bin/note.py"]);
+    expect(bin.find((e) => e.path === ".local/bin/deploy-site")).toMatchObject({ kind: "verbatim", mode: "0700" });
+    expect(bin.find((e) => e.path === ".local/bin/note.py")!.mode).toBe("0600");
+    const reasons = Object.fromEntries(inv.skipped.map((s) => [s.path, s.reason]));
+    expect(reasons[".local/bin/readme.txt"]).toBe("not a portable text script");
+    expect(reasons[".local/bin/nul-script"]).toBe("not a portable text script");
+    expect(reasons[".local/bin/huge-script"]).toBe("not a portable text script");
+    expect(reasons[".local/bin/elf-tool"]).toBe("native binary");
+    expect(reasons[".local/bin/macho-tool"]).toBe("native binary");
+    expect(reasons[".local/bin/cast"]).toBe("denied");
   });
 
   test("statusLine.command under ~/.claude adds that file with its exec bit", async () => {

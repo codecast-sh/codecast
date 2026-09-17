@@ -250,6 +250,13 @@ describe("JSON kinds", () => {
     ] }] } }, ctx);
     expect(value).toEqual({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/home/ubuntu/bin/mine.sh" }] }] } });
   });
+  test("transformHooksJson handles cursor's flat hooks.json entries the same way", () => {
+    const { value } = transformHooksJson({ version: 1, hooks: {
+      sessionStart: [{ command: "/Users/ashot/.codecast/hooks/stable-feed-cursor.sh", timeout: 30 }],
+      stop: [{ command: "/Users/ashot/.cursor/hooks/done.sh" }],
+    } }, ctx);
+    expect(value).toEqual({ version: 1, hooks: { stop: [{ command: "/home/ubuntu/.cursor/hooks/done.sh" }] } });
+  });
 });
 
 describe("renderGitconfig", () => {
