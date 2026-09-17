@@ -44,7 +44,8 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   // frame instead of popping in a round-trip late.
   const run = useWorkflowRun(workflowRunId);
   const workflow = useWorkflow(run?.workflow_id);
-  const [expanded, setExpanded] = useState(true);
+  // Same default as PlanContextPanel — header already has name, status, progress.
+  const [expanded, setExpanded] = useState(false);
   // A gate is a decision (the-line.md L4, L10): the panel renders the
   // decision card for the run's gate_decision_id, never its own buttons.
   // The row rides the sessionDecisions collection; until it lands, a link.
@@ -61,6 +62,8 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   return (
     <div className="border-b border-sol-border/30 bg-sol-bg-alt/20">
       <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"
       >

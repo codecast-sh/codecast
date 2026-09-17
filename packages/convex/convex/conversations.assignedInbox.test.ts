@@ -68,3 +68,54 @@ describe("assigned sessions and the inbox cluster cutoff", () => {
     }
   });
 });
+
+describe("a session I run that I assigned away leaves my inbox", () => {
+  const ME = "users_me";
+  const THEM = "users_them";
+  const NOW = Date.now();
+
+  function fixtures() {
+    return makeFakeDb({
+      users: [
+        { _id: ME, name: "Me", email: "me@example.com" },
+        { _id: THEM, name: "Samvit", email: "samvit@example.com" },
+      ],
+      conversations: [
+        {
+          _id: "conversations_handed",
+          user_id: ME,
+          owner_user_id: THEM,
+          status: "active",
+          updated_at: NOW,
+          message_count: 4,
+          title: "Infra lead",
+        },
+        {
+          _id: "conversations_mine",
+          user_id: ME,
+          owner_user_id: ME,
+          status: "active",
+          updated_at: NOW,
+          message_count: 2,
+          title: "Still mine",
+        },
+      ],
+      session_owners: [
+        { _id: "so_handed", conversation_id: "conversations_handed", user_id: THEM, added_by: ME, added_at: 1 },
+        { _id: "so_mine", conversation_id: "conversations_mine", user_id: ME, added_by: ME, added_at: 1 },
+      ],
+      managed_sessions: [],
+      messages: [],
+    });
+  }
+
+  test("the runner's inbox no longer lists it; the owner's inbox does", async () => {
+    const db = fixtures();
+    const mine = await computeInboxSessions({ db }, ME as any, { show_all: false, includeLiveness: false });
+    expect(mine.sessions.map((s: any) => s._id).sort()).toEqual(["conversations_mine"]);
+
+    const theirs = await computeInboxSessions({ db }, THEM as any, { show_all: false, includeLiveness: false });
+    expect(theirs.sessions.map((s: any) => s._id)).toEqual(["conversations_handed"]);
+    expect(theirs.sessions[0].owned_by_me).toBe(true);
+  });
+});

@@ -2,7 +2,7 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
@@ -17446,14 +17446,16 @@ const lastResumeAt = new Map<string, number>();
 // of these into ONE mutation per tick (flushManagedHeartbeats) instead of one
 // mutation per session — so the inbox/plans/tasks subscriptions, which collect
 // every managed_sessions row, are invalidated once per flush rather than once
-// per session per 30s. See managedSessions:heartbeatBatch.
+// per session per 30s. See managedSessions:heartbeatBatch. The tick interval
+// (HEARTBEAT_FLUSH_INTERVAL_MS) is owned by @codecast/shared/contracts: the
+// window that decides a daemon is dead is derived from it, so the two cannot
+// be set apart from each other.
 const managedHeartbeatSessions = new Set<string>();
 let heartbeatFlushTimer: NodeJS.Timeout | null = null;
 let heartbeatFlushInProgress = false;
 let heartbeatMaintenanceInProgress = false;
 let heartbeatMaintenanceCount = 0;
 let lastHeartbeatSendAt = 0;
-const HEARTBEAT_FLUSH_INTERVAL_MS = 30_000;
 // Cap the per-transaction slice so a write conflict retries a bounded number of
 // rows, not the whole fleet.
 const HEARTBEAT_BATCH_SIZE = 25;

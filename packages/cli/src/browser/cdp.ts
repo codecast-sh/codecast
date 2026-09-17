@@ -260,8 +260,16 @@ export async function readCdpJson<T>(ep: CdpEndpoint, route: string, timeoutMs =
     }, timeoutMs);
   });
   try {
-    const read = fetch(cdpHttpUrl(ep, route), { signal: controller.signal }).then(response => {
-      if (!response.ok) throw new Error(`CDP ${route} returned ${response.status}`);
+    const read = fetch(cdpHttpUrl(ep, route), { signal: controller.signal }).then(async response => {
+      if (!response.ok) {
+        // The bridge host says why in the body (a stalled worker, a missing
+        // extension); the reason is what the caller's retry reads (stall.ts).
+        let reason = "";
+        try {
+          reason = String(((await response.json()) as { error?: string }).error ?? "");
+        } catch {}
+        throw new Error(`CDP ${route} returned ${response.status}${reason ? ` — ${reason}` : ""}`);
+      }
       return response.json() as Promise<T>;
     });
     return await Promise.race([deadline, read]);

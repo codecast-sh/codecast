@@ -6,7 +6,7 @@
 
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { ConversationDiffLayout } from "../ConversationDiffLayout";
+import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../ConversationDiffLayout";
 import { ConversationData } from "../ConversationView";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
@@ -15,9 +15,13 @@ import { useState } from "react";
 import { AnchorGlyph } from "./AnchorIdentity";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true }: {
+export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput }: {
   conversationId: string;
   hideHeader?: boolean;
+  /** The staffing pane owns the send into a proposal's thread (S18). */
+  onSendOverride?: ConversationDiffLayoutProps["onSendOverride"];
+  composerNode?: React.ReactNode;
+  autoFocusInput?: boolean;
   /** The anchor page owns its anchor by construction, so it seeds `is_own`
    *  before the row lands and the owner UI paints at once. A thread embedded
    *  elsewhere (the staffing pane's chief of staff, hosted by whoever hired
@@ -61,6 +65,9 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
         isOwner={seedOwnership || !!(conversation as { is_own?: boolean }).is_own}
         showMessageInput
         hideHeader={hideHeader}
+        onSendOverride={onSendOverride}
+        composerNode={composerNode}
+        autoFocusInput={autoFocusInput}
       />
     </div>
   );

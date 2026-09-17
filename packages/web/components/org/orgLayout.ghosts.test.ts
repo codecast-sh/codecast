@@ -254,8 +254,8 @@ describe("ghostsFor", () => {
     const projects = change({ kind: "projects", changes: [{ op: "create", title: "Platform" }, { op: "merge", from: "Old", into: "Platform" }] });
     const unknown = change({ kind: "rename", handle: "growth", to: "Growth 2" } as unknown as OrgChange);
     const { ghosts } = lay([projects, unknown]);
-    expect(ghosts.chips[ME]!.map((c) => [c.change_id, c.chip])).toEqual([[projects._id, "+ Platform, Old into Platform"], [unknown._id, "Rename (not supported in this build)"]]);
-    expect(ghosts.chips[ME]![1].line).toBe("Rename (not supported in this build)");
+    expect(ghosts.chips[ME]!.map((c) => [c.change_id, c.chip])).toEqual([[projects._id, "+ Platform, Old into Platform"], [unknown._id, 'A change this version of codecast cannot show yet ("rename")']]);
+    expect(ghosts.chips[ME]![1].line).toBe('A change this version of codecast cannot show yet ("rename")');
   });
 
   it("project_meta: with no owning role the canvas draws nothing (the scope panel's project row carries it); an owner nothing answers to warns", () => {

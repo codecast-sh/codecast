@@ -6,7 +6,7 @@ import { webcrypto } from 'node:crypto';
 const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
 const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
 
-function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; slowOverlay?: boolean } = {}) {
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; slowOverlay?: boolean } = {}) {
   const grouped: unknown[] = [];
   const detached: number[] = [];
   const created: unknown[] = [];
@@ -30,10 +30,11 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
     alarms: { create: async () => {}, onAlarm: event() },
     tabs: {
       get: async () => ({ ...tab }),
-      query: async () => {
+      query: async (q: { groupId?: number } = {}) => {
         if (opts.hungTabQuery) return new Promise(() => {});
         if (opts.lateTabQueryMs) await new Promise((resolve) => setTimeout(resolve, opts.lateTabQueryMs));
-        return [tab];
+        if (q.groupId === 42) return (opts.castGroupWithTabs ?? []).map((id) => ({ ...tab, id, groupId: 42 }));
+        return [tab, ...(opts.castGroupWithTabs ?? []).map((id) => ({ ...tab, id, groupId: 42 }))];
       },
       create: async (p: object) => {
         created.push(p);
@@ -45,7 +46,12 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
       onCreated: event(), onUpdated: event(), onRemoved: event(),
     },
     tabGroups: {
-      query: async () => opts.hungGroupQuery ? new Promise(() => {}) : [], update: async (id: number, p: object) => ({ id, windowId: 1, ...p }),
+      query: async (q: { title?: string; color?: string } = {}) => {
+        if (opts.hungGroupQuery) return new Promise(() => {});
+        // Mid animation the title carries a frame; a human's red group is not ours.
+        if (opts.castGroupWithTabs && q.color === 'red') return [{ id: 42, windowId: 1, title: 'Cast ...', color: 'red' }, { id: 43, windowId: 1, title: 'Shopping', color: 'red' }];
+        return [];
+      }, update: async (id: number, p: object) => ({ id, windowId: 1, ...p }),
       onCreated: event(), onUpdated: event(), onRemoved: event(),
     },
     windows: { getAll: async () => [{ id: 1 }] },
@@ -118,6 +124,13 @@ describe('extension tab lifecycle', () => {
     const w = worker({ lateTabQueryMs: 36 });
     const result = await w.context.handle({ op: 'tabs.list' });
     expect(result.tabs).toHaveLength(1);
+  });
+
+  test('with ownership memory empty, tabs in a red Cast group are ours again (an extension reload does not orphan them)', async () => {
+    const w = worker({ castGroupWithTabs: [11, 12] });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    const byId = Object.fromEntries(result.tabs.map((t: { tabId: number; owned: boolean }) => [t.tabId, t.owned]));
+    expect(byId).toEqual({ 7: false, 11: true, 12: true });
   });
 
   test('a stalled tab query identifies the Chrome API that did not answer', async () => {

@@ -32,6 +32,7 @@ import {
   projectInbox,
   selectWorkingSet,
   shouldShowInInbox,
+  isAssignedAwayFromViewer,
   type InboxBucket,
   type InboxPlacementInput,
   type InboxSortTimeInput,
@@ -344,6 +345,30 @@ function row(id: string, overrides: Record<string, any> = {}): WorkingSetRow & R
   };
 }
 
+describe("isAssignedAwayFromViewer", () => {
+  const ME = "users_me";
+  const THEM = "users_them";
+
+  test("unowned rows stay with the runner", () => {
+    expect(isAssignedAwayFromViewer({ owner_user_id: null }, ME)).toBe(false);
+    expect(isAssignedAwayFromViewer({}, ME)).toBe(false);
+  });
+
+  test("a session I own is mine even when another account runs it", () => {
+    expect(isAssignedAwayFromViewer({ owner_user_id: ME }, ME)).toBe(false);
+    expect(isAssignedAwayFromViewer({ owner_user_id: THEM, owned_by_me: true }, ME)).toBe(false);
+  });
+
+  test("a session assigned to someone else leaves my inbox, even if I run it", () => {
+    expect(isAssignedAwayFromViewer({ owner_user_id: THEM }, ME)).toBe(true);
+    expect(isAssignedAwayFromViewer({ owner_user_id: THEM, owned_by_me: false }, ME)).toBe(true);
+  });
+
+  test("no viewer means do not hide", () => {
+    expect(isAssignedAwayFromViewer({ owner_user_id: THEM }, null)).toBe(false);
+  });
+});
+
 describe("shouldShowInInbox (the lifted pure rule)", () => {
   test("drops subagents, orphans, blank completed rows, noise titles, killed unless pinned", () => {
     expect(shouldShowInInbox(row("a"))).toBe(true);
@@ -375,8 +400,13 @@ describe("inWorkingSet", () => {
     expect(inWorkingSet(row("kd", { inbox_killed_at: EPOCH, inbox_dismissed_at: EPOCH - DAY, inbox_pinned_at: EPOCH - DAY }), EPOCH)).toEqual(["recent", "pinned"]);
     expect(inWorkingSet(row("kdo", { inbox_killed_at: EPOCH, inbox_dismissed_at: EPOCH - DAY, inbox_pinned_at: EPOCH - DAY, updated_at: EPOCH - 40 * DAY }), EPOCH)).toEqual(["pinned"]);
     expect(inWorkingSet(row("own", { owned_by_me: true }), EPOCH)).toEqual(["recent", "owned"]);
-    // owned follows recent's status + recency rule.
-    expect(inWorkingSet(row("ownold", { owned_by_me: true, updated_at: EPOCH - 31 * DAY }), EPOCH)).toEqual([]);
+    // An owner seat holds on its own: assignment puts the session in that
+    // person's inbox whatever state it is in, so neither the recency window nor
+    // the status gate can age it out.
+    expect(inWorkingSet(row("ownold", { owned_by_me: true, updated_at: EPOCH - 31 * DAY }), EPOCH)).toEqual(["owned"]);
+    expect(inWorkingSet(row("ownfailed", { owned_by_me: true, status: "failed" }), EPOCH)).toEqual(["owned"]);
+    // Still a nonmember when the row itself is not inbox material.
+    expect(inWorkingSet(row("ownsub", { owned_by_me: true, is_subagent: true }), EPOCH)).toEqual([]);
     // Nonmembers stay nonmembers whatever their stamps.
     expect(inWorkingSet(row("sub", { is_subagent: true, inbox_pinned_at: EPOCH }), EPOCH)).toEqual([]);
   });
@@ -417,10 +447,9 @@ describe("selectWorkingSet", () => {
       ...Array.from({ length: INBOX_WINDOW_CAPS.stashed + 1 }, (_, i) => row(`s${i}`, { updated_at: EPOCH - 40 * DAY, inbox_stashed_at: EPOCH - DAY - i * 1000 })),
       ...Array.from({ length: INBOX_WINDOW_CAPS.owned + 1 }, (_, i) => row(`o${i}`, { updated_at: EPOCH - 39 * DAY - i * 1000, owned_by_me: true })),
     ];
-    // The 39d-old owned rows are outside the recency window (owned follows
-    // recent's rule), so "owned" stays silent while the other four fire…
-    expect(selectWorkingSet(rows, EPOCH).truncated).toEqual(["recent", "pinned", "dismissed", "stashed"]);
-    // …and fires once its rows are recent-eligible.
+    // An owner seat needs no recency, so all five fire — the 39d-old owned rows
+    // are members on the owner row alone.
+    expect(selectWorkingSet(rows, EPOCH).truncated).toEqual(["recent", "pinned", "dismissed", "stashed", "owned"]);
     const fresh = rows.map((r) => (String(r._id).startsWith("o") ? { ...r, updated_at: EPOCH - 2 * HOUR } : r));
     expect(selectWorkingSet(fresh, EPOCH).truncated).toEqual(["recent", "pinned", "dismissed", "stashed", "owned"]);
   });
@@ -597,9 +626,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 9", () => {
+  test("the caps are the single source and the version is 10", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(9);
+    expect(INBOX_PROJECTION_VERSION).toBe(10);
   });
 });
 

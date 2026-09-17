@@ -25,6 +25,7 @@
 
 import { parseRepoObjectId } from "@codecast/shared/entities";
 import { docRelatesToTask } from "@codecast/shared/tasks";
+import { isAssignedAwayFromViewer } from "@codecast/shared/contracts";
 
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
 type AssigneeInfo = { name: string; image?: string; github_username?: string } | null;
@@ -75,23 +76,28 @@ type SessionAuthor = { name: string; avatar?: string | null } | null;
  * ownership (author chip, stash/kill semantics) MUST resolve through here;
  * checking session.user_id alone misses exactly those thin rows.
  *
- * Precedence: conv.is_own true / session owned_by_me / owner match (any positive
- * ownership signal wins — a session ASSIGNED to me is mine to triage even though
- * another account runs it) → conv.is_own false → user_id vs me → source-provided
- * author_name (team sources null it for own sessions) → assume mine.
+ * Precedence: owned_by_me / owner match (any positive ownership signal wins —
+ * a session ASSIGNED to me is mine to triage even though another account runs
+ * it) → assigned away (owner cache names someone else) → conv.is_own true /
+ * false → user_id vs me → source-provided author_name (team sources null it
+ * for own sessions) → assume mine.
  *
  * owned_by_me outranks a NEGATIVE is_own verdict deliberately: is_own is stamped
  * on view, owned_by_me on every inbox delivery — after "assign to me" the meta
  * from a pre-assignment view is stale exactly when the flag is fresh.
+ *
+ * Assigned-away outranks is_own:true: the runner still has access, but the
+ * session belongs in the owners' inboxes, not the account that hosts it.
  */
 export function isForeignSession(
   session: { user_id?: string; author_name?: string | null; owned_by_me?: boolean; owner_user_id?: string | null },
   conv: { user_id?: string; is_own?: boolean } | null | undefined,
   myId: string | null | undefined,
 ): boolean {
-  if (conv?.is_own === true) return false;
   if (session.owned_by_me) return false;
   if (myId && session.owner_user_id && session.owner_user_id === myId) return false;
+  if (isAssignedAwayFromViewer(session, myId)) return true;
+  if (conv?.is_own === true) return false;
   if (conv?.is_own === false) return true;
   const uid = session.user_id ?? conv?.user_id;
   if (uid && myId) return uid !== myId;

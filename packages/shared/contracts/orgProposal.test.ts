@@ -184,12 +184,41 @@ describe("file change", () => {
 });
 
 describe("a proposal carries one change per subject", () => {
-  test("the same task status twice is refused with both positions named; different subjects pass", () => {
-    const c = (task: string) => ({ change: { kind: "task_status", task, status: "open", reason: "never worked" }, rationale: "r" });
-    const twice = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [c("ct-1"), c("ct-2"), c("ct-1")] });
-    expect(twice.spec).toBeNull();
-    expect(twice.errors).toEqual(["changes[2] (mark task ct-1 open) repeats changes[0]: one change per subject"]);
-    expect(parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [c("ct-1"), c("ct-2")] }).errors).toEqual([]);
+  const spec = (changes: any[]) => parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes });
+  test("the same task status twice folds into one row, named; a different status is refused with both positions named", () => {
+    const c = (task: string, status = "open", reason = "never worked") => ({ change: { kind: "task_status", task, status, reason }, rationale: "r" });
+    const twice = spec([c("ct-1"), c("ct-2"), c("ct-1", "open", "its plan moved on")]);
+    expect(twice.errors).toEqual([]);
+    expect(twice.spec!.changes.map((x) => (x.change as any).task)).toEqual(["ct-1", "ct-2"]);
+    expect((twice.spec!.changes[0].change as any).reason).toBe("never worked\n\nits plan moved on");
+    expect((twice as any).notes).toEqual(["changes[2] (mark task ct-1 open) folded into changes[0]: one change per subject"]);
+    const conflict = spec([c("ct-1"), c("ct-2"), c("ct-1", "done")]);
+    expect(conflict.spec).toBeNull();
+    expect(conflict.errors).toEqual(["changes[2] (mark task ct-1 done) repeats changes[0] with a different status: one change per subject"]);
+    expect(spec([c("ct-1"), c("ct-2")]).errors).toEqual([]);
+    expect((spec([c("ct-1"), c("ct-2")]) as any).notes).toBeUndefined();
+  });
+  // The analyzer builds a spec from lists: a project in its charter list and
+  // in its owner list arrives as two project_meta rows. One row can carry
+  // both, so the parser folds them and the post never refuses the spec.
+  test("a project's charter and its owner, handed in as two project_meta rows, become one row with both fields and all the evidence", () => {
+    const goal = { change: { kind: "project_meta", project: "pr-7", goal: "Inbox zero on issue clusters" }, rationale: "The project's own tasks say so.", evidence: [{ label: "31 tasks", href: "https://x/pr-7" }], expected_effect: "A goal on the page." };
+    const owner = { change: { kind: "project_meta", project: "pr-7", owner: "@agent-quality" }, rationale: "The new seat owns the line.", evidence: [{ label: "31 tasks", href: "https://x/pr-7" }, { label: "the role", href: "https://x/or-3" }], risk: "None." };
+    const r = spec([goal, { change: { kind: "file", plan: "pl-1", project: "pr-7" }, rationale: "r" }, owner]);
+    expect(r.errors).toEqual([]);
+    expect(r.spec!.changes.length).toBe(2);
+    expect(r.spec!.changes[0]).toEqual({
+      change: { kind: "project_meta", project: "pr-7", goal: "Inbox zero on issue clusters", owner: "@agent-quality" },
+      rationale: "The project's own tasks say so.\n\nThe new seat owns the line.",
+      evidence: [{ label: "31 tasks", href: "https://x/pr-7" }, { label: "the role", href: "https://x/or-3" }],
+      expected_effect: "A goal on the page.",
+      risk: "None.",
+    });
+    expect((r as any).notes).toEqual(["changes[2] (charter pr-7 owner @agent-quality) folded into changes[0]: one change per subject"]);
+    // The same field with a different value is a disagreement, not a repeat.
+    const two = spec([goal, { ...goal, change: { ...goal.change, goal: "Something else" } }]);
+    expect(two.spec).toBeNull();
+    expect(two.errors[0]).toContain("with a different goal");
   });
 });
 

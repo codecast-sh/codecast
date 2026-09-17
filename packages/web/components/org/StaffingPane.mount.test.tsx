@@ -50,6 +50,10 @@ async function verifyStaffingPane() {
     onPickProposal: (id: string) => calls.push(`pick:${id}`),
     onHireChief: () => calls.push("hire"),
     onProposeNow: () => calls.push("propose"),
+    meId: "fixture-user-me",
+    introSeen: false,
+    onIntroSeen: () => calls.push("introSeen"),
+    onOpenGlossary: (page: string) => calls.push(`glossary:${page}`),
   };
   const root = createRoot(document.getElementById("root")!);
   const render = (props: any) => act(async () => root.render(React.createElement(StaffingPane, { ...base, ...props })));
@@ -75,7 +79,7 @@ async function verifyStaffingPane() {
   // row carries the evidence line even unselected.
   assert.deepEqual(qa("[data-change-group]").map((g) => g.getAttribute("data-change-group")), ["sync", "projects", "role", "project_meta", "budget", "routine"]);
   assert.equal(qa("[data-change-row]").length, 8);
-  assert.match(q("[data-sync-header]")!.textContent!, /Bring records in line/);
+  assert.match(q("[data-sync-header]")!.textContent!, /Records to bring up to date/);
   assert.equal(q("[data-sync-count]")!.textContent, "2 records");
   assert.equal(qa("[data-sync-evidence]").length, 2);
   assert.match(q('[data-change-row="fixture-change-7"] [data-sync-evidence]')!.textContent!, /evidenceEvery task closed 19 days ago/);
@@ -86,13 +90,67 @@ async function verifyStaffingPane() {
   assert.equal(q('[data-change-row="fixture-change-1"] [data-tenure]')!.getAttribute("data-tenure"), "standing");
   assert.equal(q('[data-change-row="fixture-change-2"] [data-tenure]')!.textContent, "program · ends with pl-88, then review");
   assert.equal(q('[data-change-row="fixture-change-4"] [data-tenure]'), null);
-  // Changes come before flags: the pane's job here is deciding.
+  // S17: the cold read intro over the ask, for a person who has never
+  // accepted a change; its link opens the short page; dismiss never returns.
+  assert.ok(q("[data-proposal-intro]"));
+  assert.match(q("[data-proposal-intro]")!.textContent!, /Nothing moves until you accept a change/);
+  await act(async () => q<HTMLButtonElement>("[data-intro-how]")!.click());
+  assert.equal(calls.pop(), "glossary:how");
+  await act(async () => q<HTMLButtonElement>("[data-intro-dismiss]")!.click());
+  assert.equal(calls.pop(), "introSeen");
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null, introSeen: true });
+  assert.equal(q("[data-proposal-intro]"), null);
+  // A person who accepted a change on any proposal in view never sees it either.
+  const acceptedByMe = { ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c.status === "accepted" ? { ...c, decided_by: "fixture-user-me" } : c) };
+  await render({ proposal: acceptedByMe, proposals: [acceptedByMe], selectedChangeId: null, introSeen: false });
+  assert.equal(q("[data-proposal-intro]"), null);
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
+  // S17: the plain ask in front, whole (a short one has no fold); no tail,
+  // so no control for it. A letter with a tail and an evidence line puts
+  // the tail behind a control and the link on the Evidence control.
+  assert.equal(q("[data-ask]")!.getAttribute("data-ask"), "open");
+  assert.match(q("[data-ask]")!.textContent!, /Two hires, one move and one budget change/);
+  assert.equal(q("[data-ask-toggle]"), null);
+  assert.equal(q('[data-summary-control="tail"]'), null);
+  assert.equal(q('[data-summary-control="evidence"]')!.tagName, "BUTTON");
+  const letter = { ...ORG_STAFFING_FIXTURE_PROPOSAL, summary_md: `${ORG_STAFFING_FIXTURE_PROPOSAL.summary_md} ${"And more words to make the ask long enough to fold on a phone. ".repeat(4)}\n\nWhat I looked at: every plan and task under Growth.\n\nEvidence, what could not be verified, findings and escalations: https://codecast.sh/a/fixture` };
+  await render({ proposal: letter, selectedChangeId: null });
+  assert.equal(q("[data-ask]")!.getAttribute("data-ask"), "folded");
+  assert.doesNotMatch(q("[data-ask]")!.textContent!, /What I looked at/);
+  await act(async () => q<HTMLButtonElement>("[data-ask-toggle]")!.click());
+  assert.equal(q("[data-ask]")!.getAttribute("data-ask"), "open");
+  assert.equal(q<HTMLAnchorElement>('[data-summary-control="evidence"]')!.getAttribute("href"), "https://codecast.sh/a/fixture");
+  assert.equal(q('[data-summary-detail="tail"]'), null);
+  await act(async () => q<HTMLButtonElement>('[data-summary-control="tail"]')!.click());
+  assert.match(q('[data-summary-detail="tail"]')!.textContent!, /What I looked at: every plan and task under Growth/);
+  assert.doesNotMatch(q('[data-summary-detail="tail"]')!.textContent!, /codecast\.sh\/a\/fixture/);
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
+  // The groups with counts are the list's own headers: no table about the
+  // changes stands between the ask and the first change.
+  assert.equal(q("[data-group-summary]"), null);
+  assert.equal(q('[data-group-header="role"] [data-group-count]')!.textContent, "2");
+  assert.match(q('[data-group-header="role"]')!.getAttribute("title")!, /standing agent/);
+  // The detail sits behind three controls: findings closed by default, so no
+  // flag row renders until asked; the budget is arithmetic from the tree.
+  assert.equal(qa("[data-flag]").length, 0);
+  assert.equal(q('[data-summary-control="findings"]')!.textContent, "Findings3");
+  await act(async () => q<HTMLButtonElement>('[data-summary-control="budget"]')!.click());
+  assert.ok(q('[data-summary-detail="budget"]'));
+  assert.match(q("[data-budget-today]")!.textContent!, /tokens$/);
+  assert.match(q("[data-budget-lines]")!.textContent!, /@growth/);
+  await act(async () => q<HTMLButtonElement>('[data-summary-control="findings"]')!.click());
+  assert.equal(q('[data-summary-detail="budget"]'), null);
+  // The findings sit above the list, behind their control; in proposal mode
+  // only the ones a change addresses show (all on @growth); the company's
+  // full list is one click away.
   const order = [...document.querySelectorAll("[data-change-row], [data-flag]")].map((el) => el.hasAttribute("data-flag") ? "flag" : "change");
-  assert.equal(order.indexOf("flag") > order.lastIndexOf("change"), true, "flags render after the change list");
-  // In proposal mode only the flags a change addresses show (all on @growth);
-  // the company's full list is one click away.
+  assert.equal(order.lastIndexOf("flag") < order.indexOf("change"), true, "findings render above the change list");
   assert.deepEqual(qa("[data-flag]").map((f) => f.getAttribute("data-flag")), ["overloaded", "cap_hit", "review_stall"]);
-  assert.match(text(), /Flags this proposal addresses/);
+  // The finding reads as words, not the code's name.
+  assert.match(qa('[data-flag="overloaded"]')[0].textContent!, /more reaching it than it can handle/);
+  // The glossary is one click from the summary.
+  await act(async () => q<HTMLButtonElement>("[data-summary-words]")!.click());
+  assert.equal(calls.pop(), "glossary:words");
   assert.equal(q("[data-rationale]"), null);
   assert.match(text(), /Accept all remaining \(6\)/);
   // Only decidable rows carry the action trio.
@@ -114,18 +172,21 @@ async function verifyStaffingPane() {
   await act(async () => q<HTMLButtonElement>('[data-proposal-author="session"]')!.click());
   assert.equal(calls.pop(), "open:fixture-conv-review");
   await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
+  // The findings control keeps its state across proposals; open it only if
+  // an earlier click left it closed.
+  if (!q('[data-summary-detail="findings"]')) await act(async () => q<HTMLButtonElement>('[data-summary-control="findings"]')!.click());
 
   // A flag on a role focuses its node.
   await act(async () => (qa('[data-flag="overloaded"]')[0] as HTMLButtonElement).click());
   assert.equal(calls.pop(), "node:role:fixture-role-growth");
   // The blocker word is spelled out, not hue alone; a company flag is not a button.
   assert.equal(qa('[data-flag="unowned"]').length, 0);
-  await act(async () => button("See all 5 flags in the company").click());
+  await act(async () => button("See all 5 findings in the company").click());
   assert.deepEqual(qa("[data-flag]").map((f) => f.getAttribute("data-flag")), ["unowned", "overloaded", "cap_hit", "no_charter", "review_stall"]);
   assert.equal(qa('[data-flag="unowned"]')[0].tagName, "DIV");
   assert.equal(qa('[data-flag="unowned"] [data-severity-tag]')[0]?.textContent, "blocker");
   assert.equal(qa('[data-flag="overloaded"] [data-severity-tag]').length, 0);
-  await act(async () => button("Only this proposal's flags").click());
+  await act(async () => button("Only this proposal's findings").click());
 
   // Accept, skip, edit, click to focus.
   await act(async () => qa('[data-change-row="fixture-change-1"] button[aria-label="Accept"]')[0].click());
@@ -184,7 +245,7 @@ async function verifyStaffingPane() {
 
   // Accept all is a two step: confirm then the action; the copy names the real apply order.
   await act(async () => button("Accept all remaining (6)").click());
-  assert.match(text(), /the records first, then projects, filings, roles, charters, then moves, scope, budget, trust, adopt, routines and retire/);
+  assert.match(text(), /records first, then projects and plans, then the agents, their areas and their limits/);
   await act(async () => button("Accept 6").click());
   assert.equal(calls.pop(), "acceptAll:fixture-proposal-7");
 
@@ -234,7 +295,7 @@ async function verifyStaffingPane() {
   assert.equal(calls.pop(), "select:fixture-big-2");
   // Accept group: a confirm, then accept all narrowed to the record kinds.
   await act(async () => q<HTMLButtonElement>("[data-sync-accept-group]")!.click());
-  assert.match(q("[data-sync-confirm]")!.textContent!, /Bring the 111 remaining records in line now: 103 tasks, 8 plans/);
+  assert.match(q("[data-sync-confirm]")!.textContent!, /Bring the 111 remaining records up to date now: 103 tasks, 8 plans/);
   await act(async () => button("Accept 111").click());
   assert.equal(calls.pop(), "acceptAll:fixture-proposal-big:plan_status,task_status,project_status");
   // Review each: the rows, carried tasks nested under their plan, a way back.
@@ -305,7 +366,7 @@ async function verifyStaffingPane() {
   // flags"; with a cached copy the flags stay and one line says the read failed.
   await render({ proposal: null, selectedChangeId: null, health: null, healthMissing: false, healthError: "Too many reads in a single function execution", onRetryHealth: () => calls.push("retryHealth") });
   assert.match(text(), /Health could not be read: Too many reads/);
-  assert.doesNotMatch(text(), /No flags\. The company is inside the capacity model/);
+  assert.doesNotMatch(text(), /Nothing is flagged\. Every role is inside its limits/);
   await act(async () => q<HTMLButtonElement>("[data-health-error] button")!.click());
   assert.equal(calls.pop(), "retryHealth");
   await render({ proposal: null, selectedChangeId: null, healthMissing: false, healthError: "the host is busy" });

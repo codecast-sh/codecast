@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { Popover, PopoverAnchor, PopoverContent } from "./popover";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -36,6 +37,7 @@ import { cn } from "@/lib/utils";
 type MenuAt<T> = { x: number; y: number; payload: T };
 
 export type ContextMenuState<T> = {
+  openAt: (x: number, y: number, payload: T) => void;
   menu: MenuAt<T> | null;
   /** `force` skips the stand-down (links, selections): for an element that
    *  owns its own menu, such as a file link. */
@@ -60,11 +62,15 @@ export function useContextMenu<T = void>(): ContextMenuState<T> {
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, payload });
   }, []);
+  // Hand off from one floating panel to another at the same point: a menu item
+  // that opens a picker closes the menu and reopens here, under the cursor
+  // where the user's attention already is.
+  const openAt = React.useCallback((x: number, y: number, payload: T) => setMenu({ x, y, payload }), []);
   const close = React.useCallback(() => setMenu(null), []);
   // Stable identity while the menu is closed. Callers pass this object (or a
   // callback depending on it) down to every row of a list; a fresh object per
   // render would defeat the rows' memo on every parent render.
-  return React.useMemo(() => ({ menu, open, close }), [menu, open, close]);
+  return React.useMemo(() => ({ menu, open, openAt, close }), [menu, open, openAt, close]);
 }
 
 const SURFACE = cn(
@@ -101,6 +107,46 @@ export function ContextMenu<T>({
         {children(menu.payload)}
       </DropdownMenuContent>
     </DropdownMenu>,
+    document.body,
+  );
+}
+
+/**
+ * A panel at the cursor, for content a MENU cannot host. Same state hook and
+ * same portal reasoning as ContextMenu, but the body is a Popover rather than
+ * DropdownMenuContent: a dropdown owns arrow keys and typeahead for menu
+ * navigation, which fights a form's own inputs and roving tabindex. Reach for
+ * ContextMenu for a list of verbs, and this for a picker, a form, or anything
+ * the user types into.
+ */
+export function CursorPopover<T>({
+  state,
+  children,
+  className,
+}: {
+  state: ContextMenuState<T>;
+  children: (payload: T) => React.ReactNode;
+  className?: string;
+}) {
+  const { menu, close } = state;
+  if (!menu) return null;
+  return createPortal(
+    <Popover open onOpenChange={(o) => !o && close()}>
+      <PopoverAnchor asChild>
+        <span
+          aria-hidden
+          style={{ position: "fixed", left: menu.x, top: menu.y, width: 1, height: 1, pointerEvents: "none" }}
+        />
+      </PopoverAnchor>
+      <PopoverContent
+        align="start"
+        sideOffset={4}
+        collisionPadding={8}
+        className={cn(SURFACE, "p-0 w-auto", className)}
+      >
+        {children(menu.payload)}
+      </PopoverContent>
+    </Popover>,
     document.body,
   );
 }

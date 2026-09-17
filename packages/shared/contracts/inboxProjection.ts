@@ -73,7 +73,11 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // v9: a process that exits after the agent declared done files under done,
 // not needs_input (isExitAfterDone): the ordinary end of a headless trigger
 // run is not a death a human must read.
-export const INBOX_PROJECTION_VERSION = 9 as const;
+// v10: assignment decides whose inbox a session is in. The owned window holds
+// its seat on the owner row alone (no recency, no status gate), and a session
+// whose owner set excludes the viewer leaves the viewer's inbox even though
+// their account runs it (isAssignedAwayFromViewer).
+export const INBOX_PROJECTION_VERSION = 10 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -747,6 +751,39 @@ export function isStashHidden(
   return !!row.inbox_stashed_at && !!row.inbox_stash_hidden;
 }
 
+// THE ASSIGNMENT RULE, in one place: a session whose owner set excludes the
+// viewer belongs to its owners, not to the account that runs it. It leaves the
+// runner's inbox, takes its open questions with it, and stops ringing them.
+// An unowned session (empty set) stays with the runner — the implicit starter.
+//
+// Two callers, two shapes of the same fact. This one reads the owner SET, for
+// paths that already hold it (notification delivery).
+export function isAssignedAwayFromOwnerSet(
+  ownerIds: ReadonlyArray<string | { toString(): string }>,
+  viewerId: string | null | undefined,
+): boolean {
+  if (!viewerId) return false;
+  if (ownerIds.length === 0) return false;
+  const me = viewerId.toString();
+  return !ownerIds.some((id) => id.toString() === me);
+}
+
+// The row shape, for paths that hold a projected row instead: `owner_user_id`
+// is the primary-owner cache and `owned_by_me` is membership in the full set,
+// so the pair answers the same question with no extra read.
+export function isAssignedAwayFromViewer(
+  row: {
+    owner_user_id?: string | { toString(): string } | null;
+    owned_by_me?: boolean | null;
+  },
+  viewerId: string | null | undefined,
+): boolean {
+  if (row.owned_by_me) return false;
+  const owner = row.owner_user_id;
+  if (owner == null || owner === "") return false;
+  return isAssignedAwayFromOwnerSet([owner], viewerId);
+}
+
 // `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until
 // a user action clears it. Never compare it against `updated_at`. Dismissed
 // conversations are still part of the inbox — they place in their own bucket.
@@ -863,7 +900,10 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
     if (row.inbox_stashed_at && row.inbox_stashed_at >= horizon) windows.push("stashed");
     if (row.inbox_snoozed_until) windows.push("snoozed");
   }
-  if (row.owned_by_me && recentEligible) windows.push("owned");
+  // The owner seat alone — no recency, no status gate. Assignment means the
+  // session is in that person's inbox until they act on it, whatever state it
+  // is in (the server scan admits owned rows on the same terms).
+  if (row.owned_by_me) windows.push("owned");
   return windows;
 }
 

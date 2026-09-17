@@ -747,7 +747,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
         <div className="flex flex-col min-h-full">
         <div className={isInline ? "flex-1 px-4 py-4 w-full" : "flex-1 max-w-4xl mx-auto px-6 py-6 w-full"}>
           {/* Card header: id + badges + watch, with actions */}
-          <div className="flex items-center justify-between mb-3 gap-2">
+          <div data-page-head className="flex items-center justify-between mb-3 gap-2">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden text-xs text-sol-text-dim">
               <button
                 onClick={() => { copyToClipboard(data.short_id); toast.success("Task ID copied"); }}
@@ -832,7 +832,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           )}
 
           {/* Title */}
-          <div className="flex items-start gap-2.5 mb-3">
+          <div data-page-head className="flex items-start gap-2.5 mb-3">
             <StatusIcon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${status.color}`} />
             <div className="flex-1 min-w-0">
               {editingTitle ? (

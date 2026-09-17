@@ -12,14 +12,43 @@
  * the situation tab ownership exists to handle. Relying on it alone would make
  * the feature go quiet exactly when it is needed.
  *
- * So we try progressively weaker but more available signals, and only give up
- * when none of them is present.
+ * Harness env vars come first for that reason: they are set for the life of
+ * the agent's process tree and do not go null when the machine is busy.
+ * Grok exports GROK_SESSION_ID and CODECAST_CONVERSATION_ID, not the Claude
+ * or Codex names; missing those keyed Grok by its tmux pane, so a resume in
+ * a new pane minted a second Cast tab and left the old one in the group.
  */
 
+/** Env vars that identify an agent process. Order is the fallback order. */
+export const OWNER_HARNESS_ENV = [
+  "CLAUDE_CODE_SESSION_ID",
+  "CODEX_SESSION_ID",
+  "CLAUDE_CODE_BRIDGE_SESSION_ID",
+  "CAST_SESSION_ID",
+  "CODECAST_SESSION_ID",
+  "GROK_SESSION_ID",
+  "CODECAST_CONVERSATION_ID",
+  "CODECAST_MANAGED_SESSION",
+  "CODEX_THREAD_ID",
+] as const;
+
+export function harnessOwnerId(env: NodeJS.ProcessEnv = process.env): string | null {
+  for (const name of OWNER_HARNESS_ENV) {
+    const v = env[name];
+    if (v) return v;
+  }
+  return null;
+}
+
 /** Identify the calling agent. Null only when nothing distinguishing exists. */
-export function ownerKey(detectSessionId?: () => string | null): string | null {
-  // 1. The real session id, when the CLI can resolve one unambiguously. Best
-  //    because it survives the agent being resumed in a different pane.
+export function ownerKey(detectSessionId?: () => string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+  // 1. Harness ids. Always present for an agent, never go quiet when other
+  //    sessions are live (detectCurrentSessionId does).
+  const harness = harnessOwnerId(env);
+  if (harness) return `env:${harness}`;
+
+  // 2. The resolved session id, when the CLI can name one unambiguously and
+  //    no harness exported an id of its own.
   try {
     const sid = detectSessionId?.();
     if (sid) return `session:${sid}`;
@@ -27,21 +56,9 @@ export function ownerKey(detectSessionId?: () => string | null): string | null {
     /* fall through */
   }
 
-  // 2. Harness-provided ids. Set for the life of one agent's process tree.
-  for (const name of [
-    "CLAUDE_CODE_SESSION_ID",
-    "CODEX_SESSION_ID",
-    "CLAUDE_CODE_BRIDGE_SESSION_ID",
-    "CAST_SESSION_ID",
-  ]) {
-    const v = process.env[name];
-    if (v) return `env:${v}`;
-  }
-
-  // 3. The tmux pane the agent runs in. Stable for the pane's lifetime, and
-  //    codecast puts each agent in its own pane, so in practice this separates
-  //    agents even when no id is exported.
-  const pane = process.env.TMUX_PANE;
+  // 3. The tmux pane the agent runs in. Last because a resume in a new pane
+  //    would otherwise look like a new browser session and open a new tab.
+  const pane = env.TMUX_PANE;
   if (pane) return `pane:${pane}`;
 
   // Nothing to go on — a human in a bare shell. Falls back to the shared

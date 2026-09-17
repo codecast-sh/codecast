@@ -4,7 +4,7 @@
 // and the org tree, plus the brief and charter documents.
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
-import { CheckSquare, Layers, MessageCircleQuestionMark } from "lucide-react";
+import { CheckSquare, ExternalLink, Layers, MessageCircleQuestionMark } from "lucide-react";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -24,10 +24,13 @@ import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { DocumentDetailLayout } from "../../DocumentDetailLayout";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
-import { DocRow, SessionRow, InlineEdit } from "../OrgScopePanel";
+import { DocRow, InlineEdit } from "../OrgScopePanel";
 import { StateBar, StateTally } from "../OrgNodeCards";
+import { AgentIcon } from "../../ConversationList";
+import { ORG_STATE_META } from "../orgMeta";
 import { ORG_TOP_N, sortOrgSessions, type OrgRole, type OrgSession, type OrgTree } from "../orgTypes";
-import type { BriefFacts } from "./scopeTypes";
+import { boundTaskOf, groupHands, subtaskCounts } from "../../../lib/scopePage";
+import type { BriefFacts, BriefHand } from "./scopeTypes";
 import { inScope, useScopeIds, type ScopeIds } from "../../../hooks/useScopeIds";
 import { decisionHref } from "../../../lib/decisionLinks";
 
@@ -102,7 +105,92 @@ function RoleSessionsPage({ roleId, teamId, cursor, onPage }: { roleId: string; 
   return null;
 }
 
-export function ScopeSessionsTab({ tree, role, scope }: { tree: OrgTree; role: OrgRole | null; scope: ScopeRef | null }) {
+/** One hand (F4.3): its title, its one line state, its age, and its task's
+ *  open and closed subtask counts when it is bound to a task that has them. */
+export function HandRow({ s, stateLine, task, progress, now, onOpen }: {
+  s: OrgSession;
+  stateLine: string | null;
+  task: { short_id: string; title: string } | null;
+  progress: { open: number; closed: number } | null;
+  now: number;
+  onOpen: () => void;
+}) {
+  const m = ORG_STATE_META[s.state] ?? ORG_STATE_META.idle;
+  const total = progress ? progress.open + progress.closed : 0;
+  return (
+    <button type="button" onClick={onOpen} className="group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors hover:bg-sol-bg-highlight/70" data-hand={s._id} data-hand-state={s.state}>
+      <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: m.color }} />
+      <AgentIcon agentType={s.agent_type} className="w-4 h-4 shrink-0" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{s.title || "Untitled"}</span>
+        <span className="block truncate text-[11px] mt-[1px]" style={{ color: stateLine ? "var(--sol-text-muted)" : "var(--sol-text-dim)" }} data-hand-line>{stateLine ?? m.label}</span>
+        {task && (
+          <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }} data-hand-task={task.short_id}>
+            {task.short_id} · {task.title}
+          </span>
+        )}
+      </span>
+      {progress && total > 0 && (
+        <span className="shrink-0 inline-flex items-center gap-1.5" title={`${progress.closed} of ${total} subtasks done, ${progress.open} open`} data-hand-progress={`${progress.closed}/${total}`}>
+          <span className="w-12 h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
+            <span className="block h-full" style={{ width: `${Math.round((progress.closed / total) * 100)}%`, background: "var(--sol-green)" }} />
+          </span>
+          <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{progress.closed}/{total}</span>
+        </span>
+      )}
+      <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - s.updated_at)}</span>
+      <ExternalLink className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" style={{ color: "var(--sol-text-dim)" }} />
+    </button>
+  );
+}
+
+/** The hands grouped by who acts next (F4.3), the inbox's groups in the
+ *  inbox's order. The state line and the task come from the store when it
+ *  holds the session (the row's own `thread_state` and `active_task_id`),
+ *  else from the brief's facts; subtask counts derive live from the tasks
+ *  collection, never a stored twin. */
+export function HandGroups({ rows, hands, now, onOpen }: { rows: OrgSession[]; hands?: BriefHand[] | null; now: number; onOpen: (s: OrgSession) => void }) {
+  const tasks = useWorkspaceCollection<TaskItem>("tasks");
+  // Subscribe to the two fields a row shows, never the session rows: a
+  // heartbeat on any hand would otherwise repaint the whole list.
+  const storeSig = useInboxStore((st) => rows.map((r) => { const row = st.sessions[r._id] as any; return `${row?.thread_state ? String(row.thread_state).split("\n")[0] : ""}|${row?.active_task_id ?? ""}`; }).join("\n"));
+  const groups = useMemo(() => groupHands(rows), [rows]);
+  const factsById = useMemo(() => new Map((hands ?? []).map((h) => [h._id, h])), [hands]);
+  const detail = useMemo(() => {
+    const st = useInboxStore.getState();
+    const out = new Map<string, { stateLine: string | null; task: { short_id: string; title: string } | null; progress: { open: number; closed: number } | null }>();
+    for (const r of rows) {
+      const row = st.sessions[r._id] as any;
+      const fact = factsById.get(r._id);
+      const stateLine = (row?.thread_state ? String(row.thread_state).split("\n")[0].trim() : "") || fact?.state_line || null;
+      const bound = boundTaskOf(r._id, row?.active_task_id ? String(row.active_task_id) : null, tasks as any[]);
+      const task = bound ? { short_id: bound.short_id, title: bound.title } : fact?.task ? { short_id: fact.task.short_id, title: fact.task.title } : null;
+      out.set(r._id, { stateLine, task, progress: bound ? subtaskCounts(bound._id, tasks as any[]) : null });
+    }
+    return out;
+  }, [rows, tasks, factsById, storeSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="space-y-4" data-hand-groups={groups.length}>
+      {groups.map((g) => (
+        <section key={g.state} data-hand-group={g.state}>
+          <h3 className="px-2.5 mb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: g.color }}>
+            <span className="w-[6px] h-[6px] rounded-full" style={{ background: g.color }} />
+            {g.label}
+            <span className="tabular-nums font-normal" style={{ color: "var(--sol-text-dim)" }}>{g.rows.length}</span>
+          </h3>
+          <ul className="space-y-0.5">
+            {g.rows.map((s) => {
+              const d = detail.get(s._id)!;
+              return <li key={s._id}><HandRow s={s} stateLine={d.stateLine} task={d.task} progress={d.progress} now={now} onOpen={() => onOpen(s)} /></li>;
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export function ScopeSessionsTab({ tree, role, scope, hands }: { tree: OrgTree; role: OrgRole | null; scope: ScopeRef | null; hands?: BriefHand[] | null }) {
   const now = useCoarseNow(30_000);
   const openLinked = useOpenLinkedSession();
   const [pages, setPages] = useState<Record<string, { rows: OrgSession[]; next?: string }>>({});
@@ -159,13 +247,10 @@ export function ScopeSessionsTab({ tree, role, scope }: { tree: OrgTree; role: O
       </div>
       <StateBar counts={counts} className="mx-2.5 mb-3" />
       {role && requested.map((c) => <RoleSessionsPage key={c} roleId={role._id} teamId={teamId} cursor={c} onPage={onPage} />)}
-      {role && <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Report to this role</h3>}
       {rows.length === 0 ? (
-        <Empty title={role ? "No sessions report to this role yet." : "No sessions in the last 30 days."} hint={role ? "A session started with cast spawn from the role, or moved under it on the org page, shows here." : undefined} />
+        <Empty title={role ? "No hands under this role yet." : "No sessions in the last 30 days."} hint={role ? "Ask the role for something in the conversation: the session it starts for the work shows here, grouped by who acts next." : undefined} />
       ) : (
-        <ul className="space-y-1">
-          {rows.map((s) => <li key={s._id}><SessionRow s={s} now={now} onOpen={() => openLinked({ _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type })} /></li>)}
-        </ul>
+        <HandGroups rows={rows} hands={hands} now={now} onOpen={(s) => openLinked({ _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type })} />
       )}
       {canLoad && (
         <div className="pt-2 text-center">

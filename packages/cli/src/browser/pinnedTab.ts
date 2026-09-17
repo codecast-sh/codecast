@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CdpConnection, cdpHttpTimeout, listTargets, type CdpEndpoint } from "./cdp.js";
-import { engineSession, engineStateDir, isPaneSession, isRealSession } from "./engine.js";
+import { CdpConnection, cdpHttpTimeout, listTargets, readCdpJson, type CdpEndpoint } from "./cdp.js";
+import {
+  baseSessionKey, engineSession, engineSessionKey, engineStateDir, isPaneSession, isRealSession,
+  paneSessionKey, realSessionKey,
+} from "./engine.js";
 import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
@@ -9,6 +12,9 @@ import { grantTab } from "./bridge/host.js";
 import { retryOnStall } from "./stall.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
+import { OWNER_HARNESS_ENV } from "./owner.js";
+import { sameDocument } from "./url.js";
+import { ownerState, scanLiveOwners, type LiveOwners } from "./engineReap.js";
 
 /** The engine daemon for this session, if one is alive. */
 export function sessionDaemonPid(session: string, stateDir = engineStateDir()): number | null {
@@ -108,6 +114,85 @@ export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowse
   return { endpoint: state.port, create: { url: "about:blank", background: true } };
 }
 
+export interface CastTab {
+  targetId: string;
+  url: string;
+  sessions: string[];
+}
+
+/** Is this engine session key the same agent as `session`, including an older
+ *  identity (tmux pane, harness twin) that would otherwise look like a stranger
+ *  and mint a second tab. */
+export function tabHolderIsSelf(holder: string, session: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (holder === session) return true;
+  if (baseSessionKey(holder) === baseSessionKey(session)) return true;
+  const pane = env.TMUX_PANE;
+  if (pane) {
+    const paneKey = engineSessionKey(`pane:${pane}`);
+    if (holder === paneKey || holder === realSessionKey(paneKey) || holder === paneSessionKey(paneKey)) return true;
+  }
+  for (const name of OWNER_HARNESS_ENV) {
+    const v = env[name];
+    if (!v) continue;
+    const key = engineSessionKey(`env:${v}`);
+    if (holder === key || holder === realSessionKey(key) || holder === paneSessionKey(key)) return true;
+  }
+  return false;
+}
+
+/**
+ * Pick a Cast tab already on `url` that this session may drive: ours (including
+ * an older identity), an unowned leftover, or one whose every holder has
+ * exited. A live stranger's tab is never taken — that is the hijack the
+ * isolation exists to prevent.
+ */
+export function pickReclaimableTab(
+  tabs: CastTab[],
+  url: string,
+  session: string,
+  holderExited: (holder: string) => boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): CastTab | null {
+  const matches = tabs.filter((t) => sameDocument(t.url, url));
+  const mine = matches.find((t) => t.sessions.some((s) => tabHolderIsSelf(s, session, env)));
+  if (mine) return mine;
+  const free = matches.find((t) => t.sessions.length === 0);
+  if (free) return free;
+  return matches.find((t) => t.sessions.length > 0 && t.sessions.every((s) => holderExited(s))) ?? null;
+}
+
+function unscopedEndpoint(endpoint: CdpEndpoint): CdpEndpoint {
+  return typeof endpoint === "number" ? endpoint : { port: endpoint.port, token: endpoint.token };
+}
+
+export async function listCastTabs(endpoint: CdpEndpoint): Promise<CastTab[]> {
+  const raw = await readCdpJson<Array<{ id?: string; url?: string; type?: string; cast?: boolean; sessions?: string[] }>>(
+    unscopedEndpoint(endpoint),
+    "/json/list",
+  );
+  return raw
+    .filter((t) => t.cast && t.type === "page" && t.id)
+    .map((t) => ({ targetId: t.id!, url: t.url ?? "", sessions: t.sessions ?? [] }));
+}
+
+function holderExitedFn(live: LiveOwners): (holder: string) => boolean {
+  return (holder) => ownerState(holder, live) === "exited";
+}
+
+async function reclaimCastTab(endpoint: CdpEndpoint, session: string, url: string): Promise<CastTab | null> {
+  let tabs: CastTab[];
+  try {
+    tabs = await listCastTabs(endpoint);
+  } catch {
+    return null;
+  }
+  const pick = pickReclaimableTab(tabs, url, session, holderExitedFn(scanLiveOwners()));
+  if (!pick) return null;
+  if (typeof endpoint === "number" || !endpoint.token) return pick;
+  const granted = await grantTab({ port: endpoint.port, token: endpoint.token }, session, pick.targetId).catch(() => false);
+  return granted ? pick : null;
+}
+
 export async function ensurePinnedTab(session = engineSession(), url?: string): Promise<boolean> {
   const browser = await pinnedTabBrowser(session);
   if (!browser) throw new Error("the browser is unavailable; no tab was opened");
@@ -122,16 +207,24 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
       bound = null;
     }
   }
-  if (bound && sessionDaemonPid(session)) return false;
   // Only a tab the browser says is gone is replaced; an unanswered check
-  // leaves the binding alone.
+  // leaves the binding alone. A live daemon is not proof the tab still
+  // exists — treating it as such made every tab_gone retry mint a second tab.
   if (bound && (await targetLiveness(browser.endpoint, bound)) !== "gone") return false;
 
   if (isRealSession(session)) {
-    const [existing] = await listTargets(browser.endpoint);
-    if (existing) {
-      writeBoundTarget(session, existing.targetId, engineStateDir(), existing.url);
+    const existing = await listTargets(browser.endpoint).catch(() => [] as Awaited<ReturnType<typeof listTargets>>);
+    const ours = url ? existing.find((t) => sameDocument(t.url, url)) ?? existing[0] : existing[0];
+    if (ours) {
+      writeBoundTarget(session, ours.targetId, engineStateDir(), ours.url);
       return false;
+    }
+    if (url) {
+      const reclaimed = await reclaimCastTab(browser.endpoint, session, url);
+      if (reclaimed) {
+        writeBoundTarget(session, reclaimed.targetId, engineStateDir(), reclaimed.url);
+        return false;
+      }
     }
   }
   if (!browser.create) throw new Error("this session's desktop pane is gone — offer one with `cast browser pane <url>` and wait for the human to open it; an agent never opens a pane itself");
@@ -152,4 +245,21 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
   if (!r?.targetId) throw new Error("the browser did not return the requested tab");
   writeBoundTarget(session, r.targetId, engineStateDir(), url);
   return true;
+}
+
+/**
+ * The engine said this session's tab is gone. Drop the pin only when the
+ * browser agrees, then bind one tab (reclaim or create) so a retry of `open`
+ * does not mint a second one beside a tab that was merely slow to answer.
+ */
+export async function recoverGoneTab(session: string, url?: string): Promise<void> {
+  const bound = readBoundTarget(session);
+  if (bound) {
+    const browser = await pinnedTabBrowser(session);
+    if (!browser) return;
+    const life = await targetLiveness(browser.endpoint, bound);
+    if (life !== "gone") return;
+    fs.rmSync(path.join(engineStateDir(), `${session}.target`), { force: true });
+  }
+  if (url) await ensurePinnedTab(session, url);
 }

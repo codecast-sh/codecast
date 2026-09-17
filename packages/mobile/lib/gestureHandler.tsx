@@ -53,6 +53,7 @@ export function NativePressable({
   children,
   hitSlop,
   activeOpacity,
+  delayPressIn = 0,
   ...rest
 }: TouchableOpacityProps) {
   const Button = gh?.TouchableOpacity ?? TouchableOpacity;
@@ -62,6 +63,7 @@ export function NativePressable({
       style={StyleSheet.flatten(style)}
       hitSlop={hitSlop}
       activeOpacity={activeOpacity}
+      delayPressIn={delayPressIn}
       {...rest}
     >
       {children}

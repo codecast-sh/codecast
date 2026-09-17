@@ -4212,6 +4212,7 @@ pre[class*="language-"] {
   margin: 14px 0;
   padding: 0 0 18px;
   overflow: clip;
+  overflow-anchor: none;
   cursor: auto;
   text-align: left;
   font-size: 1rem;
@@ -4219,8 +4220,8 @@ pre[class*="language-"] {
   background-color: var(--sol-bg-alt);
   background-image: repeating-linear-gradient(
     -45deg,
-    transparent 0 5px,
-    color-mix(in srgb, var(--sol-border) 70%, transparent) 5px 6px
+    transparent 0 9px,
+    color-mix(in srgb, var(--sol-border) 22%, transparent) 9px 10px
   );
   border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
   border-bottom: 1px solid color-mix(in srgb, var(--reveal-accent) 30%, var(--sol-border));
@@ -4230,7 +4231,7 @@ pre[class*="language-"] {
 .object-reveal__lane {
   position: absolute;
   top: 40px;
-  bottom: 58px;
+  bottom: 18px;
   width: var(--reveal-gutter);
   z-index: 2;
   display: flex;
@@ -4257,26 +4258,31 @@ pre[class*="language-"] {
   height: 40px;
   background: var(--reveal-accent);
 }
-/* Juicy hit above and below the framed page: a real link, so a click opens
-   the object and Option-click opens it beside. */
+/* One juicy Open hit above the framed page. The label opens the object;
+   the columns icon opens it beside. */
 .object-reveal__open {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: stretch;
+  gap: 2px;
   height: 40px;
-  padding: 0 16px 0 var(--reveal-gutter);
+  padding: 0 8px 0 var(--reveal-gutter);
+  background: color-mix(in srgb, var(--reveal-accent) 6%, transparent);
+}
+.object-reveal__open-go {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px 0 0;
   color: var(--sol-text);
   text-decoration: none;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  background: color-mix(in srgb, var(--reveal-accent) 10%, transparent);
-  transition: background 120ms, color 120ms;
 }
-.object-reveal__open:hover,
-.object-reveal__open:focus-visible {
-  background: color-mix(in srgb, var(--reveal-accent) 24%, transparent);
+.object-reveal__open-go:hover,
+.object-reveal__open-go:focus-visible {
   color: var(--sol-text);
 }
 .object-reveal__open-label {
@@ -4285,45 +4291,51 @@ pre[class*="language-"] {
   gap: 8px;
   min-width: 0;
 }
-.object-reveal__open-hint {
+.object-reveal__open-beside {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 500;
+  justify-content: center;
+  width: 36px;
+  height: 32px;
+  margin: auto 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--sol-text-muted);
-  letter-spacing: 0;
+  cursor: pointer;
+}
+.object-reveal__open-beside:hover,
+.object-reveal__open-beside:focus-visible {
+  background: color-mix(in srgb, var(--reveal-accent) 18%, transparent);
+  color: var(--sol-text);
 }
 .object-reveal-open-compact {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 4px 0 10px;
   border-radius: 8px;
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+}
+.object-reveal-open-compact .object-reveal__open-go {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 6px 0 0;
   color: var(--sol-text);
   text-decoration: none;
   font-size: 12px;
   font-weight: 600;
-  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
-  transition: background 120ms;
-}
-.object-reveal-open-compact:hover,
-.object-reveal-open-compact:focus-visible {
-  background: color-mix(in srgb, var(--sol-cyan) 22%, transparent);
 }
 .object-reveal-open-compact .object-reveal__open-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.object-reveal-open-compact .object-reveal__open-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--sol-text-muted);
+.object-reveal-open-compact .object-reveal__open-beside {
+  width: 26px;
+  height: 24px;
 }
 /* overflow: clip, not hidden: the corners round without the frame becoming
    a scrollport, so the strip's sticky still measures against the transcript. */
@@ -4473,6 +4485,26 @@ pre[class*="language-"] {
 }
 [data-cc-conversation][data-reveal-chrome]:not(:has([data-sv-composer]:focus-within)) [data-sv-composer] > .h-16 {
   display: none;
+}
+/* Inside the framed page the object's own header is already on the strip,
+   so drop it. A session's composer collapses to a thin bar until focused. */
+.object-reveal__body [data-sv-convhead],
+.object-reveal__body [data-page-head] {
+  display: none;
+}
+.object-reveal__body [data-sv-composer]:not(:focus-within) {
+  max-height: 36px;
+  overflow: hidden;
+}
+.object-reveal__body [data-sv-composer]:not(:focus-within) > .h-16 {
+  display: none;
+}
+.object-reveal__body [data-sv-composer]:not(:focus-within) [data-chat-input],
+.object-reveal__body [data-sv-composer]:not(:focus-within) textarea {
+  min-height: 22px !important;
+  max-height: 22px !important;
+  padding-block: 2px !important;
+  font-size: 11px;
 }
 /* The pill's reveal caret: hidden until hover, always shown while its band
    is open, and rotated to point up so the same glyph reads open and close.

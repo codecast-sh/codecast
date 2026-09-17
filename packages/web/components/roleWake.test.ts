@@ -88,3 +88,38 @@ describe("parseRoleWakeFrame", () => {
     expect(cleanUserMessage(ROLE_WAKE_FIXTURE)).toBeNull();
   });
 });
+
+// ── Where a message went (scopes-and-feed.md F4.2) ──────────────────────────
+import { handsStartedInTurn, personWrote, sentToRef } from "./roleWake";
+
+describe("where a message went is derived from what the role did", () => {
+  const at = Date.parse("2026-09-17T20:12:04.000Z");
+  const hands = [
+    { _id: "h_old", started_at: at - 60_000 },
+    { _id: "h_second", started_at: at + 90_000 },
+    { _id: "h_first", started_at: at + 30_000 },
+    { _id: "h_next_turn", started_at: at + 600_000 },
+  ];
+
+  test("a wake claims the hands started inside its turn, oldest first, and nothing from before it", () => {
+    expect(handsStartedInTurn(hands, at, at + 300_000).map((h) => h._id)).toEqual(["h_first", "h_second"]);
+    // The latest turn runs to now.
+    expect(handsStartedInTurn(hands, at, null).map((h) => h._id)).toEqual(["h_first", "h_second", "h_next_turn"]);
+    // A frame with no time claims nothing rather than everything.
+    expect(handsStartedInTurn(hands, null, null)).toEqual([]);
+  });
+
+  test("a cast send names the session it reached; flags before the id are skipped; other verbs are not a send", () => {
+    expect(sentToRef({ category: "send", subcommand: "jx7h101", args: '"try the simplest revert first"' })).toBe("jx7h101");
+    expect(sentToRef({ category: "send", subcommand: "", args: "--wake jx7h101 -" })).toBe("jx7h101");
+    expect(sentToRef({ category: "spawn", subcommand: "", args: '"get CI green"' })).toBeNull();
+    expect(sentToRef({ category: "send", subcommand: "-", args: "" })).toBeNull();
+    expect(sentToRef(null)).toBeNull();
+  });
+
+  test("a frame says when a person wrote, and the fixture (system causes only) does not", () => {
+    const wrote = ROLE_WAKE_FIXTURE.replace("## Why you are awake\n", "## Why you are awake\n- Ashot Petrosian wrote:\nremember the release moved to Friday\n");
+    expect(personWrote(parseRoleWakeFrame(wrote)!)).toBe(true);
+    expect(personWrote(parseRoleWakeFrame(ROLE_WAKE_FIXTURE)!)).toBe(false);
+  });
+});

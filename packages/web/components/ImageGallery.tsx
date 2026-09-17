@@ -1,9 +1,9 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
-import { Link2, MessageSquareText } from "lucide-react";
+import { Link2, LocateFixed } from "lucide-react";
 import { toast } from "sonner";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
-import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { copyToClipboard } from "../lib/utils";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 
@@ -79,11 +79,16 @@ export function ImageLightbox({ src, onClose }: { src: string; onClose: () => vo
 // under. The provider outlives a conversation switch (the inbox keeps one
 // ConversationView and swaps its data), so an untagged registry accumulated
 // every session ever viewed and an inline click browsed all of them.
+// One square hit box per control, icon centred: a bare <a> or an inline icon
+// paints the glyph at the top left of a taller line box, so the hover target
+// and the visible icon disagree.
+const ACTION_CLASS = "inline-flex h-10 w-10 items-center justify-center rounded text-white/35 hover:text-white transition-colors";
+
 type Registry = { conversationId: string | undefined; bySrc: Map<string, GalleryImage>; order: GalleryImage[] };
 const emptyRegistry = (conversationId: string | undefined): Registry => ({ conversationId, bySrc: new Map(), order: [] });
 
 export function ImageGalleryProvider({ conversationId, onJumpToMessage, children }: {
-  // Scopes the mount registry and addresses the "jump to message" link.
+  // Scopes the mount registry to one conversation.
   conversationId?: string;
   // Scroll the transcript to a message (the host's own path, which can expand
   // a collapsed group and highlight the row). Called after the lightbox closes.
@@ -183,9 +188,6 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
     close();
     onJumpToMessage?.(messageId);
   }, [close, onJumpToMessage]);
-  const messageHref = current?.messageId && conversationId
-    ? `${shareOrigin()}/conversation/${conversationId}#msg-${current.messageId}`
-    : undefined;
 
   return (
     <ImageGalleryContext.Provider value={ctx}>
@@ -204,27 +206,26 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
             {current?.href && (
               <button
                 onClick={() => copyLink(current.href!)}
-                className="text-white/35 hover:text-white p-2 transition-colors"
+                className={ACTION_CLASS}
                 title="Copy link to image"
                 aria-label="Copy link to image"
               >
                 <Link2 className="w-4 h-4" strokeWidth={2} />
               </button>
             )}
-            {current?.messageId && (onJumpToMessage || messageHref) && (
-              <a
-                href={messageHref ?? `#msg-${current.messageId}`}
-                onClick={e => { e.preventDefault(); jumpToMessage(current.messageId!); }}
-                className="text-white/35 hover:text-white p-2 transition-colors"
-                title="Jump to the message this image came from"
-                aria-label="Jump to the message this image came from"
+            {current?.messageId && onJumpToMessage && (
+              <button
+                onClick={() => jumpToMessage(current.messageId!)}
+                className={ACTION_CLASS}
+                title="Locate in the conversation"
+                aria-label="Locate in the conversation"
               >
-                <MessageSquareText className="w-4 h-4" strokeWidth={2} />
-              </a>
+                <LocateFixed className="w-4 h-4" strokeWidth={2} />
+              </button>
             )}
             <button
               onClick={close}
-              className="text-white/50 hover:text-white p-2 transition-colors"
+              className={`${ACTION_CLASS} text-white/50`}
               title="Close (Esc)"
             >
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

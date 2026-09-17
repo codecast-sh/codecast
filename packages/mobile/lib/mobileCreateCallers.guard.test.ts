@@ -236,3 +236,32 @@ describe("mobile principal outbox binding", () => {
     expect(inboxSource).toContain("if (!hydrated || sessionsFirstLoad !== false)");
   });
 });
+
+describe("mobile send button is a real tap target", () => {
+  const sessionSource = readFileSync(
+    `${import.meta.dir}/../app/session/[id].tsx`,
+    "utf8",
+  );
+  const composerSource = readFileSync(
+    `${import.meta.dir}/../components/chat/ChatComposerBar.tsx`,
+    "utf8",
+  );
+
+  test("session send is 44pt and lives outside the jump overlay", () => {
+    expect(sessionSource).toContain("minWidth: 44");
+    expect(sessionSource).toContain("height: 44");
+    expect(sessionSource).toContain('keyboardShouldPersistTaps="always"');
+    // Overlay is a child of the list pane, closed before composerLayer.
+    const overlay = sessionSource.indexOf("styles.jumpButtonsOverlay");
+    const overlayClose = sessionSource.indexOf("</Animated.View>", overlay);
+    const composer = sessionSource.indexOf("styles.composerLayer");
+    expect(overlay).toBeGreaterThan(-1);
+    expect(composer).toBeGreaterThan(overlayClose);
+  });
+
+  test("chat send is 44pt", () => {
+    expect(composerSource).toContain("width: 44");
+    expect(composerSource).toContain("height: 44");
+    expect(composerSource).toContain("hitSlop={12}");
+  });
+});

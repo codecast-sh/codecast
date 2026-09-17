@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { sessionIdentity } from "../../lib/sessionIdentity";
 import {
   Archive,
   Bot,
@@ -17,6 +18,7 @@ import {
   MailOpen,
   Moon,
   Pencil,
+  Smile,
   Pin,
   PinOff,
   Square,
@@ -402,6 +404,7 @@ export function SessionMenuItems({
   onStash,
   onDefer,
   onRename,
+  onPickCharacter,
   extra,
 }: {
   session: InboxSession;
@@ -415,6 +418,8 @@ export function SessionMenuItems({
   onStash?: () => void;
   onDefer?: () => void;
   onRename?: () => void;
+  /** Opens the character picker for this session (session-characters.md S2). */
+  onPickCharacter?: () => void;
 }) {
   const id = session._id;
   // One-shot snapshots — labels don't churn while a menu is open.
@@ -522,6 +527,11 @@ export function SessionMenuItems({
       {canControlModel(session.agent_type, (session.message_count ?? 0) === 0) && (
         <CtxItem icon={Cpu} onSelect={() => openPaletteMode([session], "session", "model")}>
           Change model &amp; effort…
+        </CtxItem>
+      )}
+      {onPickCharacter && (
+        <CtxItem icon={Smile} onSelect={onPickCharacter}>
+          {sessionIdentity(session as never, false).kind === "plain" ? "Give it a character\u2026" : "Change character\u2026"}
         </CtxItem>
       )}
       {onRename && (

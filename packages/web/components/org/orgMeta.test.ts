@@ -34,8 +34,8 @@ describe("standingLineOf", () => {
 
 describe("changeLine and chipLine", () => {
   test("changeLine is total: a kind this build does not know still reads as a line", () => {
-    expect(changeLine({ kind: "rename", handle: "growth" } as any)).toBe("Rename (not supported in this build)");
-    expect(changeLine({} as any)).toBe("Change (not supported in this build)");
+    expect(changeLine({ kind: "rename", handle: "growth" } as any)).toBe('A change this version of codecast cannot show yet ("rename")');
+    expect(changeLine({} as any)).toBe("A change this version of codecast cannot show yet");
     expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("Trust @growth to decide");
   });
 

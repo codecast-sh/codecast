@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 
@@ -122,20 +123,21 @@ export function DecisionAnswerControls({
   }, [keys, kind, decision.options.length, answerSingle, answerText, submit, onDismiss]);
 
   const compact = size === "compact";
-  const btn = (primary: boolean) =>
-    `group flex items-center gap-2 rounded border transition-colors ${compact ? "px-2.5 py-1.5 text-[12px]" : "px-3 py-2 text-sm"} ${
-      primary
-        ? "border-sol-yellow/40 text-sol-text hover:bg-sol-yellow hover:text-sol-bg"
-        : "border-sol-border text-sol-text-muted hover:border-sol-text-dim hover:text-sol-text"
-    }`;
   const submitBtn = (
-    <button onClick={submit} className={`${btn(true)} border-sol-green/40 hover:bg-sol-green`}>
+    <button onClick={submit} className={`flex items-center gap-2 rounded border border-sol-green/40 text-sol-text transition-colors hover:bg-sol-green hover:text-sol-bg ${compact ? "px-2.5 py-1.5 text-[12px]" : "px-3 py-2 text-sm"}`}>
       {keys && <KeyCap size="xs">return</KeyCap>}
       <span>Send this answer</span>
     </button>
   );
-  const recTag = (i: number) => recommendation === i && <span className="text-[10px] text-sol-cyan">recommended</span>;
-  const defaultTag = (i: number) => decision.default_option === i && !decision.blocking && <span className="text-[10px] text-sol-text-dim">proceeding with this</span>;
+  // The marks after a label: a lead's recommendation, the default the agent
+  // is already proceeding with on an advisory ask.
+  const tags = (i: number) => (
+    <>
+      {recommendation === i && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">recommended</span>}
+      {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>}
+    </>
+  );
+  const openOther = () => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); };
 
   const dismissBtn = onDismiss && (
     <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title="Dismiss without answering — the agent is not told">
@@ -145,51 +147,60 @@ export function DecisionAnswerControls({
 
   const body = useMemo(() => {
     if (kind === "single") {
+      // The recommended option (else the first) reads as the primary row.
+      const primary = recommendation ?? 0;
       return (
-        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
-          {decision.options.map((o, n) => (
-            <button key={n} onClick={() => answerSingle(n)} className={`${btn(n === (recommendation ?? 0))} w-full sm:w-auto text-left`} title={o.description}>
-              {keys && n < 9 && <KeyCap size="xs">{String(n + 1)}</KeyCap>}
-              <span>{o.label.replace(" (Recommended)", "")}</span>
-              {recTag(n)}{defaultTag(n)}
-            </button>
-          ))}
-          <button onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }} className={`${btn(false)} w-full sm:w-auto`}>
-            {keys && <KeyCap size="xs">t</KeyCap>}<span>type an answer</span>
-          </button>
+        <div className="space-y-2">
+          <DecisionOptionList
+            options={decision.options}
+            keys={keys}
+            compact={compact}
+            onPick={answerSingle}
+            tone={(n) => (n === primary ? "primary" : "plain")}
+            tags={tags}
+          />
+          <TypeAnswerButton onOpen={openOther} keys={keys} />
         </div>
       );
     }
     if (kind === "multi") {
       return (
-        <div className="space-y-1.5">
-          {decision.options.map((o, n) => {
-            const on = picked.includes(n);
-            return (
-              <button key={n} onClick={() => setPicked((p) => (on ? p.filter((x) => x !== n) : [...p, n]))} className={`w-full flex items-center gap-2.5 text-left rounded border px-3 py-2 text-sm transition-colors ${on ? "border-sol-yellow/50 bg-sol-yellow/10 text-sol-text" : "border-sol-border text-sol-text-muted hover:text-sol-text"}`}>
-                {on ? <CheckSquare className="w-4 h-4 text-sol-yellow shrink-0" /> : <Square className="w-4 h-4 shrink-0" />}
+        <div className="space-y-2">
+          <DecisionOptionList
+            options={decision.options}
+            keys={keys}
+            compact={compact}
+            onPick={(n) => setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]))}
+            tone={(n) => (picked.includes(n) ? "picked" : "plain")}
+            tags={tags}
+            leading={(n) => (
+              <span className="flex items-center gap-1.5">
+                {picked.includes(n) ? <CheckSquare className="w-4 h-4 text-sol-green" /> : <Square className="w-4 h-4 text-sol-text-dim" />}
                 {keys && n < 9 && <KeyCap size="xs">{String(n + 1)}</KeyCap>}
-                <span className="min-w-0 flex-1">{o.label}</span>
-                {recTag(n)}
-              </button>
-            );
-          })}
+              </span>
+            )}
+          />
           <div className="flex items-center gap-3 pt-1">{submitBtn}<span className="text-[11px] text-sol-text-dim">{picked.length} picked</span></div>
         </div>
       );
     }
     if (kind === "rank") {
+      // Rows in the reader's order; the badge is the rank, not the option's number.
+      const ordered = order.map((i) => decision.options[i]).filter(Boolean);
       return (
-        <div className="space-y-1.5">
-          {order.map((optIndex, pos) => (
-            <div key={optIndex} className="flex items-center gap-2.5 rounded border border-sol-border px-3 py-2 text-sm text-sol-text">
-              <span className="font-mono text-[11px] text-sol-text-dim w-5">{pos + 1}.</span>
-              <span className="min-w-0 flex-1">{decision.options[optIndex]?.label}</span>
-              {recTag(optIndex)}
-              <button onClick={() => move(pos, -1)} disabled={pos === 0} className="p-1 rounded hover:bg-sol-card disabled:opacity-30" title="Move up"><ArrowUp className="w-3.5 h-3.5" /></button>
-              <button onClick={() => move(pos, 1)} disabled={pos === order.length - 1} className="p-1 rounded hover:bg-sol-card disabled:opacity-30" title="Move down"><ArrowDown className="w-3.5 h-3.5" /></button>
-            </div>
-          ))}
+        <div className="space-y-2">
+          <DecisionOptionList
+            options={ordered}
+            compact={compact}
+            tags={(pos) => tags(order[pos])}
+            leading={(pos) => <span className="font-mono text-[11px] text-sol-text-dim w-5">{pos + 1}.</span>}
+            trailing={(pos) => (
+              <>
+                <button onClick={() => move(pos, -1)} disabled={pos === 0} className="p-1 rounded hover:bg-sol-card disabled:opacity-30" title="Move up"><ArrowUp className="w-3.5 h-3.5" /></button>
+                <button onClick={() => move(pos, 1)} disabled={pos === order.length - 1} className="p-1 rounded hover:bg-sol-card disabled:opacity-30" title="Move down"><ArrowDown className="w-3.5 h-3.5" /></button>
+              </>
+            )}
+          />
           <div className="flex items-center gap-3 pt-1">{submitBtn}<span className="text-[11px] text-sol-text-dim">first is most preferred</span></div>
         </div>
       );
@@ -219,7 +230,7 @@ export function DecisionAnswerControls({
       </div>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, decision.options, decision.form, picked, order, values, keys, recommendation, compact, answerSingle, move, submit]);
+  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, compact, answerSingle, move, submit]);
 
   return (
     <div>
