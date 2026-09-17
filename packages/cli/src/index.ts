@@ -83,6 +83,7 @@ import {
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
+import type { RecoveryMode } from "@codecast/shared/contracts";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
@@ -117,6 +118,7 @@ import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import { runDoctor, type DoctorDeps } from "./doctor.js";
+import { CHECK_PROJECTS, checkProject, listWatchers, repoRoot, runWatcher } from "./check.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
@@ -4585,7 +4587,7 @@ async function runUsageCommand(options: { json?: boolean }): Promise<void> {
   const profiles = loadLocalUsageProfiles();
   // The recovery flags live on the device row; best-effort — a report without
   // them is still a report.
-  let recovery: { auto_switch: boolean; auto_continue: boolean } | null = null;
+  let recovery: { auto_switch: boolean; auto_continue: boolean; mode?: RecoveryMode } | null = null;
   try {
     const { siteUrl, apiToken } = getCliEndpoint();
     const resp = await cliFetch(`${siteUrl}/cli/accounts/recovery-status`, {
@@ -4595,7 +4597,13 @@ async function runUsageCommand(options: { json?: boolean }): Promise<void> {
     });
     const status = resp.ok ? await resp.json() : null;
     if (status && typeof status.auto_switch === "boolean") {
-      recovery = { auto_switch: status.auto_switch, auto_continue: status.auto_continue !== false };
+      recovery = {
+        auto_switch: status.auto_switch,
+        auto_continue: status.auto_continue !== false,
+        // Older servers answer without a mode; derive the same four-way answer
+        // from the flags so the CLI never reports a mode the server disagrees with.
+        mode: status.mode ?? (status.ask_first ? "ask" : status.auto_switch ? "auto" : status.auto_continue !== false ? "resume" : "off"),
+      };
     }
   } catch {}
   const report = buildUsageReport(profiles, Date.now(), recovery);
@@ -5609,6 +5617,63 @@ program
       }
     }
     console.log("");
+  });
+
+program
+  .command("check [projects...]")
+  .description(
+    "Typecheck this tree through one shared tsc watcher per project (cli, web, convex; default all).\n" +
+    "One watcher serves every session on the tree and re-checks only what changed, so an ask takes\n" +
+    "seconds instead of a full tsc run per session. Use this instead of `tsc --noEmit`."
+  )
+  .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
+  .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
+  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean }) => {
+    const root = repoRoot();
+    const wanted = projects.length ? projects : Object.keys(CHECK_PROJECTS).filter((p) => fs.existsSync(path.join(root, CHECK_PROJECTS[p])));
+    let failed = 0;
+    const results = [];
+    for (const project of wanted) {
+      try {
+        const r = await checkProject(project, root, { fresh: o.fresh, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
+        results.push(r);
+        if (r.errors > 0) failed++;
+        if (!o.json) {
+          if (r.diagnostics.trim()) console.log(r.diagnostics.trimEnd());
+          const age = r.passAgeMs < 60_000 ? `${Math.round(r.passAgeMs / 1000)}s` : `${Math.round(r.passAgeMs / 60_000)}m`;
+          console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(pass ${age} old${r.started ? ", watcher started by this call" : ""})`)}`);
+        }
+      } catch (err) {
+        failed++;
+        if (o.json) results.push({ project, error: (err as Error).message });
+        else console.error(`${fmt.error("✗")} ${project}: ${(err as Error).message}`);
+      }
+    }
+    if (o.json) console.log(JSON.stringify(results, null, 2));
+    process.exit(failed ? 1 : 0);
+  });
+
+program
+  .command("check-watch <project> <root>", { hidden: true })
+  .description("Run one typecheck watcher in the foreground (internal; `cast check` starts these detached)")
+  .action(async (project: string, root: string) => {
+    await runWatcher(project, root);
+  });
+
+program
+  .command("check-status")
+  .description("The typecheck watchers on this machine: tree, project, pid, last pass")
+  .option("--stop", "Stop every watcher")
+  .action((o: { stop?: boolean }) => {
+    const all = listWatchers();
+    if (!all.length) return console.log("no typecheck watchers running");
+    for (const w of all) {
+      if (o.stop) {
+        try { process.kill(w.pid, "SIGTERM"); } catch {}
+      }
+      const age = w.finishedAt ? `${Math.round((Date.now() - w.finishedAt) / 60_000)}m ago` : "no pass yet";
+      console.log(`${o.stop ? "stopped " : ""}${w.project} @ ${w.root}  pid ${w.pid}  ${w.inProgress ? "checking" : `${w.errors ?? "?"} errors, ${age}`}`);
+    }
   });
 
 program

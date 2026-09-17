@@ -32,7 +32,25 @@ records it brings in line as counts, each seat in one line with its
 evidence, what is already decided, and the link. Compare what it claims
 with what health says now, and name a difference only where it would move
 a change; counts that drifted by a few since the post are not news. Do not
-post beside it and do not withdraw it. An edit the person gives you here
+post beside it and do not withdraw it.
+
+When the open proposal is your own (this session posted it, or you are the
+standing session of the role that did), an edit the person gives you is
+yours to make, in place, before they decide:
+
+```bash
+cast org revise op-N --remove 3 --note "growth is not dead yet"
+cast org revise op-N --amend 1 --edits '{"caps":{"wakes_per_day":6}}' --rationale "half the wakes"
+cast org revise op-N --add change.json          # one spec change, or a list
+```
+
+Removing, amending and adding touch only changes nobody has decided; a
+decided one is refused by name, and accepting stays theirs on the page.
+`--note` is one line in your words that the page shows beside each change
+the revise touched, so say why. Their message from the page opens with the
+change they were looking at ("About op-N change 3"); answer about that row.
+
+When the open proposal is someone else's, an edit the person gives you
 lands on the page, not in a new post: name the change it edits or skips by
 its number, and the order when an accept depends on a skip. An edit the
 proposal cannot carry waits for the withdraw, which is theirs, on the page
@@ -91,7 +109,8 @@ cast org propose --spec proposal.json [--supersedes op-N]
 ```
 
 Post once. `--supersedes` names an open proposal this session or the person
-posted earlier; naming another author's is refused.
+posted earlier; naming another author's is refused. After the post, a change
+of mind is a revise (`cast org revise op-N`, above), not a second post.
 
 ## End
 
