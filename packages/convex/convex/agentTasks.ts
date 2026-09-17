@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { normalizeRepository } from "./lib/gitRefs";
-import { mutation, query, internalMutation, internalAction, internalQuery } from "./functions";
+import { mutation, query, internalMutation, internalAction, internalQuery, type MutationCtx } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -16,7 +16,8 @@ import { armedTriggerKindFor } from "./dormancy";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueRoleEvent } from "./orgEvents";
-import { triggerLifecycleInstructions } from "@codecast/shared/contracts";
+import { normalizeThreadState, runResultThreadOf, triggerLifecycleInstructions } from "@codecast/shared/contracts";
+import { performSetThreadState } from "./conversations";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -183,7 +184,9 @@ export async function cancelTasksBoundToConversation(
 
 /** Cancel every open task a conversation originated (a retired standing role's
  *  routines): cancelled, not completed, so nothing re-arms them. Returns the count. */
-export async function cancelTasksOriginatingFrom(ctx: TaskCtx, conversationId: Id<"conversations">, now = Date.now()): Promise<number> {
+// `only` narrows the cancel to the tasks a caller owns (a seat's own routine),
+// leaving whatever else the person armed on the thread alone.
+export async function cancelTasksOriginatingFrom(ctx: TaskCtx, conversationId: Id<"conversations">, now = Date.now(), only?: (task: any) => boolean): Promise<number> {
   const tasks = await ctx.db
     .query("agent_tasks")
     .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", conversationId))
@@ -191,6 +194,7 @@ export async function cancelTasksOriginatingFrom(ctx: TaskCtx, conversationId: I
   let cancelled = 0;
   for (const task of tasks) {
     if (task.status === "cancelled" || task.status === "completed" || task.status === "failed") continue;
+    if (only && !only(task)) continue;
     await patchTask(ctx, task, { status: "cancelled", updated_at: now });
     cancelled++;
   }
@@ -744,6 +748,77 @@ function nextArmingAfterRun(task: Doc<"agent_tasks">, now: number): Record<strin
   return { status: "completed" };
 }
 
+// What a finished run does to the conversations around it.
+//
+// 1. The run's own conversation takes the completion as its DECLARATION. A
+//    spawned run that reported its own outcome (`cast trigger complete
+//    --summary`, no daemon_id: the daemon's tmux-exit completion means the
+//    agent died without reporting, and that run must keep reading as a death)
+//    has said who acts next: nobody, or with --needs-attention the human. That
+//    is the same claim `cast state --status done|blocked` makes, so it goes
+//    through the same writer. Without it the run's process exit reads as a dead
+//    session with output: every clean run filed under Needs Input, and the
+//    stall rule pulled a folded one back out seconds after the fold.
+// 2. The result is posted where it is read (runResultThreadOf).
+// 3. The run folds out of the inbox once its result lives somewhere else: a
+//    repeating trigger's standing row, or the thread from step 2. A once run
+//    with nowhere to post stays in the inbox, filed under Done — its single
+//    result IS the deliverable. Pins, earlier triage and queued messages are
+//    the user's intent and are never overridden.
+export async function settleRunConversation(
+  ctx: MutationCtx,
+  task: Doc<"agent_tasks">,
+  runConv: Doc<"conversations"> | null,
+  args: { summary?: string; needs_attention?: boolean; daemon_id?: string },
+  now: number,
+): Promise<void> {
+  const summary = args.summary ? normalizeThreadState(args.summary) : "";
+  const selfReported = !!runConv && !args.daemon_id && !!summary;
+  if (runConv && selfReported) {
+    await performSetThreadState(ctx, runConv, summary, args.needs_attention ? "blocked" : "done");
+  }
+
+  let posted = false;
+  const threadId = runResultThreadOf(task);
+  const thread = threadId && args.summary ? await ctx.db.get(threadId) : null;
+  if (thread) {
+    // A spawned run names its trigger and its own session, so the line in the
+    // thread is one click from the transcript behind it.
+    const runRef = runConv ? runConv.short_id ?? runConv._id.toString().slice(0, 7) : null;
+    const content = runRef
+      ? `${task.short_id ?? task.title} ran in ${runRef}${args.needs_attention ? " and needs attention" : ""}:\n\n${args.summary}`
+      : args.summary!;
+    await ctx.db.insert("messages", {
+      conversation_id: thread._id,
+      role: "assistant",
+      content,
+      subtype: "scheduled_task_result",
+      timestamp: now,
+    });
+    await ctx.db.patch(thread._id, { updated_at: now, message_count: thread.message_count + 1 });
+    posted = true;
+  }
+
+  const repeatingSpawn =
+    (task.schedule_type === "recurring" || task.schedule_type === "event") &&
+    !task.originating_conversation_id;
+  if (
+    runConv &&
+    selfReported &&
+    !args.needs_attention &&
+    (repeatingSpawn || posted) &&
+    !runConv.inbox_pinned_at &&
+    !runConv.inbox_dismissed_at &&
+    !runConv.inbox_stashed_at &&
+    !runConv.has_pending_messages
+  ) {
+    // Folded = out of the way, NOT retired: the run's history is living state,
+    // so the fold writes the stash stamp (Stashed bucket) rather than the
+    // legacy dismissed stamp that files rows under Killed.
+    await ctx.db.patch(runConv._id, { inbox_stashed_at: now });
+  }
+}
+
 export const completeTaskRun = mutation({
   args: {
     api_token: v.string(),
@@ -801,34 +876,7 @@ export const completeTaskRun = mutation({
       runConv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
     }
 
-    // Fold the run the agent just finished, not only the superseded one
-    // (linkRunConversation): the steady state of a healthy repeating spawn
-    // schedule is ZERO loose inbox cards — the schedule's standing row carries
-    // the summary. Strictly gated on the agent's own deliberate completion:
-    // no daemon_id (the daemon's tmux-exit completion means the agent died
-    // WITHOUT self-reporting — that run must stay visible), a real summary,
-    // and no --needs-attention. Same user-intent guards as the previous-run
-    // fold; `once` runs never fold (their single result IS the deliverable).
-    const repeatingSpawn =
-      (task.schedule_type === "recurring" || task.schedule_type === "event") &&
-      !task.originating_conversation_id;
-    if (
-      repeatingSpawn &&
-      !args.daemon_id &&
-      !!args.summary &&
-      !args.needs_attention &&
-      runConv &&
-      !runConv.inbox_pinned_at &&
-      !runConv.inbox_dismissed_at &&
-      !runConv.inbox_stashed_at &&
-      !runConv.has_pending_messages
-    ) {
-      // Folded = out of the way, NOT retired: the run's agent may still be
-      // alive and its history is living state, so the fold writes the stash
-      // stamp (Stashed bucket, "N running" pill) rather than the legacy
-      // dismissed stamp that files rows under Killed.
-      await ctx.db.patch(runConv._id, { inbox_stashed_at: now });
-    }
+    await settleRunConversation(ctx, task, runConv, args, now);
 
     // --needs-attention is the agent's claim on the user's eyes, and stash/kill
     // must not swallow it: if the conversation the flag points at (the inject
@@ -862,23 +910,6 @@ export const completeTaskRun = mutation({
     }
 
     await patchTask(ctx, task, updates);
-
-    if (task.target_conversation_id && args.summary) {
-      const targetConv = await ctx.db.get(task.target_conversation_id);
-      if (targetConv) {
-        await ctx.db.insert("messages", {
-          conversation_id: task.target_conversation_id,
-          role: "assistant",
-          content: args.summary,
-          subtype: "scheduled_task_result",
-          timestamp: now,
-        });
-        await ctx.db.patch(task.target_conversation_id, {
-          updated_at: now,
-          message_count: targetConv.message_count + 1,
-        });
-      }
-    }
 
     // Notify only when the completion IS the deliverable: a one-shot task
     // finishing, or any run the agent flagged --needs-attention. A healthy
@@ -1063,8 +1094,8 @@ export const skipTaskRun = mutation({
 //    job is 24 cards a day of pure noise. The moment a new run starts, the
 //    previous run has been superseded: if it completed cleanly, fold it out of
 //    the active inbox (dismiss). Attention stays earned, not granted: a run
-//    that FAILED (last_run_failed), is still active, was pinned, or has a
-//    pending user message is never folded. Folded runs remain reachable — the
+//    that FAILED (last_run_failed), asked for attention, is still active, was
+//    pinned, or has a pending user message is never folded. Folded runs remain reachable — the
 //    Dismissed group, /schedules, and the new run's strip all link the history.
 export const linkRunConversation = mutation({
   args: {
@@ -1084,7 +1115,9 @@ export const linkRunConversation = mutation({
     const repeatingSpawn =
       (task.schedule_type === "recurring" || task.schedule_type === "event") &&
       !task.originating_conversation_id;
-    if (repeatingSpawn && !task.last_run_failed) {
+    // A run that asked for attention declared itself blocked on the human
+    // (settleRunConversation); the next firing must not fold the ask away.
+    if (repeatingSpawn && !task.last_run_failed && !task.last_run_needs_attention) {
       let prev: Doc<"conversations"> | null = task.last_run_conversation_id
         ? await ctx.db.get(task.last_run_conversation_id)
         : null;

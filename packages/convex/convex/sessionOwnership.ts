@@ -10,8 +10,13 @@ import {
   removeSessionOwnerRow,
   listSessionOwnerIds,
   syncPrimaryOwnerCache,
+  humanStarterUser,
 } from "./sessionOwners";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
+import { enqueuePendingMessage, formatSessionMessage } from "./pendingMessages";
+import { requireRole, userCanAdminRole } from "./lib/orgAccess";
+import { wakeCost, wakeFieldsOf } from "./wakeCost";
+import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 
 // Session OWNERS — the humans whose inboxes a session appears in and who may
 // reply into it from the web composer. This is ONE of a session's three
@@ -26,9 +31,10 @@ import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionA
 // resynced after every write (syncPrimaryOwnerCache).
 //
 // Ownership affects where a session SURFACES and who may steer it — the
-// send/steer mechanics (pending_messages) are unchanged. Besides the explicit
-// paths here, a cross-user send into an UNOWNED session auto-owns it onto the
-// sender (performSessionSend).
+// send/steer mechanics (pending_messages) are unchanged. A cross-user send
+// auto-owns only a bot-run session with an empty owner set
+// (performSessionSend); a message into a session a person started never
+// claims it.
 
 type OwnerInfo = {
   user_id: string;
@@ -43,7 +49,13 @@ type OwnerInfo = {
   added_at?: number;
   note?: string | null;
   seen_at?: number | null;
+  // Faces for the handoff marker in the transcript, resolved server-side so a
+  // viewer whose roster lacks the assigner (another team) still sees them.
+  image?: string | null;
+  added_by_image?: string | null;
 };
+
+const avatarOf = (u: any): string | null => u?.image ?? u?.github_avatar_url ?? null;
 
 const toOwnerInfo = (u: any): OwnerInfo => ({
   user_id: u._id.toString(),
@@ -206,112 +218,255 @@ async function listOwnerInfos(
       added_at: row.added_at,
       note: row.note ?? null,
       seen_at: row.seen_at ?? null,
+      image: avatarOf(doc),
+      added_by_image: avatarOf(byDoc),
     });
   }
   return infos;
 }
 
-// ── Owner mutation bodies ────────────────────────────────────────────────────
-// Factored out so tests can drive them with an explicit authUserId (mirrors
-// performSessionSend). Deliberately db-ONLY: each returns the `added` set and
-// the PUBLIC mutations below fire the "assigned to you" notification for it,
-// which keeps ctx.scheduler out of here and these testable against a fake db.
+// ── The reparent core (org-staffing.md S11) ──────────────────────────────────
+// Who a session reports to is one gesture everywhere: the ownership menu
+// (take ownership, add an owner, remove one, replace the set), `cast own` /
+// `cast disown`, and dragging a session on the org chart all land here. It is
+// the ONE place session_owners and conversations.org_role_id change together:
+// a person target re-homes the session under that person (they become the
+// primary owner the chart files it under) and clears the role pointer; a role
+// target sets the pointer and leaves the owners alone. Every move that changes
+// the reporting line tells the agent once, through the session message rail,
+// from the acting person.
+//
+// Factored out of the mutations so tests drive them with an explicit
+// authUserId (mirrors performSessionSend). Deliberately db-only: the result
+// carries the `added` set and the PUBLIC mutations fire the "assigned to you"
+// notification for it, which keeps ctx.scheduler out of here.
+
+export type ReparentSessionTarget =
+  // A person: the org chart passes `user_id` (the owner set becomes that
+  // person); the ownership menu passes owner refs with the set arithmetic it
+  // wants. `add` re-homes under the added person; `set` under the first
+  // listed; `remove` leaves the reporting line to whoever remains.
+  | { kind: "user"; user_id?: Id<"users">; owners?: string[]; mode?: "set" | "add" | "remove" }
+  | { kind: "role"; role_id: string };
+
+export type ReportsTo =
+  | { kind: "user"; user_id: Id<"users">; name: string }
+  | { kind: "role"; role_id: Id<"org_roles">; short_id: string; handle: string; name: string };
+
+export type ReparentSessionResult = OwnerMutationResult & {
+  org_role_id: Id<"org_roles"> | null;
+  reports_to: ReportsTo | null;
+  // What the mutation told: the session itself (one message) and, for a
+  // session move, never a role. `deferred` counts a session too stale to wake
+  // for one sentence: the line waits and it reads it when it next runs. The
+  // web says it in one toast.
+  told: { sessions: number; roles: number; deferred?: number };
+};
+
+// A person's name as the product shows it: display name, then login, then
+// the email's local part. Shared with the role reparent's line.
+export function personName(u: any): string {
+  return u?.name || u?.github_username || u?.email?.split("@")[0] || "a teammate";
+}
+
+// The line every reparent delivers (org-staffing.md S11). One writer, so the
+// session and the role hear the same sentence.
+export function reportsToLine(name: string, note?: string): string {
+  const trimmed = note?.trim();
+  return `You now report to ${name}.${trimmed ? ` ${trimmed}` : ""}`;
+}
+
+// Who a session reports to: its role, else its primary owner (the
+// owner_user_id cache, which the chart files by; syncPrimaryOwnerCache is its
+// one writer).
+async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">, roleId: Id<"org_roles"> | undefined): Promise<ReportsTo | null> {
+  if (roleId) {
+    const role = await ctx.db.get(roleId);
+    if (role) return { kind: "role", role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name };
+  }
+  const primary = (await ctx.db.get(conversationId))?.owner_user_id;
+  const user = primary ? await ctx.db.get(primary) : null;
+  return user ? { kind: "user", user_id: user._id, name: personName(user) } : null;
+}
+
+const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
+
+export async function performReparentSession(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; target: ReparentSessionTarget; note?: string; from_session?: string },
+): Promise<ReparentSessionResult> {
+  const note = args.note?.trim() || undefined;
+  const targetRole = args.target.kind === "role" ? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
+  const canReshapeTarget = targetRole ? await userCanAdminRole(ctx, authUserId, targetRole) : false;
+  // Who may file: a person target is the ownership rule (the runner, or any
+  // teammate who can see the session); a role target is an owner, or a team
+  // viewer who may reshape the role. A session the caller cannot see, never.
+  const conversation = args.target.kind === "user"
+    ? await resolveOwnableConversation(ctx, authUserId, args.session_id)
+    : await findConversationByAnyRefWhere(ctx, args.session_id, async (c: any) => {
+      const access = await checkConversationAccess(ctx, authUserId, c);
+      return access === "owner" || (access === "team" && canReshapeTarget);
+    });
+  if (!conversation) throw new Error("Session not found, or you are not one of its owners");
+  // A standing session IS a seat; it reports to no seat (org-roles-standing.md
+  // T1). Filed under a role it would count as that role's hand, be interrupted
+  // by a pause and spend its hand cap. One refusal here, so every door (the
+  // chart, the ownership menu, the CLI) inherits it.
+  if (args.target.kind === "role" && (conversation.standing_role_id || conversation.anchor_id)) {
+    throw new Error("That session is a standing agent's own thread; it cannot be filed under a role");
+  }
+  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
+  const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id);
+
+  const added: Id<"users">[] = [];
+  const removed: Id<"users">[] = [];
+  let owners: OwnerInfo[];
+  let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
+
+  if (args.target.kind === "user") {
+    // A bare `user_id` is the chart's drop on a person: it ADDS that person
+    // and re-homes the session under them (S11), so a session two people own
+    // does not silently lose the other. The owner list form is the picker's,
+    // which holds the whole desired set.
+    const mode = args.target.mode ?? (args.target.owners ? "set" : "add");
+    const refs = args.target.owners ?? (args.target.user_id ? [args.target.user_id.toString()] : []);
+    const desiredKeys = new Set<string>();
+    const desired: any[] = [];
+    for (const ref of refs) {
+      const trimmed = ref.trim();
+      if (!trimmed) continue;
+      const user = await resolveOwnerRef(ctx, authUserId, conversation, trimmed);
+      if (mode !== "remove") assertHumanOwner(user);
+      const key = user._id.toString();
+      if (desiredKeys.has(key)) continue;
+      desiredKeys.add(key);
+      desired.push(user);
+    }
+    if (mode === "remove") {
+      for (const user of desired) {
+        if (await removeSessionOwnerRow(ctx, conversation._id, user._id)) removed.push(user._id);
+      }
+    } else {
+      for (const user of desired) {
+        if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, note)) added.push(user._id);
+      }
+      if (mode === "set") {
+        for (const ownerId of await listSessionOwnerIds(ctx, conversation._id)) {
+          if (desiredKeys.has(ownerId.toString())) continue;
+          if (await removeSessionOwnerRow(ctx, conversation._id, ownerId)) removed.push(ownerId);
+        }
+      }
+    }
+    // The session reports to the person this act named: `add` hands it to the
+    // added person (a handoff, the chart follows), `set` to the LAST listed —
+    // callers put the person the act names at the end of `owners`. A remove
+    // leaves the line to whoever remains, oldest first.
+    const preferred = mode === "remove" ? undefined : desired[desired.length - 1]?._id;
+    await syncPrimaryOwnerCache(ctx, conversation._id, preferred);
+    // A person is now the parent: the role pointer comes off (S11). A remove
+    // is not a re-homing, so a session filed under a role stays there.
+    if (mode !== "remove" && desired.length > 0 && roleId) {
+      await ctx.db.patch(conversation._id, { org_role_id: undefined });
+      roleId = undefined;
+    }
+    owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
+  } else {
+    if (targetRole.status === "retired") throw new Error("That role is retired");
+    // A team role only takes sessions routed to its team; a personal role
+    // takes anything its owner may reparent.
+    if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
+      throw new Error("That session is not in the role's team");
+    }
+    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id });
+    roleId = targetRole._id;
+    owners = await listOwnerInfos(ctx, conversation._id);
+  }
+
+  const after = await reportsToOf(ctx, conversation._id, roleId);
+  const told: { sessions: number; roles: number; deferred?: number } = { sessions: 0, roles: 0 };
+  if (after && reportsToKey(after) !== reportsToKey(before)) {
+    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after.name, note), args.from_session, reportsToKey(after));
+    if (how === "deferred") told.deferred = 1; else told.sessions = 1;
+  }
+  // Open questions follow the new owners. Without this, asked_user_ids and
+  // decision_inbox stay on the runner / role parent and the card never leaves
+  // their question stack.
+  await reroutePendingDecisionsForConversation(ctx, conversation._id, Date.now());
+  return {
+    ok: true,
+    short_id: shortId,
+    conversation_id: conversation._id,
+    owners,
+    added,
+    removed,
+    org_role_id: roleId ?? null,
+    reports_to: after,
+    told,
+  };
+}
+
+// One message into the session, attributed to the acting person through the
+// session message rail: their own session when the CLI names one, else a
+// named line with no session pill (the web's rendering of an unlinked
+// sender). A session that is killed or whose prompt cache has expired (the
+// send rail's own rule, wakeCost) is not woken to read one sentence: the line
+// is deferred and rides its next turn.
+async function tellSession(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  conversation: any,
+  body: string,
+  fromSession: string | undefined,
+  moveKey: string,
+): Promise<"told" | "deferred"> {
+  const actor = await ctx.db.get(authUserId);
+  const fromRef = fromSession?.trim();
+  const sender = fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
+  const fromShortId = sender ? (sender.short_id ?? sender._id.toString().slice(0, 7)) : "unknown";
+  const crossUser = conversation.user_id.toString() !== authUserId.toString();
+  const cost = wakeCost({ ...conversation, ...wakeFieldsOf(conversation) }, Date.now());
+  const defer = !conversation.standing_role_id && (cost.killed || cost.cacheCold);
+  await enqueuePendingMessage(ctx, conversation, authUserId, {
+    content: formatSessionMessage(fromShortId, body, personName(actor)),
+    client_id: `reparent:${conversation._id}:${moveKey}:${Date.now()}`,
+    from_conversation_id: crossUser && sender ? sender._id : undefined,
+    human: !sender,
+    defer,
+  });
+  return defer ? "deferred" : "told";
+}
+
+// ── The ownership menu's entry points ────────────────────────────────────────
+// Thin names over the core, kept so the mutations, `cast own`/`cast disown`
+// and the tests read as the gesture they perform.
 
 // Replace the owner set wholesale (empty list = disown everyone). Backs the web
 // multi-select, where the UI holds the full desired set.
 export async function performSetSessionOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; owners: string[]; note?: string },
-): Promise<OwnerMutationResult> {
-  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
-  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-
-  const desiredKeys = new Set<string>();
-  const desired: any[] = [];
-  for (const ref of args.owners) {
-    const trimmed = ref.trim();
-    if (!trimmed) continue;
-    const user = await resolveOwnerRef(ctx, authUserId, conversation, trimmed);
-    assertHumanOwner(user);
-    const key = user._id.toString();
-    if (desiredKeys.has(key)) continue;
-    desiredKeys.add(key);
-    desired.push(user);
-  }
-
-  const current = await listSessionOwnerIds(ctx, conversation._id);
-
-  const added: Id<"users">[] = [];
-  for (const user of desired) {
-    if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, args.note)) added.push(user._id);
-  }
-  const removed: Id<"users">[] = [];
-  for (const ownerId of current) {
-    if (desiredKeys.has(ownerId.toString())) continue;
-    if (await removeSessionOwnerRow(ctx, conversation._id, ownerId)) removed.push(ownerId);
-  }
-
-  await syncPrimaryOwnerCache(ctx, conversation._id);
-  return {
-    ok: true,
-    short_id: shortId,
-    conversation_id: conversation._id,
-    owners: desired.map(toOwnerInfo),
-    added,
-    removed,
-  };
+  args: { session_id: string; owners: string[]; note?: string; from_session?: string },
+): Promise<ReparentSessionResult> {
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, note: args.note, from_session: args.from_session });
 }
 
 // Add ONE owner without disturbing the others (`cast own`).
 export async function performAddSessionOwner(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; owner: string; note?: string },
-): Promise<OwnerMutationResult> {
-  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
-  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-
-  const user = await resolveOwnerRef(ctx, authUserId, conversation, args.owner);
-  assertHumanOwner(user);
-
-  const added: Id<"users">[] = [];
-  if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, args.note)) added.push(user._id);
-  await syncPrimaryOwnerCache(ctx, conversation._id);
-
-  return {
-    ok: true,
-    short_id: shortId,
-    conversation_id: conversation._id,
-    owners: await listOwnerInfos(ctx, conversation._id),
-    added,
-    removed: [],
-  };
+  args: { session_id: string; owner: string; note?: string; from_session?: string },
+): Promise<ReparentSessionResult> {
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "add" }, note: args.note, from_session: args.from_session });
 }
 
 // Remove ONE owner, leaving the rest (`cast disown`; defaults to self).
 export async function performRemoveSessionOwner(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; owner: string },
-): Promise<OwnerMutationResult> {
-  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
-  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-
-  const user = await resolveOwnerRef(ctx, authUserId, conversation, args.owner);
-
-  const removed: Id<"users">[] = [];
-  if (await removeSessionOwnerRow(ctx, conversation._id, user._id)) removed.push(user._id);
-  await syncPrimaryOwnerCache(ctx, conversation._id);
-
-  return {
-    ok: true,
-    short_id: shortId,
-    conversation_id: conversation._id,
-    owners: await listOwnerInfos(ctx, conversation._id),
-    added: [],
-    removed,
-  };
+  args: { session_id: string; owner: string; from_session?: string },
+): Promise<ReparentSessionResult> {
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "remove" }, from_session: args.from_session });
 }
 
 // Back-compat single-owner form: `owner` REPLACES the whole set; null disowns
@@ -407,6 +562,7 @@ export const setSessionOwners = mutation({
     session_id: SESSION_REF,
     owners: v.array(v.string()),
     note: v.optional(v.string()),
+    from_session: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -415,6 +571,7 @@ export const setSessionOwners = mutation({
       session_id: args.session_id,
       owners: args.owners,
       note: args.note?.trim() || undefined,
+      from_session: args.from_session,
     });
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
@@ -428,6 +585,7 @@ export const addSessionOwner = mutation({
     session_id: SESSION_REF,
     owner: v.optional(OWNER_REF), // default: claim for the caller
     note: v.optional(v.string()), // optional handoff message shown to the assignee
+    from_session: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -436,6 +594,7 @@ export const addSessionOwner = mutation({
       session_id: args.session_id,
       owner: args.owner?.trim() || "me",
       note: args.note?.trim() || undefined,
+      from_session: args.from_session,
     });
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
@@ -467,6 +626,7 @@ export const removeSessionOwner = mutation({
   args: {
     session_id: SESSION_REF,
     owner: v.optional(OWNER_REF), // default: remove the caller
+    from_session: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -474,6 +634,7 @@ export const removeSessionOwner = mutation({
     const result = await performRemoveSessionOwner(ctx, authUserId, {
       session_id: args.session_id,
       owner: args.owner?.trim() || "me",
+      from_session: args.from_session,
     });
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
@@ -542,10 +703,26 @@ export async function performListOwners(
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
+  const owners = await listOwnerInfos(ctx, conversation._id);
+  if (owners.length === 0) {
+    const starter = await humanStarterUser(ctx, conversation);
+    if (starter) {
+      const startedAt = conversation.started_at ?? conversation._creationTime ?? Date.now();
+      owners.push({
+        ...toOwnerInfo(starter),
+        added_by: starter._id.toString(),
+        added_by_name: starter.name ?? starter.email ?? null,
+        added_at: startedAt,
+        seen_at: startedAt,
+        image: avatarOf(starter),
+        added_by_image: avatarOf(starter),
+      });
+    }
+  }
   return {
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
-    owners: await listOwnerInfos(ctx, conversation._id),
+    owners,
   };
 }
 

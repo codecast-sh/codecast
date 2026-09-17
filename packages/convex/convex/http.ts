@@ -3817,6 +3817,10 @@ http.route({
           event_id: eventId,
           workspace: String(payload.team_id),
           event,
+          // A user event (a person's DM) names whose behalf it came on.
+          authed_users: Array.isArray(payload.authorizations)
+            ? payload.authorizations.map((a: any) => String(a?.user_id ?? "")).filter(Boolean)
+            : undefined,
         });
         mirrored = routed.status !== "no_link";
       }
@@ -4010,6 +4014,8 @@ for (const verb of ["resolve", "why"]) {
 cliRoute("/cli/projects/create", async (ctx, body) => {
   return await ctx.runMutation(api.projects.create, body);
 });
+// Which table a bare id belongs to, for `cast link <id>` with no prefix.
+cliRoute("/cli/entities/type", async (ctx, body) => ctx.runQuery(api.entities.resolveIdType, body));
 cliRoute("/cli/projects/list", async (ctx, body) => {
   return await ctx.runQuery(api.projects.list, body);
 });
@@ -4148,7 +4154,9 @@ cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as
 // Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
 // the proposal lifecycle. Decide, accept-all and withdraw refuse a session
 // caller on the server; the CLI passes from_session as on every org verb.
-cliRoute("/cli/org/health", async (ctx, body) => ctx.runQuery((api as any).org.health, body));
+// The fanned action (org-staffing.md S3): the decision ladder in its own
+// execution budget, so `cast org health` answers on a large workspace.
+cliRoute("/cli/org/health", async (ctx, body) => ctx.runAction((api as any).orgHealth.healthReport, body));
 cliRoute("/cli/org/propose", async (ctx, body) => ctx.runMutation((api as any).orgProposals.create, body));
 cliRoute("/cli/org/proposals", async (ctx, body) => ctx.runQuery((api as any).orgProposals.list, body));
 cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).orgProposals.get, body));
@@ -4236,6 +4244,15 @@ cliRoute("/cli/chat/slack/update", async (ctx, body) => {
 });
 cliRoute("/cli/chat/slack/unlink", async (ctx, body) => {
   return await ctx.runMutation(api.slackSync.unlinkChannel, body);
+});
+cliRoute("/cli/chat/slack/people", async (ctx, body) => {
+  return await ctx.runQuery(api.slackSync.listSlackPeople, body);
+});
+cliRoute("/cli/chat/slack/map", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.mapSlackPerson, body);
+});
+cliRoute("/cli/chat/slack/dms", async (ctx, body) => {
+  return await ctx.runMutation(api.slackSync.setDmSync, body);
 });
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }
@@ -4667,9 +4684,16 @@ cliRoute("/cli/pr/comment", async (ctx, body) => {
 });
 
 cliRoute("/cli/pr/notes", async (ctx, body) => {
-  const resolved = await ctx.runQuery((api as any).prCli.resolve, body);
+  const { discard, ...locator } = body;
+  const resolved = await ctx.runQuery((api as any).prCli.resolve, locator);
   const pr = resolved?.pull_request;
   if (!pr) return { error: "No pull request matched that reference" };
+  // `--discard` throws the caller's held notes away: the way back from a note
+  // written on the wrong line, before anything has been submitted.
+  if (discard) {
+    const result = await ctx.runMutation((api as any).codeComments.discardPendingReview, { api_token: body.api_token, pull_request_id: pr.id });
+    return { repository: pr.repository, number: pr.number, notes: [], ...result };
+  }
   const notes = await ctx.runQuery((api as any).codeComments.pendingReview, { api_token: body.api_token, pull_request_id: pr.id });
   return { repository: pr.repository, number: pr.number, notes };
 });

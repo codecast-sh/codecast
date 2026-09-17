@@ -9333,14 +9333,33 @@ function isOpenAskUserQuestion(msg: any): boolean {
   return !!msg && msg.role === "assistant" && !!msg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion");
 }
 
-// Pending `cast decide` questions for the user: one indexed read per overlay
-// execution (written only on post and answer, so it re-executes rarely).
+// Pending `cast decide` questions for the user. Same people set as
+// listForUserCore: decision_inbox (assignment), then the legacy owner index
+// for rows minted before asked_user_ids existed. session_decisions.user_id
+// is the RUNNER — using it here kept a hosted session's questions on the
+// host's stack after the seat was assigned away.
 export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">): Promise<Set<string>> {
-  const rows = await ctx.db
+  const ids = new Set<string>();
+  const uid = userId.toString();
+  const inbox = await ctx.db
+    .query("decision_inbox")
+    .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
+    .collect();
+  for (const r of inbox) {
+    const d = await ctx.db.get(r.decision_id);
+    if (!d || d.status !== "pending") continue;
+    if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id: any) => String(id) === uid)) continue;
+    ids.add(d.conversation_id.toString());
+  }
+  const legacy = await ctx.db
     .query("session_decisions")
     .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
     .collect();
-  return new Set<string>(rows.map((r: any) => r.conversation_id.toString()));
+  for (const r of legacy) {
+    if (r.asked_user_ids !== undefined) continue;
+    ids.add(r.conversation_id.toString());
+  }
+  return ids;
 }
 
 // The child AUQ probe answers, cached across executions by (child id,
@@ -9676,8 +9695,8 @@ async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps
 // and persists to IndexedDB). The client compensates with isLivenessStale
 // (@codecast/shared/contracts). syncOverlay ignores ids it doesn't have.
 //
-// Reads per execution: the scan, the live-pool hydration, one session_decisions
-// read, at most one newest-message read per row (fallback + AUQ probe share
+// Reads per execution: the scan, the live-pool hydration, the viewer's
+// pending-decide set (decision_inbox + the legacy owner index), at most one newest-message read per row (fallback + AUQ probe share
 // it), the child AUQ probes (bounded by live children), and the priority-ordered
 // foreign children scans (bounded by FOREIGN_SCAN_BUDGET). Stamping the
 // projection adds none.

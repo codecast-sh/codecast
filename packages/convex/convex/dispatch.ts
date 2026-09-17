@@ -64,7 +64,7 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       // decommissionAnchor) — a client must not flip these via a generic patch.
       "persistent", "acting_user_id", "anchor_id",
       // Second-party ownership is server-assigned only: setSessionOwner, plus
-      // performSessionSend's auto-own on cross-user sends into unowned sessions.
+      // performSessionSend's auto-own on a bot-run session with no owners.
       "owner_user_id",
       // Org tree pointers are server-owned (docs/architecture/org-roles.md S1,
       // org-roles-standing.md T1): reparentSession / retire write org_role_id,
@@ -623,14 +623,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // table, so these named effects are the only server write. The functions
   // live in orgRoles.ts; `api` is widened so this file compiles before that
   // module exists in a given checkout.
-  reparentOrgSession: async (ctx, _userId, [conversationId, target]: [string, any]) => {
+  // One reparent path (org-staffing.md S11): the chart drag AND the ownership
+  // menu (take ownership, add or remove an owner, move to a role) both reach
+  // the core through here. `target` carries the owner-set arithmetic
+  // ({ owners, mode }) or a role; `note` rides the reparent into the line the
+  // session and role are told.
+  reparentOrgSession: async (ctx, _userId, [conversationId, target, opts]: [string, any, { note?: string; from_session?: string } | undefined]) => {
     return await ctx.runMutation!((api as any).orgRoles.reparentSession, {
       conversation_id: conversationId,
       target,
+      ...(opts?.note ? { note: opts.note } : {}),
+      ...(opts?.from_session ? { from_session: opts.from_session } : {}),
     });
   },
-  reparentOrgRole: async (ctx, _userId, [roleId, reportsTo]: [string, any]) => {
-    return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo });
+  reparentOrgRole: async (ctx, _userId, [roleId, reportsTo, note]: [string, any, string | undefined]) => {
+    return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo, ...(note ? { note } : {}) });
   },
   createOrgRole: async (ctx, _userId, [input]: [any]) => {
     // The hire form (org-init.md O3) creates and provisions in one gesture and
@@ -643,6 +650,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.scope ? { scope: input.scope } : {}),
       ...(input.reports_to ? { reports_to: input.reports_to } : {}),
       ...(input.charter ? { charter: input.charter } : {}),
+      // Standing or program (S10) and the face (S13) ride the create.
+      ...(input.tenure ? { tenure: input.tenure } : {}),
+      ...(input.avatar ? { avatar: input.avatar } : {}),
       ...(input.provision ? { provision: true, project_path: input.project_path } : {}),
     });
     if (input.caps && role?._id) {
@@ -663,7 +673,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const rest: Record<string, any> = { ...fields };
     delete rest.trust; delete rest.caps;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
-    if (!["name", "handle", "scope", "charter", "status"].some((k) => rest[k] !== undefined)) return null;
+    // tenure (S10) and avatar (S13) go through the plain update.
+    if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;
     fields = rest;
     return await ctx.runMutation!((api as any).orgRoles.update, {
       role_id: roleId,
@@ -672,6 +683,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(fields.scope !== undefined ? { scope: fields.scope } : {}),
       ...(fields.charter !== undefined ? { charter: fields.charter } : {}),
       ...(fields.status !== undefined ? { status: fields.status } : {}),
+      ...(fields.tenure !== undefined ? { tenure: fields.tenure } : {}),
+      ...(fields.avatar !== undefined ? { avatar: fields.avatar } : {}),
     });
   },
   // The scope's line (the-line.md L2): human only, logged, wakes the role.
@@ -687,8 +700,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       channel: channelId,
     });
   },
-  retireOrgRole: async (ctx, _userId, [roleId]: [string]) => {
-    return await ctx.runMutation!((api as any).orgRoles.retire, { role_id: roleId });
+  retireOrgRole: async (ctx, _userId, [roleId, standingSession]: [string, "keep" | "retire" | undefined]) => {
+    // S16: what becomes of the seat's standing agent. Absent lets the server
+    // choose (keep for the chief of staff, retire for any other seat).
+    return await ctx.runMutation!((api as any).orgRoles.retire, { role_id: roleId, ...(standingSession ? { standing_session: standingSession } : {}) });
   },
   // Staffing (org-staffing.md S4/S6). The web pushes a role stub for the
   // chief of staff and flips a proposal's changes to accepted on the draft;
@@ -698,6 +713,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.team_id ? { team_id: input.team_id } : {}),
       ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
       ...(input.project_path ? { project_path: input.project_path } : {}),
+      // S16: seat the existing standing agent (default) or start a fresh one.
+      ...(input.seat ? { seat: input.seat } : {}),
     });
   },
   decideOrgProposalChange: async (ctx, _userId, [changeId, verdict, edits]: [string, "accept" | "skip", any]) => {
@@ -707,8 +724,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(edits && Object.keys(edits).length > 0 ? { edits } : {}),
     });
   },
-  acceptAllOrgProposal: async (ctx, _userId, [proposalId]: [string]) => {
-    return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId });
+  // Withdraw from the pane (S4 supersession: the person takes the replaced
+  // proposal down; the human gate on the mutation is what allows it).
+  withdrawOrgProposal: async (ctx, _userId, [proposalRef]: [string]) => {
+    return await ctx.runMutation!((api as any).orgProposals.withdraw, { proposal: proposalRef });
+  },
+  acceptAllOrgProposal: async (ctx, _userId, [proposalId, opts]: [string, { kinds?: string[] } | undefined]) => {
+    const kinds = Array.isArray(opts?.kinds) && opts!.kinds!.length > 0 ? opts!.kinds : undefined;
+    return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId, ...(kinds ? { kinds } : {}) });
   },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
@@ -2016,7 +2039,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateChatSlackLink: async (
     ctx,
     _userId,
-    [linkId, patch]: [string, { direction?: any; options?: Record<string, boolean>; paused?: boolean }],
+    [linkId, patch]: [string, { direction?: any; options?: Record<string, boolean>; paused?: boolean; reimport?: boolean }],
   ) => {
     if (!isServerId(linkId)) return;
     return await ctx.runMutation!(api.slackSync.updateLink, {
@@ -2024,6 +2047,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(patch?.direction ? { direction: patch.direction } : {}),
       ...(patch?.options ? { options: patch.options } : {}),
       ...(typeof patch?.paused === "boolean" ? { paused: patch.paused } : {}),
+      ...(patch?.reimport ? { reimport: true } : {}),
     });
   },
   unlinkChatSlack: async (ctx, _userId, [linkId]: [string]) => {

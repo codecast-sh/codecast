@@ -18,14 +18,16 @@ export type SlackLinkOptions = {
 
 // What a new mirror carries until somebody says otherwise. Conversation first:
 // threads, reactions, edits and files on, because a mirror that drops them does
-// not read as one room. Other apps' posts and Slack's own join and topic
-// notices off, because they are noise in a room that did not ask for them.
+// not read as one room. Other apps' lines on too: in many channels the app IS
+// the conversation (a caller assistant, a deploy bot people reply to), and a
+// room missing them reads as if it has holes. Slack's own join and topic
+// notices off, because they are housekeeping, not talk.
 export const LINK_DEFAULTS: SlackLinkOptions = {
   threads: true,
   reactions: true,
   edits: true,
   files: true,
-  bot_messages: false,
+  bot_messages: true,
   system_messages: false,
   agent_lines: true,
   match_people_by_email: true,
@@ -59,6 +61,23 @@ export function linkSendsOutbound(link: Flowing): boolean {
 export function linkReceivesInbound(link: Flowing): boolean {
   return !link.paused && (link.direction === "both" || link.direction === "slack_to_codecast");
 }
+
+/** How much Slack history a new mirror brings over. "none" starts from now;
+ *  "all" is bounded by BACKFILL_MAX_TOTAL lines per import (slackSync.ts). */
+export type BackfillWindow = "none" | "1d" | "7d" | "30d" | "90d" | "all";
+
+export const BACKFILL_WINDOWS: { key: BackfillWindow; label: string; hint: string }[] = [
+  { key: "none", label: "From now", hint: "Nothing older comes over." },
+  { key: "1d", label: "Last day", hint: "Yesterday and today." },
+  { key: "7d", label: "Last week", hint: "Enough to follow what is being discussed." },
+  { key: "30d", label: "Last month", hint: "The usual choice: recent context without the archive." },
+  { key: "90d", label: "Last 3 months", hint: "A quarter of history." },
+  { key: "all", label: "Everything", hint: "The whole channel, up to 25,000 lines." },
+];
+
+/** The default for a channel brought over from Slack: a month gives the room
+ *  its recent context without dragging in years of archive. */
+export const DEFAULT_BACKFILL: BackfillWindow = "30d";
 
 /** The one word about a mirror's health. Every surface that marks a mirrored
  *  channel (header pill, channel rows, tooltips) reads it from here, so a

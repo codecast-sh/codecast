@@ -8,7 +8,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { loadChannel, requireCaller } from "./chat";
-import { userCanAdminRole } from "./lib/orgAccess";
+import { liveRoleByHandle, userCanAdminRole } from "./lib/orgAccess";
 
 // "or-N" or a handle. A handle is looked up in every team the caller belongs
 // to, then among the caller's personal roles; an ambiguous handle is an error
@@ -35,17 +35,11 @@ async function resolveRole(
     .collect();
   const found: Doc<"org_roles">[] = [];
   for (const m of memberships) {
-    const role = await ctx.db
-      .query("org_roles")
-      .withIndex("by_team_handle", (q: any) => q.eq("team_id", m.team_id).eq("handle", handle))
-      .first();
-    if (role && role.status !== "retired" && (await userCanAdminRole(ctx, userId, role))) found.push(role);
+    const role = await liveRoleByHandle(ctx, { team_id: m.team_id }, handle);
+    if (role && (await userCanAdminRole(ctx, userId, role))) found.push(role);
   }
-  const personal = await ctx.db
-    .query("org_roles")
-    .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", userId).eq("handle", handle))
-    .first();
-  if (personal && personal.status !== "retired") found.push(personal);
+  const personal = await liveRoleByHandle(ctx, { scope_user_id: userId }, handle);
+  if (personal) found.push(personal);
   if (found.length === 0) throw new Error(`No role you administer answers to @${handle}`);
   if (found.length > 1) {
     throw new Error(`@${handle} names ${found.length} roles: ${found.map((r) => r.short_id).join(", ")}. Use the short id`);

@@ -1985,6 +1985,7 @@ describe("channel unread semantics", () => {
     // create a number that reading the channel cannot extinguish.
     expect(rail.unread).toBe(0);
     expect(rail.unread_mentions).toBe(0);
+    expect(String(rail.last_message.thread_root_id)).toBe(String(root.message_id));
 
     await call(sendMessage, as(ctx, BOB), {
       channel_id: CHANNEL, content: "@alice see thread", thread_root_id: root.message_id,

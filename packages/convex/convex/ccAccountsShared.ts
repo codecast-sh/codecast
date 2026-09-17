@@ -9,13 +9,14 @@ import {
   isWindowRolled,
   livePercent,
   worstUsagePercent,
+  switchUsagePercent,
   type CcUsage,
 } from "@codecast/shared/contracts";
 
 // The usage snapshot type and its predicates live in @codecast/shared/contracts
 // (the CLI reads them too); re-exported here so existing web/convex imports keep
 // one path.
-export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted, fallbackProfiles };
+export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted, fallbackProfiles, switchUsagePercent };
 export type { CcUsage };
 
 // Per-account usage snapshot the daemon probes from the OAuth usage API
@@ -38,7 +39,15 @@ export const ccUsageValidator = v.object({
   session: v.optional(usageWindowValidator), // rolling short window (5h / sub-24h)
   weekly: v.optional(usageWindowValidator), // 7d, all models
   weekly_scoped: v.optional(usageWindowValidator), // 7d, model-scoped
-  extra: v.optional(v.object({ percent: v.number(), enabled: v.boolean() })),
+  extra: v.optional(
+    v.object({
+      percent: v.number(),
+      enabled: v.boolean(),
+      limit: v.optional(v.number()),
+      used: v.optional(v.number()),
+      spend_limit_reached: v.optional(v.boolean()),
+    }),
+  ),
   scoped: v.optional(
     v.array(v.object({ label: v.string(), percent: v.number(), resets_at: v.optional(v.number()) })),
   ),
@@ -878,17 +887,28 @@ export function subagentLinkFields(conv: {
   };
 }
 
+// An agent-team worker (reviewer, scout, …), not the team's lead. The lead is
+// a first-class inbox card; workers nest under it. Used both with a resolved
+// lead pointer (nestParentIdOf) and without one (an unlinked worker must not
+// become a loose ↳ card just because the lead stamp never landed).
+export function isAgentTeamWorker(conv: {
+  agent_team_name?: string | null;
+  agent_name?: string | null;
+}): boolean {
+  return !!conv.agent_team_name && conv.agent_name !== "team-lead";
+}
+
 // Which parent a session NESTS under in session lists — the single definition
 // every nesting computation must share (inbox categorizer, hidden buckets,
 // card styling, wake signature). Two sources, in priority order:
 // - parent_conversation_id: a Task-tool subagent. Full subagent semantics —
 //   hidden when its parent is absent, excluded from revive.
 // - spawned_by_conversation_id + agent_team_name: an agent-team teammate. It
-//   nests under its lead for DISPLAY only and keeps first-class semantics
-//   everywhere else — when the lead is absent from a list it renders as a
-//   normal top-level card, never hidden (it's a real session someone may need
-//   to answer). The agent_team_name gate is what keeps this to teammates:
-//   forks (forked_from) and cast-spawn sessions never nest.
+//   nests under its lead for DISPLAY. When the lead is absent from a list it
+//   is hidden, not promoted to a top-level card (same as a Task subagent). A
+//   pin on the worker itself is the viewer's act to keep it visible. The
+//   agent_team_name gate is what keeps this to teammates: forks (forked_from)
+//   and cast-spawn sessions never nest.
 export function nestParentIdOf(conv: {
   parent_conversation_id?: { toString(): string } | string | null;
   spawned_by_conversation_id?: { toString(): string } | string | null;
@@ -896,7 +916,7 @@ export function nestParentIdOf(conv: {
   agent_name?: string | null;
 }): string | null {
   if (conv.parent_conversation_id) return conv.parent_conversation_id.toString();
-  if (conv.agent_team_name && conv.agent_name !== "team-lead" && conv.spawned_by_conversation_id) {
+  if (isAgentTeamWorker(conv) && conv.spawned_by_conversation_id) {
     return conv.spawned_by_conversation_id.toString();
   }
   return null;

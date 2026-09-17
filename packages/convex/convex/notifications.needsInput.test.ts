@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { performNeedsInputCheck } from "./notifications";
+import { settleRunConversation } from "./agentTasks";
+import { runResultThreadOf } from "@codecast/shared/contracts";
 import { performPushFlush } from "./pushRouter";
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
@@ -617,6 +619,31 @@ describe("needs-input check — stall rule for hidden sessions", () => {
     expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
   });
 
+  // The regression: every headless trigger run ends by its process exiting, so
+  // "stopped" arrived seconds after the clean completion folded the run and
+  // put it straight back under Needs Input. The completion is the run's done
+  // declaration (agentTasks.settleRunConversation), and an exit after a
+  // declared done is not a death.
+  test("a run that exited after completing cleanly stays folded", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111, agent_task_id: "task1", thread_state_status: "done" },
+      session: { agent_status: "stopped" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("hidden");
+    expect(tables.conversations[0].inbox_stashed_at).toBe(111);
+  });
+
+  test("a run whose process died WITHOUT reporting still un-stashes", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { inbox_stashed_at: 111, agent_task_id: "task1" },
+      session: { agent_status: "stopped" },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("unstashed_stall");
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+  });
+
   test("a folded run on the legacy dismissed stamp gets the same treatment", async () => {
     const { ctx, tables } = settledIdleWorld({
       conv: { inbox_dismissed_at: 111, agent_task_id: "task1" },
@@ -642,6 +669,94 @@ describe("needs-input check — stall rule for hidden sessions", () => {
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.reason).toBe("killed");
     expect(tables.conversations[0].inbox_stashed_at).toBe(111);
+  });
+});
+
+// The whole life of a trigger run in a fresh session, end to end through the
+// REAL completion and the REAL stall check: the agent reports its outcome, the
+// turn settles, the headless process exits. Before ct-52200 the exit read as a
+// dead session with output, so the stall rule pulled every clean run back out
+// of its fold and into Needs Input.
+describe("a trigger run in a fresh session, from completion to process exit", () => {
+  const task = (over: Rec = {}) =>
+    ({ _id: "task1", short_id: "tr-9", title: "Stall sweep", schedule_type: "recurring", ...over }) as any;
+  const exitProcess = (tables: Record<string, Rec[]>) => {
+    tables.managed_sessions[0].agent_status = "stopped";
+    tables.managed_sessions[0].agent_status_updated_at = Date.now() - 60_000;
+  };
+  const world = (conv: Rec = {}, extra: Rec[] = []) => {
+    const w = settledIdleWorld({ conv: { agent_task_id: "task1", short_id: "jx7run1", ...conv } });
+    w.tables.conversations.push(...extra);
+    return w;
+  };
+
+  test("a repeating run that reports a clean outcome folds and STAYS folded after it exits", async () => {
+    const { ctx, tables } = world();
+    await settleRunConversation(ctx as any, task(), tables.conversations[0] as any, { summary: "Nothing stuck." }, Date.now());
+    expect(tables.conversations[0].thread_state_status).toBe("done");
+    expect(tables.conversations[0].thread_state).toBe("Nothing stuck.");
+    expect(tables.conversations[0].inbox_stashed_at).toBeGreaterThan(0);
+
+    exitProcess(tables);
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("hidden");
+    expect(tables.conversations[0].inbox_stashed_at).toBeGreaterThan(0);
+  });
+
+  test("--needs-attention declares blocked, never folds, and the exit keeps it in front of the human", async () => {
+    const { ctx, tables } = world({ inbox_stashed_at: 111 });
+    await settleRunConversation(ctx as any, task(), tables.conversations[0] as any, { summary: "Two sessions need you.", needs_attention: true }, Date.now());
+    expect(tables.conversations[0].thread_state_status).toBe("blocked");
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a run the DAEMON completed (the agent died without reporting) declares nothing and stays visible", async () => {
+    const { ctx, tables } = world();
+    await settleRunConversation(ctx as any, task(), tables.conversations[0] as any, { summary: "exit 1", daemon_id: "d1" }, Date.now());
+    expect(tables.conversations[0].thread_state_status).toBeUndefined();
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a once run armed from a session posts its result there and folds", async () => {
+    const creator = { _id: "creator1", user_id: "u1", message_count: 7, updated_at: 1 };
+    const { ctx, tables } = world({}, [creator]);
+    const once = task({ schedule_type: "once", created_by_conversation_id: "creator1" });
+    expect(runResultThreadOf(once)).toBe("creator1");
+    await settleRunConversation(ctx as any, once, tables.conversations[0] as any, { summary: "CI is green." }, Date.now());
+
+    const posted = tables.messages.find((m) => m.conversation_id === "creator1");
+    expect(posted?.subtype).toBe("scheduled_task_result");
+    expect(posted?.content).toBe("tr-9 ran in jx7run1:\n\nCI is green.");
+    expect(tables.conversations[1].message_count).toBe(8);
+    expect(tables.conversations[0].inbox_stashed_at).toBeGreaterThan(0);
+  });
+
+  test("a once run with no thread to post into stays in the inbox, filed under done", async () => {
+    const { ctx, tables } = world();
+    const once = task({ schedule_type: "once" });
+    expect(runResultThreadOf(once)).toBeUndefined();
+    await settleRunConversation(ctx as any, once, tables.conversations[0] as any, { summary: "Domain still held." }, Date.now());
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
+    expect(tables.conversations[0].thread_state_status).toBe("done");
+
+    // The exit neither chimes nor reads as a death: the row rests under Done.
+    exitProcess(tables);
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(false);
+    expect(tables.notifications.length).toBe(0);
+  });
+
+  test("a repeating trigger never posts to the session that armed it", () => {
+    expect(runResultThreadOf(task({ created_by_conversation_id: "creator1" }))).toBeUndefined();
+    expect(runResultThreadOf(task({ created_by_conversation_id: "creator1", target_conversation_id: "thread1" }))).toBe("thread1");
+    // An inject trigger's home is not a fresh run: nothing to route.
+    expect(runResultThreadOf(task({ schedule_type: "once", originating_conversation_id: "home1", created_by_conversation_id: "home1" }))).toBeUndefined();
+  });
+
+  test("a pin is the user's intent: a pinned run is never folded", async () => {
+    const { ctx, tables } = world({ inbox_pinned_at: 5 });
+    await settleRunConversation(ctx as any, task(), tables.conversations[0] as any, { summary: "ok" }, Date.now());
+    expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
   });
 });
 

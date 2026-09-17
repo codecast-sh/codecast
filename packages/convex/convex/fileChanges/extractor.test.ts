@@ -8,9 +8,17 @@ const changes = (name: string, input: unknown, isError = false) => extractFileCh
 }]);
 
 describe("shared file change formats", () => {
-  test.each(["Edit", "edit", "file_edit", "replace", "functions.edit"])("recognizes %s including deletion to empty text", (name) => {
+  test.each(["Edit", "edit", "file_edit", "replace", "functions.edit", "search_replace"])("recognizes %s including deletion to empty text", (name) => {
     expect(changes(name, { file_path: "a.ts", old_string: "old", new_string: "" })[0]).toMatchObject({ filePath: "a.ts", newContent: "" });
     expect(hasFileChangeToolCall({ _id: "m", timestamp: 1, tool_calls: [{ id: "t", name, input: "{}" }] })).toBe(true);
+  });
+  test("Grok search_replace reads target_file when file_path is absent", () => {
+    expect(changes("search_replace", { target_file: "a.ts", old_string: "old", new_string: "new" })[0])
+      .toMatchObject({ filePath: "a.ts", oldContent: "old", newContent: "new" });
+  });
+  test("Grok run_terminal_command git commits land on the same change list", () => {
+    expect(changes("run_terminal_command", { command: 'git commit -m "fix grok diffs"' })[0])
+      .toMatchObject({ changeType: "commit", commitMessage: "fix grok diffs" });
   });
   test("MultiEdit keeps every replacement with stable ids", () => {
     expect(changes("MultiEdit", { file_path: "a.ts", edits: [

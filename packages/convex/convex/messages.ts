@@ -25,6 +25,8 @@ import {
 } from "./smallViewContracts";
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { safetyBlockPatch } from "./conversationSafety";
+import { stripContextTags } from "./userMessagesFilter";
+import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, newestSignificantMessage, isBannerTurn, isRealTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import {
@@ -596,7 +598,9 @@ export function deriveActivity(
     const msg = messages[i];
     if (msg.role !== "assistant" || !msg.tool_calls?.length) continue;
     const tc = msg.tool_calls[msg.tool_calls.length - 1];
-    const text = redactSecrets(activityLine(tc)).replace(/\s+/g, " ").trim();
+    // One line already: toolSubject collapses whitespace before the phrase is
+    // built, and redaction only swaps a match for a fixed token.
+    const text = redactSecrets(activityLine(tc));
     if (!text) return null;
     const at = msg.timestamp || now;
     if (previous && previous.at > at) return null;
@@ -931,6 +935,7 @@ export const getConversationImages = query({
         src: r.src,
         timestamp: r.timestamp,
         seq: r.seq,
+        message_id: r.message_id,
       }));
   },
 });
@@ -2474,30 +2479,48 @@ export const findMessageByContent = query({
   },
 });
 
-function parseSearchTermsServer(query: string): string[] {
-  const terms: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    const term = match[1] || match[2];
-    if (term) terms.push(term.toLowerCase());
-  }
-  return terms;
+/**
+ * One page of an in-conversation search. The scan is bounded (`limit` rows
+ * per call) because a single query over a whole transcript blows the
+ * per-function execution cap on long sessions (a 16k-message conversation
+ * timed out at 3s and took the conversation view down with it). The client
+ * walks pages with `after_ts` until `next_after_ts` comes back null.
+ *
+ * Hits are counted on the content the transcript actually renders — context
+ * tags (`<system-reminder>` and friends) are stripped first — so the counter
+ * does not promise matches nobody can see.
+ */
+export const SEARCH_PAGE_LIMIT = 1500;
+
+/**
+ * Cut a page so it never ends in the middle of a timestamp tie. The next page
+ * resumes with `gt(next_after_ts)`, so every row sharing the boundary
+ * timestamp must land on one side of the cut: the page keeps rows strictly
+ * before the boundary and the next call re-reads the boundary rows.
+ * `rows` is `limit + 1` rows (the extra one proves there is more).
+ */
+export function cutSearchPage<T extends { timestamp: number }>(rows: T[], limit: number): { rows: T[]; next_after_ts: number | null } {
+  if (rows.length <= limit) return { rows, next_after_ts: null };
+  const boundary = rows[limit - 1].timestamp;
+  const kept = rows.filter((r) => r.timestamp < boundary);
+  // Every row on the page shares one timestamp: nothing precedes the boundary,
+  // so keep the page and skip past it, accepting the (theoretical) tie loss
+  // over an infinite loop.
+  if (kept.length === 0) return { rows: rows.slice(0, limit), next_after_ts: boundary };
+  return { rows: kept, next_after_ts: boundary - 1 };
 }
 
-function countMatches(content: string, terms: string[]): number {
-  if (terms.length === 0) return 0;
-  const lower = content.toLowerCase();
-  let count = 0;
-  for (const term of terms) {
-    if (!term) continue;
-    let pos = 0;
-    while ((pos = lower.indexOf(term, pos)) !== -1) {
-      count++;
-      pos += term.length;
-    }
+export function searchMessageMatches<T extends { _id: Id<"messages">; timestamp: number; content?: string }>(
+  rows: T[],
+  terms: string[],
+): { message_id: Id<"messages">; timestamp: number; match_count: number }[] {
+  const matches: { message_id: Id<"messages">; timestamp: number; match_count: number }[] = [];
+  for (const msg of rows) {
+    if (!msg.content) continue;
+    const count = countMatches(stripContextTags(msg.content), terms);
+    if (count > 0) matches.push({ message_id: msg._id, timestamp: msg.timestamp, match_count: count });
   }
-  return count;
+  return matches;
 }
 
 export const findAllMessagesByContent = query({
@@ -2505,33 +2528,33 @@ export const findAllMessagesByContent = query({
     conversation_id: v.id("conversations"),
     search_term: v.string(),
     share_token: v.optional(v.string()),
+    after_ts: v.optional(v.number()),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const empty = { matches: [], next_after_ts: null as number | null };
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return [];
-    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return [];
+    if (!conversation) return empty;
+    if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") return empty;
 
-    const terms = parseSearchTermsServer(args.search_term);
-    if (terms.length === 0) return [];
+    const terms = parseSearchTerms(args.search_term);
+    if (terms.length === 0) return empty;
 
-    const messages = await ctx.db
+    const limit = Math.max(1, Math.min(args.limit ?? SEARCH_PAGE_LIMIT, SEARCH_PAGE_LIMIT));
+    const after = args.after_ts;
+    const rows = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id)
+        after === undefined
+          ? q.eq("conversation_id", args.conversation_id)
+          : q.eq("conversation_id", args.conversation_id).gt("timestamp", after)
       )
       .order("asc")
-      .collect();
+      .take(limit + 1);
 
-    const matches: { message_id: string; timestamp: number; match_count: number }[] = [];
-    for (const msg of messages) {
-      if (!msg.content) continue;
-      const count = countMatches(msg.content, terms);
-      if (count > 0) {
-        matches.push({ message_id: msg._id, timestamp: msg.timestamp, match_count: count });
-      }
-    }
-    return matches;
+    const page = cutSearchPage(rows, limit);
+    return { matches: searchMessageMatches(page.rows, terms), next_after_ts: page.next_after_ts };
   },
 });
 

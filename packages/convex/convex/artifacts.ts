@@ -16,6 +16,7 @@
 // caller forces a fresh one (`cast publish --new`).
 
 import { v } from "convex/values";
+import { siteUrl } from "./lib/siteUrl";
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -56,7 +57,7 @@ export function newSecret(): string {
 }
 
 export function artifactUrl(slug: string): string {
-  return `${process.env.SITE_URL || "https://codecast.sh"}/a/${slug}`;
+  return `${siteUrl()}/a/${slug}`;
 }
 
 // ---------------------------------------------------------------------------

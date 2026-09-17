@@ -5,7 +5,7 @@ import { mutation, query, internalMutation } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopeByProject, scopedFetch } from "./data";
+import { createDataContext, scopeByProject, scopedFetch, explicitWorkspace } from "./data";
 import { nextShortId } from "./counters";
 // Owner-or-team access check for a plan. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
@@ -1029,6 +1029,8 @@ export const list = query({
     project_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     team: v.optional(v.boolean()),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
     include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     query: v.optional(v.string()),
@@ -1037,7 +1039,9 @@ export const list = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path, ...explicitWorkspace(args, {}) });
+    // A named team lists the team's plans the way `--team` (the active team) does.
+    const teamListing = (args.team || args.workspace === "team") && db.workspace.type === "team";
 
     let plans;
     // by_project_id is a global index — a client-supplied project_id could
@@ -1049,7 +1053,7 @@ export const list = query({
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
       needsAccessFilter = true;
-    } else if (args.team && db.workspace.type === "team") {
+    } else if (teamListing) {
       const teamId = (db.workspace as { type: "team"; teamId: Id<"teams"> }).teamId;
       if (args.status) {
         plans = await ctx.db

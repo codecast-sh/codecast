@@ -1,6 +1,6 @@
 import { getApplyPatchInput } from "./applyPatchParser";
 
-export const SHELL_TOOL_NAMES = new Set(["bash", "shell", "shell_command", "exec_command", "commandexecution", "run_shell_command"]);
+export const SHELL_TOOL_NAMES = new Set(["bash", "shell", "shell_command", "exec_command", "commandexecution", "run_shell_command", "run_terminal_command"]);
 
 const patchInputsByTool = new WeakMap<object, { name: string; input: string; patches: readonly string[] }>();
 

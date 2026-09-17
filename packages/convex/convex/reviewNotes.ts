@@ -21,7 +21,7 @@ import { createDataContext } from "./data";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { normalizeRepository } from "./lib/gitRefs";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
-import { buildReviewBatchPrompt } from "@codecast/shared/comments";
+import { buildReviewBatchPrompt, type ReviewVerdict } from "@codecast/shared/comments";
 
 /** The notes one author wrote in one worktree, oldest first. */
 async function batchRows(
@@ -141,18 +141,28 @@ export const send = mutation({
 
 /**
  * Deliver a batch of notes to a session as one message, oldest first, and
- * stamp each note sent. The worktree batch (`cast review send`) and the pull
- * request review (reviews.handPendingToSession) both come through here, so a
- * session reads the same shape whichever surface wrote the notes.
+ * stamp each note sent. The worktree batch (`cast review send`), the notes
+ * handed over from a pull request (reviews.handPendingToSession) and a
+ * submitted review (reviews.deliverSubmittedReview) all come through here, so
+ * a session reads the same shape whichever surface wrote the notes. A review
+ * carries its verdict and summary, and may carry no notes at all.
  */
 export async function sendNotesToSession(
   ctx: any,
   userId: Id<"users">,
   conversationRef: string,
   rows: Doc<"review_comments">[],
-  opts: { repository?: string; ref?: string; url?: string; stale_ids?: Id<"review_comments">[] },
+  opts: {
+    repository?: string;
+    ref?: string;
+    url?: string;
+    stale_ids?: Id<"review_comments">[];
+    pullRequest?: { number: number; url?: string | null };
+    verdict?: ReviewVerdict;
+    summary?: string | null;
+  },
   resolved?: Doc<"conversations">,
-): Promise<{ sent: number; conversation_id: Id<"conversations">; content: string }> {
+): Promise<{ sent: number; conversation_id: Id<"conversations">; short_id?: string; content: string }> {
   const conversation = resolved ?? (await findConversationByAnyRef(ctx, conversationRef, userId));
   if (!conversation) throw new Error(`No session matches ${conversationRef}`);
   if (!(await canSendProductMessage(ctx, userId, conversation))) {
@@ -165,6 +175,9 @@ export async function sendNotesToSession(
     repository: opts.repository,
     ref: opts.ref,
     url: opts.url ?? null,
+    pullRequest: opts.pullRequest,
+    verdict: opts.verdict,
+    summary: opts.summary,
     notes: rows.map((r) => ({
       file_path: r.file_path ?? "",
       line_number: r.line_number,
@@ -180,12 +193,12 @@ export async function sendNotesToSession(
     // Idempotency is sent_at, not this key: a retry finds the batch already
     // stamped and stops. The key only has to be distinct per delivery, so a
     // second batch to the same session is not mistaken for the first.
-    client_id: `review-batch:${conversation._id}:${rows[0]._id}:${now}`,
+    client_id: `review-batch:${conversation._id}:${rows[0]?._id ?? opts.verdict ?? "review"}:${now}`,
     human: true,
   });
   for (const row of rows) await ctx.db.patch(row._id, { sent_at: now });
 
-  return { sent: rows.length, conversation_id: conversation._id, content };
+  return { sent: rows.length, conversation_id: conversation._id, short_id: conversation.short_id ?? undefined, content };
 }
 
 /** One note by id, for `cast review rm` / `edit` to confirm before acting. */

@@ -55,6 +55,7 @@ function db(tables: Record<string, any[]>) {
     managed_sessions: [],
     messages: [],
     session_decisions: [],
+    decision_inbox: [],
     ...tables,
   });
 }
@@ -203,6 +204,59 @@ describe("overlay projection — placement rules", () => {
       if (row.bucket === undefined) continue; // fact-only child rows carry what the probe read
       for (const f of INBOX_FACT_FIELDS) expect(Object.prototype.hasOwnProperty.call(row, f), `${id}.${f}`).toBe(true);
     }
+  });
+
+  test("a pending decide on a session you run but do not own does not lift QUESTIONS", async () => {
+    const THEM = "users_them";
+    const tables = {
+      conversations: [conv("hosted", { owner_user_id: THEM, updated_at: EPOCH - MIN })],
+      session_owners: [
+        { _id: "so1", conversation_id: "conversations_hosted", user_id: THEM, added_by: ME, added_at: EPOCH },
+      ],
+      session_decisions: [
+        {
+          _id: "session_decisions_hosted",
+          user_id: ME,
+          conversation_id: "conversations_hosted",
+          status: "pending",
+          asked_user_ids: [THEM],
+        },
+      ],
+      decision_inbox: [
+        { _id: "di1", decision_id: "session_decisions_hosted", user_id: THEM, status: "pending", created_at: EPOCH },
+      ],
+    };
+    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    expect(liveness.conversations_hosted.asking).toBe(false);
+    expect(liveness.conversations_hosted.bucket).not.toBe("questions");
+  });
+
+  test("the assignee's overlay does lift a hosted session's pending decide", async () => {
+    const THEM = "users_them";
+    const tables = {
+      users: [
+        { _id: ME, name: "Me", email: "me@example.com" },
+        { _id: THEM, name: "Them", email: "them@example.com" },
+      ],
+      conversations: [conv("hosted", { owner_user_id: THEM, updated_at: EPOCH - MIN })],
+      session_owners: [
+        { _id: "so1", conversation_id: "conversations_hosted", user_id: THEM, added_by: ME, added_at: EPOCH },
+      ],
+      session_decisions: [
+        {
+          _id: "session_decisions_hosted",
+          user_id: ME,
+          conversation_id: "conversations_hosted",
+          status: "pending",
+          asked_user_ids: [THEM],
+        },
+      ],
+      decision_inbox: [
+        { _id: "di1", decision_id: "session_decisions_hosted", user_id: THEM, status: "pending", created_at: EPOCH },
+      ],
+    };
+    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, THEM as any);
+    expect(liveness.conversations_hosted).toMatchObject({ asking: true, bucket: "questions" });
   });
 
   test("armed_trigger_kind on the row drives dormancy with no agent_tasks read", async () => {
@@ -480,7 +534,7 @@ describe("base, crawl and byIds channels carry no projection or liveness", () =>
 });
 
 describe("overlay read budget", () => {
-  test("stamping adds no reads: the execution's reads are the scan, the maps, the decisions read and one newest-message read per non-idle row", async () => {
+  test("stamping adds no reads: the execution's reads are the scan, the maps, the pending-decide set and one newest-message read per non-idle row", async () => {
     const tables = {
       conversations: [
         conv("settled"),                                   // idle at the epoch: no probe
@@ -498,6 +552,7 @@ describe("overlay read budget", () => {
     const by = (prefix: string) => ops.filter((o) => o.startsWith(prefix)).length;
     expect(by("managed_sessions")).toBe(1);
     expect(by("session_decisions")).toBe(1);
+    expect(by("decision_inbox")).toBe(1);
     expect(by("agent_tasks")).toBe(0);
     // One newest-message read for the non-idle row, one for the un-backfilled
     // row (shared by its fallback and its probe), none for settled rows.
@@ -507,7 +562,7 @@ describe("overlay read budget", () => {
     expect(by("conversations")).toBe(10);
     expect(by("session_owners")).toBe(1);
     expect(by("get")).toBe(0);
-    expect(ops.length).toBe(15);
+    expect(ops.length).toBe(16);
   });
 });
 

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
+import { getFunctionName } from "convex/server";
 import { processReviewEvent, processReviewCommentEvent, processPushEvent } from "./githubWebhooks";
+import { wake } from "./prShepherd";
 
 const TEAM = "team_1" as any;
 const CONV = "conv_1" as any;
@@ -391,5 +393,43 @@ describe("a review comment on a range of lines", () => {
     await (processReviewCommentEvent as any)._handler(ctx, { event_id: "event_1" });
 
     expect(ctx.db._tables.review_comments[0]).toMatchObject({ line_number: 10, line_end: 20 });
+  });
+});
+
+// A review sent through codecast reaches the owning session as a message from
+// reviews.deliverSubmittedReview. GitHub's webhook for the same review can land
+// before that delivery is recorded, so its wake waits and then stands down.
+describe("a review whose author can submit through codecast", () => {
+  const codecastUser = { users: [{ _id: "user_2", name: "Sam", github_username: "samvit" }] };
+
+  test("the webhook wake waits for the direct delivery instead of firing at once", async () => {
+    const ctx = context(reviewPayload("changes_requested", "needs a test"), "submitted", "pull_request_review", codecastUser);
+    await (processReviewEvent as any)._handler(ctx, { event_id: "event_1" });
+
+    const delayed = ctx._scheduled.filter((s: any) => getFunctionName(s.reference).includes("prShepherd:wake"));
+    expect(delayed.length).toBe(1);
+    expect(delayed[0].delay).toBe(20_000);
+    expect(delayed[0].args).toMatchObject({ pr_id: PR, reason: "changes_requested", unless_delivered_review: 77 });
+    // Nothing was handed to the trigger yet.
+    expect(ctx.db._tables.agent_tasks[0].prompt).toBe("old");
+  });
+
+  test("the delayed wake stands down once the session has heard the review", async () => {
+    const ctx = context({}, undefined, "pull_request_review", {
+      reviews: [{ _id: "rev_1", pull_request_id: PR, github_review_id: 77, state: "changes_requested", submitted_at: 1, session_delivered_at: 5 }],
+    });
+    const out = await (wake as any)._handler(ctx, { pr_id: PR, reason: "changes_requested", unless_delivered_review: 77 });
+    expect(out).toEqual({ woken: false, reason: "delivered_directly" });
+    expect(ctx.db._tables.agent_tasks[0].prompt).toBe("old");
+  });
+
+  test("the delayed wake fires when the review went out on GitHub alone", async () => {
+    const ctx = context({}, undefined, "pull_request_review", {
+      pull_requests: [pullRequest({ review_decision: "changes_requested" })],
+      reviews: [{ _id: "rev_1", pull_request_id: PR, github_review_id: 77, state: "changes_requested", submitted_at: 1 }],
+    });
+    const out = await (wake as any)._handler(ctx, { pr_id: PR, reason: "changes_requested", unless_delivered_review: 77 });
+    expect(out.woken).toBe(true);
+    expect(ctx.db._tables.agent_tasks[0].prompt).not.toBe("old");
   });
 });

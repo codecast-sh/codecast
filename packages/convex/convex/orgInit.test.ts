@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, mergeAnalysisInputs, performApplyDecision } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, mergeAnalysisInputs, performApplyDecision } from "./orgInit";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
@@ -97,7 +97,7 @@ describe("org.analysisInputs", () => {
     expect(r.projects.map((p) => p.title).sort()).toEqual(["Billing", "Growth"]);
     expect(r.projects.find((p) => p.title === "Growth")).toMatchObject({ tasks: { total: 1, open: 1, by_status: { in_progress: 1 } }, plans: 1, description: "Bring users in" });
     expect(r.plans).toEqual([expect.objectContaining({ short_id: "pl-1", progress: { total: 1, done: 0, in_progress: 0, open: 1 } })]);
-    expect(r.tasks).toEqual({ total: 3, by_status: { in_progress: 1, open: 2 }, unfiled_open: 1, truncated: false });
+    expect(r.tasks).toEqual({ total: 3, by_status: { in_progress: 1, open: 2 }, unfiled_open: 1, truncated: false, closed_counted: "inside the window only" });
     expect(r.docs_by_type).toEqual({ note: 1, design: 1 });
     // Sessions: the caller's row counts; the teammate's private row does not.
     expect(r.sessions.total).toBe(1);
@@ -122,9 +122,13 @@ describe("org.analysisInputs", () => {
     const work = await computeAnalysisWork(ctx, ME as any, TEAM);
     const signals = await computeAnalysisSignals(ctx, ME as any, TEAM, NOW);
     const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
-    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW)).toEqual(whole);
+    const activity = await computeAnalysisActivity(ctx, ME as any, TEAM, NOW);
+    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, activity.activity)).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
     expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks"]);
+    // The activity block is its own slice (S9): areas, people and stale lists.
+    expect(whole.activity).toBeDefined();
+    expect(Object.keys(whole.activity.stale).sort()).toEqual(["plans", "projects", "tasks"]);
   });
 
   test("every list at its cap still answers, and each floor is reported", async () => {
@@ -144,7 +148,10 @@ describe("org.analysisInputs", () => {
     expect(r.truncated).toEqual({ projects: true, plans: true, tasks: true, docs: true, insights: true });
     expect(r.projects.length).toBe(ANALYSIS_CAPS.projects);
     expect(r.plans.length).toBe(ANALYSIS_CAPS.plans);
-    expect(r.tasks.total).toBe(ANALYSIS_CAPS.tasks);
+    // Tasks are read per status (every open row) plus the window's changes,
+    // so the total is not one cap; the floor is reported per slice.
+    expect(r.tasks.total).toBeGreaterThanOrEqual(ANALYSIS_CAPS.tasks);
+    expect(r.tasks.truncated).toBe(true);
     expect(Object.values(r.docs_by_type).reduce((a, b) => a + b, 0)).toBe(ANALYSIS_CAPS.docs);
     expect(r.insights.total).toBe(ANALYSIS_CAPS.insights);
     expect(r.channels.length).toBe(ANALYSIS_CAPS.channels);

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { cleanBudget } from "./charterBudget";
+import { liveRoleByHandle } from "./orgAccess";
 
 // Charters on projects and plans (docs/architecture/org-staffing.md S7): the
 // direction a role reads before its task list. ONE module owns the field
@@ -59,9 +60,7 @@ const lines = (xs: string[] | undefined): string[] | undefined => {
 export async function resolveOwnerRole(ctx: { db: any }, row: { team_id?: any; user_id: any }, ref: string): Promise<any> {
   const trimmed = ref.trim();
   const handle = trimmed.replace(/^@/, "").toLowerCase();
-  const byHandle = row.team_id
-    ? await ctx.db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", row.team_id).eq("handle", handle)).first()
-    : await ctx.db.query("org_roles").withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", row.user_id).eq("handle", handle)).first();
+  const byHandle = await liveRoleByHandle(ctx, row.team_id ? { team_id: row.team_id } : { scope_user_id: row.user_id }, handle);
   let role = byHandle;
   if (!role) {
     role = await ctx.db.query("org_roles").withIndex("by_short_id", (q: any) => q.eq("short_id", trimmed)).first();

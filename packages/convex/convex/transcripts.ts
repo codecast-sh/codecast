@@ -33,7 +33,6 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
-  CALL_MEMBER_STALE_MS,
   authorizeRoom,
   authorizeRoomNoGrant,
   isRoomTranscribeOff,
@@ -46,6 +45,7 @@ import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   LIVE_TRANSCRIBE_MODEL,
+  REC_LEASE_STALE_MS,
   RECORDING_SUMMARY_PUSH_TYPE,
   TRANSCRIBE_MAX_BYTES,
   asrTranscriptionSession,
@@ -385,7 +385,8 @@ async function writeSegments(
   }[],
   opts: { trackParticipants?: boolean } = {},
 ): Promise<number> {
-  const trackParticipants = opts.trackParticipants !== false;
+  const trackParticipants =
+    opts.trackParticipants !== false && !isRecRoomKey(t.room_key);
   let seq = t.last_seq;
   for (const s of segments) {
     const text = s.text.trim();
@@ -453,14 +454,15 @@ export const flush = mutation({
  * recording on the sweep's next pass, two minutes in. It reads the row's own
  * beat instead, through the same window a seat uses.
  *
- * A recording that has not beaten yet is measured from its start, so a tab
- * that died during the first fifteen seconds still gets swept.
+ * A recording that has not beaten yet is measured from its start, so a
+ * process that died during the first beat still gets swept. The window is
+ * longer than a seat's: see REC_LEASE_STALE_MS.
  */
 export function recLeaseExpired(
   t: { last_beat?: number; started_at: number },
   now: number,
 ): boolean {
-  return now - (t.last_beat ?? t.started_at) >= CALL_MEMBER_STALE_MS;
+  return now - (t.last_beat ?? t.started_at) >= REC_LEASE_STALE_MS;
 }
 
 /** A recording says it is still going. The room's seat leases do this job for
@@ -549,6 +551,18 @@ export const stop = mutation({
     const t = await ctx.db.get(args.transcript_id);
     if (!t || String(t.started_by) !== String(userId)) {
       throw new Error("Transcript not found");
+    }
+    if (t.status === "ended") {
+      // A recording the sweep closed while the phone was still capturing:
+      // the honest end is when the person actually stopped, not when the
+      // lease went stale.
+      if (isRecRoomKey(t.room_key)) {
+        const endedAt = Date.now();
+        if (endedAt > (t.ended_at ?? 0)) {
+          await ctx.db.patch(t._id, { ended_at: endedAt });
+        }
+      }
+      return;
     }
     await endTranscript(ctx, t);
   },
@@ -1377,26 +1391,40 @@ export const mintAsrToken = action({
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return { error: "Transcription is not configured" };
     const model = LIVE_TRANSCRIBE_MODEL;
-    const languages = unionTranscribeLanguages(args.languages, grant.languages);
+    let languages = unionTranscribeLanguages(args.languages, grant.languages);
     // GA realtime API: client secrets are minted at /v1/realtime/client_secrets
     // with the session config nested under `session` (audio.input vocabulary).
-    const resp = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ session: asrTranscriptionSession(model, languages) }),
-    });
-    if (!resp.ok) {
-      const body = (await resp.text()).slice(0, 300);
-      console.error("[transcripts] mint failed", resp.status, body);
-      return { error: `ASR session mint failed (${resp.status})` };
+    const mint = async (
+      session: ReturnType<typeof asrTranscriptionSession>,
+    ): Promise<{ error: string } | { client_secret: string }> => {
+      const resp = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ session }),
+      });
+      if (!resp.ok) {
+        const body = (await resp.text()).slice(0, 300);
+        console.error("[transcripts] mint failed", resp.status, body);
+        return { error: `ASR session mint failed (${resp.status})` };
+      }
+      const data = (await resp.json()) as { value?: string; client_secret?: { value?: string } };
+      const secret = data.value ?? data.client_secret?.value;
+      if (!secret) return { error: "ASR session mint returned no secret" };
+      return { client_secret: secret };
+    };
+    let minted = await mint(asrTranscriptionSession(model, languages));
+    // One unsupported language code rejects the whole session. Retry
+    // unconstrained so the huddle still gets words; the client keeps its
+    // own list for the script filter.
+    if ("error" in minted && languages.length) {
+      languages = [];
+      minted = await mint(asrTranscriptionSession(model, languages));
     }
-    const data = (await resp.json()) as { value?: string; client_secret?: { value?: string } };
-    const secret = data.value ?? data.client_secret?.value;
-    if (!secret) return { error: "ASR session mint returned no secret" };
-    return { client_secret: secret, model, languages };
+    if ("error" in minted) return { error: minted.error };
+    return { client_secret: minted.client_secret, model, languages };
   },
 });
 
@@ -1483,9 +1511,14 @@ export const deliverToSession = internalMutation({
     as_user: v.id("users"),
     to: v.string(),
     body: v.string(),
+    image_storage_ids: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
-    await performSessionSend(ctx, args.as_user, { to: args.to, body: args.body });
+    await performSessionSend(ctx, args.as_user, {
+      to: args.to,
+      body: args.body,
+      image_storage_ids: args.image_storage_ids,
+    });
   },
 });
 

@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopedFetch } from "./data";
+import { createDataContext, scopedFetch, explicitWorkspace } from "./data";
 import { isTeamMember } from "./privacy";
 import {
   canAccessDoc,
@@ -46,6 +46,9 @@ export const list = query({
   args: {
     api_token: v.string(),
     status: v.optional(v.string()),
+    // `cast project ls --team <name>|personal` narrows to one workspace.
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -53,10 +56,12 @@ export const list = query({
 
     // Own projects plus every project of a team the caller belongs to — the
     // web's workspace-"all" scope, so teammates share one project list. No
-    // path scoping: projects are org units that span repos.
+    // path scoping: projects are org units that span repos. A named
+    // workspace narrows it.
+    const named = explicitWorkspace(args, {});
     const { records } = await scopedFetch(ctx, "projects", {
       userId: auth.userId,
-      workspace: "all",
+      ...(named.workspace ? { workspace: named.workspace, teamId: named.team_id } : { workspace: "all" }),
     });
     let projects = records;
     if (args.status) {
@@ -123,6 +128,8 @@ export const update = mutation({
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
+    // Ongoing or bounded (org-staffing.md S10); "none" from the CLI clears it.
+    horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"), v.null())),
     // The charter (org-staffing.md S7); `--owner @handle` resolves inside the
     // project's own workspace. Access is the project's, unchanged.
     ...projectCharterArgs,
@@ -140,6 +147,7 @@ export const update = mutation({
     if (args.status) updates.status = args.status;
     if (args.target_date !== undefined) updates.target_date = args.target_date ?? undefined;
     if (args.labels) updates.labels = args.labels;
+    if (args.horizon !== undefined) updates.horizon = args.horizon ?? undefined;
 
     await ctx.db.patch(args.id, updates);
     return { success: true };
@@ -332,6 +340,7 @@ export const webUpdate = mutation({
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
+    horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"), v.null())),
     ...projectCharterArgs,
   },
   handler: async (ctx, args) => {

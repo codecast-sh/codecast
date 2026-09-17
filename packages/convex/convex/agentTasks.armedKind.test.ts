@@ -221,7 +221,7 @@ describe("every agent_tasks writer restamps the home (exhaustive)", () => {
       "runConv._id",        // run conversation fold (conversation row)
       "t._id",              // adminBackfillCreatedBy (inert field)
       "task._id",           // patchTask chokepoint + short-id/run_at inert sites
-      "task.target_conversation_id", // target conversation bump (conversation row)
+      "thread._id",         // the result thread's message count (settleRunConversation)
     ]);
   });
 

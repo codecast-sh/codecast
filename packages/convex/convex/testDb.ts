@@ -117,6 +117,13 @@ export function makeFakeDb(tables: Record<string, any[]>) {
         });
         return indexed.map(([row]) => row);
       };
+      // A row handed to a handler is a SNAPSHOT, as in convex: a later patch
+      // changes the table row, never the object the handler already holds.
+      // Aliasing let updateAgentStatus read its own status write through the
+      // row it compared against, so an active status never settled in tests.
+      // Table rows themselves stay stable objects (patch mutates in place), so
+      // a test may keep a reference to db._tables.x[i] and watch it change.
+      const snapshot = () => apply().map((r: any) => ({ ...r }));
       const builder: any = {
         withIndex(_name: string, fn?: (q: any) => any) {
           if (fn) {
@@ -153,19 +160,19 @@ export function makeFakeDb(tables: Record<string, any[]>) {
           direction = dir === "desc" ? "desc" : "asc";
           return builder;
         },
-        async first() { return apply()[0] ?? null; },
+        async first() { return snapshot()[0] ?? null; },
         async unique() {
-          const rows = apply();
+          const rows = snapshot();
           if (rows.length > 1) throw new Error("Query returned more than one result");
           return rows[0] ?? null;
         },
-        async collect() { return apply(); },
-        async take(n: number) { return apply().slice(0, n); },
+        async collect() { return snapshot(); },
+        async take(n: number) { return snapshot().slice(0, n); },
         // Position cursors, as offsets into the matched rows. Real enough to test
         // that a page respects its size, that `isDone` is honest, and that the
         // next cursor reaches the rows the first page did not.
         async paginate(opts: any) {
-          const rows = apply();
+          const rows = snapshot();
           const numItems = opts?.numItems ?? rows.length;
           const start = opts?.cursor ? parseInt(String(opts.cursor), 10) || 0 : 0;
           const end = start + numItems;
@@ -177,13 +184,13 @@ export function makeFakeDb(tables: Record<string, any[]>) {
         },
         // The streaming read path (scopedFetch's stripFields `for await`).
         async *[Symbol.asyncIterator]() {
-          for (const r of apply()) yield r;
+          for (const r of snapshot()) yield r;
         },
       };
       return builder;
     },
     async get(id: any) {
-      for (const rows of Object.values(tables)) { const r = rows.find((x: any) => x._id === id); if (r) return r; }
+      for (const rows of Object.values(tables)) { const r = rows.find((x: any) => x._id === id); if (r) return { ...r }; }
       return null;
     },
     normalizeId(table: string, id: string) {

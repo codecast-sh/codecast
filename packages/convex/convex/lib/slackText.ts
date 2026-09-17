@@ -5,75 +5,12 @@
 // round trip must still read as the same sentence, and nothing a Slack person
 // typed may turn into a codecast mention of somebody they did not name.
 
-// ── Emoji shortcodes ─────────────────────────────────────────────────────────
-// Slack writes reactions and inline emoji as :names:. The chat stores unicode
-// (chatText.isValidEmoji refuses anything else), so both directions need this
-// table. It is the working set people actually react with, not the whole
-// standard; an unknown name stays as text inbound and is skipped outbound.
-const EMOJI_BY_NAME: Record<string, string> = {
-  "+1": "👍", thumbsup: "👍", "-1": "👎", thumbsdown: "👎",
-  heart: "❤️", hearts: "💕", blue_heart: "💙", green_heart: "💚", yellow_heart: "💛", purple_heart: "💜", orange_heart: "🧡", black_heart: "🖤", white_heart: "🤍", broken_heart: "💔", heart_eyes: "😍", sparkling_heart: "💖",
-  eyes: "👀", eye: "👁️", white_check_mark: "✅", heavy_check_mark: "✔️", ballot_box_with_check: "☑️", x: "❌", negative_squared_cross_mark: "❎", heavy_multiplication_x: "✖️",
-  tada: "🎉", confetti_ball: "🎊", rocket: "🚀", fire: "🔥", sparkles: "✨", star: "⭐", star2: "🌟", zap: "⚡", boom: "💥", "100": "💯",
-  joy: "😂", rolling_on_the_floor_laughing: "🤣", rofl: "🤣", smile: "😄", smiley: "😃", grinning: "😀", grin: "😁", laughing: "😆", satisfied: "😆", sweat_smile: "😅", wink: "😉", blush: "😊", innocent: "😇", slightly_smiling_face: "🙂", upside_down_face: "🙃", relaxed: "☺️", yum: "😋", stuck_out_tongue: "😛", stuck_out_tongue_winking_eye: "😜", zany_face: "🤪", stuck_out_tongue_closed_eyes: "😝", money_mouth_face: "🤑", hugging_face: "🤗", face_with_hand_over_mouth: "🤭", shushing_face: "🤫", thinking_face: "🤔", zipper_mouth_face: "🤐", face_with_raised_eyebrow: "🤨", neutral_face: "😐", expressionless: "😑", no_mouth: "😶", smirk: "😏", unamused: "😒", face_with_rolling_eyes: "🙄", grimacing: "😬", lying_face: "🤥", relieved: "😌", pensive: "😔", sleepy: "😪", drooling_face: "🤤", sleeping: "😴", mask: "😷", face_with_thermometer: "🤒", face_with_head_bandage: "🤕", nauseated_face: "🤢", face_vomiting: "🤮", sneezing_face: "🤧", hot_face: "🥵", cold_face: "🥶", woozy_face: "🥴", dizzy_face: "😵", exploding_head: "🤯", face_with_cowboy_hat: "🤠", partying_face: "🥳", sunglasses: "😎", nerd_face: "🤓", face_with_monocle: "🧐", confused: "😕", worried: "😟", slightly_frowning_face: "🙁", white_frowning_face: "☹️", open_mouth: "😮", hushed: "😯", astonished: "😲", flushed: "😳", pleading_face: "🥺", frowning: "😦", anguished: "😧", fearful: "😨", cold_sweat: "😰", disappointed_relieved: "😥", cry: "😢", sob: "😭", scream: "😱", confounded: "😖", persevere: "😣", disappointed: "😞", sweat: "😓", weary: "😩", tired_face: "😫", yawning_face: "🥱", triumph: "😤", rage: "😡", angry: "😠", face_with_symbols_on_mouth: "🤬", smiling_imp: "😈", imp: "👿", skull: "💀", skull_and_crossbones: "☠️", hankey: "💩", poop: "💩", clown_face: "🤡", ghost: "👻", alien: "👽", robot_face: "🤖", melting_face: "🫠", saluting_face: "🫡", face_holding_back_tears: "🥹", smiling_face_with_3_hearts: "🥰", star_struck: "🤩", face_with_peeking_eye: "🫣",
-  wave: "👋", raised_back_of_hand: "🤚", hand: "✋", raised_hand: "✋", vulcan_salute: "🖖", ok_hand: "👌", pinched_fingers: "🤌", pinching_hand: "🤏", v: "✌️", crossed_fingers: "🤞", i_love_you_hand_sign: "🤟", the_horns: "🤘", call_me_hand: "🤙", point_left: "👈", point_right: "👉", point_up_2: "👆", middle_finger: "🖕", point_down: "👇", point_up: "☝️", fist: "✊", facepunch: "👊", punch: "👊", left_facing_fist: "🤛", right_facing_fist: "🤜", clap: "👏", raised_hands: "🙌", open_hands: "👐", palms_up_together: "🤲", handshake: "🤝", pray: "🙏", muscle: "💪", writing_hand: "✍️", nail_care: "💅", selfie: "🤳", brain: "🧠", man_shrugging: "🤷‍♂️", woman_shrugging: "🤷‍♀️", shrug: "🤷", man_facepalming: "🤦‍♂️", woman_facepalming: "🤦‍♀️", facepalm: "🤦", bow: "🙇", dancer: "💃", man_dancing: "🕺", runner: "🏃", running: "🏃",
-  see_no_evil: "🙈", hear_no_evil: "🙉", speak_no_evil: "🙊", monkey_face: "🐵", dog: "🐶", cat: "🐱", unicorn_face: "🦄", bee: "🐝", bug: "🐛", snail: "🐌", turtle: "🐢", octopus: "🐙", whale: "🐳", penguin: "🐧", owl: "🦉", fox_face: "🦊", bear: "🐻", panda_face: "🐼", koala: "🐨", chicken: "🐔", hatching_chick: "🐣", duck: "🦆", eagle: "🦅", butterfly: "🦋", crab: "🦀", shrimp: "🦐", dragon: "🐉", t_rex: "🦖",
-  coffee: "☕", tea: "🍵", beer: "🍺", beers: "🍻", wine_glass: "🍷", cocktail: "🍸", champagne: "🍾", clinking_glasses: "🥂", pizza: "🍕", hamburger: "🍔", taco: "🌮", burrito: "🌯", sushi: "🍣", ramen: "🍜", cake: "🍰", birthday: "🎂", cookie: "🍪", doughnut: "🍩", popcorn: "🍿", apple: "🍎", banana: "🍌", avocado: "🥑", hot_pepper: "🌶️", eggplant: "🍆", peach: "🍑", cherries: "🍒", strawberry: "🍓", watermelon: "🍉", lemon: "🍋", croissant: "🥐", egg: "🥚", bacon: "🥓",
-  seedling: "🌱", herb: "🌿", four_leaf_clover: "🍀", cactus: "🌵", palm_tree: "🌴", evergreen_tree: "🌲", deciduous_tree: "🌳", sunflower: "🌻", rose: "🌹", cherry_blossom: "🌸", tulip: "🌷", bouquet: "💐", earth_americas: "🌎", earth_africa: "🌍", earth_asia: "🌏", sunny: "☀️", partly_sunny: "⛅", cloud: "☁️", rain_cloud: "🌧️", snowflake: "❄️", snowman: "⛄", umbrella: "☔", rainbow: "🌈", ocean: "🌊", volcano: "🌋", mountain: "⛰️", full_moon: "🌕", crescent_moon: "🌙", new_moon_with_face: "🌚", full_moon_with_face: "🌝", comet: "☄️",
-  soccer: "⚽", basketball: "🏀", football: "🏈", baseball: "⚾", tennis: "🎾", "8ball": "🎱", trophy: "🏆", medal: "🏅", first_place_medal: "🥇", second_place_medal: "🥈", third_place_medal: "🥉", dart: "🎯", video_game: "🎮", game_die: "🎲", jigsaw: "🧩", art: "🎨", musical_note: "🎵", notes: "🎶", microphone: "🎤", headphones: "🎧", guitar: "🎸", drum_with_drumsticks: "🥁", trumpet: "🎺", saxophone: "🎷", violin: "🎻", movie_camera: "🎥", clapper: "🎬", tv: "📺", camera: "📷", camera_with_flash: "📸",
-  computer: "💻", desktop_computer: "🖥️", keyboard: "⌨️", iphone: "📱", telephone_receiver: "📞", phone: "☎️", battery: "🔋", electric_plug: "🔌", bulb: "💡", flashlight: "🔦", mag: "🔍", mag_right: "🔎", microscope: "🔬", telescope: "🔭", satellite_antenna: "📡", gear: "⚙️", wrench: "🔧", hammer: "🔨", hammer_and_wrench: "🛠️", nut_and_bolt: "🔩", pick: "⛏️", toolbox: "🧰", magnet: "🧲", test_tube: "🧪", dna: "🧬", pill: "💊", syringe: "💉", bomb: "💣", knife: "🔪", hocho: "🔪", shield: "🛡️", key: "🔑", lock: "🔒", unlock: "🔓", closed_lock_with_key: "🔐", bell: "🔔", no_bell: "🔕", loudspeaker: "📢", mega: "📣", speech_balloon: "💬", thought_balloon: "💭", left_speech_bubble: "🗨️", right_anger_bubble: "🗯️", hourglass: "⌛", hourglass_flowing_sand: "⏳", stopwatch: "⏱️", alarm_clock: "⏰", clock1: "🕐", calendar: "📆", date: "📅", spiral_calendar_pad: "🗓️", pushpin: "📌", round_pushpin: "📍", paperclip: "📎", link: "🔗", scissors: "✂️", pencil2: "✏️", memo: "📝", pencil: "📝", black_nib: "✒️", fountain_pen: "🖋️", book: "📖", books: "📚", notebook: "📓", ledger: "📒", page_facing_up: "📄", page_with_curl: "📃", bookmark_tabs: "📑", scroll: "📜", newspaper: "📰", chart_with_upwards_trend: "📈", chart_with_downwards_trend: "📉", bar_chart: "📊", clipboard: "📋", file_folder: "📁", open_file_folder: "📂", card_index_dividers: "🗂️", wastebasket: "🗑️", package: "📦", inbox_tray: "📥", outbox_tray: "📤", envelope: "✉️", email: "📧", "e-mail": "📧", incoming_envelope: "📨", mailbox: "📫", moneybag: "💰", dollar: "💵", money_with_wings: "💸", credit_card: "💳", gem: "💎", crown: "👑", ring: "💍", gift: "🎁", balloon: "🎈", ribbon: "🎀", christmas_tree: "🎄", jack_o_lantern: "🎃", fireworks: "🎆", sparkler: "🎇",
-  warning: "⚠️", no_entry: "⛔", no_entry_sign: "🚫", exclamation: "❗", heavy_exclamation_mark: "❗", grey_exclamation: "❕", question: "❓", grey_question: "❔", bangbang: "‼️", interrobang: "⁉️", recycle: "♻️", white_circle: "⚪", black_circle: "⚫", red_circle: "🔴", large_blue_circle: "🔵", large_green_circle: "🟢", large_yellow_circle: "🟡", large_orange_circle: "🟠", large_purple_circle: "🟣", small_red_triangle: "🔺", small_red_triangle_down: "🔻", arrow_up: "⬆️", arrow_down: "⬇️", arrow_left: "⬅️", arrow_right: "➡️", arrows_counterclockwise: "🔄", repeat: "🔁", fast_forward: "⏩", rewind: "⏪", arrow_forward: "▶️", double_vertical_bar: "⏸️", black_square_for_stop: "⏹️", black_circle_for_record: "⏺️", heavy_plus_sign: "➕", heavy_minus_sign: "➖", heavy_division_sign: "➗", infinity: "♾️", hash: "#️⃣", keycap_star: "*️⃣", zero: "0️⃣", one: "1️⃣", two: "2️⃣", three: "3️⃣", four: "4️⃣", five: "5️⃣", six: "6️⃣", seven: "7️⃣", eight: "8️⃣", nine: "9️⃣", keycap_ten: "🔟", ok: "🆗", new: "🆕", cool: "🆒", free: "🆓", up: "🆙", sos: "🆘", "100_": "💯", checkered_flag: "🏁", triangular_flag_on_post: "🚩", crossed_flags: "🎌", waving_white_flag: "🏳️", waving_black_flag: "🏴", "rainbow-flag": "🏳️‍🌈", pirate_flag: "🏴‍☠️",
-  car: "🚗", taxi: "🚕", bus: "🚌", truck: "🚚", bike: "🚲", airplane: "✈️", helicopter: "🚁", ship: "🚢", anchor: "⚓", house: "🏠", office: "🏢", hospital: "🏥", school: "🏫", church: "⛪", tent: "⛺", statue_of_liberty: "🗽", construction: "🚧", traffic_light: "🚦", world_map: "🗺️", compass: "🧭",
-  sleeping_accommodation: "🛌", bath: "🛀", zzz: "💤", dash: "💨", sweat_drops: "💦", droplet: "💧", speech_bubble: "💬", dizzy: "💫", anger: "💢", collision: "💥", hole: "🕳️", eyeglasses: "👓", dark_sunglasses: "🕶️", necktie: "👔", shirt: "👕", tshirt: "👕", jeans: "👖", dress: "👗", bikini: "👙", high_heel: "👠", athletic_shoe: "👟", tophat: "🎩", mortar_board: "🎓", handbag: "👜", briefcase: "💼", school_satchel: "🎒", lipstick: "💄", baby: "👶", boy: "👦", girl: "👧", man: "👨", woman: "👩", older_man: "👴", older_woman: "👵", cop: "👮", detective: "🕵️", santa: "🎅", angel: "👼", princess: "👸", prince: "🤴", superhero: "🦸", supervillain: "🦹", mage: "🧙", zombie: "🧟", genie: "🧞", technologist: "🧑‍💻", male_technologist: "👨‍💻", female_technologist: "👩‍💻", scientist: "🧑‍🔬", firefighter: "🧑‍🚒", astronaut: "🧑‍🚀", busts_in_silhouette: "👥", bust_in_silhouette: "👤", family: "👪", couple: "👫", two_men_holding_hands: "👬", two_women_holding_hands: "👭", people_holding_hands: "🧑‍🤝‍🧑", footprints: "👣", ear: "👂", nose: "👃", tongue: "👅", lips: "👄", tooth: "🦷", bone: "🦴", speaking_head_in_silhouette: "🗣️",
-  slack: "💬", slightly_smiling: "🙂", simple_smile: "🙂", heavy_heart_exclamation_mark_ornament: "❣️", two_hearts: "💕", revolving_hearts: "💞", heartbeat: "💓", heartpulse: "💗", cupid: "💘", gift_heart: "💝", heart_decoration: "💟", peace_symbol: "☮️", latin_cross: "✝️", star_of_david: "✡️", om_symbol: "🕉️", wheel_of_dharma: "☸️", yin_yang: "☯️", six_pointed_star: "🔯", menorah_with_nine_branches: "🕎", atom_symbol: "⚛️", radioactive_sign: "☢️", biohazard_sign: "☣️", medical_symbol: "⚕️", wheelchair: "♿", mens: "🚹", womens: "🚺", restroom: "🚻", potable_water: "🚰", trident: "🔱", fleur_de_lis: "⚜️", beginner: "🔰", o: "⭕", white_large_square: "⬜", black_large_square: "⬛", large_blue_diamond: "🔷", large_orange_diamond: "🔶", small_blue_diamond: "🔹", small_orange_diamond: "🔸", diamond_shape_with_a_dot_inside: "💠", radio_button: "🔘", white_square_button: "🔳", black_square_button: "🔲", checkered: "🏁",
-  eyes_shifty: "👀", handshake_: "🤝", ok_woman: "🙆‍♀️", ok_man: "🙆‍♂️", no_good: "🙅", raising_hand: "🙋", person_with_pouting_face: "🙎", person_frowning: "🙍", information_desk_person: "💁", tipping_hand_person: "💁", massage: "💆", haircut: "💇", walking: "🚶", standing_person: "🧍", kneeling_person: "🧎", couplekiss: "💏", couple_with_heart: "💑", man_in_business_suit_levitating: "🕴️", speak: "🗣️", chart: "💹", tickets: "🎟️", ticket: "🎫", admission_tickets: "🎟️", performing_arts: "🎭", circus_tent: "🎪", carousel_horse: "🎠", ferris_wheel: "🎡", roller_coaster: "🎢", hotsprings: "♨️", label: "🏷️", moneybag_: "💰", chart_increasing: "📈", stopwatch_: "⏱️", timer_clock: "⏲️", mantelpiece_clock: "🕰️", watch: "⌚", radio: "📻", pager: "📟", fax: "📠", vhs: "📼", cd: "💿", dvd: "📀", minidisc: "💽", floppy_disk: "💾", printer: "🖨️", trackball: "🖲️", mouse_two_button: "🖱️", joystick: "🕹️", compression: "🗜️", abacus: "🧮", film_frames: "🎞️", film_projector: "📽️", level_slider: "🎚️", control_knobs: "🎛️", studio_microphone: "🎙️", postal_horn: "📯", speaker: "🔈", sound: "🔉", loud_sound: "🔊", mute: "🔇",
-};
+import { emojiToShortcode, replaceShortcodes, shortcodeToEmoji } from "@codecast/shared/chat";
 
-const NAME_BY_EMOJI: Record<string, string> = (() => {
-  const out: Record<string, string> = {};
-  // First name wins, so the canonical Slack names (listed first per glyph) are
-  // what outbound reactions carry.
-  for (const [name, glyph] of Object.entries(EMOJI_BY_NAME)) {
-    if (!(glyph in out)) out[glyph] = name;
-  }
-  // Slack accepts these bare names for the two most common reactions.
-  out["👍"] = "+1";
-  out["👎"] = "-1";
-  return out;
-})();
+export { emojiToShortcode, replaceShortcodes, shortcodeToEmoji };
 
-const SKIN_TONE_RE = /::skin-tone-[2-6]$/;
-const SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
-const VARIATION_SELECTOR_RE = /️/g;
-
-/** A Slack emoji name (with or without colons, with or without a skin tone) to
- *  its unicode glyph, or null when the name is not in the working set. */
-export function shortcodeToEmoji(name: string): string | null {
-  const bare = name.replace(/^:|:$/g, "").replace(SKIN_TONE_RE, "");
-  return EMOJI_BY_NAME[bare] ?? null;
-}
-
-/** A unicode emoji to the Slack name its reaction API wants, or null when Slack
- *  has no name we know for it. Skin tones and variation selectors are dropped
- *  first so 👍🏽 reacts as +1. */
-export function emojiToShortcode(emoji: string): string | null {
-  const direct = NAME_BY_EMOJI[emoji];
-  if (direct) return direct;
-  const stripped = emoji.replace(SKIN_TONE_MODIFIER_RE, "").replace(VARIATION_SELECTOR_RE, "");
-  if (NAME_BY_EMOJI[stripped]) return NAME_BY_EMOJI[stripped];
-  for (const [glyph, name] of Object.entries(NAME_BY_EMOJI)) {
-    if (glyph.replace(VARIATION_SELECTOR_RE, "") === stripped) return name;
-  }
-  return null;
-}
-
-/** Replace :name: shortcodes in prose with their glyphs. Unknown names stay. */
-export function replaceShortcodes(text: string): string {
-  return text.replace(/:([a-z0-9_+\-']+)(?:::skin-tone-[2-6])?:/g, (whole, name: string) => {
-    const glyph = EMOJI_BY_NAME[name];
-    return glyph ?? whole;
-  });
-}
+// Emoji shortcodes live in @codecast/shared/chat (the full Slack/iamcal set).
+// slackToMarkdown calls replaceShortcodes after the other mrkdwn rules.
 
 // ── Entities and code protection ─────────────────────────────────────────────
 

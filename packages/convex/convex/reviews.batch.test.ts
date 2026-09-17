@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { create, listForPR, pendingReview, discardPendingReview, recordSubmittedReview } from "./codeComments";
-import { submitPending, getCommentsForPR } from "./reviews";
+import { submitPending, getCommentsForPR, deliverSubmittedReview } from "./reviews";
 import { threads, findComment } from "./prCli";
 
 const USER = "user_1" as any;
@@ -168,6 +168,87 @@ describe("submitting the batch", () => {
     const out = await (submitPending as any)._handler(ctx, { pull_request_id: PR, event: "APPROVE" });
     expect(out.error).toMatch(/own GitHub account/);
     expect(calls).toEqual([]);
+  });
+
+  test("a pull request with an owning session hears the review once GitHub has it", async () => {
+    const { ctx, calls } = harness({ ...reviewer, pr: { ...reviewer.pr, owner_conversation_id: "conv_9" } }, [note]);
+    const out = await (submitPending as any)._handler(ctx, { pull_request_id: PR, event: "REQUEST_CHANGES", body: "Two things" });
+    expect(calls.map((c) => c.name.split(":").pop())).toEqual([
+      "submitPRReview", "listReviewComments", "recordSubmittedReview", "deliverSubmittedReview",
+    ]);
+    const deliver = calls.find((c) => c.name.includes("deliverSubmittedReview"))!;
+    expect(deliver.args).toMatchObject({
+      conversation_ref: "conv_9", state: "changes_requested", body: "Two things", note_ids: ["n1"],
+      review_url: "https://github.com/r/900",
+    });
+    expect(out.delivered_to).toBeDefined();
+  });
+
+  test("a pull request nobody owns is reviewed on GitHub alone", async () => {
+    const { ctx, calls } = harness(reviewer, []);
+    const out = await (submitPending as any)._handler(ctx, { pull_request_id: PR, event: "APPROVE" });
+    expect(calls.some((c) => c.name.includes("deliverSubmittedReview"))).toBe(false);
+    expect(out.delivered_to).toBeNull();
+  });
+});
+
+describe("delivering a submitted review to the owning session", () => {
+  const CONV = "conv_1" as any;
+  function seeded(over: Record<string, any[]> = {}) {
+    return context(USER, {
+      conversations: [{ _id: CONV, user_id: USER, is_private: true, session_id: "sess-1", short_id: "jx7abcd", title: "Shepherd" }],
+      pending_messages: [],
+      review_comments: [{
+        _id: "n1", pull_request_id: PR, repository: "codecast-sh/codecast", file_path: "src/foo.ts", line_number: 4,
+        content: "rename this", author_user_id: USER, created_at: 1, github_review_id: 900,
+      }],
+      ...over,
+    });
+  }
+
+  test("the verdict, the summary and the notes arrive as one message, and the notes are stamped sent", async () => {
+    const ctx = seeded();
+    const out = await (deliverSubmittedReview as any)._handler(ctx, {
+      user_id: USER, pull_request_id: PR, conversation_ref: CONV, note_ids: ["n1"],
+      state: "changes_requested", body: "Two things before this lands", review_url: "https://github.com/r/900",
+    });
+    expect(out).toMatchObject({ conversation_id: CONV, short_id: "jx7abcd", notes: 1 });
+    const queued = ctx.db._tables.pending_messages;
+    expect(queued.length).toBe(1);
+    expect(queued[0].content).toContain("Ashot requested changes on codecast-sh/codecast#12@abcdef1 with 1 review note.");
+    expect(queued[0].content).toContain("Two things before this lands");
+    expect(queued[0].content).toContain("File: src/foo.ts");
+    expect(queued[0].content).toContain("rename this");
+    expect(queued[0].content).toContain("https://github.com/r/900");
+    expect(ctx.db._tables.review_comments[0].sent_at).toBeDefined();
+  });
+
+  test("the review row is stamped, so the webhook's delayed wake stands down", async () => {
+    const ctx = seeded({ reviews: [{ _id: "rev_1", pull_request_id: PR, github_review_id: 900, state: "commented", submitted_at: 1 }] });
+    await (deliverSubmittedReview as any)._handler(ctx, {
+      user_id: USER, pull_request_id: PR, conversation_ref: CONV, note_ids: ["n1"], github_review_id: 900, state: "commented", body: "hi",
+    });
+    expect(ctx.db._tables.reviews[0].session_delivered_at).toBeDefined();
+  });
+
+  test("an approval with no notes is still a message", async () => {
+    const ctx = seeded();
+    await (deliverSubmittedReview as any)._handler(ctx, {
+      user_id: USER, pull_request_id: PR, conversation_ref: CONV, note_ids: [], state: "approved",
+    });
+    const queued = ctx.db._tables.pending_messages;
+    expect(queued.length).toBe(1);
+    expect(queued[0].content).toContain("Ashot approved codecast-sh/codecast#12@abcdef1.");
+    expect(queued[0].content).toContain("approves the change");
+  });
+
+  test("a session the reviewer cannot send to is reported, not thrown", async () => {
+    const ctx = seeded({ conversations: [{ _id: CONV, user_id: OTHER, is_private: true, session_id: "sess-1", title: "Theirs" }] });
+    const out = await (deliverSubmittedReview as any)._handler(ctx, {
+      user_id: USER, pull_request_id: PR, conversation_ref: CONV, note_ids: ["n1"], state: "commented", body: "hi",
+    });
+    expect(out.error).toMatch(/No session matches|cannot send/);
+    expect(ctx.db._tables.pending_messages.length).toBe(0);
   });
 });
 
