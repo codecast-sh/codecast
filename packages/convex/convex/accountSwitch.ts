@@ -22,6 +22,11 @@ import {
   blockedHeadlineCause,
   ccAccountsValidator,
   decideAutoSwitch,
+  fallbackProfiles,
+  isWindowRolled,
+  usageStanding,
+  recoveryModeOf,
+  type CcUsage,
   splitAuthParks,
   AUTO_SWITCH_CONTINUE_KEY,
   AUTO_SWITCH_CODEX_CONTINUE_KEY,
@@ -151,7 +156,31 @@ const BLOCKED_FLAG_CLEAR = { pending_api_error: false, pending_api_error_kind: u
 // (auto-switch) or same-account resume at window reset (auto-continue, on by
 // default). Both live on the primary device row (see loadPrimaryForToggle).
 function autoRecoveryEnabled(primary: Doc<"devices"> | undefined): boolean {
-  return !!primary && (primary.cc_auto_switch === true || isAutoContinueEnabled(primary));
+  return !!primary && recoveryModeOf(primary) !== "off";
+}
+
+// The label of the worst pegged limit window on an account — what the human
+// sees closed on the meter (e.g. "Fable (7d)"). Used only to explain a switch
+// or proposal; absent when nothing is pegged. Mirrors the meter's own labels.
+function peggedWindowLabel(usage: CcUsage | undefined | null, now: number): string | undefined {
+  if (!usage) return undefined;
+  const windows: Array<{ label: string; percent: number; resets_at?: number }> = [];
+  // Spread FIRST, then the label: the stored window carries its own raw
+  // `label` ("Fable"), and letting it land last would overwrite the display
+  // label the meters use ("Fable (7d)").
+  if (usage.session) windows.push({ ...usage.session, label: "Session (5h)" });
+  if (usage.weekly) windows.push({ ...usage.weekly, label: "Week (7d)" });
+  if (usage.weekly_scoped)
+    windows.push({ ...usage.weekly_scoped, label: `${usage.weekly_scoped.label ?? "Model"} (7d)` });
+  for (const s of usage.scoped ?? []) windows.push({ label: s.label, percent: s.percent, resets_at: s.resets_at });
+  // Several windows can be pegged at once (a spent 5h session inside a spent
+  // week). The one worth naming is the one that takes LONGEST to clear — it is
+  // what actually keeps the account unusable; the shorter window reopening
+  // changes nothing while the longer one is still shut.
+  const pegged = windows
+    .filter((w) => !isWindowRolled(w, now) && w.percent >= 100)
+    .sort((a, b) => (b.resets_at ?? 0) - (a.resets_at ?? 0))[0];
+  return pegged?.label;
 }
 
 // An automatic pass makes the same decision the revive button makes: the
@@ -1163,6 +1192,8 @@ export const recoveryStatus = query({
       device_id: primary.device_id,
       auto_switch: primary.cc_auto_switch === true,
       auto_continue: isAutoContinueEnabled(primary),
+      ask_first: primary.cc_recovery_ask === true,
+      mode: recoveryModeOf(primary),
       session_tokens: true,
     };
   },
@@ -1181,6 +1212,9 @@ export const setAutoSwitchAccounts = mutation({
     const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
     await ctx.db.patch(device._id, {
       cc_auto_switch: args.enabled,
+      // Auto-switch and ask-first are mutually exclusive: turning rotation on
+      // clears the ask-first flag so the two can never both be set.
+      ...(args.enabled ? { cc_recovery_ask: false } : {}),
       // A fresh toggle starts a fresh incident history either way.
       cc_auto_switch_state: undefined,
     });
@@ -1397,6 +1431,40 @@ export const setAutoContinueAccounts = mutation({
   },
 });
 
+// The recovery mode selector — one mutually-exclusive choice, so the three
+// flags can never contradict (auto-switch AND ask-first both on was the bug
+// this replaces). "ask" is the default a new machine gets: recommend a switch
+// and wait. "auto" rotates accounts without asking. "resume" waits for the
+// window to reset on the same account. "off" parks and does nothing. Every
+// mode keeps same-account resume unless it is "off".
+export const setRecoveryMode = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    mode: v.union(v.literal("ask"), v.literal("auto"), v.literal("resume"), v.literal("off")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
+    await ctx.db.patch(device._id, {
+      cc_recovery_ask: args.mode === "ask",
+      cc_auto_switch: args.mode === "auto",
+      cc_auto_continue: args.mode !== "off",
+      // A fresh mode starts a fresh incident history — no stale proposal or
+      // attempt list carries across the change.
+      cc_auto_switch_state: undefined,
+    });
+    // Ask and auto both act on sessions already parked: ask records a
+    // recommendation now, auto switches now, rather than waiting for the next
+    // limit event.
+    if (args.mode === "ask" || args.mode === "auto") {
+      await scheduleAutoSwitchCheck(ctx, userId);
+    }
+    return { mode: args.mode };
+  },
+});
+
 /**
  * The auto-switch decision. Runs debounced after a limit banner lands (and
  * self-schedules a re-check at the earliest known limit reset when every
@@ -1416,8 +1484,16 @@ export const autoSwitchCheck = internalMutation({
     const now = Date.now();
     const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
     if (!primary) return { acted: "off" };
-    const allowSwitch = primary.cc_auto_switch === true;
-    if (!allowSwitch && !isAutoContinueEnabled(primary)) return { acted: "off" };
+    // Ask-first: never change the account without the human approving. A
+    // switch the loop would take becomes a PROPOSAL instead (recorded on the
+    // state, surfaced by the park card). Same-account resume still runs.
+    // Read through recoveryModeOf so the server, the web selector and the CLI
+    // agree on what an unset machine does — ask-first is the default, and a
+    // machine that never chose must not switch unannounced.
+    const mode = recoveryModeOf(primary);
+    const askFirst = mode === "ask";
+    const allowSwitch = mode === "auto";
+    if (mode === "off") return { acted: "off" };
 
     const state = primary.cc_auto_switch_state ?? {};
     const attempts = state.attempts ?? [];
@@ -1486,12 +1562,41 @@ export const autoSwitchCheck = internalMutation({
       return { acted: "cooldown" };
     }
 
-    const recordAction = async (action: string, profileKeys: string[], nextCheckAt?: number) => {
+    // What the human sees on the meter that closed, and where the loop would
+    // move — the reason every switch/proposal is recorded with, so the park
+    // card can explain the account change instead of it happening silently.
+    const activeProfiles = primary.cc_accounts?.profiles ?? [];
+    const activeEmail = primary.cc_accounts?.active_email;
+    const activeUsage = activeProfiles.find((p) => p.email && p.email === activeEmail)?.usage;
+    const buildDecision = (
+      kind: "switch" | "propose" | "continue" | "exhausted",
+      target?: { name?: string; email?: string; usage?: CcUsage | null },
+    ) => {
+      const pct = target ? usageStanding(target.usage, now).percent : null;
+      return {
+        kind,
+        at: now,
+        target_name: target?.name,
+        target_email: target?.email,
+        target_percent: pct ?? undefined,
+        from_email: activeEmail,
+        parked_count: claudeLimit.length + authSwitch.length,
+        pegged_window: peggedWindowLabel(activeUsage, now),
+      };
+    };
+
+    const recordAction = async (
+      action: string,
+      profileKeys: string[],
+      nextCheckAt?: number,
+      decisionRecord?: ReturnType<typeof buildDecision>,
+    ) => {
       await ctx.db.patch(primary._id, {
         cc_auto_switch_state: {
           ...state,
           last_action_at: now,
           last_action: action,
+          last_decision: decisionRecord ?? state.last_decision,
           attempts: [...attempts, ...profileKeys.map((profile) => ({ profile, at: now }))].slice(
             -MAX_ATTEMPT_HISTORY,
           ),
@@ -1694,7 +1799,7 @@ export const autoSwitchCheck = internalMutation({
           claudeLimit.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
         ),
       });
-      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp());
+      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp(), buildDecision("continue"));
       return {
         acted: "continue",
         conversations: claudeLimit.length,
@@ -1704,6 +1809,7 @@ export const autoSwitchCheck = internalMutation({
 
     if (decision.action === "switch") {
       const switched = targets;
+      const targetProfile = activeProfiles.find((p) => p.name === decision.profile);
       await insertSwitchCommands(ctx, args.user_id, {
         profile: decision.profile,
         blocked: switched,
@@ -1712,7 +1818,12 @@ export const autoSwitchCheck = internalMutation({
         continueBlocked: true,
         now,
       });
-      await recordAction(`switch:${decision.profile}`, [decision.profile], await bookCodexFollowUp());
+      await recordAction(
+        `switch:${decision.profile}`,
+        [decision.profile],
+        await bookCodexFollowUp(),
+        buildDecision("switch", targetProfile),
+      );
       console.log(
         `autoSwitchCheck: switching to "${decision.profile}" for ${claudeLimit.length} limit-parked + ${authSwitch.length} auth-parked conversation(s)`,
       );
@@ -1726,6 +1837,43 @@ export const autoSwitchCheck = internalMutation({
       // starts passing one fails loudly instead of quietly redeeming a credit
       // on behalf of the wrong provider.
       throw new Error("autoSwitchCheck: a reset-credit redeem reached the Claude pass");
+    }
+
+    // Ask-first: the active account cannot self-heal (we reached the switch
+    // path with switching turned off), so instead of moving the machine we
+    // RECOMMEND the freshest saved account and leave the sessions parked for
+    // the human to approve from the park card. The proposal is re-recorded on
+    // each pass so its target and reason stay current as the meters move; the
+    // human approves through the same requestAccountSwitch the manual button
+    // calls, so the ask path and the manual path are one codepath.
+    if (askFirst) {
+      const best = fallbackProfiles(activeProfiles, activeEmail, now)[0];
+      if (best) {
+        const proposal = buildDecision("propose", best);
+        const already =
+          state.last_decision?.kind === "propose" &&
+          state.last_decision.target_email === best.email &&
+          state.last_decision.parked_count === proposal.parked_count;
+        // Only touch the row when the recommendation actually changed, so a
+        // re-check that lands on the same proposal does not churn the state.
+        if (!already) {
+          await ctx.db.patch(primary._id, {
+            cc_auto_switch_state: { ...state, last_decision: proposal },
+          });
+        }
+        const retryAt = withCodexRetry(decision.retry_at);
+        if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
+          await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
+            user_id: args.user_id,
+          });
+        }
+        console.log(
+          `autoSwitchCheck: ask-first — recommending "${best.name}" for ${claudeLimit.length} limit-parked conversation(s), awaiting approval`,
+        );
+        return { acted: "proposed", profile: best.name, conversations: claudeLimit.length };
+      }
+      // No saved account has room either — fall through to the exhausted path,
+      // which is the honest state and does not stamp "spent" (allowSwitch off).
     }
 
     // Every account is spent. Mark it for the UI and wake up at the earliest
@@ -2146,11 +2294,16 @@ export const listAccountProfiles = query({
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,
           auto_continue: isAutoContinueEnabled(d),
+          ask_first: d.cc_recovery_ask === true,
           auto_switch_state: d.cc_auto_switch_state
             ? {
                 last_action_at: d.cc_auto_switch_state.last_action_at,
                 last_action: d.cc_auto_switch_state.last_action,
                 exhausted_at: d.cc_auto_switch_state.exhausted_at,
+                // Why the account moved (or should move) — the park card and
+                // the settings page read this instead of guessing from the
+                // action string.
+                last_decision: d.cc_auto_switch_state.last_decision,
               }
             : undefined,
         })),

@@ -804,11 +804,16 @@ async function parentNameOf(ctx: Ctx, role: any): Promise<string> {
   return user?.name || user?.email?.split("@")[0] || "a person";
 }
 
-const FOUR_RULES = [
+// The rules of a role, as the charter carries them. The charter rides every
+// restart frame in full, so a rule here survives compaction where the
+// bootstrap message does not (anchors.ts bootstrapMessage says the same rules
+// at length).
+export const ROLE_RULES = [
   "1. Wake, read, act, brief: every turn starts from the frame and ends by updating the brief.",
   "2. Stay inside the scope; what falls outside goes up the reporting line.",
   "3. Escalate with a recommendation attached, never as a bare question.",
   "4. Caps on wakes, hands and tokens per day are real; a held cap is reported in the brief, not worked around.",
+  "5. A person's message is answered here or handed on to a hand, and the reply says which; a request to remember or forget is a brief write in the same turn.",
 ];
 
 export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
@@ -821,7 +826,7 @@ export function charterTemplate(role: { name: string; handle: string; charter?: 
     scopeNames.length ? scopeNames.map((n) => `- ${n}`).join("\n") : `- the whole workspace`,
     ``,
     `## Rules`,
-    ...FOUR_RULES,
+    ...ROLE_RULES,
   ].join("\n");
 }
 

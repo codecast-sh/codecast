@@ -231,7 +231,9 @@ export const emit = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const actor = args.actor_user_id ? await ctx.db.get(args.actor_user_id) : null;
-    const actorName = actor?.name || actor?.github_username || args.actor_name || "Someone";
+    // A snapshot wins: Slack inbound names the person who posted, not the
+    // workspace bridge the row is stored under. Same for a session-typed line.
+    const actorName = args.actor_name || actor?.name || actor?.github_username || "Someone";
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const recipients: UserDoc[] = [];

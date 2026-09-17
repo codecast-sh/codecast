@@ -244,6 +244,18 @@ describe("digest sweep", () => {
     expect(row.email_digest_last_sent_at).toBeGreaterThanOrEqual(now);
   });
 
+  test("a Slack snapshot name beats the workspace bridge user", async () => {
+    const now = Date.now();
+    const c = sweepCtx({
+      users: [user(), { _id: "users_bridge", name: "Union (Slack)", email: "slack@example.com" }],
+      notifications: [mention(now - 20 * MIN, { actor_user_id: "users_bridge", actor_name: "Aivery" })],
+    });
+
+    await runSweep(c.ctx);
+
+    expect(c.scheduled[0].sections[0].entries[0].title).toBe("**Aivery** mentioned you");
+  });
+
   test("an existing unsubscribe token is reused, never re-minted", async () => {
     const now = Date.now();
     const token = "z".repeat(32);

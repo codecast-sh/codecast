@@ -13,7 +13,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -1515,8 +1515,6 @@ export function planStuckMessageHeal(
   }
   return { kind: "skip" };
 }
-
-const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
 // The cron only revives a stranded message when its session is live AND settled — i.e. ready to
 // receive it right now. A user message is NEVER dropped: if the session is busy, blocked, stopped,

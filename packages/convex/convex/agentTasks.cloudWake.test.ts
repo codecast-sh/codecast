@@ -168,6 +168,8 @@ describe("dispatchCloudTriggers", () => {
     expect(cause).toContain(original);
     expect(cause).toContain("cast trigger complete tr-42 --summary");
     expect(cause).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");
+    expect(cause).toContain("A finding does not survive this run on its own");
+    expect(cause).toContain("--needs-attention claims the human's eyes, so pass it only when they themselves must act");
     expect(cause).toContain("Ongoing mandates remain active until explicitly ended");
     expect(cause).toContain("Preserve safe-mode restrictions");
     expect(tables.agent_tasks[0]).toMatchObject({ prompt: original, mode: "propose", status: "scheduled" });
@@ -184,6 +186,8 @@ describe("dispatchCloudTriggers", () => {
     expect(pending.content).toStartWith('<scheduled-task title="Check &quot;release&quot;" task-id="agent_tasks_cloud">Check the release and report its status.');
     expect(pending.content).toContain("bounded trigger and its terminal condition is verified complete");
     expect(pending.content).toContain("Completing one recurring run alone does not retire its trigger");
+    expect(pending.content).toContain("A finding does not survive this run on its own");
+    expect(pending.content).toContain("--needs-attention claims the human's eyes, so pass it only when they themselves must act");
     expect(pending.content).toContain("Ongoing mandates remain active until explicitly ended");
     expect(pending.content).toContain("pending deadlines are NOT proof of completion");
     expect(pending.content).toContain("subordinate to this trigger's prompt");

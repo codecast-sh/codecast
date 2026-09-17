@@ -1,4 +1,5 @@
 import { mutation, syncAckPositions } from "./functions";
+import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { guardClientResolution, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
@@ -84,6 +85,9 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     // updated_at` era) and the resulting client/server value drift kept the
     // local pending-field override alive forever — a cross-tab unstash could
     // never converge.
+    // Character fields (session-characters.md S1): an unknown face key or
+    // an empty name clears the field; a name is trimmed and capped.
+    beforePatch: (_doc: any, safe: Record<string, any>) => normalizeCharacterFields(safe),
   },
   client_state: {
     kind: "singleton",
@@ -1076,6 +1080,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   retryPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
     retryPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
+
+  // A person's message from the staffing pane into the thread bound to a
+  // proposal (org-staffing.md S18). orgProposals.say wraps it with the row it
+  // is about and enqueues it on the message rail under the pane's client id.
+  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId]: [string, string, number | null, string, string]) => {
+    return await ctx.runMutation!((api as any).orgProposals.say, {
+      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}),
+    });
+  },
 
   sendMessage: async (
     ctx,

@@ -346,6 +346,37 @@ describe("multi-owner session ownership", () => {
     expect(db._tables.decision_inbox.map((i: any) => i.user_id)).toEqual([JASON]);
   });
 
+  // A handoff un-hides the row: dismiss, stash and snooze are the previous
+  // holder's "not in my inbox" and they live on the conversation, so leaving
+  // them set hands someone a session they cannot see.
+  test("a handoff clears the previous holder's dismiss, stash and snooze", async () => {
+    const db = fixtures();
+    const conv = db._tables.conversations.find((c: any) => c._id === "jx1abcd_convex_id");
+    conv.inbox_dismissed_at = 111;
+    conv.inbox_stashed_at = 222;
+    conv.inbox_stash_hidden = true;
+    conv.inbox_snoozed_until = 333;
+    conv.inbox_killed_at = 444;
+
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+
+    expect(conv.inbox_dismissed_at).toBeUndefined();
+    expect(conv.inbox_stashed_at).toBeUndefined();
+    expect(conv.inbox_stash_hidden).toBeUndefined();
+    expect(conv.inbox_snoozed_until).toBeUndefined();
+    // A kill is a retirement, not a hide: `cast restore` is its gesture.
+    expect(conv.inbox_killed_at).toBe(444);
+  });
+
+  test("removing an owner leaves the hide stamps alone", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    const conv = db._tables.conversations.find((c: any) => c._id === "jx1abcd_convex_id");
+    conv.inbox_stashed_at = 222;
+    await performRemoveSessionOwner({ db }, JASON as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    expect(conv.inbox_stashed_at).toBe(222);
+  });
+
   test("a bot may assign owners but may never BE one", async () => {
     const db = fixtures();
     await expect(

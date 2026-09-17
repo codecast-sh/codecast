@@ -109,19 +109,19 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "_id", "acting_user_id", "active_plan", "active_task", "activity", "agent_name", "agent_started_at",
       "agent_status", "agent_status_boundary", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
-      "awaiting_input", "browser_pane_offer", "cloud_placement", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
+      "awaiting_input", "browser_pane_offer", "character_avatar", "character_name", "cloud_placement", "context_tokens", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
       "has_pending", "hibernated_at", "icon", "icon_color", "idle_summary", "image_preview_url",
       "implementation_session", "inbox_dismissed_at", "inbox_killed_at",
       "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_anchor", "is_connected",
       "is_deferred", "is_favorite", "is_idle", "is_pinned", "is_private",
       "is_subagent", "is_unresponsive", "is_workflow_primary", "last_comment_at",
-      "last_comment_author", "last_comment_author_id", "last_comment_excerpt", "last_heartbeat",
+      "last_comment_author", "last_comment_author_id", "last_comment_excerpt", "last_heartbeat", "last_model_call_at",
       "last_role_is_user", "last_user_message", "loop_state", "message_count", "migration_batch_id", "model",
-      "open_comment_threads", "open_tasks", "open_tasks_at", "owned_by_me", "owner_device_id",
+      "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",
       "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
       "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",
-      "project_path", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
-      "started_at", "status", "subtitle", "team_id", "thread_state", "thread_state_at",
+      "project_path", "role", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
+      "standing_role_id", "started_at", "status", "subtitle", "team_id", "thread_state", "thread_state_at",
       "thread_state_msg_count", "thread_state_status", "title", "tmux_session",
       "transcript_revision", "turn_completed_at", "updated_at", "user_id", "user_rest", "workflow_run_activity",
       "workflow_run_agents_done", "workflow_run_agents_total", "workflow_run_id",
@@ -217,5 +217,38 @@ describe("one visibility rule, one selection (sync-convergence C4)", () => {
     // No inbox window constant carries its own literal any more.
     expect(conversations).not.toMatch(/INBOX_(?:SESSION|DISMISSED)_WINDOW_MS = \d/);
     expect(WORKING_SET_RECENCY_MS).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe("session identity on the row (session-characters.md S1, S6)", () => {
+  test("a plain session carries its chosen character parts and no role", async () => {
+    const tables = { conversations: [conv("a", { updated_at: EPOCH - MIN, character_avatar: "owl", character_name: "Minerva" })] };
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
+    const row = sessions.find((s: any) => s._id === "conversations_a");
+    expect(row.character_avatar).toBe("owl");
+    expect(row.character_name).toBe("Minerva");
+    expect(row.role).toBeNull();
+    expect(row.standing_role_id).toBeNull();
+    expect(row.org_role_id).toBeNull();
+  });
+
+  test("a role's standing session carries a snapshot of the role it wears", async () => {
+    const tables = {
+      org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure: { kind: "program", ends: { date: 1 }, then: "review" } }],
+      conversations: [
+        conv("a", { updated_at: EPOCH - MIN, standing_role_id: "org_roles_infra", character_avatar: "fox" }),
+        conv("hand", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
+      ],
+    };
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
+    const standing = sessions.find((s: any) => s._id === "conversations_a");
+    expect(standing.standing_role_id).toBe("org_roles_infra");
+    expect(standing.role).toEqual({ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure_kind: "program" });
+    // the character fields still travel; the web resolver decides the role wins
+    expect(standing.character_avatar).toBe("fox");
+    const hand = sessions.find((s: any) => s._id === "conversations_hand");
+    expect(hand.org_role_id).toBe("org_roles_infra");
+    expect(hand.standing_role_id).toBeNull();
+    expect(hand.role?.handle).toBe("infra");
   });
 });

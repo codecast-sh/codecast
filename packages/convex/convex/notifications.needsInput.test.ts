@@ -197,6 +197,43 @@ describe("needs-input push — settled idle", () => {
     // is scheduled from here for this conversation.
   });
 
+  // Assignment moves the alert with the inbox row: the account that RUNS a
+  // session it no longer owns is not the one being asked (sessionOwnership,
+  // isAssignedAwayFromOwnerSet). Without this the row left the runner's inbox
+  // and kept ringing their phone.
+  test("a session handed to a teammate rings the owner, not the runner", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { owner_user_id: "u2" },
+      users: [
+        { _id: "u1", notifications_enabled: true, push_token: "tok-u1" },
+        { _id: "u2", notifications_enabled: true, push_token: "tok-u2" },
+      ],
+      extra: { session_owners: [{ _id: "so1", conversation_id: "conv1", user_id: "u2", added_by: "u1", added_at: 1 }] },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+
+    expect(res.notified).toBe(true);
+    expect(tables.notifications.map((n: Rec) => n.recipient_user_id)).toEqual(["u2"]);
+  });
+
+  test("an owner set that still holds the runner rings them both", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { owner_user_id: "u2" },
+      users: [
+        { _id: "u1", notifications_enabled: true, push_token: "tok-u1" },
+        { _id: "u2", notifications_enabled: true, push_token: "tok-u2" },
+      ],
+      extra: {
+        session_owners: [
+          { _id: "so1", conversation_id: "conv1", user_id: "u2", added_by: "u1", added_at: 1 },
+          { _id: "so2", conversation_id: "conv1", user_id: "u1", added_by: "u1", added_at: 2 },
+        ],
+      },
+    });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(tables.notifications.map((n: Rec) => n.recipient_user_id).sort()).toEqual(["u1", "u2"]);
+  });
+
   test("same waiting episode never pushes twice; a new turn pushes again", async () => {
     const { ctx, tables, scheduled } = settledIdleWorld();
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -458,8 +495,11 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     expect(tables.notifications.length).toBe(0);
   });
 
-  test("assigned owner gets a mirrored row+push", async () => {
-    const { ctx, tables, scheduled } = settledIdleWorld({
+  // The legacy shape: an owner in the cache with no join row yet (pre-backfill).
+  // It still names an owner, so it still moves the alert — the assigned owner
+  // is rung and the account that merely runs the session is not.
+  test("assigned owner gets the row+push; the runner does not", async () => {
+    const { ctx, tables } = settledIdleWorld({
       conv: { owner_user_id: "u2" },
       users: [
         { _id: "u1", notifications_enabled: true, push_token: "tok-u1" },
@@ -468,8 +508,8 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     });
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.notified).toBe(true);
-    expect(tables.notifications.length).toBe(2);
-    expect(tables.push_outbox.map((r: Rec) => r.user_id).sort()).toEqual(["u1", "u2"]);
+    expect(tables.notifications.map((n: Rec) => n.recipient_user_id)).toEqual(["u2"]);
+    expect(tables.push_outbox.map((r: Rec) => r.user_id)).toEqual(["u2"]);
   });
 });
 

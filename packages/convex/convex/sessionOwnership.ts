@@ -358,6 +358,22 @@ export async function performReparentSession(
         }
       }
     }
+    // A handoff un-hides the row. Dismiss, stash and snooze are the PREVIOUS
+    // holder's triage ("not in my inbox"), and they live on the row rather than
+    // per viewer, so leaving them set would hand someone a session they cannot
+    // see. Only a real addition clears them, and only a stamp that is set — an
+    // untouched row takes no write. A kill is left alone: that row is retired,
+    // and `cast restore` is the gesture that brings it back.
+    if (added.length > 0) {
+      const hidden: Record<string, undefined> = {};
+      if (conversation.inbox_dismissed_at) hidden.inbox_dismissed_at = undefined;
+      if (conversation.inbox_stashed_at) {
+        hidden.inbox_stashed_at = undefined;
+        hidden.inbox_stash_hidden = undefined;
+      }
+      if (conversation.inbox_snoozed_until) hidden.inbox_snoozed_until = undefined;
+      if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);
+    }
     // The session reports to the person this act named: `add` hands it to the
     // added person (a handoff, the chart follows), `set` to the LAST listed —
     // callers put the person the act names at the end of `owners`. A remove

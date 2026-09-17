@@ -455,7 +455,7 @@ describe("pause is idempotent and interrupts only live hands (review minor)", ()
 
 // ── Final product review (6 findings) ───────────────────────────────────────
 
-import { performRetireRole, refuseUnlessHuman } from "./orgRoles";
+import { ROLE_RULES, charterTemplate, performRetireRole, refuseUnlessHuman } from "./orgRoles";
 import { handBriefing } from "./spawn";
 import { bootstrapMessage } from "./anchors";
 
@@ -540,6 +540,40 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
     expect(text).toContain("Never wake");
     const roleText = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: [], parentName: "Me", trust: "understand" } });
     expect(roleText).not.toContain("## Roles that report into this workspace");
+  });
+
+  // The scope is a conversation (scopes-and-feed.md F4.2, F4.4): the role is
+  // told, at the principle level, to say where a person's message went, to
+  // say only what it did, to take a redirect in plain words, and to treat
+  // remember and forget as brief writes. The charter carries the same rule so
+  // it survives compaction; the rule text is pinned, never the phrasing of a
+  // reply (dry runs prove that: /tmp/scopeconv/dryrun).
+  test("a role's bootstrap says where a message went, only what it did, and that remembering is a brief write", () => {
+    // The briefing wraps its lines; a phrase is read across the wrap.
+    const text = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: ["project Infrastructure"], parentName: "Me", trust: "direct" } }).replace(/\s+/g, " ");
+    expect(text).toContain("## When a person writes to you");
+    expect(text).toContain("answers them here or moves the work into a hand");
+    expect(text).toContain("says which, in your own words, in the same turn");
+    expect(text).toContain("in the text you write back: your pinned state and your brief are status");
+    expect(text).toContain("Never start work in silence");
+    expect(text).toContain("never ask for a permission you already hold");
+    expect(text).toContain("Say only what you did");
+    expect(text).toContain("redirect you in plain words");
+    expect(text).toContain("Remembering is something a person says");
+    expect(text).toContain("forgetting is removing the line, not adding a note");
+    // What belongs in the brief and what does not.
+    expect(text).toContain("decisions with the reason they were taken");
+    expect(text).toContain("Not status, not a log of what happened");
+    // The workspace anchor is not a role and gets none of it.
+    const anchor = bootstrapMessage({ name: "Anchor", scopeType: "team", scopeLabel: "x", teamName: "Acme" });
+    expect(anchor).not.toContain("## When a person writes to you");
+  });
+
+  test("the charter template carries the routing rule so a restart frame re-reads it", () => {
+    const charter = charterTemplate({ name: "Infra lead", handle: "infra-lead" }, ["project Infrastructure"], "Me");
+    expect(ROLE_RULES).toHaveLength(5);
+    expect(charter).toContain("5. A person's message is answered here or handed on to a hand, and the reply says which");
+    expect(charter).toContain("a request to remember or forget is a brief write in the same turn");
   });
 });
 
