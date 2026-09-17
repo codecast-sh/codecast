@@ -110,7 +110,7 @@ async function verifyGhostCards() {
   const meDots = Array.from(me.querySelectorAll("[data-flags] [data-severity]")) as HTMLElement[];
   assert.deepEqual(meDots.map((d) => d.getAttribute("data-severity")), ["blocker"]);
   assert.ok(meDots[0].style.border === "" && meDots[0].style.background !== "", "a blocker is filled");
-  assert.ok(meDots[0].getAttribute("title")?.startsWith("blocker: unowned"), "the severity word is in the tooltip");
+  assert.ok(meDots[0].getAttribute("title")?.startsWith("blocker: no owner"), "the severity word is in the tooltip");
   // The orphan file chip landed on the viewer's card; so did the trust change
   // on a handle nothing answers to, as a warning.
   assert.ok(me.querySelector("[data-ghost-chip='c-file']"), "file chip on the viewer");

@@ -158,7 +158,7 @@ async function verifyStaffingPane() {
   assert.equal(q("[data-thread]")!.getAttribute("data-thread"), "fixture-chief-conv");
   // No kicker over the serif title: the mode sits in the meta line.
   assert.equal(qa("span").some((el) => el.textContent === "review" && /uppercase/.test(el.className)), false);
-  assert.match(text(), /Chief of Staff·review·/);
+  assert.match(text(), /Chief of Staff·from a company review·/);
   // The progress strip is a real control, one named button per change.
   const strip = q('[role="group"][aria-label="Changes, one block each"]');
   assert.ok(strip);
