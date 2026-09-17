@@ -159,6 +159,38 @@ describe("classifyWorkState — the pending API error rule", () => {
   });
 });
 
+// A process that exits AFTER the agent declared the work delivered owes nobody
+// anything: every headless trigger run ends this way, and reading that exit as
+// a death filed each clean run under Needs Input.
+describe("classifyWorkState — an exit after a declared done", () => {
+  test("a stopped agent whose row says done files under done", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done" }))).toBe("done");
+    expect(isHardBlocked(input({ agentStatus: "stopped", declaredStatus: "done" }))).toBe(false);
+  });
+
+  test("a done row with an armed once trigger parks, same as a live done", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done", armedOnceTriggerHome: true }))).toBe("dormant");
+  });
+
+  test("any other declaration still reads as a death", () => {
+    for (const declaredStatus of [null, "working", "dormant", "blocked"]) {
+      expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus }))).toBe("needs_input");
+      expect(isHardBlocked(input({ agentStatus: "stopped", declaredStatus }))).toBe(true);
+    }
+  });
+
+  test("queued work or a hanging message on a dead agent still needs a human", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done", hasPending: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done", isUnresponsive: true }))).toBe("needs_input");
+    expect(isHardBlocked(input({ agentStatus: "stopped", declaredStatus: "done", hasPending: true }))).toBe(true);
+  });
+
+  test("the hard blocks above it still win", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done", awaitingInput: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done", pendingApiError: true }))).toBe("needs_input");
+  });
+});
+
 describe("placeInboxRow — bucket precedence", () => {
   test("dismissed outranks everything, stashed next", () => {
     expect(placeInboxRow(input({ dismissed: true, stashed: true, asking: true, pinned: true })).bucket).toBe("dismissed");
@@ -565,9 +597,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 8", () => {
+  test("the caps are the single source and the version is 9", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(8);
+    expect(INBOX_PROJECTION_VERSION).toBe(9);
   });
 });
 

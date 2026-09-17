@@ -763,7 +763,19 @@ export function describeToolGroup(rawName: string, count: number): string {
 
 // Words that set a command up rather than being it: a `cd` into the repo, an
 // env assignment, a privilege or timing wrapper. The receipt names what follows.
-const SHELL_PREFIX_WORDS = new Set(["cd", "sudo", "time", "env", "nohup", "exec", "command", "builtin"]);
+// A wrapper that takes an argument of its own (`cd repo`, `timeout 600`) takes
+// it along.
+const SHELL_PREFIX_WORDS = new Set(["cd", "sudo", "time", "env", "nohup", "exec", "command", "builtin", "timeout"]);
+const SHELL_PREFIX_ARGS: Record<string, number> = { cd: 1, timeout: 1 };
+
+// Programs that say nothing about what a command is for: a banner `echo`, a
+// `mkdir -p` before the real work, a `sleep`. A segment led by one of these
+// yields to the first segment that names something; a command that is ONLY
+// an echo still reads "echo".
+const SHELL_NOISE_PROGRAMS = new Set([
+  "echo", "printf", "true", "false", "set", "export", "sleep", "pwd", "date", "mkdir", "touch",
+  "source", ".", "test", "[", "wait", "trap", "shopt", "unset", "unalias", "type", "which",
+]);
 
 // Programs whose first bare word is the real name of what ran ("git status",
 // "cast browser", "bun test"). Everything else is named by its program alone,
@@ -781,21 +793,26 @@ const SHELL_SUBCOMMAND_PROGRAMS = new Set([
 // keeps its first word rather than vanishing.
 export function shellLead(command: string): string {
   let fallback = "";
+  let noise = "";
   for (const segment of command.split(/\r?\n|&&|\|\||[;|]/)) {
     const words = segment.replace(/^[\s({!]+/, "").replace(/[)}\s]+$/, "").split(/\s+/).filter(Boolean);
     if (words.length === 0) continue;
     if (!fallback) fallback = words[0];
     while (words.length > 0 && (SHELL_PREFIX_WORDS.has(words[0]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]))) {
-      // `cd` takes its target with it; a wrapper or an assignment is one word.
-      words.splice(0, words[0] === "cd" ? 2 : 1);
+      // A wrapper takes its own argument with it; an assignment is one word.
+      words.splice(0, 1 + (SHELL_PREFIX_ARGS[words[0]] ?? 0));
     }
     if (words.length === 0) continue;
     const program = words[0].startsWith("/") ? words[0].slice(words[0].lastIndexOf("/") + 1) : words[0];
+    if (SHELL_NOISE_PROGRAMS.has(program)) {
+      if (!noise) noise = program;
+      continue;
+    }
     const sub = words[1];
     if (SHELL_SUBCOMMAND_PROGRAMS.has(program) && sub && /^[a-z][a-z0-9-]*$/i.test(sub)) return `${program} ${sub}`;
     return program;
   }
-  return fallback;
+  return noise || fallback;
 }
 
 // One or two tools fit in the same space a count would take, so say WHAT they

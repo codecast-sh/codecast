@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { deviceDisplayName, deviceKindLabel } from "./deviceName";
+import { deviceDisplayName, deviceKindLabel, isCloudAssignedHostname, isRemoteHost } from "./deviceName";
 
 describe("deviceDisplayName", () => {
   it("shows a laptop by its hostname without the OS prefix and .local", () => {
@@ -28,6 +28,24 @@ describe("deviceDisplayName", () => {
   it("falls back to the raw label and handles a missing device", () => {
     expect(deviceDisplayName({ label: "macOS - ", platform: "darwin" })).toBe("macOS - ");
     expect(deviceDisplayName(null)).toBe("Unknown device");
+  });
+});
+
+describe("isCloudAssignedHostname / isRemoteHost", () => {
+  it("treats AWS ip-* and grok-bot-vm hostnames as cloud boxes", () => {
+    expect(isCloudAssignedHostname("Linux - grok-bot-vm-2307902")).toBe(true);
+    expect(isCloudAssignedHostname("Linux - ip-172-31-40-243")).toBe(true);
+    expect(isCloudAssignedHostname("macOS - ip-172-31-29-242.us-east-2.compute.internal")).toBe(true);
+    expect(isCloudAssignedHostname("Linux - Anduril")).toBe(false);
+    expect(isCloudAssignedHostname("macOS - MacBook-Pro-4.local")).toBe(false);
+    expect(isCloudAssignedHostname("Linux - ip-man")).toBe(false);
+  });
+
+  it("counts a flagged remote and an unflagged cloud hostname as a remote host", () => {
+    expect(isRemoteHost({ is_remote: true, label: "Mac-mini" })).toBe(true);
+    expect(isRemoteHost({ is_remote: false, label: "Linux - grok-bot-vm-2307902" })).toBe(true);
+    expect(isRemoteHost({ is_remote: false, label: "Linux - Anduril" })).toBe(false);
+    expect(isRemoteHost({ label: "MacBook" })).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@ import {
   MAX_RECORDING_MS,
   METER_CEIL_DB,
   METER_FLOOR_DB,
+  REC_LEASE_STALE_MS,
   RECORDING_BIT_RATE,
   RECORDING_BYTES_PER_SECOND,
   RECORDING_CHANNELS,
@@ -54,6 +55,14 @@ describe("the length a recording may run to", () => {
   test("a nonsensical byte rate yields no time rather than infinity", () => {
     expect(maxRecordingMs(0)).toBe(0);
     expect(maxRecordingMs(-1)).toBe(0);
+  });
+
+  test("a recording's lease outlives a locked screen, not a seat", () => {
+    // A huddle seat is stale in 45 seconds. Locking the phone freezes JS
+    // timers for much longer than that, so the recording lease has to be
+    // minutes, not seconds, or the sweep ends a meeting that is still going.
+    expect(REC_LEASE_STALE_MS).toBeGreaterThan(5 * 60 * 1000);
+    expect(REC_LEASE_STALE_MS).toBeLessThan(MAX_RECORDING_MS);
   });
 
   test("the encoding is the speech shape the ceiling is computed from", () => {

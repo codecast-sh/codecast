@@ -1,10 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import {
   GROUP_WINDOW_MS,
+  authorGroupKey,
+  threadFaceKey,
   buildChatTimeline,
   dayLabel,
   QUIET_TOAST_BURST_CAP,
   chatToastTier,
+  isHistoryLine,
+  HISTORY_LAG_MS,
   shouldToastChatMessage,
   tallyUnread,
   type TimelineMessage,
@@ -43,6 +47,31 @@ describe("buildChatTimeline — grouping", () => {
   it("breaks the group when the author changes", () => {
     const rows = buildChatTimeline([msg("a", "u1", NOW - 2 * MIN), msg("b", "u2", NOW - MIN)], { now: NOW });
     expect(groupedFlags(rows)).toEqual([false, false]);
+  });
+
+  it("groups by the rendered identity, not the stored author, when a group key is given", () => {
+    // Every line mirrored in from Slack is written by the one bridge user.
+    // Two Slack people back to back must each get their own header.
+    const rows = buildChatTimeline(
+      [
+        msg("a", "bridge", NOW - 3 * MIN, { groupKey: "slack:U1" }),
+        msg("b", "bridge", NOW - 2 * MIN, { groupKey: "slack:U2" }),
+        msg("c", "bridge", NOW - MIN, { groupKey: "slack:U2" }),
+      ],
+      { now: NOW },
+    );
+    expect(groupedFlags(rows)).toEqual([false, false, true]);
+  });
+
+  it("derives the group key from the Slack person behind a bridge-authored line", () => {
+    expect(authorGroupKey({ id: "u1", name: "Ashot" })).toBe("u1");
+    expect(authorGroupKey({ id: "bridge", name: "Samvit", slack: { userId: "U1" } })).toBe("slack:U1");
+    // A Slack app carries no user id; its name still keeps it apart from a person.
+    expect(authorGroupKey({ id: "bridge", name: "Aivery", slack: {} })).toBe("slack:Aivery");
+    // The row-level reading agrees with the author-level one.
+    expect(threadFaceKey({ user_id: "bridge", external: { user: "U1" }, external_author: { name: "Samvit" } })).toBe("slack:U1");
+    expect(threadFaceKey({ user_id: "bridge", external_author: { name: "Aivery" } })).toBe("slack:Aivery");
+    expect(threadFaceKey({ user_id: "u1" })).toBe("u1");
   });
 
   it("breaks the group once the gap exceeds the window", () => {
@@ -357,5 +386,19 @@ describe("tallyUnread thread semantics", () => {
       "me",
     );
     expect(t).toEqual({ unread: 1, mentions: 1 });
+  });
+});
+
+describe("chatToastTier — imported history", () => {
+  const base = { authorId: "u2", viewerId: "u1", channelId: "c", windowFocused: false } as const;
+  it("stays silent for a line that is history, even one that names the viewer", () => {
+    expect(chatToastTier({ ...base, mentionsViewer: true, history: true })).toBe("silent");
+    expect(chatToastTier({ ...base, mentionsViewer: true })).toBe("loud");
+  });
+  it("tells a late import from a live mirrored line by the lag behind its stamp", () => {
+    const at = 1_000_000_000;
+    expect(isHistoryLine({ created_at: at, external: { synced_at: at + 4_000 } })).toBe(false);
+    expect(isHistoryLine({ created_at: at, external: { synced_at: at + HISTORY_LAG_MS + 1 } })).toBe(true);
+    expect(isHistoryLine({ created_at: at })).toBe(false);
   });
 });

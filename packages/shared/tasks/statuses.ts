@@ -116,6 +116,32 @@ export function normalizeTeamTaskStatuses(input: unknown): TeamTaskStatus[] {
   return out;
 }
 
+export function isTaskStatusCategory(value: string | undefined | null): value is TaskStatusCategory {
+  return TASK_STATUS_CATEGORIES.includes(value as TaskStatusCategory);
+}
+
+/**
+ * A status as a person types it on the command line: "Pending Approval",
+ * "pending_approval" and "pending-approval" are the same key.
+ */
+export function taskStatusKey(name: string): string {
+  return name.trim().toLowerCase().replace(/[\s_-]+/g, "_");
+}
+
+/** A team status named by its id or by its name (`cast task update -s today`). */
+export function findTeamTaskStatus(
+  statuses: TeamTaskStatus[],
+  ref: string,
+): TeamTaskStatus | undefined {
+  const key = taskStatusKey(ref);
+  return statuses.find((s) => s.id === ref) ?? statuses.find((s) => taskStatusKey(s.name) === key);
+}
+
+/** Every status key a team accepts: the categories, then its named statuses. */
+export function taskStatusChoices(statuses: TeamTaskStatus[]): string[] {
+  return [...new Set([...TASK_STATUS_CATEGORIES, ...statuses.map((s) => taskStatusKey(s.name))])];
+}
+
 /** A team's effective statuses: its config, or the defaults when it has none. */
 export function teamTaskStatuses(
   raw: TeamTaskStatus[] | undefined | null,
@@ -152,11 +178,7 @@ export function resolveTaskStatus(
   task: { status?: string | null; status_id?: string | null },
   statuses: TeamTaskStatus[],
 ): TeamTaskStatus {
-  const category = (
-    TASK_STATUS_CATEGORIES.includes(task.status as TaskStatusCategory)
-      ? task.status
-      : "open"
-  ) as TaskStatusCategory;
+  const category = isTaskStatusCategory(task.status) ? task.status : "open";
   if (task.status_id) {
     const match = statuses.find((s) => s.id === task.status_id);
     if (match && match.category === category) return match;

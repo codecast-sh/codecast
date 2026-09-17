@@ -54,6 +54,18 @@ export function maxRecordingMs(
 /** The ceiling for the encoding above. */
 export const MAX_RECORDING_MS = maxRecordingMs();
 
+/**
+ * How long a recording may go without a heartbeat before the orphan sweep
+ * ends it.
+ *
+ * A huddle seat goes stale in 45 seconds. A recording cannot use that window:
+ * locking the phone freezes JavaScript timers even while native capture keeps
+ * running, and a 45 second lease then closes the transcript in the middle of
+ * the meeting. Ten minutes is long enough to ride out a lock screen and short
+ * enough that a process that actually died does not sit on the live list.
+ */
+export const REC_LEASE_STALE_MS = 10 * 60 * 1000;
+
 // ── The level meter ───────────────────────────────────────────────────────
 
 /** Below this a measurement is a room, not a voice. */

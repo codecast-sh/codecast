@@ -53,6 +53,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // the freshest-first order it produces — the shared per-class sort time and
   // the creation grace (ct-49550).
   8: "f4780d48f6371246",
+  // v9: a stopped agent whose row declares done files under done; with queued
+  // work behind it, it still needs a human (isExitAfterDone).
+  9: "95cf1e642bba5962",
 };
 
 type Expected = {

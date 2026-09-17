@@ -1,6 +1,9 @@
+/** How long a new socket may sit in CONNECTING before we kill the handshake. */
+export const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 15_000;
+
 export function recoveringWebSocket({
   Native = globalThis.WebSocket,
-  timeoutMs = 15_000,
+  timeoutMs = WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
   completeMissingClose = false,
 }: {
   Native?: typeof WebSocket;

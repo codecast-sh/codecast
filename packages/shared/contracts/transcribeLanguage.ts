@@ -68,11 +68,34 @@ const SCRIPT_OF_LANGUAGE: Record<string, TranscriptScript[]> = {
   el: ["greek"],
 };
 
+/** Codes the live recognizer accepts. A tag outside this set is dropped
+ *  rather than sent: the Realtime API rejects the whole session for one
+ *  unsupported language, which is how a huddle can sit on "transcribing"
+ *  with no words. Whisper's 57, plus the Chinese region forms and the
+ *  two ISO-639-3 tags the live model documents. */
+const TRANSCRIBE_LANGUAGE_CODES = new Set([
+  "af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "zh-cn", "zh-tw", "zh-hk",
+  "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "el", "he", "hi",
+  "hu", "is", "id", "it", "ja", "kn", "kk", "ko", "lv", "lt", "mk", "ms", "mr",
+  "mi", "ne", "no", "fa", "pl", "pt", "ro", "ru", "sr", "sk", "sl", "es", "sw",
+  "sv", "tl", "ta", "th", "tr", "uk", "ur", "vi", "cy", "yue", "cmn",
+]);
+
+/** Browser/OS tags that fold onto a code the recognizer actually has. */
+const TRANSCRIBE_LANGUAGE_ALIASES: Record<string, string> = {
+  nb: "no",
+  nn: "no",
+  iw: "he",
+  in: "id",
+  fil: "tl",
+};
+
 /** Fold a BCP-47 tag into the code the transcriber accepts. */
 export function foldLanguageTag(tag: string): string | null {
   const t = tag.trim().toLowerCase().replace(/_/g, "-");
   if (!t) return null;
   if (t === "yue" || t === "cmn") return t;
+  if (t === "fil") return TRANSCRIBE_LANGUAGE_ALIASES.fil;
   if (t.startsWith("zh")) {
     if (t.startsWith("zh-tw") || t.includes("hant")) return "zh-tw";
     if (t.startsWith("zh-hk")) return "zh-hk";
@@ -80,7 +103,8 @@ export function foldLanguageTag(tag: string): string | null {
   }
   const primary = t.split("-")[0] ?? "";
   if (!/^[a-z]{2}$/.test(primary)) return null;
-  return primary;
+  const folded = TRANSCRIBE_LANGUAGE_ALIASES[primary] ?? primary;
+  return TRANSCRIBE_LANGUAGE_CODES.has(folded) ? folded : null;
 }
 
 /** Unique, valid, capped. Empty means "the caller did not say". */
