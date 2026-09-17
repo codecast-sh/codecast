@@ -68,7 +68,7 @@ export function CrossfadeText({ text, className = "" }: { text: string; classNam
       <span
         key={`in-${n}`}
         data-sv-activity-text
-        className={`col-start-1 row-start-1 truncate ${outgoing ? "animate-in fade-in-0 slide-in-from-bottom-0.5 duration-300" : ""}`}
+        className={`col-start-1 row-start-1 truncate ${outgoing ? "animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200" : ""}`}
       >
         {text}
       </span>
@@ -96,7 +96,7 @@ export function SessionActivityLine({
       data-sv-activity
       title={shown.value.text}
       className={`mt-0.5 flex items-center gap-1.5 min-w-0 leading-snug text-sol-text-secondary ${compact ? "text-[10px]" : "text-[11px]"} ${
-        shown.leaving ? "animate-out fade-out-0 fill-mode-forwards duration-200" : "animate-in fade-in-0 duration-300"
+        shown.leaving ? "animate-out fade-out-0 fill-mode-forwards duration-200" : "animate-in fade-in-0 duration-200"
       }`}
     >
       <LivePulseDot className={compact ? "w-1 h-1" : "w-1.5 h-1.5"} />

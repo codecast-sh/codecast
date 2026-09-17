@@ -15,6 +15,7 @@ import { cn } from "../../lib/utils";
 import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
+import { RoleFace } from "./RoleFace";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
@@ -421,7 +422,15 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
 
 // ---------------------------------------------------------------- role
 
-export type RoleNodeData = CardData & { role: OrgRole; collapsed: boolean; hidden: number; overflow: number };
+export type RoleNodeData = CardData & {
+  role: OrgRole;
+  collapsed: boolean;
+  hidden: number;
+  overflow: number;
+  /** The tenure chip (S10), resolved by the layout where the whole tree is in
+   *  hand (orgLayout.roleBranch). Absent on a standing seat, which says nothing. */
+  tenure?: { short: string; full: string };
+};
 
 export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<RoleNodeData>>) {
   const { role: r, collapsed, hidden, overflow } = data;
@@ -445,6 +454,10 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
   const retiring = !!data.retire && data.retire.status !== "applied";
   const faded = paused || retiring;
   const action = actionOf(data);
+  // The tenure chip (S10): standing is silent, a program names its end. The
+  // layout resolved it against the whole tree, so the card paints a string and
+  // repaints whenever the layout does.
+  const tenure = data.tenure;
   return (
     <Frame
       selected={data.selected}
@@ -487,6 +500,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           the scope chips say WHAT is proposed and stay readable. */}
       <div>
       <div className="flex items-start gap-2">
+        <RoleFace role={r} size={30} className="mt-[1px]" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>
             {r.name}
@@ -506,6 +520,15 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
         </div>
         {!ghost && <CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />}
       </div>
+      {/* A program seat says when it ends, on its own line (S10): the meta line
+          above is too narrow for it, and a truncated "p…" says nothing. A
+          standing seat is silent and takes no row (ORG_SIZES.tenureRow). */}
+      {tenure && (
+        <div className="mt-1.5 flex items-center gap-1 min-w-0" style={{ opacity: dim ? GHOST.opacity : 1 }}>
+          <Clock className="w-2.5 h-2.5 shrink-0" style={{ color: "var(--sol-violet)" }} />
+          <span className="truncate text-[10px]" style={{ color: "var(--sol-violet)" }} title={tenure.full} data-tenure="">{tenure.short}</span>
+        </div>
+      )}
       <div style={{ opacity: dim ? GHOST.opacity : 1 }}><StandingLine standing={r.standing} className="mt-1.5" /></div>
       <div className="mt-2 flex items-center gap-1 min-w-0 overflow-hidden">
         {wholeWorkspace ? (

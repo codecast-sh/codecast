@@ -9,11 +9,16 @@
  * reactive listOwners query, so the chip never flickers back mid-round-trip.
  */
 
-import { useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
-import { X, UserCheck } from "lucide-react";
+import { X, UserCheck, ArrowRightLeft, Network } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
-import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi } from "../hooks/useOwners";
+import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type HandoffInfo } from "../hooks/useOwners";
+import { useOrgRoles } from "../hooks/useOrgRoles";
+import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
+import { reparentToastLine } from "../store/orgSlice";
+import { RoleFace } from "./org/RoleFace";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
 import {
@@ -21,9 +26,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuItem,
   DropdownMenuCheckboxItem,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
+import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
+import { Command, CommandInput, CommandList, CommandEmpty, CommandItem } from "./ui/command";
+import { Switch } from "./ui/switch";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 
-export type { OwnersApi };
+export type { OwnersApi, HandoffInfo };
 
 export function OwnerAvatar({ name, image, size = "w-4 h-4" }: { name: string; image?: string; size?: string }) {
   const initials = name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
@@ -41,14 +53,48 @@ export function OwnerAvatar({ name, image, size = "w-4 h-4" }: { name: string; i
   );
 }
 
-/** The shared owners logic bound to the web environment: store roster + sonner. */
+/** The shared owners logic bound to the web environment: store roster + sonner.
+ *  On web the owner axis rides the org store's one reparent path (S11): every
+ *  add, remove, take-ownership and handoff dispatches through
+ *  reparentOrgSession, so the chart node moves in the same tick and one write
+ *  reaches the core. The toast says both things from the told counts. */
 export function useOwnersFromStore(conversationId: string): OwnersApi {
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const currentUser = useInboxStore((s) => s.currentUser) as any;
+  const starterIds = useInboxStore(useShallow((s) => {
+    const live = typeof (s as any).resolveLiveSessionId === "function"
+      ? (s as any).resolveLiveSessionId(conversationId)
+      : conversationId;
+    const row = (s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId];
+    return [row?.author_user_id ?? null, row?.user_id ?? null] as const;
+  }));
+  const implicitOwnerId = (() => {
+    const isBot = (id: string) => {
+      if (currentUser?._id === id) return !!currentUser.is_bot;
+      const m = teamMembers?.find((x: any) => x._id === id);
+      return m ? !!m.is_bot : false;
+    };
+    for (const id of starterIds) {
+      if (id && !isBot(id)) return id as string;
+    }
+    return undefined;
+  })();
   return useOwners(conversationId, {
     teamMembers,
     currentUser,
+    implicitOwnerId,
     notify: (msg, kind) => (kind === "success" ? toast.success(msg) : toast.error(msg)),
+    reparent: async (target, opts) => {
+      const r = await useInboxStore.getState().reparentOrgSession(conversationId, target, { note: opts.note });
+      // Always a SESSION reparent here, whether the new parent is a person or a
+      // role: the session is what is told. A stale session is DEFERRED rather
+      // than woken, which still deserves the line — it says when it will read.
+      if (r && (r.told?.sessions || r.told?.deferred)) {
+        toast.success(reparentToastLine(r.short_id ?? "The session", r.reports_to?.name ?? opts.parentName ?? "its new parent", "session", r.told));
+      } else if (opts.toastFallback) {
+        toast.success(opts.toastFallback);
+      }
+    },
   });
 }
 
@@ -64,11 +110,30 @@ export function OwnerMenuItems({
   owners: OwnersApi;
   conversationId: string;
 }) {
-  const { ownerIds, ownerList, displayFor, toggle, clearAll, currentUser } = owners;
+  const { ownerIds, ownerList, displayFor, toggle, moveToRole, clearAll, currentUser } = owners;
   // Mounted only while the assignment menu is open (Radix unmounts Content
   // when closed). This is the team-roster collect that must not run for
   // every open conversation.
   const serverRoster = useOwnerCandidates(conversationId, currentUser);
+  // Feed the roles slice while the menu is open, so a session filed under a
+  // role names it and "Move to a role" can list the workspace's roles even off
+  // the org page (org-staffing.md S11). Bounded to the menu's lifetime.
+  useSyncOrgTreeFeeder();
+  const { roles } = useOrgRoles();
+  const liveRoles = roles.filter((r) => r.status !== "retired");
+  const orgRoleId = useInboxStore((s) => {
+    const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
+    return ((s.sessions as any)?.[live]?.org_role_id ?? (s.conversations as any)?.[conversationId]?.org_role_id) as string | undefined;
+  });
+  const currentRole = orgRoleId ? liveRoles.find((r) => r._id === orgRoleId) : undefined;
+  // A standing agent's own thread is a seat, not a hand: the server refuses to
+  // file it under a role (sessionOwnership.performReparentSession), so the
+  // menu does not offer it.
+  const isStandingThread = useInboxStore((s) => {
+    const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
+    const row = (s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId];
+    return !!(row?.is_anchor || row?.anchor_id || row?.standing_role_id);
+  });
   const selectable = pickRoster(serverRoster, owners.selectable).filter(
     (m: any) => m && !m.is_bot,
   );
@@ -78,6 +143,45 @@ export function OwnerMenuItems({
   const [note, setNote] = useState("");
   return (
     <>
+      {/* The reporting line to a role (S11): the same act as a chart drag. When
+          the session already reports to a role, name it; either way, offer to
+          file it under a role, which clears the person-owner line. */}
+      {currentRole && (
+        <>
+          <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
+            Reports to a role
+          </DropdownMenuLabel>
+          <div className="px-2 pb-1 flex items-center gap-2 text-xs text-sol-text">
+            <RoleFace role={currentRole} size={18} />
+            <span className="truncate">{currentRole.name}</span>
+            <span className="text-sol-text-dim font-mono text-[10px]">@{currentRole.handle}</span>
+          </div>
+        </>
+      )}
+      {moveToRole && !isStandingThread && liveRoles.length > 0 && (
+        <>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="text-xs gap-2">
+              <Network className="w-3.5 h-3.5 shrink-0" /> Move to a role
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-[280px] overflow-y-auto">
+              {liveRoles.map((r) => (
+                <DropdownMenuItem
+                  key={r._id}
+                  disabled={r._id === orgRoleId}
+                  onSelect={(e) => { e.preventDefault(); void moveToRole(r._id, r.name); }}
+                  className="text-xs gap-2"
+                >
+                  <RoleFace role={r} size={18} />
+                  <span className="flex-1 truncate">{r.name}</span>
+                  <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSeparator />
+        </>
+      )}
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Owners · whose inbox
       </DropdownMenuLabel>
@@ -179,5 +283,127 @@ export function AssignedToYouBanner({ conversationId }: { conversationId: string
         Got it
       </button>
     </div>
+  );
+}
+
+/**
+ * The composer's hand-off picker: a teammate list with type-to-filter, opened
+ * from the button beside the send arrow (or Alt+Shift+H). Picking a person
+ * transfers the session to them with the composed text as the hand-off note —
+ * one mutation (OwnersApi.handoffTo) — and the caller clears the composer. The
+ * note is shown at the top so it is clear what travels with the assignment.
+ *
+ * "Stay an owner" keeps the session in the sender's inbox too; off by default,
+ * because handing off means it is theirs now.
+ */
+export function HandoffPicker({
+  owners,
+  conversationId,
+  note,
+  open,
+  onOpenChange,
+  onPick,
+  children,
+}: {
+  owners: OwnersApi;
+  conversationId: string;
+  note: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  // Fires as soon as a teammate is chosen, before the mutation settles.
+  onPick: (target: { id: string; name: string }, keepSelf: boolean) => void;
+  children: ReactNode;
+}) {
+  const { currentUser, ownerIds } = owners;
+  const serverRoster = useOwnerCandidates(conversationId, currentUser, open);
+  const meId = currentUser?._id?.toString?.();
+  const people = pickRoster(serverRoster, owners.selectable).filter(
+    (m: any) => m && !m.is_bot && m._id !== meId,
+  );
+  const [keepSelf, setKeepSelf] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const preview = note.trim().split("\n").find((l) => l.trim()) ?? "";
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      {/* An anchor, not a trigger: the button lives inside a tooltip wrapper
+          that would swallow a trigger's cloned props, so it toggles `open`
+          itself and the popover only positions against it. */}
+      <PopoverAnchor asChild><span ref={anchorRef} className="inline-flex">{children}</span></PopoverAnchor>
+      <PopoverContent
+        side="top"
+        align="end"
+        sideOffset={8}
+        className="p-0 w-[320px] border-sol-border bg-sol-bg-alt text-sol-text shadow-xl"
+        // Radix's Escape/outside dismissal closes; the composer refocuses its box.
+        onKeyDown={(e) => e.stopPropagation()}
+        // A click on the button itself is the toggle's job, not a dismissal —
+        // otherwise the outside-click closes and the toggle reopens.
+        onInteractOutside={(e) => { if (anchorRef.current?.contains(e.target as Node)) e.preventDefault(); }}
+      >
+        <div className="px-3 pt-2.5 pb-2 border-b border-sol-border/60">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet">
+            <ArrowRightLeft className="w-3 h-3" />
+            Hand off to
+          </div>
+          {preview ? (
+            <div className="mt-1 text-[11px] text-sol-text-muted truncate" title={note.trim()}>
+              with your note: <span className="text-sol-text">“{preview}”</span>
+            </div>
+          ) : (
+            <div className="mt-1 text-[11px] text-sol-text-dim">
+              No note — type a message first to send one along.
+            </div>
+          )}
+        </div>
+        <Command
+          loop
+          filter={(value, search) => (value.toLowerCase().includes(search.toLowerCase().trim()) ? 1 : 0)}
+        >
+          <CommandInput
+            autoFocus
+            placeholder="Find a teammate…"
+            className="h-9 text-[13px] placeholder:text-sol-text-dim"
+          />
+          <CommandList className="max-h-[240px] py-1">
+            <CommandEmpty className="py-5 text-center text-xs text-sol-text-dim">
+              {people.length === 0 ? "No teammates on this session's team." : "Nobody matches."}
+            </CommandEmpty>
+            {people.map((m: any) => {
+              const name = m.name || m.email?.split("@")[0] || "Teammate";
+              const isOwner = ownerIds.has(m._id);
+              return (
+                <CommandItem
+                  key={m._id}
+                  value={`${name} ${m.email ?? ""}`}
+                  onSelect={() => {
+                    onOpenChange(false);
+                    onPick({ id: m._id, name }, keepSelf);
+                  }}
+                  className="mx-1 gap-2.5 px-2 py-1.5 text-[13px] text-sol-text data-[selected=true]:bg-sol-violet/15 data-[selected=true]:text-sol-text [&[data-selected=true]_*]:text-inherit"
+                >
+                  <OwnerAvatar name={name} image={m.image || m.github_avatar_url} size="w-5 h-5" />
+                  <span className="flex-1 min-w-0 truncate">{name}</span>
+                  {isOwner && (
+                    <span className="shrink-0 text-[9px] uppercase tracking-wide text-sol-text-dim">owner</span>
+                  )}
+                </CommandItem>
+              );
+            })}
+          </CommandList>
+        </Command>
+        <div className="flex items-center justify-between gap-3 px-3 py-2 border-t border-sol-border/60">
+          {/* Only an owner has anything to keep. */}
+          {meId && ownerIds.has(meId) ? (
+            <label className="flex items-center gap-2 text-[11px] text-sol-text-muted cursor-pointer select-none">
+              <Switch checked={keepSelf} onCheckedChange={setKeepSelf} aria-label="Stay an owner" />
+              Stay an owner
+            </label>
+          ) : <span />}
+          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim">
+            <KeyCap size="xs">↵</KeyCap> hand off
+          </span>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -20,6 +20,7 @@ export type ViewNavSource =
   | "rekey" // same logical conversation under a new id (stub→server, ghost→twin)
   | "undo" // user-invoked undo restoring a snapshot
   | "deeplink" // codecast:// arrival (manual link or policy-cleared handoff)
+  | "follow" // mirroring a teammate's view: the person opted in (hooks/useFollowMode)
   | "sync"; // server-driven (must never move the view directly — toast instead)
 
 export type NavEvent = {
@@ -79,6 +80,16 @@ function loadLog(): NavEvent[] {
 
 let navLog: NavEvent[] | null = null;
 
+// Live listeners on the audit trail. Follow mode ends itself the moment the
+// follower makes a move of their own, and the trail already names every move.
+const navListeners = new Set<(e: NavEvent) => void>();
+export function subscribeNavEvents(fn: (e: NavEvent) => void): () => void {
+  navListeners.add(fn);
+  return () => {
+    navListeners.delete(fn);
+  };
+}
+
 export function recordNavEvent(e: Omit<NavEvent, "ts" | "win" | "stack">): void {
   if (navLog === null) navLog = loadLog();
   // Stacks only for problem events (blocked / untracked writers) — they're what
@@ -92,6 +103,7 @@ export function recordNavEvent(e: Omit<NavEvent, "ts" | "win" | "stack">): void 
     ...e,
   };
   navLog.push(event);
+  for (const l of navListeners) l(event);
   if (navLog.length > LOG_CAP) navLog.splice(0, navLog.length - LOG_CAP);
   try {
     localStorage.setItem(LOG_KEY, JSON.stringify(navLog));

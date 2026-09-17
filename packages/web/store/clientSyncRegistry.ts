@@ -372,6 +372,15 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     indexes: "_id, chat_channel_id, team_id",
   },
+  // The team's Slack people (slack_users via slackSync.listSlackPeople): the
+  // composer offers the unmatched ones as @mention targets, the People popup
+  // lists them all. The query serves the complete set, so a snapshot sync.
+  chatSlackPeople: {
+    persistence: { kind: "collection", key: "chatSlackPeople" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, team_id, codecast_user_id",
+    feeds: ["slackSync.listSlackPeople"],
+  },
   // Who wrote each line, for a reader whose roster does not hold the author:
   // a community room (chat.listCommunityChannels) is read by visitors and by
   // members of other teams, and the team roster is the ONLY name source
@@ -922,6 +931,19 @@ export const HYDRATION_CRITICAL_READ_KEYS = [
   ...HYDRATION_MANUAL_KEYS,
 ];
 
+// Native first-content-paint subset. The phone's inbox only needs the live
+// session rows and the prefs that place them; the rest of CRITICAL_READ_KEYS
+// (conversations twin, feed, drafts, roster, …) loads after splash hide.
+export const HYDRATION_PAINT_KEYS = [
+  "sessions",
+  "clientState",
+  "pending",
+  "collapsedSections",
+  "liveInboxIdList",
+  "lastFocusedConversationId",
+  "teamInboxIdSnapshot",
+] as const;
+
 export function hydrationMergeStrategy(key: string): HydrationMerge {
   const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
   const hydration = entry?.hydration;
@@ -1063,6 +1085,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   chatReactions: "shared",
   chatReads: "shared",
   chatSlackLinks: "shared",
+  chatSlackPeople: "shared",
   chatAuthors: "shared",
   // The viewer's read marks are the same in every window of theirs, and the
   // ack that clears a card must clear it everywhere at once.

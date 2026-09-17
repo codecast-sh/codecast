@@ -27,6 +27,8 @@ export type RevealTarget = {
   href: string;
   /** The band's strip title: "Task: Fix the auth race". */
   title: string;
+  /** "Open task" — the juicy hit before and after the framed page. */
+  openLabel?: string;
   /** The reference's own open handler (a session routes through
    *  useOpenLinkedSession); the band's open link calls it too. */
   onOpen?: (e: MouseEvent) => void;

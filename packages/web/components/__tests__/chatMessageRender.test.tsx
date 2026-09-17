@@ -80,6 +80,30 @@ describe("ChatMessage", () => {
     expect(html).toContain('title="More"');
   });
 
+  test("a Slack emoji shortcode renders as the glyph, not the :name:", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={view({ content: ":rotating_light: Serper credits exhausted" })}
+        channelId={CHANNEL}
+        now={Date.now()}
+      />,
+    );
+    expect(html).toContain("🚨");
+    expect(html).not.toContain(":rotating_light:");
+  });
+
+  test("a Slack shortcode inside inline code stays a shortcode", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={view({ content: "type `:rotating_light:` in Slack" })}
+        channelId={CHANNEL}
+        now={Date.now()}
+      />,
+    );
+    expect(html).toContain(":rotating_light:");
+    expect(html).not.toContain("🚨");
+  });
+
   test("every reaction pill carries its own emoji", () => {
     const html = renderToStaticMarkup(
       <ChatMessage

@@ -9,6 +9,7 @@ import {
   HYDRATION_CRITICAL_READ_KEYS,
   HYDRATION_DEFERRED_KEYS,
   HYDRATION_MANUAL_KEYS,
+  HYDRATION_PAINT_KEYS,
   META_STORE_KEYS,
   REGISTRY_SYNC_OPTS,
   WORKSPACE_SCOPED_KEYS,
@@ -118,6 +119,15 @@ describe("client sync registry", () => {
       for (const key of HYDRATION_DEFERRED_KEYS) {
         expect(HYDRATION_CRITICAL_READ_KEYS).not.toContain(key);
       }
+    });
+
+    it("native first-paint keys are a subset of the critical read set", () => {
+      const readable = new Set(HYDRATION_CRITICAL_READ_KEYS);
+      for (const key of HYDRATION_PAINT_KEYS) {
+        expect(readable.has(key)).toBe(true);
+      }
+      expect(HYDRATION_PAINT_KEYS).not.toContain("conversations");
+      expect(HYDRATION_PAINT_KEYS).not.toContain("feedConversations");
     });
 
     it("buckets + assignments hydrate in the critical pass (label-bar pop-in regression)", () => {

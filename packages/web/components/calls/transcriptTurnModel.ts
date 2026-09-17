@@ -11,6 +11,7 @@ export type TranscriptSegment = {
   speaker_name: string;
   text: string;
   t0: number;
+  t1?: number;
 };
 
 export type Turn = {
@@ -36,4 +37,19 @@ export function groupTurns(segments: TranscriptSegment[]): Turn[] {
       });
   }
   return turns;
+}
+
+/**
+ * One segment per turn. A recording has a single microphone, so grouping by
+ * speaker folds the whole meeting into one block — the phone lists each
+ * line, and so does the call page when it uses this.
+ */
+export function oneSegmentTurns(segments: TranscriptSegment[]): Turn[] {
+  return segments.map((s, i) => ({
+    index: i,
+    speaker_id: s.speaker_id,
+    speaker_name: s.speaker_name,
+    t0: s.t0,
+    segments: [s],
+  }));
 }

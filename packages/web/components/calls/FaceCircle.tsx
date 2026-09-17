@@ -5,6 +5,7 @@ import { AvatarImg } from "../../lib/avatarCache";
 import { firstName } from "./speakers";
 import type { FacePerson, FacesMode } from "../../lib/calls/faceCrop";
 import type { ParticipantTile } from "../../lib/calls/callManager";
+import { useInboxStore } from "../../store/inboxStore";
 
 /*
  * What a floating call LOOKS like: one person as a circle, and the four
@@ -122,6 +123,7 @@ export function FaceCircle({
     active: shown,
   });
   const levelRef = useMicLevelVar<HTMLDivElement>(person.isLocal && !person.muted && shown);
+  const followed = useInboxStore((s) => !!person.id && s.followLeaderId === String(person.id));
 
   return (
     // The slot is the circle's square and nothing more, so a row of them still
@@ -136,6 +138,9 @@ export function FaceCircle({
         // attribute rather than a class because it is a fact about the person,
         // not a variant of the component — and it reads that way in a test.
         data-speaking={speaking ? "true" : undefined}
+        // Following them: the same cyan ring the team bar draws on a followed
+        // face, so the state reads the same in the huddle and in the app.
+        data-followed={followed ? "true" : undefined}
         className={`face${shown ? " face--shown" : " face--hidden"}`}
         style={{ width: diameter, height: diameter }}
         onPointerDown={onPointerDown}

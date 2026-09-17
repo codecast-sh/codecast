@@ -125,7 +125,20 @@ describe("threadRollups", () => {
       row({ _id: "r2", thread_root_id: "m1", user_id: "u3", created_at: 20 }),
       row({ _id: "r3", thread_root_id: "m1", user_id: "u2", created_at: 30 }),
     ]);
-    expect(rollups.get("m1")).toEqual({ replyCount: 3, lastReplyAt: 30, faces: ["u2", "u3"] });
+    expect(rollups.get("m1")).toEqual({ replyCount: 3, lastReplyAt: 30, faces: [{ user_id: "u2" }, { user_id: "u3" }] });
+  });
+
+  it("keeps Slack repliers apart by the person behind the bridge user, with their own face", () => {
+    // Every line mirrored in from Slack is written by the one bridge user.
+    const rollups = threadRollups([
+      row({ _id: "r1", thread_root_id: "m1", user_id: "bridge", created_at: 10, external: { provider: "slack", direction: "inbound", user: "U1" } as any, external_author: { name: "Samvit", avatar_url: "https://s/1.png" } }),
+      row({ _id: "r2", thread_root_id: "m1", user_id: "bridge", created_at: 20, external: { provider: "slack", direction: "inbound", user: "U2" } as any, external_author: { name: "Aivery", is_bot: true } }),
+      row({ _id: "r3", thread_root_id: "m1", user_id: "bridge", created_at: 30, external: { provider: "slack", direction: "inbound", user: "U1" } as any, external_author: { name: "Samvit", avatar_url: "https://s/1.png" } }),
+    ]);
+    expect(rollups.get("m1")!.faces).toEqual([
+      { user_id: "bridge", slack: { user: "U1", name: "Samvit", avatar_url: "https://s/1.png", is_bot: undefined } },
+      { user_id: "bridge", slack: { user: "U2", name: "Aivery", avatar_url: undefined, is_bot: true } },
+    ]);
   });
 
   it("ignores tombstoned replies and messages that are not replies", () => {
@@ -228,6 +241,20 @@ describe("toMessageView", () => {
     expect(view.author.name).toBe("Maya");
     expect(view.reactions).toHaveLength(1);
     expect(view.replyFaces?.[0]).toMatchObject({ id: "u2", name: "Maya" });
+  });
+
+  it("draws a Slack replier's own face on the thread link, and groups its author by the Slack person", () => {
+    const slackRow = row({ _id: "r1", thread_root_id: "m1", user_id: "bridge", created_at: 50, external: { provider: "slack", direction: "inbound", user: "U1" } as any, external_author: { name: "Samvit", avatar_url: "https://s/1.png" } });
+    const view = toMessageView(row({ _id: "m1" }), { ...ctx, rollups: threadRollups([slackRow]) });
+    expect(view.replyFaces).toEqual([{ id: "slack:U1", name: "Samvit", avatarUrl: "https://s/1.png" }]);
+    // The server's summary carries the same faces once it has them.
+    const fromSummary = toMessageView(row({ _id: "m1" }), {
+      ...ctx,
+      rollups: undefined,
+      summaries: { m1: { reply_count: 1, last_reply_at: 60, reply_user_ids: ["bridge"], reply_faces: [{ user_id: "bridge", slack: { user: "U1", name: "Samvit" } }] } },
+    });
+    expect(fromSummary.replyFaces).toEqual([{ id: "slack:U1", name: "Samvit", avatarUrl: undefined }]);
+    expect(toMessageView(slackRow, ctx).author.slack).toEqual({ isBot: false, userId: "U1" });
   });
 
   it("marks an optimistic row pending and a given-up row failed", () => {

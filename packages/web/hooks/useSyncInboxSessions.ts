@@ -1,6 +1,6 @@
 import { useRef, useCallback, useState } from "react";
 import { captureException } from "@sentry/react";
-import { useQuery, useMutation, useConvex } from "convex/react";
+import { useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession, classifySession, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
@@ -12,6 +12,8 @@ import { useRecoveryPoll } from "./useRecoveryPoll";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyLiveInboxIds, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
+import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
 import { useWatchEffect } from "./useWatchEffect";
 import { cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
@@ -121,15 +123,28 @@ export function useSyncInboxSessions() {
   // sessions cache (delta, never-prune) but deliberately NOT into liveInboxIds —
   // an old favorite reaches the shelf without re-entering the active desk. Liveness
   // rides the sessionsLiveness overlay below, same as the inbox list.
-  const favoriteSessions = useQuery(api.conversations.listFavoriteSessions, { include_liveness: false });
-  const sessionLiveness = useQuery(api.conversations.sessionsLiveness, {});
-  const clientState = useQuery(api.client_state.get, {});
-  const currentUser = useQuery(api.users.getCurrentUser);
+  // Every subscription here is a feeder (useQueryNoThrow, never useQuery): the
+  // store keeps its cached rows through a terminal server error instead of the
+  // whole feeder set unmounting — see useLiveInboxSessions.
+  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, { include_liveness: false });
+  useFeederError("conversations.listFavoriteSessions", favorites.error);
+  const favoriteSessions = favorites.data;
+  const liveness = useQueryNoThrow(api.conversations.sessionsLiveness, {});
+  useFeederError("conversations.sessionsLiveness", liveness.error);
+  const sessionLiveness = liveness.data;
+  const clientStateQ = useQueryNoThrow(api.client_state.get, {});
+  useFeederError("client_state.get", clientStateQ.error);
+  const clientState = clientStateQ.data;
+  const currentUserQ = useQueryNoThrow(api.users.getCurrentUser, {});
+  useFeederError("users.getCurrentUser", currentUserQ.error);
+  const currentUser = currentUserQ.data;
   // Bookmarks sync lives here (not in the Sidebar) so the store's bookmarks
   // list is populated wherever DashboardLayout mounts — the Sidebar AND every
   // conversation-view bookmark toggle read their on/off state from this one
   // local list, making toggles instant and consistent.
-  const bookmarks = useQuery(api.bookmarks.listBookmarks);
+  const bookmarksQ = useQueryNoThrow(api.bookmarks.listBookmarks, {});
+  useFeederError("bookmarks.listBookmarks", bookmarksQ.error);
+  const bookmarks = bookmarksQ.data;
   const syncTable = useInboxStore((s) => s.syncTable);
   const pruneDrafts = useMutation(api.client_state.pruneDeadDrafts);
   const prunedRef = useRef(false);
@@ -156,7 +171,7 @@ export function useSyncInboxSessions() {
   // prefetch (instant clicks) and the recovery-poll watermark; the shared payload
   // carries null liveness (include_liveness:false), so the idle/needs-input sound
   // stays on the sessionsLiveness overlay below where liveness actually changes.
-  const inboxSessions = useLiveInboxSessions({
+  const { data: inboxSessions, error: inboxError } = useLiveInboxSessions({
     onSync: (sessions) => {
       warm();
       lastSyncRef.current = Date.now();
@@ -312,9 +327,11 @@ export function useSyncInboxSessions() {
   // place, so this only lights up on a genuine cold open, not on warm in-app
   // navigation. Kept in `liveLoading` (not `syncProgress`) so the chip tracks
   // this fast first payload, never the minutes-long background reconcile crawl.
+  // A failed subscription is not a cold open still loading: the chip must not
+  // spin on a server error the cache already covers.
   useWatchEffect(() => {
-    useInboxStore.getState().setLiveLoading("sessions", inboxSessions === undefined);
-  }, [inboxSessions]);
+    useInboxStore.getState().setLiveLoading("sessions", inboxSessions === undefined && !inboxError);
+  }, [inboxSessions, inboxError]);
 
   // BACKGROUND RECONCILE — backfill every inbox session beyond the live window.
   // CRAWL ONLY: we never seed the live listInboxSessions subscription from the

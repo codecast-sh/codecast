@@ -129,3 +129,26 @@ export function paletteActionForKey(event: KeyboardEvent, actions: PaletteAction
       && !!action.hotkey && event.code === `Key${action.hotkey.toUpperCase()}`;
   });
 }
+
+const PALETTE_MATCH = 1;
+const PALETTE_COMPOSE = 0.1;
+
+/** cmdk filter score: 0 hides, higher ranks first. cmdk then sorts groups by
+ *  their best item, so a row that creates from the typed query (`__compose__`)
+ *  must score below a real match. Scoring it with matches puts
+ *  "Files: New note" at the top and Enter creates a note instead of opening
+ *  the hit. */
+export function paletteItemScore(value: string, search: string): number {
+  if (value.startsWith("__compose__")) return PALETTE_COMPOSE;
+  if (
+    value.startsWith("__search__") ||
+    value.startsWith("__recent__") ||
+    value.startsWith("__entity__") ||
+    value.startsWith("__chat__") ||
+    value.startsWith("__pick__") ||
+    value.startsWith("__teammate__")
+  ) return PALETTE_MATCH;
+  const idx = value.indexOf("|||");
+  const searchable = idx >= 0 ? value.slice(0, idx) : value;
+  return searchable.toLowerCase().includes(search.toLowerCase()) ? PALETTE_MATCH : 0;
+}

@@ -1836,10 +1836,10 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
 describe("kill/stash cascade takes the whole nested group", () => {
   // Bug history: killing an agent-team LEAD swept only its Task subagents
   // (parent_conversation_id), not its teammates (spawned_by + agent_team_name).
-  // A teammate with an absent lead deliberately floats as a first-class card —
-  // the categorizer can't hide it — so the leftover teammates resurfaced as
-  // loose ↳ needs-input rows the user had to dismiss one by one. The cascade
-  // must use the SAME nesting definition the renderer does (nestParentIdOf).
+  // A leftover teammate used to float as a ↳ card; the categorizer now hides
+  // it, and the cascade still has to stamp the nested group so a restore of
+  // the lead brings the workers back with it. The cascade must use the SAME
+  // nesting definition the renderer does (nestParentIdOf).
   const LEAD = "a".repeat(32);
   const TASK_SUB = "b".repeat(32);
   const TEAMMATE = "c".repeat(32);

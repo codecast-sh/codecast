@@ -37,7 +37,11 @@ export function openForwardToChat(payload: ForwardToChatPayload) {
         // preview card in chat (remarkEntityCards) instead of a pill after
         // a line break.
         const content = [result.note, payload.url].filter(Boolean).join("\n\n");
-        store.sendChatMessage(channelId, content);
+        store.sendChatMessage(
+          channelId,
+          content,
+          result.attachments?.length ? { attachments: result.attachments } : undefined,
+        );
         toast.success(`Sent to ${target.label}`);
       },
     },

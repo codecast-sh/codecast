@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
 import Link from "next/link";
+import { RoleFace } from "./org/RoleFace";
 import {
   Target,
   ArrowUpRight,
@@ -61,6 +62,7 @@ import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
 import { useRevealRef } from "../lib/revealHost";
+import { RevealOpenLink } from "./ObjectReveal";
 
 export { SessionHoverContent };
 
@@ -768,6 +770,21 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   if (internal) {
     return <Link href={internal} className={(props as any).className}>{children}</Link>;
   }
+  // A chat role pill (org-staffing.md S13) wears the role's face: the pill
+  // carries the handle, so the default-for-the-handle avatar is drawn inline
+  // before the "@handle" text (a chosen key would need the roles slice, which
+  // chat does not load — the default reads the same family). The class is the
+  // marker the mention plugin stamps.
+  if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//") && typeof (props as any).className === "string" && (props as any).className.includes("mention-role")) {
+    const roleText = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+    const roleHandle = roleText.replace(/^@/, "").trim();
+    return (
+      <Link href={href} {...props}>
+        {roleHandle && <RoleFace role={{ handle: roleHandle }} size={13} className="align-middle mr-0.5 -mt-[1px]" />}
+        {children}
+      </Link>
+    );
+  }
   // A relative href names one of our own routes (a role pill's /org/<or-N>):
   // it navigates in this window, never a new tab.
   if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//")) {
@@ -1004,9 +1021,10 @@ export function EntityIdPill({
   // card's own link, and any modified click, still go to the page. Without
   // a reveal host the pill is the link it always was.
   const linkRef = useRef<HTMLAnchorElement>(null);
+  const openLabel = type ? `Open ${TYPE_LABEL[type].toLowerCase()}` : "Open";
   const revealTarget = useMemo(
-    () => ({ href, title: `${type ? TYPE_LABEL[type] : ""}: ${fullLabel}`, onOpen: handleOpen }),
-    [href, type, fullLabel, handleOpen],
+    () => ({ href, title: `${type ? TYPE_LABEL[type] : ""}: ${fullLabel}`, onOpen: handleOpen, openLabel }),
+    [href, type, fullLabel, handleOpen, openLabel],
   );
   const { host: revealHost, open: revealOpen, toggle: toggleReveal } = useRevealRef(revealTarget, linkRef);
   const handleClick = useCallback(
@@ -1135,9 +1153,12 @@ export function EntityIdPill({
             place. Said once here, where a reader hovering for the first time
             is looking, so the band that follows a click is no surprise. */}
         {revealHost && entity && (
-          <div className="flex items-center gap-1.5 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
-            <PanelBottomOpen className="h-3 w-3" />
-            Click to open here, under this line
+          <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
+            <span className="inline-flex items-center gap-1.5">
+              <PanelBottomOpen className="h-3 w-3" />
+              Click to open here
+            </span>
+            <RevealOpenLink href={href} label={openLabel} onOpen={handleOpen} variant="compact" />
           </div>
         )}
       </PopoverContent>

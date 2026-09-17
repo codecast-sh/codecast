@@ -21,6 +21,8 @@ import { ladderRecommendation } from "../../lib/decisionLinks";
 import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import "./decisions.css";
+import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
+import { proposalRefInContext } from "../org/staffingModel";
 
 const api = _api as any;
 
@@ -145,6 +147,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               >{session?.title || decision.session_title || "See the conversation"}</Link>
               {(session?.project_path || decision.project_path) && <span className="text-sol-text-dim"> · {getProjectName(session?.project_path || decision.project_path!)}</span>}
             </dd>
+            {proposalRefInContext(decision.context_md) && (
+              <>
+                <dt>proposal</dt>
+                <dd><DecisionProposalOrigin contextMd={decision.context_md} size="md" /></dd>
+              </>
+            )}
             {(detail.task || decision.task_id) && (
               <>
                 <dt>task</dt>

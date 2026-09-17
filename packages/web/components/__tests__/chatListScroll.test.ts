@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const css = readFileSync(new URL("../chat/chat.css", import.meta.url), "utf8");
 const list = readFileSync(new URL("../chat/ChatMessageList.tsx", import.meta.url), "utf8");
 const page = readFileSync(new URL("../../app/chat/page.tsx", import.meta.url), "utf8");
+const hook = readFileSync(new URL("../../hooks/useBottomAnchoredList.ts", import.meta.url), "utf8");
 
 function rule(selector: string): Record<string, string> {
   const at = css.indexOf(`\n${selector} {`);
@@ -37,8 +38,16 @@ describe("chat list scrolling", () => {
     expect(rule(".ch-list-sizer")["margin-top"]).toBeUndefined();
   });
 
-  test("a thread hangs from its root instead of floating to the bottom", () => {
-    expect(rule(".ch-thread .ch-list-fill")["justify-content"]).toBe("flex-start");
+  test("a thread pins to the composer the same way a channel does", () => {
+    expect(css).not.toMatch(/\.ch-thread \.ch-list-fill/);
+    expect(rule(".ch-list-fill")["justify-content"]).toBe("flex-end");
+  });
+
+  test("opening a list pins to the bottom unless a message link names a row", () => {
+    expect(list).not.toMatch(/const initialIndex = newRuleIndex/);
+    expect(list).toMatch(/holdLanding:\s*!!targetMessageId/);
+    expect(hook).toMatch(/holdLanding\?: boolean/);
+    expect(hook).toMatch(/if \(holdLanding\) \{/);
   });
 
   test("the list wraps the sizer in the fill", () => {

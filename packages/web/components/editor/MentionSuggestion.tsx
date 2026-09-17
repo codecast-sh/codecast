@@ -3,6 +3,7 @@ import type { MentionItem } from "./MentionList";
 import { useInboxStore, placeInboxRows, rankVerdictOf } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { AvatarImg } from "../../lib/avatarCache";
+import { SlackLogo } from "../SlackLogo";
 import { visitTimeAgo } from "../../lib/recentVisits";
 import { statusesForTeam, taskStatusOf } from "../../lib/taskStatuses";
 import { agentDisplayName, deriveLiveAt, modelDisplayLabel } from "@codecast/shared/contracts";
@@ -92,6 +93,7 @@ export function MentionSuggestion({ item }: { item: Omit<MentionItem, "id"> & { 
           <span className="text-[13px] truncate" title={current.label}>
             {current.type === "file" ? current.label.split("/").pop() : current.type === "skill" ? `/${current.label}` : current.label}
           </span>
+          {current.slack && <SlackLogo className="w-3 h-3 shrink-0" title="In Slack only — paged there" />}
           {time ? <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums" title={`${timeLabel} ${new Date(time).toLocaleString()}`}>{timeLabel.toLowerCase()} {visitTimeAgo(time)}</span> : null}
         </span>
         <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim min-w-0" title={[status, ...parts, summary].filter(Boolean).join(" · ")}>

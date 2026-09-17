@@ -1,24 +1,56 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
+import { WEBSOCKET_HANDSHAKE_TIMEOUT_MS } from "@codecast/shared/network";
 
 import { useMountEffect } from "./useMountEffect";
 import { useWatchEffect } from "./useWatchEffect";
-// How long the connection must stay down before we call it "disconnected".
-// Covers the normal boot handshake, a reconnect after a laptop wake, and the
-// few seconds a Wi-Fi handoff or VPN toggle drops the OS's online flag —
-// all of which resolve on their own and must not flash a banner. The same
-// grace applies to navigator.onLine: the browser flips it false for a moment
-// on every network change, so it is a hint, not a verdict.
-const DISCONNECT_GRACE_MS = 8_000;
+// Outlast the recovering socket's handshake, plus the close-and-retry after
+// a stalled CONNECTING. navigator.onLine flips false for a moment on every
+// network change, so it is a hint, not a verdict — same grace.
+export const DISCONNECT_GRACE_MS = WEBSOCKET_HANDSHAKE_TIMEOUT_MS + 5_000;
+
+export type AppOffline = { offline: boolean; online: boolean };
+
+export type ConnectionNotice = { title: string; detail: string };
+export type ConnectionChipCopy = { label: string; detail: string };
+
+/**
+ * Bottom-left card copy. A dropped Convex socket is not an outage the user
+ * needs a card for: the app is already serving from the local cache, and the
+ * header LED carries the reconnecting state. The card is only for a true OS
+ * offline, after the grace period.
+ */
+export function connectionNotice({ offline, online }: AppOffline): ConnectionNotice | null {
+  if (!offline || online) return null;
+  return {
+    title: "Offline",
+    detail: "showing locally cached data; changes will sync when the connection returns.",
+  };
+}
+
+/** Header LED copy while we cannot sync. Null when the socket is up. */
+export function connectionChipCopy({ offline, online }: AppOffline): ConnectionChipCopy | null {
+  if (!offline) return null;
+  return online
+    ? {
+        label: "Reconnecting",
+        detail: "The live server link dropped. This view is from the cache, and it will sync when the link returns.",
+      }
+    : {
+        label: "Offline",
+        detail: "This device has no network. This view is from the cache, and it will sync when the connection returns.",
+      };
+}
 
 /**
  * Is this client running from local cache right now? True when the OS
  * reports no network, or the Convex WebSocket has been down past the grace
- * period. Drives the ConnectionBanner and suppresses banners that would
- * misattribute our own lost connection to something else (e.g. the CLI
- * daemon looking stale merely because nothing can sync).
+ * period. Drives the ConnectionBanner (OS-offline card only) and the header
+ * LED, and suppresses banners that would misattribute our own lost
+ * connection to something else (e.g. the CLI daemon looking stale merely
+ * because nothing can sync).
  */
-export function useAppOffline(): { offline: boolean; online: boolean } {
+export function useAppOffline(): AppOffline {
   // Subscribe to ONLY the websocket-connected boolean, not the whole connection
   // state: `useConvexConnectionState()` re-emits on every in-flight request
   // (each keystroke's draft mutation, every query of a session switch), which

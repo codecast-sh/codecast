@@ -39,3 +39,18 @@ test("both chat rows in the rail wear the same signals", () => {
   const spreads = source.match(/\.\.\.\(?(?:live \? )?channelSignals\(/g) ?? [];
   expect(spreads.length).toBe(2);
 });
+
+test("the section count sits after the chevron, not inside the link", () => {
+  const nav = block("function NavSection(", "const NeedsInputCountBadge");
+  const linkEnd = nav.indexOf("</Link>");
+  const chevron = nav.indexOf("aria-expanded={expanded}");
+  const badge = nav.indexOf("{!isNarrow && badge && (");
+  expect(linkEnd).toBeGreaterThan(-1);
+  expect(chevron).toBeGreaterThan(linkEnd);
+  expect(badge).toBeGreaterThan(chevron);
+});
+
+test("chat mention counts are red", () => {
+  expect(source).toContain('tone="bg-sol-red text-white" kind="mention"');
+  expect(source).not.toContain("bg-sol-orange text-sol-bg");
+});

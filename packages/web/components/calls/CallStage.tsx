@@ -52,6 +52,8 @@ import { DeviceRows } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
+import { ScreenCursors, useScreenCursorSender } from "./ScreenCursors";
+import { FollowChip } from "./FollowInCall";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import {
@@ -69,6 +71,7 @@ import {
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
 import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
+import { LivePulseDot } from "../SessionActivityLine";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -386,7 +389,7 @@ export function CallStage({
           <span className="relative">
             <Captions className="h-3.5 w-3.5" />
             {live && (
-              <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sol-green animate-pulse" />
+              <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />
             )}
           </span>
           transcript
@@ -865,6 +868,7 @@ export function StageVideo({
   contain?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   useWatchEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -873,9 +877,17 @@ export function StageVideo({
       tile.track.detach(el);
     };
   }, [tile.track]);
+  // Cursors ride only a letterboxed share: a cropped one has no honest
+  // mapping between the pointer and the share's pixels.
+  const cursorsOn = tile.kind === "screen" && !!contain;
+  const sender = useScreenCursorSender(tile, ref);
   return (
     <div
-      className={`relative overflow-hidden bg-black/60 transition-shadow duration-300 ${
+      ref={boxRef}
+      data-sv-screen-tile={cursorsOn ? "cursors" : undefined}
+      onPointerMove={cursorsOn ? sender.onPointerMove : undefined}
+      onPointerLeave={cursorsOn ? sender.onPointerLeave : undefined}
+      className={`group relative overflow-hidden bg-black/60 transition-shadow duration-300 ${
         speaking ? SPEAKING_RING : ""
       } ${small ? "aspect-video w-full rounded-lg" : "h-full w-full rounded-xl"}`}
     >
@@ -888,15 +900,21 @@ export function StageVideo({
           tile.isLocal && tile.kind === "camera" ? "-scale-x-100" : ""
         }`}
       />
-      <span
-        className={`absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full bg-black/45 font-mono text-white/90 backdrop-blur ${
-          small ? "px-2 py-px text-[11px]" : "px-2.5 py-0.5 text-[12px]"
-        }`}
-      >
-        {tile.isLocal ? "you" : firstName(tile.name)}
-        {tile.kind === "screen" ? " · screen" : ""}
-        {muted && tile.kind === "camera" && <MicOff className="h-3 w-3 text-sol-red/90" />}
+      <span className="absolute bottom-2 left-2 flex items-center gap-1.5">
+        <span
+          className={`flex items-center gap-1.5 rounded-full bg-black/45 font-mono text-white/90 backdrop-blur ${
+            small ? "px-2 py-px text-[11px]" : "px-2.5 py-0.5 text-[12px]"
+          }`}
+        >
+          {tile.isLocal ? "you" : firstName(tile.name)}
+          {tile.kind === "screen" ? " · screen" : ""}
+          {muted && tile.kind === "camera" && <MicOff className="h-3 w-3 text-sol-red/90" />}
+        </span>
+        {/* Follow them in the app. A shared screen carries it at rest: that
+            is the moment it is for. A camera tile reveals it on hover. */}
+        {!small && <FollowChip identity={tile.identity} name={tile.name} variant="tile" always={tile.kind === "screen"} />}
       </span>
+      {cursorsOn && <ScreenCursors tile={tile} boxRef={boxRef} videoRef={ref} />}
     </div>
   );
 }
@@ -915,21 +933,25 @@ function VoiceRows({
 }) {
   const onCamera = new Set(cameras.map((c) => c.identity));
   const voices = roster.filter((m) => !onCamera.has(String(m.user_id)));
+  const followLeaderId = useInboxStore((s) => s.followLeaderId);
   if (voices.length === 0) return null;
   return (
     <div className={small ? "space-y-1" : "flex flex-wrap gap-2"}>
       {voices.map((m) => (
         <div
           key={m.user_id}
-          className={`flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors ${
+          className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors ${
             speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
           }`}
         >
-          <Avatar m={m} size={22} />
+          <Avatar m={m} size={22} followed={followLeaderId === String(m.user_id)} />
           <span className="truncate font-mono text-[12px] text-sol-text">
             {firstName(m.user_name)}
           </span>
           {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
+          <span className="ml-auto shrink-0">
+            <FollowChip identity={String(m.user_id)} name={m.user_name} variant="row" />
+          </span>
         </div>
       ))}
     </div>
@@ -1003,13 +1025,13 @@ function AudioOnlyStage({
   );
 }
 
-export function Avatar({ m, size }: { m: any; size: number }) {
+export function Avatar({ m, size, followed = false }: { m: any; size: number; followed?: boolean }) {
   return (
     <AvatarImg
       src={m.user_image}
       alt=""
       style={{ width: size, height: size }}
-      className="rounded-full object-cover"
+      className={`rounded-full object-cover ${followed ? "ring-2 ring-sol-cyan ring-offset-1 ring-offset-sol-bg-alt" : ""}`}
       fallback={
         <span
           style={{ width: size, height: size, fontSize: Math.max(11, size / 2.6) }}
@@ -1091,6 +1113,11 @@ function TranscriptRail({
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
   ).data as { segments: Array<any> } | null | undefined;
+  const scribeError = useSyncExternalStore(
+    subscribeScribe,
+    () => getScribeStatus().error,
+    () => null,
+  );
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const segCount = call?.segments?.length ?? 0;
@@ -1173,7 +1200,7 @@ function TranscriptRail({
           </div>
         ) : segCount === 0 ? (
           <div className="py-6 text-center text-[12px] text-sol-text-muted">
-            Listening — words appear as people speak.
+            {scribeError ?? "Listening — words appear as people speak."}
           </div>
         ) : (
           <div className="space-y-1 pb-2">
@@ -1226,7 +1253,9 @@ function CaptionsLane({
   return (
     <div className="pointer-events-none min-h-[4.25rem] border-b border-white/[0.06] px-5 py-2">
       {shown.length === 0 ? (
-        <div className="font-mono text-[11px] text-sol-text-dim">listening…</div>
+        <div className="font-mono text-[11px] text-sol-text-dim">
+          {scribe.error ?? "listening…"}
+        </div>
       ) : (
         <div className="space-y-1">
           {shown.map((c, i, arr) => (

@@ -126,9 +126,60 @@ describe("the questions bucket", () => {
     expect(placed.placements.get("mate3")?.bucket).toBe("pinned");
     expect(ids(placed.pinned)).toEqual(["mate3"]);
     expect(placed.subsByParent.has("mate3")).toBe(false);
-    // A teammate whose lead is absent keeps its own placement and renders flat.
-    expect(ids(placed.needsInput)).toEqual(["mate4"]);
-    expect(placed.counts.needsInput).toBe(1);
+    // A teammate whose lead is absent is not an inbox card — leftover
+    // reviewers of a gone lead used to dump into Needs Input / Done as ↳ rows.
+    expect(ids(placed.needsInput)).toEqual([]);
+    expect(placed.counts.needsInput).toBe(0);
+    expect(ids(placed.sorted)).not.toContain("mate4");
+  });
+
+  it("a finished teammate whose lead is gone does not become a Done card", () => {
+    const mate = row("mate1", {
+      spawned_by_conversation_id: "gone",
+      agent_team_name: "team",
+      agent_name: "reviewer",
+      inbox_rest: "done",
+      inbox_rest_at: T0,
+      updated_at: T0,
+    });
+    const placed = place([mate]);
+    expect(ids(placed.done)).toEqual([]);
+    expect(ids(placed.sorted)).toEqual([]);
+  });
+
+  it("an unlinked team worker does not float as a first-class card", () => {
+    const mate = row("mate1", {
+      agent_team_name: "team",
+      agent_name: "reviewer",
+      inbox_rest: "done",
+      inbox_rest_at: T0,
+      updated_at: T0,
+    });
+    const placed = place([mate]);
+    expect(ids(placed.sorted)).toEqual([]);
+  });
+
+  it("a worktree session without a parent is still an inbox card", () => {
+    const wt = row("wt1", {
+      worktree_name: "aivery-pr-merge",
+      inbox_rest: "done",
+      inbox_rest_at: T0,
+      updated_at: T0,
+    });
+    const placed = place([wt]);
+    expect(ids(placed.done)).toEqual(["wt1"]);
+  });
+
+  it("a pinned teammate whose lead is gone keeps its pinned card", () => {
+    const mate = row("mate1", {
+      spawned_by_conversation_id: "gone",
+      agent_team_name: "team",
+      agent_name: "reviewer",
+      is_pinned: true,
+      inbox_pinned_at: T0,
+    });
+    const placed = place([mate]);
+    expect(ids(placed.pinned)).toEqual(["mate1"]);
   });
 
   it("a teammate rides a stashed lead out of the active sections and into the stashed bucket with it", () => {
@@ -165,6 +216,18 @@ describe("the questions bucket", () => {
     expect(placed.isQuestion(dismissed)).toBe(false);
     expect(ids(placed.stashed)).toEqual(["st1"]);
     expect(ids(placed.dismissed)).toEqual(["dx1"]);
+  });
+
+  it("a pending decide asked of someone else does not file under QUESTIONS", () => {
+    const hosted = row("h1");
+    const mine = placeSections(
+      Object.fromEntries([[hosted._id, hosted]]),
+      new Set(),
+      undefined,
+      { sessionDecisions: { d: { ...decide("h1"), asked_user_ids: ["users_them"] } }, currentUser: { _id: "users_me" } },
+    );
+    expect(ids(mine.questions)).toEqual([]);
+    expect(ids(mine.needsInput)).toEqual(["h1"]);
   });
 
   it("an open AskUserQuestion qualifies without any decide row, once", () => {

@@ -12,6 +12,7 @@ import {
   blocksDelivery,
   sigCell,
   worstDaemonHealth,
+  fleetDaemonHealth,
   deviceHealthInput,
   ROSTER_CONSIDER_MS,
   OVERLOADED_HOUR_MS,
@@ -476,6 +477,23 @@ describe("worstDaemonHealth", () => {
     const asleepLinux = { device_id: "f", label: "Linux - ip-172-31-40-243", last_seen: NOW - 10 * 60 * 60 * 1000, is_remote: true };
     expect(worstDaemonHealth([cloud, asleepLinux], NOW)).toEqual({ kind: "ok" });
     expect(worstDaemonHealth([asleepLinux], NOW)).toBeNull();
+  });
+
+  // The screenshot: "Linux - grok-bot-vm-…: daemon stale 51 min" in the global
+  // header. The box never set is_remote (daemon without CODECAST_REMOTE_DEVICE),
+  // so the old !is_remote filter let it win the fleet chip over the laptop.
+  it("leaves unflagged cloud boxes out of the fleet verdict", () => {
+    const grokVm = { device_id: "g", label: "Linux - grok-bot-vm-2307902", last_seen: NOW - 51 * 60 * 1000 };
+    const aws = { device_id: "f", label: "Linux - ip-172-31-40-243", last_seen: NOW - 51 * 60 * 1000 };
+    const laptopOk = { device_id: "a", label: "MacBook", last_seen: NOW - 1000 };
+    expect(worstDaemonHealth([laptopOk, grokVm], NOW)).toEqual({ kind: "ok" });
+    expect(worstDaemonHealth([laptopOk, aws], NOW)).toEqual({ kind: "ok" });
+    expect(worstDaemonHealth([grokVm], NOW)).toBeNull();
+    expect(worstDaemonHealth([aws], NOW)).toBeNull();
+    // Roster known, only cloud boxes: do not fall back to user-doc last-writer
+    // (that field is often the remote's own last_seen).
+    expect(fleetDaemonHealth([grokVm], { daemon_last_seen: NOW - 51 * 60 * 1000 }, NOW)).toEqual({ kind: "ok" });
+    expect(fleetDaemonHealth([], { daemon_last_seen: NOW - 51 * 60 * 1000 }, NOW)).toMatchObject({ kind: "offline", tier: "warn" });
   });
 
   it("ranks unreachable above busy above restarting", () => {

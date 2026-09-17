@@ -145,7 +145,7 @@ function HoverPreview({ message, conversationId, rect, onMouseEnter, onMouseLeav
         </div>
         <div className="relative flex-1 min-h-0 flex flex-col">
           <div ref={bodyRef} className={`px-3 pb-3 flex-1 min-h-0 ${expanded ? "overflow-y-auto" : "overflow-hidden"}`}>
-            <MessagePromptPreview content={body} images={message.images} variant="preview" textClassName="text-[13px] text-sol-text whitespace-pre-wrap leading-relaxed" />
+            <MessagePromptPreview content={body} images={message.images} messageId={message._id} variant="preview" textClassName="text-[13px] text-sol-text whitespace-pre-wrap leading-relaxed" />
           </div>
           {!expanded && overflows && (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-sol-bg to-transparent" />
@@ -483,7 +483,7 @@ function NavDropdown({
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <MessagePromptPreview content={m.display} images={m.images} textClassName={`text-[12px] leading-snug line-clamp-2 ${
+                      <MessagePromptPreview content={m.display} images={m.images} messageId={m._id} textClassName={`text-[12px] leading-snug line-clamp-2 ${
                         isActive || isCurrent ? "text-sol-text" : "text-sol-text-secondary"
                       } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`} />
                       <div className="flex items-center gap-1.5 mt-1">

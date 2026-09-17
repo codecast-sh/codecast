@@ -18,6 +18,9 @@ import { parentNodeId, parentRefOfNodeId, refMatches, refResolves } from "./orgL
 import type { OrgParentRef, OrgTree } from "./orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type TrustStage } from "./scope/scopeTypes";
 import { OrgTemplateHire } from "./orgTemplateHire";
+import { AVATAR_KEYS, avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { ORG_TENURE_THEN, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { RoleFace } from "./RoleFace";
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
@@ -49,7 +52,7 @@ function proposeCharter(name: string, projects: Array<{ title: string; descripti
  *  the form resolves them against the workspace's projects and plans, so a
  *  ref nothing answers to is simply not ticked. `reports_to` is resolved by
  *  the caller against the tree (resolveOrgParentRef). */
-export type HireRoleInitial = { name?: string; handle?: string; charter?: string; caps?: Partial<RoleCaps>; scope?: { projects?: string[]; plans?: string[] }; reports_to?: OrgParentRef | null };
+export type HireRoleInitial = { name?: string; handle?: string; charter?: string; caps?: Partial<RoleCaps>; scope?: { projects?: string[]; plans?: string[] }; reports_to?: OrgParentRef | null; tenure?: OrgTenureSpec; avatar?: string };
 
 /** What the person changed in the form, so an edit sends only that: a scope
  *  ref the form could not resolve, or a parent the same proposal creates (a
@@ -97,12 +100,33 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   const setProjectIds = (v: string[]) => { setTouched((t) => ({ ...t, scope: true })); setProjectIdsState(v); };
   const setPlanIds = (v: string[]) => { setTouched((t) => ({ ...t, scope: true })); setPlanIdsState(v); };
   const [caps, setCaps] = useState<RoleCaps>({ ...DEFAULT_CAPS, ...(initial?.caps ?? {}) });
+  // The face (S13): a chosen avatar key, else the default derived from the
+  // handle so every role has one. `avatar` is undefined until the person picks.
+  const [avatar, setAvatar] = useState<string | undefined>(initial?.avatar);
+  // Standing or program (S10). Standing by default; a program ends with a plan,
+  // a project or a date, and then retires or comes up for review.
+  const initProgram = initial?.tenure?.kind === "program" ? initial.tenure : null;
+  const initEnds = initProgram?.ends as { plan?: string; project?: string; date?: number } | undefined;
+  const [tenureKind, setTenureKind] = useState<"standing" | "program">(initProgram ? "program" : "standing");
+  const [endKind, setEndKind] = useState<"plan" | "project" | "date">(initEnds?.plan ? "plan" : initEnds?.project ? "project" : initEnds?.date ? "date" : "plan");
+  const [endPlan, setEndPlan] = useState<string>(initEnds?.plan ?? "");
+  const [endProject, setEndProject] = useState<string>(initEnds?.project ?? "");
+  const [endDate, setEndDate] = useState<string>(initEnds?.date ? new Date(initEnds.date).toISOString().slice(0, 10) : "");
+  const [tenureThen, setTenureThen] = useState<"retire" | "review">(initProgram?.then ?? "retire");
+  const [faceOpen, setFaceOpen] = useState(false);
   // Preset rows lead the list, then the rest of the workspace.
   const projects = useMemo(() => [...initialProjects, ...wsProjects.filter((p) => !initialProjects.some((q) => q._id === p._id))], [initialProjects, wsProjects]);
   const effHandle = handleTouched ? handle : slugify(name);
   const taken = tree.roles.some((r) => r.handle === effHandle && r.status !== "retired");
-  const valid = name.trim().length > 0 && /^[a-z0-9-]{2,32}$/.test(effHandle) && !taken && !!reportsTo;
+  // A program needs its end chosen; standing needs nothing.
+  const tenureOk = tenureKind === "standing" || (endKind === "plan" ? !!endPlan : endKind === "project" ? !!endProject : !!endDate);
+  const valid = name.trim().length > 0 && /^[a-z0-9-]{2,32}$/.test(effHandle) && !taken && !!reportsTo && tenureOk;
   const wholeWorkspace = projectIds.length + planIds.length === 0;
+  const buildTenure = (): OrgTenureSpec => {
+    if (tenureKind === "standing") return { kind: "standing" };
+    const ends = endKind === "plan" ? { plan: endPlan } : endKind === "project" ? { project: endProject } : { date: new Date(`${endDate}T00:00:00Z`).getTime() };
+    return { kind: "program", ends, then: tenureThen };
+  };
 
   // The scope preview: what the seat will read. A whole-workspace scope reads
   // everything, so the query is skipped and the hint says so.
@@ -135,6 +159,8 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       reports_to: ref,
       ...(charter.trim() ? { charter: charter.trim() } : {}),
       caps,
+      tenure: buildTenure(),
+      ...(avatar ? { avatar } : {}),
       provision: true,
       ...(cwd ? { project_path: cwd } : {}),
       host_user_id: meId,
@@ -177,6 +203,26 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
             </Field>
           </div>
 
+          <Field label="Face" hint={avatar ? "chosen" : "from the handle"}>
+            <div className="flex items-center gap-2.5">
+              <RoleFace role={{ avatar, handle: effHandle, name }} size={36} />
+              <button type="button" onClick={() => setFaceOpen((o) => !o)} className="text-[11.5px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }}>{faceOpen ? "Close" : "Choose a face"}</button>
+              {avatar && <button type="button" onClick={() => setAvatar(undefined)} className="text-[11px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>reset to default</button>}
+            </div>
+            {faceOpen && (
+              <div className="mt-1.5 grid grid-cols-8 gap-1.5 rounded-lg border p-2" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
+                {AVATAR_KEYS.map((k) => {
+                  const on = avatarOf({ avatar, handle: effHandle }) === k;
+                  return (
+                    <button key={k} type="button" onClick={() => { setAvatar(k); setFaceOpen(false); }} className="rounded-full inline-flex" style={{ outline: on ? "2px solid var(--sol-violet)" : "none", outlineOffset: 1 }} title={k}>
+                      <RoleFace role={{ avatar: k, handle: effHandle, name }} size={28} />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Field>
+
           <Field label="Scope" hint={scopeHint}>
             <div className="max-h-[132px] overflow-y-auto rounded-lg border p-1" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
               {projects.length === 0 && plans.length === 0 && <p className="px-2 py-1.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No projects or plans in this workspace yet.</p>}
@@ -207,6 +253,49 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
             <textarea value={charter} onChange={(e) => { setCharterTouched(true); setCharter(e.target.value); }} rows={4} className={INPUT} style={{ ...INPUT_STYLE, height: "auto", padding: "8px 10px", lineHeight: 1.45 }} />
             {charterTouched && charter !== proposed && (
               <button type="button" onClick={() => { setCharterTouched(false); setCharter(proposed); }} className="self-start text-[10.5px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>Use the proposed text</button>
+            )}
+          </Field>
+
+          <Field label="Tenure" hint={tenureKind === "standing" ? "an area that outlives any plan" : "a bounded effort with an end"}>
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1">
+              {([["standing", "Standing"], ["program", "Program"]] as const).map(([value, label]) => (
+                <button key={value} type="button" aria-pressed={tenureKind === value} onClick={() => setTenureKind(value)} className="rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors" style={{ background: tenureKind === value ? "var(--sol-card)" : undefined, color: tenureKind === value ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{label}</button>
+              ))}
+            </div>
+            {tenureKind === "program" && (
+              <div className="mt-2 flex flex-col gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>ends with</span>
+                  <SelectBox value={endKind} onChange={(e) => setEndKind(e.target.value as "plan" | "project" | "date")} className="text-[12.5px]" style={{ width: 118 }}>
+                    <option value="plan">a plan</option>
+                    <option value="project">a project</option>
+                    <option value="date">a date</option>
+                  </SelectBox>
+                  {endKind === "plan" && (
+                    <SelectBox value={endPlan} onChange={(e) => setEndPlan(e.target.value)} className="text-[12.5px] flex-1" style={{ minWidth: 150 }}>
+                      <option value="">Pick a plan…</option>
+                      {plans.map((p) => <option key={p._id} value={p._id}>{p.short_id ? `${p.short_id} · ` : ""}{p.title}</option>)}
+                    </SelectBox>
+                  )}
+                  {endKind === "project" && (
+                    <SelectBox value={endProject} onChange={(e) => setEndProject(e.target.value)} className="text-[12.5px] flex-1" style={{ minWidth: 150 }}>
+                      <option value="">Pick a project…</option>
+                      {projects.map((p) => <option key={p._id} value={p._id}>{p.title}</option>)}
+                    </SelectBox>
+                  )}
+                  {endKind === "date" && (
+                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={INPUT} style={{ ...INPUT_STYLE, width: "auto", flex: 1, minWidth: 150 }} />
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>then</span>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" style={{ width: 220 }}>
+                    {ORG_TENURE_THEN.map((t) => (
+                      <button key={t} type="button" aria-pressed={tenureThen === t} onClick={() => setTenureThen(t)} className="rounded-md px-2 py-1 text-[11.5px] font-medium capitalize transition-colors" style={{ background: tenureThen === t ? "var(--sol-card)" : undefined, color: tenureThen === t ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{t}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             )}
           </Field>
 

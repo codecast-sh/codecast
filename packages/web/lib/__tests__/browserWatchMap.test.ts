@@ -42,7 +42,7 @@ describe("mapToFrame", () => {
   });
 });
 
-import { frameContentRect, mapFromFrame, parseWatchAction } from "../browserWatch";
+import { frameContentRect, mapFromFrame, parseWatchAction, WATCH_ACTION_TEXT_CAP } from "../browserWatch";
 
 // The ghost cursor is drawn by the inverse mapping. It must be the exact
 // inverse: an arrow drawn from an action, and a click sent from where the
@@ -97,6 +97,29 @@ describe("parseWatchAction", () => {
     expect(parseWatchAction({ type: "action", kind: "move", x: "0", y: 0, at: 1 })).toBeNull();
     expect(parseWatchAction({ type: "action", kind: "move", x: NaN, y: 0, at: 1 })).toBeNull();
     expect(parseWatchAction(null)).toBeNull();
+  });
+
+  test("a point outside the viewport is clamped to it, and a non finite one drops the frame", () => {
+    expect(parseWatchAction({ type: "action", kind: "move", x: -0.5, y: 1.7, at: 1 })).toEqual({ kind: "move", x: 0, y: 1, at: 1 });
+    expect(parseWatchAction({ type: "action", kind: "move", x: 0.5, y: Infinity, at: 1 })).toBeNull();
+    expect(parseWatchAction({ type: "action", kind: "move", x: 0.5, y: -Infinity, at: 1 })).toBeNull();
+  });
+
+  test("text rides only on type, a url only on nav, and never both", () => {
+    expect(parseWatchAction({ type: "action", kind: "move", x: 0, y: 0, text: "hi", url: "https://a.test/", at: 1 })).toEqual({ kind: "move", x: 0, y: 0, at: 1 });
+    expect(parseWatchAction({ type: "action", kind: "nav", x: 0, y: 0, text: "hi", url: "https://a.test/", at: 1 })).toEqual({ kind: "nav", x: 0, y: 0, url: "https://a.test/", at: 1 });
+    expect(parseWatchAction({ type: "action", kind: "type", x: 0, y: 0, text: "hi", url: "https://a.test/", at: 1 })).toEqual({ kind: "type", x: 0, y: 0, text: "hi", at: 1 });
+    // A secret field reports no text even if a frame claims some.
+    expect(parseWatchAction({ type: "action", kind: "type", x: 0, y: 0, secret: true, text: "hunter2", at: 1 })).toEqual({ kind: "type", x: 0, y: 0, secret: true, at: 1 });
+    expect(parseWatchAction({ type: "action", kind: "down", x: 0, y: 0, secret: true, at: 1 })).toEqual({ kind: "down", x: 0, y: 0, at: 1 });
+  });
+
+  test("typed text is capped at the daemon's cap, keeping the tail", () => {
+    const long = "a".repeat(WATCH_ACTION_TEXT_CAP) + "tail";
+    const a = parseWatchAction({ type: "action", kind: "type", x: 0, y: 0, text: long, at: 1 })!;
+    expect(a.text!.length).toBe(WATCH_ACTION_TEXT_CAP);
+    expect(a.text!.endsWith("tail")).toBe(true);
+    expect(WATCH_ACTION_TEXT_CAP).toBe(200);
   });
 
   test("a frame with no time is stamped now", () => {

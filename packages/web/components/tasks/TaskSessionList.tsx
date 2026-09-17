@@ -19,6 +19,7 @@ import {
 import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { compactAge, threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import { getProjectName, useInboxStore } from "../../store/inboxStore";
+import { LivePulseDot } from "../SessionActivityLine";
 
 export type TaskLinkedSession = {
   _id: string;
@@ -227,7 +228,7 @@ export function TaskSessionList({
         <span className="text-[11px] font-mono text-sol-text-muted">{rows.length}</span>
         {liveCount > 0 && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-[10px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+            <LivePulseDot className="w-1.5 h-1.5" />
             {liveCount} live
           </span>
         )}

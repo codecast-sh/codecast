@@ -353,10 +353,17 @@ export function sessionHasOpenQuestion(
   return !!s.awaiting_input || s.agent_status === "permission_blocked";
 }
 
-/** Conversation ids with a pending `cast decide` row. */
-export function pendingDecisionConvIds(decisions: Record<string, SessionDecisionItem>): Set<string> {
+/** Conversation ids with a pending `cast decide` the viewer must answer. */
+export function pendingDecisionConvIds(
+  decisions: Record<string, SessionDecisionItem>,
+  meId?: string | null,
+): Set<string> {
   const ids = new Set<string>();
-  for (const d of Object.values(decisions)) if (d.status === "pending") ids.add(d.conversation_id);
+  for (const d of Object.values(decisions)) {
+    if (d.status !== "pending") continue;
+    if (meId && d.asked_user_ids && !d.asked_user_ids.some((id) => String(id) === String(meId))) continue;
+    ids.add(d.conversation_id);
+  }
   return ids;
 }
 

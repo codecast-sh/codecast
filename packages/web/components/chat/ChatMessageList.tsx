@@ -1,7 +1,8 @@
+import type { ReactNode } from "react";
 import { memo, useCallback, useMemo, useRef } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useBottomAnchoredList, prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
-import { buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
+import { authorGroupKey, buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import "./chat.css";
@@ -13,16 +14,19 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // identically from a fixture and from live data — which is how the whole surface
 // gets screenshot-verified before any wiring exists.
 //
-// Two behaviours here are product decisions rather than mechanics, and both come
-// from the design critique:
+// These behaviours are product decisions rather than mechanics:
 //
-//  1. A channel with unread messages OPENS AT THE UNREAD RULE, not at the bottom.
-//     Landing at the bottom means the first thing you do in a busy channel is
-//     scroll backwards to find where you stopped.
+//  1. A room OPENS AT THE BOTTOM, against the newest messages. The unread
+//     rule still draws so you can find where you stopped, but it is not a
+//     landing. Opening on the rule made a busy room feel like you had missed
+//     the conversation happening now.
 //  2. The rule SURVIVES until you leave the channel. If it vanished the moment
 //     you glanced at the room, re-entering mid read would erase your place.
 //     So the rule is computed from a lastReadAt frozen at entry, not from the
 //     live read mark that your own reading is busy advancing.
+//  3. A permalink (`?m=<id>`) is the exception: that row is the place someone
+//     sent you. The list holds still until the row is on screen, so the bottom
+//     pin cannot yank the link away.
 
 type Row = TimelineRow<{
   id: string;
@@ -33,11 +37,16 @@ type Row = TimelineRow<{
   view: ChatMessageView;
 }>;
 
+// `header` rides the list as its first virtual row, so it scrolls with the
+// messages instead of standing in a second scroll region above them.
+type ListRow = Row | { kind: "header"; key: string };
+
 // Rough first guesses, refined by the height cache after one measured pass. Too
 // small is better than too large: the list corrects downward without the content
 // appearing to jump away from the reader.
-const estimateRow = (row: Row | undefined): number => {
+const estimateRow = (row: ListRow | undefined): number => {
   if (!row) return 40;
+  if (row.kind === "header") return 160;
   if (row.kind === "day") return 38;
   if (row.kind === "new") return 24;
   const m = row.message.view;
@@ -94,9 +103,10 @@ export type ChatMessageListProps = {
   /** Suppresses day separators and the thread affordance. */
   inThread?: boolean;
   /** A permalink landing (/chat/<channel>?m=<id>): scroll that row into view and
-   *  flash it once. Separate from the unread rule — a link is a place someone
-   *  sent you, not a place you stopped reading. */
+   *  flash it once. This is the only case that does not pin to the bottom. */
   targetMessageId?: string;
+  /** Rendered above the first message, inside the scroll region. */
+  header?: ReactNode;
 };
 
 export const ChatMessageList = memo(function ChatMessageList({
@@ -124,13 +134,16 @@ export const ChatMessageList = memo(function ChatMessageList({
   onShareToSlack,
   inThread,
   targetMessageId,
+  header,
 }: ChatMessageListProps) {
-  const rows = useMemo<Row[]>(
-    () =>
-      buildChatTimeline(
+  const hasHeader = header != null && header !== false;
+  const rows = useMemo<ListRow[]>(
+    () => {
+      const timeline = buildChatTimeline(
         messages.map((m) => ({
           id: m.id,
           authorId: m.author.id,
+          groupKey: authorGroupKey(m.author),
           createdAt: m.createdAt,
           pendingAgent: m.agentStatus === "thinking" || m.agentStatus === "streaming",
           deleted: !!m.deletedAt,
@@ -138,14 +151,11 @@ export const ChatMessageList = memo(function ChatMessageList({
           view: m,
         })),
         { now, lastReadAt, viewerId, withoutDays: inThread },
-      ) as Row[],
-    [messages, lastReadAt, viewerId, now, inThread],
+      ) as Row[];
+      return hasHeader ? [{ kind: "header", key: "header" }, ...timeline] : timeline;
+    },
+    [messages, lastReadAt, viewerId, now, inThread, hasHeader],
   );
-
-  // Land on the unread rule when there is one. The rule row itself, not the
-  // first unread message, so the reader sees the boundary they stopped at.
-  const newRuleIndex = useMemo(() => rows.findIndex((r) => r.kind === "new"), [rows]);
-  const initialIndex = newRuleIndex >= 0 ? newRuleIndex : null;
 
   const list = useBottomAnchoredList({
     count: rows.length,
@@ -165,8 +175,9 @@ export const ChatMessageList = memo(function ChatMessageList({
     },
     paddingStart: 12,
     paddingEnd: 8,
-    initialIndex,
+    // Always the tail. A permalink holds the pin until that row is on screen.
     resetKey: channelId,
+    holdLanding: !!targetMessageId,
     hasMoreAbove,
     isLoadingOlder,
     onLoadOlder,
@@ -225,8 +236,8 @@ export const ChatMessageList = memo(function ChatMessageList({
       && tail.message.view.author.id === viewerId
       ? tail.key
       : null;
-  // Entering a channel is a landing, not a send — the unread rule owns that
-  // position, so a pending tail that is merely already there must not snap.
+  // Entering a channel is a landing, not a send — a pending tail that is
+  // merely already there must not snap as if this tab had just written it.
   const ownSendScrolledRef = useRef(ownSendKey);
   const ownSendChannelRef = useRef(channelId);
   if (ownSendChannelRef.current !== channelId) {
@@ -305,7 +316,9 @@ export const ChatMessageList = memo(function ChatMessageList({
             });
             return (
               <div key={key} {...rowProps}>
-                {row.kind === "day" ? (
+                {row.kind === "header" ? (
+                  header
+                ) : row.kind === "day" ? (
                   <ChatDayDivider label={row.label} />
                 ) : row.kind === "new" ? (
                   <ChatNewDivider />

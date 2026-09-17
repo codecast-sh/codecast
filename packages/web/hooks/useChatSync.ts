@@ -60,6 +60,7 @@ import type { ChatMessageView } from "../components/chat/chatTypes";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { useSyncCollection } from "./useSyncCollection";
 const api = _api as any;
 
 /** Warm the image cache (id→URL mapping AND bytes) for every image attachment
@@ -162,7 +163,8 @@ export const slackLinksSig = makeCollectionSig<ChatSlackLinkRow>(
   (l) =>
     `${l._id}|${l.chat_channel_id}|${l.slack_channel_id}|${l.slack_channel_name ?? ""}|${l.direction}|${l.paused ? 1 : 0}` +
     `|${Object.entries(l.options ?? {}).map(([k, val]) => `${k}=${val ? 1 : 0}`).join(",")}` +
-    `|${l.last_inbound_at ?? 0}|${l.last_outbound_at ?? 0}|${l.inbound_count ?? 0}|${l.outbound_count ?? 0}|${l.last_error ?? ""}`,
+    `|${l.last_inbound_at ?? 0}|${l.last_outbound_at ?? 0}|${l.inbound_count ?? 0}|${l.outbound_count ?? 0}|${l.last_error ?? ""}` +
+    `|${l.backfill ? `${l.backfill.status}:${l.backfill.fetched}:${l.backfill.capped ? 1 : 0}` : ""}`,
 );
 
 const channelsSig = makeCollectionSig<ChatChannelRow>(
@@ -220,6 +222,18 @@ export function useChatChannelsSync(): { error?: Error } {
     // chat has no scope at all, so there is nothing to subscribe to.
     // Follower windows receive the channel rail over replication instead.
     chatOn && isSyncHost && teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
+  );
+
+  // The workspace's people, on the same gate. Its own subscription because a
+  // profile refresh (users.info, on a TTL) must not re-push the channel rail.
+  const feedPeople = !!(chatOn && isSyncHost && teamId && isConvexId(teamId));
+  useSyncCollection(
+    "chatSlackPeople",
+    api.slackSync.listSlackPeople,
+    feedPeople ? { team_id: teamId } : "skip",
+    useMemo(() => ({
+      select: (d: any) => d === null ? [] : d?.people?.map((p: any) => ({ ...p, _id: p.slack_user_id, team_id: teamId })),
+    }), [teamId]),
   );
 
   useConvexSync(
@@ -305,6 +319,10 @@ export type ChannelFeed = {
   hasMoreAbove: boolean;
   isLoadingOlder: boolean;
   loadOlder: () => void;
+  /** The oldest created_at the feed has paged to without a gap: the view
+   *  shows rows at or above it. 0 once history is exhausted; null before the
+   *  first page lands (the reader then shows only the newest cached page). */
+  floor: number | null;
   /** One-shot refetch of the newest page, for the error state's retry. The live
    *  subscription cannot be re-armed (its args have not changed), but the store
    *  is what the surface renders, so filling it is a real recovery. */
@@ -317,6 +335,14 @@ export type ChannelFeed = {
  * Older pages are fetched once and overlaid as deltas — a channel's collection
  * only ever grows here, which is what lets the store hold three open channels at
  * once without any of them pruning the others.
+ *
+ * Growing without pruning has one cost: the collection can hold rows the
+ * current pages do not reach (a page from an earlier visit, a line delivered
+ * live, history imported behind the pages). Rendered as one list they read as
+ * a room with holes: last June beside today, nothing between. So the feed
+ * also reports the FLOOR it has paged to contiguously, and the reader shows
+ * only rows at or above it. Every page lowers the floor; exhausting history
+ * drops it to zero.
  */
 export function useChannelMessagesSync(channelId: string | undefined): ChannelFeed {
   const syncTable = useInboxStore((s) => s.syncTable);
@@ -333,6 +359,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
   const [olderExhausted, setOlderExhausted] = useState(false);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [floor, setFloor] = useState<number | null>(null);
   const channelRef = useRef(channelId);
   if (channelRef.current !== channelId) {
     channelRef.current = channelId;
@@ -342,7 +369,16 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
     if (olderExhausted) setOlderExhausted(false);
     if (isLoadingOlder) setIsLoadingOlder(false);
     if (recovered) setRecovered(false);
+    if (floor !== null) setFloor(null);
   }
+  // A page lowers the floor to its oldest row; the last page drops it to 0.
+  const lowerFloor = (messages: ChatMessageRow[], hasMore: boolean) =>
+    setFloor((prev) => {
+      if (!hasMore) return 0;
+      if (messages.length === 0) return prev;
+      const oldest = Math.min(...messages.map((m) => m.created_at));
+      return prev === null ? oldest : Math.min(prev, oldest);
+    });
 
   useConvexSync(
     result,
@@ -368,6 +404,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         // Only seed the history cursor; never let a live re-push rewind a
         // cursor the reader has already paged past.
         setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
+        lowerFloor(messages, !!data.has_more);
       },
       [syncTable, convex],
     ),
@@ -394,6 +431,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         prefetchAttachmentImages(convex, messages);
         setOlderCursor(page?.next_cursor ?? null);
         if (!page?.has_more) setOlderExhausted(true);
+        lowerFloor(messages, !!page?.has_more);
       })
       .catch(() => {
         // Leave the cursor where it was: the affordance stays, and the next
@@ -418,6 +456,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
           .syncTable("chatReactions", page?.reactions ?? [], chatReactionSyncOpts(messages.map((m) => m._id)));
         prefetchAttachmentImages(convex, messages);
         setOlderCursor((prev) => (prev === null ? (page?.next_cursor ?? null) : prev));
+        lowerFloor(messages, !!page?.has_more);
         setRecovered(true);
       })
       .catch(() => {
@@ -429,6 +468,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
   return {
     loading: !!live && result === undefined && !error,
     error,
+    floor,
     hasMoreAbove: !!olderCursor && !olderExhausted,
     isLoadingOlder,
     loadOlder,
@@ -632,7 +672,22 @@ export function useMessageViews(
 
 /** One channel's timeline, ready to render. Roots only — replies live in the
  *  thread panel. */
-export function useChannelMessages(channelId: string | undefined): ChatMessageView[] {
+/** The rows the view may show: those the feed has paged to without a gap.
+ *  Before the first page lands (`floor` null) the newest cached page stands
+ *  in, so a warm cache still paints instantly and never shows a hole. */
+export function windowRows<T extends { created_at: number; pending?: unknown }>(
+  rows: T[],
+  floor: number | null | undefined,
+  pageSize = PAGE_SIZE,
+): T[] {
+  if (floor === undefined) return rows;
+  if (floor === null) return rows.length > pageSize ? rows.slice(rows.length - pageSize) : rows;
+  // A line typed here and not yet acknowledged has a created_at of now; it is
+  // never below the floor, so pending rows always show.
+  return rows.filter((r) => r.created_at >= floor);
+}
+
+export function useChannelMessages(channelId: string | undefined, floor?: number | null): ChatMessageView[] {
   const { byId, viewerId } = useChatMembers();
   const s = useTrackedStore([
     (s: any) => messagesSig(s.chatMessages),
@@ -642,10 +697,10 @@ export function useChannelMessages(channelId: string | undefined): ChatMessageVi
     (s: any) => s.chatThreadSummaries,
   ]);
   const rows = useMemo(
-    () => (channelId ? selectChannelMessages(s as any, channelId) : []),
+    () => (channelId ? windowRows(selectChannelMessages(s as any, channelId), floor) : []),
     // The signature is the real dep: the raw map ref flips on every push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [channelId, messagesSig(s.chatMessages)],
+    [channelId, floor, messagesSig(s.chatMessages)],
   );
   return useMessageViews(rows, s.chatReactions, byId, viewerId, s.chatMessages, s.chatThreadSummaries);
 }

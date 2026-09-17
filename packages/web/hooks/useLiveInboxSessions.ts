@@ -1,9 +1,10 @@
 import { useCallback, useRef } from "react";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useIsSyncHost } from "./useSyncRole";
+import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useFeederError } from "./useSyncCollection";
 
 // Record the live (recent) id set, change-guarded so an identical payload doesn't
 // re-render every subscriber (or touch IDB). "Old" = cached top-level sessions
@@ -39,7 +40,15 @@ export function applyLiveInboxIds(sessions: any[]) {
  * the two callers share Convex's query cache instead of forking a second token.
  *
  * Returns the raw subscription result (undefined until the first server response)
- * for callers that need the live payload itself.
+ * for callers that need the live payload itself, and the subscription's terminal
+ * error, if any.
+ *
+ * useQueryNoThrow, never useQuery: this is THE feeder for the sessions cache,
+ * mounted with every other global feeder under one ErrorBoundary. A terminal
+ * server error (the backend's 1s user-code cap once the host saturates, 2026-09-16)
+ * thrown from render unmounted every feeder in the app until a reload; here it
+ * degrades to the cached rows, the subscription re-runs on the next data change,
+ * and the 15s recovery probe re-feeds the store meanwhile.
  */
 // The ONE argument shape for the live inbox window. The 15s recovery probe in
 // useSyncInboxSessions spreads THIS constant (plus its cache-busting _probe),
@@ -50,7 +59,8 @@ export const LIST_INBOX_SESSIONS_ARGS = { show_all: false, include_liveness: fal
 export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void }) {
   // Follower windows receive `sessions` over replication; only a host feeds it.
   const isSyncHost = useIsSyncHost();
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip");
+  const { data: inboxSessions, error } = useQueryNoThrow(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip");
+  useFeederError("conversations.listInboxSessions", error);
   const syncTable = useInboxStore((s) => s.syncTable);
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;
@@ -62,5 +72,5 @@ export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void
     onSyncRef.current?.(sessions);
   }, [syncTable]), { coalesceMs: 300 });
 
-  return inboxSessions;
+  return { data: inboxSessions, error };
 }

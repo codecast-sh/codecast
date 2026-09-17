@@ -169,6 +169,17 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
         handle, isBot: !!m.is_bot,
       };
     }),
+    // People in the team's Slack workspace with no codecast account. One
+    // already matched to a teammate is that teammate's own entry above.
+    ...(scope.kind === "team"
+      ? Object.values(s.chatSlackPeople || {})
+        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle)
+        .map((p) => ({
+          id: `slack:${p.slack_user_id}`, type: "person", label: p.name,
+          sublabel: `@${p.handle}`, image: p.avatar_url ?? undefined,
+          handle: p.handle!, slack: true,
+        }))
+      : []),
     ...labelMentionItems(s),
     ...merged(idx.tasks, s.tasks).map((t) => ({
       id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id,

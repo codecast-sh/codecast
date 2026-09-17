@@ -8,10 +8,14 @@
 // you shape it.
 
 import { useAction, useMutation } from "convex/react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
+import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
 import { deriveAnchorStatus, useAnchors } from "../../hooks/useSyncAnchors";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Repeat, Settings2 } from "lucide-react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -29,6 +33,7 @@ import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+const ANCHOR_MOVED_SEEN_KEY = "codecast.anchorMovedSeen";
 type ScopeType = "user" | "team";
 type Scope = { type: ScopeType; teamId: string | null };
 
@@ -43,6 +48,20 @@ export default function AnchorPage() {
 }
 
 function AnchorSpace() {
+  // The chief of staff is the workspace's standing agent (org-staffing.md
+  // S12): once one stands, this page is its scope page.
+  const router = useRouter();
+  useSyncOrgTreeFeeder();
+  const chief = useOrgRoles().roles.find((r) => r.handle === "chief-of-staff" && r.status !== "retired");
+  useEffect(() => {
+    if (!chief) return;
+    // Said once (S16): the person typed /anchor and landed somewhere else.
+    if (!window.localStorage.getItem(ANCHOR_MOVED_SEEN_KEY)) {
+      window.localStorage.setItem(ANCHOR_MOVED_SEEN_KEY, "1");
+      toast("The anchor is now the Chief of Staff", { description: `Same agent, same thread. Its page is ${chief.short_id}, and /anchor opens here from now on.`, duration: 9000 });
+    }
+    router.replace(`/org/${chief.short_id}`);
+  }, [chief?.short_id]); // eslint-disable-line react-hooks/exhaustive-deps
   const teams: any[] = useInboxStore((s) => s.teams) ?? [];
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id as string | undefined) ?? null;
   const [scope, setScope] = useState<Scope>({ type: "user", teamId: null });

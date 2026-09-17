@@ -37,3 +37,15 @@ describe("a session mention stays inline", () => {
     expect(link.data.hProperties["data-mention"]).toBe("jx7c6zk");
   });
 });
+
+describe("a Slack-only person", () => {
+  const slack = new Map([["erin", { kind: "slack" as const, user: "UERIN", handle: "erin", name: "Erin" }]]);
+  it("renders as a person chip wearing the Slack mark, named from the snapshot", () => {
+    const tree: any = { type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: "cc @erin" }] }] };
+    remarkChatMentions({ known: new Set(), slack })(tree);
+    const chip = tree.children[0].children.find((c: any) => c.type === "emphasis");
+    expect(chip.data.hProperties.className).toContain("ch-mention-slack");
+    expect(chip.data.hChildren[0].tagName).toBe("svg");
+    expect(chip.data.hChildren[1]).toEqual({ type: "text", value: "@Erin" });
+  });
+});

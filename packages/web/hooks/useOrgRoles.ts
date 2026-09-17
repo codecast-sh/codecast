@@ -21,7 +21,10 @@ const NO_ROLES: OrgRole[] = [];
 export function orgRolesSig(tree: OrgTree | null | undefined): string {
   if (!tree) return "";
   let sig = `${tree.workspace.kind}:${tree.workspace.id}:${tree.workspace.name}`;
-  for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}`;
+  // `avatar` is in the signature because these surfaces DRAW the face (the
+  // ownership menu's role list, the role pill): without it a face change lands
+  // in the tree and nothing repaints.
+  for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}|${r.avatar ?? ""}`;
   return sig;
 }
 

@@ -12,13 +12,15 @@ import { entityRemarkPlugins } from "./remarkEntityIds";
 // further: they reorder the *visual* run so reviewed text reads differently
 // than the underlying bytes (the "trojan source" trick).
 //
-// Zero-width joiners/spaces (U+200B-U+200D), the BOM (U+FEFF), and every
+// Zero-width spaces (U+200B, U+200C), the BOM (U+FEFF), and every
 // Private Use Area codepoint get stripped outright — they have no legitimate
-// role in prose. Bidi controls (U+202A-U+202E, U+2066-U+2069) are NOT dropped
-// (that would silently hide the tampering); each is surfaced as its visible
-// codepoint so a reviewer sees that reordering was attempted.
+// role in prose. The zero-width joiner (U+200D) stays: it is how compound
+// emoji join (flags, families), and stripping it turns a Slack-mirrored
+// glyph into leftover parts. Bidi controls (U+202A-U+202E, U+2066-U+2069)
+// are NOT dropped (that would silently hide the tampering); each is surfaced
+// as its visible codepoint so a reviewer sees that reordering was attempted.
 const INVISIBLE_STRIP_RE =
-  /[\u200B-\u200D\uFEFF\uE000-\uF8FF]|[\u{F0000}-\u{FFFFD}]|[\u{100000}-\u{10FFFD}]/gu;
+  /[\u200B\u200C\uFEFF\uE000-\uF8FF]|[\u{F0000}-\u{FFFFD}]|[\u{100000}-\u{10FFFD}]/gu;
 const BIDI_CONTROL_RE = /[\u202A-\u202E\u2066-\u2069]/g;
 
 function sanitizeInvisibleUnicode(value: string): string {

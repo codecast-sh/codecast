@@ -49,6 +49,7 @@ import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { clipFade } from "./CollapsibleBody";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
+import { LivePulseDot } from "./SessionActivityLine";
 
 const api = _api as any;
 
@@ -267,7 +268,7 @@ function PlanSessionCard({ session: s }: { session: any }) {
         </span>
         {isActive && (
           <span className="flex items-center gap-0.5 shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+            <LivePulseDot className="w-1.5 h-1.5" />
             <span className="text-[8px] text-sol-green/60 font-medium uppercase tracking-wider">live</span>
           </span>
         )}
@@ -379,7 +380,7 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
           </span>
           {s.is_active && (
             <span className="flex items-center gap-0.5 flex-shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+              <LivePulseDot className="w-1.5 h-1.5" />
               <span className="text-[8px] text-sol-green/60 font-medium uppercase">live</span>
             </span>
           )}

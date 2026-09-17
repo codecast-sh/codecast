@@ -23,6 +23,33 @@ export type { CcUsage };
 // able to tell a live meter from a memory.
 const STALE_AFTER_MS = 20 * 60 * 1000;
 
+type ExtraSpend = NonNullable<CcUsage["extra"]>;
+
+function money(n: number): string {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+function showExtraSpend(extra: ExtraSpend): boolean {
+  if (extra.enabled) return true;
+  return (extra.limit ?? 0) > 0 || (extra.used ?? 0) > 0;
+}
+
+function extraSpendDollars(extra: ExtraSpend): string | null {
+  if (extra.limit == null && extra.used == null) return null;
+  if ((extra.limit ?? 0) === 0 && (extra.used ?? 0) === 0) return null;
+  if (extra.limit != null && extra.used != null) return `${money(extra.used)} / ${money(extra.limit)} extra`;
+  if (extra.limit != null) return `limit ${money(extra.limit)} extra`;
+  return `${money(extra.used!)} extra used`;
+}
+
+function extraSpendTitle(extra: ExtraSpend): string {
+  const dollars = extraSpendDollars(extra);
+  const pct = `${Math.round(extra.percent)}% of extra spend used`;
+  if (extra.spend_limit_reached) return dollars ? `${dollars}: extra spend cap reached` : "Extra spend cap reached";
+  if (!extra.enabled) return dollars ? `${dollars}: extra spend is off` : "Extra spend is off";
+  return dollars ? `${dollars} (${pct})` : `Extra usage credits: ${pct}`;
+}
+
 export function UsageMeterRow({
   label,
   percent,
@@ -109,13 +136,19 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
       {usage.scoped?.map((s) => (
         <UsageMeterRow key={s.label} label={s.label} percent={s.percent} resetsAt={s.resets_at} now={now} />
       ))}
-      {usage.extra?.enabled && (
+      {usage.extra && showExtraSpend(usage.extra) && (
         <UsageMeterRow
           label="Extra"
           percent={usage.extra.percent}
           now={now}
-          title={`Extra usage credits: ${Math.round(usage.extra.percent)}% of the monthly budget spent`}
+          title={extraSpendTitle(usage.extra)}
         />
+      )}
+      {usage.extra && extraSpendDollars(usage.extra) && (
+        <div className={`pt-0.5 text-[10px] ${usage.extra.spend_limit_reached ? "text-sol-red" : "text-sol-text-dim"}`}>
+          {extraSpendDollars(usage.extra)}
+          {usage.extra.spend_limit_reached ? " · extra spend cap reached" : !usage.extra.enabled ? " · extra spend off" : null}
+        </div>
       )}
       {usage.credits && (usage.credits.has_credits || usage.credits.unlimited) && (
         <div className="pt-0.5 text-[10px] text-sol-text-dim">

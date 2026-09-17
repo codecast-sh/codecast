@@ -26,7 +26,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { startScribe, stopScribe } from "./transcription";
-import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
@@ -38,6 +39,7 @@ import {
   voiceHostElsewhere,
 } from "../desktop";
 import { shouldYieldCallOnDisconnect } from "./callHandoff";
+import { bindCallCursors } from "./callCursors";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { readMeterLevel } from "./walkieMeter";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
@@ -84,6 +86,28 @@ export function bindConvex(client: ConvexHandle) {
   // one map, one host, one idempotent attach — so a room adopted mid-voice
   // does not end up with two elements for one person.
   bindPrewarmAudio({ attach: attachAudio, detach: detachAudio });
+}
+
+// THE WALKIE'S SIDE OF A DELIBERATE JOIN.
+//
+// A burst and a call are the same room; what separates them is whether a
+// person decided to be in it. The walkie engine holds that decision (its live
+// room's mode) and a clock that hands a burst's seat back when nothing is
+// happening in it — and that clock will hang up a huddle if the join that
+// made the room a huddle never reached the engine. It did not reach it from
+// an answered ring, or from the caller's own "ring them" off the walkie key:
+// only the strip's Join live told the walkie, so a ring answered into a room
+// somebody was auto-listening in was hung up by the listener's own seat clock
+// seconds later, and the far side followed when the room emptied.
+//
+// So every deliberate join passes through this seam. The engine answers
+// whether it holds the room — and if it does, the room is a call from this
+// instant (the clock stops) and the seat is stamped for the far side. The
+// engine imports this module, so it binds itself here rather than being
+// imported.
+let walkieUpgrade: ((roomKey: string) => boolean) | null = null;
+export function bindWalkieUpgrade(fn: (roomKey: string) => boolean): void {
+  walkieUpgrade = fn;
 }
 
 function setCall(patch: Parameters<ReturnType<typeof useInboxStore.getState>["setCallState"]>[0]) {
@@ -444,6 +468,12 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
 async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
   if (opts?.intent === "deliberate" && huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
+  // A person stepping into a room the walkie holds IS the upgrade, whichever
+  // button they pressed to do it (bindWalkieUpgrade). Decided before either
+  // path below, so the engine's clock is stopped before any await.
+  if (opts?.intent === "deliberate" && !opts.walkieJoin && walkieUpgrade?.(roomKey)) {
+    opts = { ...opts, walkieJoin: true };
+  }
   const prior = useInboxStore.getState().call;
   // Already in (or genuinely joining) this room: idempotent. "connecting" only
   // counts when a Room object exists AND belongs to this key — accepting a
@@ -532,14 +562,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // refuses to hand one over whose microphone the person has changed since,
     // so the rule holds across the seam rather than being skipped at it.
     const prefs = readJoinPrefs();
-    r = warm ?? new Room({
-      adaptiveStream: true,
-      dynacast: true,
-      audioCaptureDefaults: micConstraints(prefs.micDeviceId),
-      videoCaptureDefaults: prefs.cameraDeviceId
-        ? { deviceId: { ideal: prefs.cameraDeviceId } }
-        : {},
-    });
+    r = warm ?? new Room(huddleRoomOptions(prefs));
     room = r;
     currentRoomKey = roomKey;
 
@@ -566,6 +589,8 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // different event from unsubscribe and must also clear the tile — without
     // this a stopped share leaves a dead hero on the stage.
     r.on(RoomEvent.TrackUnpublished, () => rebuildTiles());
+    // Teammates' pointers over a screen share, on the data channel.
+    bindCallCursors(r);
     r.on(RoomEvent.TrackMuted, rebuildTiles);
     r.on(RoomEvent.TrackUnmuted, rebuildTiles);
     r.on(RoomEvent.LocalTrackPublished, (pub) => {
@@ -944,7 +969,16 @@ export async function setScreenShare(on: boolean, sourceId?: string): Promise<vo
       }
       // audio:false — a huddle shares the screen, not system audio (which
       // Chrome only offers for tabs anyway and doubles the mic path).
-      const pub = await room.localParticipant.setScreenShareEnabled(on, { audio: false });
+      // Capture/encoding for a share of UI: see livekitMedia.ts. Encoding is
+      // passed here as well as on the Room so a huddle that joined before
+      // those defaults existed still publishes a sharp share.
+      const pub = await room.localParticipant.setScreenShareEnabled(
+        on,
+        on ? SCREEN_SHARE_CAPTURE : { audio: false },
+        on
+          ? { screenShareEncoding: SCREEN_SHARE_ENCODING, degradationPreference: "maintain-resolution" }
+          : undefined,
+      );
       const live = on ? !!pub?.track : false;
       setCall({ sharing: live });
     } catch (err: any) {
@@ -1163,7 +1197,11 @@ async function acceptInviteHere(inviteId: string, roomKey: string): Promise<void
   const switching =
     prior.roomKey !== roomKey &&
     (prior.phase === "connected" || prior.phase === "connecting");
-  setCall({ phase: "connecting", roomKey, error: null, errorFix: null, speaking: [] });
+  // Not over a seat already taken in this very room: a ring answered while
+  // auto-listening to the caller's burst joins nothing (joinCall treats it as
+  // an intent), so a "connecting" painted here would never be painted over.
+  const seated = prior.roomKey === roomKey && prior.phase === "connected";
+  if (!seated) setCall({ phase: "connecting", roomKey, error: null, errorFix: null, speaking: [] });
   try {
     const res = await convex.mutation(api.calls.respondInvite, {
       invite_id: inviteId,

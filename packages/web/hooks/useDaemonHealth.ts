@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { PRESENCE_BUCKET_MS } from "@codecast/convex/convex/presenceState";
+import { isRemoteHost } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 
 const ONE_MIN_MS = 60 * 1000;
@@ -250,9 +251,12 @@ export const ROSTER_CONSIDER_MS = ONE_DAY_MS;
 // Remote hosts stay out of the verdict. A cloud box sleeps when idle and wakes
 // on demand, so its daemon going silent for hours is its parked state, not an
 // outage — and the user is never sitting at it, so "restart with cast restart"
-// is advice they cannot act on from where they are. A session that lives on a
-// remote host still reports that host's health through useDaemonHealth(owner
-// device id) on its own pending messages, which is where it matters.
+// is advice they cannot act on from where they are. `isRemoteHost` also catches
+// a Linux VM that heartbeats without CODECAST_REMOTE_DEVICE=1 (grok-bot-vm,
+// AWS ip-*): those used to win the global chip because is_remote was false.
+// A session that lives on a remote host still reports that host's health
+// through useDaemonHealth(owner device id) on its own pending messages, and
+// SessionDaemonChip on the session header.
 export type FleetDaemonHealth = DaemonHealth & { device?: string };
 
 export function worstDaemonHealth(
@@ -260,7 +264,7 @@ export function worstDaemonHealth(
   now: number,
   opts?: { recentlyWoke?: boolean },
 ): FleetDaemonHealth | null {
-  const recent = rows.filter((d) => !d.is_remote && (d.last_seen ?? 0) > now - ROSTER_CONSIDER_MS);
+  const recent = rows.filter((d) => !isRemoteHost(d) && (d.last_seen ?? 0) > now - ROSTER_CONSIDER_MS);
   if (recent.length === 0) return null;
   let worst: FleetDaemonHealth | null = null;
   for (const d of recent) {
@@ -270,6 +274,24 @@ export function worstDaemonHealth(
     }
   }
   return worst;
+}
+
+// Fleet chip input: the worst local machine, or ok once the roster is known
+// and none of those machines are in trouble. The user-doc fields are last-writer
+// across every daemon, including remotes, so they must not fill in when the
+// roster is only cloud boxes (that was "daemon stale" in the global header
+// for a grok-bot-vm that never set is_remote). Empty roster still falls back
+// for daemons that predate device rows.
+export function fleetDaemonHealth(
+  rows: DaemonDeviceRow[],
+  user: DaemonHealthInput | null | undefined,
+  now: number,
+  opts?: { recentlyWoke?: boolean },
+): FleetDaemonHealth {
+  const fleet = worstDaemonHealth(rows, now, opts);
+  if (fleet) return fleet;
+  if (rows.length > 0) return { kind: "ok" };
+  return computeDaemonHealth(user, now, opts);
 }
 
 export function computeDaemonHealth(
@@ -505,6 +527,6 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
       const row = roster.find((d) => d.device_id === deviceId);
       if (row) return computeDaemonHealth(deviceHealthInput(row), now, opts);
     }
-    return worstDaemonHealth(roster, now, opts) ?? computeDaemonHealth(user, now, opts);
+    return fleetDaemonHealth(roster, user, now, opts);
   }, [deviceId, roster, user, now, recentlyWoke]);
 }

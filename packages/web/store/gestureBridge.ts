@@ -55,6 +55,10 @@ export type GestureMessage =
   // a trigger wake brings the row back.
   | { kind: "hide"; mode: "kill" | "stash"; hidden?: boolean; ids: string[]; forget?: string[]; ts: number }
   | { kind: "restore"; ids: string[]; ts: number }
+  /** Follow mode changed in one window (started, or stopped with null): the
+   *  siblings mirror the state so a face in the huddle window and the pill in
+   *  the main window agree; only the main window runs the lease and the mirror. */
+  | { kind: "follow"; leaderId: string | null; ts: number }
   // `pinnedAt` is the EXACT value the sender wrote, carried separately from
   // `ts` (the ordering stamp) because undo restores the ORIGINAL pin time, not
   // the time of the undo. The receiver plants a pending field lock holding this
@@ -187,6 +191,7 @@ function isGestureMessage(data: unknown): data is Envelope {
     return Array.isArray(e.ids);
   }
   if (e.kind === "restore") return Array.isArray(e.ids);
+  if (e.kind === "follow") return e.leaderId === null || typeof e.leaderId === "string";
   if (e.kind === "ack") {
     return !!e.patches && typeof e.patches === "object" && typeof e.sentAt === "number" &&
       Array.isArray(e.ack) && e.ack.every((a) => a && typeof a.scope_key === "string" && typeof a.position === "number");

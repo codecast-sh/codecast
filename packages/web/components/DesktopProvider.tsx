@@ -30,6 +30,7 @@ import {
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
+import { isChatContextOnScreen } from "../lib/chatFocus";
 import { useOsPermission } from "../hooks/useOsPermissions";
 import { soundChatMessage } from "../lib/sounds";
 import { useInboxStore } from "../store/inboxStore";
@@ -150,6 +151,25 @@ export function DesktopProvider() {
         // The same click target the bell computes: a chat banner lands on the
         // message, a task banner on the task — not just "the app, focused".
         const route = notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
+        // Chat's "already on screen" rule is channel + thread, not path. The
+        // shell only sees `/chat/<id>`, so a thread reply while you sit on the
+        // channel floor used to look like you were already reading it and the
+        // OS banner never went up — and the toast often stayed silent too
+        // (notify_level mentions, thread not loaded). Force the banner unless
+        // this exact context is open; skip it when it is and the window is
+        // focused (the toast owns that case).
+        let force: boolean | undefined;
+        if (n.entity_type === "chat_channel" && n.entity_id) {
+          const msgId = n.chat_message_id ? String(n.chat_message_id) : "";
+          const st = useInboxStore.getState() as any;
+          const msg = msgId ? st.chatMessages?.[msgId] : undefined;
+          const rail = (st.chatRail ?? []).find((r: any) => String(r.channel_id) === String(n.entity_id));
+          const threadRootId = msg?.thread_root_id
+            ?? (rail?.last_message?._id === msgId ? rail.last_message.thread_root_id : undefined);
+          const onScreen = isChatContextOnScreen(String(n.entity_id), threadRootId ? String(threadRootId) : undefined);
+          if (typeof document !== "undefined" && document.hasFocus() && onScreen) continue;
+          force = !onScreen;
+        }
         // `key` lets the desktop shell collapse the same row reported by every
         // open window into one banner; `kind` is the row's type, which decides
         // which of two banners for one conversation wins a same-moment race
@@ -159,6 +179,7 @@ export function DesktopProvider() {
           route,
           key: String(n._id),
           kind: typeof n.type === "string" ? n.type : undefined,
+          force,
         });
         // A banner this row deserved could not be shown: the app is unfocused
         // (a focused app is announced by the toast/bell — nothing missed) and

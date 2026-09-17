@@ -17,7 +17,7 @@
 // at should not keep Chrome encoding JPEGs.
 
 import { useCallback, useState, useSyncExternalStore } from "react";
-import { X, RotateCw, MousePointerClick } from "lucide-react";
+import { X, RotateCw } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useTabActive } from "../../hooks/usePagePresence";
@@ -28,6 +28,7 @@ import type { BrowserStreamReport } from "../../lib/browserWatch";
 import type { BrowserRowState } from "../castCommand";
 import { BrowserStream } from "./BrowserStream";
 import { BrowserTabActionLabel } from "./BrowserTabPill";
+import { WatchAddress, WheelButton } from "./watchControls";
 import { BROWSER_ROW_PILL, useBrowserTabActions } from "../../hooks/useBrowserTabActions";
 
 const DEFAULT_HEIGHT = 320;
@@ -202,17 +203,7 @@ function SplitBody({
         {tab && (
           <>
             <span className="text-[10px] font-mono text-sol-text-muted truncate">{tab.title || "untitled"}</span>
-            {tab.url && (
-              // Keyed on the navigation time so the flash restarts per
-              // navigation and never on an unrelated re-render.
-              <span
-                key={report.nav?.at ?? 0}
-                className={`text-[10px] font-mono text-sol-text-dim/70 truncate rounded px-0.5 -mx-0.5 ${report.nav ? "cc-nav-flash" : ""}`}
-                title={tab.url}
-              >
-                {tab.url}
-              </span>
-            )}
+            {tab.url && <WatchAddress url={tab.url} nav={report.nav} />}
           </>
         )}
         {tabActions.tabId && (
@@ -229,26 +220,7 @@ function SplitBody({
           </button>
         )}
         <span className="flex-1" />
-        {live && report.controlAvailable && (
-          <button
-            data-sv-wheel
-            aria-pressed={controlOn}
-            onClick={() => setControlOn((v) => !v)}
-            title={
-              controlOn
-                ? "Hand the page back to the agent (Esc)"
-                : "Take the wheel: your clicks and typing go to this page, for a sign-in the agent cannot do"
-            }
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono tracking-wider transition-colors ${
-              controlOn
-                ? "bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/40"
-                : "text-sol-text-dim/60 hover:text-sol-cyan border border-transparent"
-            }`}
-          >
-            <MousePointerClick className="w-3 h-3" />
-            {controlOn ? "HAND BACK" : "TAKE THE WHEEL"}
-          </button>
-        )}
+        {live && report.controlAvailable && <WheelButton on={controlOn} onToggle={() => setControlOn((v) => !v)} />}
         {failed?.canRetry && (
           <button
             onClick={reconnect}

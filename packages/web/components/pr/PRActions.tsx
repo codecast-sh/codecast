@@ -104,7 +104,9 @@ export function ReviewMenu({
     try {
       if (kind === "submit") {
         const result = await submit({ pull_request_id: pr._id, event: verdict, body: body.trim() || undefined });
-        if (report(result, count ? `Review sent with ${count} ${count === 1 ? "note" : "notes"}` : "Review sent")) {
+        const withNotes = count ? ` with ${count} ${count === 1 ? "note" : "notes"}` : "";
+        const toSession = result?.delivered_to?.short_id ? `, delivered to session ${result.delivered_to.short_id}` : "";
+        if (report(result, `Review sent${withNotes}${toSession}`)) {
           setBody("");
           setOpen(false);
         }
@@ -140,7 +142,7 @@ export function ReviewMenu({
           {count === 0 ? (
             <div className="mt-1 space-y-1.5">
               <p className="text-[12px] text-sol-text-muted leading-relaxed">
-                No notes yet. Open Files, choose a line, and write with <em>Add to review</em> on. Or leave a verdict alone.
+                No notes yet. In Files, hover a line and press <span className="font-mono text-sol-blue">+</span> to write one with <em>Add to review</em> on. Or leave a verdict alone.
               </p>
               {!!openThreads && onWalk && (
                 <button
@@ -211,10 +213,14 @@ export function ReviewMenu({
               disabled={!openPr || busy !== null}
               onClick={() => run("submit")}
               className="pr-verb inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium"
-              title={openPr ? "One GitHub review, under your account" : "Only an open pull request takes a review"}
+              title={
+                !openPr ? "Only an open pull request takes a review"
+                : shepherd ? "One GitHub review under your account; the owning session hears it as a message"
+                : "One GitHub review, under your account"
+              }
             >
               <Send className="w-3.5 h-3.5" />
-              {busy === "submit" ? "Sending" : "Submit to GitHub"}
+              {busy === "submit" ? "Sending" : "Submit review"}
             </button>
             {count > 0 && (shepherd || sessionChoices.length > 0) && (
               <button

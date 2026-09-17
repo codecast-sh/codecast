@@ -18,6 +18,7 @@ import { cn } from "../../lib/utils";
 import { GhostChips, StateBar, StateTally, StandingLine } from "./OrgNodeCards";
 import { ORG_STATE_META, parentName } from "./orgMeta";
 import { OrgButton } from "./OrgButton";
+import { RetireRoleConfirm, type UnseatChoice } from "./RetireRoleConfirm";
 import type { OrgGhostChip, OrgLayoutNode } from "./orgLayout";
 import { ghostChipOf, parentNodeId, refMatches } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
@@ -50,7 +51,7 @@ export type OrgScopePanelProps = {
   onOpenSession: (conversationId: string) => void;
   onMove: (subject: { kind: "session" | "role"; id: string; title: string }) => void;
   onUpdateRole: (roleId: string, fields: OrgUpdateRoleInput) => void;
-  onRetireRole: (roleId: string) => void;
+  onRetireRole: (roleId: string, standingSession?: UnseatChoice) => void;
   onSelectNode: (id: string) => void;
   mode: OrgPanelMode;
   onMode: (mode: OrgPanelMode) => void;
@@ -325,7 +326,7 @@ export function InlineEdit({ value, onSave, className, style, placeholder, multi
 
 function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpdateRole, onRetireRole, onSelectNode, now, changes, focusChangeId, onSelectChange }: {
   tree: OrgTree; role: OrgRole; sessions: OrgSessionsSource; canEdit: boolean; now: number;
-  onOpenSession: (id: string) => void; onMove: OrgScopePanelProps["onMove"]; onUpdateRole: OrgScopePanelProps["onUpdateRole"]; onRetireRole: (id: string) => void; onSelectNode: (id: string) => void;
+  onOpenSession: (id: string) => void; onMove: OrgScopePanelProps["onMove"]; onUpdateRole: OrgScopePanelProps["onUpdateRole"]; onRetireRole: OrgScopePanelProps["onRetireRole"]; onSelectNode: (id: string) => void;
   changes?: OrgProposalChange[]; focusChangeId?: string | null; onSelectChange?: (changeId: string) => void;
 }) {
   const parentId = parentNodeId({ kind: "role", role_id: role._id });
@@ -397,11 +398,13 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
             </div>
           ) : (
             <div className="rounded-lg p-3 border" style={{ borderColor: "color-mix(in srgb, var(--sol-red) 40%, transparent)", background: "color-mix(in srgb, var(--sol-red) 6%, transparent)" }}>
-              <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>Retire <b>{role.name}</b>? Its {role.total} session{role.total === 1 ? "" : "s"} go back to their owners. Roles under it report to {parentName(tree, reportsTo)}.</p>
-              <div className="mt-2 flex items-center gap-2">
-                <button type="button" onClick={() => onRetireRole(role._id)} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-red)", color: "var(--sol-bg)" }}>Retire</button>
-                <button type="button" onClick={() => setConfirmRetire(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-              </div>
+              {/* The one retire confirm (S16): the chief of staff's asks keep or retire. */}
+              <RetireRoleConfirm
+                role={role}
+                lead={<>Retire <b>{role.name}</b>? Its {role.total} session{role.total === 1 ? "" : "s"} go back to their owners. Roles under it report to {parentName(tree, reportsTo)}.</>}
+                onRetire={(choice) => onRetireRole(role._id, choice)}
+                onCancel={() => setConfirmRetire(false)}
+              />
             </div>
           )}
         </div>

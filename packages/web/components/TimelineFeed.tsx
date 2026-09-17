@@ -9,6 +9,7 @@ import { ClaudeIcon } from "./BrandIcons";
 import { EmptyState } from "./EmptyState";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
+import { LivePulseDot } from "./SessionActivityLine";
 
 type TimelineItem =
   | {
@@ -130,7 +131,7 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
               {!item.is_own && <span className="font-medium">{item.author_name}</span>}
               {item.is_active && !item.is_own && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+                  <LivePulseDot className="w-1.5 h-1.5" />
                   <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
                 </span>
               )}

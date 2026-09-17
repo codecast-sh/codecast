@@ -61,6 +61,8 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const memberFilter = searchParams.get("member");
+  // The teammate this window follows wears the selected ring too.
+  const followLeaderId = useInboxStore((s) => s.followLeaderId);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   // Only the viewer's id is rendered (the "self" ring) — never the whole user
   // doc, whose identity churns on daemon heartbeats.
@@ -156,7 +158,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           member={member}
           viewerId={viewerId}
           callsEnabled={callsEnabled}
-          selected={memberFilter === member._id}
+          selected={memberFilter === member._id || followLeaderId === String(member._id)}
           faces={faces}
           onHoverEnter={() => hoverEnter(String(member._id))}
           onHoverLeave={hoverLeave}
@@ -336,6 +338,7 @@ export function MemberHoverCard({
   const whereInStore = useInboxStore((s) => !!(where && s.sessions[where]));
   const fetchedWhere = useMissingSessionRow(where && !whereInStore ? where : null);
   const whereTitle = storedWhereTitle ?? fetchedWhere?.title;
+  const followingThem = useInboxStore((s) => s.followLeaderId === memberId);
 
   // Local-first: the store action flips the roster row in the same tick (the
   // pill must not wait on a server round-trip) and dispatches the
@@ -404,18 +407,33 @@ export function MemberHoverCard({
           <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center text-sol-text-dim transition-all group-hover:translate-x-0.5 group-hover:text-sol-cyan" />
         </button>
 
-        {where && (
+        {/* Follow them: this window mirrors theirs (route, session, place in
+            the transcript) until you move on your own or stop. The session
+            they have open, if any, opens at once so the follow starts where
+            they are instead of a beat later. */}
+        {!isSelf && (where || followingThem) && (
           <button
             type="button"
-            onClick={() => openSession(where)}
-            title="Open the session they have open"
-            className="group mt-2.5 flex w-full items-center gap-2 rounded-md border border-sol-cyan/25 bg-sol-cyan/[0.07] px-2 py-1.5 text-left transition-colors hover:bg-sol-cyan/15"
+            data-sv-follow-button={followingThem ? "unfollow" : "follow"}
+            onClick={() => {
+              const st = useInboxStore.getState();
+              if (followingThem) {
+                st.setFollowLeader(null);
+                return;
+              }
+              st.setFollowLeader(memberId);
+              if (where) openSession(where);
+            }}
+            title={followingThem ? "Stop following" : "Follow them: your view mirrors theirs until you move"}
+            className={`group mt-2.5 flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors ${
+              followingThem ? "border-sol-cyan/60 bg-sol-cyan/15 hover:bg-sol-cyan/20" : "border-sol-cyan/25 bg-sol-cyan/[0.07] hover:bg-sol-cyan/15"
+            }`}
           >
             <ArrowRight className="h-3.5 w-3.5 shrink-0 text-sol-cyan transition-transform group-hover:translate-x-0.5" />
             <span className="min-w-0 flex-1">
-              <span className="block text-[12px] font-medium text-sol-cyan">Go where they are</span>
+              <span className="block text-[12px] font-medium text-sol-cyan">{followingThem ? "Stop following" : "Follow"}</span>
               <span className="block truncate text-[11px] text-sol-text-dim">
-                {whereTitle ? cleanTitle(whereTitle) : fetchedWhere === null ? "a session that no longer opens" : "a session"}
+                {where ? (whereTitle ? cleanTitle(whereTitle) : fetchedWhere === null ? "a session that no longer opens" : "a session") : "around, not in a session"}
               </span>
             </span>
           </button>

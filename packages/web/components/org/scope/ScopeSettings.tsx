@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
-import { TriangleAlert, Hash, Trash2 } from "lucide-react";
+import { TriangleAlert, Hash, MessageSquare, Trash2 } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -18,6 +18,7 @@ import { SelectBox } from "../../ui/select-box";
 import { cn } from "../../../lib/utils";
 import { InlineEdit, ScopeEditor } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
+import { RetireRoleConfirm } from "../RetireRoleConfirm";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
 
@@ -65,11 +66,14 @@ export type ScopeSettingsProps = {
   armRetire?: boolean;
   onUpdate: (fields: OrgUpdateRoleInput) => void;
   onReparent: (target: OrgParentRef) => void;
-  onRetire: () => void;
+  /** S16: for the chief of staff the confirm also says what becomes of its
+   *  standing agent; any other seat passes nothing and the server decides. */
+  onRetire: (standingSession?: "keep" | "retire") => void;
 };
 
 export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, counters, armRetire, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
   const [confirmRetire, setConfirmRetire] = useState(!!armRetire);
+  // Keeping the standing agent is the default (S16).
   useWatchEffect(() => { if (armRetire) setConfirmRetire(true); }, [armRetire]);
   const caps: RoleCaps = role.caps ?? DEFAULT_CAPS;
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
@@ -222,6 +226,21 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </dl>
       </Section>
 
+      {/* S16: seating this role fresh retired the workspace's previous standing
+          agent, and the seat dialog promises its thread is kept and linked from
+          here. This is that link — without it the promise is empty. */}
+      {role.previous_standing_conversation_id && (
+        <Section title="Previous standing agent" hint="The agent this seat replaced. Its thread is kept and readable; it no longer wakes.">
+          <Link
+            href={`/conversation/${role.previous_standing_conversation_id}`}
+            className="inline-flex items-center gap-1.5 text-[12.5px] hover:underline"
+            style={{ color: "var(--sol-cyan)" }}
+          >
+            <MessageSquare className="w-3.5 h-3.5" /> Open the retired agent's thread
+          </Link>
+        </Section>
+      )}
+
       <Section title="Channels" hint="Chat channels whose lines ride the role's wake frame. Edit with cast role follow / unfollow.">
         {followed.length === 0 ? (
           <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Follows no channel.</p>
@@ -241,9 +260,8 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
               <button type="button" onClick={() => setConfirmRetire(true)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-medium hover:bg-sol-red/10" style={{ color: "var(--sol-red)" }}><Trash2 className="w-3.5 h-3.5" /> Retire role</button>
             </div>
           ) : (
-            <div className="mt-2 flex items-center gap-2">
-              <button type="button" onClick={onRetire} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-red)", color: "var(--sol-bg)" }}>Retire {role.name}</button>
-              <button type="button" onClick={() => setConfirmRetire(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+            <div className="mt-2">
+              <RetireRoleConfirm role={role} onRetire={onRetire} onCancel={() => setConfirmRetire(false)} />
             </div>
           )}
         </section>

@@ -21,7 +21,7 @@ import {
   subscribeCallTiles,
   takeOverCall,
 } from "../../lib/calls/callManager";
-import { publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
+import { inOwnCall, publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
 import { callWindowReport } from "../../lib/calls/callHandoff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import {
@@ -145,10 +145,11 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   });
   // SOMEBODY IS CALLING. The oldest live invite is the card; a person already
   // in a call of their own is not rung here (the stage stays; the ring window
-  // and the banner say it). A burst being heard is not a call of their own.
+  // and the banner say it). A burst being heard is not a call of their own —
+  // the one rule (lib/calls/walkie inOwnCall) the ring hook and the ring
+  // window stand down by, so one ring is one card.
   const invite: RingInvite | null = (s.myCalls?.incoming?.[0] as RingInvite | undefined) ?? null;
-  const inOwnCall = call.phase !== "idle" && !walkieHoldsRoom(walkie, call.roomKey);
-  const ringing = !!invite && !inOwnCall;
+  const ringing = !!invite && !inOwnCall(walkie, call);
   const view: VoiceWindowShape = voiceHostView({
     surface,
     callSize,
@@ -381,8 +382,10 @@ function RingCardHost({ invite, onAnswer, onDecline }: { invite: RingInvite; onA
     if (!el || typeof ResizeObserver === "undefined") return;
     const measure = () => {
       const r = el.getBoundingClientRect();
+      // The card's own gutter carries its glow (RingCard), so this is the
+      // whole of what the window needs to be.
       if (r.width > 0 && r.height > 0) {
-        setCallWindowContentSize({ width: Math.ceil(r.width) + 2 * RING_GLOW, height: Math.ceil(r.height) + 2 * RING_GLOW });
+        setCallWindowContentSize({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
       }
     };
     measure();
@@ -392,6 +395,3 @@ function RingCardHost({ invite, onAnswer, onDecline }: { invite: RingInvite; onA
   }, [invite._id]);
   return <RingCard ref={ref} invite={invite} onAnswer={onAnswer} onDecline={onDecline} />;
 }
-
-/** The margin the card's glow needs on every side (ringCard.css). */
-const RING_GLOW = 24;

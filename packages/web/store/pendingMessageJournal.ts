@@ -90,12 +90,19 @@ export function pendingMessagesFromRecords(records: PendingMessageRecord[]): Pen
   return pending;
 }
 
-export type PendingJournalStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
+export type PendingJournalStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length"> & {
+  // One scan of the key space. Without this, read walks storage.key(i) and a
+  // Storage.length getter that itself lists every key — O(n²) on a native
+  // per-row cache with thousands of keys, which froze the send button.
+  getAllKeys?: () => Array<string | null>;
+};
 export const PENDING_JOURNAL_PREFIX = "cast-pending-input:v1:";
 
 export function readPendingMessageJournal(storage: PendingJournalStorage): Array<{ key: string; ownerId: string; writes: PendingMessageWrite[] }> {
   const batches: Array<{ key: string; ownerId: string; writes: PendingMessageWrite[] }> = [];
-  const keys = Array.from({ length: storage.length }, (_, i) => storage.key(i));
+  const keys = storage.getAllKeys
+    ? storage.getAllKeys()
+    : Array.from({ length: storage.length }, (_, i) => storage.key(i));
   for (const key of keys) {
     if (!key?.startsWith(PENDING_JOURNAL_PREFIX)) continue;
     const raw = storage.getItem(key);

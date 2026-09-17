@@ -10,7 +10,7 @@
 import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
 import type { OrgChange, OrgChangeKind, OrgChangeStatus, OrgProposalChange } from "./orgStaffingTypes";
 import { editedOrgChange } from "@codecast/shared/contracts/orgProposal";
-import { changeLine, chipLine, standingLineOf } from "./orgMeta";
+import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
 
 export type OrgNodeKind = "person" | "role" | "anchor" | "session" | "cluster";
 
@@ -50,7 +50,7 @@ type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhost
 
 export type OrgLayoutNode =
   | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
-  | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
+  | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
   | { id: string; kind: "anchor"; x: number; y: number; w: number; h: number; anchor: OrgAnchor }
   | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef } & GhostDecor)
   | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean };
@@ -82,6 +82,10 @@ export const ORG_SIZES = {
    *  the line on the same predicate (standingLineOf), so the layout and the
    *  card cannot disagree about the card's height. */
   standingRow: 22,
+  /** Extra height of a program seat's tenure row (org-staffing.md S10): its own
+   *  line, because "program · ends with pl-N" does not fit the meta line. A
+   *  standing seat says nothing, so it takes no row. */
+  tenureRow: 18,
   /** Extra height of an adopt stub: a second line naming the role it joins. */
   adoptRow: 18,
   siblingGap: 40,
@@ -121,6 +125,11 @@ type Branch = {
   person?: OrgPerson;
   role?: OrgRole;
   anchor?: OrgAnchor;
+  /** A program seat's tenure chip (S10), resolved HERE because this is where
+   *  the whole tree is in hand: the plan or project name lives in some other
+   *  role's scope_names, so a card resolving it alone would show a raw id and
+   *  would not repaint when the naming role's row changed. Absent = standing. */
+  tenure?: { short: string; full: string };
   children: Branch[];
   /** The parent's own sessions, drawn as a vertical stack under it. */
   stack: { parent: OrgParentRef; sessions: OrgSession[]; total: number; counts: StateCounts; hasMoreNode: boolean; fullyLoaded: boolean } | null;
@@ -226,8 +235,12 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // would recurse forever: cut it here.
     const kids = visiting.has(r._id) ? [] : (rolesUnderRole.get(r._id) ?? []).sort(byName);
     visiting.add(r._id);
+    // Resolved once, with the whole tree in hand; the row's height already
+    // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
+    const tenure = roleTenureChip(r.tenure, tree);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + chipRow(id), role: r,
+      ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
@@ -282,7 +295,7 @@ function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges
   const x = left + (b.width - b.w) / 2;
   const y = top;
   if (b.kind === "person") out.push({ id: b.id, kind: "person", x, y, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
-  else if (b.kind === "role") out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+  else if (b.kind === "role") out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
   else out.push({ id: b.id, kind: "anchor", x, y, w: b.w, h: b.h, anchor: b.anchor! });
 
   const parts: number[] = b.children.map((c) => c.width);
@@ -520,6 +533,10 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
       status: "active",
       ...(ch.charter ? { charter: ch.charter } : {}),
       ...(ch.caps ? { caps: { hands_per_day: ch.caps.hands_per_day ?? 0, wakes_per_day: ch.caps.wakes_per_day ?? 0, tokens_per_day: ch.caps.tokens_per_day ?? 0 } } : {}),
+      // A proposal's role carries its tenure and face onto the ghost seat (S10,
+      // S13), so the chip and the drawn avatar read the same as a live seat.
+      ...(ch.tenure ? { tenure: ch.tenure } : {}),
+      ...(ch.avatar ? { avatar: ch.avatar } : {}),
       trust: "understand",
       created_by: host,
       created_at: now,

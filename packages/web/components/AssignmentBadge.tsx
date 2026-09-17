@@ -121,20 +121,37 @@ export function AssignmentBadge({
     !!ownerDeviceId && !own,
   );
   const d = own ?? (foreign || undefined);
-  const { ownerList, displayFor, currentUser } = owners;
+  const { ownerList, displayFor, currentUser, implicitOwnerId } = owners;
 
-  // The default case — no explicit owners (implicitly yours) or just you —
-  // renders CONDENSED: avatar only, no name, no "Assign" text. Full names are
-  // reserved for the interesting case: the thread living in someone else's inbox.
+  // Default ownership (the person who started it, or you on your own
+  // session) stays off the chip: avatar only, named on hover. The name
+  // appears in the header only after ownership has moved to someone else
+  // or grown past one person.
   const meId = currentUser?._id?.toString?.();
   const isRunner = runner?.id ? runner.id === meId : isOwner;
-  const selfOnly =
-    (ownerList.length === 0 && isRunner) || (ownerList.length === 1 && ownerList[0] === meId);
+  const starterId = implicitOwnerId ?? (isRunner ? meId : runner?.id);
+  const onlyStarter =
+    ownerList.length === 0 ||
+    (ownerList.length === 1 && (!starterId || ownerList[0] === starterId));
+  const ownershipChanged = ownerList.length > 1 || (ownerList.length === 1 && !onlyStarter);
   const selfDisp = currentUser
     ? {
         name: currentUser.name || currentUser.email?.split("@")[0] || "You",
         image: currentUser.image || currentUser.github_avatar_url,
       }
+    : null;
+  const ownerNames = (ownerList.length ? ownerList : meId && isRunner ? [meId] : starterId ? [starterId] : [])
+    .map((id) => (id === meId ? `${selfDisp?.name ?? "You"}${selfDisp?.name ? " (you)" : ""}` : displayFor(id).name));
+  const ownerHover =
+    ownerNames.length === 0
+      ? "No owner — click to take ownership"
+      : ownerNames.length === 1
+        ? `Owned by ${ownerNames[0]}`
+        : `Owned by ${ownerNames.join(", ")}`;
+  const ownerLabel = ownershipChanged
+    ? ownerList.length === 1
+      ? displayFor(ownerList[0]).name
+      : `${ownerList.length} owners`
     : null;
 
   const { worktree, preparing } = useRunLocation(conversationId);
@@ -159,7 +176,7 @@ export function AssignmentBadge({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          title={`${deviceTitle}\nOwners — whose inboxes this session appears in.`}
+          title={`${deviceTitle} · ${ownerHover}`}
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
           {(loaded || d || owners.canManage) && (
@@ -193,25 +210,24 @@ export function AssignmentBadge({
           )}
           <span
             className={`inline-flex items-center gap-1.5 py-0.5 ${compact ? "pl-1 pr-1.5" : "pl-1.5 pr-2 max-w-[150px]"} ${
-              selfOnly ? "text-sol-text-dim hover:text-sol-text" : "bg-sol-cyan/10 text-sol-cyan"
+              ownershipChanged ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
             }`}
-            title={selfOnly ? `Assigned to you${ownerList.length === 0 ? " (default)" : ""} — click to reassign` : undefined}
           >
-            {selfOnly ? (
-              selfDisp && <OwnerAvatar name={selfDisp.name} image={selfDisp.image} />
+            {ownerList.length === 0 && !isRunner && !starterId ? (
+              <>
+                <UserCheck className="w-3.5 h-3.5" />
+                {!compact && <span className="truncate cq-sq1">Take ownership</span>}
+              </>
             ) : (
               <>
-                {ownerList.length === 0 && <UserCheck className="w-3.5 h-3.5" />}
                 <span className="flex -space-x-1.5">
-                  {ownerList.slice(0, 3).map((id) => {
-                    const disp = displayFor(id);
+                  {(ownerList.length ? ownerList.slice(0, 3) : meId ? [meId] : starterId ? [starterId] : []).map((id) => {
+                    const disp = id === meId && selfDisp ? selfDisp : displayFor(id);
                     return <OwnerAvatar key={id} name={disp.name} image={disp.image} />;
                   })}
                 </span>
-                {!compact && (
-                  <span className="truncate cq-sq1">
-                    {ownerList.length === 0 ? "Take ownership" : ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
-                  </span>
+                {ownershipChanged && !compact && ownerLabel && (
+                  <span className="truncate cq-sq1">{ownerLabel}</span>
                 )}
               </>
             )}

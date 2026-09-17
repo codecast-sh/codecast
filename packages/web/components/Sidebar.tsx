@@ -196,11 +196,13 @@ function SectionRow({ row, className }: { row: SectionRowSpec; className?: strin
 /** A numeric count on a nav row. Every count in the rail renders through this
  *  so simple view restyles counts by the `data-sv-count` marker, never by
  *  colour: a colour-keyed selector cannot tell a count pill from a project dot
- *  that happens to share its hue. `small` is the pinned rail's scale. */
-function NavCount({ n, tone, small }: { n: number; tone: string; small?: boolean }) {
+ *  that happens to share its hue. `small` is the pinned rail's scale.
+ *  `kind: "mention"` is a chat mention: it stays red in every visual style,
+ *  because that number is "someone named you", not a volume count. */
+function NavCount({ n, tone, small, kind }: { n: number; tone: string; small?: boolean; kind?: "mention" }) {
   return (
     <span
-      data-sv-count
+      data-sv-count={kind ?? ""}
       className={`${small ? "min-w-[16px] h-[15px] px-1 text-[9.5px]" : "-ml-0.5 min-w-[20px] h-[20px] px-1.5 text-[11px]"} flex items-center justify-center font-bold rounded-full flex-shrink-0 ${tone}`}
     >
       {n > 99 ? "99+" : n}
@@ -272,12 +274,11 @@ function NavSection({
           // split it in beside whatever is there (lib/stage).
           draggable
           onDragStart={(e) => startPaneDrag(e, { path: href, title: label })}
-          className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
+          className={`flex-1 flex items-center ${isNarrow ? "justify-center px-4" : "gap-3 pl-4"} py-2.5 min-w-0`}
           title={title ?? label}
         >
           {icon}
           {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
-          {!isNarrow && badge}
         </Link>
         {!isNarrow && headerAction}
         {hasChildren && (
@@ -292,6 +293,24 @@ function NavSection({
             </svg>
           </button>
         )}
+        {/* Count last, after the hover control and the chevron, so it sits on
+            the same right edge as Inbox / Questions / Threads — those rows
+            have no trailing buttons, and a badge inside the link was shoved
+            left of Chat's extras. Same href as the label, so clicking the
+            number still opens the section. */}
+        {!isNarrow && badge && (
+          <Link
+            href={href}
+            tabIndex={-1}
+            aria-hidden="true"
+            className="flex-shrink-0"
+            onClick={onMobileClose}
+            draggable={false}
+          >
+            {badge}
+          </Link>
+        )}
+        {!isNarrow && <span className="w-4 flex-shrink-0" aria-hidden="true" />}
       </div>
       {/* Nested rows — a slide-open list aligned under this row's icon. */}
       {hasChildren && (
@@ -445,7 +464,7 @@ function channelSignals(
           />
         )}
         {(channel.mentionCount ?? 0) > 0 ? (
-          <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-orange text-sol-bg" small />
+          <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-red text-white" small kind="mention" />
         ) : (channel.unreadCount ?? 0) > 0 ? (
           <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
         ) : null}
@@ -589,7 +608,7 @@ const ChatNavRow = memo(function ChatNavRow({
         unread={channels > 0 || mentions > 0}
         badge={
           mentions > 0 ? (
-            <NavCount n={mentions} tone="bg-sol-orange text-sol-bg" />
+            <NavCount n={mentions} tone="bg-sol-red text-white" kind="mention" />
           ) : channels > 0 && !isActive ? (
             <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />
           ) : null
@@ -840,7 +859,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
-  const isAnchor = pathname?.startsWith("/anchor");
   const isOrg = pathname === "/org" || pathname?.startsWith("/org/");
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
@@ -1414,20 +1432,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               </svg>
             }
           />
-          <NavSection
-            label="Anchor"
-            href="/anchor"
-            isActive={isAnchor}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            title="Anchor — your standing agent"
-            icon={
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
-              </svg>
-            }
-          />
+          {/* The workspace's standing agent is the Chief of Staff now
+              (org-staffing.md S12), and its home is the root seat of the Org
+              chart — so the rail keeps listing places, not individuals, and
+              /anchor redirects to the chief's scope page for old links. */}
           <NavSection
             label="Windows"
             href="/windows"

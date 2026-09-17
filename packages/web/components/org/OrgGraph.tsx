@@ -138,7 +138,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
       : {};
     switch (n.kind) {
       case "person": return { ...base, data: { ...common, ...decor, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
-      case "role": return { ...base, data: { ...common, ...decor, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
+      case "role": return { ...base, data: { ...common, ...decor, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow, tenure: n.tenure } };
       case "anchor": return { ...base, data: { ...common, anchor: n.anchor } };
       case "session": return { ...base, data: { ...common, ...decor, session: n.session, parent: n.parent } };
       case "cluster": {

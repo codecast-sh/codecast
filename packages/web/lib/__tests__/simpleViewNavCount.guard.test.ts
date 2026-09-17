@@ -21,6 +21,7 @@ describe("simple view count badges", () => {
   test("the sidebar rule keys on the NavCount marker, not on a colour class", () => {
     const navRules = css.match(/\.simple-view \[data-sv-nav\][^{]*\{/g) ?? [];
     expect(navRules.some((r) => r.includes("[data-sv-count]"))).toBe(true);
+    expect(css).toContain('[data-sv-count="mention"]');
     for (const rule of navRules) {
       expect(rule).not.toMatch(/\[class\*=["']?bg-/);
     }

@@ -30,8 +30,16 @@ import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTo
 import { isConvexId } from "../lib/entityLinks";
 
 let Storage: any = null;
+// Send writes the pending-input journal with setItemSync. That used to hit the
+// same SQLite file as the collection cache, so a new-session send waited on
+// whatever blob/row flush was in flight and froze the button for seconds.
+let PendingStorage: any = null;
 try {
-  Storage = require("expo-sqlite/kv-store").default;
+  const kv = require("expo-sqlite/kv-store");
+  Storage = kv.default;
+  PendingStorage = typeof kv.SQLiteStorage === "function"
+    ? new kv.SQLiteStorage("codecast-pending-input")
+    : kv.default;
 } catch {
   // Tests can't reach this require with bun's mock.module (it intercepts the
   // ESM path only), so the suite injects an AsyncStorage-compatible shim via
@@ -39,6 +47,7 @@ try {
   // PERSISTENCE_AVAILABLE const come out true. Absent the global (production
   // on an older binary), degrade to in-memory exactly as before.
   Storage = (globalThis as any).__CODECAST_TEST_KV_STORAGE__ ?? null;
+  PendingStorage = Storage;
 }
 
 export type OutboxEntry = {
@@ -63,16 +72,11 @@ const OUTBOX_KEY = "dispatchOutbox";
 
 let _hydrating = false;
 
-// What each collection currently holds on disk, by id → row reference. The KV
-// engine stores a collection as a single JSON blob, so it can't rewrite one row
-// — but it CAN skip the rewrite entirely when a sync changed nothing (the common
-// case: live queries re-push identical rows constantly). Seeded from loadCache.
+// What each collection currently holds on disk, by id → row reference. Seeded
+// from loadCache so the first post-hydrate write diffs against disk. Unchanged
+// row refs (live queries re-pushing the same objects) produce an empty diff
+// and touch SQLite zero times; a changed ref writes that one row key.
 const lastPersisted = new Map<string, Map<string, any>>();
-
-// Test hook — see idbCache.ts.
-export function _resetPersistedShadow() {
-  lastPersisted.clear();
-}
 
 // False when the ExpoSQLite native module is absent (OTA shipped to an older
 // binary). inboxStore gates its hydrate/persist wiring on this, so the app runs
@@ -81,45 +85,82 @@ export function _resetPersistedShadow() {
 export const PERSISTENCE_AVAILABLE = Storage != null;
 
 // ── Write-behind ─────────────────────────────────────────────────────────────
-// The KV store holds ONE blob per collection, so every write is a JSON.stringify
-// of the whole table: for a busy account sessions is ~4.5 MB and tasks ~6.8 MB.
-// The store patches those tables many times a second during boot catch-up
-// (every sync page and every delta batch is its own patch), and each setItem
-// pins its multi-MB string until SQLite commits it. Written eagerly, the strings
-// outran the disk and piled up until Hermes ran out of heap ~20 s after launch
-// (Sentry REACT-NATIVE-J "LLVM ERROR" abort inside JSON.stringify, and the
-// watchdog RAM kill REACT-NATIVE-H). So a key is scheduled, not written: the
-// latest producer wins, a short trailing delay folds a burst into one blob, and
-// at most one write per key is in flight — a key dirtied mid-write is rewritten
-// once, after the write lands. Reads of a scheduled key see the scheduled value.
+// Collections used to live as ONE JSON blob per table. A busy account's
+// sessions blob is ~4.5 MB and tasks ~6.8 MB; overlay heartbeats change a
+// handful of row refs many times a second, and JSON.stringify of the whole
+// table on the JS thread froze taps for seconds (and, written eagerly, piled
+// strings until Hermes aborted — Sentry REACT-NATIVE-J "LLVM ERROR" inside
+// JSON.stringify, watchdog RAM kill REACT-NATIVE-H).
+//
+// Per-row keys match the web Dexie engine: a heartbeat stringifies one row,
+// not the table. Writes are still scheduled, not eager — the latest producer
+// wins, a short trailing delay folds a burst, and at most one write per key
+// is in flight. A global inflight cap keeps a boot migration of thousands of
+// row keys from opening that many SQLite statements at once. Reads of a
+// scheduled key see the scheduled value; a null producer is a delete.
 const WRITE_COALESCE_MS = 250;
-const pendingWrites = new Map<string, () => string>();
+const MAX_INFLIGHT = 8;
+type Produce = (() => string) | null;
+const pendingWrites = new Map<string, Produce>();
 const inflightWrites = new Map<string, Promise<void>>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+// One remove of the leftover whole-table blob per collection per process, so a
+// heartbeat does not keep issuing removeItem for a key that is already gone.
+const droppedLegacyBlobs = new Set<string>();
 
-function scheduleWrite(key: string, produce: () => string) {
+// Test hook — see idbCache.ts.
+export function _resetPersistedShadow() {
+  lastPersisted.clear();
+  droppedLegacyBlobs.clear();
+  pendingWrites.clear();
+  if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
+}
+
+function afterInteractions(fn: () => void) {
+  try {
+    const IM = require("react-native").InteractionManager;
+    if (IM?.runAfterInteractions) {
+      IM.runAfterInteractions(fn);
+      return;
+    }
+  } catch { /* bun tests have no RN */ }
+  fn();
+}
+
+function scheduleWrite(key: string, produce: Produce) {
   pendingWrites.set(key, produce);
   if (flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, WRITE_COALESCE_MS);
 }
 
+function scheduleRemove(key: string) {
+  scheduleWrite(key, null);
+}
+
 function flushScheduledWrites() {
   flushTimer = null;
+  afterInteractions(flushScheduledWritesNow);
+}
+
+function flushScheduledWritesNow() {
   for (const [key, produce] of pendingWrites) {
     if (inflightWrites.has(key)) continue;
+    if (inflightWrites.size >= MAX_INFLIGHT) break;
     pendingWrites.delete(key);
-    let value: string;
-    try { value = produce(); } catch { continue; }
-    const write = Promise.resolve(Storage.setItem(key, value)).catch(() => {}).then(() => {
+    const write = Promise.resolve().then(() => {
+      if (produce == null) return Storage.removeItem(key);
+      return Storage.setItem(key, produce());
+    }).catch(() => {}).then(() => {
       inflightWrites.delete(key);
-      if (pendingWrites.has(key) && flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, 0);
+      if (pendingWrites.size > 0 && flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, 0);
     });
     inflightWrites.set(key, write);
   }
 }
 
 /** A scheduled-but-unflushed value, so a read never sees older bytes than the
- *  store has already committed to disk-in-spirit. */
+ *  store has already committed to disk-in-spirit. A pending delete is absent. */
 function scheduledValue(key: string): string | undefined {
+  if (!pendingWrites.has(key)) return undefined;
   const produce = pendingWrites.get(key);
   return produce ? produce() : undefined;
 }
@@ -129,7 +170,8 @@ function scheduledValue(key: string): string | undefined {
 export async function flushPersistence(): Promise<void> {
   while (pendingWrites.size > 0 || inflightWrites.size > 0) {
     if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
-    flushScheduledWrites();
+    // Tests and shutdown must not wait for the interaction queue.
+    flushScheduledWritesNow();
     await Promise.all([...inflightWrites.values()]);
   }
 }
@@ -144,22 +186,25 @@ export function isPersistedStoreKey(key: string): boolean {
 const PENDING_INPUT_PREFIX = "pendingInput:v1:";
 
 const pendingJournalStorage: PendingJournalStorage = {
-  getItem: key => Storage.getItemSync(key),
-  setItem: (key, value) => Storage.setItemSync(key, value),
-  removeItem: key => Storage.removeItemSync(key),
-  key: index => Storage.getAllKeysSync()[index] ?? null,
-  get length() { return Storage.getAllKeysSync().length; },
+  getItem: key => PendingStorage.getItemSync(key),
+  setItem: (key, value) => PendingStorage.setItemSync(key, value),
+  removeItem: key => PendingStorage.removeItemSync(key),
+  getAllKeys: () => PendingStorage.getAllKeysSync(),
+  key: index => PendingStorage.getAllKeysSync()[index] ?? null,
+  get length() { return PendingStorage.getAllKeysSync().length; },
 };
 
-function flushPendingInputJournal(): void {
-  for (const batch of readPendingMessageJournal(pendingJournalStorage)) {
+async function flushPendingInputJournal(): Promise<void> {
+  if (!Storage || !PendingStorage) return;
+  const batches = readPendingMessageJournal(pendingJournalStorage);
+  for (const batch of batches) {
     for (const write of batch.writes) {
       const key = `${PENDING_INPUT_PREFIX}${batch.ownerId}:${write.id}`;
-      const raw = Storage.getItemSync(key);
+      const raw = await Storage.getItem(key);
       const value = applyPendingMessageWrite(raw ? JSON.parse(raw) : undefined, write);
-      Storage.setItemSync(key, JSON.stringify(value));
+      await Storage.setItem(key, JSON.stringify(value));
     }
-    Storage.removeItemSync(batch.key);
+    PendingStorage.removeItemSync(batch.key);
   }
 }
 
@@ -167,15 +212,15 @@ export function persistPendingMessageChanges(before: PendingMessages, after: Pen
   if (before === after) return;
   const writes = pendingMessageWrites(before, after);
   if (!writes.length) return;
-  if (!Storage?.setItemSync) throw new Error("Update Codecast before sending so your messages can be saved safely.");
+  if (!PendingStorage?.setItemSync) throw new Error("Update Codecast before sending so your messages can be saved safely.");
   if (!ownerId) throw new Error("Sign in before sending a message so it can be saved safely.");
   writePendingMessageJournal(pendingJournalStorage, ownerId, writes);
-  void Promise.resolve().then(flushPendingInputJournal).catch(error => captureException(error, { tags: { source: "pending-input-journal" } }));
+  void flushPendingInputJournal().catch(error => captureException(error, { tags: { source: "pending-input-journal" } }));
 }
 
 async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
   if (!ownerId || !Storage) return {};
-  flushPendingInputJournal();
+  await flushPendingInputJournal();
   const prefix = `${PENDING_INPUT_PREFIX}${ownerId}:`;
   const legacy = await Storage.getItem(META_PREFIX + "pendingMessages");
   const user = await Storage.getItem(META_PREFIX + "currentUser");
@@ -199,6 +244,57 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
   return pendingMessagesFromRecords(rows);
 }
 
+function collectionBlobKey(key: string): string {
+  return COLLECTION_PREFIX + key;
+}
+
+function collectionRowKey(key: string, id: string): string {
+  return COLLECTION_PREFIX + key + ":" + id;
+}
+
+function isCollectionRowKey(storageKey: string, collectionKey: string): boolean {
+  return storageKey.startsWith(COLLECTION_PREFIX + collectionKey + ":");
+}
+
+function dropLegacyBlob(blobKey: string) {
+  if (droppedLegacyBlobs.has(blobKey)) return;
+  droppedLegacyBlobs.add(blobKey);
+  scheduleRemove(blobKey);
+}
+
+// conversations is registered as a meta blob (one JSON object) so web Dexie
+// can store it in the meta table. On native that blob is the sessions twin:
+// creating a session stringified the whole map on the JS thread and froze
+// the send button on a new session. Persist it per-row like collections.
+const PER_ROW_META_KEYS = new Set(["conversations"]);
+
+function persistKeyedRows(
+  storeKey: string,
+  data: Record<string, any>,
+  pending: Record<string, { type?: string }>,
+  blobKey: string,
+  rowKeyFor: (id: string) => string,
+) {
+  const prevShadow = lastPersisted.get(storeKey);
+  const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
+  const deletes: string[] = [];
+  for (const id of rawDeletes) {
+    if (pending[`${storeKey}:${id}`]?.type === "exclude") deletes.push(id);
+    else if (!isConvexId(String(id))) deletes.push(id);
+    else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
+  }
+  lastPersisted.set(storeKey, next);
+  if (puts.length || deletes.length) {
+    for (const row of puts) {
+      if (!row || row._id == null) continue;
+      const id = String(row._id);
+      scheduleWrite(rowKeyFor(id), () => JSON.stringify(row));
+    }
+    for (const id of deletes) scheduleRemove(rowKeyFor(id));
+    dropLegacyBlob(blobKey);
+  }
+}
+
 export function writePatchesToIDB(patches: Patch[], state: any) {
   if (!Storage || _hydrating) return;
 
@@ -208,37 +304,18 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
     if (path.length > 0) affectedKeys.add(String(path[0]));
   }
 
+  const pending = (state.pending || {}) as Record<string, { type?: string }>;
   for (const key of affectedKeys) {
     if (key === "pendingMessages" || key === "queuedMessages") continue;
     if (COLLECTION_TABLES.has(key)) {
       const data = state[key];
       if (data && typeof data === "object") {
-        const prevShadow = lastPersisted.get(key);
-        const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
-        // NEVER wipe the cache from a store-shrink (same guarantee as the web
-        // engine). A row leaves storage ONLY when explicitly removed — kill/archive
-        // plant a `${key}:${id}` exclude in `pending`. A diff-delete with NO exclude
-        // means the store is merely missing the row, so keep it in the persisted
-        // blob AND the shadow. Makes a whole-collection wipe structurally impossible.
-        const pending = (state.pending || {}) as Record<string, { type?: string }>;
-        const kept: any[] = [];
-        for (const id of rawDeletes) {
-          if (pending[`${key}:${id}`]?.type === "exclude") continue; // intentional → drop
-          // Stubs (non-Convex ids) are client-minted, so their absence is always
-          // an intentional local removal (altKey supersede, create rollback) —
-          // never a windowed payload. Keeping them resurrects a sent message's
-          // stub NEXT TO its server twin on the next boot. Same fix as the web
-          // engine (idbCache.ts).
-          if (!isConvexId(String(id))) continue;
-          if (prevShadow?.has(id)) { next.set(id, prevShadow.get(id)); kept.push(prevShadow.get(id)); }
-        }
-        lastPersisted.set(key, next);
-        // Whole-blob engine: rewrite only when something actually changed, and
-        // include the rows we refused to drop so they survive on disk.
-        if (puts.length || rawDeletes.length) {
-          const rows = kept.length ? [...Object.values(data), ...kept] : Object.values(data);
-          scheduleWrite(COLLECTION_PREFIX + key, () => JSON.stringify(rows));
-        }
+        persistKeyedRows(key, data, pending, collectionBlobKey(key), (id) => collectionRowKey(key, id));
+      }
+    } else if (PER_ROW_META_KEYS.has(key)) {
+      const data = state[key];
+      if (data && typeof data === "object") {
+        persistKeyedRows(key, data, pending, META_PREFIX + key, (id) => META_PREFIX + key + ":" + id);
       }
     } else if (META_KEYS.has(key)) {
       scheduleWrite(META_PREFIX + key, () => JSON.stringify(state[key]));
@@ -246,91 +323,306 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 }
 
-export async function loadCache(keys?: readonly string[], context: Record<string, any> = {}): Promise<Record<string, any> | null> {
-  if (!Storage) return null;
-  try {
-    const result: Record<string, any> = {};
-    let hasData = false;
+async function storageKeys(): Promise<string[]> {
+  if (typeof Storage.getAllKeysSync === "function") return Storage.getAllKeysSync();
+  if (typeof Storage.getAllKeys === "function") return await Storage.getAllKeys();
+  return [];
+}
 
-    const wanted = keys ? new Set(keys) : null;
-    const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
-    const metaKeys = [...META_KEYS].filter(key => !wanted || wanted.has(key));
-    const pairs = await Storage.multiGet([
-      ...collectionKeys.map((k) => COLLECTION_PREFIX + k),
-      ...metaKeys.map((k) => META_PREFIX + k),
-    ]);
-    const byKey = new Map(pairs);
-    // Meta lookup first — the pending map gates hydrateRow (an unsynced local
-    // edit keeps its body), and the sessions retention pass below needs
-    // liveInboxIdList and lastFocusedConversationId from the same snapshot.
-    const readMeta = (key: string): any => {
-      try {
-        const raw = byKey.get(META_PREFIX + key);
-        return raw == null ? undefined : JSON.parse(raw);
-      } catch { return undefined; }
-    };
-    const metaPending = readMeta("pending") as Record<string, any> | undefined;
+function collectReadKeys(allKeys: string[], wanted: Set<string> | null): string[] {
+  const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
+  const metaKeys = [...META_KEYS].filter(key => !wanted || wanted.has(key));
+  const collectionStorageKeys = allKeys.filter((k: string) =>
+    collectionKeys.some((key) => k === collectionBlobKey(key) || isCollectionRowKey(k, key)),
+  );
+  const perRowMetaKeys = allKeys.filter((k: string) =>
+    [...PER_ROW_META_KEYS].some((key) =>
+      (!wanted || wanted.has(key)) && (k === META_PREFIX + key || k.startsWith(META_PREFIX + key + ":")),
+    ),
+  );
+  const metaStorageKeys = metaKeys.filter((k) => !PER_ROW_META_KEYS.has(k)).map((k) => META_PREFIX + k);
+  return [...collectionStorageKeys, ...perRowMetaKeys, ...metaStorageKeys];
+}
 
-    for (const key of collectionKeys) {
-      const raw = byKey.get(COLLECTION_PREFIX + key);
-      if (raw == null) continue;
-      let rows = JSON.parse(raw) as any[];
+function materializeLoadedCache(
+  byKey: Map<string, string | null>,
+  wanted: Set<string> | null,
+): Record<string, any> | null {
+  const result: Record<string, any> = {};
+  let hasData = false;
+  const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
+  const metaKeys = [...META_KEYS].filter(key => !wanted || wanted.has(key));
+  // Meta lookup first — the pending map gates hydrateRow (an unsynced local
+  // edit keeps its body), and the sessions retention pass below needs
+  // liveInboxIdList and lastFocusedConversationId from the same snapshot.
+  const readMeta = (key: string): any => {
+    try {
+      const raw = byKey.get(META_PREFIX + key);
+      return raw == null ? undefined : JSON.parse(raw);
+    } catch { return undefined; }
+  };
+  const metaPending = readMeta("pending") as Record<string, any> | undefined;
+
+  for (const key of collectionKeys) {
+      const rows: any[] = [];
+      const seen = new Set<string>();
+      for (const [storageKey, raw] of byKey) {
+        if (!isCollectionRowKey(storageKey, key) || raw == null) continue;
+        try {
+          const row = JSON.parse(raw);
+          if (row?._id == null || seen.has(row._id)) continue;
+          seen.add(row._id);
+          rows.push(row);
+        } catch { /* skip a corrupt row; the next put overwrites it */ }
+      }
+      const blobRaw = byKey.get(collectionBlobKey(key));
+      let hadLegacyBlob = false;
+      if (blobRaw != null) {
+        hadLegacyBlob = true;
+        try {
+          const blobRows = JSON.parse(blobRaw) as any[];
+          if (Array.isArray(blobRows)) {
+            for (const row of blobRows) {
+              if (row?._id == null || seen.has(row._id)) continue;
+              seen.add(row._id);
+              rows.push(row);
+            }
+          }
+        } catch { /* drop a corrupt blob; per-row keys still load */ }
+      }
+      if (rows.length === 0 && !hadLegacyBlob) {
+        lastPersisted.set(key, new Map());
+        continue;
+      }
       // Seed the persistence shadow with what's on disk so the first write after
       // hydrate diffs against reality (see idbCache.ts).
       const shadow = new Map<string, any>();
       const validRow = collectionRowValidator(key);
       const hydrateRow = collectionRowHydrator(key);
       const hydrateCtx = { pending: (metaPending as Record<string, any> | undefined) ?? {} };
-      let anyTrimmed = false;
-      if (key === "sessions" && rows.length > 0) {
+      let keptRows = rows;
+      const dropped = new Set<string>();
+      if (key === "sessions" && keptRows.length > 0) {
         const { keep, drop } = partitionSessionRetention(
-          rows,
+          keptRows,
           readMeta("liveInboxIdList"),
           readMeta("lastFocusedConversationId"),
           Date.now(),
         );
-        rows = keep;
-        // Whole-blob engine: the trim rewrite below (Object.values(map), which
-        // the dropped rows never enter) is how the prune reaches disk.
-        if (drop.length) anyTrimmed = true;
-        if (drop.length && rows.length === 0) scheduleWrite(COLLECTION_PREFIX + key, () => "[]");
+        keptRows = keep;
+        for (const id of drop) dropped.add(id);
       }
       // Opened-docs body cache: bound by last-open recency (see idbCache.ts).
-      if (key === "docDetails" && rows.length > 0) {
-        const { keep, drop } = partitionDocDetailRetention(rows, Date.now());
-        rows = keep;
-        if (drop.length) anyTrimmed = true;
-        if (drop.length && rows.length === 0) scheduleWrite(COLLECTION_PREFIX + key, () => "[]");
+      if (key === "docDetails" && keptRows.length > 0) {
+        const { keep, drop } = partitionDocDetailRetention(keptRows, Date.now());
+        keptRows = keep;
+        for (const id of drop) dropped.add(id);
       }
-      if (rows.length > 0) {
-        const map: Record<string, any> = {};
-        for (const row of rows) {
-          // Foreign documents persisted under the wrong collection (see validRow
-          // in the registry) never enter the store or the shadow; the next blob
-          // rewrite drops them from disk.
-          if (validRow && !validRow(row)) continue;
-          // Trimmed on the way in (registry hydrateRow). The shadow holds the
-          // trimmed row (the original would pin the dropped bytes); the blob is
-          // rewritten below so disk shrinks too.
-          const kept = hydrateRow ? hydrateRow(row, hydrateCtx) : row;
-          if (kept !== row) anyTrimmed = true;
-          map[row._id] = kept; shadow.set(row._id, kept);
+      const map: Record<string, any> = {};
+      let anyTrimmed = false;
+      for (const row of keptRows) {
+        // Foreign documents persisted under the wrong collection (see validRow
+        // in the registry) never enter the store or the shadow; dropping the
+        // row key is how the prune reaches disk.
+        if (validRow && !validRow(row)) {
+          dropped.add(row._id);
+          continue;
         }
-        if (anyTrimmed) scheduleWrite(COLLECTION_PREFIX + key, () => JSON.stringify(Object.values(map)));
-        if (Object.keys(map).length > 0) {
-          result[key] = map;
-          hasData = true;
+        // Trimmed on the way in (registry hydrateRow). The shadow holds the
+        // trimmed row (the original would pin the dropped bytes); the row key
+        // is rewritten below so disk shrinks too.
+        const kept = hydrateRow ? hydrateRow(row, hydrateCtx) : row;
+        if (kept !== row) anyTrimmed = true;
+        map[row._id] = kept; shadow.set(row._id, kept);
+      }
+      if (anyTrimmed) {
+        for (const row of Object.values(map)) {
+          scheduleWrite(collectionRowKey(key, String(row._id)), () => JSON.stringify(row));
         }
+      }
+      for (const id of dropped) scheduleRemove(collectionRowKey(key, id));
+      if (hadLegacyBlob) {
+        // Split the leftover whole-table blob into per-row keys so the next
+        // heartbeat cannot stringify the table again.
+        if (!anyTrimmed) {
+          for (const row of Object.values(map)) {
+            scheduleWrite(collectionRowKey(key, String(row._id)), () => JSON.stringify(row));
+          }
+        }
+        dropLegacyBlob(collectionBlobKey(key));
+      }
+      if (Object.keys(map).length > 0) {
+        result[key] = map;
+        hasData = true;
       }
       lastPersisted.set(key, shadow);
     }
 
     for (const key of metaKeys) {
+      if (PER_ROW_META_KEYS.has(key)) continue;
       const raw = byKey.get(META_PREFIX + key);
       if (raw == null) continue;
       result[key] = JSON.parse(raw);
       hasData = true;
     }
+
+    // conversations is the sessions twin. Load per-row keys (and a leftover
+    // whole-map blob), then apply the same retention policy.
+    if (!wanted || wanted.has("conversations")) {
+      const convPrefix = META_PREFIX + "conversations:";
+      const convBlobKey = META_PREFIX + "conversations";
+      const convMap: Record<string, any> = {};
+      for (const [storageKey, raw] of byKey) {
+        if (!storageKey.startsWith(convPrefix) || raw == null) continue;
+        try {
+          const row = JSON.parse(raw);
+          if (row?._id != null) convMap[row._id] = row;
+        } catch { /* skip a corrupt row */ }
+      }
+      const convBlob = byKey.get(convBlobKey);
+      let hadConvBlob = false;
+      if (convBlob != null) {
+        hadConvBlob = true;
+        try {
+          const parsed = JSON.parse(convBlob);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            for (const row of Object.values(parsed) as any[]) {
+              if (row?._id != null && convMap[row._id] == null) convMap[row._id] = row;
+            }
+          }
+        } catch { /* drop a corrupt blob; per-row keys still load */ }
+      }
+      if (Object.keys(convMap).length > 0) {
+        const { keep, drop } = partitionSessionRetention(
+          Object.values(convMap),
+          readMeta("liveInboxIdList"),
+          readMeta("lastFocusedConversationId"),
+          Date.now(),
+        );
+        const pruned: Record<string, any> = {};
+        const shadow = new Map<string, any>();
+        for (const row of keep) {
+          pruned[row._id] = row;
+          shadow.set(row._id, row);
+        }
+        result.conversations = pruned;
+        lastPersisted.set("conversations", shadow);
+        hasData = true;
+        for (const id of drop) scheduleRemove(convPrefix + id);
+        if (hadConvBlob) {
+          for (const row of keep) {
+            scheduleWrite(convPrefix + String(row._id), () => JSON.stringify(row));
+          }
+          dropLegacyBlob(convBlobKey);
+        }
+      } else {
+        lastPersisted.set("conversations", new Map());
+      }
+    }
+
+  if (result.pending && typeof result.pending === "object") {
+    result.pending = expireExcludeTombstones(result.pending, Date.now());
+  }
+
+  return hasData ? result : null;
+}
+
+// Same bytes as loadCache, on this thread. expo-sqlite's kv-store exposes
+// getItemSync; using it at module eval means the store already holds sessions
+// before React's first paint — kill-and-reopen then looks like web/desktop.
+export function loadCacheSync(
+  keys?: readonly string[],
+  _context: Record<string, any> = {},
+): Record<string, any> | null {
+  if (!Storage || typeof Storage.getItemSync !== "function") return null;
+  if (typeof Storage.getAllKeysSync !== "function") return null;
+  try {
+    const wanted = keys ? new Set(keys) : null;
+    const toRead = collectReadKeys(Storage.getAllKeysSync() as string[], wanted);
+    const byKey = new Map<string, string | null>();
+    for (const key of toRead) {
+      byKey.set(key, scheduledValue(key) ?? Storage.getItemSync(key));
+    }
+    return materializeLoadedCache(byKey, wanted);
+  } catch {
+    return null;
+  }
+}
+
+export function loadPaintCacheSync(): Record<string, any> | null {
+  if (!Storage || typeof Storage.getItemSync !== "function") return null;
+  const t0 = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  try {
+    const readMeta = (key: string): any => {
+      try {
+        const raw = scheduledValue(META_PREFIX + key) ?? Storage.getItemSync(META_PREFIX + key);
+        return raw == null ? undefined : JSON.parse(raw);
+      } catch { return undefined; }
+    };
+    const liveInboxIdList = readMeta("liveInboxIdList");
+    const lastFocusedConversationId = readMeta("lastFocusedConversationId");
+    const teamInboxIdSnapshot = readMeta("teamInboxIdSnapshot");
+    const clientState = readMeta("clientState");
+    const pending = readMeta("pending");
+    const collapsedSections = readMeta("collapsedSections");
+    const ids = new Set<string>();
+    if (Array.isArray(liveInboxIdList)) {
+      for (const id of liveInboxIdList) if (typeof id === "string") ids.add(id);
+    }
+    if (typeof lastFocusedConversationId === "string") ids.add(lastFocusedConversationId);
+    if (Array.isArray(teamInboxIdSnapshot?.ids)) {
+      for (const id of teamInboxIdSnapshot.ids) if (typeof id === "string") ids.add(id);
+    }
+
+    if (ids.size === 0) {
+      // No live-set pointer on disk: scan just the paint keys, not the whole
+      // critical set (conversations twin, feed, drafts, roster, …).
+      return loadCacheSync([
+        "sessions",
+        "clientState",
+        "pending",
+        "collapsedSections",
+        "liveInboxIdList",
+        "lastFocusedConversationId",
+        "teamInboxIdSnapshot",
+      ]);
+    }
+
+    const sessions: Record<string, any> = {};
+    for (const id of ids) {
+      const raw = scheduledValue(collectionRowKey("sessions", id)) ?? Storage.getItemSync(collectionRowKey("sessions", id));
+      if (raw == null) continue;
+      try {
+        const row = JSON.parse(raw);
+        if (row?._id) sessions[row._id] = row;
+      } catch { /* skip a corrupt row */ }
+    }
+    const result: Record<string, any> = {};
+    if (Object.keys(sessions).length > 0) result.sessions = sessions;
+    if (liveInboxIdList != null) result.liveInboxIdList = liveInboxIdList;
+    if (lastFocusedConversationId != null) result.lastFocusedConversationId = lastFocusedConversationId;
+    if (teamInboxIdSnapshot != null) result.teamInboxIdSnapshot = teamInboxIdSnapshot;
+    if (clientState != null) result.clientState = clientState;
+    if (pending != null) result.pending = pending;
+    if (collapsedSections != null) result.collapsedSections = collapsedSections;
+    if (Object.keys(result).length === 0) return null;
+    const dt = Math.round((typeof performance !== "undefined" && performance.now ? performance.now() : Date.now()) - t0);
+    console.log(`[boot] ${dt}ms paintCache sessions=${Object.keys(sessions).length} ids=${ids.size}`);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadCache(keys?: readonly string[], context: Record<string, any> = {}): Promise<Record<string, any> | null> {
+  if (!Storage) return null;
+  try {
+    const wanted = keys ? new Set(keys) : null;
+    const allKeys = await storageKeys();
+    const pairs = await Storage.multiGet(collectReadKeys(allKeys, wanted));
+    const byKey = new Map(pairs) as Map<string, string | null>;
+    const result: Record<string, any> = materializeLoadedCache(byKey, wanted) ?? {};
+    let hasData = Object.keys(result).length > 0;
 
     if (!wanted || wanted.has("pendingMessages") || wanted.has("queuedMessages")) {
       const rawUser = await Storage.getItem(META_PREFIX + "currentUser");
@@ -340,25 +632,6 @@ export async function loadCache(keys?: readonly string[], context: Record<string
         result.queuedMessages = queuedMessagesFromPending(result.pendingMessages);
         hasData = true;
       }
-    }
-
-    // The conversations map is the sessions cache's twin persisted as ONE meta
-    // blob — apply the same retention policy (see idbCache.ts); the pruned blob
-    // reaches disk on its next natural put.
-    if (result.conversations && typeof result.conversations === "object") {
-      const { keep } = partitionSessionRetention(
-        Object.values(result.conversations),
-        readMeta("liveInboxIdList"),
-        readMeta("lastFocusedConversationId"),
-        Date.now(),
-      );
-      const pruned: Record<string, any> = {};
-      for (const row of keep) pruned[row._id] = row;
-      result.conversations = pruned;
-    }
-
-    if (result.pending && typeof result.pending === "object") {
-      result.pending = expireExcludeTombstones(result.pending, Date.now());
     }
 
     return hasData ? result : null;

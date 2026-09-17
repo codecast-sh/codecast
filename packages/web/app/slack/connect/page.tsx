@@ -16,6 +16,7 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { SlackLogo } from "../../../components/SlackLogo";
 import { useMountEffect } from "../../../hooks/useMountEffect";
+import { takeSlackReturn } from "../../../lib/slackReturn";
 
 const ERRORS: Record<string, string> = {
   bad_state: "The link from Slack had expired or was altered. Start again from the page you came from.",
@@ -24,6 +25,9 @@ const ERRORS: Record<string, string> = {
   no_anchor: "Create your anchor first, then connect Slack.",
   workspace_taken: "That Slack workspace is already connected to a different codecast team.",
   not_configured: "Slack is not configured on this server.",
+  no_workspace: "Connect the team's Slack workspace first; then connect your own account.",
+  wrong_workspace: "That is a different Slack workspace from the one this team uses. Sign in to the team's workspace in Slack and try again.",
+  no_user_token: "Slack did not grant your account's permissions. Try again and accept the request.",
   access_denied: "Slack reported that the install was cancelled.",
   exchange_failed: "Slack did not accept the install. Try again.",
 };
@@ -44,10 +48,13 @@ function Completion() {
   const [failure, setFailure] = useState<{ code: string; returnTo: string } | null>(null);
 
   useMountEffect(() => {
+    // boot.tsx lifted Slack's code out of the URL before the auth provider
+    // could claim it; the URL keeps the rest. Either source is fine.
+    const stashed = takeSlackReturn();
     const p = new URLSearchParams(window.location.search);
-    const code = p.get("code");
-    const state = p.get("state");
-    const denied = p.get("error");
+    const code = p.get("code") ?? stashed?.code ?? null;
+    const state = p.get("state") ?? stashed?.state ?? null;
+    const denied = p.get("error") ?? stashed?.error ?? null;
     // Always rebuilt from pathname + search + hash on THIS origin, so a
     // return_to can never carry the browser to another host.
     const samePage = (to: string) => {

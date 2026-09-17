@@ -1,7 +1,7 @@
 // Presentation facts the org surfaces share: how each work state reads, and
 // how a parent reference is named. Data only; the cards render it.
 import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contracts";
-import { describeOrgChange, type OrgChange } from "@codecast/shared/contracts/orgProposal";
+import { describeOrgChange, describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import type { OrgParentRef, OrgStandingState, OrgTree } from "./orgTypes";
@@ -28,6 +28,22 @@ export function standingLineOf(s: OrgStandingState | null | undefined): { text: 
   if (status) return { text, label: THREAD_STATE_STATUS_META[status].label.toLowerCase(), color: THREAD_STATE_STATUS_META[status].color };
   if (s.state) return { text, label: ORG_STATE_META[s.state].label, color: ORG_STATE_META[s.state].color };
   return text ? { text, label: "pinned", color: "var(--sol-text-dim)" } : null;
+}
+
+/** The compact tenure chip a role node and a ghost seat draw (org-staffing.md
+ *  S10). Null for a standing seat — standing is silent. A program reads
+ *  "program · ends with pl-N" / a date / a project, the plan or project named
+ *  from the tree when it knows it. The ", then …" tail is dropped for the chip;
+ *  the full sentence is its title. */
+export function roleTenureChip(tenure: OrgTenureSpec | undefined | null, tree: OrgTree | null | undefined): { short: string; full: string } | null {
+  if (!tenure || tenure.kind === "standing") return null;
+  const e = tenure.ends as { plan?: string; project?: string; date?: number };
+  const roles = tree?.roles ?? [];
+  const names: { plan?: string; project?: string } = {};
+  if (e.plan) names.plan = roles.flatMap((r) => r.scope_names.plans).find((p) => p.id === e.plan || p.short_id === e.plan)?.short_id;
+  if (e.project) names.project = roles.flatMap((r) => r.scope_names.projects).find((p) => p.id === e.project || p.short_id === e.project || p.title === e.project)?.title;
+  const full = describeTenure(tenure, names);
+  return { short: full.replace(/, then .*$/, ""), full };
 }
 
 export function parentName(tree: OrgTree, ref: OrgParentRef): string {
@@ -88,6 +104,9 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   project_meta: "charter",
   adopt: "adopt",
   retire: "retire",
+  plan_status: "plan",
+  task_status: "task",
+  project_status: "project",
 };
 
 /** A ghost's colour (org-staffing.md S5): the page's violet, dashed, at 55%. */

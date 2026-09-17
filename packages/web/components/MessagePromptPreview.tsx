@@ -6,10 +6,12 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { ImageLightbox, useImageGallery } from "./ImageGallery";
 
 export function MessagePromptPreview({
-  content, images, variant = "row", textClassName = "", textRef, onTextClick,
+  content, images, messageId, variant = "row", textClassName = "", textRef, onTextClick,
 }: {
   content: string;
   images?: PromptImage[];
+  // The message these images belong to, so the lightbox can jump back to it.
+  messageId?: string;
   variant?: "row" | "sticky" | "preview";
   textClassName?: string;
   textRef?: Ref<HTMLDivElement>;
@@ -50,7 +52,7 @@ export function MessagePromptPreview({
                   e.stopPropagation();
                   if (!src || unavailable) return;
                   const available = [...new Set(srcs.filter((value): value is string => !!value && !failed.has(value)))];
-                  if (gallery) gallery.openList(available, available.indexOf(src));
+                  if (gallery) gallery.openList(available.map(s => ({ src: s, href: s.startsWith("data:") ? undefined : s, messageId })), available.indexOf(src));
                   else setLightbox(src);
                 }}
               >

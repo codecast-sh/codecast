@@ -1,0 +1,45 @@
+/* Viewer faces: who has this session open right now.
+ *
+ * A stack of small round faces, overlapped with a bg colored ring so the
+ * overlap reads as depth. A face arriving scales in from its center; a face
+ * leaving unmounts (the list re-keys on member id, so the others do not move).
+ * Motion is opacity and transform only, and the global reduced motion rule in
+ * globals.css zeroes it. The stack shares its geometry with the chat typing
+ * indicator so the two read as one family on the same screen. */
+.cc-viewers {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.cc-viewers > * {
+  margin-left: calc(var(--cc-viewers-overlap, 5px) * -1);
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1.5px var(--sol-bg);
+  animation: cc-viewers-in 160ms ease-out;
+}
+
+.cc-viewers > *:first-child {
+  margin-left: 0;
+}
+
+.cc-viewers-more {
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--sol-bg-alt);
+  color: var(--sol-text-dim);
+  font-weight: 600;
+  line-height: 1;
+}
+
+@keyframes cc-viewers-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

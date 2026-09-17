@@ -32,6 +32,7 @@ import { useTriggers } from "../hooks/useSyncTriggers";
 import { TriggerPromptView } from "./TriggerPromptView";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { LivePulseDot } from "./SessionActivityLine";
 const api = _api as any;
 
 // Raw titles are often a 60-char prompt slice that dies mid-parenthetical
@@ -247,7 +248,7 @@ export function TriggerContextPanel({
       case "running":
         return (
           <span className="flex items-center gap-1 text-sol-green">
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+            <LivePulseDot className="w-1.5 h-1.5" />
             running
           </span>
         );

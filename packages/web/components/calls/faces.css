@@ -89,6 +89,14 @@
   transition: opacity 220ms ease, box-shadow 120ms ease;
 }
 
+/* Followed. The team bar's selected ring, here: a steady cyan band, no glow,
+   so it never reads as speech. Speech still wins while it lasts. */
+.face[data-followed="true"]:not([data-speaking="true"]) {
+  box-shadow:
+    0 0 0 2px var(--sol-bg-alt),
+    0 0 0 4px var(--sol-cyan);
+}
+
 .face-slot[data-local="true"] .face {
   box-shadow:
     0 0 0 calc(var(--level, 0) * 5px) var(--sol-orange),

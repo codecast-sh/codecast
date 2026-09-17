@@ -1,7 +1,5 @@
 import React, { useCallback, useId, useRef, useState } from "react";
-import Link from "next/link";
 import {
-  ArrowUpRight,
   ChevronDown,
   FileText,
   Folder,
@@ -44,7 +42,7 @@ import {
 import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
-import { RevealButton, type RevealTarget } from "./ObjectReveal";
+import { RevealButton, RevealOpenLink, type RevealTarget } from "./ObjectReveal";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -597,7 +595,7 @@ export function ObjectCardFrame({
   const flat = resolved && !!flatBody;
   // The full page, inline: the band opens after the message body (RevealHost)
   // at the same href the open link goes to.
-  const reveal: RevealTarget = { href, title: ariaLabel, onOpen };
+  const reveal: RevealTarget = { href, title: ariaLabel, onOpen, openLabel };
   const revealChrome = `text-sol-text-dim opacity-0 transition-opacity ${accent.hoverText} focus-visible:opacity-100 group-hover/card:opacity-100 aria-pressed:opacity-100`;
 
   return (
@@ -620,15 +618,7 @@ export function ObjectCardFrame({
         <>
           <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
             {resolved && <RevealButton target={reveal} className={`text-sol-text-dim ${accent.hoverText}`} />}
-            <Link
-              href={href}
-              onClick={openObject}
-              {...(onOpen ? { "data-no-progress": "" } : {})}
-              title={openLabel}
-              className={`rounded p-0.5 text-sol-text-dim ${accent.hoverText}`}
-            >
-              <ArrowUpRight className="h-3 w-3" />
-            </Link>
+            <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />
             <ChevronDown
               className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
             />
@@ -653,15 +643,7 @@ export function ObjectCardFrame({
           <div className="mt-[1px] flex flex-shrink-0 items-center gap-1.5">
             {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
             {resolved && <RevealButton target={reveal} className={revealChrome} />}
-            <Link
-              href={href}
-              onClick={openObject}
-              {...(onOpen ? { "data-no-progress": "" } : {})}
-              title={openLabel}
-              className={`rounded p-0.5 text-sol-text-dim opacity-0 transition-opacity ${accent.hoverText} focus-visible:opacity-100 group-hover/card:opacity-100`}
-            >
-              <ArrowUpRight className="h-3 w-3" />
-            </Link>
+            {resolved && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
             <ChevronDown
               className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
             />
@@ -704,15 +686,7 @@ export function ObjectCardFrame({
                 <span className="font-mono text-[10px] text-sol-text-dim">{footerId}</span>
                 <span className="flex items-center gap-3">
                   <RevealButton target={reveal} withLabel className={`text-[10px] text-sol-text-muted ${accent.hoverText} hover:underline`} />
-                  <Link
-                    href={href}
-                    onClick={openObject}
-                    {...(onOpen ? { "data-no-progress": "" } : {})}
-                    className={`inline-flex items-center gap-0.5 text-[10px] ${accent.text} no-underline hover:underline`}
-                  >
-                    {openLabel}
-                    <ArrowUpRight className="h-2.5 w-2.5" />
-                  </Link>
+                  <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />
                 </span>
               </div>
             </div>

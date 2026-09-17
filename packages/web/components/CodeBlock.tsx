@@ -1,9 +1,13 @@
-import { useState, useMemo, useCallback, memo } from "react";
+import { useState, useMemo, useCallback, useContext, memo } from "react";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
 import { Copy, Check, MoveHorizontal, WrapText } from "lucide-react";
 import { highlightCode } from "../lib/codeLanguage";
+import { HighlightContext } from "./HighlightContext";
+import { markMatchesInHtml } from "../lib/domMarks";
+import { SEARCH_MARK_ATTR, SEARCH_MARK_CLASS } from "../lib/rehypeSearchHighlight";
+import { parseSearchTerms } from "@codecast/shared/search";
 
 interface CodeBlockProps {
   code: string;
@@ -11,6 +15,10 @@ interface CodeBlockProps {
 }
 
 const wrappedBlocks = new Set<string>();
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 function codeKey(code: string): string {
   let h = 0;
@@ -20,6 +28,18 @@ function codeKey(code: string): string {
 
 export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockProps) {
   const highlighted = useMemo(() => highlightCode(code, language), [code, language]);
+  // The in-conversation search marks hits here too: the markdown pass cannot
+  // reach inside a fenced block (its text is flattened before Prism sees it),
+  // so the hit is wrapped in the finished HTML instead. Plain (unhighlighted)
+  // code takes the same path through an escaped copy so both branches render
+  // identically with or without a query.
+  const query = useContext(HighlightContext);
+  const searched = useMemo(() => {
+    const terms = query ? parseSearchTerms(query) : [];
+    if (terms.length === 0) return null;
+    return markMatchesInHtml(highlighted ?? escapeHtml(code), terms, { className: SEARCH_MARK_CLASS, attrs: { [SEARCH_MARK_ATTR]: "true" } });
+  }, [query, highlighted, code]);
+  const html = searched ?? highlighted;
   const key = useMemo(() => codeKey(code), [code]);
   const { expanded, toggle: toggleExpand, containerRef, style: expandStyle } = useFullWidthExpand(key);
   const [wrapped, setWrapped] = useState(wrappedBlocks.has(key));
@@ -75,8 +95,8 @@ export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockPr
         className={`!m-0 !py-2 !pl-4 !pr-8 !border-0 text-sm code-block-accent ${wrapped ? "" : "cb-hscroll"}`}
         style={wrapped ? { whiteSpace: "pre-wrap", wordBreak: "break-word" } : undefined}
       >
-        {highlighted ? (
-          <code className="font-mono text-sol-text-secondary" dangerouslySetInnerHTML={{ __html: highlighted }} />
+        {html ? (
+          <code className="font-mono text-sol-text-secondary" dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <code className="font-mono text-sol-text-secondary">{code}</code>
         )}

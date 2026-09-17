@@ -408,3 +408,51 @@ describe("teammateWhereabouts", () => {
     expect(rows[0].name).toBe("ghost-dev");
   });
 });
+
+import { viewersLabel, viewersOf, viewersSig } from "./memberPresence";
+
+describe("viewersOf", () => {
+  const me = "u-me";
+  const ann = { _id: "u-ann", name: "Ann Lee", presence_state: "active", viewing_conversation_id: "c1" };
+  const bob = { _id: "u-bob", name: "Bob", presence_state: "idle", viewing_conversation_id: "c1" };
+  const cy = { _id: "u-cy", name: "Cy", presence_state: "offline", viewing_conversation_id: "c1" };
+  const dan = { _id: "u-dan", name: "Dan", presence_state: "active", viewing_conversation_id: "c2" };
+  const self = { _id: me, name: "Me", presence_state: "active", viewing_conversation_id: "c1" };
+  const roster = [self, ann, cy, bob, dan];
+
+  it("lists the online teammates reporting this conversation, in roster order, never the viewer", () => {
+    expect(viewersOf(roster, "c1", me).map((m) => m._id)).toEqual(["u-ann", "u-bob"]);
+  });
+
+  it("drops an offline row even when it still carries the id, and names nobody for another session or no session", () => {
+    expect(viewersOf(roster, "c1", me).map((m) => m._id)).not.toContain("u-cy");
+    expect(viewersOf(roster, "c9", me)).toEqual([]);
+    expect(viewersOf(roster, null, me)).toEqual([]);
+    expect(viewersOf(undefined, "c1", me)).toEqual([]);
+  });
+
+  it("signature is the ids joined, and empty when nobody is here", () => {
+    expect(viewersSig(roster, "c1", me)).toBe("u-ann,u-bob");
+    expect(viewersSig(roster, "c2", me)).toBe("u-dan");
+    expect(viewersSig(roster, "c9", me)).toBe("");
+  });
+
+  it("label reads as a sentence and shortens to first names past one person", () => {
+    expect(viewersLabel([])).toBe("");
+    expect(viewersLabel(["Ann Lee"])).toBe("Ann Lee is here");
+    expect(viewersLabel(["Ann Lee", "Bob"])).toBe("Ann and Bob are here");
+    expect(viewersLabel(["Ann Lee", "Bob", "Cy"])).toBe("Ann, Bob and Cy are here");
+    expect(viewersLabel(["Ann Lee", "Bob", "Cy", "Dan"])).toBe("Ann, Bob and 2 others are here");
+  });
+});
+
+describe("teammateWhereabouts, the followed teammate", () => {
+  const me = "u-me";
+  const ann = { _id: "u-ann", name: "Ann", presence_state: "offline" };
+  const bob = { _id: "u-bob", name: "Bob", presence_state: "active" };
+  it("is always listed, even offline or in no session, so the row that stops the follow is there", () => {
+    expect(teammateWhereabouts([ann, bob], me, "", {}, "u-ann").map((r) => r.id)).toEqual(["u-ann"]);
+    expect(teammateWhereabouts([ann, bob], me, "stop", {}, "u-ann").map((r) => r.id)).toEqual(["u-ann"]);
+    expect(teammateWhereabouts([ann, bob], me, "", {}, null)).toEqual([]);
+  });
+});

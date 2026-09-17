@@ -57,6 +57,8 @@ import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
+import { useFollowMode } from "../hooks/useFollowMode";
+import { FollowPill } from "./presence/FollowPill";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron, borrowsTabShell, isStandaloneCommunityPath } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
@@ -797,6 +799,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   });
 
   useGlobalShortcutActions();
+  // Follow mode, both sides (the lease, the mirror, the report).
+  useFollowMode();
   useShortcutContext('desktop', isDesktopApp);
   const switcherState = useRecentSwitcher();
 
@@ -1113,6 +1117,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
             <ErrorBoundary name="TeamAvatarBar" level="inline">
               <Suspense fallback={null}><TeamAvatarBar /></Suspense>
+            </ErrorBoundary>
+            <ErrorBoundary name="FollowPill" level="inline">
+              <FollowPill />
             </ErrorBoundary>
           </div>
 

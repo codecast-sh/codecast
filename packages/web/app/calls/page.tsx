@@ -40,7 +40,7 @@ import {
 } from "../../components/calls/useCallFeed";
 import { firstName, fmtClock, speakerColor } from "../../components/calls/speakers";
 import { TranscriptTurnList } from "../../components/calls/TranscriptTurns";
-import { groupTurns } from "../../components/calls/transcriptTurnModel";
+import { groupTurns, oneSegmentTurns } from "../../components/calls/transcriptTurnModel";
 import { useMutation } from "convex/react";
 import {
   DropdownMenu,
@@ -263,7 +263,15 @@ function CallDetail({ id }: { id: string }) {
   const [end, setEnd] = useState<number | null>(null);
   const [sentTick, setSentTick] = useState<string | null>(null);
 
-  const turns = useMemo(() => groupTurns(call?.segments ?? []), [call?.segments]);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [audioMs, setAudioMs] = useState(0);
+  const turns = useMemo(
+    () =>
+      recording
+        ? oneSegmentTurns(call?.segments ?? [])
+        : groupTurns(call?.segments ?? []),
+    [call?.segments, recording],
+  );
   const [selLo, selHi] =
     anchor === null ? [null, null] : end === null ? [anchor, anchor] : [Math.min(anchor, end), Math.max(anchor, end)];
   const selectedCount = selLo === null ? 0 : (selHi as number) - selLo + 1;
@@ -329,13 +337,36 @@ function CallDetail({ id }: { id: string }) {
   };
 
   const isSelected = (i: number) => selLo !== null && i >= selLo && i <= (selHi as number);
+  const seekTo = (ms: number) => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.currentTime = Math.max(0, ms / 1000);
+    void el.play().catch(() => {});
+    setAudioMs(ms);
+  };
+
   const onTurnClick = (i: number, e: React.MouseEvent) => {
+    if (recording && !e.shiftKey) {
+      seekTo(turns[i]?.t0 ?? 0);
+      return;
+    }
     if (anchor === null) return setAnchor(i);
     if (e.shiftKey || anchor !== null) {
       if (i === anchor && end === null) return clearSelection();
       setEnd(i);
     }
   };
+
+  const activeIndex =
+    recording && audioMs > 0
+      ? (() => {
+          const i = turns.findIndex((t) => {
+            const t1 = t.segments[t.segments.length - 1]?.t1;
+            return t1 != null && audioMs >= t.t0 && audioMs < t1;
+          });
+          return i >= 0 ? i : null;
+        })()
+      : null;
 
   return (
     <div className="flex h-full min-h-0">
@@ -479,7 +510,14 @@ function CallDetail({ id }: { id: string }) {
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">
                 <Mic className="h-3 w-3" /> Audio
               </div>
-              <audio controls preload="none" src={call.recording_url} className="w-full max-w-lg" />
+              <audio
+                ref={audioRef}
+                controls
+                preload="none"
+                src={call.recording_url}
+                className="w-full max-w-lg"
+                onTimeUpdate={(e) => setAudioMs(e.currentTarget.currentTime * 1000)}
+              />
             </div>
           )}
 
@@ -495,12 +533,19 @@ function CallDetail({ id }: { id: string }) {
             <>
               {selectedCount === 0 && (
                 <div className="mb-2 text-[10.5px] text-sol-text-dim/80">
-                  Click a turn to start a selection, click another to extend — then send the
-                  excerpt to an agent.
+                  {recording
+                    ? "Click a line to jump there in the audio. Shift-click to select lines to send."
+                    : "Click a turn to start a selection, click another to extend — then send the excerpt to an agent."}
                 </div>
               )}
               <div className="space-y-0.5 pb-20">
-                <TranscriptTurnList turns={turns} isSelected={isSelected} onTurnClick={onTurnClick} />
+                <TranscriptTurnList
+                  turns={turns}
+                  isSelected={isSelected}
+                  onTurnClick={onTurnClick}
+                  compact={recording}
+                  activeIndex={activeIndex}
+                />
               </div>
             </>
           )}

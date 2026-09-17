@@ -1,3 +1,4 @@
+import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -22,11 +23,12 @@ import { installStoreListenerCensus } from "./storeListenerCensus";
 import { current, isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import type { AppPermissionKind } from "../lib/osPermissions";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, setUpgradeBlockedListener, PERSISTENCE_AVAILABLE } from "./idbCache";
+import { loadCache, loadPaintCacheSync, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, setUpgradeBlockedListener, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
   HYDRATION_CRITICAL_READ_KEYS,
   HYDRATION_CRITICAL_KEYS,
+  HYDRATION_PAINT_KEYS,
   HYDRATION_DEFERRED_KEYS,
   REGISTRY_SYNC_OPTS,
   collectionInitialState,
@@ -124,7 +126,7 @@ export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport, SessionActivity } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
-import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -1659,6 +1661,18 @@ export type ClientUI = {
   // over it, and this retires that callout for good. Stamped LWW: learning the
   // gesture on the laptop means the phone's browser has learned it too.
   walkie_hold_seen?: boolean;
+  // The org page's first open guide (org-staffing.md S14) has been dismissed
+  // once, so the page never opens on it again; "How this page works" in the
+  // toolbar reopens it by hand. Stamped LWW: a person who has read the guide
+  // on one device has read it everywhere.
+  org_nux_seen?: boolean;
+  // The review "Propose an org now" started on the org page: when, in which
+  // workspace, and the session doing it (its stub id first, the real id once
+  // the server names it). Kept here, not in component state, so a reload or
+  // a visit elsewhere does not forget a running review and offer to start a
+  // second one. Stamped LWW: the phone sees the laptop's review too. The
+  // page derives reviewing, ended or nothing from it (staffingModel.reviewRunState).
+  org_review_run?: { since: number; session_id: string | null; workspace: string } | null;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
@@ -2540,6 +2554,8 @@ export function isSessionHardBlocked(
     messageCount: session.message_count ?? 0,
     isUnresponsive: !!session.is_unresponsive,
     declaredStatus: session.thread_state_status ?? null,
+    // A row with queued messages already returned above.
+    hasPending: false,
   });
 }
 
@@ -3035,7 +3051,7 @@ function deriveInboxAsking(
   mineAll: Record<string, InboxSession> = filterInboxScope(state.sessions, "mine", meId),
 ): InboxAsking {
   const decisions = state.sessionDecisions ?? (EMPTY_PLACEMENT_OBJ as Record<string, SessionDecisionItem>);
-  const pendingDecide = pendingDecisionConvIds(decisions);
+  const pendingDecide = pendingDecisionConvIds(decisions, meId);
   const asks = (s: InboxSession) => pendingDecide.has(s._id) || sessionHasOpenQuestion(s, state.questionResolutions);
   const askingChildParents = new Set<string>();
   for (const s of Object.values(mineAll)) {
@@ -3351,7 +3367,14 @@ export function placeInboxRows(
   // parent is absent (a plan handoff under a dismissed planner) renders flat,
   // exactly as the server lists it.
   const isOrphanSubagent = (s: InboxSession) => isOrphanOrSubagent(s) && !subsWithParent.has(s._id);
-  const isFlat = (s: InboxSession) => isTop(s) && !isOrphanSubagent(s);
+  // A team worker whose lead is not on this list is not an inbox card.
+  // Promoting it was the "loose ↳ in Done" leak: the lead finished or aged
+  // out and every leftover reviewer became its own Done row. Same display
+  // rule as a Task subagent. A pin on the worker itself is the viewer's act
+  // to keep it visible.
+  const isLooseTeamWorker = (s: InboxSession) =>
+    isAgentTeamWorker(s) && !subsWithParent.has(s._id) && !s.is_pinned;
+  const isFlat = (s: InboxSession) => isTop(s) && !isOrphanSubagent(s) && !isLooseTeamWorker(s);
 
   // 6. Tallies over working-set MEMBERS only — the client twin of the server
   // envelope's tally. Members the fold dropped from visibleSessions still
@@ -3482,7 +3505,7 @@ export function placeInboxRows(
     tally: tallyOut,
     truncated: reuseArray(prev?.truncated, membership?.truncated ?? EMPTY_TRUNCATED),
     set_digest,
-    sorted: reuseArray(prev?.sorted, sorted.filter(s => !isOrphanSubagent(s))),
+    sorted: reuseArray(prev?.sorted, sorted.filter(s => !isOrphanSubagent(s) && !isLooseTeamWorker(s))),
     questions: reuseArray(prev?.questions, questions),
     pinned: reuseArray(prev?.pinned, pinned),
     newSessions: reuseArray(prev?.newSessions, newSessions),
@@ -4102,10 +4125,9 @@ export function chipMatchesSession(
 // it between unrelated cards while its (recently-active) parent sorts far away
 // — three ↳-styled rows adrift in the middle of the inbox. Children keep the
 // comparator's relative order among siblings and follow chains (a child's own
-// children ride along). A teammate whose lead didn't make the list stays where
-// the sort put it — same "parentless renders flat" semantics as
-// placeInboxRows; a parentless Task subagent never reaches here (see
-// dropOrphanSubagents).
+// children ride along). A teammate whose lead didn't make the list is dropped
+// (dropOrphanSubagents), same as a parentless Task subagent — leftover
+// reviewers must not become their own Done cards.
 function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
   const present = new Set(list.map((s) => s._id));
   const nestedHere = (s: InboxSession) => {
@@ -4145,12 +4167,12 @@ function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
 // nested subagents when the toggle is off (always keeping the focused one),
 // sorts by the view comparator, applies the chip predicate, then hoists each
 // remaining subagent/teammate row under its parent (hoistNestedUnderParent).
-// A Task subagent whose parent is NOT in the final list is dropped, exactly as
-// placeInboxRows' isOrphanSubagent: it rides its parent (a hidden anchor's
-// worker, a parent that aged out, was dismissed, or fails the chip). Left in,
-// it floats at its own creation slot wearing the ↳ arrow and reads as a child
-// of whatever unrelated card sorts above it. Teammates keep the "parentless
-// renders flat" semantics (a real session someone may need to answer).
+// A Task subagent or team worker whose parent is NOT in the final list is
+// dropped, exactly as placeInboxRows' isOrphanSubagent / isLooseTeamWorker:
+// it rides its parent (a hidden anchor's worker, a parent that aged out, was
+// dismissed, or fails the chip). Left in, it floats at its own creation slot
+// wearing the ↳ arrow and reads as a child of whatever unrelated card sorts
+// above it.
 export function flatViewSessions(
   sortedSessions: InboxSession[],
   subsByParent: Map<string, InboxSession[]>,
@@ -4194,12 +4216,14 @@ function nestedSessionIds(subsByParent: Map<string, InboxSession[]>): Set<string
   return ids;
 }
 
-// Drop Task subagents whose nest parent didn't make `list` (see flatViewSessions).
-// The focused row always renders; a pinned one is an explicit "keep visible".
+// Drop Task subagents and team workers whose nest parent didn't make `list`
+// (see flatViewSessions). The focused row always renders; a pinned one is an
+// explicit "keep visible".
 function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): InboxSession[] {
   const present = new Set(list.map((s) => s._id));
   return list.filter((s) => {
-    if (s._id === focusedId || s.is_pinned || !isSubagentConversation(s)) return true;
+    if (s._id === focusedId || s.is_pinned) return true;
+    if (!isSubagentConversation(s) && !isAgentTeamWorker(s)) return true;
     const p = nestParentIdOf(s);
     return !!p && p !== s._id && present.has(p);
   });
@@ -4721,6 +4745,18 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
 
   // -- Unified command palette --
   palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
+  // Follow mode (hooks/useFollowMode), ephemeral and per window: the teammate
+  // this window mirrors, whether their view is somewhere this person cannot
+  // open, who mirrors this window, and this window's place in a transcript
+  // (written only while followed).
+  followLeaderId: string | null;
+  followBlocked: boolean;
+  followedBy: FollowerRow[];
+  viewAnchor: ViewAnchor | null;
+  setFollowLeader: (id: string | null, opts?: { fromBridge?: boolean }) => void;
+  setFollowBlocked: (blocked: boolean) => void;
+  setFollowedBy: (rows: FollowerRow[]) => void;
+  setViewAnchor: (anchor: ViewAnchor | null) => void;
   // `pick` opens the palette as an entity chooser (see lib/palettePick.ts):
   // the caller's title/extras on top, the usual recents + search below, and
   // the choice returned through `pick.onPick` instead of navigating.
@@ -5857,28 +5893,28 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
   return out;
 }
 
-// The ui keys whose writes carry a ":ts" stamp (updateClientUI), making them
-// per-key LWW across devices: the inbox VIEW configuration — scope, view mode,
-// the subagents / old-sessions toggles — is a per-USER preference ("the view
-// follows me"), not a per-device one. Everything else in the ui bag stays
-// unstamped and keeps exact legacy local_wins semantics: layout-ish prefs
-// (sidebar, zen mode, theme, active team) are naturally per-device, and
-// silently globalizing them would yank screens out from under people.
-export const STAMPED_UI_KEYS = new Set([
-  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
-  "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "auto_open_browser_panes",
-  "walkie_hold_seen", "call_camera_on", "call_mic_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
-  // The sound gates and volume: a mute is a per-user preference, not a
-  // per-device one — turning sounds off anywhere must silence every client,
-  // localhost dev origins included.
-  "sounds_enabled", "chat_sounds_enabled", "session_sounds_enabled",
-  "call_sounds_enabled", "walkie_sounds_enabled", "ui_sounds_enabled",
-  "sound_volume",
-  // Pins to the top of the rail follow the user. Layout-ish neighbors
-  // (sidebar_collapsed, zen, theme, nav_sections) stay unstamped on purpose.
-  "sidebar_pins",
+// Default: a ui write is stamped and last-writer-wins across devices, so a
+// new preference persists without joining a whitelist. The pin bug (ct-51761)
+// was one missed key on that whitelist — the write painted, then an empty
+// list from another client replaced it.
+//
+// Opt out only for prefs that name THIS window or THIS machine. Stamping those
+// would collapse the laptop's sidebar on the ultrawide, or send a headset id
+// to a phone that cannot open it.
+export const PER_DEVICE_UI_KEYS = new Set([
+  "theme", "visual_style",
+  "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
+  "sticky_headers_disabled", "diff_panel_open",
+  "trigger_prompt_height", "thread_state_collapsed", "people_view",
+  "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
 ]);
+
+export function isStampedUiKey(key: string): boolean {
+  return !key.endsWith(":ts") && !PER_DEVICE_UI_KEYS.has(key);
+}
+
+/** @deprecated Use isStampedUiKey. New keys stamp by default; this is not a list. */
+export const STAMPED_UI_KEYS = { has: isStampedUiKey };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
   if (typeof spec === "function") return spec(local, server, initialized);
@@ -6104,10 +6140,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   clientState: {
     kind: "singleton",
     merge: {
-      // Per-key LWW for the stamped inbox-view prefs (STAMPED_UI_KEYS); every
-      // unstamped key keeps exact local_wins per-key semantics. Blanket
-      // local_wins forked the bag per device forever — a pref changed on any
-      // other device never reached a client that already held the key.
+      // Per-key LWW: stamped keys (the default) take the newer write;
+      // PER_DEVICE_UI_KEYS stay unstamped local_wins so this window's chrome
+      // does not follow the user. Blanket local_wins forked the bag per
+      // device forever — a pref changed on any other device never reached a
+      // client that already held the key.
       ui: mergeStampedBagLww,
       layouts: "local_wins",
       dismissed: mergeStampedBagLww,
@@ -7145,6 +7182,9 @@ function announceHide(
 // can never regress newer local state. An absent visible value counts as 0, but
 // a pending field lock still carries the timestamp of a newer restore/unpin.
 function applyGestureInDraft(draft: any, msg: GestureMessage) {
+  // Follow state is ephemeral window state, routed to setFollowLeader by the
+  // bridge receiver (src/providers.tsx); it never touches a row.
+  if (msg.kind === "follow") return;
   const notNewer = (coll: "sessions" | "conversations", id: string, field: string, current: unknown, ts: number) => {
     const pending = draft.pending[`${coll}:${id}:${field}`];
     const currentTs = typeof current === "number" ? current : 0;
@@ -7621,6 +7661,30 @@ const inboxStoreConfig = (set: any, get: any) => ({
   cloudSessionMode: false,
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
+
+  followLeaderId: null,
+  followBlocked: false,
+  followedBy: [],
+  viewAnchor: null,
+  setFollowLeader: (id: string | null, opts?: { fromBridge?: boolean }) => {
+    const s = useInboxStore.getState();
+    if (s.followLeaderId === id && !s.followBlocked) return;
+    set({ followLeaderId: id, followBlocked: false });
+    // Sibling windows (the huddle window, the main window) mirror the state.
+    if (!opts?.fromBridge) broadcastGesture({ kind: "follow", leaderId: id, ts: Date.now() }, bridgeUserId(s));
+  },
+  setFollowBlocked: (blocked: boolean) => {
+    if (useInboxStore.getState().followBlocked === blocked) return;
+    set({ followBlocked: blocked });
+  },
+  setFollowedBy: (rows: FollowerRow[]) => {
+    if (followersSig(useInboxStore.getState().followedBy) === followersSig(rows)) return;
+    set({ followedBy: rows });
+  },
+  setViewAnchor: (anchor: ViewAnchor | null) => {
+    if (sameViewAnchor(useInboxStore.getState().viewAnchor, anchor)) return;
+    set({ viewAnchor: anchor });
+  },
 
   openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger'; mode?: string; initialQuery?: string; pick?: PalettePick }) => {
     set({
@@ -9122,16 +9186,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
-    // Whitelisted per-USER keys get a flat "<key>:ts" sibling stamp so the ui
-    // bag can merge them per-key LWW (mergeStampedBagLww) — the inbox view
-    // follows the user across devices, and the newest toggle anywhere wins
-    // everywhere. A caller-supplied stamp is honored (the hydration gap-fill
-    // restores legacy values with their ORIGINAL write time, so a stale boot
-    // can't outrank a genuinely newer cross-device write).
+    // Every key is stamped unless it is in PER_DEVICE_UI_KEYS, so a new
+    // preference persists without joining a whitelist. A caller-supplied
+    // stamp is honored (the hydration gap-fill restores legacy values with
+    // their ORIGINAL write time, so a stale boot can't outrank a genuinely
+    // newer cross-device write).
     const stamped: Record<string, any> = { ...partial };
     const now = Date.now();
     for (const k of Object.keys(partial)) {
-      if (STAMPED_UI_KEYS.has(k) && stamped[`${k}:ts`] === undefined) stamped[`${k}:ts`] = now;
+      if (isStampedUiKey(k) && stamped[`${k}:ts`] === undefined) stamped[`${k}:ts`] = now;
     }
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
     Object.assign(this.clientState.ui, stamped);
@@ -12418,7 +12481,12 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
   });
 
   setHydrating(true);
-  const cached = await loadCache(HYDRATION_CRITICAL_READ_KEYS);
+  // Native first paint reads only the live inbox rows (no getAllKeys of the
+  // whole SQLite cache, no conversations twin). That runs before the first
+  // await so bootPersistence() at module eval already has sessions in the
+  // store. The full critical set still loads below, after splash can hide.
+  // Desktop IndexedDB has no sync read; loadPaintCacheSync returns null.
+  const paintCached = loadPaintCacheSync();
 
     const apply = (source: Record<string, any> | null, pick: string[]) => {
       if (!source) return;
@@ -12502,6 +12570,21 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
         useInboxStore.setState(updates);
       }
     };
+
+    if (paintCached) {
+      apply(paintCached, [...HYDRATION_PAINT_KEYS]);
+      seedLiveInboxIdsFromCache(paintCached.liveInboxIdList);
+      seedTeamInboxIdsFromCache(paintCached.teamInboxIdSnapshot);
+      const paintFocus = (paintCached.lastFocusedConversationId ?? null) as string | null;
+      if (paintFocus && !useInboxStore.getState().lastFocusedConversationId) {
+        useInboxStore.setState({ lastFocusedConversationId: paintFocus });
+      }
+      if (!useInboxStore.getState().clientStateInitialized) {
+        useInboxStore.setState({ clientStateInitialized: true });
+      }
+    }
+
+    const cached = await loadCache(HYDRATION_CRITICAL_READ_KEYS);
 
     // Strip stale large fields from cached conversations (git_diff, git_diff_staged, available_skills)
     if (cached?.conversations && typeof cached.conversations === "object") {

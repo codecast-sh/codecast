@@ -4,13 +4,16 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock, Pencil } from "lucide-react";
+import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock } from "lucide-react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useDocPresence, type PresenceRow } from "../hooks/useDocPresence";
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
 import { PresenceFacepile } from "./PresenceFacepile";
+import { TypingIndicator } from "./chat/TypingIndicator";
+import { rosterIdentity } from "../hooks/useTeamRoster";
+import type { ChatMember } from "../lib/chatViews";
 import { AvatarImg } from "../lib/avatarCache";
 import type { ConversationData } from "./ConversationView";
 
@@ -35,44 +38,94 @@ function useComposerPresence(
   });
 }
 
-function CollabPresenceBar({ present }: { present: PresenceRow[] }) {
-  if (present.length === 0) return null;
-  const writer = present.find((p) => p.draft_text && p.draft_text.trim());
+/**
+ * Whether a conversation can carry composer co-presence. It must be a real
+ * server row: a fresh optimistic stub is keyed by its session uuid, which the
+ * presence query's id validator rejects. Every real conversation qualifies,
+ * private ones included: the server gates the read on access, and the owner
+ * writes nothing until someone else appears, so a solo session costs one
+ * silent subscription and no rows.
+ */
+export function composerPresenceEnabled(conversation: { _id: unknown } | null | undefined): boolean {
+  return !!conversation && isConvexId(String(conversation._id));
+}
+
+/** The rows in a presence list that are forming words right now. */
+export function typingRows(present: readonly PresenceRow[]): PresenceRow[] {
+  return present.filter((p) => !!p.draft_text && p.draft_text.trim().length > 0);
+}
+
+/**
+ * A presence row as the typing strip's member: the roster row when the
+ * person is a teammate (their real face), else the name the row carries (a
+ * share link guest, who is not on the roster).
+ */
+export function presenceMember(row: PresenceRow, roster: readonly ChatMember[]): ChatMember {
+  return roster.find((m) => String(m._id) === row.user_id) ?? { _id: row.user_id, name: row.user_name };
+}
+
+// The line above a composer that says who else is in the box. Two states.
+// Someone is typing: the same strip the team chat composer wears (faces,
+// "Ann is typing", dots) plus their words in muted italics, so two humans
+// steering one session see the overlap before both press send. Someone is
+// simply here: only for a share link guest, who has no face on the roster.
+// A teammate's presence already shows as a face on the header and the card,
+// so on a team session the line stays empty until words appear.
+//
+// The container keeps its place in the layout and animates its height, so a
+// line arriving never shoves the composer and a line leaving never snaps it.
+export function CollabPresenceBar({ present, showHere, boxed = false }: { present: PresenceRow[]; showHere: boolean; boxed?: boolean }) {
+  const roster = useInboxStore((s) => rosterIdentity(s.teamMembers)) as ChatMember[];
+  const typing = typingRows(present);
+  const writer = typing[0];
+  const open = !!writer || (showHere && present.length > 0);
   const names = present.map((p) => p.user_name).join(", ");
   return (
-    <div className="flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted border-t border-sol-border/20 bg-sol-bg-alt/30">
-      <PresenceFacepile present={present} />
-      {writer ? (
-        <span className="flex items-center gap-1 min-w-0">
-          <Pencil className="w-3 h-3 text-sol-cyan shrink-0" />
-          <b className="text-sol-text shrink-0">{writer.user_name}</b>
-          <span className="italic truncate text-sol-text-dim">{writer.draft_text}</span>
-        </span>
-      ) : (
-        <span className="truncate">
-          <b className="text-sol-text">{names}</b> {present.length > 1 ? "are" : "is"} here
-        </span>
-      )}
+    <div
+      data-sv-composer-presence={open ? (writer ? "typing" : "here") : "off"}
+      aria-hidden={!open}
+      className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+    >
+      <div className="min-h-0 overflow-hidden">
+        {open && (
+          <div className={`flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted min-w-0 ${boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
+            {writer ? (
+              <>
+                <TypingIndicator members={typing.map((p) => presenceMember(p, roster))} />
+                <span className="italic truncate text-sol-text-dim min-w-0" title={writer.draft_text}>{writer.draft_text}</span>
+              </>
+            ) : (
+              <>
+                <PresenceFacepile present={present} />
+                <span className="truncate">
+                  <b className="text-sol-text">{names}</b> {present.length > 1 ? "are" : "is"} here
+                </span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-// Owner-side presence: mounted above the owner's own composer (only on a shared
-// session). Reads the owner's live draft from the store — no MessageInput surgery
-// — broadcasts it once a collaborator appears, and shows who's co-writing.
+// Owner-side presence: mounted above the owner's own composer on every real
+// conversation. Reads the owner's live draft from the store — no MessageInput
+// surgery — broadcasts it once a collaborator appears, and shows who is
+// co-writing. `showHere` is for a share link session, whose guests have no
+// face anywhere else.
 export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   conversationId,
+  showHere = false,
 }: {
   conversationId: string;
+  showHere?: boolean;
 }) {
   const draft = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
   const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: false });
-  if (present.length === 0) return null;
   return (
-    <div className="mx-auto conv-col px-2 sm:px-4 pb-1">
-      <div className="rounded-xl border border-sol-cyan/25 bg-sol-cyan/5 overflow-hidden">
-        <CollabPresenceBar present={present} />
-      </div>
+    <div className="mx-auto conv-col px-2 sm:px-4">
+      <CollabPresenceBar present={present} showHere={showHere} boxed />
     </div>
   );
 });
@@ -211,7 +264,7 @@ export const CollabComposer = memo(function CollabComposer({
 
   return (
     <div className="bg-sol-bg">
-      <CollabPresenceBar present={present} />
+      <CollabPresenceBar present={present} showHere={!!conversation.share_token} />
       <div className={`flex items-center gap-2 px-4 py-1.5 text-[11px] border-t ${toneClass}`}>
         <span className="shrink-0">{strip.icon}</span>
         <span className="truncate">{strip.text}</span>

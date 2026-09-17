@@ -1266,3 +1266,31 @@ describe("gesture bridge receiver is local-only", () => {
     expect(pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
   });
 });
+
+import { test as followTest, expect as followExpect } from "bun:test";
+import { broadcastGesture as followBroadcast, subscribeGestures as followSubscribe, setGestureChannelFactory as followFactory } from "../gestureBridge";
+
+followTest("a follow gesture crosses to a sibling window and a malformed one is dropped", () => {
+  const listeners: Array<(e: MessageEvent) => void> = [];
+  const fake = {
+    addEventListener: (_: string, fn: (e: MessageEvent) => void) => listeners.push(fn),
+    removeEventListener: () => {},
+    postMessage: (data: unknown) => {
+      // A sibling: a different source token, so the message is not our own.
+      for (const fn of listeners) fn({ data: { ...(data as object), source: "other-window" } } as MessageEvent);
+    },
+    close: () => {},
+  };
+  followFactory(() => fake as any);
+  const seen: unknown[] = [];
+  const stop = followSubscribe("user-1", () => "user-1", (m) => seen.push(m));
+  followBroadcast({ kind: "follow", leaderId: "u-ann", ts: 1 }, "user-1");
+  followBroadcast({ kind: "follow", leaderId: null, ts: 2 }, "user-1");
+  fake.postMessage({ kind: "follow", leaderId: 42, ts: 3, v: 1, userId: "user-1" });
+  followExpect(seen).toEqual([
+    { kind: "follow", leaderId: "u-ann", ts: 1 },
+    { kind: "follow", leaderId: null, ts: 2 },
+  ]);
+  stop();
+  followFactory(null);
+});

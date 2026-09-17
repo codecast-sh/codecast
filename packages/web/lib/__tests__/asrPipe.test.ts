@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { openAsrPipe } from "../calls/asrPipe";
+import { openAsrPipe, openAsrPcmSession } from "../calls/asrPipe";
 
 // ── the browser, in as much as this file touches it ────────────────────────
 
@@ -373,16 +373,15 @@ describe("asrPipe: words while they are still being said", () => {
     expect(heard).toEqual(["アショット, サムビット, エージェントレイヤー。"]);
   });
 
-  test("the socket is told the allowlist before any audio", async () => {
+  test("the minted session is left alone; audio flushes without a session.update", async () => {
     const h = open(undefined, ["en", "ja"]);
     const ws = await h.connect();
     h.audio().speak(frame(100));
     ws.open();
-    expect(ws.types()[0]).toBe("session.update");
-    expect(JSON.parse(ws.sent[0]).session.audio.input.transcription.languages).toEqual([
-      "en",
-      "ja",
-    ]);
+    // Rewriting the session on open was how a huddle lost every word: it
+    // swapped the live model onto a socket whose VAD had already been set,
+    // and the live model then waited for a commit nobody sent.
+    expect(ws.types()).not.toContain("session.update");
     expect(ws.appends()).toEqual([100]);
   });
 
@@ -410,5 +409,83 @@ describe("asrPipe: words while they are still being said", () => {
       transcript: "アショット, サムビット, エージェントレイヤー。",
     });
     expect(heard).toEqual(["アショット, サムビット, エージェントレイヤー。"]);
+  });
+});
+
+describe("asrPipe: gpt-live-transcribe needs an explicit commit", () => {
+  test("speech_stopped commits, and the completed line becomes an utterance", async () => {
+    const heard: string[] = [];
+    const h = open({ onUtterance: (u) => heard.push(u.text) });
+    const ws = await h.connect("sk-test", { model: "gpt-live-transcribe" });
+    ws.open();
+    h.audio().speak(frame(100));
+    ws.deliver({ type: "input_audio_buffer.speech_started" });
+    ws.deliver({ type: "input_audio_buffer.speech_stopped" });
+    expect(ws.types()).toContain("input_audio_buffer.commit");
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "hello there",
+    });
+    expect(heard).toEqual(["hello there"]);
+  });
+
+  test("an older mint that does not name the model still relies on VAD to close the turn", async () => {
+    const h = open();
+    const ws = await h.connect();
+    ws.open();
+    ws.deliver({ type: "input_audio_buffer.speech_started" });
+    ws.deliver({ type: "input_audio_buffer.speech_stopped" });
+    expect(ws.types()).not.toContain("input_audio_buffer.commit");
+  });
+});
+
+describe("asrPipe: a language mint that OpenAI refuses still transcribes", () => {
+  test("the second mint is unconstrained, and the pipe opens", async () => {
+    const calls: Array<{ room_key: string; languages?: string[] }> = [];
+    let n = 0;
+    const pipe = openAsrPipe({
+      convex: {
+        action: async (_fn: unknown, args: { room_key: string; languages?: string[] }) => {
+          calls.push(args);
+          n += 1;
+          if (n === 1) return { error: "ASR session mint failed (400)" };
+          return { client_secret: "sk-test", model: "gpt-live-transcribe", languages: [] };
+        },
+      } as any,
+      roomKey: "dm:a:b",
+      track: TRACK,
+      clock: () => 0,
+      languages: ["en", "zz"],
+    });
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(calls).toEqual([
+      { room_key: "dm:a:b", languages: ["en"] },
+      { room_key: "dm:a:b" },
+    ]);
+    expect(FakeWebSocket.live.length).toBe(1);
+    pipe.close();
+  });
+});
+
+describe("asrPcmSession: a caller that already has samples", () => {
+  test("int16 at 48 kHz is resampled to 24 kHz before it hits the socket", async () => {
+    let settleMint: (v: any) => void = () => {};
+    const minted = new Promise((resolve) => {
+      settleMint = resolve;
+    });
+    const session = openAsrPcmSession({
+      convex: { action: () => minted as any },
+      roomKey: "rec:abc",
+      clock: () => 0,
+    });
+    // 10 ms at 48 kHz is 480 samples; at 24 kHz that is 240.
+    session.feedInt16(new Int16Array(480).fill(1000), 48_000);
+    settleMint({ client_secret: "sk-test" });
+    await Promise.resolve();
+    await Promise.resolve();
+    const ws = FakeWebSocket.live[0]!;
+    ws.open();
+    expect(ws.appends()).toEqual([240]);
+    session.close();
   });
 });

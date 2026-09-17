@@ -25,7 +25,7 @@ export type ChatAuthor = {
   /** A Slack person (or Slack app) with no codecast account: the row's author
    *  is the workspace's bridge identity and this is the snapshot of who really
    *  wrote it. Renders their face, never the bridge's, plus the Slack mark. */
-  slack?: { isBot?: boolean };
+  slack?: { isBot?: boolean; /** Their Slack user id — the grouping identity (shared authorGroupKey). */ userId?: string };
 };
 
 export type ChatReaction = {

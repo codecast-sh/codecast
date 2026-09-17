@@ -17,12 +17,12 @@ const client = new ConvexReactClient("https://example.convex.cloud");
 
 const NOW = Date.now();
 
-function render(row: Parameters<typeof TeammateItem>[0]["row"]) {
+function render(row: Parameters<typeof TeammateItem>[0]["row"], following = false) {
   return renderToStaticMarkup(
     <ConvexProvider client={client}>
       <CommandPrimitive>
         <CommandPrimitive.List>
-          <TeammateItem row={row} className="row" onGo={() => {}} />
+          <TeammateItem row={row} className="row" onGo={() => {}} following={following} />
         </CommandPrimitive.List>
       </CommandPrimitive>
     </ConvexProvider>,
@@ -43,7 +43,7 @@ describe("palette Teammates row", () => {
       since: NOW - 5 * 60_000,
       score: 0,
     });
-    expect(html).toContain("Go where Ann is");
+    expect(html).toContain("Follow Ann");
     expect(html).toContain("Fix the auth race");
     expect(html).toContain("for 5m");
     expect(html).toContain('data-palette-id="c1"');
@@ -61,13 +61,13 @@ describe("palette Teammates row", () => {
       since: NOW,
       score: 0,
     });
-    expect(html).toContain("Go where Ann is");
+    expect(html).toContain("Follow Ann");
     expect(html).toContain("a session");
     // Under a minute there is no duration tag.
     expect(html).not.toContain("for ");
   });
 
-  test("a teammate around but in no session is a muted row that cannot be selected", () => {
+  test("a teammate around but in no session can still be followed: the mirror covers every route", () => {
     const html = render({
       member: ann,
       id: "u-ann",
@@ -78,8 +78,15 @@ describe("palette Teammates row", () => {
       since: undefined,
       score: 1,
     });
-    expect(html).toContain("Ann is around, not in a session");
-    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain("Follow Ann");
+    expect(html).toContain("around, not in a session");
+    expect(html).toContain('aria-disabled="false"');
     expect(html).not.toContain("Go where");
+  });
+
+  test("a teammate this window already follows: the row offers to stop, even with no session", () => {
+    const html = render({ member: ann, id: "u-ann", name: "Ann", conversationId: null, inStore: false, score: 0 } as any, true);
+    expect(html).toContain("Stop following Ann");
+    expect(html).toContain("around, not in a session");
   });
 });
