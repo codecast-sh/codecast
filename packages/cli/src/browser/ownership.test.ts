@@ -19,7 +19,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ownerKey } from "./owner.js";
+import { ownerKey, OWNER_HARNESS_ENV } from "./owner.js";
 
 // resolveTarget reads the live tab list over HTTP, so exercise the same policy
 // through a local copy of its decision logic driven by the same inputs. The
@@ -119,7 +119,7 @@ describe("resolveTarget picks the right tab", () => {
 
 describe("ownerKey", () => {
   const clearEnv = () => {
-    for (const k of ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CAST_SESSION_ID", "TMUX_PANE"]) {
+    for (const k of [...OWNER_HARNESS_ENV, "TMUX_PANE"]) {
       delete process.env[k];
     }
   };
@@ -129,10 +129,30 @@ describe("ownerKey", () => {
     Object.assign(process.env, saved);
   });
 
-  test("prefers a resolved session id", () => {
+  test("prefers a resolved session id when no harness exported one", () => {
     clearEnv();
     process.env.TMUX_PANE = "%9";
     expect(ownerKey(() => "abc123")).toBe("session:abc123");
+  });
+
+  test("a harness id wins over the detector, because the detector goes quiet when many sessions are live", () => {
+    clearEnv();
+    process.env.GROK_SESSION_ID = "grok-1";
+    expect(ownerKey(() => "conv-1")).toBe("env:grok-1");
+  });
+
+  test("Grok is keyed by its session id, not the tmux pane", () => {
+    clearEnv();
+    process.env.GROK_SESSION_ID = "01a0abcd";
+    process.env.TMUX_PANE = "%921";
+    expect(ownerKey(() => null)).toBe("env:01a0abcd");
+  });
+
+  test("a codecast conversation id wins over the tmux pane when Grok did not export a session id", () => {
+    clearEnv();
+    process.env.CODECAST_CONVERSATION_ID = "jx7abc";
+    process.env.TMUX_PANE = "%921";
+    expect(ownerKey(() => null)).toBe("env:jx7abc");
   });
 
   test("falls back to a harness id when the session is ambiguous", () => {

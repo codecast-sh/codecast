@@ -9,12 +9,12 @@ import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
 import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import {
-  ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeDependencies, orgChangeError, orderOrgChanges, parseOrgProposalSpec,
-  type OrgChange, type OrgProposalMode,
+  ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeDependencies, orgChangeError, orgReviseOpError, orderOrgChanges, parseOrgProposalSpec,
+  type OrgChange, type OrgProposalMode, type OrgReviseOp, type OrgSpecChange,
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
@@ -110,7 +110,7 @@ ${roots}
 
 ${ORG_GROUNDING_RULES.activity_first} ${ORG_GROUNDING_RULES.done_is_sync} ${ORG_GROUNDING_RULES.untouched_is_not_a_seat} ${ORG_GROUNDING_RULES.records_first}
 
-How to read the evidence. The activity block says which paths had commits and sessions and who made them; a plan whose tasks are all closed, whose bound sessions are all done, or whose area had no activity for three weeks is stale, and the block names which. A task in progress whose sessions finished two weeks ago, or whose commits landed while it stayed open, is finished or dropped, not in flight. A project whose path had no commits and no sessions for the window is paused, not unowned. Every stale record becomes one status change with its evidence in the reason, and the loads you size for a seat exclude it: the model measures work that is happening, and a seat sized on records that are behind it is a seat nobody needs. Bring the records in line first, then size: a seat's load is what will reach it once the stale rows are closed and the loose plans filed, and its ledger after those changes is context. Closing a plan closes its still open tasks in the same accept (they are dropped and the applied note lists them), so propose one change per plan and name a task on its own only when its evidence differs from its plan's: done because its commit landed, or open or backlog because it was filed in bulk as in progress and never picked up. Done is a claim that work landed, so a task marked done cites what shows it: the commit, the closed sibling task, the session that finished it. A plan already marked done is not that evidence; its close drops what it left open, and that is the honest reading. A weekly average hides its days: read \`spend.wakes_by_day\` and \`spend.last_wake_at\` before you call one burst a daily rate. A seat flagged \`bypassed\` is neither idle nor loaded: work closes in its scope and none of it passes through the seat; name it to the person as a finding and ask whether the work should route through the seat or the seat should be sized as a reader, and do not split, merge or retire on its first sighting. The activity block's \`commits\` says how many commits carried a file list; the areas can only show a seam for those, so report the rest as could not verify, never as work on the root. Where the record and the activity disagree and you cannot tell which is right, say so as a finding and size without the record.`;
+How to read the evidence. The activity block says which paths had commits and sessions and who made them; a plan whose tasks are all closed, whose bound sessions are all done, or whose area had no activity for three weeks is stale, and the block names which. A task in progress whose sessions finished two weeks ago, or whose commits landed while it stayed open, is finished or dropped, not in flight. A project whose path had no commits and no sessions for the window is paused, not unowned. Every stale record becomes one status change with its evidence in the reason, and the loads you size for a seat exclude it: the model measures work that is happening, and a seat sized on records that are behind it is a seat nobody needs. Bring the records in line first, then size: a seat's load is what will reach it once the stale rows are closed and the loose plans filed, and its ledger after those changes is context. Closing a plan closes its still open tasks in the same accept (they are dropped and the applied note lists them), so propose one change per plan and name a task on its own only when its evidence differs from its plan's: done because its commit landed, or open or backlog because it was filed in bulk as in progress and never picked up. The activity block says a record is stale; it does not say what became of the work, and two readers who stop there will guess differently. Before you set a task done, open, backlog or dropped, read the row (\`cast task show ct-N${team}\`: its comments, its plan, the commit that names it) and write the status the row itself shows: done when a commit, a closing comment or a finished sibling shows the work landed; open or backlog when it is still real work nobody started; dropped when nothing under it happened and nothing waits on it. A finished session is not evidence that the work landed; a plan already marked done is not either, and its close drops what it left open. A plan closes as done when the tasks that finished under it carried its goal, which its decisions, its done tasks or its own page show, and as abandoned when nothing under it finished; the reason names which. A row you did not read gets no status change. A weekly average hides its days: read \`spend.wakes_by_day\` and \`spend.last_wake_at\` before you call one burst a daily rate. A seat flagged \`bypassed\` is neither idle nor loaded: work closes in its scope and none of it passes through the seat; name it to the person as a finding and ask whether the work should route through the seat or the seat should be sized as a reader, and do not split, merge or retire on its first sighting. The activity block's \`commits\` says how many commits carried a file list; the areas can only show a seam for those, so report the rest as could not verify, never as work on the root. Where the record and the activity disagree and you cannot tell which is right, say so as a finding and size without the record.`;
 
   const capacity = `## The capacity model
 
@@ -136,7 +136,9 @@ The output is one proposal, posted with \`cast org propose${team} --spec proposa
 ${SPEC_EXAMPLE}
 \`\`\`
 
-Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. The summary is what a founder reads on a phone before opening anything. Lead with the decision you are asking for: what to accept and why, the records to bring in line in one line, one sentence per seat with its tenure, the filings and charters in one line, and the company budget before and after. That paragraph stays under two hundred words; a seat's sizing against the model, its evidence and its caps live in the change, not here. Then the evidence, one line per finding with the numbers that matter. What you could not verify and the findings that are not changes go after it, as a short list, so the ask stays on top.
+Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. A proposal names each subject once: one status per plan or task, one project_meta carrying every field you set for a project, one row per role for each kind. Build the spec so no two of your lists can name the same subject; two rows that agree about one subject are folded into one at the post and named, and two that disagree are refused.
+
+The summary is the ask. ${ORG_ASK_RULES.reader} ${ORG_ASK_RULES.decision_first} ${ORG_ASK_RULES.invented_words} ${ORG_ASK_RULES.numbers_mean_something} ${ORG_ASK_RULES.cost_in_plain_words} ${ORG_ASK_RULES.readable_once} The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here. After the ask come the evidence, one line per finding, then what you could not verify and the findings that are not changes, as a short list; each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word.
 
 The change kinds:
 
@@ -312,6 +314,7 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   try { raw = JSON.parse(text); } catch (e: any) { fail(`The spec is not JSON: ${e?.message ?? e}`); }
   const parsed = parseOrgProposalSpec(raw);
   if (!parsed.spec) fail(`The spec has ${parsed.errors.length} fault${parsed.errors.length === 1 ? "" : "s"}:\n${parsed.errors.map((e) => `  - ${e}`).join("\n")}\nChange kinds: ${ORG_CHANGE_KINDS.join(", ")}.`);
+  for (const n of parsed.notes ?? []) console.log(`  ${fmt.muted(`folded ${n}`)}`);
   if (options.supersedes && !/^op-\d+$/.test(options.supersedes)) fail(`--supersedes wants a proposal id like op-12 (got ${options.supersedes})`);
   const { ws, args } = await membership(deps, options);
   const result = await deps.cliPost("/cli/org/propose", { ...args, ...parsed.spec, from_session: deps.callingSession(), ...(options.supersedes ? { supersedes: options.supersedes } : {}) });
@@ -320,6 +323,68 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   const n = result.changes?.length ?? parsed.spec.changes.length;
   console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${parsed.spec.mode}`)}`);
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
+}
+
+// ── revise (S18) ─────────────────────────────────────────────────────────────
+
+/** JSON from a flag value: inline text when it parses, else a file ('-' is stdin). */
+function readJsonArg(value: string, flag: string): unknown {
+  const text = value === "-" || fs.existsSync(value) ? readSpecText(value) : value;
+  try { return JSON.parse(text); } catch (e: any) { fail(`${flag} is not JSON (inline text or a file): ${e?.message ?? e}`); }
+}
+
+const seqOf = (raw: string, flag: string): number => {
+  const n = Number(String(raw).replace(/^#/, ""));
+  if (!Number.isInteger(n) || n < 1) fail(`${flag} wants a change number like 3 (got ${raw})`);
+  return n;
+};
+
+/** The ops the flags describe, in the order remove, amend, add. Pure over
+ *  `readJson`, so the test drives it; `--ops` hands the list over as is,
+ *  with `--note` filled in where an op has none. */
+export function buildReviseOps(options: any, readJson: (value: string, flag: string) => unknown = readJsonArg): OrgReviseOp[] {
+  const note = options.note ? { note: String(options.note) } : {};
+  let ops: OrgReviseOp[] = [];
+  if (options.ops) {
+    const raw = readJson(options.ops, "--ops");
+    if (!Array.isArray(raw)) fail("--ops wants a JSON list of ops");
+    ops = raw.map((o: any) => (o && typeof o === "object" && options.note && o.note === undefined ? { ...o, ...note } : o));
+  } else {
+    for (const r of options.remove ?? []) ops.push({ op: "remove", seq: seqOf(r, "--remove"), ...note });
+    if (options.amend !== undefined) {
+      if (options.edits === undefined && !options.rationale) fail("--amend wants --edits (a JSON patch over the change's keys), --rationale <text>, or both");
+      ops.push({ op: "amend", seq: seqOf(options.amend, "--amend"), ...(options.edits !== undefined ? { edits: readJson(options.edits, "--edits") as Record<string, unknown> } : {}), ...(options.rationale ? { rationale: String(options.rationale) } : {}), ...note });
+    } else if (options.edits !== undefined || options.rationale) fail("--edits and --rationale go with --amend <seq>");
+    for (const file of options.add ?? []) {
+      const raw = readJson(file, "--add");
+      for (const c of Array.isArray(raw) ? raw : [raw]) ops.push({ op: "add", change: c as OrgSpecChange, ...note });
+    }
+  }
+  if (!ops.length) fail("Nothing to do: give --remove <seq>, --amend <seq> with --edits or --rationale, --add <file>, or --ops <file>");
+  const faults = ops.map((o, i) => { const f = orgReviseOpError(o); return f ? `  - ops[${i}]: ${f}` : null; }).filter(Boolean);
+  if (faults.length) fail(`The revise is not valid:\n${faults.join("\n")}`);
+  return ops;
+}
+
+export async function revise(deps: OrgInitDeps, ref: string, options: any): Promise<void> {
+  if (!/^op-\d+$/.test(ref)) fail(`Usage: cast org revise op-N [--remove <seq>] [--amend <seq> --edits <json> | --rationale <text>] [--add <file>] [--note <text>]; got ${ref}`);
+  const ops = buildReviseOps(options);
+  const from_session = deps.callingSession();
+  if (!from_session) fail("cast org revise runs inside the session that posted the proposal (or the standing session of the role that did); at a plain shell, decide it on the org page instead");
+  const r = await deps.cliPost("/cli/org/proposal/revise", { proposal: ref, ops, from_session });
+  if (!r || r.error) fail(r?.error ?? `Could not revise ${ref}.`);
+  if (options.json) { console.log(JSON.stringify({ ...r, url: proposalUrl(deps, ref) }, null, 2)); return; }
+  const { decided, total } = decidedCount(r);
+  console.log(`${fmt.success("✓")} ${fmt.highlight(ref)} revised ${fmt.muted(`· ${decided} of ${total} decided`)}`);
+  for (const j of r.revisions ?? []) console.log(`  ${revisionLine(j)}`);
+  console.log(`${fmt.muted("The person decides what is left on the org page:")} ${fmt.accent(proposalUrl(deps, ref))}`);
+}
+
+/** One journal entry as a line: what happened to which change, and the note. */
+function revisionLine(j: any): string {
+  const what = j.op === "removed" ? fmt.error("removed") : j.op === "added" ? fmt.success("added") : fmt.accent("amended");
+  const detail = j.op === "amended" && j.was && j.was !== j.line ? `${j.line} ${fmt.muted(`(was: ${j.was})`)}` : j.line;
+  return `${what} ${fmt.muted(`#${j.seq}`)} ${detail}${j.note ? ` ${fmt.muted(`· ${j.note}`)}` : ""}`;
 }
 
 /** The list carries `counts`, the get carries the change rows; one reading. */
@@ -387,11 +452,15 @@ export async function showProposal(deps: OrgInitDeps, ref: string, options: any)
     const dep = row.depends ?? depends[row.seq];
     if (dep) console.log(`      ${fmt.muted(dep)}`);
   }
+  if (p.revisions?.length) {
+    console.log(fmt.muted("  revised by its author, in order:"));
+    for (const j of p.revisions) console.log(`    ${revisionLine(j)}`);
+  }
   console.log(`${fmt.muted("Decide it on the org page:")} ${fmt.accent(url)}`);
 }
 
 function statusTag(status?: string): string {
-  return status === "applied" ? fmt.success("applied") : status === "failed" ? fmt.error("failed") : status === "accepted" ? fmt.success("accepted") : status === "skipped" ? fmt.muted("skipped") : fmt.muted(status ?? "proposed");
+  return status === "applied" ? fmt.success("applied") : status === "failed" ? fmt.error("failed") : status === "accepted" ? fmt.success("accepted") : status === "skipped" ? fmt.muted("skipped") : status === "removed" ? fmt.muted("removed") : fmt.muted(status ?? "proposed");
 }
 
 /** Template stacks (ds-N) keep the decision stack path. */

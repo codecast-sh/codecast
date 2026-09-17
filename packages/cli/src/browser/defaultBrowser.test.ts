@@ -169,14 +169,15 @@ test("eval through the real bridge never starts the separate browser", async () 
   }
 });
 
-test("ordinary stop closes its real tab without sweeping clone tabs", async () => {
+test("ordinary stop closes its real tab and reaps abandoned ones without launching a clone", async () => {
   const host = await testBridgeHost();
   const extension = await new FakeExtension([]).connect(host.port);
   try {
     const result = await run("engine", ["stop"], process.env.CODECAST_DIR);
     expect(result.code, result.text).toBe(0);
     expect(result.text).toContain("CLOSE_TAB");
-    expect(result.text).not.toContain("REAP_CLONE");
+    expect(result.text).toContain("REAP_CLONE");
+    expect(result.text).not.toContain("CLONE_LAUNCH");
   } finally {
     extension.ws.close();
     await host.close();
@@ -235,6 +236,8 @@ test("full and short agent instructions make separate Chrome a last resort", () 
   expect(BROWSER_SNIPPET).toContain("Connection checks and tab lists create nothing");
   expect(BROWSER_SNIPPET).toContain("unless the human still needs them");
   expect(BROWSER_SNIPPET).toContain("Close tabs you opened");
+  expect(BROWSER_SNIPPET).toContain("abandoned Cast tab already on that URL");
+  expect(BROWSER_SNIPPET).toContain("cast read");
   const stub = renderSectionBody(snippetBySlug("browser")!, "stub", "1.0.0");
   expect(stub).toContain("unless the human still needs them");
 });

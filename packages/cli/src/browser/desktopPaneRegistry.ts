@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { listTargets, type CdpEndpoint, type CdpTarget } from "./cdp.js";
 import { browserHome } from "./profile.js";
 import { isPidAlive } from "../workspace/chrome.js";
+import { OWNER_HARNESS_ENV } from "./owner.js";
 
 export const DESKTOP_PANE_REGISTRY_VERSION = 1;
 export const DESKTOP_PANE_REGISTRY_FILE = "desktop-panes.json";
@@ -117,7 +118,7 @@ export function paneOwnerIds(ownerKey: string | null, env: NodeJS.ProcessEnv = p
   const ids = new Set<string>();
   const m = ownerKey ? /^(session|env):(.+)$/.exec(ownerKey) : null;
   if (m) ids.add(m[2]);
-  for (const name of ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CAST_SESSION_ID"]) {
+  for (const name of OWNER_HARNESS_ENV) {
     const v = env[name];
     if (v) ids.add(v);
   }

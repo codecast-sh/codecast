@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
-import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
+import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { ORG_CHANGE_KINDS, orgProposalBlock, parseOrgProposalSpec } from "@codecast/shared/contracts/orgProposal";
 
@@ -118,8 +118,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("`company.caps_total`");
       expect(p).toContain("never write it as unchanged when a seat is added");
       expect(p).toContain("Lead with the decision you are asking for");
-      expect(p).toContain("one sentence per seat");
-      expect(p).toContain("That paragraph stays under two hundred words; a seat's sizing against the model, its evidence and its caps live in the change, not here");
+      expect(p).toContain("The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here");
       expect(p).not.toContain("allocated from the person's total");
     }
     // The split rules read from health: the streak for the ordinary case, the
@@ -162,7 +161,10 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("Bring the records in line first, then size");
       // Review findings: done needs its own evidence, an average needs its
       // days, and a bypassed seat is named, not restructured on first sight.
-      expect(p).toContain("A plan already marked done is not that evidence");
+      expect(p).toContain("A row you did not read gets no status change");
+      expect(p).toContain("A finished session is not evidence that the work landed; a plan already marked done is not either");
+      expect(p).toContain("as abandoned when nothing under it finished");
+      expect(p).toContain("0 hands, 8 wakes and 200,000 tokens a day is the default");
       expect(p).toContain("`spend.wakes_by_day`");
       expect(p).toContain("A seat flagged `bypassed` is neither idle nor loaded");
       expect(p).toContain("Closing a plan closes its still open tasks in the same accept");
@@ -181,6 +183,60 @@ describe("buildOrgAnalyzerPrompt", () => {
     // The review reads the stale flags before any bottleneck.
     const review = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
     expect(review).toContain("turn each stale record into its status change before you read anything as a bottleneck");
+  });
+  // S17: the ask is a letter to a reader who has never seen the feature. The
+  // rules are named, the decision leads, every invented word is explained or
+  // dropped, numbers carry their meaning, the cost is in plain words, the
+  // bound holds, and the old packing instruction (one line of records, one
+  // sentence per seat, a budget as bare numbers) is gone.
+  test("writes the ask for a reader who has never seen the feature: the rules, the decision first, the bound, no packing", () => {
+    for (const mode of ["init", "review"] as const) {
+      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
+      expect(p).toContain("The summary is the ask.");
+      for (const rule of Object.values(ORG_ASK_RULES)) expect(p).toContain(rule);
+      expect(p).toContain("has never heard of a role, a scope, a charter, a hand, a wake or a budget in tokens");
+      expect(p).toContain("explained in plain words the first time it appears, or not used at all");
+      expect(p).toContain("A signal from the health report is told as what is happening, never by its name");
+      expect(p).toContain("A short id never stands in for a name");
+      expect(p).toContain("Counts joined by commas are a defect");
+      expect(p).toContain("A budget stated as bare numbers is not a cost");
+      expect(p).toContain("A sentence they would have to reread or decode is a defect in the summary");
+      // Run 1 on the Codecast workspace showed these gaps: a cost counted in
+      // wake ups nobody defined, a new agent named by its title after being
+      // introduced as "one new agent", project names as bare lowercase words,
+      // and "seats" leaking through the lines after the ask.
+      expect(p).toContain("A unit of spend is explained where the cost is stated, as what it lets an agent do, the first time it appears");
+      expect(p).toContain("introduced once with what it is and what it will do, and called by those same words after that");
+      expect(p).toContain("A project's or a plan's name appears as it is filed, capitalized or quoted");
+      expect(p).toContain("read the whole summary once more as that person, the lines after the ask included");
+      // Run 2 showed "a standing agent" spending an invented word in the
+      // sentence that introduces the thing, and the inputs' own names
+      // ("the activity block credits", "the seat should end with it")
+      // leaking into the lines below the ask.
+      expect(p).toContain("standing means the agent stays and keeps watching its area, a program means it exists for one effort and ends with it");
+      expect(p).toContain("These rules bind every line of the summary, the evidence, what could not be verified and the findings included, not the ask alone");
+      expect(p).toContain("the names of the inputs you read (an activity block, a health flag, a ledger, a frame) never reach the reader");
+      // Run 3 wrote "may wake 120 times a day" with no word on what a wake
+      // is, while it explained a token; the rule now asks for both.
+      expect(p).toContain("A count of wakes never stands alone: wherever the number appears, say in your own words what one wake is");
+      // Run 4 handed in a project_meta for one project twice (its charter list
+      // and its owner list); the prompt says one row per subject and what
+      // the post does with a repeat.
+      expect(p).toContain("A proposal names each subject once: one status per plan or task, one project_meta carrying every field you set for a project");
+      expect(p).toContain("two rows that agree about one subject are folded into one at the post and named, and two that disagree are refused");
+      // The decision leads, and the ask rules sit inside the writing section.
+      const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
+      expect(at("## How to write")).toBeLessThan(at("The summary is the ask."));
+      expect(at("The summary is the ask.")).toBeLessThan(at("## What not to invent"));
+      expect(at(ORG_ASK_RULES.reader)).toBeLessThan(at(ORG_ASK_RULES.decision_first));
+      expect(at(ORG_ASK_RULES.decision_first)).toBeLessThan(at(ORG_ASK_RULES.invented_words));
+      // What comes after the ask is written for the same reader.
+      expect(p).toContain("each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word");
+      // The packing instruction that produced an inventory is gone.
+      expect(p).not.toContain("one sentence per seat");
+      expect(p).not.toContain("the records to bring in line in one line");
+      expect(p).not.toContain("the company budget before and after");
+    }
   });
   // S10: every proposed role is standing or a program, says which, and names
   // its end; tenure rides on the role change and the spec example carries it.
@@ -452,5 +508,72 @@ describe("applyStack", () => {
     expect(posted).toEqual(["sd-2", "sd-1"]);
     expect(cap.said()).toContain("1 failed");
     expect(cap.said()).toContain("rerun cast org apply ds-9 after the failed ones are answered again with changes");
+  });
+});
+
+// ── cast org revise (S18) ────────────────────────────────────────────────────
+// The flags become the ops the server takes, in the order remove, amend,
+// add; --note rides every op; the shape check runs before the post so a
+// bad flag never reaches the server; the verb runs only inside a session.
+
+describe("cast org revise", () => {
+  const json = (files: Record<string, unknown>) => (value: string, flag: string) => {
+    if (value in files) return files[value];
+    try { return JSON.parse(value); } catch { throw new Error(`${flag} not json: ${value}`); }
+  };
+  /** buildReviseOps fails through process.exit; trap it and hand back what it said. */
+  const failing = (fn: () => unknown): string => {
+    const cap = capture(); const exit = trapExit();
+    try { fn(); throw new Error("did not fail"); } catch (e: any) { if (e.message !== "exit") throw e; return cap.said(); } finally { exit.restore(); cap.restore(); }
+  };
+  test("flags become ops in order, --note rides each, inline JSON or a file both read", () => {
+    const ops = buildReviseOps(
+      { remove: ["3", "#5"], amend: "1", edits: '{"caps":{"wakes_per_day":6}}', rationale: "half", add: ["adds.json"], note: "after talking it over" },
+      json({ "adds.json": [{ change: { kind: "retire", handle: "growth" }, rationale: "gone" }] }),
+    );
+    expect(ops).toEqual([
+      { op: "remove", seq: 3, note: "after talking it over" },
+      { op: "remove", seq: 5, note: "after talking it over" },
+      { op: "amend", seq: 1, edits: { caps: { wakes_per_day: 6 } }, rationale: "half", note: "after talking it over" },
+      { op: "add", change: { change: { kind: "retire", handle: "growth" }, rationale: "gone" }, note: "after talking it over" },
+    ]);
+    // A single spec change in the file, and no note.
+    expect(buildReviseOps({ add: ["one.json"] }, json({ "one.json": { change: { kind: "trust", handle: "growth", trust: "direct" }, rationale: "r" } }))).toEqual([{ op: "add", change: { change: { kind: "trust", handle: "growth", trust: "direct" }, rationale: "r" } }]);
+    // --ops hands the list over, filling in the note where an op has none.
+    expect(buildReviseOps({ ops: "ops.json", note: "n" }, json({ "ops.json": [{ op: "remove", seq: 2 }, { op: "remove", seq: 4, note: "own" }] }))).toEqual([{ op: "remove", seq: 2, note: "n" }, { op: "remove", seq: 4, note: "own" }]);
+  });
+
+  test("refuses a bad flag before any post: nothing to do, a non-number, an amend with nothing, stray --edits, an invalid add", () => {
+    const r = json({});
+    expect(failing(() => buildReviseOps({}, r))).toContain("Nothing to do");
+    expect(failing(() => buildReviseOps({ remove: ["x"] }, r))).toContain("--remove wants a change number like 3 (got x)");
+    expect(failing(() => buildReviseOps({ amend: "2" }, r))).toContain("--amend wants --edits");
+    expect(failing(() => buildReviseOps({ edits: "{}" }, r))).toContain("--edits and --rationale go with --amend <seq>");
+    expect(failing(() => buildReviseOps({ add: ['{"change":{"kind":"nope"},"rationale":"r"}'] }, r))).toContain("ops[0]: add:");
+    expect(failing(() => buildReviseOps({ amend: "1", edits: "[1]" }, r))).toContain("amend: edits is an object patch");
+  });
+
+  test("posts to the revise route with the calling session and prints the journal; refuses at a plain shell", async () => {
+    const posts: any[] = [];
+    const d = deps({
+      callingSession: () => "jxanaly",
+      cliPost: async (route: string, body: any) => { posts.push([route, body]); return { proposal: "op-4", status: "open", counts: { total: 2, decided: 1 }, revisions: [{ op: "removed", seq: 3, line: "retire @growth", note: "not yet" }, { op: "amended", seq: 1, line: "budget @growth wakes 6/day", was: "budget @growth wakes 12/day" }] }; },
+    } as any) as any;
+    const cap = capture();
+    try { await revise(d, "op-4", { remove: ["3"], amend: "1", edits: '{"caps":{"wakes_per_day":6}}', note: "not yet" }); } finally { cap.restore(); }
+    expect(posts).toEqual([["/cli/org/proposal/revise", { proposal: "op-4", ops: [{ op: "remove", seq: 3, note: "not yet" }, { op: "amend", seq: 1, edits: { caps: { wakes_per_day: 6 } }, note: "not yet" }], from_session: "jxanaly" }]]);
+    const said = cap.said();
+    expect(said).toContain("op-4");
+    expect(said).toContain("1 of 2 decided");
+    expect(said).toContain("retire @growth");
+    expect(said).toContain("(was: budget @growth wakes 12/day)");
+    expect(said).toContain("/org?proposal=op-4");
+    const shell = deps({ callingSession: () => undefined } as any) as any;
+    const cap2 = capture(); const exit = trapExit();
+    try { await revise(shell, "op-4", { remove: ["3"] }); } catch (e: any) { expect(e.message).toBe("exit"); } finally { exit.restore(); cap2.restore(); }
+    expect(cap2.said()).toContain("runs inside the session that posted the proposal");
+    const cap3 = capture(); const exit3 = trapExit();
+    try { await revise(d, "ds-4", { remove: ["3"] }); } catch (e: any) { expect(e.message).toBe("exit"); } finally { exit3.restore(); cap3.restore(); }
+    expect(cap3.said()).toContain("Usage: cast org revise op-N");
   });
 });

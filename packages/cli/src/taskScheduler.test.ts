@@ -245,6 +245,13 @@ describe("trigger run lifecycle guidance", () => {
     expect(prompt).toContain("bounded trigger and its terminal condition is verified complete");
     expect(prompt).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");
     expect(prompt).toContain("Quiet or no-change results, quota errors, collector failures, unavailable sources, and pending deadlines are NOT proof of completion");
+    expect(prompt).toContain("A finding does not survive this run on its own");
+    expect(prompt).toContain("the next firing overwrites this trigger's summary");
+    expect(prompt).toContain("File it as a task, add it to the task or plan it already belongs to, or queue a decision");
+    expect(prompt).toContain("--needs-attention claims the human's eyes, so pass it only when they themselves must act");
+    expect(prompt).toContain("open the summary with the ask: what you need them to do");
+    expect(prompt).toContain("Work you have already given an owner does not need their eyes");
+    expect(prompt).toContain("says something needs a look without naming the action");
     expect(prompt).toContain("Ongoing mandates remain active until explicitly ended");
     expect(prompt).toContain("Do not close unrelated tasks or cancel other triggers");
     expect(prompt).toContain("subordinate to this trigger's prompt, explicit user instructions, and the session's existing permissions");

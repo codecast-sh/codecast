@@ -19,6 +19,7 @@ import {
   switchUsagePercent,
   worstUsagePercent,
   type CcUsage,
+  type RecoveryMode,
 } from "@codecast/shared/contracts";
 import { activeAccountSummary, listProfiles, readUsageCache, type UsageRetryState } from "./ccAccounts.js";
 
@@ -36,6 +37,9 @@ export interface UsageProfile {
 export interface RecoveryFlags {
   auto_switch: boolean;
   auto_continue: boolean;
+  // Which of the four recovery modes the machine is in. Optional so an older
+  // server (flags only) still produces a report.
+  mode?: RecoveryMode;
 }
 
 export interface UsageWindowLine {
@@ -162,6 +166,15 @@ export function describeRecovery(r: UsageReport): string {
     : "no other saved account with headroom";
   if (!r.recovery) {
     return `On a limit: ${hop}; recovery flags unknown (server unreachable)${resetNote}.`;
+  }
+  // Ask-first: the machine recommends and waits, so say what it will ask for
+  // rather than implying it acts on its own.
+  if (r.recovery.mode === "ask") {
+    return r.fallbacks[0]
+      ? `On a limit: this machine RECOMMENDS a switch (best: ${r.fallbacks[0].name}${
+          r.fallbacks[0].worst != null ? ` at ${Math.round(r.fallbacks[0].worst)}%` : ""
+        }) and waits for you to approve it; sessions still resume when the window resets${resetNote}.`
+      : `On a limit: this machine asks before switching, and ${hop}${resetNote}.`;
   }
   if (r.recovery.auto_switch && r.fallbacks[0]) {
     return `On a limit: auto-switch hops to the freshest of ${hop} and continues parked sessions${resetNote}.`;

@@ -41,8 +41,8 @@ import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, ta
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
-import { ensurePinnedTab, pinnedTabBrowser, touchBoundTarget } from "./pinnedTab.js";
-import { shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
+import { ensurePinnedTab, pinnedTabBrowser, recoverGoneTab, touchBoundTarget } from "./pinnedTab.js";
+import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
@@ -127,7 +127,7 @@ function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint:
  * wrong browser.
  */
 async function ctx(choice: TargetChoice = {}): Promise<Ctx> {
-  const session = engineSession();
+  const session = engineSession(detectSessionId);
   const owner = auditOwner();
   if (isPaneMode(choice, owner)) {
     // The desktop pane: a `-pane` session key on the app's own CDP socket,
@@ -318,6 +318,9 @@ const MOBILE_PRESETS = new Set(["tablet", "mobile", "mobile-small"]);
 /** The calling codecast session, for the audit trail — same key the built-in
  *  driver stamps, so `cast browser audit` reads one trail whichever engine drove. */
 let auditOwner: () => string | null = () => ownerKey();
+/** Same detector `auditOwner` uses, so the engine session key and the audit
+ *  trail name one agent. Unset until registerEngineCommands. */
+let detectSessionId: (() => string | null) | undefined;
 
 type Ctx = Awaited<ReturnType<typeof engineBrowserFor>>;
 
@@ -564,15 +567,19 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // The real Chrome is the human's, already running; its bridge came up in
     // ctx. The clone is ours to start.
     await ensureBrowser(o);
+    // Close abandoned tabs first so a reclaim cannot pick a dead session's
+    // target and then have the reaper close it out from under us.
+    // In the human's Chrome too: a dead session's Cast tab left open keeps
+    // reloading against the dev server and piles up in their tab strip
+    // (2026-09-17: ninety two bindings, sixteen live sessions). The reaper
+    // closes only tabs whose owner is gone, never this session's own, and
+    // never a tab the human opened. A pane is the human's view: untouched.
+    const swept = pane ? "" : describeReap(await reapEngineOrphans({ keep: session }));
+    if (swept) console.log(fmt.muted(`  ${swept}`));
     // The pre-action hook ran before the browser existed on a cold start;
     // now that it does, bind this session's tab quietly (pinnedTab.ts).
     const created = await ensurePinnedTab(session, url && (/^[a-z]+:/i.test(url) ? url : `https://${url}`));
     if (created) args = args.filter((arg) => arg !== "--new-tab");
-    // `open` is where a session's browsing begins, so it is also where tabs
-    // whose sessions have died get closed (engineReap.ts) — throttled, and
-    // never this session's own.
-    const swept = real || pane ? "" : describeReap(await reapEngineOrphans({ keep: session }));
-    if (swept) console.log(fmt.muted(`  ${swept}`));
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
     if (url && !real && !pane) await carryLogins(url);
@@ -643,7 +650,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // open first.
     if (res.status !== 0 && /tab_gone/.test(res.stderr + res.stdout)) {
       if (call.args[0] === "open") {
-        res = runEngine(["tab", "new", ...call.args.slice(1)], o);
+        const goneUrl = call.args.find((a) => a && !a.startsWith("-"));
+        await recoverGoneTab(session, goneUrl && (/^[a-z]+:/i.test(goneUrl) ? goneUrl : `https://${goneUrl}`));
+        res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
       } else {
         res = { ...res, stderr: `this session's tab is gone — \`cast browser open <url>\` starts a new one\n`, stdout: "" };
       }
@@ -1178,6 +1187,7 @@ export function engineFailureMessage(stderr: string, stdout: string): string {
 
 export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   registerAdvancedClone(br, (program) => registerEngineCommands(program.command("browser"), deps));
+  detectSessionId = deps.detectCurrentSessionId;
   auditOwner = () => ownerKey(deps.detectCurrentSessionId);
   registerAuditCommand(br, auditOwner);
   registerBridgeCommands(br, { me: auditOwner });
@@ -1387,7 +1397,14 @@ frames are superseded before anyone reads them.`,
         } catch (err) {
           die((err as Error).message);
         }
-        const raw = await readCdpJson<Array<{ id: string; title: string; url: string; cast?: boolean; sessions?: string[] }>>({ port: bridge.port, token: bridge.token }, "/json/list");
+        // The listing is answered by the extension's worker, whose process
+        // may be frozen (stall.ts): once more after a stall, then one line.
+        let raw: Array<{ id: string; title: string; url: string; cast?: boolean; sessions?: string[] }>;
+        try {
+          raw = await retryOnStall(() => readCdpJson<typeof raw>({ port: bridge.port, token: bridge.token }, "/json/list"));
+        } catch (err) {
+          die((err as Error).message);
+        }
         const tabs = raw.filter((t) => t.cast && (o.all || t.sessions?.includes(c.session)));
         if (!tabs.length) console.log(fmt.muted("  no agent tabs in your Chrome"));
         for (const t of tabs) {
@@ -1579,11 +1596,10 @@ sessions' tabs).`,
         die((err as Error).message);
       }
       if (install.installed) console.log(`${OK} browser engine installed (${ENGINE_PACKAGE})`);
-      if (real) return;
-
-      const session = engineSession();
+      const session = engineSession(detectSessionId);
       const swept = describeReap(await reapEngineOrphans({ force: true, keep: session }));
       if (swept) console.log(fmt.muted(`  ${swept}`));
+      if (real) return;
 
       await startManagedBrowser({ ...DEFAULT_START, ...o });
       console.log(fmt.muted(`  this session drives its own tab in it — session ${session}`));
@@ -1643,9 +1659,10 @@ sessions' tabs).`,
       // go of it, and the pane stays where they put it.
       await closeSessionTab(session);
       console.log(isPaneSession(session) ? `${OK} let go of the desktop pane; it stays open for the human` : `${OK} closed this session's tab`);
-      if (isRealSession(session) || isPaneSession(session)) return;
+      if (isPaneSession(session)) return;
       const swept = describeReap(await reapEngineOrphans({ force: true, keep: o.all ? null : session, idleMs: o.all ? 0 : undefined }));
       if (swept) console.log(fmt.muted(`  ${swept}`));
+      if (isRealSession(session)) return;
       if (o.all) {
         const state = readState();
         if (state) {

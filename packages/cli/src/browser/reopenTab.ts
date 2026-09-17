@@ -23,9 +23,10 @@ import { agentSpawnPath } from "../agentSpawnPath.js";
 import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
 import { sessionTarget } from "./engineReap.js";
 import { parseTabLine } from "./tabId.js";
+import { OWNER_HARNESS_ENV } from "./owner.js";
 
 /** Every env var ownerKey reads: the child must see exactly one identity. */
-const IDENTITY_ENV = ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CAST_SESSION_ID", "TMUX_PANE"];
+const IDENTITY_ENV = [...OWNER_HARNESS_ENV, "TMUX_PANE"];
 
 /** How long an `open` may take: bridge start, navigation, login carry. */
 const OPEN_TIMEOUT_MS = 60_000;

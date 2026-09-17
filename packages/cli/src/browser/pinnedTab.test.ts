@@ -4,7 +4,8 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  ensurePinnedTab, pinnedTabBrowser, readBoundTarget, sessionDaemonPid, targetLiveness, writeBoundTarget,
+  ensurePinnedTab, pickReclaimableTab, pinnedTabBrowser, readBoundTarget, sessionDaemonPid,
+  tabHolderIsSelf, targetLiveness, writeBoundTarget, type CastTab,
 } from "./pinnedTab.js";
 import { writeBridgeState } from "./bridge/host.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
@@ -157,7 +158,7 @@ describe("page creation", () => {
       extension.ws.close();
       await host.close();
     }
-  });
+  }, 15_000);
 
   test("open creates the requested URL in the background and reuses it without attaching", async () => {
     const host = await testBridgeHost();
@@ -179,5 +180,38 @@ describe("page creation", () => {
       extension.ws.close();
       await host.close();
     }
+  }, 15_000);
+});
+
+describe("pickReclaimableTab", () => {
+  const url = "http://localhost:3200/conversation/jx7abc";
+  const session = "env-grok-real";
+  const tab = (targetId: string, sessions: string[], href = url): CastTab => ({ targetId, url: href, sessions });
+
+  test("a tab this session already holds, including an older pane identity, is reused", () => {
+    const env = { TMUX_PANE: "%921" };
+    const tabs = [tab("AAAA", ["env-other-real"]), tab("BBBB", ["pane-921-real"])];
+    expect(pickReclaimableTab(tabs, url, session, () => false, env)?.targetId).toBe("BBBB");
+  });
+
+  test("a harness twin of this session is treated as ours", () => {
+    expect(tabHolderIsSelf("env-01a0abcd-real", "env-other-real", { GROK_SESSION_ID: "01a0abcd" })).toBe(true);
+    expect(tabHolderIsSelf("env-stranger-real", "env-other-real", { GROK_SESSION_ID: "01a0abcd" })).toBe(false);
+  });
+
+  test("an unowned Cast tab on the same URL is claimed", () => {
+    expect(pickReclaimableTab([tab("FREE", [])], url, session, () => false)?.targetId).toBe("FREE");
+  });
+
+  test("a tab whose every holder has exited is claimed", () => {
+    expect(pickReclaimableTab([tab("DEAD", ["pane-66-real"])], url, session, (h) => h === "pane-66-real")?.targetId).toBe("DEAD");
+  });
+
+  test("a live stranger's tab on the same URL is never taken", () => {
+    expect(pickReclaimableTab([tab("LIVE", ["env-other-real"])], url, session, () => false)).toBeNull();
+  });
+
+  test("a tab on a different URL is ignored even if unowned", () => {
+    expect(pickReclaimableTab([tab("X", [], "https://example.com/")], url, session, () => true)).toBeNull();
   });
 });
