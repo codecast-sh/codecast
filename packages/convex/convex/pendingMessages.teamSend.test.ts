@@ -91,18 +91,27 @@ function world(opts: { bobLive?: boolean; bobIdle?: boolean; now: number } = { n
   const now = opts.now;
   const heartbeat = opts.bobLive === false ? now - 10 * 60_000 : now - 5_000;
   return createDb({
-    users: [{ _id: "uAlice" }, { _id: "uBob" }, { _id: "uCarol" }, { _id: "uBot", name: "Mr Bot", is_bot: true }],
+    users: [
+      { _id: "uAlice" },
+      { _id: "uBob" },
+      { _id: "uCarol" },
+      { _id: "uBot", name: "Mr Bot", is_bot: true },
+      { _id: "uBot2", name: "Other Bot", is_bot: true },
+    ],
     teams: [{ _id: "tA" }],
     team_memberships: [
       { _id: "mAlice", user_id: "uAlice", team_id: "tA", visibility: "summary" },
       { _id: "mBob", user_id: "uBob", team_id: "tA", visibility: "summary" },
       { _id: "mBot", user_id: "uBot", team_id: "tA", visibility: "summary" },
+      { _id: "mBot2", user_id: "uBot2", team_id: "tA", visibility: "summary" },
     ],
     conversations: [
       { _id: "convAlice", user_id: "uAlice", short_id: "jxalice", session_id: "sess-alice", is_private: true, status: "active" },
       { _id: "convBob", user_id: "uBob", team_id: "tA", short_id: "jxbob01", session_id: "sess-bob", is_private: false, status: "active" },
       { _id: "convBobPriv", user_id: "uBob", team_id: "tA", short_id: "jxbobpv", session_id: "sess-bobpv", is_private: true, status: "active" },
       { _id: "convCarol", user_id: "uCarol", short_id: "jxcarol", session_id: "sess-carol", is_private: true, status: "active" },
+      // Bot-run, no human starter — the only shape a teammate send may auto-claim.
+      { _id: "convBotRun", user_id: "uBot", team_id: "tA", short_id: "jxbotrn", session_id: "sess-botrun", is_private: false, status: "active" },
     ],
     managed_sessions: [
       {
@@ -250,31 +259,57 @@ describe("team send — authorization", () => {
     expect(tables.pending_messages[0].status).toBe("pending"); // never rejected — it's queued
   });
 
-  test("a cross-user send into an UNOWNED session auto-owns it onto the sender", async () => {
+  test("a cross-user send into a human-run session does not claim it — the starter stays responsible", async () => {
     const { ctx, tables } = world({ now: Date.now() });
     const res = await performSessionSend(ctx as any, "uAlice" as any, {
       to: "jxbob01",
       from: "jxalice",
       body: "picking this up",
     });
-    expect(res.auto_owned).toBe(true);
+    expect(res.auto_owned).toBe(false);
     const conv = tables.conversations.find((c) => c._id === "convBob")!;
-    expect(conv.owner_user_id).toBe("uAlice"); // thread now surfaces in Alice's inbox
+    expect(conv.owner_user_id).toBeUndefined();
+    expect(tables.session_owners ?? []).toEqual([]);
     // Delivery routing is untouched: the pending row still routes to Bob's daemon.
     expect(tables.pending_messages[0].owner_user_id).toBe("uBob");
   });
 
-  test("a BOT sender never auto-owns — the thread stays claimable by the first human", async () => {
+  test("a cross-user send into a BOT-run unowned session auto-owns it onto the sender", async () => {
     const { ctx, tables } = world({ now: Date.now() });
-    const botRes = await performSessionSend(ctx as any, "uBot" as any, { to: "jxbob01", body: "status ping" });
+    const res = await performSessionSend(ctx as any, "uAlice" as any, {
+      to: "jxbotrn",
+      from: "jxalice",
+      body: "picking this up",
+    });
+    expect(res.auto_owned).toBe(true);
+    const conv = tables.conversations.find((c) => c._id === "convBotRun")!;
+    expect(conv.owner_user_id).toBe("uAlice");
+    expect(tables.pending_messages[0].owner_user_id).toBe("uBot");
+  });
+
+  test("a bot-run session a human originally started is not auto-claimed", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    tables.conversations.find((c) => c._id === "convBotRun")!.author_user_id = "uBob";
+    const res = await performSessionSend(ctx as any, "uAlice" as any, {
+      to: "jxbotrn",
+      from: "jxalice",
+      body: "fyi",
+    });
+    expect(res.auto_owned).toBe(false);
+    expect(tables.conversations.find((c) => c._id === "convBotRun")!.owner_user_id).toBeUndefined();
+  });
+
+  test("a BOT sender never auto-owns — a bot-run thread stays claimable by the first human", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    const botRes = await performSessionSend(ctx as any, "uBot2" as any, { to: "jxbotrn", body: "status ping" });
     expect(botRes.auto_owned).toBe(false);
-    expect(tables.conversations.find((c) => c._id === "convBob")!.owner_user_id).toBeUndefined();
+    expect(tables.conversations.find((c) => c._id === "convBotRun")!.owner_user_id).toBeUndefined();
     // The message itself still delivers normally.
     expect(tables.pending_messages[0].content).toContain("status ping");
-    // A human engaging afterwards still claims it.
-    const humanRes = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "on it" });
+    // A human engaging afterwards still claims a bot-run unowned thread.
+    const humanRes = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbotrn", from: "jxalice", body: "on it" });
     expect(humanRes.auto_owned).toBe(true);
-    expect(tables.conversations.find((c) => c._id === "convBob")!.owner_user_id).toBe("uAlice");
+    expect(tables.conversations.find((c) => c._id === "convBotRun")!.owner_user_id).toBe("uAlice");
   });
 
   test("a cross-user send NEVER steals an existing owner", async () => {
@@ -302,11 +337,11 @@ describe("team send — authorization", () => {
   // before the session_owners backfill) must not be auto-claimed either.
   test("auto-claim writes the canonical join row, not just the owner_user_id cache", async () => {
     const { ctx, tables } = world({ now: Date.now() });
-    const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "on it" });
+    const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbotrn", from: "jxalice", body: "on it" });
     expect(res.auto_owned).toBe(true);
     expect((tables.session_owners ?? []).map((r: any) => r.user_id)).toEqual(["uAlice"]);
     // …and the cache is resynced from the set.
-    expect(tables.conversations.find((c) => c._id === "convBob")!.owner_user_id).toBe("uAlice");
+    expect(tables.conversations.find((c) => c._id === "convBotRun")!.owner_user_id).toBe("uAlice");
   });
 
   test("a self-send (Bob → his own session) sets no failure channel and keeps owner == sender", async () => {

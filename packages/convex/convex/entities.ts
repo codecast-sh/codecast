@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { getAuthenticatedUserId } from "./pendingMessages";
 
 // Entity tables addressable by pill/link surfaces, in resolution order.
 // Mirrors EntityType in @codecast/shared/entities.
@@ -26,9 +27,10 @@ const ID_TYPE_TABLES = [
  * (message ids, hashes), which callers render as plain text.
  */
 export const resolveIdType = query({
-  args: { id: v.string() },
+  args: { id: v.string(), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    // The browser, or the CLI with its token (`cast link <id>`).
+    const userId = args.api_token ? await getAuthenticatedUserId(ctx, args.api_token) : await getAuthUserId(ctx);
     if (!userId) return null;
     for (const [table, type] of ID_TYPE_TABLES) {
       if (ctx.db.normalizeId(table, args.id)) return type;

@@ -10,6 +10,7 @@ import { derivePresenceState } from "./presenceState";
 import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
 import { canAccessDoc, canAccessPlan, canAccessProject, canAccessTask } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
+import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
 import { pendingOnLadder } from "./sessionDecisions";
 import { isWholeWorkspace, type Scope } from "./lib/orgScope";
@@ -226,6 +227,9 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
   const people = await Promise.all(scan.memberIds.map(async (uid) => {
     const user = uid.toString() === userId.toString() ? caller : await ctx.db.get(uid);
     if (!user) return null;
+    // A standing agent's bot account sits on the roster for routing; it is a
+    // seat's identity, drawn once under its role or anchor, never a person.
+    if (user.is_bot) return null;
     const mine = scan.byParent.get(`user:${uid.toString()}`) ?? [];
     return {
       user_id: uid,
@@ -280,6 +284,9 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
     ]);
     return {
       ...role,
+      // The face (org-staffing.md S13): the chosen key, else the handle's
+      // default, so every node draws one. Tenure (S10) rides through `...role`.
+      avatar: avatarOf(role),
       counts: tallyOf(mine),
       sessions: mine.slice(0, ORG_TOP_N),
       total: mine.length,

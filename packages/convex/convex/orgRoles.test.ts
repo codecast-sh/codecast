@@ -35,6 +35,10 @@ function fixtures(extra: Record<string, any[]> = {}) {
     managed_sessions: [],
     messages: [],
     user_presence: [],
+    pending_messages: [],
+    devices: [],
+    anchors: [],
+    role_wake_outbox: [],
     ...extra,
   });
 }
@@ -51,6 +55,28 @@ describe("orgRoles.create", () => {
     expect(role.host_user_id).toBe(ME);
     expect(role.reports_to).toEqual({ kind: "user", user_id: ME });
     expect(role.scope).toEqual({ project_ids: [], plan_ids: [] });
+  });
+
+  test("tenure and avatar (S10, S13): standing/program resolve refs, and the face defaults from the handle", async () => {
+    const db = fixtures({
+      plans: [{ _id: "plans_push", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: "pl-7", title: "Push", status: "active", created_at: 1, updated_at: 1 }],
+      projects: [{ _id: "projects_mig", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: "pr-1", title: "Migration", status: "active", created_at: 1, updated_at: 1 }],
+    });
+    const ctx = ctxOf(db);
+    // A program role ending with a plan: the ref resolves to the plan id.
+    const program = await performCreateRole(ctx, ME as any, { name: "Push lead", handle: "push", team_id: TEAM, tenure: { kind: "program", ends: { plan: "pl-7" }, then: "retire" } });
+    expect(program.tenure).toEqual({ kind: "program", ends: { plan: "plans_push" }, then: "retire" });
+    // Every role gets a face; the default is stable per handle.
+    const { defaultAvatarFor, isAvatarKey } = await import("@codecast/shared/contracts/orgAvatars");
+    expect(program.avatar).toBe(defaultAvatarFor("push"));
+    // A chosen avatar sticks; a standing tenure passes through; a bad key is refused.
+    const chosen = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, tenure: { kind: "standing" }, avatar: "otter" });
+    expect(chosen).toMatchObject({ tenure: { kind: "standing" }, avatar: "otter" });
+    expect(isAvatarKey(chosen.avatar)).toBe(true);
+    await expect(performCreateRole(ctx, ME as any, { name: "Bad", handle: "bad", team_id: TEAM, avatar: "dragon" })).rejects.toThrow(/avatar key/);
+    // Update converts a program to standing (a human act) and re-faces it.
+    const updated = await performUpdateRole(ctx, ME as any, { role_id: String(program._id), tenure: { kind: "standing" }, human_decision: "d" });
+    expect(updated.tenure).toEqual({ kind: "standing" });
   });
 
   test("a personal role carries the caller as its scope user", async () => {
@@ -164,7 +190,7 @@ describe("orgRoles.reparentSession + retire", () => {
     const db = fixtures({ conversations: [conv()] });
     const ctx = ctxOf(db);
     const role = await performCreateRole(ctx, ME as any, { name: "A", handle: "aa", team_id: TEAM });
-    const res = await performReparentSession(ctx, ME as any, { conversation_id: "c".repeat(32), target: { kind: "role", role_id: role.short_id } });
+    const res = await performReparentSession(ctx, ME as any, { session_id: "c".repeat(32), target: { kind: "role", role_id: role.short_id } });
     expect(res.org_role_id).toBe(role._id);
     expect(db._tables.conversations[0].org_role_id).toBe(role._id);
     expect(db._tables.session_owners.length).toBe(0);
@@ -180,12 +206,12 @@ describe("orgRoles.reparentSession + retire", () => {
     const ctx = ctxOf(db);
     const personal = await performCreateRole(ctx, ME as any, { name: "P", handle: "pp" });
     // Not the runner, not an owner, and a personal role grants no reshape over MATE's row.
-    await expect(performReparentSession(ctx, ME as any, { conversation_id: "c".repeat(32), target: { kind: "role", role_id: personal._id } }))
+    await expect(performReparentSession(ctx, ME as any, { session_id: "c".repeat(32), target: { kind: "role", role_id: personal._id } }))
       .rejects.toThrow(/not one of its owners/);
     const other = await performCreateRole(ctx, MATE as any, { name: "Q", handle: "qq" });
     db._tables.conversations[0].team_id = undefined;
     const teamRole = await performCreateRole(ctx, ME as any, { name: "T", handle: "tt", team_id: TEAM });
-    await expect(performReparentSession(ctx, MATE as any, { conversation_id: "c".repeat(32), target: { kind: "role", role_id: teamRole._id } }))
+    await expect(performReparentSession(ctx, MATE as any, { session_id: "c".repeat(32), target: { kind: "role", role_id: teamRole._id } }))
       .rejects.toThrow(/not in the role's team/);
     void other;
   });
@@ -194,12 +220,140 @@ describe("orgRoles.reparentSession + retire", () => {
     const db = fixtures({ conversations: [conv()] });
     const ctx = ctxOf(db);
     const role = await performCreateRole(ctx, ME as any, { name: "A", handle: "aa", team_id: TEAM });
-    await performReparentSession(ctx, ME as any, { conversation_id: "c".repeat(32), target: { kind: "role", role_id: role._id } });
-    const res = await performReparentSession(ctx, ME as any, { conversation_id: "c".repeat(32), target: { kind: "user", user_id: MATE as any } });
+    await performReparentSession(ctx, ME as any, { session_id: "c".repeat(32), target: { kind: "role", role_id: role._id } });
+    const res = await performReparentSession(ctx, ME as any, { session_id: "c".repeat(32), target: { kind: "user", user_id: MATE as any } });
     expect(res.org_role_id).toBeNull();
     expect(db._tables.conversations[0].org_role_id).toBeUndefined();
     expect(db._tables.session_owners.map((r: any) => r.user_id)).toEqual([MATE]);
     expect(db._tables.conversations[0].owner_user_id).toBe(MATE);
+  });
+
+  // org-staffing.md S11: the ownership menu and the chart are one gesture.
+  test("adding an owner re-homes the session under that person and clears the role pointer; the session is told once", async () => {
+    const db = fixtures({ conversations: [conv()], session_owners: [{ _id: "so1", conversation_id: "c".repeat(32), user_id: ME, added_by: ME, added_at: 1 }] });
+    const ctx = ctxOf(db);
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    const filed = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "role", role_id: role._id } });
+    expect(filed.reports_to).toMatchObject({ kind: "role", name: "Growth" });
+    expect(filed.told).toEqual({ sessions: 1, roles: 0 });
+
+    // `cast own`: Mate is added, keeps Me as an owner, and the chart follows Mate.
+    const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "add" }, note: "Take it from here." });
+    expect(res.org_role_id).toBeNull();
+    expect(db._tables.conversations[0].org_role_id).toBeUndefined();
+    expect(db._tables.session_owners.map((r: any) => r.user_id).sort()).toEqual([ME, MATE].sort());
+    expect(db._tables.conversations[0].owner_user_id).toBe(MATE);
+    expect(res.reports_to).toEqual({ kind: "user", user_id: MATE, name: "Mate" });
+    expect(res.told).toEqual({ sessions: 1, roles: 0 });
+
+    // The line rides the session message rail, from the acting person, with the note.
+    const pending = db._tables.pending_messages;
+    expect(pending).toHaveLength(2);
+    expect(pending[0].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Growth.\n</session-message>`);
+    expect(pending[1].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Mate. Take it from here.\n</session-message>`);
+    expect(pending[1].from_user_id).toBe(ME);
+    expect(pending[1].conversation_id).toBe("c".repeat(32));
+
+    // A move that changes nothing tells nobody.
+    const again = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "add" } });
+    expect(again.told).toEqual({ sessions: 0, roles: 0 });
+    expect(db._tables.pending_messages).toHaveLength(2);
+
+    // Removing an owner is not a re-homing: Mate leaves, Me is the line again, and the session hears it.
+    const gone = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "remove" } });
+    expect(gone.removed).toEqual([MATE]);
+    expect(db._tables.conversations[0].owner_user_id).toBe(ME);
+    expect(gone.told).toEqual({ sessions: 1, roles: 0 });
+  });
+
+  // Review findings on S11.
+  test("a standing agent's own thread cannot be filed under a role, by any door", async () => {
+    const db = fixtures({ conversations: [conv({ standing_role_id: "role-x", anchor_id: "anchor-x" }), conv({ _id: "e".repeat(32), session_id: "sess-anchor", anchor_id: "anchor-y" })] });
+    const ctx = ctxOf(db);
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    for (const ref of ["sess1", "sess-anchor"]) {
+      await expect(performReparentSession(ctx, ME as any, { session_id: ref, target: { kind: "role", role_id: role._id } })).rejects.toThrow(/standing agent's own thread/);
+    }
+    expect(db._tables.conversations.every((c: any) => c.org_role_id === undefined)).toBe(true);
+    expect(db._tables.pending_messages).toHaveLength(0);
+  });
+
+  test("a chart drop on a person adds them and re-homes the session; the other owner stays", async () => {
+    const db = fixtures({ conversations: [conv()], session_owners: [{ _id: "so1", conversation_id: "c".repeat(32), user_id: ME, added_by: ME, added_at: 1 }] });
+    const res = await performReparentSession(ctxOf(db), ME as any, { session_id: "sess1", target: { kind: "user", user_id: MATE as any } });
+    expect(res.removed).toEqual([]);
+    expect(db._tables.session_owners.map((r: any) => r.user_id).sort()).toEqual([ME, MATE].sort());
+    expect(db._tables.conversations[0].owner_user_id).toBe(MATE);
+    expect(res.reports_to).toMatchObject({ kind: "user", user_id: MATE });
+    // The picker's whole-set form still replaces.
+    const set = await performReparentSession(ctxOf(db), ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"] } });
+    expect(set.removed).toEqual([ME]);
+  });
+
+  test("a session too stale to wake is not woken for one sentence: the line waits and rides its next turn", async () => {
+    const stale = Date.now() - 2 * 60 * 60 * 1000;
+    const db = fixtures({ conversations: [conv({ updated_at: stale, inbox_killed_at: stale, inbox_stashed_at: stale })] });
+    const ctx = ctxOf(db);
+    const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", user_id: MATE as any }, note: "Yours now." });
+    expect(res.told).toEqual({ sessions: 0, roles: 0, deferred: 1 });
+    const row = db._tables.pending_messages[0];
+    expect(row.status).toBe("held");
+    expect(row.content).toContain("You now report to Mate. Yours now.");
+    // Nothing about the session moved: not resurrected, not resurfaced, not bumped.
+    const c = db._tables.conversations[0];
+    expect(c.inbox_killed_at).toBe(stale);
+    expect(c.inbox_stashed_at).toBe(stale);
+    expect(c.updated_at).toBe(stale);
+    expect(c.has_pending_messages).toBeUndefined();
+    // The next real message releases it, and it is the older row, so it reads first.
+    const { enqueuePendingMessage } = await import("./pendingMessages");
+    await enqueuePendingMessage(ctx, c, ME as any, { content: "pick this up", human: true });
+    expect(db._tables.pending_messages.map((p: any) => p.status)).toEqual(["pending", "pending"]);
+    expect(db._tables.pending_messages[0].content).toContain("You now report to Mate.");
+  });
+
+  test("the acting person's own session signs the line; a bot still cannot own", async () => {
+    const BOT = "u".repeat(31) + "b";
+    const db = fixtures({
+      conversations: [conv(), conv({ _id: "d".repeat(32), session_id: "sess2", short_id: "jxactor" })],
+      users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: MATE, name: "Mate", email: "mate@x.ai" }, { _id: BOT, name: "Anchor", is_bot: true }],
+    });
+    db._tables.team_memberships.push({ _id: "m3", user_id: BOT, team_id: TEAM, role: "member", joined_at: 1 });
+    const ctx = ctxOf(db);
+    const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", user_id: MATE as any }, from_session: "jxactor" });
+    expect(res.told.sessions).toBe(1);
+    expect(db._tables.pending_messages[0].content).toBe(`<session-message from="jxactor" name="Me">\nYou now report to Mate.\n</session-message>`);
+    await expect(performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["Anchor"], mode: "add" } }))
+      .rejects.toThrow(/agent account/);
+  });
+
+  test("a role move wakes the role with the same line and rides each hand as a passive fact", async () => {
+    const db = fixtures({
+      anchors: [{ _id: "anchor-g", scope_type: "team", team_id: TEAM, bot_user_id: "bot-g", host_user_id: ME, name: "Growth", status: "active", conversation_id: "standing-g", org_role_id: "role-g" }],
+      conversations: [
+        conv({ _id: "standing-g", session_id: "s-g", standing_role_id: "role-g", anchor_id: "anchor-g" }),
+        conv({ _id: "hand-1", session_id: "s-h1", short_id: "jxhand1", org_role_id: "role-g" }),
+        conv({ _id: "hand-2", session_id: "s-h2", short_id: "jxhand2", org_role_id: "role-g", status: "completed" }),
+      ],
+      org_roles: [
+        { _id: "role-g", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchor-g", created_by: ME, created_at: 1, updated_at: 1 },
+        { _id: "role-o", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Ops", handle: "ops", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+      ],
+    });
+    const scheduled: any[] = [];
+    const ctx: any = { db, scheduler: { runAfter: async (delay: number, _fn: any, args: any) => { scheduled.push({ delay, args }); } } };
+    const moved = await performReparentRole(ctx, ME as any, { role_id: "or-1", reports_to: { kind: "role", role_id: "role-o" as any }, note: "Ops owns growth now." });
+    expect(moved.told).toEqual({ sessions: 1, roles: 1 });
+    const rows = db._tables.role_wake_outbox.filter((r: any) => r.role_id === "role-g");
+    expect(rows.map((r: any) => r.kind)).toEqual(["immediate", "passive"]);
+    expect(rows[0].cause).toBe("reporting line: You now report to Ops (@ops). Ops owns growth now. (Me moved the role)");
+    expect(rows[1].cause).toBe("hand jxhand1: You now report to Ops (@ops). Ops owns growth now.");
+    expect(rows[1].ref).toEqual({ table: "conversations", id: "hand-1", short_id: "jxhand1" });
+    expect(scheduled).toHaveLength(1);
+    // A no-op move logs nothing and tells nobody.
+    const same = await performReparentRole(ctx, ME as any, { role_id: "or-1", reports_to: { kind: "role", role_id: "role-o" as any } });
+    expect(same.told).toEqual({ sessions: 0, roles: 0 });
+    expect(db._tables.role_wake_outbox).toHaveLength(2);
   });
 });
 
@@ -241,7 +395,10 @@ describe("org.tree", () => {
     });
     const ctx = ctxOf(db);
     const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
-    await performReparentSession(ctx, ME as any, { conversation_id: parentId, target: { kind: "role", role_id: role._id } });
+    await performReparentSession(ctx, ME as any, { session_id: parentId, target: { kind: "role", role_id: role._id } });
+    // Telling the session (S11) stamps it with the wall clock; the tree is
+    // computed at the fixture's NOW, so put the row back inside the window.
+    db._tables.conversations.find((c: any) => c._id === parentId)!.updated_at = NOW - 1000;
 
     const tree = await computeOrgTree(ctx, ME as any, TEAM, NOW);
     expect(tree.workspace).toEqual({ kind: "team", id: TEAM, name: "Acme" });
@@ -265,6 +422,36 @@ describe("org.tree", () => {
     // The subagent is counted, never emitted.
     const all = [...tree.people, ...tree.roles].flatMap((n: any) => n.sessions.map((s: any) => s.title));
     expect(all).not.toContain("Kid");
+  });
+});
+
+describe("org.tree people", () => {
+  test("a standing agent's bot account is never a person row", async () => {
+    const BOT = "u".repeat(31) + "b";
+    const db = fixtures({ users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: MATE, name: "Mate", email: "mate@x.ai" }, { _id: BOT, name: "Anchor", is_bot: true, bot_kind: "anchor" }] });
+    db._tables.team_memberships.push({ _id: "m3", user_id: BOT, team_id: TEAM, role: "member", joined_at: 1 });
+    const tree = await computeOrgTree(ctxOf(db), ME as any, TEAM, NOW);
+    expect(tree.people.map((p: any) => p.name).sort()).toEqual(["Mate", "Me"]);
+  });
+});
+
+describe("staffing mutations are a person's act", () => {
+  test("create, reparent and retire refuse a token call and a session; the perform functions stay open to the apply core", async () => {
+    const { create, reparent, retire } = await import("./orgRoles");
+    const db = fixtures();
+    const ctx: any = { db };
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    const calls: Array<[any, any]> = [
+      [create, { api_token: "tok", name: "Ops", handle: "ops", team_id: TEAM }],
+      [reparent, { api_token: "tok", role_id: String(role._id), reports_to: { kind: "user", user_id: MATE } }],
+      [retire, { api_token: "tok", role_id: String(role._id) }],
+      [create, { from_session: "jxhand01", name: "Ops", handle: "ops", team_id: TEAM }],
+    ];
+    for (const [fn, args] of calls) {
+      await expect((fn as any)._handler(ctx, args)).rejects.toThrow(/human only/);
+    }
+    expect(db._tables.org_roles).toHaveLength(1);
+    expect(db._tables.org_roles[0].status).toBe("active");
   });
 });
 

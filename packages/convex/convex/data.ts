@@ -28,6 +28,18 @@ const SCOPED_TABLES = new Set([
 
 export type DataContext = Awaited<ReturnType<typeof createDataContext>>;
 
+// The workspace a CLI call named outright (`--team <name>` or `--team
+// personal`), else whatever the caller derived (a session's team, the
+// active team pointer, or nothing and let the directory rule decide).
+export function explicitWorkspace(
+  args: { workspace?: "personal" | "team"; team_id?: Id<"teams"> },
+  derived: { workspace?: "team"; team_id?: Id<"teams"> },
+): { workspace?: "personal" | "team"; team_id?: Id<"teams"> } {
+  if (args.workspace === "personal") return { workspace: "personal" };
+  if (args.workspace === "team" && args.team_id) return { workspace: "team", team_id: args.team_id };
+  return derived;
+}
+
 // ── Scoped fetch: shared workspace query pattern ──────────────────────
 // Merges user + team records, resolves effective team through conversations,
 // and filters by workspace. Eliminates the duplicate 3-branch fetching logic
@@ -39,6 +51,13 @@ type ScopedFetchOpts = {
   workspace?: "personal" | "team" | "all";
   limit?: number;
   stripFields?: string[];
+  /** Tasks only: read one status through the status indexes (by_user_status,
+   *  by_team_status) instead of the newest rows, so a caller that needs every
+   *  open row of a large workspace is not fed the newest N of every status. */
+  status?: string;
+  /** Tasks only: rows updated at or after this stamp, through the updated
+   *  indexes (by_user_updated, by_team_updated), newest first. */
+  updatedSince?: number;
 };
 
 // The row's ACCESS workspace key: the stored field when present, else the
@@ -86,6 +105,17 @@ export async function scopedFetch(
   // When stripFields is set, iterate with `for await` so only one full record
   // is in the V8 heap at a time — heavy fields are dropped before accumulating.
   const stripSet = strip ? new Set(strip) : null;
+  // The index a read walks: the owner or team index by default; a status or
+  // updated_at index when the caller asked for one slice of the tasks table.
+  const slice = table === "tasks" && (opts.status !== undefined || opts.updatedSince !== undefined)
+    ? { status: opts.status, since: opts.updatedSince }
+    : null;
+  const byOwner = (field: "user_id" | "team_id", id: any) => {
+    const q = ctx.db.query(table);
+    if (!slice) return q.withIndex(`by_${field}`, (x: any) => x.eq(field, id)).order("desc");
+    if (slice.status !== undefined) return q.withIndex(`by_${field === "user_id" ? "user" : "team"}_status`, (x: any) => x.eq(field, id).eq("status", slice.status)).order("desc");
+    return q.withIndex(`by_${field === "user_id" ? "user" : "team"}_updated`, (x: any) => x.eq(field, id).gte("updated_at", slice.since)).order("desc");
+  };
   const runQuery = async (q: any): Promise<any[]> => {
     if (stripSet) {
       const results: any[] = [];
@@ -103,31 +133,27 @@ export async function scopedFetch(
   };
 
   if (workspace === "personal") {
-    userRecords = await runQuery(
-      ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
-    );
+    userRecords = await runQuery(byOwner("user_id", userId));
   } else if (workspace === "all") {
-    userRecords = await runQuery(
-      ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
-    );
+    userRecords = await runQuery(byOwner("user_id", userId));
     const memberships = await ctx.db
       .query("team_memberships")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
     for (const m of memberships) {
-      const teamRecs = await runQuery(
-        ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id)).order("desc")
-      );
+      const teamRecs = await runQuery(byOwner("team_id", m.team_id));
       teamRecords.push(...teamRecs);
     }
+  } else if (slice && workspace === "team" && teamId) {
+    // A sliced read walks ONE index: every row keyed to a team carries that
+    // team_id, so the owner index would only re-read the same rows (or
+    // personal rows the key filter drops), and the read budget is what a
+    // slice exists to protect.
+    teamRecords = await runQuery(byOwner("team_id", teamId));
   } else {
-    userRecords = await runQuery(
-      ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
-    );
+    userRecords = await runQuery(byOwner("user_id", userId));
     if (teamId) {
-      teamRecords = await runQuery(
-        ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).order("desc")
-      );
+      teamRecords = await runQuery(byOwner("team_id", teamId));
     }
   }
 

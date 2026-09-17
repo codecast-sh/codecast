@@ -626,8 +626,18 @@ export const wake = internalMutation({
     reason: v.string(),
     detail: v.optional(v.string()),
     attempt: v.optional(v.number()),
+    // A review's GitHub id. When codecast already handed that review to the
+    // owning session as a message, this wake has nothing left to say.
+    unless_delivered_review: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (args.unless_delivered_review != null) {
+      const review = await ctx.db
+        .query("reviews")
+        .withIndex("by_github_review_id", (q) => q.eq("github_review_id", args.unless_delivered_review))
+        .first();
+      if (review?.session_delivered_at) return { woken: false, reason: "delivered_directly" };
+    }
     return await wakeShepherd(ctx, args.pr_id, args.reason, args.detail, args.attempt ?? 0);
   },
 });

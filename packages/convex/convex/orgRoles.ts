@@ -1,20 +1,25 @@
-import { mutation, query } from "./functions";
-import { cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
+import { internalMutation, mutation, query } from "./functions";
+import { internalQuery } from "./_generated/server";
+import { applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
 import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
+import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
+import { orgTenureError } from "@codecast/shared/contracts/orgProposal";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
-import { userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { performSetSessionOwner } from "./sessionOwnership";
+import { CHIEF_OF_STAFF_HANDLE, chiefOfStaffIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { performReparentSession, personName, reportsToLine } from "./sessionOwnership";
+import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { canAccessPlan, canAccessProject, isTeamMember, workspaceForResource, workspaceKey } from "./lib/access";
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
-import { decommissionAnchorRow, provisionStandingAgent, type RoleBootstrap } from "./anchors";
+import { announceSeating, decommissionAnchorRow, provisionStandingAgent, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor, type RoleBootstrap } from "./anchors";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
+import { siteUrl } from "./lib/siteUrl";
 import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, scheduleFlush, trustOf, unflushedRowsFor } from "./orgEvents";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -39,6 +44,16 @@ const reportsToValidator = v.union(
   v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
 );
 const scopeValidator = v.object({ project_ids: v.array(v.id("projects")), plan_ids: v.array(v.id("plans")) });
+// Tenure as the CLI and a proposal carry it: refs are strings (pl-N, a
+// project ref), resolved to ids by resolveTenure inside the boundary.
+const tenureValidator = v.union(
+  v.object({ kind: v.literal("standing") }),
+  v.object({
+    kind: v.literal("program"),
+    ends: v.union(v.object({ plan: v.string() }), v.object({ project: v.string() }), v.object({ date: v.number() })),
+    then: v.union(v.literal("retire"), v.literal("review")),
+  }),
+);
 
 function requireHandle(handle: string): string {
   const h = handle.trim().toLowerCase();
@@ -46,27 +61,10 @@ function requireHandle(handle: string): string {
   return h;
 }
 
-// A role ref from the CLI is "or-N" or a raw id; the web passes ids.
-export async function resolveRoleRef(ctx: Ctx, ref: string): Promise<any | null> {
-  const trimmed = (ref ?? "").trim();
-  if (!trimmed) return null;
-  const byShort = await ctx.db
-    .query("org_roles")
-    .withIndex("by_short_id", (q: any) => q.eq("short_id", trimmed))
-    .first();
-  if (byShort) return byShort;
-  const id = typeof ctx.db.normalizeId === "function" ? ctx.db.normalizeId("org_roles", trimmed) : trimmed;
-  if (!id) return null;
-  try { return await ctx.db.get(id); } catch { return null; }
-}
-
-async function requireRole(ctx: Ctx, userId: Id<"users">, ref: string, gate: "access" | "admin"): Promise<any> {
-  const role = await resolveRoleRef(ctx, ref);
-  if (!role) throw new Error("Role not found");
-  const ok = gate === "admin" ? await userCanAdminRole(ctx, userId, role) : await userCanAccessRole(ctx, userId, role);
-  if (!ok) throw new Error(gate === "admin" ? "Only an admin (or the host) can reshape this role" : "Role not found");
-  return role;
-}
+// The role lookup and its gate live in lib/orgAccess so the session
+// reparent core (sessionOwnership.ts) can use them without importing this
+// module. Re-exported for the callers that read them from here.
+export { CHIEF_OF_STAFF_HANDLE, resolveRoleRef, rolesInBoundary };
 
 // Two rows share an access boundary when they are the same team role space or
 // the same personal space. A role may only report to a role in its boundary.
@@ -78,10 +76,7 @@ function sameBoundary(a: { team_id?: any; scope_user_id?: any }, b: { team_id?: 
 // Handles are unique among the boundary's live roles: a retired role's handle
 // is free to reuse, the way a retired seat's title is.
 async function handleTaken(ctx: Ctx, boundary: { team_id?: any; scope_user_id?: any }, handle: string, exceptId?: any): Promise<boolean> {
-  const rows: any[] = boundary.team_id
-    ? await ctx.db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", boundary.team_id).eq("handle", handle)).collect()
-    : await ctx.db.query("org_roles").withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", boundary.scope_user_id).eq("handle", handle)).collect();
-  return rows.some((r) => r.status !== "retired" && (!exceptId || r._id.toString() !== exceptId.toString()));
+  return (await liveRolesByHandle(ctx, boundary, handle)).some((r) => !exceptId || r._id.toString() !== exceptId.toString());
 }
 
 async function resolveReportsTo(ctx: Ctx, userId: Id<"users">, boundary: { team_id?: any; scope_user_id?: any }, target: ReportsTo): Promise<ReportsTo> {
@@ -114,15 +109,6 @@ export type ScopeOverlap = {
 
 const boundaryKey = (seat: { team_id?: any; scope_user_id?: any }): string =>
   seat.team_id ? `team:${seat.team_id}` : `user:${seat.scope_user_id}`;
-
-// Every live role in a boundary. There is no parent index: the boundary's roles
-// are few (a team's org chart), so siblings and children are filtered here.
-export async function rolesInBoundary(ctx: Ctx, seat: { team_id?: any; scope_user_id?: any }): Promise<any[]> {
-  const rows: any[] = seat.team_id
-    ? await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", seat.team_id)).collect()
-    : await ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", seat.scope_user_id)).collect();
-  return rows.filter((r) => r.status !== "retired");
-}
 
 // The plan → project edge for every plan named by these scopes, read once.
 export async function planProjectsOf(ctx: Ctx, scopes: Scope[]): Promise<PlanProjectOf> {
@@ -239,6 +225,35 @@ export async function resolveScopeRef(ctx: Ctx, role: any, ref: string): Promise
   throw new Error(`No ${kind} "${needle}" in this workspace`);
 }
 
+// ── Tenure and avatar (org-staffing.md S10, S13) ────────────────────────────
+export type TenureSpec =
+  | { kind: "standing" }
+  | { kind: "program"; ends: { plan: string } | { project: string } | { date: number }; then: "retire" | "review" };
+
+/** A tenure spec (refs) → the stored tenure (ids). Validates the shape, then
+ *  resolves a plan or project ref inside the boundary the way scope refs
+ *  resolve; a date passes through. Throws on a bad shape or an unknown ref. */
+export async function resolveTenure(ctx: Ctx, boundary: { team_id?: any; scope_user_id?: any }, spec: TenureSpec): Promise<any> {
+  const fault = orgTenureError(spec);
+  if (fault) throw new Error(fault);
+  if (spec.kind === "standing") return { kind: "standing" };
+  const e: any = spec.ends;
+  if (e.date !== undefined) return { kind: "program", ends: { date: e.date }, then: spec.then };
+  const which = e.plan !== undefined ? "plan" : "project";
+  const ref = await resolveScopeRef(ctx, boundary, `${which}:${e[which]}`);
+  return { kind: "program", ends: which === "plan" ? { plan: ref.id } : { project: ref.id }, then: spec.then };
+}
+
+/** A chosen avatar key, else the stable default for the handle. An empty
+ *  string clears back to the default. */
+export function normalizeAvatar(avatar: string | undefined, handle: string): string {
+  if (avatar === undefined) return defaultAvatarFor(handle);
+  const trimmed = avatar.trim();
+  if (!trimmed) return defaultAvatarFor(handle);
+  if (!isAvatarKey(trimmed)) throw new Error(`"${trimmed}" is not an avatar key (see shared/contracts/orgAvatars)`);
+  return trimmed;
+}
+
 // `cast role scope <handle> --add project:<ref> --remove plan:<ref>`: edit the
 // scope by refs, then run the update path with its rules and its log entry.
 export async function performSetRoleScope(
@@ -268,7 +283,7 @@ export async function performSetRoleScope(
 export async function performCreateRole(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { name: string; handle: string; team_id?: Id<"teams">; scope?: Scope; reports_to?: ReportsTo; charter?: string; review_backend?: string },
+  args: { name: string; handle: string; team_id?: Id<"teams">; scope?: Scope; reports_to?: ReportsTo; charter?: string; review_backend?: string; tenure?: TenureSpec; avatar?: string },
 ): Promise<any> {
   const name = args.name.trim();
   if (!name) throw new Error("A role needs a name");
@@ -282,6 +297,10 @@ export async function performCreateRole(
   }
   if (await handleTaken(ctx, boundary, handle)) throw new Error(`Handle @${handle} is already taken in this workspace`);
   const reports_to = await resolveReportsTo(ctx, userId, boundary, args.reports_to ?? { kind: "user", user_id: userId });
+  // Standing or program (S10) and the face (S13): tenure refs resolve to ids
+  // inside the boundary; the avatar defaults to the handle's own face.
+  const tenure = args.tenure ? await resolveTenure(ctx, { team_id: args.team_id, scope_user_id: args.team_id ? undefined : userId }, args.tenure) : undefined;
+  const avatar = normalizeAvatar(args.avatar, handle);
   const now = Date.now();
   // A role born with a scope ("Add a lead" on a project page) obeys the same
   // containment rule as an edit; overlaps are the caller's to show.
@@ -302,6 +321,8 @@ export async function performCreateRole(
     review_backend: normalizeBackend(args.review_backend),
     trust: "understand",
     caps: { ...DEFAULT_CAPS },
+    tenure,
+    avatar,
     created_by: userId,
     created_at: now,
     updated_at: now,
@@ -312,7 +333,7 @@ export async function performCreateRole(
 export async function performUpdateRole(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; from_session?: string; review_backend?: string; api_token?: string; human_decision?: string },
+  args: { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; tenure?: TenureSpec; avatar?: string; from_session?: string; review_backend?: string; api_token?: string; human_decision?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   // A retired seat is closed: its handle may already belong to a live role
@@ -320,7 +341,9 @@ export async function performUpdateRole(
   if (role.status === "retired") throw new Error("That role is retired");
   // Scope and charter edits are human only (F1, T2): a call carrying the
   // session it runs in is an agent's, and an agent may not widen or narrow
-  // what a role owns, nor rewrite the statement of its job.
+  // what a role owns, nor rewrite the statement of its job. Tenure (S10) and
+  // the avatar (S13) are set freely at create and edited the same way here:
+  // the host sets whether a seat is standing or a program, like its name.
   if (args.scope !== undefined) await refuseUnlessHuman(ctx, args, "Scope");
   if (args.charter !== undefined) await refuseUnlessHuman(ctx, args, "Charter");
   // Retiring through update is the retire path: sessions must fall back to
@@ -328,6 +351,8 @@ export async function performUpdateRole(
   if (args.status === "retired") return performRetireRole(ctx, userId, { role_id: args.role_id });
   const patch: Record<string, any> = { updated_at: Date.now() };
   if (args.review_backend !== undefined) patch.review_backend = normalizeBackend(args.review_backend);
+  if (args.tenure !== undefined) patch.tenure = await resolveTenure(ctx, role, args.tenure);
+  if (args.avatar !== undefined) { const t = args.avatar.trim(); patch.avatar = t ? normalizeAvatar(t, role.handle) : defaultAvatarFor(role.handle); }
   if (args.name !== undefined) {
     const name = args.name.trim();
     if (!name) throw new Error("A role needs a name");
@@ -391,7 +416,7 @@ async function roleChainReaches(ctx: Ctx, start: any, needle: string): Promise<b
 export async function performReparentRole(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; reports_to: ReportsTo },
+  args: { role_id: string; reports_to: ReportsTo; note?: string; from_session?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const reports_to = await resolveReportsTo(ctx, userId, role, args.reports_to);
@@ -416,6 +441,7 @@ export async function performReparentRole(
   const same = before?.kind === reports_to.kind
     && String(reports_to.kind === "role" ? before.role_id : before.user_id) === String(reports_to.kind === "role" ? reports_to.role_id : reports_to.user_id);
   await ctx.db.patch(role._id, { reports_to, updated_at: now });
+  const told = { sessions: 0, roles: 0 };
   if (!same) {
     await ctx.db.insert("org_role_history", {
       role_id: role._id,
@@ -427,14 +453,50 @@ export async function performReparentRole(
       new_value: JSON.stringify(reports_to),
       created_at: now,
     });
+    Object.assign(told, await tellRoleMoved(ctx, userId, await ctx.db.get(role._id), args.note));
   }
-  return await ctx.db.get(role._id);
+  return { ...(await ctx.db.get(role._id)), told };
 }
 
-export async function performRetireRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
+// The agents hear about a role move (org-staffing.md S11): the role gets an
+// immediate wake carrying the same line a moved session receives, and each
+// live hand rides that frame as a passive fact (one row per hand, so the
+// role sees which of its hands now report through it to the new parent).
+// A role with no standing session has nobody to tell; the rail returns null
+// and the counts say so.
+async function tellRoleMoved(ctx: Ctx, userId: Id<"users">, role: any, note?: string): Promise<{ sessions: number; roles: number }> {
+  const actor = await ctx.db.get(userId);
+  const line = reportsToLine(await parentNameOf(ctx, role), note);
+  const told = { sessions: 0, roles: 0 };
+  const woke = await enqueueRoleEvent(ctx, role._id, {
+    kind: "immediate",
+    cause: `reporting line: ${line} (${personName(actor)} moved the role)`,
+    ref: { table: "org_roles", id: String(role._id), short_id: role.short_id },
+  });
+  if (!woke) return told;
+  told.roles = 1;
+  for (const hand of await handsOf(ctx, role)) {
+    const row = await enqueueRoleEvent(ctx, role._id, {
+      kind: "passive",
+      cause: `hand ${hand.short_id ?? String(hand._id).slice(0, 7)}: ${line}`,
+      ref: { table: "conversations", id: String(hand._id), short_id: hand.short_id },
+    });
+    if (row) told.sessions++;
+  }
+  return told;
+}
+
+export type UnseatChoice = "keep" | "retire";
+
+export async function performRetireRole(ctx: any, userId: Id<"users">, args: { role_id: string; standing_session?: UnseatChoice }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
-  if (role.status === "retired") return { ...role, cleared: 0, rehomed: 0, interrupted: 0, cancelled_triggers: 0 };
+  if (role.status === "retired") return { ...role, cleared: 0, rehomed: 0, interrupted: 0, cancelled_triggers: 0, standing_session: "kept" };
   const now = Date.now();
+  // Unseating the chief of staff (org-staffing.md S16) keeps the workspace's
+  // standing agent by default: the person is never left without the
+  // assistant they had. Any other seat goes down with its role unless asked
+  // to stay.
+  const keepStanding = (args.standing_session ?? (role.handle === CHIEF_OF_STAFF_HANDLE ? "keep" : "retire")) === "keep";
   // Live hands hear it first (before org_role_id is cleared, or handsOf finds
   // nothing): stop at a safe point; the session now reports to its owner.
   const interrupted = await interruptHands(ctx, role, userId, "role-retired",
@@ -444,21 +506,43 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
   // held and pending turns dropped, its anchor decommissioned (kill command,
   // status completed, bot off the team roster). Outbox rows that never
   // flushed are dropped too.
+  // Kept (S16), the thread is the assistant the person had before the hire:
+  // only the seat's own routine goes, every trigger they armed on it stays,
+  // and a message waiting for a wake is delivered as written, since the wake
+  // that would have carried it is dropped below.
   let cancelledTriggers = 0;
   const standing = await standingConversationOf(ctx, role);
   if (standing) {
-    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now);
+    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now, keepStanding ? (t) => t.title === COMPANY_REVIEW_TITLE : undefined);
     const held: any[] = await ctx.db.query("pending_messages")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "held")).collect();
-    for (const p of held) await ctx.db.patch(p._id, { status: "cancelled", cancelled_at: now });
+    for (const p of held) await ctx.db.patch(p._id, keepStanding ? { status: "pending" } : { status: "cancelled", cancelled_at: now });
   }
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
-  if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor);
-  // The seat's markers come off the session here, the one site that knows the
-  // row was a role's seat (a plain workspace anchor keeps anchor_id so its
-  // history still renders under the bot). Without this an adopted session
-  // stays "another role's standing session" forever (org-staffing.md S6).
-  if (standing) await ctx.db.patch(standing._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
+  if (keepStanding) {
+    // The session runs on as a plain standing agent: the anchors row drops
+    // the role pointer and answers as the workspace anchor again, the bot
+    // is an anchor again, and the thread takes its old title back.
+    if (anchor && anchor.status !== "decommissioned") {
+      await ctx.db.patch(anchor._id, { org_role_id: undefined, updated_at: now });
+      await ctx.db.patch(anchor.bot_user_id, { bot_kind: "anchor" });
+    }
+    if (standing) {
+      const prev = standing.seat_previous;
+      await ctx.db.patch(standing._id, {
+        standing_role_id: undefined,
+        updated_at: now,
+        ...(prev ? { title: prev.title, title_is_custom: prev.title_is_custom, seat_previous: undefined } : {}),
+      });
+    }
+  } else {
+    if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor);
+    // The seat's markers come off the session here, the one site that knows the
+    // row was a role's seat (a plain workspace anchor keeps anchor_id so its
+    // history still renders under the bot). Without this an adopted session
+    // stays "another role's standing session" forever (org-staffing.md S6).
+    if (standing) await ctx.db.patch(standing._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
+  }
   for (const row of await unflushedRowsFor(ctx, role._id)) await ctx.db.delete(row._id);
   const filed: any[] = await ctx.db
     .query("conversations")
@@ -474,42 +558,15 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
   );
   for (const child of children) await ctx.db.patch(child._id, { reports_to: role.reports_to, updated_at: now });
   await ctx.db.patch(role._id, { status: "retired", updated_at: now });
-  return { ...(await ctx.db.get(role._id)), cleared: filed.length, rehomed: children.length, interrupted, cancelled_triggers: cancelledTriggers };
+  return { ...(await ctx.db.get(role._id)), cleared: filed.length, rehomed: children.length, interrupted, cancelled_triggers: cancelledTriggers, standing_session: standing ? (keepStanding ? "kept" : "retired") : "none" };
 }
 
-// Move a session in the tree. A user target changes ownership (the existing
-// owner path) and clears the role pointer; a role target sets the pointer and
-// leaves owners alone.
-export async function performReparentSession(
-  ctx: Ctx,
-  userId: Id<"users">,
-  args: { conversation_id: string; target: { kind: "user"; user_id: Id<"users"> } | { kind: "role"; role_id: string } },
-): Promise<{ ok: true; conversation_id: Id<"conversations">; org_role_id: Id<"org_roles"> | null }> {
-  const targetRole = args.target.kind === "role" ? await requireRole(ctx, userId, args.target.role_id, "access") : null;
-  const canReshapeTarget = targetRole ? await userCanAdminRole(ctx, userId, targetRole) : false;
-  // The conversation access rule decides who may file: an owner always, a
-  // team viewer only when they can reshape the target role, and a session the
-  // caller cannot see never.
-  const conv = await findConversationByAnyRefWhere(ctx, args.conversation_id, async (c: any) => {
-    const access = await checkConversationAccess(ctx, userId, c);
-    return access === "owner" || (access === "team" && canReshapeTarget);
-  });
-  if (!conv) throw new Error("Session not found, or you are not one of its owners");
-
-  if (args.target.kind === "user") {
-    await performSetSessionOwner(ctx, userId, { session_id: conv._id.toString(), owner: args.target.user_id.toString() });
-    if (conv.org_role_id) await ctx.db.patch(conv._id, { org_role_id: undefined });
-    return { ok: true, conversation_id: conv._id, org_role_id: null };
-  }
-  if (targetRole.status === "retired") throw new Error("That role is retired");
-  // A team role only takes sessions routed to its team; a personal role takes
-  // anything its owner may reparent.
-  if (targetRole.team_id && (conv.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
-    throw new Error("That session is not in the role's team");
-  }
-  await ctx.db.patch(conv._id, { org_role_id: targetRole._id });
-  return { ok: true, conversation_id: conv._id, org_role_id: targetRole._id };
-}
+// Moving a session in the tree is the ownership gesture (org-staffing.md
+// S11): one core in sessionOwnership.ts serves the org page, the ownership
+// menu and `cast own`/`cast disown`, and it is the one place session_owners
+// and org_role_id change together. Re-exported so the org callers keep
+// their import.
+export { performReparentSession };
 
 // ── Mutations (S5) ────────────────────────────────────────────────────────────
 
@@ -519,9 +576,14 @@ async function requireCaller(ctx: any, apiToken?: string): Promise<Id<"users">> 
   return userId;
 }
 
+// Staffing is a person's act (org-staffing.md S1, S4): the chart changes by a
+// person's hand on the org page or through a proposal a person accepted
+// (orgInit.applyOrgChange calls the perform functions directly and carries
+// the decision). The same gate as trust, caps and proposal decisions.
 export const create = mutation({
   args: {
     api_token: v.optional(v.string()),
+    from_session: v.optional(v.string()),
     name: v.string(),
     handle: v.string(),
     team_id: v.optional(v.id("teams")),
@@ -529,6 +591,8 @@ export const create = mutation({
     reports_to: v.optional(reportsToValidator),
     charter: v.optional(v.string()),
     review_backend: v.optional(v.string()),
+    tenure: v.optional(tenureValidator),
+    avatar: v.optional(v.string()),
     // `cast role create` provisions the standing session in the same call
     // unless --no-session; these ride along to provisionStandingAgent.
     provision: v.optional(v.boolean()),
@@ -536,7 +600,8 @@ export const create = mutation({
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
   },
-  handler: async (ctx, { api_token, provision, model, project_path, agent_type, ...args }) => {
+  handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, ...args }) => {
+    await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
     const userId = await requireCaller(ctx, api_token);
     const role = await performCreateRole(ctx, userId, args);
     if (!provision) return role;
@@ -554,6 +619,8 @@ export const update = mutation({
     scope: v.optional(scopeValidator),
     charter: v.optional(v.string()),
     status: v.optional(v.union(v.literal("active"), v.literal("paused"), v.literal("retired"))),
+    tenure: v.optional(tenureValidator),
+    avatar: v.optional(v.string()),
     // The session the CLI runs inside, when any: marks the call as an agent's.
     from_session: v.optional(v.string()),
     review_backend: v.optional(v.string()),
@@ -636,13 +703,19 @@ export const setLine = mutation({
 });
 
 export const reparent = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), reports_to: reportsToValidator },
-  handler: async (ctx, { api_token, ...args }) => performReparentRole(ctx, await requireCaller(ctx, api_token), args),
+  args: { api_token: v.optional(v.string()), role_id: v.string(), reports_to: reportsToValidator, note: v.optional(v.string()), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => {
+    await refuseUnlessHuman(ctx, { api_token, from_session: args.from_session }, "Staffing");
+    return performReparentRole(ctx, await requireCaller(ctx, api_token), args);
+  },
 });
 
 export const retire = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string() },
-  handler: async (ctx, { api_token, ...args }) => performRetireRole(ctx, await requireCaller(ctx, api_token), args),
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), role_id: v.string(), standing_session: v.optional(v.union(v.literal("keep"), v.literal("retire"))) },
+  handler: async (ctx, { api_token, from_session, ...args }) => {
+    await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
+    return performRetireRole(ctx, await requireCaller(ctx, api_token), args);
+  },
 });
 
 export const reparentSession = mutation({
@@ -650,11 +723,29 @@ export const reparentSession = mutation({
     api_token: v.optional(v.string()),
     conversation_id: v.string(),
     target: v.union(
-      v.object({ kind: v.literal("user"), user_id: v.id("users") }),
+      v.object({
+        kind: v.literal("user"),
+        user_id: v.optional(v.id("users")),
+        owners: v.optional(v.array(v.string())),
+        mode: v.optional(v.union(v.literal("set"), v.literal("add"), v.literal("remove"))),
+      }),
       v.object({ kind: v.literal("role"), role_id: v.string() }),
     ),
+    note: v.optional(v.string()),
+    from_session: v.optional(v.string()),
   },
-  handler: async (ctx, { api_token, ...args }) => performReparentSession(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, conversation_id, ...args }) => {
+    const authUserId = await requireCaller(ctx, api_token);
+    const result = await performReparentSession(ctx, authUserId, { session_id: conversation_id, ...args });
+    // The ownership menu now reaches the core through here (org-staffing.md
+    // S11), so this path must notify the assignee exactly as addSessionOwner
+    // did: the "assigned to you" push and inbox row, and the ownership-changed
+    // notice. Without these an owner added from the chart or the menu would
+    // hear nothing. notifySessionAssigned skips the actor and an empty set.
+    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
+    return result;
+  },
 });
 
 // ── Standing agent (org-roles-standing.md T1, T2, T4) ────────────────────────
@@ -760,7 +851,13 @@ async function insertRoleDoc(ctx: Ctx, userId: Id<"users">, role: any, docType: 
 // a hand (it reports to a seat already) and not another role's standing
 // session. The role's own standing session is accepted, so a repeat is a no-op.
 async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: string): Promise<any> {
-  const conv = await findConversationByAnyRefWhere(ctx, ref, async (c: any) => (await checkConversationAccess(ctx, userId, c)) === "owner");
+  // The workspace anchor's session (org-staffing.md S12) is the company's,
+  // not only its host's: whoever may reshape the anchor may seat it.
+  const conv = await findConversationByAnyRefWhere(ctx, ref, async (c: any) => {
+    if ((await checkConversationAccess(ctx, userId, c)) === "owner") return true;
+    const anchor = c.anchor_id && !c.standing_role_id ? await ctx.db.get(c.anchor_id) : null;
+    return !!anchor && anchor.status !== "decommissioned" && (await userCanAdminAnchor(ctx, userId, anchor));
+  });
   if (!conv) throw new Error("Session not found, or you are not one of its owners");
   if (conv.org_role_id) throw new Error("That session is a hand of a role; a hand cannot become a standing session");
   // A pointer at a live role refuses; one left by a seat retired before
@@ -781,7 +878,7 @@ async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: s
 export async function performProvisionRole(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string },
+  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
@@ -802,7 +899,7 @@ export async function performProvisionRole(
     project_path: args.project_path ?? adopt?.project_path ?? undefined,
     model: args.model,
     agent_type: agentType as any,
-    role: { _id: role._id, bootstrap, adopt },
+    role: { _id: role._id, bootstrap, adopt, announce: adopt ? args.announce : undefined },
   });
   patch.anchor_id = provisioned.anchor_id;
   await ctx.db.patch(role._id, patch);
@@ -829,7 +926,6 @@ export const provision = mutation({
 // its standing session, arms the weekly company review on that session and
 // queues the first review as an immediate wake. Idempotent per company.
 
-export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
 export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
 export const COMPANY_REVIEW_TITLE = "Company review";
 export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -851,22 +947,44 @@ export const CHIEF_OF_STAFF_CHARTER = [
   renderCapacityModel(),
 ].join("\n");
 
+// The seating note (org-staffing.md S16): one message from the person who
+// seated the agent, read before the briefing. It names the new job in a
+// sentence, links the role page, and says what did not change, so a thread
+// the person already talks to never reads as taken over.
+export function seatingNote(role: { short_id: string; handle: string; name: string }, workspaceName: string): string {
+  return [
+    `I have seated you as the ${role.name} of ${workspaceName} (@${role.handle}, ${role.short_id}): ${siteUrl()}/org/${role.short_id}.`,
+    `Your job now is to read how work flows across the company and propose the organization that lets it flow better; the weekly company review is part of it.`,
+    `Nothing else changed: your memory, your handle, your chat and Slack bindings and this thread are as they were.`,
+    `The next message is your briefing. Once you have read it, restate your job in your own words.`,
+  ].join("\n");
+}
+
 // The routine's prompt: the standing session runs the review and proposes only
 // when the stability rules warrant it.
 export const COMPANY_REVIEW_PROMPT = [
   `Company review. Run \`cast org review\` (it reads \`cast org health --json\` and the inputs) and read each role's brief.`,
-  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. When nothing warrants a change, say so in one line in your brief and end the turn; a quiet review is a good review.`,
+  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. A program role whose end has arrived (health flags it \`program_ended\`) is due rather than a judgement call: propose the retirement or the review its tenure names. When nothing warrants a change, say so in one line in your brief and end the turn; a quiet review is a good review.`,
   `Every proposed change carries evidence a person can click. You apply nothing.`,
 ].join("\n");
 
-// The review routine on the standing session, once. Keyed on its title so a
-// repeat staff call, or a re-provision, never arms a second one.
-async function ensureCompanyReview(ctx: any, standing: any, everyMs: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
+// The seat's live review routine, brought up to the current prompt. The
+// routine holds its own copy of the text, so a prompt change reaches a seat
+// already hired only through here: the one audited writer for routine edits.
+async function liveCompanyReview(ctx: any, standing: any): Promise<any | null> {
   const rows: any[] = await ctx.db
     .query("agent_tasks")
     .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id))
     .collect();
   const live = rows.find((t) => t.title === COMPANY_REVIEW_TITLE && (t.status === "scheduled" || t.status === "running"));
+  if (live) await applyTaskUpdate(ctx, live, { prompt: COMPANY_REVIEW_PROMPT }, { userId: standing.user_id, source: "cli" });
+  return live ?? null;
+}
+
+// The review routine on the standing session, once. Keyed on its title so a
+// repeat staff call, or a re-provision, never arms a second one.
+async function ensureCompanyReview(ctx: any, standing: any, everyMs: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
+  const live = await liveCompanyReview(ctx, standing);
   if (live) return { id: live._id, short_id: live.short_id, created: false };
   const interval = Math.max(60_000, Math.round(everyMs || COMPANY_REVIEW_EVERY_MS));
   const created = await insertTask(ctx, standing.user_id, {
@@ -882,10 +1000,12 @@ async function ensureCompanyReview(ctx: any, standing: any, everyMs: number): Pr
   return { ...created, created: true };
 }
 
+export type SeatChoice = "existing" | "fresh";
+
 export async function performStaff(
   ctx: any,
   userId: Id<"users">,
-  args: { team_id?: Id<"teams">; reports_to?: Id<"users">; adopt_conversation_id?: string; every_ms?: number; project_path?: string },
+  args: { team_id?: Id<"teams">; reports_to?: Id<"users">; adopt_conversation_id?: string; every_ms?: number; project_path?: string; seat?: SeatChoice },
 ): Promise<{
   role: { _id: Id<"org_roles">; short_id: string; handle: string; name: string };
   standing: { conversation_id: Id<"conversations">; short_id?: string } | null;
@@ -893,6 +1013,13 @@ export async function performStaff(
   created: boolean;
   adopted: boolean;
   already_existed: boolean;
+  // What happened to the workspace's standing agent (S16): the existing one
+  // was seated, or a fresh session was started and the old one retired.
+  seated: SeatChoice;
+  conversation_short_id: string | null;
+  previous_title: string | null;
+  // The retired standing agent's thread, kept and linked from the role page.
+  previous_standing: { conversation_id: Id<"conversations">; short_id?: string } | null;
 }> {
   const boundary = args.team_id ? { team_id: args.team_id } : { scope_user_id: userId };
   const existing = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === CHIEF_OF_STAFF_HANDLE);
@@ -907,10 +1034,58 @@ export async function performStaff(
   // A seat that already stands is left as it is: the standing session, its
   // routine and its first review happened once. Only a seat with no session
   // yet (created earlier without provisioning) is provisioned now.
-  const already_existed = !!existing && !!existing.anchor_id;
+  // A seat whose anchor was decommissioned on its own (`cast anchor rm`) is
+  // empty again: staff fills it rather than reporting a dead chief as hired.
+  const seatAnchor = existing?.anchor_id ? await ctx.db.get(existing.anchor_id) : null;
+  const already_existed = !!seatAnchor && seatAnchor.status !== "decommissioned";
+  if (already_existed && args.adopt_conversation_id) {
+    const named = await findConversationByAnyRefWhere(ctx, args.adopt_conversation_id, async () => true);
+    if (!named || String(named._id) !== String(seatAnchor.conversation_id)) {
+      throw new Error("The chief of staff already stands in another session; retire it first to seat this one");
+    }
+  }
+  // The chief of staff IS the workspace's standing agent (S12, S16). With a
+  // standing agent already in the workspace and no session named, the
+  // default seats it: nothing restarts, the anchors row gains the role
+  // pointer. `fresh` starts a new session and retires the old agent in the
+  // same act, its thread kept and linked from the role, so the workspace
+  // never ends with two root agents.
+  const anchor = already_existed ? null : await workspaceAnchorFor(ctx, boundary);
+  const seat: SeatChoice = args.seat ?? (args.adopt_conversation_id || anchor ? "existing" : "fresh");
+  if (already_existed && args.seat && args.seat !== "existing") {
+    throw new Error("The chief of staff already stands; retire it first to seat a fresh session");
+  }
+  let previousStanding: { conversation_id: Id<"conversations">; short_id?: string } | null = null;
+  let adoptId = args.adopt_conversation_id;
+  let previousTitle: string | null = null;
+  if (!already_existed) {
+    if (seat === "existing" && !adoptId && anchor?.conversation_id) adoptId = String(anchor.conversation_id);
+    if (seat === "fresh") {
+      adoptId = undefined;
+      if (anchor && anchor.status !== "decommissioned") {
+        if (!(await userCanAdminAnchor(ctx, userId, anchor))) throw new Error("Only the standing agent's host or a team admin can retire it for a fresh seat");
+        const old = anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+        await decommissionAnchorRow(ctx, anchor);
+        if (old) {
+          previousStanding = { conversation_id: old._id, short_id: old.short_id ?? undefined };
+          await ctx.db.patch(role._id, { previous_standing_conversation_id: old._id, updated_at: Date.now() });
+        }
+      }
+    }
+    if (adoptId) {
+      const adopting = await findConversationByAnyRefWhere(ctx, adoptId, async () => true);
+      previousTitle = adopting?.title ?? null;
+    }
+  }
+  const workspaceName = args.team_id ? ((await ctx.db.get(args.team_id))?.name ?? "the team") : "your workspace";
   const provisioned = already_existed
     ? null
-    : await performProvisionRole(ctx, userId, { role_id: String(role._id), adopt_conversation_id: args.adopt_conversation_id, project_path: args.project_path });
+    : await performProvisionRole(ctx, userId, {
+      role_id: String(role._id),
+      adopt_conversation_id: adoptId,
+      project_path: args.project_path ?? anchor?.project_path ?? undefined,
+      announce: seatingNote(role, workspaceName),
+    });
   const fresh = await ctx.db.get(role._id);
   const standing = await standingConversationOf(ctx, fresh);
   let routine: { id: Id<"agent_tasks">; short_id?: string } | null = null;
@@ -928,8 +1103,75 @@ export async function performStaff(
     created,
     adopted: !!provisioned?.adopted,
     already_existed,
+    seated: already_existed ? "existing" : seat,
+    conversation_short_id: standing?.short_id ?? (standing ? String(standing._id).slice(0, 7) : null),
+    previous_title: previousTitle,
+    previous_standing: previousStanding ?? (fresh.previous_standing_conversation_id
+      ? { conversation_id: fresh.previous_standing_conversation_id, short_id: (await ctx.db.get(fresh.previous_standing_conversation_id))?.short_id ?? undefined }
+      : null),
   };
 }
+
+// One-time backfill (S16): a chief seated before seating learned to explain
+// itself sits in a thread still titled after the anchor, with no note. Bring
+// every such seat up to the shipped behaviour: keep the current title in
+// seat_previous, retitle after the role, and post the seating note from the
+// role's host. Idempotent: a thread that carries seat_previous is skipped.
+// Run once on prod: `npx convex run orgRoles:backfillSeatedChiefs '{"dry_run":true}'`, then without.
+export async function performBackfillSeatedChiefs(ctx: any, dryRun: boolean): Promise<{ dry_run: boolean; updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }>; skipped: number }> {
+  const roles: any[] = await ctx.db.query("org_roles").collect();
+  const updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }> = [];
+  let skipped = 0;
+  for (const role of roles) {
+    if (role.handle !== CHIEF_OF_STAFF_HANDLE || role.status === "retired" || !role.anchor_id) continue;
+    const standing = await standingConversationOf(ctx, role);
+    // Refresh only: a routine a person cancelled stays cancelled.
+    if (standing && !dryRun) await liveCompanyReview(ctx, standing);
+    // Nothing to explain: already explained (seat_previous is the mark), a
+    // thread born as the role (a fresh seat was never anyone's assistant, and
+    // its title is the role's from its first row), or a note already waiting.
+    const bornAsRole = !!standing && standing.title === role.name && standing.title_is_custom === true;
+    const noteWaiting = !!standing && (await ctx.db.query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "pending")).collect())
+      .some((p: any) => typeof p.client_id === "string" && p.client_id.startsWith("seat:"));
+    if (!standing || standing.seat_previous || bornAsRole || noteWaiting) { skipped++; continue; }
+    const workspace = role.team_id ? ((await ctx.db.get(role.team_id))?.name ?? "the team") : "your workspace";
+    if (!dryRun) {
+      await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, role.name), updated_at: Date.now() });
+      await announceSeating(ctx, standing._id, role.host_user_id, seatingNote(role, workspace));
+    }
+    updated.push({ role: role.short_id, conversation: standing.short_id ?? null, previous_title: standing.title ?? null, title: role.name, workspace });
+  }
+  return { dry_run: dryRun, updated, skipped };
+}
+
+export const backfillSeatedChiefs = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => performBackfillSeatedChiefs(ctx, !!args.dry_run),
+});
+
+// What each seated chief's thread looks like now: for verifying the backfill.
+export const seatedChiefs = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const roles: any[] = await ctx.db.query("org_roles").collect();
+    const out: any[] = [];
+    for (const role of roles) {
+      if (role.handle !== CHIEF_OF_STAFF_HANDLE || role.status === "retired") continue;
+      const standing = await standingConversationOf(ctx, role);
+      const pending: any[] = standing
+        ? await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "pending")).collect()
+        : [];
+      const note = pending.find((p) => typeof p.client_id === "string" && p.client_id.startsWith("seat:"));
+      out.push({
+        role: role.short_id, workspace: role.team_id ? ((await ctx.db.get(role.team_id as Id<"teams">))?.name ?? null) : "personal", status: role.status,
+        conversation: standing?.short_id ?? null, title: standing?.title ?? null, title_is_custom: standing?.title_is_custom ?? null, seat_previous: standing?.seat_previous ?? null,
+        seating_note: note ? { status: note.status, head: String(note.content).split("\n").slice(0, 2).join(" | ") } : null,
+      });
+    }
+    return out;
+  },
+});
 
 export const staff = mutation({
   args: {
@@ -939,6 +1181,7 @@ export const staff = mutation({
     adopt_conversation_id: v.optional(v.string()),
     every_ms: v.optional(v.number()),
     project_path: v.optional(v.string()),
+    seat: v.optional(v.union(v.literal("existing"), v.literal("fresh"))),
     from_session: v.optional(v.string()),
   },
   handler: async (ctx, { api_token, from_session: _from, ...args }) => performStaff(ctx, await requireCaller(ctx, api_token), args),

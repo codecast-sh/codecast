@@ -4,11 +4,13 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { scopedFetch } from "./data";
-import { workspaceKey } from "./lib/access";
+import { workspaceForResource, workspaceKey } from "./lib/access";
 import { userCanAdminRole } from "./lib/orgAccess";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
 import { collectOrgSessions, requireWorkspaceCaller } from "./org";
-import { latestEventAnywhere, roleActivity } from "./orgHealth";
+import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
+import { computeOrgActivity } from "./lib/orgActivity";
+import { isActiveTask } from "@codecast/shared/tasks";
 import { capacity } from "@codecast/shared/contracts/orgCapacity";
 import {
   overlapsAmong,
@@ -34,17 +36,21 @@ import {
   type OrgBudgetChange,
   type OrgChange,
   type OrgFileChange,
+  type OrgPlanStatusChange,
   type OrgProjectChange,
   type OrgProjectMetaChange,
+  type OrgProjectStatusChange,
   type OrgProposal,
   type OrgRoleProposal,
   type OrgRoutineChange,
   type OrgScopeChange,
+  type OrgTaskStatusChange,
   type OrgTrustChange,
 } from "@codecast/shared/contracts/orgProposal";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
+import { enforceIndependentReview, recalcPlanProgress, resolveStatusWrite } from "./tasks";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -103,7 +109,7 @@ function statusCounts(rows: any[]): Record<string, number> {
   return objOf(m);
 }
 
-function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[]) {
+function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[], tasksTruncated = false) {
   const tasksByProject = new Map<string, any[]>();
   const tasksByPlan = new Map<string, any[]>();
   let unfiledOpen = 0;
@@ -157,12 +163,12 @@ function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[]) {
   return {
     projects: projectRows,
     plans: planRows,
-    tasks: { total: tasks.length, by_status: statusCounts(tasks), unfiled_open: unfiledOpen, truncated: tasks.length >= ANALYSIS_CAPS.tasks },
+    tasks: { total: tasks.length, by_status: statusCounts(tasks), unfiled_open: unfiledOpen, truncated: tasksTruncated, closed_counted: "inside the window only" },
     docs_by_type: objOf(docsByType),
     truncated: {
       projects: projects.length >= ANALYSIS_CAPS.projects,
       plans: plans.length >= ANALYSIS_CAPS.plans,
-      tasks: tasks.length >= ANALYSIS_CAPS.tasks,
+      tasks: tasksTruncated,
       docs: docs.length >= ANALYSIS_CAPS.docs,
     },
     handoff,
@@ -172,13 +178,18 @@ function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[]) {
 // ── Work items, through the workspace chokepoint ──────────────────────────
 export async function computeAnalysisWork(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<AnalysisWork> {
   const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
-  const [projects, plans, tasks, docs] = await Promise.all([
+  // Every open row of the workspace plus the month's changes (orgHealth
+  // readWorkTasks): real work only, complete for what is open, so the counts
+  // and the stale reading are not the newest N of the table. Rows closed
+  // before the window are not read; `tasks.by_status` counts done and
+  // dropped inside the window and says so.
+  const [projects, plans, work, docs] = await Promise.all([
     scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
     scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans }).then((r) => r.records),
-    scopedFetch(ctx, "tasks", { ...fetchOpts, limit: ANALYSIS_CAPS.tasks }).then((r) => r.records),
+    readWorkTasks(ctx, userId, teamId, { perStatus: ANALYSIS_CAPS.tasks, updatedSince: Date.now() - ANALYSIS_WINDOW_MS, recentCap: ANALYSIS_CAPS.tasks }),
     scopedFetch(ctx, "docs", { ...fetchOpts, limit: ANALYSIS_CAPS.docs, stripFields: ["content", "entries", "content_embedding"] }).then((r) => r.records),
   ]);
-  return shapeWork(projects, plans, tasks, docs);
+  return shapeWork(projects, plans, work.tasks, docs, work.any_truncated);
 }
 
 // ── Sessions (the org scan), members, labels, git roots, roles ────────────
@@ -298,6 +309,39 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
   };
 }
 
+// ── Activity: ground in what is happening, not what was filed (S9) ─────────
+// A slice of its own so the commit history and the stale computation get their
+// own execution budget on a large workspace. Reads the work rows raw (the org
+// slice never reads tasks), the scan, and the commit history of the scanned
+// repos, then hands them to the one pure reading of activity (lib/orgActivity).
+export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+  const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
+  const [projects, plans, work, scan] = await Promise.all([
+    scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
+    scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans }).then((r) => r.records),
+    readWorkTasks(ctx, userId, teamId, { perStatus: ANALYSIS_CAPS.tasks, updatedSince: now - ANALYSIS_WINDOW_MS, recentCap: ANALYSIS_CAPS.tasks }),
+    collectOrgSessions(ctx, userId, teamId, now),
+  ]);
+  const tasks = work.tasks;
+  const members = [];
+  for (const uid of scan.memberIds.slice(0, ANALYSIS_CAPS.members)) {
+    const user = await ctx.db.get(uid);
+    members.push({ user_id: String(uid), name: user?.name ?? user?.email ?? "", email: user?.email ?? null });
+  }
+  const commits = await readActivityCommits(ctx, reposFromScan(scan), now - ANALYSIS_WINDOW_MS);
+  const activity = computeOrgActivity({
+    now,
+    commits,
+    sessions: activitySessionsFromScan(scan),
+    projects: projects.map((p: any) => ({ id: String(p._id), title: p.title, status: p.status, project_path: p.project_path ?? null, updated_at: p.updated_at ?? p._creationTime })),
+    plans: plans.map((p: any) => ({ id: String(p._id), short_id: p.short_id, title: p.title, status: p.status, project_id: p.project_id ? String(p.project_id) : null, updated_at: p.updated_at ?? p._creationTime })),
+    tasks: tasks.map((t: any) => ({ id: String(t._id), short_id: t.short_id, title: t.title, status: t.status, plan_id: t.plan_id ? String(t.plan_id) : null, project_id: t.project_id ? String(t.project_id) : null, updated_at: t.updated_at ?? t._creationTime, conversation_ids: (t.conversation_ids ?? []).map((id: any) => String(id)) })),
+    members,
+    maxAreas: 40,
+  });
+  return { activity };
+}
+
 // ── Insights, chat channels, open decisions ───────────────────────────────
 export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
   const cutoff = now - ANALYSIS_WINDOW_MS;
@@ -351,6 +395,7 @@ export function mergeAnalysisInputs(
   org: AnalysisOrg,
   signals: AnalysisSignals,
   now: number,
+  activity?: ReturnType<typeof computeOrgActivity>,
 ) {
   const { handoff: _handoff, truncated, ...rest } = work;
   return {
@@ -365,6 +410,9 @@ export function mergeAnalysisInputs(
     insights: signals.insights,
     channels: signals.channels,
     decisions_open_by_category: signals.decisions_open_by_category,
+    // Ground in what is happening (S9): where code lands, who is in it, and
+    // which records the evidence says are done.
+    ...(activity ? { activity } : {}),
     generated_at: now,
   };
 }
@@ -376,12 +424,13 @@ export async function workspaceLabelOf(ctx: Ctx, userId: Id<"users">, teamId: Id
 /** The three slices in one process: tests and server side callers. */
 export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
   const work = await computeAnalysisWork(ctx, userId, teamId);
-  const [org, signals, label] = await Promise.all([
+  const [org, signals, label, activity] = await Promise.all([
     computeAnalysisOrg(ctx, userId, teamId, now, work.handoff),
     computeAnalysisSignals(ctx, userId, teamId, now),
     workspaceLabelOf(ctx, userId, teamId),
+    computeAnalysisActivity(ctx, userId, teamId, now),
   ]);
-  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now);
+  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, activity.activity);
 }
 
 // One slice per call, so each read stays inside the execution limit on a
@@ -390,7 +439,7 @@ export const analysisPart = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity")),
     work: v.optional(v.any()),
     now: v.optional(v.number()),
   },
@@ -400,6 +449,7 @@ export const analysisPart = query({
     const now = args.now ?? Date.now();
     if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
     if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
+    if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now);
     if (!args.work) throw new Error("the org slice needs the work slice's handoff");
     return computeAnalysisOrg(ctx, userId, args.team_id, now, args.work as AnalysisHandoff);
   },
@@ -410,15 +460,16 @@ export const analysisInputs = action({
   handler: async (ctx, args): Promise<any> => {
     const now = Date.now();
     const part = (api as any).orgInit.analysisPart;
-    const [work, signals] = await Promise.all([
+    const [work, signals, activity] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "work", now }),
       ctx.runQuery(part, { ...args, part: "signals", now }),
+      ctx.runQuery(part, { ...args, part: "activity", now }),
     ]);
     if (!work || !signals) return null;
     const org = await ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff });
     if (!org) return null;
     const { label, user_id, ...rest } = signals;
-    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now);
+    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity?.activity);
   },
 });
 
@@ -455,7 +506,7 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
   return { project_ids, plan_ids };
 }
 
-export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string }): Promise<ApplyResult> {
+export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string; awaiting_adopt?: string }): Promise<ApplyResult> {
   const handle = p.handle.trim().toLowerCase();
   const charter = [p.charter?.trim(), note ? `Changes asked for by the person who approved this role:\n${note}` : undefined].filter(Boolean).join("\n\n") || undefined;
   // A live role with this handle is never adopted: it may be one the person
@@ -467,17 +518,17 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   if (taken) return { status: "error", error: `@${handle} is already ${taken.short_id} (${taken.name}); answer with changes to pick another handle, or skip` };
   const scope = await resolveProposalScope(ctx, boundary, p.scope);
   const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
-  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter });
+  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
   let provisioned = false;
-  if (opts.provision) {
+  if (opts.provision && !opts.awaiting_adopt) {
     const firstProject = role.scope?.project_ids?.[0] ? await ctx.db.get(role.scope.project_ids[0]) : null;
     await performProvisionRole(ctx, userId, { role_id: String(role._id), project_path: firstProject?.project_path ?? undefined });
     provisioned = true;
   }
   return {
     status: "applied",
-    note: `created @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : ""}`,
+    note: `created @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : opts.awaiting_adopt ? `; its standing session is the adopt of ${opts.awaiting_adopt} in this proposal (skip that and provision from the role's page)` : ""}`,
     role: { id: String(role._id), short_id: role.short_id, handle: role.handle },
   };
 }
@@ -545,7 +596,9 @@ export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundar
 export async function applyRetire(ctx: Ctx, userId: Id<"users">, boundary: Boundary, handleRef: string): Promise<ApplyResult> {
   const handle = handleRef.replace(/^@/, "").toLowerCase();
   const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === handleRef);
-  if (!role) return { status: "applied", note: `@${handle} is already retired or never existed` };
+  // No live role by that handle: a mistyped handle must not read as a green
+  // applied row while the role it meant stays. Failed stays decidable.
+  if (!role) return { status: "error", error: `No live role @${handle} in this workspace: it is already retired, or the handle is wrong; edit the handle or skip` };
   const r = await performRetireRole(ctx, userId, { role_id: String(role._id) });
   return { status: "applied", note: `retired @${role.handle} (${r.cleared} sessions back under their owners, ${r.rehomed} roles re-homed)` };
 }
@@ -555,7 +608,15 @@ export async function applyRetire(ctx: Ctx, userId: Id<"users">, boundary: Bound
 // person's decision as the human authority. `applyOrgChange` is the one
 // dispatcher the proposal mutations use for every kind, old and new.
 
-export type ApplyOpts = { provision: boolean; human_decision: string };
+export type ApplyOpts = {
+  provision: boolean;
+  human_decision: string;
+  /** The session an adopt change of the SAME proposal will seat as this
+   *  role's standing session. The role is then created without one: a fresh
+   *  session here would make the later adopt a no-op and leave the workspace
+   *  with two root agents while the note claimed the anchor was adopted. */
+  awaiting_adopt?: string;
+};
 
 async function liveRole(ctx: Ctx, boundary: Boundary, handleRef: string) {
   const handle = handleRef.replace(/^@/, "").toLowerCase();
@@ -626,6 +687,10 @@ export async function applyProjectMeta(ctx: Ctx, userId: Id<"users">, boundary: 
 export async function applyAdopt(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgAdoptChange, _opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
   const r = await performProvisionRole(ctx, userId, { role_id: String(role._id), adopt_conversation_id: p.conversation.trim() });
+  // Provision is idempotent per role: a role that already has a standing
+  // session keeps it and adopts nothing. Saying "adopted" then would be a
+  // lie with a second root agent behind it, so the change lands as failed.
+  if (!r?.adopted) return { status: "error", error: `@${role.handle} already has a standing session, so ${p.conversation} was not adopted; retire that session first (or skip this change) rather than run two agents for one seat` };
   return { status: "applied", note: `@${role.handle}: adopted ${r?.short_id ?? p.conversation} as its standing session`, role: roleRef(role) };
 }
 
@@ -645,6 +710,103 @@ export async function applyFile(ctx: Ctx, _userId: Id<"users">, boundary: Bounda
   return { status: "applied", note: `filed ${plan.short_id} "${plan.title}" under "${project.title}"` };
 }
 
+// ── Bring records in line (org-staffing.md S9) ──────────────────────────────
+// A plan, task or project whose evidence says it is finished gets its status
+// set through the same paths a person uses: the status validity, the plan
+// progress reconcile, the independent review rule on a task close. The person
+// deciding the proposal is the human authority, so a task close carries a
+// person's approve verdict (the board's rule), which is outside every role.
+
+const PLAN_STATUSES = new Set(["done", "abandoned", "active"]);
+const TASK_STATUSES = new Set(["done", "dropped", "open", "backlog"]);
+const PROJECT_STATUSES = new Set(["paused", "done", "active"]);
+const OPEN_TASK = (t: any) => t.status !== "done" && t.status !== "dropped";
+
+/** One task's status set the way a person sets it: the team's status
+ *  vocabulary (a backlog only where the team has one), the independent
+ *  review rule on a close (a person's approve is the verdict from outside
+ *  every role), the bound sessions released and the plan's progress
+ *  reconciled. Shared by the task change and by a plan close's cascade, so
+ *  there is one path a proposal can move a task through. */
+async function setTaskStatus(ctx: Ctx, boundary: Boundary, task: any, status: string, now: number): Promise<void> {
+  const write = await resolveStatusWrite(ctx, boundary.team_id ?? null, task.status, { status });
+  const next = write.status ?? status;
+  const closing = next === "done" || next === "dropped";
+  const verdict = next === "done" ? { verdict: "approve" as const, at: now, note: "closed by an org proposal" } : undefined;
+  await enforceIndependentReview(ctx, task, null, next, verdict);
+  const patch: Record<string, any> = { status: next, status_id: write.statusId.set ? write.statusId.value : task.status_id, updated_at: now, closed_at: closing ? now : undefined };
+  if (verdict) patch.review_verdict = verdict;
+  // A hand's "blocked" or "needs context" is a claim about open work; on a
+  // closed task it is history that would read as a live stall.
+  if (closing && (task.execution_status === "blocked" || task.execution_status === "needs_context")) patch.execution_status = undefined;
+  if (next === "done" && task.started_at) patch.actual_minutes = Math.round((now - task.started_at) / 60000);
+  await ctx.db.patch(task._id, patch);
+  if (closing) {
+    for (const convId of task.conversation_ids ?? []) {
+      const conv = await ctx.db.get(convId);
+      if (conv && String(conv.active_task_id ?? "") === String(task._id)) await ctx.db.patch(convId, { active_task_id: undefined });
+    }
+  }
+  if (task.plan_id) await recalcPlanProgress(ctx, task.plan_id, task._id, next);
+}
+
+// Closing a plan closes its open tasks in the same apply: a plan marked done
+// or abandoned with rows still open would otherwise leave the ledger telling
+// the old story, and the analyzer had to propose one change per task to
+// follow it. The tasks are dropped, never done: the plan closed without them,
+// and done would claim work the evidence does not show. A task the proposal
+// marks done on its own evidence lands first (task_status ranks before
+// plan_status) and is already closed when the cascade reads the plan.
+export async function applyPlanStatus(ctx: Ctx, _userId: Id<"users">, boundary: Boundary, p: OrgPlanStatusChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  if (!PLAN_STATUSES.has(p.status)) throw new Error(`plan status "${p.status}" is not one of done, abandoned, active`);
+  const ref = await resolveScopeRef(ctx, boundary, `plan:${p.plan}`);
+  const plan = ref.kind === "plan" ? await ctx.db.get(ref.id) : null;
+  if (!plan) throw new Error(`No plan "${p.plan}" in this workspace`);
+  const now = Date.now();
+  const same = plan.status === p.status;
+  const closing = p.status === "done" || p.status === "abandoned";
+  if (same && !closing) return { status: "applied", note: `${plan.short_id} is already ${p.status}` };
+  if (!same) await ctx.db.patch(plan._id, { status: p.status, updated_at: now });
+  // A closed plan with rows still open is the record the evidence contradicts
+  // whether the close is new or old (a plan marked done months ago and never
+  // swept), so re-asserting done or abandoned sweeps the same way.
+  let cascade = "";
+  if (closing) {
+    const open: any[] = (await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).collect()).filter((t: any) => OPEN_TASK(t) && isActiveTask(t));
+    open.sort((a, b) => String(a.short_id).localeCompare(String(b.short_id), undefined, { numeric: true }));
+    for (const t of open) await setTaskStatus(ctx, boundary, t, "dropped", now);
+    if (open.length) cascade = `; dropped its ${open.length} open task${open.length === 1 ? "" : "s"}: ${open.map((t) => t.short_id).join(", ")}`;
+  }
+  if (same) return { status: "applied", note: `${plan.short_id} is already ${p.status}${cascade || "; no open tasks under it"}` };
+  return { status: "applied", note: `${plan.short_id} "${plan.title}": ${plan.status} → ${p.status}${cascade}` };
+}
+
+export async function applyProjectStatus(ctx: Ctx, _userId: Id<"users">, boundary: Boundary, p: OrgProjectStatusChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  if (!PROJECT_STATUSES.has(p.status)) throw new Error(`project status "${p.status}" is not one of paused, done, active`);
+  const ref = await resolveScopeRef(ctx, boundary, `project:${p.project}`);
+  const project = ref.kind === "project" ? await ctx.db.get(ref.id) : null;
+  if (!project) throw new Error(`No project "${p.project}" in this workspace`);
+  if (project.status === p.status) return { status: "applied", note: `"${project.title}" is already ${p.status}` };
+  await ctx.db.patch(project._id, { status: p.status, updated_at: Date.now() });
+  return { status: "applied", note: `project "${project.title}": ${project.status} → ${p.status}` };
+}
+
+// A task's status from a proposal is a person's act: a close runs the same
+// independent review rule a role write goes through (setTaskStatus), and
+// open or backlog puts a row that was marked in progress but never worked
+// back where it belongs. A backlog only exists where the team's statuses
+// have one; elsewhere the write is refused with the team's vocabulary, and
+// the change lands as failed for the person to edit.
+export async function applyTaskStatus(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgTaskStatusChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  if (!TASK_STATUSES.has(p.status)) throw new Error(`task status "${p.status}" is not one of done, dropped, open, backlog`);
+  const key = workspaceKey(boundary.team_id ? { type: "team", teamId: boundary.team_id } : { type: "personal", userId });
+  const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", p.task.trim())).first();
+  if (!task || workspaceKey(workspaceForResource(task)) !== key) throw new Error(`No task "${p.task}" in this workspace`);
+  if (task.status === p.status) return { status: "applied", note: `${task.short_id} is already ${p.status}` };
+  await setTaskStatus(ctx, boundary, task, p.status, Date.now());
+  return { status: "applied", note: `${task.short_id} "${task.title}": ${task.status} → ${p.status}` };
+}
+
 /** One change of any kind, applied. Throws on a refusal; the caller records it. */
 export async function applyOrgChange(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {
   switch (change.kind) {
@@ -659,6 +821,9 @@ export async function applyOrgChange(ctx: Ctx, userId: Id<"users">, boundary: Bo
     case "project_meta": return applyProjectMeta(ctx, userId, boundary, change, opts);
     case "adopt": return applyAdopt(ctx, userId, boundary, change, opts);
     case "file": return applyFile(ctx, userId, boundary, change, opts);
+    case "plan_status": return applyPlanStatus(ctx, userId, boundary, change, opts);
+    case "task_status": return applyTaskStatus(ctx, userId, boundary, change, opts);
+    case "project_status": return applyProjectStatus(ctx, userId, boundary, change, opts);
   }
 }
 

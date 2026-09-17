@@ -17,7 +17,7 @@ import { verifyApiToken } from "./apiTokens";
 import { teamVisibleConvTeam } from "./privacy";
 import { nextShortId } from "./counters";
 import type { Doc, Id } from "./_generated/dataModel";
-import { userCanAccessRole, userCanAdminRole, type ScopedSeat } from "./lib/orgAccess";
+import { liveRoleByHandle, userCanAccessRole, userCanAdminRole, type ScopedSeat } from "./lib/orgAccess";
 import { OPEN_CATEGORIES } from "./lib/decisionCategory";
 import { findDecision, findStack, finalizeAnswer, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
 
@@ -59,20 +59,7 @@ async function findRole(ctx: Ctx, stack: StackRow, ref: string): Promise<Doc<"or
   }
   const id = ctx.db.normalizeId("org_roles", handle);
   if (id) return ctx.db.get(id);
-  if (stack.team_id) {
-    return (
-      (await ctx.db
-        .query("org_roles")
-        .withIndex("by_team_handle", (q: any) => q.eq("team_id", stack.team_id).eq("handle", handle))
-        .first()) ?? null
-    );
-  }
-  return (
-    (await ctx.db
-      .query("org_roles")
-      .withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", stack.scope_user_id).eq("handle", handle))
-      .first()) ?? null
-  );
+  return liveRoleByHandle(ctx, stack.team_id ? { team_id: stack.team_id } : { scope_user_id: stack.scope_user_id }, handle);
 }
 
 const policyValidator = v.object({

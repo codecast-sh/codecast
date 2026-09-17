@@ -47,6 +47,18 @@ describe("extractSessionImages", () => {
     expect(entries.map((e) => e.key)).toEqual(["a", "https://ours/1.png"]);
   });
 
+  test("stamps the owning message id on every channel", () => {
+    const entries = extractSessionImages(
+      [
+        { _id: "m1", timestamp: 1, images: [{ media_type: "image/png", storage_id: "a" }] },
+        { _id: "m2", timestamp: 2, content: "![x](https://ours/1.png)" },
+        { timestamp: 3, images: [{ media_type: "image/png", data: "AAAA" }] },
+      ],
+      trustOurs,
+    );
+    expect(entries.map((e) => e.message_id)).toEqual(["m1", "m2", undefined]);
+  });
+
   test("inline base64 images carry a ready data src", () => {
     const [entry] = extractSessionImages(
       [{ timestamp: 1, images: [{ media_type: "image/png", data: "AAAA" }] }],
