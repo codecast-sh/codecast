@@ -22,7 +22,7 @@ with a scope and a parent.
 - The root of a workspace is the existing team or personal anchor. `org.tree`
   renders it as the root role. `cast anchor` verbs keep working for it.
 - Bootstrap: extend `bootstrapMessage` with role options: name, handle, scope
-  names, parent name, trust stage, and the four rules below. Keep it principle
+  names, parent name, trust stage, and the rules below. Keep it principle
   level. The role's memory is its brief, not files: replace the memory bullet
   with "your brief is your memory; update it with `cast brief edit` at the end
   of any turn that changed your understanding". Delegation bullet: "a hand is a
@@ -54,7 +54,7 @@ docs.doc_type        + "charter" | "brief"   (schema, CLI DOC_TYPE_ICONS, Create
 ## T2. Charter and brief
 
 - Charter: a doc the humans own. Created at provision from a template that
-  states the role's job in one paragraph, its scope, and the four rules. Any
+  states the role's job in one paragraph, its scope, and the rules. Any
   session carrying `standing_role_id` or `org_role_id` may not write a charter
   doc (server check in docs.update keyed on the stored doc_type).
 - Brief: a doc the role owns. Body = narrative (first line is the state line,
