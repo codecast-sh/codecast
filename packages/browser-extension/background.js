@@ -728,15 +728,50 @@ let ownershipLoaded = null;
 function loadOwnership() {
   if (!ownershipLoaded) {
     ownershipLoaded = bounded(chrome.storage.session.get(["ownedGroups", "ownedTabs"]), "Chrome storage.session.get")
-      .then(({ ownedGroups: gids, ownedTabs: tids }) => {
+      .then(async ({ ownedGroups: gids, ownedTabs: tids }) => {
         for (const id of gids || []) ownedGroups.add(id);
         for (const id of tids || []) ownedTabs.add(id);
+        // Always: the host re-marks a few tabs the moment it reconnects, so
+        // "memory is empty" is rarely true by the first listing, while the
+        // groups a reload orphaned are still sitting there unowned.
+        await adoptCastGroups();
       }).catch(error => {
         ownershipLoaded = null;
         throw error;
       });
   }
   return ownershipLoaded;
+}
+
+/**
+ * Session storage empties on an extension reload and on a browser restart,
+ * and with it every mark of which tabs are ours. The tab group survives
+ * both: it is the one marker Chrome keeps. A group carrying exactly our
+ * title and colour was made by this extension (a person names a group
+ * "Cast" in red by accident about never), so when memory is empty, those
+ * groups and the tabs in them are ours again. Without this, every agent tab
+ * left behind after a reload looked like the human's: the host would not
+ * list it, and the reaper could not close it (2026-09-17: a strip full of
+ * dead sessions' tabs, all reloading against the dev server).
+ */
+async function adoptCastGroups() {
+  // Short bounds: this runs inside the first listing after a reload, and a
+  // group query that does not answer must not hold that listing back. The
+  // next listing tries again (ownedGroups stays empty until one succeeds).
+  // By colour, then the plain title: a group of ours reads "Cast ..." or
+  // "Cast ✓" while its session works (the indicator frames), and a query by
+  // the exact title would miss exactly the groups that are busiest.
+  const red = await bounded(chrome.tabGroups.query({ color: DEFAULT_CAST_GROUP.color }), "Chrome tabGroups.query", 5_000).catch(() => []);
+  const found = red.filter((g) => plainOf(g.title) === DEFAULT_CAST_GROUP.title && !ownedGroups.has(g.id));
+  if (!found.length) return;
+  for (const g of found) {
+    ownedGroups.add(g.id);
+    groups.set(g.id, g);
+    const tabs = await bounded(chrome.tabs.query({ groupId: g.id }), "Chrome tabs.query", 5_000).catch(() => []);
+    for (const t of tabs) if (t.id !== undefined) ownedTabs.add(t.id);
+  }
+  persistOwned();
+  note(`adopted ${found.length} Cast group(s) after ownership memory was empty`);
 }
 
 /** Both sets outlive this worker (session storage), so a restart keeps telling ours from the human's. */
