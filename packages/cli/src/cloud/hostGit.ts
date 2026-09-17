@@ -28,6 +28,8 @@
  *      host's ~/.gitconfig (other helpers left alone) and turns on
  *      `useHttpPath`, without which git names no repository and the helper
  *      cannot tell which installation to ask for,
+ *      and installs the gh wrapper (ghWrapper.ts) that hands gh the same
+ *      token as GH_TOKEN on every call,
  *   6. probes READ and WRITE access separately: `git ls-remote` alone only
  *      exercises upload-pack, so a deploy key added with GitHub's default
  *      read-only setting would report granted while every push failed;
@@ -49,6 +51,7 @@
 import { spawnSync } from "../proc.js";
 import { DEVICE_GIT_KEY_REL, deviceKeyComment, isGitAuthError } from "../gitIdentity.js";
 import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { FIND_CAST_SH, ghWrapperInstallSnippet } from "./ghWrapper.js";
 import { githubRepo, hostAppOrigin, hostProbeOrigin, isGitHubHost, originHost } from "./gitOrigin.js";
 
 export { DEVICE_GIT_KEY_REL as DEVICE_KEY_REL } from "../gitIdentity.js";
@@ -300,8 +303,7 @@ fi
 #    and re-added, so a re-run never stacks duplicates and any OTHER helper
 #    the human configured keeps its place. useHttpPath is what makes git name
 #    the repository, without which the helper cannot pick an installation.
-CAST=$(command -v cast 2>/dev/null || true)
-if [ -z "$CAST" ]; then for c in "$HOME/.local/bin/cast" "$HOME/.bun/bin/cast" /usr/local/bin/cast; do [ -x "$c" ] && CAST="$c" && break; done; fi
+${FIND_CAST_SH}
 helper="!\${CAST:-cast} ${CREDENTIAL_HELPER_VERB}"
 git config --file "$GC" --unset-all ${shq(CREDENTIAL_HELPER_KEY)} ${shq(CREDENTIAL_HELPER_PATTERN)} 2>/dev/null || true
 git config --file "$GC" --add ${shq(CREDENTIAL_HELPER_KEY)} "$helper" 2>/dev/null || helper=""
@@ -316,6 +318,9 @@ git config --file "$GC" ${shq(CREDENTIAL_USE_PATH_KEY)} true 2>/dev/null || true
 [ -n "$(git config --file "$GC" --get core.askPass 2>/dev/null)" ] || git config --file "$GC" core.askPass ${shq(NO_ASKPASS)} 2>/dev/null || true
 [ -f "$GC" ] && chmod 600 "$GC"
 if [ "$lock_held" = 1 ] && grep -q "$lock_token" "$LOCK" 2>/dev/null; then rm -f "$LOCK"; fi
+# 5b. gh: a wrapper ahead of the real gh hands it GH_TOKEN from the same
+#     helper, per call, so gh authenticates with the App token git uses.
+${ghWrapperInstallSnippet()}
 if [ "$identity" = mirrored ] && [ -n "$REPO" ] && [ -e "$REPO/.git" ]; then
   if [ "$(git -C "$REPO" config --local --get user.email 2>/dev/null)" = ${shq(PLACEHOLDER_EMAIL)} ] && [ "$(git -C "$REPO" config --local --get user.name 2>/dev/null)" = ${shq(PLACEHOLDER_NAME)} ]; then
     git -C "$REPO" config --local --unset user.email; git -C "$REPO" config --local --unset user.name

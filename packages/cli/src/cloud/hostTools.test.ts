@@ -10,6 +10,7 @@ import {
   settingsHookCommands, shebangInterpreter, summarizeHostTools, type McpSources, type RequiredHostTools,
   classifyMcp, codecastFileWriteCommand, mcpChecks, parseCodexMcpServers, parseMcpLines, readMcpSources, reconcileMcp, staticMcpVerdict,
 } from "./hostTools";
+import { ghWrapperScript, REAL_GH_REL } from "./ghWrapper";
 
 let dir: string, home: string, repo: string;
 let savedEnv: NodeJS.ProcessEnv;
@@ -245,6 +246,19 @@ describe("the script run locally against a temp HOME (stubs on PATH, no network)
     const stamp = path.join(home, ".codecast", "host-tools.json");
     expect(fs.statSync(stamp).mode & 0o777).toBe(0o600);
     expect(parseHostToolsStamp(fs.readFileSync(stamp, "utf-8"))?.missing[0].tool).toBe("frobnicate");
+  });
+
+  test("gh counts only the real gh: the wrapper alone is missing, the real one behind it is ok with its version", () => {
+    stub("node", "echo v22.12.0");
+    stub("gh", ghWrapperScript().replace("#!/bin/sh\n", ""));
+    // A gh elsewhere on the machine would count, so the check runs with a PATH that has none.
+    process.env.PATH = "/usr/bin:/bin";
+    const required: RequiredHostTools = { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [{ tool: "gh", version: "2.86.0" }], unsupported: [] };
+    expect(runHostTools(host, required, { install: false, run: localRun }).missing.map((m) => m.tool)).toEqual(["gh"]);
+    write(home, REAL_GH_REL, "#!/bin/sh\necho gh version 2.86.0\n", 0o755);
+    const r = runHostTools(host, required, { install: false, run: localRun });
+    expect(r.missing).toEqual([]);
+    expect(r.ok.find((t) => t.tool === "gh")?.version).toBe("gh version 2.86.0");
   });
 
   test("a node below the floor is missing in check-only mode with the reason", () => {

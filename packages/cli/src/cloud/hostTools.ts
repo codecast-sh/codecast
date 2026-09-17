@@ -35,6 +35,7 @@ import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { INSTALLABLE_CLIENTS, parseClientVersion, readInstalledClientVersions, type InstallableClient } from "../remote/agentAuth.js";
 import { remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { realGhFunction } from "./ghWrapper.js";
 import {
   emptyOverrides, normalizeCommand, parseHostMcpOverrides, reconcilePins, serializeHostMcpOverrides, HOST_MCP_OVERRIDES_FILE,
   type HostMcpOverrides, type McpClassified, type McpHarness, type McpSourceServer, type McpStatus,
@@ -824,7 +825,7 @@ INSTALL=${install ? 1 : 0}
 [ "$(uname -s)" = Linux ] || INSTALL=0
 ok=""; installed=""; missing=""
 ver_of() { "$1" --version 2>/dev/null </dev/null | head -1 | tr -cd 'A-Za-z0-9._ -' | head -c 40; }
-add() { local v item; v=$(ver_of "$2"); item="{\\"tool\\":\\"$2\\",\\"version\\":\\"$v\\"},"; case "$1" in ok) ok="$ok$item";; installed) installed="$installed$item";; esac; }
+add() { local v item; v=$(ver_of "\${3:-$2}"); item="{\\"tool\\":\\"$2\\",\\"version\\":\\"$v\\"},"; case "$1" in ok) ok="$ok$item";; installed) installed="$installed$item";; esac; }
 miss() { local err; err=$(printf '%s' "$3" | tr -cd 'A-Za-z0-9._ :/-' | head -c 160); missing="$missing{\\"tool\\":\\"$1\\",\\"referenced_by\\":\\"$2\\",\\"error\\":\\"$err\\"},"; }
 # node: a user-local install when the host's major is too old (apt's node stays for novnc).
 node_installed=0; node_err=""
@@ -839,10 +840,15 @@ fi`);
   lines.push(`if command -v bun >/dev/null 2>&1; then add ok bun
 ${inst(`  if err=$( (curl ${CURL_LIMITS} https://bun.sh/install | bash -s${bun ? ` "bun-v${bun}"` : ""}) 2>&1 >/dev/null ) && command -v bun >/dev/null 2>&1; then add installed bun; else miss bun "the workspace manifest" "$err"; fi`)}else miss bun "the workspace manifest" "not installed"; fi`);
   // gh
-  lines.push(`if command -v gh >/dev/null 2>&1; then add ok gh
+  // The real gh, not the wrapper in front of it (ghWrapper.ts): a host with
+  // only the wrapper has no gh, and asking the wrapper for a version would
+  // mint a token. An install lands at ~/.local/bin/gh, and the host git step
+  // moves it behind the wrapper.
+  lines.push(`${realGhFunction}
+if gh_path=$(real_gh); then add ok gh "$gh_path"
 ${inst(`  arch=$(uname -m); case "$arch" in x86_64) ga=amd64;; aarch64|arm64) ga=arm64;; *) ga="";; esac
   tmp=$(mktemp -d); mkdir -p "$HOME/.local/bin"; err=""
-  if [ -n "$ga" ] && curl ${CURL_LIMITS} "https://github.com/cli/cli/releases/download/v${gh}/gh_${gh}_linux_$ga.tar.gz" 2>"$tmp/err" | tar -xz -C "$tmp" 2>>"$tmp/err" && install -m 755 "$tmp/gh_${gh}_linux_$ga/bin/gh" "$HOME/.local/bin/gh" 2>>"$tmp/err"; then add installed gh
+  if [ -n "$ga" ] && curl ${CURL_LIMITS} "https://github.com/cli/cli/releases/download/v${gh}/gh_${gh}_linux_$ga.tar.gz" 2>"$tmp/err" | tar -xz -C "$tmp" 2>>"$tmp/err" && install -m 755 "$tmp/gh_${gh}_linux_$ga/bin/gh" "$HOME/.local/bin/gh" 2>>"$tmp/err"; then add installed gh "$HOME/.local/bin/gh"
   else err=$(tail -c 200 "$tmp/err" 2>/dev/null); [ -n "$err" ] || err="download failed"; miss gh "the authorized GitHub workflow" "$err"; fi
   rm -rf "$tmp"`)}else miss gh "the authorized GitHub workflow" "not installed"; fi`);
   if (needsUv) {
