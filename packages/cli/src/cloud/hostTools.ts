@@ -4,7 +4,7 @@
  * script that checks and installs them user-locally.
  *
  * `requiredHostTools` derives the set on the laptop: the agent CLIs at the
- * laptop's versions (codex, gemini, grok, claude), a Node whose major
+ * laptop's versions (codex, gemini, grok, claude, opencode, pi), a Node whose major
  * satisfies the installed convex package's engines (else the repo's own
  * pin, else the laptop's node — never below NODE_FLOOR_MAJOR, the Convex
  * CLI on apt's node 18 was already hit in a migration), bun at the laptop's
@@ -19,8 +19,8 @@
  * missing (node tarball into ~/.local/node-<ver>, extracted in a temp dir
  * and renamed so an interrupted download leaves nothing half-built; bun's
  * installer pinned; gh from its release tarball into ~/.local/bin; uv's
- * installer; codex/gemini through `bun install -g`; grok and claude through
- * their installers with the version argument). Never sudo for a package,
+ * installer; codex/gemini/pi through `bun install -g`; grok, claude and
+ * opencode through their installers with the version argument). Never sudo for a package,
  * never a distro package: apt's node stays for novnc. The one root touch is
  * a best-effort `sudo -n ln -sf` of node/npm/npx into /usr/local/bin, the
  * only place that shadows /usr/bin/node on the daemon's PATH
@@ -784,6 +784,11 @@ export function clientInstallSnippet(client: InstallableClient, version: string 
     case "codex": return `command -v codex >/dev/null 2>&1 || bun install -g @openai/codex${ver ? `@${ver}` : ""} >/dev/null 2>&1`;
     case "gemini": return `command -v gemini >/dev/null 2>&1 || bun install -g @google/gemini-cli${ver ? `@${ver}` : ""} >/dev/null 2>&1`;
     case "grok": return `command -v grok >/dev/null 2>&1 || (curl ${CURL_LIMITS} https://x.ai/cli/install.sh | bash -s${ver ? ` ${ver}` : ""}) >/dev/null 2>&1`;
+    // The opencode.ai installer writes ~/.opencode/bin/opencode (the dir opencodeServer.ts
+    // puts on PATH); the ~/.local/bin link reaches the daemon's PATH without sudo.
+    case "opencode": return `command -v opencode >/dev/null 2>&1 || { (curl ${CURL_LIMITS} https://opencode.ai/install | bash -s -- --no-modify-path${ver ? ` --version ${ver}` : ""}) >/dev/null 2>&1; [ -x "$HOME/.opencode/bin/opencode" ] && mkdir -p "$HOME/.local/bin" && ln -sf "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; }`;
+    // pi is the node script of @mariozechner/pi-coding-agent (daemon.ts matches its process by that path).
+    case "pi": return `command -v pi >/dev/null 2>&1 || bun install -g @mariozechner/pi-coding-agent${ver ? `@${ver}` : ""} >/dev/null 2>&1`;
   }
 }
 
@@ -793,14 +798,14 @@ export interface HostToolsScriptOptions {
 }
 
 /** The PATH every tool check and install runs under on the host. */
-export const HOST_TOOLS_PATH = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:$HOME/.grok/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"';
+export const HOST_TOOLS_PATH = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:$HOME/.grok/bin:$HOME/.opencode/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"';
 
 export function hostToolsScript(required: RequiredHostTools, opts: HostToolsScriptOptions = {}): string {
   const install = opts.install !== false;
   const bun = safeVersion(required.bun);
   const gh = safeVersion(required.tools.find((t) => t.tool === "gh")?.version) ?? GH_DEFAULT_VERSION;
   const needsUv = required.tools.some((t) => t.tool === "uv");
-  // Only what the laptop has: provisioning installs the four agent CLIs
+  // Only what the laptop has: provisioning installs the agent CLIs
   // once; every wake must not retry an unpinned install of a CLI the
   // laptop itself lacks.
   const clients = INSTALLABLE_CLIENTS.filter((c) => c in required.clients);

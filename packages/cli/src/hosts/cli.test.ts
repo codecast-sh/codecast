@@ -5,8 +5,9 @@ import * as path from "node:path";
 import {
   AGENT_BRIDGE_SECURITY_NOTE, briefError, EC2_HOURLY_USD, estimateHostCost, forwardAgentRefusal, gitStatusLine,
   GP3_USD_PER_GIB_MONTH, GH_NOT_LOGGED_IN_MESSAGE, grantDeployKey, hostGitReport, KEY_ALREADY_IN_USE_MESSAGE, keyReportLines, markOrphanWorktrees,
-  parseDanglingSeeds, parseRemoteWorkspaceList, REMOTE_DANGLING_SEEDS_SCRIPT, REMOTE_WORKSPACE_LIST_SCRIPT, sessionLine, sessionSeed, sessionWhere, worktreeNote, type HostSession, type RemoteWorktree,
+  parseDanglingSeeds, parseRemoteWorkspaceList, readRemoteWorktrees, REMOTE_DANGLING_SEEDS_SCRIPT, worktreeGitLabel, REMOTE_WORKSPACE_LIST_SCRIPT, sessionLine, sessionSeed, sessionWhere, worktreeNote, type HostSession, type RemoteWorktree,
 } from "./cli.js";
+import { execFileSync } from "node:child_process";
 import type { CloudHost } from "../browser/cloudHost.js";
 import type { HostGitState } from "../cloud/hostGit.js";
 
@@ -117,6 +118,75 @@ describe("REMOTE_WORKSPACE_LIST_SCRIPT", () => {
     expect(REMOTE_WORKSPACE_LIST_SCRIPT).toContain("cast ws ls");
     // The `## ` marker is what ties each table back to its checkout.
     expect(REMOTE_WORKSPACE_LIST_SCRIPT).toContain('echo "## $d"');
+  });
+});
+
+describe("live worktree git state over the host probe", () => {
+  let dir: string, saved: NodeJS.ProcessEnv;
+  beforeEach(() => {
+    saved = { ...process.env };
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cast-hosts-live-")));
+  });
+  afterEach(() => {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: "pipe" }).trim();
+  const commitAll = (cwd: string, msg: string) => git(cwd, "-c", "user.name=T", "-c", "user.email=t@test.local", "-c", "commit.gpgsign=false", "commit", "-qam", msg);
+
+  test("one ssh reports each worktree's current branch, HEAD and uncommitted changes, plus the main checkout", () => {
+    // The fake host: HOME with ~/work/app (a codecast checkout) and one worktree that moved off its start branch.
+    const home = path.join(dir, "home");
+    const app = path.join(home, "work", "app");
+    const other = path.join(home, "work", "notes");
+    fs.mkdirSync(path.join(app, ".codecast"), { recursive: true });
+    fs.mkdirSync(other, { recursive: true });
+    Object.assign(process.env, { HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" });
+    git(app, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(app, ".gitignore"), ".codecast/worktrees/\n");
+    fs.writeFileSync(path.join(app, ".codecast", "workspace.toml"), "");
+    git(app, "add", ".");
+    commitAll(app, "init");
+    const mainHead = git(app, "rev-parse", "HEAD");
+    const wt = path.join(app, ".codecast", "worktrees", "cloud-1");
+    git(app, "worktree", "add", "-q", "-b", "ws/cloud-1", wt);
+    git(wt, "checkout", "-q", "-b", "feat/moved");
+    fs.writeFileSync(path.join(wt, "work.txt"), "a\n");
+    git(wt, "add", "work.txt");
+    commitAll(wt, "host work");
+    const wtHead = git(wt, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(wt, "work.txt"), "b\n");
+
+    // The host's cast answers `cast ws ls` with its start branch; ssh runs the remote command locally and logs it.
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/sh\nprintf 'NAME     STATE  BRANCH      PATH\\ncloud-1  ready  ws/cloud-1  %s\\n' ${JSON.stringify(wt)}\n`, { mode: 0o755 });
+    const log = path.join(dir, "ssh.log");
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\nfor a; do last="$a"; done\necho call >> ${JSON.stringify(log)}\nexec bash -c "$last"\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+
+    const rows = readRemoteWorktrees({ address: "host.invalid", user: "ubuntu", keyPath: path.join(dir, "key"), remoteBaseDir: dir }, 30_000);
+    expect(fs.readFileSync(log, "utf-8")).toBe("call\n");
+    expect(rows).toEqual([
+      { repo: "app", name: "cloud-1", state: "ready", branch: "ws/cloud-1", path: wt, live: { branch: "feat/moved", head: wtHead, dirty: true } },
+      { repo: "app", name: "shared-checkout", state: "", branch: "", path: app, live: { branch: "main", head: mainHead, dirty: false } },
+    ]);
+    expect(worktreeGitLabel(rows[0].live!)).toBe(`feat/moved@${wtHead.slice(0, 7)}, uncommitted changes`);
+    expect(worktreeGitLabel(rows[1].live!)).toBe(`main@${mainHead.slice(0, 7)}`);
+
+    // A detached HEAD and a branch with no commits still read plainly.
+    git(wt, "checkout", "-q", "--detach");
+    const detached = readRemoteWorktrees({ address: "host.invalid", user: "ubuntu", keyPath: path.join(dir, "key"), remoteBaseDir: dir }, 30_000);
+    expect(worktreeGitLabel(detached[0].live!)).toBe(`detached HEAD@${wtHead.slice(0, 7)}, uncommitted changes`);
+    expect(worktreeGitLabel({ branch: "main", head: "", dirty: false })).toBe("main, no commits");
+  });
+
+  test("a shared-checkout record already naming the main checkout is not listed twice", () => {
+    const out = "## /h/work/app/\nNAME  STATE  BRANCH  PATH\nshared-checkout  ready  main  /h/work/app\n@@\t/h/work/app\tmain\tabc1234def\t\n";
+    expect(parseRemoteWorkspaceList(out)).toEqual([
+      { repo: "app", name: "shared-checkout", state: "ready", branch: "main", path: "/h/work/app", live: { branch: "main", head: "abc1234def", dirty: false } },
+    ]);
   });
 });
 

@@ -306,8 +306,10 @@ describe("readInstalledClientVersions — a fake PATH of stubs", () => {
     fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\necho '2.1.263 (Claude Code)'\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "codex"), "#!/bin/sh\necho 'codex-cli 0.153.4'\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "grok"), "#!/bin/sh\necho 'no version here'\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "opencode"), "#!/bin/sh\necho '1.18.3'\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "pi"), "#!/bin/sh\necho '0.73.1'\n", { mode: 0o755 });
     const v = readInstalledClientVersions({ path: `${bin}:/usr/bin:/bin` });
-    expect(v).toEqual({ claude: "2.1.263", codex: "0.153.4" });
+    expect(v).toEqual({ claude: "2.1.263", codex: "0.153.4", opencode: "1.18.3", pi: "0.73.1" });
     expect(v.gemini).toBeUndefined();
     expect(parseClientVersion("gemini 0.58.0\n")).toBe("0.58.0");
     expect(parseClientVersion("")).toBeUndefined();

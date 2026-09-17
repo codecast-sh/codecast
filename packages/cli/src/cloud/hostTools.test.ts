@@ -123,7 +123,7 @@ describe("hostToolsScript shape", () => {
   const required: RequiredHostTools = {
     node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" },
     bun: "1.4.0",
-    clients: { codex: "0.153.4", gemini: "0.58.0", grok: "1.2.3", claude: "2.1.263" },
+    clients: { codex: "0.153.4", gemini: "0.58.0", grok: "1.2.3", claude: "2.1.263", opencode: "1.18.3", pi: "0.73.1" },
     tools: [{ tool: "gh", version: "2.86.0" }, { tool: "uv" }, { tool: "shellcheck", referenced_by: "~/.claude/hooks/x.sh" }],
     unsupported: [{ tool: "~/.claude/hooks/notify", referenced_by: "~/.claude/hooks/notify", reason: "Mach-O binary" }],
   };
@@ -136,6 +136,9 @@ describe("hostToolsScript shape", () => {
     expect(s).toContain("bun install -g @google/gemini-cli@0.58.0");
     expect(s).toContain("x.ai/cli/install.sh | bash -s 1.2.3");
     expect(s).toContain("claude.ai/install.sh | bash -s 2.1.263");
+    expect(s).toContain("opencode.ai/install | bash -s -- --no-modify-path --version 1.18.3");
+    expect(s).toContain("bun install -g @mariozechner/pi-coding-agent@0.73.1");
+    expect(s).toContain("$HOME/.opencode/bin");
     expect(s).toContain(`"$HOME/.local/node-${NODE_22_VERSION}"`);
     expect(s).toContain("$HOME/.codecast/host-tools.json");
     expect(s).toContain('[ "$(uname -s)" = Linux ] || INSTALL=0');
