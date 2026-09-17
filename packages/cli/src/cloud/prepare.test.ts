@@ -90,6 +90,8 @@ describe("agent logins step (readyHostHome step 1)", () => {
     fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
     process.env.HOME = home;
     process.env.CODECAST_DIR = path.join(home, ".codecast");
+    // The login sources read CODEX_HOME before HOME; a pinned or real one must not leak in.
+    delete process.env.CODEX_HOME;
   });
   afterEach(() => {
     for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];

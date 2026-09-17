@@ -8,7 +8,7 @@ import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
-import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
+import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
@@ -141,6 +141,12 @@ export async function spawnSessionCore(
 
   const privacy = await resolveCreationPrivacy(ctx, userId, opts.privacyPath || opts.gitRoot || opts.projectPath);
   if (opts.cloudPark?.workspace === "shared") {
+    // The device has to be the ROW OWNER's own wake-on-use host, checked here
+    // the way every other cloud creator checks it (conversations.createConversation,
+    // reconfigureSession, dispatch.createSession): the park writes
+    // owner_device_id and claims a checkout, and an unchecked id would claim a
+    // checkout on a machine nobody here owns.
+    await resolveCloudDevice(ctx, runnerUserId, opts.cloudPark.deviceId);
     const occupant = await findSharedCheckoutOccupant(ctx, runnerUserId, opts.cloudPark.deviceId, { projectPath: opts.cloudPark.checkoutPath });
     if (occupant) throw new Error(checkoutInUseMessage(opts.cloudPark.checkoutPath, occupant));
   }

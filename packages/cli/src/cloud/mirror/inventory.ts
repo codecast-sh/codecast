@@ -160,7 +160,7 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
       totalBytes += stat.size;
       bytes = await fd.readFile();
     } finally { await fd.close(); }
-    if (script && !isPortableScript(bytes)) { totalBytes -= stat.size; skip(rel, "not a portable text script"); return; }
+    if (script && !isPortableScript(bytes, home)) { totalBytes -= stat.size; skip(rel, "not a portable text script"); return; }
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { totalBytes -= stat.size; skip(rel, credential); return; }
     const text = portableText(bytes);

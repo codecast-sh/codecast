@@ -7288,7 +7288,10 @@ async function executeRemoteCommand(
           const detail = childErrorDetail(res.stderr, res.stdout);
           error = `cloud host preparation failed (exit ${res.code})${detail ? `: ${detail}` : ""}`;
           log(`[CLOUD] FAILED ${conversationId.slice(0, 12)}: ${error}`, "warn");
-          syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+          // Through the park's token: a child whose park was superseded (the
+          // row re-parked, re-pointed, or placed by another laptop) must not
+          // write its error onto the park that replaced it.
+          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error).catch(() => {});
         }
         break;
       }

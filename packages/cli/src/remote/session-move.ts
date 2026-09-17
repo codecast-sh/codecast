@@ -751,13 +751,13 @@ export interface MoveResult {
 }
 
 /**
- * Where a moved session lands on the host: `<remoteBaseDir>/<basename of the
- * local cwd>` — the repo's MAIN checkout there, the same path a shared cloud
- * session holds. Exported so `cast remote move` can ask who occupies it
- * before pushing anything.
+ * Where a repo lives on the host: `<remoteBaseDir>/<basename of the local
+ * checkout>`. It is the repo's MAIN checkout there: where a moved session
+ * lands, the path a shared cloud session holds, and where cloud prepare
+ * clones. `cast remote move` asks who occupies it before pushing anything.
  */
-export function remoteMoveCwd(host: RemoteHost, localCwd: string): string {
-  return path.posix.join(host.remoteBaseDir, path.basename(localCwd));
+export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
+  return path.posix.join(host.remoteBaseDir, path.basename(localGitRoot));
 }
 
 /**
@@ -771,7 +771,7 @@ export function remoteMoveCwd(host: RemoteHost, localCwd: string): string {
  */
 export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean } = {}): Promise<MoveResult> {
   const s = resolveLocalSession(sessionId);
-  const remoteCwd = remoteMoveCwd(host, s.cwd);
+  const remoteCwd = remoteRepoPath(host, s.cwd);
   const remoteProjectDir = path.posix.join(
     remoteHome(host), ".claude", "projects",
     cwdToSlug(remoteCwd),

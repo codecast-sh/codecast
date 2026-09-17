@@ -717,6 +717,13 @@ export default defineSchema({
     // back by a child that was already mid-SSH. A pending row with NO token is
     // one nobody is preparing (an occupancy refusal) and is never re-issued.
     cloud_placement_token: v.optional(v.string()),
+    // When the laptop's `cast cloud start` for THIS park failed (the child
+    // reports it through cloud.reportPlacementFailure, which ignores a report
+    // whose token no longer matches the row). A failed park is not retried on
+    // its own: the heartbeat re-issue skips it, so a host that cannot be
+    // prepared is not woken again by every laptop that comes online. Cleared
+    // by a fresh pick (parkOnCloudHost) and by placeConversation.
+    cloud_placement_failed_at: v.optional(v.number()),
     // Where a cloud session runs on the host: its own worktree (absent =
     // isolated) or the host's main checkout (shared). Stamped at create
     // (createQuickSession / dispatch.createSession / the CLI spawn) and by

@@ -273,9 +273,8 @@ import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context
 import { useDevices, useDeviceMoveStatus, deviceDisplayName, type Device } from "./DeviceBadge";
 import { MachineChips } from "./MachineChips";
 import { SessionModeToggles } from "./SessionModeToggles";
-import { cloudPlacementFor } from "@codecast/shared/contracts";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
-import { cloudHostOf, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, type SessionMachine } from "../lib/sessionMachines";
+import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../lib/sessionMachines";
 import { useSessionMachines } from "../hooks/useSessionMachines";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
@@ -1510,8 +1509,7 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     // plain start there; "ambiguous" parks — the user chose the host from a
     // laptop folder list, and the explicit cloud_device_id tells the server so.
     const locals = machineChips.filter((d) => !d.is_remote && d.bot_name === undefined);
-    const cloudPark = !!target && isCloudHost(target)
-      && (!trimmed || cloudPlacementFor({ target, locals, paths: [trimmed] }) !== "native");
+    const cloudPark = cloudParkNeeded({ target, locals, path: trimmed });
     // The shared toggle only means something for a park; a native host
     // folder has no worktree-or-root choice to re-issue.
     if (opts.onlyCloudPark && !cloudPark) return;
@@ -1539,18 +1537,18 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     // cloudMode is still true in this closure, and shipping it would make the
     // un-park build a laptop worktree nobody asked for (a host-native plain
     // start would likewise ask for a worktree inside a worktree).
-    const isolatedArg = cloudPark ? undefined : (forceIsolated ?? isolatedToggle) || undefined;
     // Read at call time, not from the closure: the shared toggle (and the
     // start-from pick) set the flag and re-park in the same tick.
     const cloudShared = useInboxStore.getState().cloudSharedCheckout;
-    const cloudStartFromNow = cloudShared ? "origin_main" : resolveCloudStartFrom(useInboxStore.getState().clientState.ui);
-    convCommand(convexId, "reconfigureSession", {
-      ...(machineOnly ? {} : { project_path: trimmed, git_root: trimmed }),
-      isolated: isolatedArg,
-      ...(cloudPark
-        ? { cloud_device_id: target!.device_id, cloud_workspace: cloudShared ? "shared" : "isolated", cloud_start_from: cloudStartFromNow }
-        : targetDeviceId ? { target_device_id: targetDeviceId } : {}),
-    }).catch((err) => {
+    convCommand(convexId, "reconfigureSession", switchReconfigureArgs({
+      machineOnly,
+      path: trimmed,
+      cloudPark,
+      targetDeviceId: cloudPark ? target!.device_id : targetDeviceId,
+      isolated: forceIsolated ?? isolatedToggle,
+      cloudShared,
+      cloudStartFrom: resolveCloudStartFrom(useInboxStore.getState().clientState.ui),
+    })).catch((err) => {
       if (isParkedDispatchError(err)) return;
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");

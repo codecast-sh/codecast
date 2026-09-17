@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { claimSharedCheckout, commandOutcome, pickOnlineLocalDevice, placeConversation, placementFence, requestBrowserSync, requestRemoteWake, wakeDevicesFor } from "./cloud";
+import { BROWSER_SYNC_PENDING_CAP, claimSharedCheckout, commandOutcome, pickOnlineLocalDevice, placeConversation, placementFence, reportPlacementFailure, requestBrowserSync, requestRemoteWake, wakeDevicesFor } from "./cloud";
 import { resolveOfflineOwnerTakeover } from "./pendingMessages";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
@@ -126,6 +126,27 @@ describe("placeConversation — fenced by the park's token", () => {
     const db = fixture({ owner_device_id: "laptop" });
     expect(await place(db, { expect_token: "tok" })).toMatchObject({ placed: false, reason: "not_pending", owner_device_id: "laptop" });
     expect((await db.get("conv_1")).owner_device_id).toBe("laptop");
+  });
+
+  test("a failed placement is recorded under its own token, and a report from a park that is over is ignored", async () => {
+    const report = (db: any, token: string | undefined) => (reportPlacementFailure as any)._handler(ctx(db), {
+      conversation_id: "conv_1", ...(token ? { placement_token: token } : {}), error: "cloud host preparation failed (exit 1)",
+    });
+    const db = fixture({ owner_device_id: "box", cloud_placement: "pending", cloud_placement_token: "tok" });
+    expect(await report(db, "tok")).toEqual({ recorded: true });
+    const row = await db.get("conv_1");
+    expect(row.session_error).toBe("cloud host preparation failed (exit 1)");
+    expect(row.cloud_placement_failed_at).toBeGreaterThan(0);
+
+    // The row was re-parked while the child was mid-ssh: its failure belongs
+    // to the park that is over, and must not show on the new one.
+    const reparked = fixture({ owner_device_id: "box", cloud_placement: "pending", cloud_placement_token: "tok-2" });
+    expect(await report(reparked, "tok")).toEqual({ recorded: false, reason: "superseded" });
+    expect((await reparked.get("conv_1")).session_error).toBeUndefined();
+    // …and one already placed (no longer pending).
+    const placed = fixture({ owner_device_id: "box" });
+    expect(await report(placed, "tok")).toEqual({ recorded: false, reason: "not_pending" });
+    expect((await placed.get("conv_1")).cloud_placement_failed_at).toBeUndefined();
   });
 
   test("an owner change releases the previous owner; no expectation stays unfenced", async () => {
@@ -500,6 +521,17 @@ describe("requestBrowserSync / commandOutcome — a cloud session asks its lapto
     expect(JSON.parse(db._inserted[0].doc.args)).toEqual({ host_device_id: "box", cdp_port: 37121, origin: "https://github.com", all: false, conversation_id: "conv_host" });
     await ask(db, { origin: undefined, all: true });
     expect(JSON.parse(db._inserted[1].doc.args)).toEqual({ host_device_id: "box", cdp_port: 37121, origin: null, all: true });
+  });
+  test("refuses a new request while the cap of unanswered ones is waiting for the laptop", async () => {
+    const db = fixture();
+    for (let i = 0; i < BROWSER_SYNC_PENDING_CAP; i++) expect(await ask(db)).toMatchObject({ device_id: "mac" });
+    await expect(ask(db)).rejects.toThrow("already waiting for your laptop");
+    // One the laptop answered no longer counts, and neither does an old one.
+    await db.patch(db._tables.daemon_commands[0]._id, { executed_at: Date.now() });
+    expect(await ask(db)).toMatchObject({ device_id: "mac" });
+    await expect(ask(db)).rejects.toThrow("already waiting for your laptop");
+    await db.patch(db._tables.daemon_commands[1]._id, { created_at: Date.now() - 10 * 60 * 1000 });
+    expect(await ask(db)).toMatchObject({ device_id: "mac" });
   });
   test("refuses a device that is not a cloud host of the caller", async () => {
     const db = fixture();

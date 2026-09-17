@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   cloudHostOf,
+  cloudParkNeeded,
   cloudToggleAvailable,
   defaultSessionMachineId,
   isCloudHost,
   machineSelectionAfterCloudToggle,
   machineSelectionAfterPick,
   sessionMachineChoices,
+  switchReconfigureArgs,
 } from "./sessionMachines";
 
 const laptop = { device_id: "laptop", label: "My Mac", platform: "darwin", online: true, is_remote: false, last_seen: 1, local_project_roots: ["/Users/me/src/app"] };
@@ -124,5 +126,50 @@ describe("transitions keep cloudMode === isCloudHost(picked)", () => {
     const off = machineSelectionAfterCloudToggle(devices, { ownerDeviceId: cloud.device_id }, false);
     expect(off).toEqual({ pickedDeviceId: "laptop", cloudMode: false });
     invariant(off);
+  });
+});
+
+describe("a composer switch: park or plain start, and the payload", () => {
+  const args = (over: Partial<Parameters<typeof switchReconfigureArgs>[0]> = {}) => switchReconfigureArgs({
+    machineOnly: false, path: "/Users/me/src/app", cloudPark: false, targetDeviceId: "laptop",
+    isolated: false, cloudShared: false, cloudStartFrom: "checkout", ...over,
+  });
+
+  test("a laptop folder parks on the host; a folder the host already holds starts plainly", () => {
+    expect(cloudParkNeeded({ target: cloud, locals: [laptop], path: "/Users/me/src/app" })).toBe(true);
+    expect(cloudParkNeeded({ target: cloud, locals: [laptop], path: "/home/ubuntu/work/app" })).toBe(false);
+    // A worktree under a folder the host holds is the host's too.
+    expect(cloudParkNeeded({ target: cloud, locals: [laptop], path: "/home/ubuntu/work/app/.codecast/worktrees/x" })).toBe(false);
+    // A machine-only switch has no folder to judge: the host needs preparing.
+    expect(cloudParkNeeded({ target: cloud, locals: [laptop], path: "" })).toBe(true);
+    // Every non-cloud target: never a park, whatever the folder.
+    expect(cloudParkNeeded({ target: laptop, locals: [laptop], path: "/Users/me/src/app" })).toBe(false);
+    expect(cloudParkNeeded({ target: mini, locals: [laptop], path: "/Users/me/src/app" })).toBe(false);
+    expect(cloudParkNeeded({ target: undefined, locals: [laptop], path: "/Users/me/src/app" })).toBe(false);
+  });
+
+  test("a park carries the host, the workspace and the seed, and never asks for a local worktree", () => {
+    expect(args({ cloudPark: true, targetDeviceId: "cloud", isolated: true })).toEqual({
+      project_path: "/Users/me/src/app", git_root: "/Users/me/src/app",
+      isolated: undefined,
+      cloud_device_id: "cloud", cloud_workspace: "isolated", cloud_start_from: "checkout",
+    });
+    // A shared checkout pins the seed at origin/main whatever was picked.
+    expect(args({ cloudPark: true, targetDeviceId: "cloud", cloudShared: true, cloudStartFrom: "checkout" })).toMatchObject({
+      cloud_workspace: "shared", cloud_start_from: "origin_main",
+    });
+  });
+
+  test("every other target carries the real toggle and a plain target device", () => {
+    expect(args({ isolated: true })).toEqual({
+      project_path: "/Users/me/src/app", git_root: "/Users/me/src/app",
+      isolated: true, target_device_id: "laptop",
+    });
+    // Leaving cloud mode: no cloud field rides along with the un-park.
+    expect(args({ cloudShared: true, cloudStartFrom: "origin_main" })).not.toHaveProperty("cloud_device_id");
+    // A machine-only switch leaves the row's folder alone.
+    expect(args({ machineOnly: true })).toEqual({ isolated: undefined, target_device_id: "laptop" });
+    // No target at all: just the folder.
+    expect(args({ targetDeviceId: null })).toEqual({ project_path: "/Users/me/src/app", git_root: "/Users/me/src/app", isolated: undefined });
   });
 });

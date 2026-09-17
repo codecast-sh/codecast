@@ -1,5 +1,5 @@
 import type { Device } from "../components/DeviceBadge";
-import { deviceDisplayName } from "@codecast/shared/contracts";
+import { cloudPlacementFor, deviceDisplayName, type CloudStartFrom } from "@codecast/shared/contracts";
 import { defaultMachineId, wakesOnUse, type MachineCandidate } from "./machinePicker";
 
 export type SessionMachine = Device & { bot_name?: string | null };
@@ -106,4 +106,52 @@ export function machineChipTitle(d: SessionMachine): string {
   if (d.online) return `Run this session on ${name}`;
   if (isCloudHost(d)) return `${name} is asleep — it boots when the session starts`;
   return `${name} is offline — will fall back to an online machine with this repo`;
+}
+
+/**
+ * Does a switch to `target` have to PARK the row (a laptop prepares the host
+ * first), or can it start there plainly? The shared predicate decides, so the
+ * composer, createSessionFromStub and the server's start chokepoint agree. A
+ * machine-only switch (no folder) has no path to judge and always parks.
+ */
+export function cloudParkNeeded(opts: {
+  target: SessionMachine | undefined;
+  locals: SessionMachine[];
+  path: string;
+}): boolean {
+  if (!opts.target || !isCloudHost(opts.target)) return false;
+  return !opts.path || cloudPlacementFor({ target: opts.target, locals: opts.locals, paths: [opts.path] }) !== "native";
+}
+
+/**
+ * The reconfigureSession payload for a folder or machine switch.
+ *
+ * Two rules live here. A PARK carries the host id, the workspace pick and
+ * what the worktree starts from, and never an `isolated` flag: a cloud
+ * session's worktree is made on the host by the laptop that prepares it, so
+ * asking for one here would build a second worktree on this machine. Every
+ * other target carries the user's real toggle and the plain target device —
+ * including the un-park that runs while the composer still shows cloud mode.
+ */
+export function switchReconfigureArgs(opts: {
+  /** A machine-only switch leaves the row's folder alone. */
+  machineOnly: boolean;
+  path: string;
+  cloudPark: boolean;
+  targetDeviceId: string | null;
+  isolated: boolean;
+  cloudShared: boolean;
+  cloudStartFrom: CloudStartFrom;
+}): Record<string, unknown> {
+  return {
+    ...(opts.machineOnly ? {} : { project_path: opts.path, git_root: opts.path }),
+    isolated: opts.cloudPark ? undefined : opts.isolated || undefined,
+    ...(opts.cloudPark && opts.targetDeviceId
+      ? {
+          cloud_device_id: opts.targetDeviceId,
+          cloud_workspace: opts.cloudShared ? "shared" : "isolated",
+          cloud_start_from: opts.cloudShared ? "origin_main" : opts.cloudStartFrom,
+        }
+      : opts.targetDeviceId ? { target_device_id: opts.targetDeviceId } : {}),
+  };
 }

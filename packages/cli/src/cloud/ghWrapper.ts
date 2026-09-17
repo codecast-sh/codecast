@@ -9,7 +9,10 @@
  * and execs the real gh. Nothing is written to disk: the token lives in the
  * environment of one gh process. When the helper has nothing (no repository
  * here, no installation, no network) gh runs exactly as it would without the
- * wrapper. An explicit GH_TOKEN or GITHUB_TOKEN always wins.
+ * wrapper. An explicit GH_TOKEN or GITHUB_TOKEN always wins, and so does a
+ * github.com login someone made on the host with `gh auth login` (a
+ * github.com entry in gh's hosts.yml): that login usually has more
+ * permissions than the App token, which only carries contents:write.
  *
  * The real gh lives wherever it was: anywhere else on PATH, or, when the host
  * tools step put it at `~/.local/bin/gh`, moved aside to REAL_GH_REL by the
@@ -49,7 +52,8 @@ ${GH_WRAPPER_MARKER}
 # Written by cast (cloud/ghWrapper.ts): GH_TOKEN from \`cast git-credential\`, then the real gh.
 ${realGhFunction}
 real=$(real_gh) || { echo "gh: not installed on this host (cast hosts tools installs it)" >&2; exit 127; }
-if [ -z "\${GH_TOKEN:-}\${GITHUB_TOKEN:-}" ] && { [ -z "\${GH_HOST:-}" ] || [ "\${GH_HOST}" = github.com ]; }; then
+gh_hosts="\${GH_CONFIG_DIR:-\${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml"
+if [ -z "\${GH_TOKEN:-}\${GITHUB_TOKEN:-}" ] && { [ -z "\${GH_HOST:-}" ] || [ "\${GH_HOST}" = github.com ]; } && ! grep -q '^github\.com:' "$gh_hosts" 2>/dev/null; then
   case "\${1:-}" in
     ""|--version|version|completion) ;;
     *)

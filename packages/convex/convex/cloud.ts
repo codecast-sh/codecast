@@ -16,14 +16,13 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { grantsContentsWrite, installationForRepo } from "./githubApp";
-import { normalizeRepository } from "./lib/gitRefs";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
-import { checkoutInUseMessage, fromConvexAgentType, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, fromConvexAgentType, isHttpOrigin, parseOwnerRepo, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 
 // The park/prepare logic moved to cloudPlacement.ts (a leaf every creator can
@@ -183,6 +182,7 @@ export const placeConversation = mutation({
       ...(args.seed ? { cloud_seed: { ...args.seed, at: Date.now() } } : {}),
       cloud_placement: undefined,
       cloud_placement_token: undefined,
+      cloud_placement_failed_at: undefined,
       session_error: undefined,
       updated_at: Date.now(),
     });
@@ -281,6 +281,43 @@ export function placementFence(
 }
 
 /**
+ * The laptop's `cast cloud start` for a park failed: record it on the row.
+ *
+ * Fenced by the park's token, exactly like placeConversation. A child that
+ * lost the race — the row was re-parked, re-pointed at a laptop, or another
+ * laptop already placed it — reports a failure about a park that is over, and
+ * that report must not show on the card or count against the new park. It is
+ * ignored, not applied.
+ *
+ * The stamp is what stops the retry loop: a failed park is not re-issued by
+ * the heartbeat when a laptop comes online (reissueStrandedCloudSpawns), so a
+ * host that cannot be prepared is woken once, not once per laptop wake.
+ */
+export const reportPlacementFailure = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    /** The park token the child read from its command args. */
+    placement_token: v.optional(v.string()),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const, reason: "not_yours" };
+    const fence = placementFence(conv, args.placement_token);
+    if (fence) return { recorded: false as const, reason: fence };
+    await ctx.db.patch(args.conversation_id, {
+      session_error: args.error,
+      cloud_placement_failed_at: Date.now(),
+      updated_at: Date.now(),
+    });
+    return { recorded: true as const };
+  },
+});
+
+/**
  * What `cast cloud start <conversation>` (the daemon's child for a web
  * "run in the cloud") needs to know about the row it is placing.
  */
@@ -376,15 +413,9 @@ export function pickOnlineLocalDevice(
   return pick ? { device_id: pick.device_id, label: pick.label ?? null } : null;
 }
 
-/** Is `s` exactly an http(s) origin (scheme + host [+ port], no path, query or fragment)? */
-function isHttpOrigin(s: string): boolean {
-  try {
-    const u = new URL(s);
-    return (u.protocol === "http:" || u.protocol === "https:") && u.origin === s;
-  } catch {
-    return false;
-  }
-}
+/** Unanswered carry requests one user may have waiting at a time, counted over the window below. */
+export const BROWSER_SYNC_PENDING_CAP = 5;
+const BROWSER_SYNC_WINDOW_MS = 5 * 60 * 1000;
 
 /**
  * A cloud session asks the owner's laptop to carry a browser login into the
@@ -433,6 +464,16 @@ export const requestBrowserSync = mutation({
       if (conv.owner_device_id !== args.device_id) conversationId = undefined;
     }
     const now = Date.now();
+    // A cap on requests the laptop has not answered yet: every carry opens an
+    // ssh forward, and a looping session on the host must not queue them.
+    const unanswered = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .filter((q: any) => q.and(q.eq(q.field("command"), "cloud_browser_sync"), q.gt(q.field("created_at"), now - BROWSER_SYNC_WINDOW_MS)))
+      .take(BROWSER_SYNC_PENDING_CAP);
+    if (unanswered.length >= BROWSER_SYNC_PENDING_CAP) {
+      throw new Error(`${BROWSER_SYNC_PENDING_CAP} browser sync requests are already waiting for your laptop — wait for them to finish and retry`);
+    }
     const devices = await ctx.db
       .query("devices")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
@@ -508,12 +549,6 @@ export type HostGitCredential = {
 
 export type HostGitCredentialRefusal = { reason: string };
 
-/** `owner/name`, the only repository spelling an installation lookup accepts. */
-function parseRepository(value: string): string | null {
-  const repo = normalizeRepository(value.trim().replace(/\.git$/, ""));
-  return /^[a-z0-9._-]+\/[a-z0-9._-]+$/.test(repo) ? repo : null;
-}
-
 /**
  * The installation whose token lets `device_id` push `repository`, or the
  * reason it cannot have one.
@@ -522,14 +557,21 @@ function parseRepository(value: string): string | null {
  * theirs (an is_remote device — a laptop has the human's own credentials and
  * needs none of this), and does a GitHub App installation THEY can reach cover
  * that repository. The second is githubApp.installationForRepo, the same rule
- * issue sync and the PR paths resolve through, so a host can reach exactly the
- * repositories its owner's workspaces can.
+ * issue sync and the PR paths resolve through.
+ *
+ * That rule alone is wider than a push credential may be. A team's
+ * installation covers every repository the team installed the app on, and any
+ * member of that team reaches it here, including one who cannot push to the
+ * repository on GitHub. So this answer carries `personal`: true when the
+ * installation is the caller's OWN, and false when it is a team's. The action
+ * mints on a personal installation at once, and on a team's only after GitHub
+ * itself says this person may push (hostGitCredential).
  */
 export async function hostGitInstallationFor(
   ctx: { db: any; auth?: any },
   userId: Id<"users">,
   args: { device_id: string; repository: string; host?: string },
-): Promise<{ installation_id: number; account_login: string } | HostGitCredentialRefusal> {
+): Promise<{ installation_id: number; account_login: string; personal: boolean; repository: string } | HostGitCredentialRefusal> {
   const device = await ctx.db
     .query("devices")
     .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
@@ -540,7 +582,7 @@ export async function hostGitInstallationFor(
   if (args.host !== undefined && args.host !== "github.com") {
     return { reason: `${args.host} is not github.com — the codecast app only holds GitHub credentials` };
   }
-  const repository = parseRepository(args.repository);
+  const repository = parseOwnerRepo(args.repository);
   if (!repository) return { reason: `${args.repository} is not an owner/name repository` };
   const installation = await installationForRepo(ctx as any, { repository, user_id: userId });
   if (!installation) {
@@ -550,7 +592,12 @@ export async function hostGitInstallationFor(
         `(codecast settings, integrations), or grant this host's device key: cast hosts key`,
     };
   }
-  return { installation_id: installation.installation_id, account_login: installation.account_login };
+  return {
+    installation_id: installation.installation_id,
+    account_login: installation.account_login,
+    personal: !!installation.scope_user_id && String(installation.scope_user_id) === String(userId),
+    repository,
+  };
 }
 
 /** The wire spelling of the rule above; the action below is its only caller. */
@@ -561,12 +608,55 @@ export const hostGitInstallation = internalQuery({
     repository: v.string(),
     host: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ installation_id: number; account_login: string } | HostGitCredentialRefusal> => {
+  handler: async (ctx, args): Promise<HostGitInstallationAnswer | HostGitCredentialRefusal> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    return await hostGitInstallationFor(ctx, userId, args);
+    const resolved = await hostGitInstallationFor(ctx, userId, args);
+    if ("reason" in resolved) return resolved;
+    // The caller's own GitHub credential, so the action can ask GitHub whether
+    // this person may push. Internal only: it never leaves the server.
+    const user = await ctx.db.get(userId);
+    return {
+      ...resolved,
+      viewer_github_token: user?.github_access_token ?? null,
+      viewer_github_login: user?.github_username ?? null,
+    };
   },
 });
+
+export type HostGitInstallationAnswer = {
+  installation_id: number;
+  account_login: string;
+  personal: boolean;
+  repository: string;
+  viewer_github_token: string | null;
+  viewer_github_login: string | null;
+};
+
+/**
+ * Does GitHub say the owner of `token` may push to `repository`? A repository
+ * read with the person's own OAuth token answers it: `permissions.push` is
+ * what GitHub grants THEM, whatever the installation covers. null when the
+ * question could not be asked (no token, GitHub unreachable), which the caller
+ * treats as a refusal.
+ */
+export async function viewerCanPush(
+  repository: string,
+  token: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean | null> {
+  if (!token) return null;
+  try {
+    const r = await fetchImpl(`https://api.github.com/repos/${repository}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    if (!r.ok) return r.status === 403 || r.status === 404 ? false : null;
+    const body: any = await r.json();
+    return body?.permissions?.push === true;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The credential `cast git-credential` prints on the host: the username and
@@ -581,9 +671,10 @@ export const hostGitInstallation = internalQuery({
  * nothing here prints it, and the CLI writes it only to git's stdin protocol.
  *
  * What this does NOT narrow: anyone holding the caller's api_token can ask for
- * any repository the caller's own installations cover, one repository at a
- * time. Reaching a repository still means reaching an installation the caller
- * can reach, which is the same rule issue sync and the PR paths use.
+ * any repository the caller's OWN installations cover, one repository at a
+ * time. A team's installation is wider than one person's access, so before
+ * minting from one this asks GitHub, with the person's own OAuth credential,
+ * whether they may push to that repository (viewerCanPush).
  *
  * A refusal is an answer, not an error — the helper exits quietly and git
  * falls through to its next credential helper (the device key over ssh, or the
@@ -600,7 +691,7 @@ export const hostGitCredential = action({
     host: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<HostGitCredential | HostGitCredentialRefusal> => {
-    const resolved: { installation_id: number; account_login: string } | HostGitCredentialRefusal =
+    const resolved: HostGitInstallationAnswer | HostGitCredentialRefusal =
       await ctx.runQuery(internal.cloud.hostGitInstallation, {
         ...(args.api_token ? { api_token: args.api_token } : {}),
         device_id: args.device_id,
@@ -608,6 +699,20 @@ export const hostGitCredential = action({
         ...(args.host ? { host: args.host } : {}),
       });
     if ("reason" in resolved) return resolved;
+    // A team's installation covers repositories this person may not be able to
+    // push to on GitHub, so GitHub decides, with their own credential. Their
+    // own installation needs no second opinion: it is their access already.
+    if (!resolved.personal) {
+      const allowed = await viewerCanPush(resolved.repository, resolved.viewer_github_token);
+      if (allowed !== true) {
+        const who = resolved.viewer_github_login ? ` (${resolved.viewer_github_login})` : "";
+        return {
+          reason: allowed === false
+            ? `your GitHub account${who} cannot push to ${resolved.repository}, so the ${resolved.account_login} installation will not push for you`
+            : `the ${resolved.account_login} installation covers ${resolved.repository}, but GitHub could not confirm that you may push there — link your GitHub account in codecast settings and retry`,
+        };
+      }
+    }
     // Scoped to the repository git named, and to push access. GitHub refuses
     // (422) when the installation does not hold that permission, so a mint
     // that throws is a refusal the helper can print, not a crash.

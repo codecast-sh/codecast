@@ -31,15 +31,17 @@ test("cloud mode is derived from the routed machine, never read from the store",
   expect(switcher).toContain("useWatchEffect(() => () => { setCloudSessionMode(false); }, [setCloudSessionMode]);");
 });
 
-test("handleSwitch decides placement with the shared predicate and emits cloud_device_id only for a park", () => {
+test("handleSwitch decides placement and builds its payload with the pure helpers", () => {
   const handleSwitch = between("const handleSwitch = useCallback(", "const updateClientUI");
-  expect(handleSwitch).toContain("cloudPlacementFor(");
-  expect(handleSwitch.match(/cloud_device_id:/g)).toHaveLength(1);
-  // The park carries the workspace pick (ct-49428) beside the host id.
+  // Both decisions live in lib/sessionMachines and are tested there with
+  // inputs and outputs; the composer only feeds them.
+  expect(handleSwitch).toContain("cloudParkNeeded({ target, locals, path: trimmed })");
+  expect(handleSwitch).toContain("switchReconfigureArgs({");
+  expect(switcher).not.toContain("cloudPlacementFor(");
+  // The workspace and seed picks are read at call time, not from the closure:
+  // the shared toggle sets the flag and re-parks in the same tick.
   expect(handleSwitch).toContain('const cloudShared = useInboxStore.getState().cloudSharedCheckout;');
-  expect(handleSwitch).toContain('? { cloud_device_id: target!.device_id, cloud_workspace: cloudShared ? "shared" : "isolated", cloud_start_from: cloudStartFromNow }');
-  // The seed choice is read at call time too, and a shared checkout pins it at origin/main (ct-49433).
-  expect(handleSwitch).toContain('const cloudStartFromNow = cloudShared ? "origin_main" : resolveCloudStartFrom(useInboxStore.getState().clientState.ui);');
+  expect(handleSwitch).toContain("cloudStartFrom: resolveCloudStartFrom(useInboxStore.getState().clientState.ui),");
   // The shared toggle re-parks an existing row (only when the folder would park) so the
   // isolated cloud_spawn in flight is superseded rather than left to build a worktree.
   const toggle = between("onToggleShared={() => {", "{!picking && recentProjects.length > 0");
@@ -51,17 +53,17 @@ test("handleSwitch decides placement with the shared predicate and emits cloud_d
   expect(startFrom).toContain("setCloudStartFrom(v)");
   expect(startFrom).toContain('storeSession?.cloud_placement === "pending"');
   expect(startFrom).toContain("handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true })");
-  expect(handleSwitch).toContain("const cloudPark = !!target && isCloudHost(target)");
-  // Nothing else in the composer emits the field.
-  expect(switcher.match(/cloud_device_id:/g)).toHaveLength(1);
+  // Nothing in the composer spells the payload's cloud fields by hand.
+  expect(switcher).not.toContain("cloud_device_id:");
 });
 
 test("leaving cloud mode never ships the cloud-locked isolated value, and the routed host is the park target", () => {
   const handleSwitch = between("const handleSwitch = useCallback(", "const updateClientUI");
   // `isolated` (= isolatedToggle || cloudMode) is display state; the payload
-  // carries the user's real toggle for every non-park target, so the un-park
-  // that runs while cloudMode is still true cannot ask the laptop for a worktree.
-  expect(handleSwitch).toContain("const isolatedArg = cloudPark ? undefined : (forceIsolated ?? isolatedToggle) || undefined;");
+  // carries the user's real toggle, and switchReconfigureArgs drops it for a
+  // park — so the un-park that runs while cloudMode is still true cannot ask
+  // the laptop for a worktree.
+  expect(handleSwitch).toContain("isolated: forceIsolated ?? isolatedToggle,");
   expect(handleSwitch).not.toMatch(/isolatedToggle : isolated\)/);
   const deps = handleSwitch.slice(handleSwitch.lastIndexOf("}, ["));
   expect(deps).not.toMatch(/[\[, ]isolated[,\]]/);

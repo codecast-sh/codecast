@@ -123,6 +123,19 @@ describe("ghWrapperScript", () => {
     expect(castCalled()).toBe(false);
   });
 
+  test("a github.com login made on the host with gh auth login wins over the App token", () => {
+    fakeCast();
+    fakeRealGh();
+    installWrapper();
+    fs.mkdirSync(path.join(home, ".config", "gh"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".config", "gh", "hosts.yml"), "enterprise.example:\n    user: x\n");
+    expect(runGh(["api", "user"]).stdout).toBe("token=ghs_fresh\narg=api\narg=user\n");
+    fs.writeFileSync(path.join(home, ".config", "gh", "hosts.yml"), "github.com:\n    user: human\n    git_protocol: https\n");
+    fs.rmSync(path.join(dir, "cast-stdin"), { force: true });
+    expect(runGh(["pr", "create"]).stdout).toBe("token=\narg=pr\narg=create\n");
+    expect(castCalled()).toBe(false);
+  });
+
   test("the real gh behind the wrapper is found in libexec first, never the wrapper itself; none is exit 127", () => {
     fakeCast();
     installWrapper();

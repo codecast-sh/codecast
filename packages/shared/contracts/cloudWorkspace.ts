@@ -134,3 +134,19 @@ export function checkoutInUseMessage(path: string, occupant: CheckoutOccupantRow
   const title = (occupant.title ?? "").trim() || "untitled";
   return `the host checkout ${path} is in use by session ${id} (${title}) — run this session isolated, or finish/kill that one`;
 }
+
+/**
+ * Is `s` exactly an http(s) origin (scheme + host [+ port], no path, query or
+ * fragment)? A browser sync request carries an origin and never a URL, whose
+ * query can hold tokens; the server mutation and the laptop's child judge it
+ * by this one rule.
+ */
+export function isHttpOrigin(s: unknown): boolean {
+  if (typeof s !== "string") return false;
+  try {
+    const u = new URL(s);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.origin === s;
+  } catch {
+    return false;
+  }
+}

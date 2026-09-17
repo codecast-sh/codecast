@@ -66,6 +66,16 @@ describe("daemonHeartbeat re-issues stranded cloud_spawns on a local device's of
     expect(spawns(db)).toHaveLength(0);
   });
 
+  test("a park whose `cast cloud start` already failed is left alone until a human re-picks", async () => {
+    // Without this the box is woken, and the error the human is reading is
+    // cleared, on every laptop that comes back online.
+    const db = await fixture({ laptopLastSeen: stale() });
+    await db.patch("conv_1", { cloud_placement_failed_at: Date.now() - 60_000, session_error: "cloud host preparation failed (exit 1): no space left on device" });
+    await beat(db);
+    expect(spawns(db)).toHaveLength(0);
+    expect((await db.get("conv_1")).session_error).toContain("no space left on device");
+  });
+
   test("an online laptop holding the checkout is preferred over the one that just came back", async () => {
     const db = await fixture({
       laptopLastSeen: stale(),

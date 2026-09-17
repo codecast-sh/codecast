@@ -10,7 +10,7 @@ import {
   settingsHookCommands, shebangInterpreter, summarizeHostTools, type McpSources, type RequiredHostTools,
   classifyMcp, codecastFileWriteCommand, mcpChecks, parseCodexMcpServers, parseMcpLines, readMcpSources, reconcileMcp, staticMcpVerdict,
 } from "./hostTools";
-import { ghWrapperScript, REAL_GH_REL } from "./ghWrapper";
+import { GH_WRAPPER_MARKER, ghWrapperScript, REAL_GH_REL } from "./ghWrapper";
 
 let dir: string, home: string, repo: string;
 let savedEnv: NodeJS.ProcessEnv;
@@ -278,6 +278,23 @@ describe("the script run locally against a temp HOME (stubs on PATH, no network)
     expect(fs.readdirSync(path.join(home, ".local")).filter((n) => n.startsWith(".node-download"))).toEqual([]);
     expect(r.missing.find((m) => m.tool === "gh")?.error).toMatch(/Could not resolve host|download failed/);
     expect(r.install).toBe(true);
+  });
+
+  linuxOnly("install mode: a downloaded gh lands behind the wrapper, never on the wrapper's path", () => {
+    stub("node", "echo v22.12.0");
+    fs.unlinkSync(path.join(home, ".local", "bin", "gh"));
+    const arch = process.arch === "arm64" ? "arm64" : "amd64";
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "gh-tar-"));
+    write(src, `gh_2.86.0_linux_${arch}/bin/gh`, "#!/bin/sh\necho gh version 2.86.0\n", 0o755);
+    const tarball = path.join(src, "gh.tar.gz");
+    expect(spawnSync("tar", ["-czf", tarball, "-C", src, `gh_2.86.0_linux_${arch}`]).status).toBe(0);
+    stub("curl", `cat ${JSON.stringify(tarball)}`);
+    process.env.PATH = "/usr/bin:/bin";
+    const r = runHostTools(host, { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [{ tool: "gh", version: "2.86.0" }], unsupported: [] }, { install: true, run: localRun });
+    expect(r.installed.map((t) => t.tool)).toContain("gh");
+    expect(fs.readFileSync(path.join(home, REAL_GH_REL), "utf-8")).toContain("echo gh version");
+    expect(fs.readFileSync(path.join(home, ".local", "bin", "gh"), "utf-8")).toContain(GH_WRAPPER_MARKER);
+    fs.rmSync(src, { recursive: true, force: true });
   });
 
   test("a transport failure throws; a non-zero exit names the last stderr line", () => {

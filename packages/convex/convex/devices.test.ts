@@ -331,6 +331,19 @@ describe("enqueueStartSession cloud placement chokepoint", () => {
     expect((await d.get(CONVERSATION)).cloud_placement).toBeUndefined();
   });
 
+  test("a start into the host's own checkout is refused while another session holds it", async () => {
+    const held = { _id: "conv_holder", user_id: USER, session_id: "held", short_id: "holder1", title: "shared", owner_device_id: `host-${USER}`, project_path: "/home/ubuntu/work/app", cloud_workspace: "shared", cloud_checkout_path: "/home/ubuntu/work/app", status: "active" };
+    const native = row({ owner_device_id: `host-${USER}`, project_path: "/home/ubuntu/work/app", git_root: "/home/ubuntu/work/app" });
+    const d = makeFakeDb({ users: [{ _id: USER }], conversations: [native, held], devices: [host(), laptop()], daemon_commands: [] });
+    expect(await enqueueStartSession({ db: d } as any, USER, { conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${USER}`, callerUserId: USER })).toBeNull();
+    expect(commands(d)).toEqual([]);
+    expect((await d.get(CONVERSATION)).session_error).toContain("is in use by session holder1");
+    // The same start with nobody else in the checkout runs plainly.
+    const free = makeFakeDb({ users: [{ _id: USER }], conversations: [native], devices: [host(), laptop()], daemon_commands: [] });
+    await enqueueStartSession({ db: free } as any, USER, { conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${USER}`, callerUserId: USER });
+    expect(commands(free)).toEqual(["start_session"]);
+  });
+
   test("a bot runner never parks", async () => {
     const d = db(row({ user_id: BOT, owner_device_id: `laptop-${BOT}` }), [host(BOT), laptop(BOT)], [{ _id: BOT, is_bot: true }]);
     await enqueueStartSession({ db: d } as any, BOT, { conversationId: CONVERSATION, agentType: "claude", targetDeviceId: `host-${BOT}`, callerUserId: BOT });

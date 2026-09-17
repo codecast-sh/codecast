@@ -62,3 +62,34 @@ describe("plain spawn origin", () => {
     expect(isAgentTeamWorker({})).toBe(false);
   });
 });
+
+describe("a shared cloud park from the CLI", () => {
+  const park = async (devices: any[], cloud_device_id = "box") => {
+    const db = makeFakeDb({
+      users: [{ _id: OWNER }],
+      conversations: [],
+      devices,
+    });
+    const ctx = { db, auth: { getUserIdentity: async () => ({ subject: `${OWNER}|session` }) } };
+    return await (createSessionFromCli as any)._handler(ctx, {
+      agent_type: "codex",
+      project_path: "/home/ubuntu/work/codecast",
+      cloud_workspace: "shared",
+      cloud_device_id,
+      cloud_checkout_path: "/home/ubuntu/work/codecast",
+    });
+  };
+  const host = { _id: "dev_box", user_id: OWNER, device_id: "box", is_remote: true, platform: "linux", last_seen: Date.now() };
+
+  test("the row parks on the caller's own cloud host", async () => {
+    const r = await park([host]);
+    expect(r.conversation_id).toBeTruthy();
+  });
+
+  test("a device that is not the caller's wake-on-use host is refused, so no row claims the checkout", async () => {
+    // Somebody else's host, a laptop of the caller's, and an id of nothing.
+    await expect(park([{ ...host, user_id: "someone-else" }])).rejects.toThrow("Not a cloud host you own");
+    await expect(park([{ ...host, is_remote: false }])).rejects.toThrow("Not a cloud host you own");
+    await expect(park([host], "not-a-device")).rejects.toThrow("Not a cloud host you own");
+  });
+});

@@ -9,6 +9,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
+import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -115,9 +116,7 @@ export function grantsContentsWrite(permissions: Record<string, string> | undefi
  * already decided by installation_id.
  */
 export function mintRepositoryName(repository: string | undefined): string | undefined {
-  if (!repository) return undefined;
-  const name = normalizeRepository(repository.trim().replace(/\.git$/, "")).split("/")[1];
-  return name && /^[a-z0-9._-]+$/.test(name) ? name : undefined;
+  return parseOwnerRepo(repository)?.split("/")[1];
 }
 
 export const getInstallationToken = internalAction({
@@ -138,7 +137,7 @@ export const getInstallationToken = internalAction({
     // Scoped tokens are cached apart from the installation-wide one: same
     // installation, different authority, so they must never answer for each
     // other.
-    const repository = args.repository ? normalizeRepository(args.repository.trim().replace(/\.git$/, "")) : undefined;
+    const repository = parseOwnerRepo(args.repository) ?? undefined;
     const name = mintRepositoryName(args.repository);
     if (args.repository && !name) throw new Error(`Not an owner/name repository: ${args.repository}`);
     const cachedToken = await ctx.runQuery(internal.githubApp.getCachedToken, {

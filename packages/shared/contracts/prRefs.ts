@@ -35,6 +35,17 @@ export function normalizeRepository<T extends string | undefined | null>(reposit
   return (typeof repository === "string" ? repository.trim().toLowerCase() : repository) as T;
 }
 
+/**
+ * `owner/name` canonicalized (trimmed, lowercased, `.git` dropped), or null
+ * when the value is not one. The spelling every installation lookup, token
+ * mint and credential helper accepts.
+ */
+export function parseOwnerRepo(value: string | undefined | null): string | null {
+  if (!value) return null;
+  const repo = normalizeRepository(value.trim().replace(/\.git$/, ""));
+  return /^[a-z0-9._-]+\/[a-z0-9._-]+$/.test(repo) ? repo : null;
+}
+
 /** The canonical owner of "owner/name", the key every installation lookup uses. */
 export function repositoryOwner(repository: string): string {
   return normalizeRepository(repository).split("/")[0];

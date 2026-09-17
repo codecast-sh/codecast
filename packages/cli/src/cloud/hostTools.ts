@@ -35,7 +35,7 @@ import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { INSTALLABLE_CLIENTS, parseClientVersion, readInstalledClientVersions, type InstallableClient } from "../remote/agentAuth.js";
 import { remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
-import { realGhFunction } from "./ghWrapper.js";
+import { ghWrapperInstallSnippet, realGhFunction, REAL_GH_REL } from "./ghWrapper.js";
 import {
   emptyOverrides, normalizeCommand, parseHostMcpOverrides, reconcilePins, serializeHostMcpOverrides, HOST_MCP_OVERRIDES_FILE,
   type HostMcpOverrides, type McpClassified, type McpHarness, type McpSourceServer, type McpStatus,
@@ -842,13 +842,16 @@ ${inst(`  if err=$( (curl ${CURL_LIMITS} https://bun.sh/install | bash -s${bun ?
   // gh
   // The real gh, not the wrapper in front of it (ghWrapper.ts): a host with
   // only the wrapper has no gh, and asking the wrapper for a version would
-  // mint a token. An install lands at ~/.local/bin/gh, and the host git step
-  // moves it behind the wrapper.
+  // mint a token. An install lands where the wrapper looks first
+  // (REAL_GH_REL), never on the wrapper's path, and the wrapper is then
+  // written in front of it, so the order of this step and the host git step
+  // does not matter.
   lines.push(`${realGhFunction}
 if gh_path=$(real_gh); then add ok gh "$gh_path"
 ${inst(`  arch=$(uname -m); case "$arch" in x86_64) ga=amd64;; aarch64|arm64) ga=arm64;; *) ga="";; esac
-  tmp=$(mktemp -d); mkdir -p "$HOME/.local/bin"; err=""
-  if [ -n "$ga" ] && curl ${CURL_LIMITS} "https://github.com/cli/cli/releases/download/v${gh}/gh_${gh}_linux_$ga.tar.gz" 2>"$tmp/err" | tar -xz -C "$tmp" 2>>"$tmp/err" && install -m 755 "$tmp/gh_${gh}_linux_$ga/bin/gh" "$HOME/.local/bin/gh" 2>>"$tmp/err"; then add installed gh "$HOME/.local/bin/gh"
+  tmp=$(mktemp -d); mkdir -p "$HOME/.local/bin" "$(dirname "$HOME/${REAL_GH_REL}")"; err=""
+  if [ -n "$ga" ] && curl ${CURL_LIMITS} "https://github.com/cli/cli/releases/download/v${gh}/gh_${gh}_linux_$ga.tar.gz" 2>"$tmp/err" | tar -xz -C "$tmp" 2>>"$tmp/err" && install -m 755 "$tmp/gh_${gh}_linux_$ga/bin/gh" "$HOME/${REAL_GH_REL}" 2>>"$tmp/err"; then add installed gh "$HOME/${REAL_GH_REL}"
+${ghWrapperInstallSnippet()}
   else err=$(tail -c 200 "$tmp/err" 2>/dev/null); [ -n "$err" ] || err="download failed"; miss gh "the authorized GitHub workflow" "$err"; fi
   rm -rf "$tmp"`)}else miss gh "the authorized GitHub workflow" "not installed"; fi`);
   if (needsUv) {

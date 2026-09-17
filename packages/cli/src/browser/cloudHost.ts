@@ -70,6 +70,11 @@ export interface CloudHost {
    * teammates). Default: allowed. Set by hand in hosts.json today; a CLI
    * switch must write it through patchHost. Read by cloud/browserSync.ts. */
   browserSync?: boolean;
+  /** Allow a whole cookie jar carry (`cast browser sync --all` on the host)
+   * into this host. Default: refused, because any process on the host can ask
+   * for one, and the laptop cannot prove the listener is the managed Chrome.
+   * Set by hand in hosts.json. Read by cloud/browserSync.ts. */
+  browserSyncAll?: boolean;
 }
 
 export interface HostGitAccessRecord {
