@@ -6,7 +6,12 @@ import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
 
-export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode"] as const;
+export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode", ".cursor", ".pi"] as const;
+/** Single state files that installed skills read; their directories hold other state, so only these files travel. */
+export const SKILL_STATE_FILES: readonly string[] = [".hyperframes/config.json", ".media/preferences.json"];
+/** Personal commands on the laptop PATH. Only portable text scripts travel from here. */
+export const LOCAL_BIN_ROOT = ".local/bin";
+export const LOCAL_BIN_SCRIPT_CAP = 1024 * 1024;
 export const CONTEXT_SIZE_CAP = 256 * 1024 * 1024;
 export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i;
 export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
@@ -31,6 +36,9 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".codex/.personality_migration", ".codex/.sandbox_migration", ".codex/version.json",
   ".grok/logs", ".grok/memtrace", ".grok/relocations", ".grok/upload_queue", ".grok/models_cache.json",
   ".grok/.metadata_version", ".grok/last-copy.txt", ".grok/grove/pin_gc_orphans.json", ".grok/slash-mru.json", ".grok/tip_cursor.json", ".grok/trusted_folders.toml", ".grok/version.json",
+  ".cursor/extensions", ".cursor/projects", ".cursor/chats", ".cursor/ai-tracking", ".cursor/worktrees", ".cursor/snapshots",
+  ".cursor/ide_state.json", ".cursor/argv.json", ".cursor/cli-config.json",
+  ".pi/agent/sessions", ".pi/agent/bin", ".pi/agent/git",
   ".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/tmp", ".gemini/history",
   ".gemini/antigravity/brain", ".gemini/antigravity/code_tracker", ".gemini/antigravity/conversations", ".gemini/antigravity/implicit",
   ".gemini/antigravity/installation_id", ".gemini/antigravity/user_settings.pb", ".gemini/antigravity/browserAllowlist.txt",
@@ -104,6 +112,11 @@ export function isAccountDataPath(rel: string): boolean {
 export function isNativeBinary(bytes: Buffer): boolean {
   const magic = bytes.subarray(0, 4).toString("hex");
   return bytes.subarray(0, 2).toString() === "MZ" || ["7f454c46", "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"].includes(magic);
+}
+
+/** A text script that runs on any host: a shebang first line, no NUL bytes, under the script cap. */
+export function isPortableScript(bytes: Buffer): boolean {
+  return bytes.length <= LOCAL_BIN_SCRIPT_CAP && bytes.subarray(0, 2).toString() === "#!" && !bytes.includes(0);
 }
 
 export function configPatterns(value: string | undefined): string[] {
@@ -211,7 +224,7 @@ export interface ProjectContext {
 
 function isContextFile(rel: string): boolean {
   return AGENT_CONTEXT_ROOTS.some((r) => rel.startsWith(`${r}/`))
-    || /(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents)\//.test(rel)
+    || /(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(rel)
     || INSTRUCTION_FILE_RE.test(path.basename(rel))
     || /\.(?:md|mdx|rst|txt|adoc|org)$/i.test(rel)
     || /(?:^|\/)(?:docs|scripts|agent-scripts|references|assets)\//.test(rel)
@@ -247,7 +260,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const logical = path.resolve(source);
     if (homeRelative(logical, root) === null && homeRelative(logical, home) === null || denied(logical, true)) return;
     const projectPath = homeRelative(logical, root);
-    if (!includeAll && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents)\//.test(projectPath)) return;
+    if (!includeAll && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
     const stat: fs.Stats | undefined = yield { op: "lstat", path: logical };
     if (!stat || denied(logical, stat.isDirectory())) return;
     if (stat.isFile() && !includeAll && !isContextFile(homeRelative(logical, root) ?? homeRelative(logical, home)!)) return;

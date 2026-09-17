@@ -179,10 +179,10 @@ export function kindForPath(rel: string): MirrorKind {
   if (/^(?:claude(?:\.local)?|gemini|grok|opencode)\.md$/.test(base)) return "claude-md";
   if (/(?:^|\/)\.claude\/settings(?:\.local)?\.jsonc?$/.test(lower)) return "claude-settings";
   if (/(?:^|\/)\.codex\/config\.toml$/.test(lower)) return "codex-toml";
-  if (/(?:^|\/)\.codex\/hooks\.json$/.test(lower)) return "codex-hooks";
+  if (/(?:^|\/)\.(?:codex|cursor)\/hooks\.json$/.test(lower)) return "codex-hooks";
   if (/(?:^|\/)\.gemini\/settings\.json$/.test(lower)) return "gemini-settings";
   if (/opencode\.jsonc?$/.test(base)) return "opencode-json";
-  if (/^(?:\.mcp|mcp)\.json$/.test(base) || /^\.(?:claude|codex|gemini|grok|opencode)\/(?:settings|user-settings|config|keybindings)\.jsonc?$/.test(lower) || /^\.grok\/hooks\/[^/]+\.json$/.test(lower) || /^\.claude\/plugins\/(?:installed_plugins|known_marketplaces)\.json$/.test(lower)) return "json-remap";
+  if (/^(?:\.mcp|mcp)\.json$/.test(base) || /^\.(?:claude|codex|gemini|grok|opencode)\/(?:settings|user-settings|config|keybindings)\.jsonc?$/.test(lower) || /^\.pi\/agent\/(?:settings|models|keybindings)\.json$/.test(lower) || /^\.grok\/hooks\/[^/]+\.json$/.test(lower) || /^\.claude\/plugins\/(?:installed_plugins|known_marketplaces)\.json$/.test(lower)) return "json-remap";
   if (/^\.(?:gemini|grok)\/config\.toml$/.test(lower) || /^\.gemini\/commands\/.*\.toml$/.test(lower)) return "toml-remap";
   return "verbatim";
 }
@@ -292,8 +292,22 @@ export function scrubSecrets<T>(value: T, label = ""): ScrubResult<T> {
 // ~/.claude/settings.json
 // ---------------------------------------------------------------------------
 
-type HookGroup = { matcher?: string; hooks?: Array<{ command?: string; [k: string]: unknown }>; [k: string]: unknown };
+type HookEntry = { command?: string; [k: string]: unknown };
+export type HookGroup = { matcher?: string; hooks?: HookEntry[]; command?: string; [k: string]: unknown };
 type Hooks = Record<string, HookGroup[]>;
+
+/**
+ * Keep the entries of one hooks table item that `keep` accepts. Claude and
+ * codex nest entries in matcher groups (`{ matcher, hooks: [...] }`); cursor
+ * lists each entry flat (`{ command, timeout }`). A group comes back reduced
+ * to its kept entries, a flat entry comes back whole, and nothing kept is null.
+ */
+export function filterHookItem(item: HookGroup, keep: (entry: HookEntry) => boolean): HookGroup | null {
+  if (!item || typeof item !== "object") return null;
+  if (!Array.isArray(item.hooks)) return typeof item.command === "string" && keep(item) ? item : null;
+  const entries = item.hooks.filter(keep);
+  return entries.length ? { ...item, hooks: entries } : null;
+}
 
 /** Remove codecast's own entries from a hooks table; drop groups/events left empty. */
 export function dropCodecastHooks(hooks: unknown, home: string): Hooks | undefined {
@@ -301,12 +315,7 @@ export function dropCodecastHooks(hooks: unknown, home: string): Hooks | undefin
   const out: Hooks = {};
   for (const [event, groups] of Object.entries(hooks as Record<string, unknown>)) {
     if (!Array.isArray(groups)) continue;
-    const kept: HookGroup[] = [];
-    for (const g of groups as HookGroup[]) {
-      if (!g || typeof g !== "object") continue;
-      const entries = Array.isArray(g.hooks) ? g.hooks.filter((h) => !isCodecastHookCommand(h?.command, home)) : [];
-      if (entries.length) kept.push({ ...g, hooks: entries });
-    }
+    const kept = (groups as HookGroup[]).map((g) => filterHookItem(g, (h) => !isCodecastHookCommand(h?.command, home))).filter((g): g is HookGroup => g !== null);
     if (kept.length) out[event] = kept;
   }
   return Object.keys(out).length ? out : undefined;
@@ -314,12 +323,10 @@ export function dropCodecastHooks(hooks: unknown, home: string): Hooks | undefin
 
 function remapHooks(hooks: Hooks | undefined, ctx: TransformContext): Hooks | undefined {
   if (!hooks) return undefined;
+  const remap = <T extends HookEntry>(h: T): T => (typeof h.command === "string" ? { ...h, command: remapContextPaths(h.command, ctx) } : h);
   const out: Hooks = {};
   for (const [event, groups] of Object.entries(hooks)) {
-    out[event] = groups.map((g) => ({
-      ...g,
-      hooks: (g.hooks ?? []).map((h) => (typeof h.command === "string" ? { ...h, command: remapContextPaths(h.command, ctx) } : h)),
-    }));
+    out[event] = groups.map((g) => (Array.isArray(g.hooks) ? { ...g, hooks: g.hooks.map(remap) } : remap(g)));
   }
   return out;
 }

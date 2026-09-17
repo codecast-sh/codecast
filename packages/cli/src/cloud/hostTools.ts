@@ -485,8 +485,8 @@ function claudeStdioServers(servers: unknown): Record<string, McpSourceServer> {
  * ~/.codex) `[mcp_servers.*]`, `~/.claude.json` user-scope `mcpServers`, and
  * the project MCP the mirror also ships: every `projects[root].mcpServers`
  * in `~/.claude.json` (a registered repo root, its worktrees, any other
- * root) plus `<root>/.mcp.json` for each registered repo. Servers the laptop
- * disabled itself are skipped. Readiness reconciles pins over this whole
+ * root) plus `.mcp.json` in the laptop home (scoped to the home) and at
+ * each registered repo root. Servers the laptop disabled itself are skipped. Readiness reconciles pins over this whole
  * roster, so a server defined only for a project keeps its pin.
  */
 export function readMcpSources(laptopHome: string, env: NodeJS.ProcessEnv = process.env, projects: readonly ProjectRegistration[] = []): Required<McpSources> {
@@ -509,9 +509,9 @@ export function readMcpSources(laptopHome: string, env: NodeJS.ProcessEnv = proc
     const roots = claude.projects && typeof claude.projects === "object" && !Array.isArray(claude.projects) ? claude.projects as Record<string, any> : {};
     for (const [root, project] of Object.entries(roots)) if (path.isAbsolute(root) && project && typeof project === "object") scoped(root, claudeStdioServers(project.mcpServers));
   }
-  for (const p of live) {
-    const file = readJson(path.join(p.sourceRoot, ".mcp.json"));
-    if (file && typeof file === "object") scoped(p.sourceRoot, claudeStdioServers(file.mcpServers));
+  for (const root of [...(laptopHome ? [laptopHome] : []), ...live.map((p) => p.sourceRoot)]) {
+    const file = readJson(path.join(root, ".mcp.json"));
+    if (file && typeof file === "object") scoped(root, claudeStdioServers(file.mcpServers));
   }
   return out;
 }

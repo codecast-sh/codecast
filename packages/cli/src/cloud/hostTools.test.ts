@@ -359,6 +359,16 @@ trust_level = "trusted"
     expect(src.claudeProjects[worktree]).toEqual({ native: { command: `${worktree}/bin/native` } });
   });
 
+  test("readMcpSources: a home level ~/.mcp.json is a source scoped to the home, and mcpChecks classifies it with the home remapped", () => {
+    write(home, ".mcp.json", JSON.stringify({ mcpServers: { homeTool: { command: `${home}/bin/home-tool`, args: ["--x"] }, mac: { command: "/Applications/M.app/Contents/MacOS/m" }, web: { type: "http", url: "https://x" } } }));
+    const src = readMcpSources(home, {});
+    expect(src.claudeProjects).toEqual({ [home]: { homeTool: { command: `${home}/bin/home-tool`, args: ["--x"] }, mac: { command: "/Applications/M.app/Contents/MacOS/m" } } });
+    const checks = mcpChecks(src, home, "/home/ubuntu");
+    expect(checks.map((c) => `${c.name}@${c.scope}`)).toEqual(["homeTool@/home/ubuntu", "mac@/home/ubuntu"]);
+    expect(checks[0]).toMatchObject({ command: "/home/ubuntu/bin/home-tool", probe: { kind: "path", path: "/home/ubuntu/bin/home-tool" }, underHome: true });
+    expect(checks[1]!.verdict?.status).toBe("unsupported");
+  });
+
   test("mcpChecks spells project definitions the way the mirror writes them on the host (roots remapped, home absolute), collapses identical worktree repeats, and keeps laptop_command laptop-side", () => {
     const proj = path.join(home, "src/repo");
     const worktree = path.join(proj, ".codecast/worktrees/fix");

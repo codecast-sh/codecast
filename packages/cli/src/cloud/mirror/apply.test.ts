@@ -167,6 +167,16 @@ describe("merges", () => {
     expect(Object.keys(merged.hooks.SessionStart[0])).toEqual(["hooks"]);
   });
 
+  test("mergeCodexHooks on cursor's flat hooks.json keeps the host's stable feed entry first, then the laptop's entries", () => {
+    const host = { version: 1, hooks: { sessionStart: [{ command: "/home/ubuntu/.codecast/hooks/stable-feed-cursor.sh", timeout: 30 }, { command: "/home/ubuntu/bin/host-only.sh" }] } };
+    const laptop = { version: 1, hooks: { sessionStart: [{ command: "/home/ubuntu/.cursor/hooks/mine.sh" }], stop: [{ command: "/home/ubuntu/.cursor/hooks/done.sh" }] } };
+    const merged = mergeCodexHooks(laptop, host, home) as any;
+    expect(merged).toEqual({ version: 1, hooks: {
+      sessionStart: [{ command: "/home/ubuntu/.codecast/hooks/stable-feed-cursor.sh", timeout: 30 }, { command: "/home/ubuntu/.cursor/hooks/mine.sh" }],
+      stop: [{ command: "/home/ubuntu/.cursor/hooks/done.sh" }],
+    } });
+  });
+
   test("mergeCodexToml keeps host [projects.*] and `[features] hooks = true`, takes the rest from the laptop", () => {
     const merged = mergeCodexToml('model = "gpt-5"\n\n[projects."/Users/ashot/x"]\ntrust_level = "trusted"\n\n[features]\nweb_search = true\nhooks = false\n', HOST_CODEX_TOML);
     expect(merged).toBe('model = "gpt-5"\n\n[features]\nweb_search = true\nhooks = true\n\n[projects."/home/ubuntu/work/codecast"]\ntrust_level = "trusted"\n');
@@ -221,8 +231,8 @@ describe("applyMirrorBundle", () => {
     expect(modeOf(".claude/skills/mine")).toBe(0o700);
     expect(modeOf(".claude/skills")).toBe(0o700);
     expect(modeOf(MIRROR_STAMP_REL)).toBe(0o600);
-    // An existing directory keeps its mode (seeded by mkdirSync with the default 0755 minus umask).
-    expect(modeOf(".claude")).toBe(0o755 & ~process.umask());
+    // An existing directory keeps its mode (seeded by mkdirSync with the default 0777 minus umask).
+    expect(modeOf(".claude")).toBe(0o777 & ~process.umask());
     const stamp = readStamp(home)!;
     expect(stamp.source_device_id).toBe("laptop-1");
     expect(stamp.files[".claude/skills/mine/SKILL.md"]!.sha).toBe(sha256("# skill\n"));

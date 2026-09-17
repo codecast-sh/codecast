@@ -9,8 +9,8 @@ import { installAllStableHooks } from "../../stableContext.js";
 import { maskPins, readHostMcpOverrides, writeHostMcpOverrides, type HostMcpOverrides, type McpSourceServer } from "../hostMcpOverrides.js";
 import { assertMirrorFileContent, assertSafePath, sha256, type ParsedBundle, type ParsedFile } from "./bundle.js";
 import {
-  dropCodecastHooks, findAllOwnedSections, joinTomlTables, splitTomlTables, stripOwnedSections, tableFirstSegment,
-  type MirrorKind, type TomlTable,
+  dropCodecastHooks, filterHookItem, findAllOwnedSections, joinTomlTables, splitTomlTables, stripOwnedSections, tableFirstSegment,
+  type HookGroup, type MirrorKind, type TomlTable,
 } from "./transform.js";
 
 // ---------------------------------------------------------------------------
@@ -214,9 +214,6 @@ export function deepMerge(current: unknown, mirrored: unknown): unknown {
   return mirrored === undefined ? current : mirrored;
 }
 
-type HookEntry = { command?: string; [k: string]: unknown };
-type HookGroup = { matcher?: string; hooks?: HookEntry[]; [k: string]: unknown };
-
 /**
  * Re-pin the host's codecast hook entries into a (laptop-stripped) hooks
  * table: per event, the host's own groups first — each kept in its own
@@ -234,8 +231,8 @@ export function pinCodecastHooks(mirroredHooks: unknown, currentHooks: unknown, 
       if (!Array.isArray(groups)) continue;
       const own: HookGroup[] = [];
       for (const g of groups as HookGroup[]) {
-        const entries = (g?.hooks ?? []).filter((h) => isCodecastHookCommand(h?.command, home));
-        if (entries.length) own.push({ ...g, hooks: entries });
+        const kept = filterHookItem(g, (h) => isCodecastHookCommand(h?.command, home));
+        if (kept) own.push(kept);
       }
       if (own.length) out[event] = own;
     }
