@@ -72,11 +72,11 @@ test("the band portals into a slot right under the reference's paragraph and the
   click(band.querySelector(".object-reveal__foot")!);
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
-  // The header strip closes as well; the open-the-page bars do not.
+  // The header strip closes as well; the open-the-page hit does not.
   click(content.querySelector("button")!);
   const opens = content.querySelectorAll(".object-reveal__open");
-  expect(opens.length).toBe(2);
-  click(opens[0]!);
+  expect(opens.length).toBe(1);
+  click(opens[0]!.querySelector("a")!);
   expect(content.querySelector(".object-reveal")).not.toBeNull();
   click(content.querySelector(".object-reveal__strip")!);
   expect(content.querySelector(".object-reveal")).toBeNull();

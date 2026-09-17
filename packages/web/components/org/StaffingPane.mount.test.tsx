@@ -50,6 +50,10 @@ async function verifyStaffingPane() {
     onPickProposal: (id: string) => calls.push(`pick:${id}`),
     onHireChief: () => calls.push("hire"),
     onProposeNow: () => calls.push("propose"),
+    meId: "fixture-user-me",
+    introSeen: false,
+    onIntroSeen: () => calls.push("introSeen"),
+    onOpenGlossary: (page: string) => calls.push(`glossary:${page}`),
   };
   const root = createRoot(document.getElementById("root")!);
   const render = (props: any) => act(async () => root.render(React.createElement(StaffingPane, { ...base, ...props })));
@@ -75,7 +79,7 @@ async function verifyStaffingPane() {
   // row carries the evidence line even unselected.
   assert.deepEqual(qa("[data-change-group]").map((g) => g.getAttribute("data-change-group")), ["sync", "projects", "role", "project_meta", "budget", "routine"]);
   assert.equal(qa("[data-change-row]").length, 8);
-  assert.match(q("[data-sync-header]")!.textContent!, /Bring records in line/);
+  assert.match(q("[data-sync-header]")!.textContent!, /Records to bring up to date/);
   assert.equal(q("[data-sync-count]")!.textContent, "2 records");
   assert.equal(qa("[data-sync-evidence]").length, 2);
   assert.match(q('[data-change-row="fixture-change-7"] [data-sync-evidence]')!.textContent!, /evidenceEvery task closed 19 days ago/);
@@ -86,13 +90,56 @@ async function verifyStaffingPane() {
   assert.equal(q('[data-change-row="fixture-change-1"] [data-tenure]')!.getAttribute("data-tenure"), "standing");
   assert.equal(q('[data-change-row="fixture-change-2"] [data-tenure]')!.textContent, "program · ends with pl-88, then review");
   assert.equal(q('[data-change-row="fixture-change-4"] [data-tenure]'), null);
-  // Changes come before flags: the pane's job here is deciding.
+  // S17: the cold read intro over the ask, for a person who has never
+  // accepted a change; its link opens the short page; dismiss never returns.
+  assert.ok(q("[data-proposal-intro]"));
+  assert.match(q("[data-proposal-intro]")!.textContent!, /Nothing moves until you accept a change/);
+  await act(async () => q<HTMLButtonElement>("[data-intro-how]")!.click());
+  assert.equal(calls.pop(), "glossary:how");
+  await act(async () => q<HTMLButtonElement>("[data-intro-dismiss]")!.click());
+  assert.equal(calls.pop(), "introSeen");
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null, introSeen: true });
+  assert.equal(q("[data-proposal-intro]"), null);
+  // A person who accepted a change on any proposal in view never sees it either.
+  const acceptedByMe = { ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c.status === "applied" ? { ...c, decided_by: "fixture-user-me" } : c) };
+  await render({ proposal: acceptedByMe, proposals: [acceptedByMe], selectedChangeId: null, introSeen: false });
+  assert.equal(q("[data-proposal-intro]"), null);
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
+  // S17: the plain ask in front, folded to its first sentence, the whole
+  // letter one click away.
+  assert.equal(q("[data-ask]")!.getAttribute("data-ask"), "folded");
+  assert.match(q("[data-ask]")!.textContent!, /^Growth is past its in-flight limit and the platform project has no owner\./);
+  assert.doesNotMatch(q("[data-ask]")!.textContent!, /Two hires, one move/);
+  await act(async () => q<HTMLButtonElement>("[data-ask-toggle]")!.click());
+  assert.equal(q("[data-ask]")!.getAttribute("data-ask"), "open");
+  assert.match(q("[data-ask]")!.textContent!, /Two hires, one move and one budget change/);
+  await act(async () => q<HTMLButtonElement>("[data-ask-toggle]")!.click());
+  // The groups with counts, in list order, each a jump to its rows; the
+  // records group counts records, the rest count changes.
+  assert.deepEqual(qa("[data-group-summary-row]").map((r) => r.getAttribute("data-group-summary-row")), ["sync", "projects", "role", "project_meta", "budget", "routine"]);
+  assert.match(qa("[data-group-summary-row]")[0].textContent!, /Records to bring up to date2/);
+  assert.match(qa("[data-group-summary-row]")[2].textContent!, /New standing agents2/);
+  // The detail sits behind three controls: findings closed by default, so no
+  // flag row renders until asked; the budget is arithmetic from the tree.
+  assert.equal(qa("[data-flag]").length, 0);
+  assert.equal(q('[data-summary-control="findings"]')!.textContent, "Findings3");
+  await act(async () => q<HTMLButtonElement>('[data-summary-control="budget"]')!.click());
+  assert.ok(q('[data-summary-detail="budget"]'));
+  assert.match(q("[data-budget-today]")!.textContent!, /tokens$/);
+  assert.match(q("[data-budget-lines]")!.textContent!, /@growth/);
+  await act(async () => q<HTMLButtonElement>('[data-summary-control="findings"]')!.click());
+  assert.equal(q('[data-summary-detail="budget"]'), null);
+  // The findings sit above the list, behind their control; in proposal mode
+  // only the ones a change addresses show (all on @growth); the company's
+  // full list is one click away.
   const order = [...document.querySelectorAll("[data-change-row], [data-flag]")].map((el) => el.hasAttribute("data-flag") ? "flag" : "change");
-  assert.equal(order.indexOf("flag") > order.lastIndexOf("change"), true, "flags render after the change list");
-  // In proposal mode only the flags a change addresses show (all on @growth);
-  // the company's full list is one click away.
+  assert.equal(order.lastIndexOf("flag") < order.indexOf("change"), true, "findings render above the change list");
   assert.deepEqual(qa("[data-flag]").map((f) => f.getAttribute("data-flag")), ["overloaded", "cap_hit", "review_stall"]);
-  assert.match(text(), /Flags this proposal addresses/);
+  // The finding reads as words, not the code's name.
+  assert.match(qa('[data-flag="overloaded"]')[0].textContent!, /more reaching it than it can handle/);
+  // The glossary is one click from the summary.
+  await act(async () => q<HTMLButtonElement>("[data-summary-words]")!.click());
+  assert.equal(calls.pop(), "glossary:words");
   assert.equal(q("[data-rationale]"), null);
   assert.match(text(), /Accept all remaining \(6\)/);
   // Only decidable rows carry the action trio.
@@ -114,18 +161,19 @@ async function verifyStaffingPane() {
   await act(async () => q<HTMLButtonElement>('[data-proposal-author="session"]')!.click());
   assert.equal(calls.pop(), "open:fixture-conv-review");
   await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
+  await act(async () => q<HTMLButtonElement>('[data-summary-control="findings"]')!.click());
 
   // A flag on a role focuses its node.
   await act(async () => (qa('[data-flag="overloaded"]')[0] as HTMLButtonElement).click());
   assert.equal(calls.pop(), "node:role:fixture-role-growth");
   // The blocker word is spelled out, not hue alone; a company flag is not a button.
   assert.equal(qa('[data-flag="unowned"]').length, 0);
-  await act(async () => button("See all 5 flags in the company").click());
+  await act(async () => button("See all 5 findings in the company").click());
   assert.deepEqual(qa("[data-flag]").map((f) => f.getAttribute("data-flag")), ["unowned", "overloaded", "cap_hit", "no_charter", "review_stall"]);
   assert.equal(qa('[data-flag="unowned"]')[0].tagName, "DIV");
   assert.equal(qa('[data-flag="unowned"] [data-severity-tag]')[0]?.textContent, "blocker");
   assert.equal(qa('[data-flag="overloaded"] [data-severity-tag]').length, 0);
-  await act(async () => button("Only this proposal's flags").click());
+  await act(async () => button("Only this proposal's findings").click());
 
   // Accept, skip, edit, click to focus.
   await act(async () => qa('[data-change-row="fixture-change-1"] button[aria-label="Accept"]')[0].click());

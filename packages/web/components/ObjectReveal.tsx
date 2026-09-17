@@ -26,8 +26,9 @@ import { PaneControls } from "./stage/PaneControls";
 import { PageIcon, pageAccent } from "./RecentVisitRow";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { hasOpenModal, isEditableTarget, isMac } from "../shortcuts";
+import { hasOpenModal, isEditableTarget } from "../shortcuts";
 import { canOpenBeside } from "../lib/stage";
+import { openIn } from "../lib/openIntent";
 import { useRouter } from "next/navigation";
 import { useTabContext } from "../lib/tabParams";
 import { paneSessionId } from "../lib/stage";
@@ -110,9 +111,9 @@ export function RevealButton({
   );
 }
 
-/** The big "open this page" hit: a real link, so Option-click opens beside
- *  (lib/openIntent) the same way every other in-app object does. `bar` is
- *  the hatch above and below the framed page; `compact` is the card/pill. */
+/** The big "open this page" hit. The label opens the object; the columns
+ *  icon opens it beside, with a tooltip. `bar` sits above the framed page;
+ *  `compact` is the card/pill. */
 export function RevealOpenLink({
   href,
   label,
@@ -126,27 +127,37 @@ export function RevealOpenLink({
 }) {
   const beside = canOpenBeside();
   return (
-    <Link
-      href={href}
-      onClick={(e) => {
-        e.stopPropagation();
-        onOpen?.(e);
-      }}
-      className={variant === "bar" ? "object-reveal__open" : "object-reveal-open-compact"}
-      title={beside ? `${label}. ${isMac ? "Option" : "Alt"}-click opens beside.` : label}
-    >
-      <span className="object-reveal__open-label">
-        {label}
-        <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
-      </span>
-      {beside && (
-        <span className="object-reveal__open-hint">
-          <KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap>
-          <Columns2 className="h-3 w-3" />
-          beside
+    <div className={variant === "bar" ? "object-reveal__open" : "object-reveal-open-compact"}>
+      <Link
+        href={href}
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen?.(e);
+        }}
+        className="object-reveal__open-go"
+        title={label}
+      >
+        <span className="object-reveal__open-label">
+          {label}
+          <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </span>
+      </Link>
+      {beside && (
+        <button
+          type="button"
+          className="object-reveal__open-beside"
+          title="Open beside"
+          aria-label="Open beside"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openIn("split", href);
+          }}
+        >
+          <Columns2 className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+        </button>
       )}
-    </Link>
+    </div>
   );
 }
 
@@ -504,7 +515,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
         <KeyCap size="xs">esc</KeyCap>
       </div>
       </div>
-      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} />
       {/* The grip is only a grip: the rounded bar under the frame, in the
           gutter, always drawn so the resize reads before the pointer finds it. */}
       <div

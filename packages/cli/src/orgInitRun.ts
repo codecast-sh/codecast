@@ -9,12 +9,12 @@ import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
 import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import {
-  ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeDependencies, orgChangeError, orderOrgChanges, parseOrgProposalSpec,
-  type OrgChange, type OrgProposalMode,
+  ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeDependencies, orgChangeError, orgReviseOpError, orderOrgChanges, parseOrgProposalSpec,
+  type OrgChange, type OrgProposalMode, type OrgReviseOp, type OrgSpecChange,
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
@@ -136,7 +136,9 @@ The output is one proposal, posted with \`cast org propose${team} --spec proposa
 ${SPEC_EXAMPLE}
 \`\`\`
 
-Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. The summary is what a founder reads on a phone before opening anything. Lead with the decision you are asking for: what to accept and why, the records to bring in line in one line, one sentence per seat with its tenure, the filings and charters in one line, and the company budget before and after. That paragraph stays under two hundred words; a seat's sizing against the model, its evidence and its caps live in the change, not here. Then the evidence, one line per finding with the numbers that matter. What you could not verify and the findings that are not changes go after it, as a short list, so the ask stays on top.
+Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it.
+
+The summary is the ask. ${ORG_ASK_RULES.reader} ${ORG_ASK_RULES.decision_first} ${ORG_ASK_RULES.invented_words} ${ORG_ASK_RULES.numbers_mean_something} ${ORG_ASK_RULES.cost_in_plain_words} ${ORG_ASK_RULES.readable_once} The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here. After the ask come the evidence, one line per finding, then what you could not verify and the findings that are not changes, as a short list; each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word.
 
 The change kinds:
 
@@ -322,6 +324,68 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
 }
 
+// ── revise (S18) ─────────────────────────────────────────────────────────────
+
+/** JSON from a flag value: inline text when it parses, else a file ('-' is stdin). */
+function readJsonArg(value: string, flag: string): unknown {
+  const text = value === "-" || fs.existsSync(value) ? readSpecText(value) : value;
+  try { return JSON.parse(text); } catch (e: any) { fail(`${flag} is not JSON (inline text or a file): ${e?.message ?? e}`); }
+}
+
+const seqOf = (raw: string, flag: string): number => {
+  const n = Number(String(raw).replace(/^#/, ""));
+  if (!Number.isInteger(n) || n < 1) fail(`${flag} wants a change number like 3 (got ${raw})`);
+  return n;
+};
+
+/** The ops the flags describe, in the order remove, amend, add. Pure over
+ *  `readJson`, so the test drives it; `--ops` hands the list over as is,
+ *  with `--note` filled in where an op has none. */
+export function buildReviseOps(options: any, readJson: (value: string, flag: string) => unknown = readJsonArg): OrgReviseOp[] {
+  const note = options.note ? { note: String(options.note) } : {};
+  let ops: OrgReviseOp[] = [];
+  if (options.ops) {
+    const raw = readJson(options.ops, "--ops");
+    if (!Array.isArray(raw)) fail("--ops wants a JSON list of ops");
+    ops = raw.map((o: any) => (o && typeof o === "object" && options.note && o.note === undefined ? { ...o, ...note } : o));
+  } else {
+    for (const r of options.remove ?? []) ops.push({ op: "remove", seq: seqOf(r, "--remove"), ...note });
+    if (options.amend !== undefined) {
+      if (options.edits === undefined && !options.rationale) fail("--amend wants --edits (a JSON patch over the change's keys), --rationale <text>, or both");
+      ops.push({ op: "amend", seq: seqOf(options.amend, "--amend"), ...(options.edits !== undefined ? { edits: readJson(options.edits, "--edits") as Record<string, unknown> } : {}), ...(options.rationale ? { rationale: String(options.rationale) } : {}), ...note });
+    } else if (options.edits !== undefined || options.rationale) fail("--edits and --rationale go with --amend <seq>");
+    for (const file of options.add ?? []) {
+      const raw = readJson(file, "--add");
+      for (const c of Array.isArray(raw) ? raw : [raw]) ops.push({ op: "add", change: c as OrgSpecChange, ...note });
+    }
+  }
+  if (!ops.length) fail("Nothing to do: give --remove <seq>, --amend <seq> with --edits or --rationale, --add <file>, or --ops <file>");
+  const faults = ops.map((o, i) => { const f = orgReviseOpError(o); return f ? `  - ops[${i}]: ${f}` : null; }).filter(Boolean);
+  if (faults.length) fail(`The revise is not valid:\n${faults.join("\n")}`);
+  return ops;
+}
+
+export async function revise(deps: OrgInitDeps, ref: string, options: any): Promise<void> {
+  if (!/^op-\d+$/.test(ref)) fail(`Usage: cast org revise op-N [--remove <seq>] [--amend <seq> --edits <json> | --rationale <text>] [--add <file>] [--note <text>]; got ${ref}`);
+  const ops = buildReviseOps(options);
+  const from_session = deps.callingSession();
+  if (!from_session) fail("cast org revise runs inside the session that posted the proposal (or the standing session of the role that did); at a plain shell, decide it on the org page instead");
+  const r = await deps.cliPost("/cli/org/proposal/revise", { proposal: ref, ops, from_session });
+  if (!r || r.error) fail(r?.error ?? `Could not revise ${ref}.`);
+  if (options.json) { console.log(JSON.stringify({ ...r, url: proposalUrl(deps, ref) }, null, 2)); return; }
+  const { decided, total } = decidedCount(r);
+  console.log(`${fmt.success("✓")} ${fmt.highlight(ref)} revised ${fmt.muted(`· ${decided} of ${total} decided`)}`);
+  for (const j of r.revisions ?? []) console.log(`  ${revisionLine(j)}`);
+  console.log(`${fmt.muted("The person decides what is left on the org page:")} ${fmt.accent(proposalUrl(deps, ref))}`);
+}
+
+/** One journal entry as a line: what happened to which change, and the note. */
+function revisionLine(j: any): string {
+  const what = j.op === "removed" ? fmt.error("removed") : j.op === "added" ? fmt.success("added") : fmt.accent("amended");
+  const detail = j.op === "amended" && j.was && j.was !== j.line ? `${j.line} ${fmt.muted(`(was: ${j.was})`)}` : j.line;
+  return `${what} ${fmt.muted(`#${j.seq}`)} ${detail}${j.note ? ` ${fmt.muted(`· ${j.note}`)}` : ""}`;
+}
+
 /** The list carries `counts`, the get carries the change rows; one reading. */
 function decidedCount(p: any): { decided: number; total: number } {
   if (p.counts && typeof p.counts.total === "number") return { decided: p.counts.decided ?? 0, total: p.counts.total };
@@ -387,11 +451,15 @@ export async function showProposal(deps: OrgInitDeps, ref: string, options: any)
     const dep = row.depends ?? depends[row.seq];
     if (dep) console.log(`      ${fmt.muted(dep)}`);
   }
+  if (p.revisions?.length) {
+    console.log(fmt.muted("  revised by its author, in order:"));
+    for (const j of p.revisions) console.log(`    ${revisionLine(j)}`);
+  }
   console.log(`${fmt.muted("Decide it on the org page:")} ${fmt.accent(url)}`);
 }
 
 function statusTag(status?: string): string {
-  return status === "applied" ? fmt.success("applied") : status === "failed" ? fmt.error("failed") : status === "accepted" ? fmt.success("accepted") : status === "skipped" ? fmt.muted("skipped") : fmt.muted(status ?? "proposed");
+  return status === "applied" ? fmt.success("applied") : status === "failed" ? fmt.error("failed") : status === "accepted" ? fmt.success("accepted") : status === "skipped" ? fmt.muted("skipped") : status === "removed" ? fmt.muted("removed") : fmt.muted(status ?? "proposed");
 }
 
 /** Template stacks (ds-N) keep the decision stack path. */

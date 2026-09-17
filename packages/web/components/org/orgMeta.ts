@@ -52,12 +52,51 @@ export function parentName(tree: OrgTree, ref: OrgParentRef): string {
     : tree.roles.find((r) => r._id === ref.role_id)?.name ?? "a role";
 }
 
+/**
+ * What each kind of change is, in the reader's words (org-staffing.md S17):
+ * the group header the pane shows, and the one sentence that says what
+ * accepting one does. The reader has never heard of a role, a scope or a
+ * budget, so every label names the thing in plain words and the sentence
+ * carries the mechanism. The glossary is the one place a word is defined;
+ * these sentences use the words, they do not define them.
+ */
+export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; describe: string }> = {
+  plan_status: { label: "Plans to close or reopen", describe: "Marks a plan finished, abandoned or active again, because the evidence says the record is behind what happened." },
+  task_status: { label: "Tasks to close or reopen", describe: "Marks a task done, dropped, open or backlog, so the board says what actually happened to it." },
+  project_status: { label: "Projects to pause or close", describe: "Marks a project paused, finished or active again." },
+  projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
+  file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
+  role: { label: "New standing agents", describe: "Adds a standing agent with a name, an area of work to look after, and a daily limit." },
+  move: { label: "Reporting line changes", describe: "Moves a standing agent under a different person or agent, and can change what it looks after." },
+  scope: { label: "Area of work changes", describe: "Adds or removes the projects and plans a standing agent looks after." },
+  budget: { label: "Daily limit changes", describe: "Raises or lowers how much an agent may do in one day." },
+  trust: { label: "Trust changes", describe: "Changes how far an agent may act on its own: understand, decide, or direct." },
+  routine: { label: "Scheduled routines", describe: "Gives an agent a job it runs on a schedule." },
+  project_meta: { label: "Project charters", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
+  adopt: { label: "Sessions adopted as standing agents", describe: "Makes an existing session the standing session of an agent." },
+  retire: { label: "Agents retired", describe: "Closes a seat; its sessions fall back to their owners." },
+};
+
+/** The kind's label, total: a kind this build does not know still reads as a
+ *  sentence, never as a build error. */
+export function kindLabel(kind: string | undefined): string {
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.label ?? "Changes this version cannot show yet";
+}
+
+/** The kind's one sentence, total, with the unknown kind named so the reader
+ *  can quote it. */
+export function kindDescription(kind: string | undefined): string {
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update, or ask the agent what it does.`;
+}
+
 /** The one line a change reads as in the pane's list and in a chip's title:
  *  the shared describer (the words the CLI walk uses too), sentence cased.
  *  Total: a kind this build does not know (a newer server) still reads as a
- *  line, so the pane and the chart degrade to a chip instead of throwing. */
+ *  sentence, so the pane and the chart degrade to a readable row instead of
+ *  throwing or printing a build error. */
 export function changeLine(change: OrgChange): string {
-  const line = describeOrgChange(change) ?? `${String((change as { kind?: unknown }).kind ?? "change")} (not supported in this build)`;
+  const kind = (change as { kind?: unknown }).kind;
+  const line = describeOrgChange(change) ?? `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;
   return line.charAt(0).toUpperCase() + line.slice(1);
 }
 

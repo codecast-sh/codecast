@@ -21,7 +21,7 @@ import { spawnSessionWithPrompt } from "../../lib/spawnSession";
 import { resolveComposeProjectPath } from "../../store/inboxStore";
 import { useOrgSessionsUnder } from "../../hooks/useOrgSessionsUnder";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
-import { useIsPhone } from "../../hooks/useIsPhone";
+import { useIsPhone, useMinWidth } from "../../hooks/useIsPhone";
 import { isConvexId } from "../../lib/entityLinks";
 import { toast } from "sonner";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
@@ -31,16 +31,19 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { cn } from "../../lib/utils";
 import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
-import { OrgScopePanel, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
+import { OrgScopePanel, STAFFING_THREAD_W, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
+import { ProposalThread, type ProposalThreadLayout } from "./ProposalThread";
+import { latestRevisionAt, proposalThread, revisedSince } from "./staffingRevise";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
 import { OrgEmptyCanvas, OrgGuide, orgGuideSteps } from "./OrgFirstOpen";
+import { OrgGlossary, type GlossaryPage } from "./OrgGlossary";
 import { orgTreeReadState } from "./orgReadState";
 import { retireToastText, type UnseatChoice } from "./RetireRoleConfirm";
 import { reviewRunState, type OrgReviewRun } from "./staffingModel";
 import { changeNodeId, composeParam, findChiefOfStaff, orgPreviewEnabled, pickProposal, proposalParam, proposalProgress, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
-import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
+import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
 import { StateTally } from "./OrgNodeCards";
 import { OrgButton } from "./OrgButton";
@@ -118,6 +121,7 @@ export function OrgPageInner() {
     (st) => st.currentSessionId,
     (st) => st.teams,
     (st) => st.clientState.ui?.org_nux_seen,
+    (st) => st.clientState.ui?.org_intro_seen,
     (st) => st.clientState.ui?.org_review_run?.since,
     (st) => st.clientState.ui?.org_review_run?.session_id,
     // The review session's liveness, two fields of one row (never the row):
@@ -154,7 +158,7 @@ export function OrgPageInner() {
   // slice bodies the store uses. Never a fallback for missing data.
   const preview = orgPreviewEnabled(searchParams.toString(), ORG_PREVIEW_DEV);
   const [previewTree, setPreviewTree] = useState<OrgTree>(ORG_FIXTURE);
-  const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>([ORG_STAFFING_FIXTURE_PROPOSAL]);
+  const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>([ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL]);
   // The slot holds one tree. After a workspace switch it still holds the
   // previous workspace's until the new answer lands; a tree that names another
   // workspace is not this page's data, so paint the skeleton for that round
@@ -206,6 +210,9 @@ export function OrgPageInner() {
   // Opens on its own once, when the tree lands with no roles and the pref is
   // unset; "How this page works" reopens it; Done or dismiss writes the pref.
   const [guide, setGuide] = useState<{ step: number } | null>(null);
+  // The glossary and the short "how this works" page (S17): one dialog, opened
+  // from the pane and from this header.
+  const [glossary, setGlossary] = useState<GlossaryPage | null>(null);
   const guideOffered = useRef(false);
   const proposals = useMemo<OrgProposalRow[]>(() => preview ? previewProposals : joinProposals(s.orgProposals, s.orgProposalChanges), [preview, previewProposals, s.orgProposals, s.orgProposalChanges]);
   const workspaceProposals = useMemo(() => {
@@ -479,13 +486,20 @@ export function OrgPageInner() {
   // -------- staffing actions
   /** The preview decides on its local copy; live, the store action flips the
    *  row and rides dispatch to orgProposals.decide. */
+  // The pane's cold read intro (S17) goes for good once a person dismisses
+  // it or accepts a change; the pref follows them to every device.
+  const introSeen = s.clientState.ui?.org_intro_seen === true;
+  const markIntroSeen = useCallback(() => {
+    if (!preview && !useInboxStore.getState().clientState.ui?.org_intro_seen) useInboxStore.getState().updateClientUI({ org_intro_seen: true });
+  }, [preview]);
   const decideChange = useCallback((changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => {
+    if (verdict === "accept") markIntroSeen();
     if (preview) {
       setPreviewProposals((rows) => rows.map((p) => ({ ...p, changes: p.changes.map((c) => c._id === changeId ? { ...c, status: verdict === "accept" ? "applied" : "skipped", decided_at: Date.now(), ...(edits ? { edits } : {}) } : c) })));
       return;
     }
     useInboxStore.getState().decideOrgProposalChange(changeId, verdict, edits);
-  }, [preview]);
+  }, [preview, markIntroSeen]);
   /** Withdraw the replaced proposal from its own line (S4): the preview
    *  flips its local copy; live, the store action rides dispatch to
    *  orgProposals.withdraw. */
@@ -499,12 +513,13 @@ export function OrgPageInner() {
   }, [preview]);
   const acceptAll = useCallback((proposalId: string, opts?: { kinds?: string[] }) => {
     const kinds = opts?.kinds?.length ? new Set(opts.kinds) : null;
+    markIntroSeen();
     if (preview) {
       setPreviewProposals((rows) => rows.map((p) => p._id !== proposalId ? p : { ...p, changes: p.changes.map((c) => c.status === "proposed" && (!kinds || kinds.has(c.change.kind)) ? { ...c, status: "applied" as const, decided_at: Date.now() } : c) }));
       return;
     }
     useInboxStore.getState().acceptAllOrgProposal(proposalId, opts);
-  }, [preview]);
+  }, [preview, markIntroSeen]);
   /** Click on a change: focus its ghost (the scalar) and, when its subject
    *  already exists on the chart, highlight that node. */
   const selectChange = useCallback((changeId: string | null) => {
@@ -631,12 +646,70 @@ export function OrgPageInner() {
 
   const nodeSelected = !!selectedNode && selectedNode.kind !== "cluster";
   const panelOpen = nodeSelected || staffingOpen;
-  const panelWidth = panelOpen && !phone ? PANEL_W : 0;
+  const panelWidth = panelOpen && !phone ? panelW : 0;
   // On the phone the pane is a bottom sheet over the same canvas: it grows
   // to 90% while the composer has focus so the thread and the keyboard fit,
   // and the graph centres a focused ghost in what stays free above it.
   const [composerFocused, setComposerFocused] = useState(false);
-  const sheetFraction = panelOpen && phone ? (composerFocused ? 0.9 : 0.62) : 0;
+  // -------- the proposal's conversation (org-staffing.md S18)
+  // The author's thread renders with the same conversation view a session
+  // uses. Where: its own column beside the list when the window fits both
+  // and a strip of chart; under the list when it does not; on the phone the
+  // list leads and the conversation is the sheet's second view, one tap
+  // away, because the two cannot share a phone screen and the person came
+  // here to decide the list.
+  const threadRef = useMemo(() => proposal && proposal.status === "open" ? proposalThread(proposal, tree) : null, [proposal, tree]);
+  const wideForThread = useMinWidth(PANEL_W + STAFFING_THREAD_W + 480);
+  const threadLayout: ProposalThreadLayout = phone ? "phone" : wideForThread ? "side" : "stack";
+  const [phoneView, setPhoneView] = useState<"changes" | "discuss">("changes");
+  useWatchEffect(() => { setPhoneView("changes"); }, [proposal?._id, panelOpen]);
+  // What the author revised since the reader last looked: a watermark set
+  // when the proposal opens (so a reload announces nothing old), moved to now
+  // by "Got it" or by opening the list on the phone.
+  const [revisedSeen, setRevisedSeen] = useState<{ proposalId: string; at: number } | null>(null);
+  useWatchEffect(() => {
+    if (proposal && revisedSeen?.proposalId !== proposal._id) setRevisedSeen({ proposalId: proposal._id, at: latestRevisionAt(proposal.changes) });
+  }, [proposal?._id]);
+  const revisedRows = useMemo(() => proposal && revisedSeen?.proposalId === proposal._id ? revisedSince(proposal.changes, revisedSeen.at) : [], [proposal, revisedSeen]);
+  const seenRevisions = useCallback(() => { if (proposal) setRevisedSeen({ proposalId: proposal._id, at: Date.now() }); }, [proposal]);
+  const aboutChange = useMemo(() => focusChangeId ? proposal?.changes.find((c) => c._id === focusChangeId) ?? null : null, [focusChangeId, proposal]);
+  /** The person's words into the thread, with the change they were looking
+   *  at: the bubble paints at once, dispatch runs orgProposals.say. */
+  const say = useCallback((threadConvId: string, shortId: string, seq: number | null, body: string) => {
+    if (preview) { toast.success("Preview: nothing is sent"); return; }
+    useInboxStore.getState().sayOnOrgProposal(threadConvId, shortId, seq, body, `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  }, [preview]);
+  /** A row's "Ask about this": the row is what the next message is about,
+   *  and the composer comes to hand (the phone flips to the conversation). */
+  const askAbout = useCallback((c: OrgProposalChange) => {
+    selectChange(c._id);
+    if (phone) setPhoneView("discuss");
+    else requestAnimationFrame(() => (document.querySelector("[data-proposal-thread] textarea") as HTMLTextAreaElement | null)?.focus());
+  }, [selectChange, phone]);
+  const clearAbout = useCallback(() => selectChange(null), [selectChange]);
+  const backToList = useCallback(() => { setPhoneView("changes"); seenRevisions(); }, [seenRevisions]);
+  const openDiscuss = useCallback(() => setPhoneView("discuss"), []);
+  const threadNode = threadRef && proposal ? (
+    <ProposalThread
+      proposal={proposal}
+      thread={threadRef}
+      layout={threadLayout}
+      about={aboutChange}
+      onClearAbout={clearAbout}
+      onSay={say}
+      onOpenSession={openSession}
+      onResume={resumeChief}
+      revisedRows={revisedRows}
+      onBackToList={backToList}
+      preview={preview}
+      autoFocus={phone && phoneView === "discuss"}
+    />
+  ) : null;
+  const phoneDiscuss = phone && phoneView === "discuss" && !!threadNode;
+  const sheetFraction = panelOpen && phone ? (composerFocused || phoneDiscuss ? 0.9 : 0.62) : 0;
+  const effectivePanelMode: OrgPanelMode = nodeSelected ? panelMode : "staffing";
+  const threadBeside = !phone && threadLayout === "side" && effectivePanelMode === "staffing" && !!threadNode;
+  const panelW = threadBeside ? PANEL_W + STAFFING_THREAD_W : PANEL_W;
   const staffingCount = proposal ? proposalProgress(proposal).remaining : 0;
   const staffingPane = tree ? (
     <StaffingPane
@@ -664,7 +737,15 @@ export function OrgPageInner() {
       onHireChief={hireChief}
       onProposeNow={proposeNow}
       onResumeChief={resumeChief}
+      threadNode={threadRef ? (threadLayout === "stack" ? threadNode : null) : undefined}
+      discuss={phone && threadRef ? { name: threadRef.name, updated: revisedRows.length, onOpen: openDiscuss } : null}
+      onAskAbout={threadRef ? askAbout : undefined}
+      revised={threadRef ? { rows: revisedRows, who: threadRef.name, onSeen: seenRevisions } : undefined}
       link={link}
+      meId={meId}
+      introSeen={introSeen}
+      onIntroSeen={markIntroSeen}
+      onOpenGlossary={setGlossary}
     />
   ) : null;
   const panelProps = tree ? {
@@ -680,7 +761,9 @@ export function OrgPageInner() {
     onSelectNode: setSelectedId,
     mode: panelMode,
     onMode: setPanelMode,
-    staffing: staffingPane,
+    staffing: phoneDiscuss ? threadNode : staffingPane,
+    staffingAside: threadBeside ? threadNode : undefined,
+    staffingFill: phoneDiscuss,
     staffingCount,
     changes: proposal?.status === "open" ? proposal.changes : undefined,
     focusChangeId,
@@ -702,6 +785,9 @@ export function OrgPageInner() {
             <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
             {tree && (
               <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
+            )}
+            {tree && (
+              <button type="button" onClick={() => setGlossary("words")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} title="The eight words this page uses, each in one sentence" data-org-glossary-open>Words</button>
             )}
           </p>
         </div>
@@ -846,7 +932,7 @@ export function OrgPageInner() {
 
         {/* panel: right on desktop, bottom sheet on phone */}
         {panelOpen && panelProps && !phone && (
-          <aside className="absolute right-0 top-0 bottom-0 z-20 border-l min-h-0 org-panel-in shadow-[-16px_0_40px_-24px_rgba(0,0,0,0.45)]" style={{ width: PANEL_W, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }}>
+          <aside className="absolute right-0 top-0 bottom-0 z-20 border-l min-h-0 org-panel-in shadow-[-16px_0_40px_-24px_rgba(0,0,0,0.45)] transition-[width] duration-200" style={{ width: panelW, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }}>
             <OrgScopePanel {...panelProps} />
           </aside>
         )}
@@ -935,6 +1021,7 @@ export function OrgPageInner() {
 
       {/* first open guide (S14) */}
       {guide && tree && <OrgGuide steps={guideSteps} step={guide.step} onStep={(i) => setGuide({ step: i })} onDone={closeGuide} onAction={(id) => { if (id === "open_proposal") setPanelMode("staffing"); }} />}
+      <OrgGlossary open={glossary} onClose={() => setGlossary(null)} tree={tree} health={health} proposal={proposal} />
 
       {/* context menu */}
       <ContextMenu state={menu}>

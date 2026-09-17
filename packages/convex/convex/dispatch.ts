@@ -1077,6 +1077,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   retryPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
     retryPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
 
+  // A person's message from the staffing pane into the thread bound to a
+  // proposal (org-staffing.md S18). orgProposals.say wraps it with the row it
+  // is about and enqueues it on the message rail under the pane's client id.
+  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId]: [string, string, number | null, string, string]) => {
+    return await ctx.runMutation!((api as any).orgProposals.say, {
+      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}),
+    });
+  },
+
   sendMessage: async (
     ctx,
     userId,

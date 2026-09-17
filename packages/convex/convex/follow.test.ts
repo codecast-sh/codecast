@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { FOLLOW_LEASE_MS, follow, followersOf, following, reportView, unfollow, viewOf } from "./follow";
+import { follow, followersOf, following, reportView, unfollow, viewOf } from "./follow";
+import { FOLLOW_LEASE_MS } from "@codecast/shared/contracts/follow";
 
 // Follow mode over the fake db: the lease, the write gate, and the access rule.
 

@@ -4163,6 +4163,7 @@ cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).org
 cliRoute("/cli/org/proposal/decide", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decide, body));
 cliRoute("/cli/org/proposal/accept-all", async (ctx, body) => ctx.runMutation((api as any).orgProposals.acceptAll, body));
 cliRoute("/cli/org/proposal/withdraw", async (ctx, body) => ctx.runMutation((api as any).orgProposals.withdraw, body));
+cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api as any).orgProposals.revise, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the

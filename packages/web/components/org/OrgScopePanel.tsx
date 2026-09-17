@@ -57,6 +57,12 @@ export type OrgScopePanelProps = {
   onMode: (mode: OrgPanelMode) => void;
   /** The staffing pane, rendered in the body when mode is "staffing". */
   staffing: React.ReactNode;
+  /** The proposal's conversation in its own column beside the body, on a
+   *  desktop wide enough for both (org-staffing.md S18). */
+  staffingAside?: React.ReactNode;
+  /** The body is one full height view with its own scroll (the phone
+   *  sheet's conversation view), not the padded scroll of the pane. */
+  staffingFill?: boolean;
   /** Changes still to decide on the open proposal, shown on the tab. */
   staffingCount?: number;
   /** The open proposal's changes: a project charter or a filing renders as a
@@ -183,7 +189,7 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
   // A proposal's chips on the rows they name (S5): a project charter on its
   // project's row; a filing on its plan's row when the scope has the plan,
   // else on its project's row. Decided ones are gone from here.
-  const open = useMemo(() => (changes ?? []).filter((c) => c.status !== "skipped" && c.status !== "applied"), [changes]);
+  const open = useMemo(() => (changes ?? []).filter((c) => c.status !== "skipped" && c.status !== "applied" && c.status !== "removed"), [changes]);
   const chipsOnProject = (id: string): OrgGhostChip[] => {
     const row = { id, title: nameOfProject(id), short_id: (projectById.get(id) as { short_id?: string } | undefined)?.short_id };
     return open
@@ -572,7 +578,8 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
           <X className="w-4 h-4" />
         </button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-8" data-main-scroll data-panel-mode={mode}>
+      <div className="flex-1 min-h-0 flex">
+      <div className={cn("flex-1 min-w-0 min-h-0", mode === "staffing" && props.staffingFill ? "flex flex-col overflow-hidden" : "overflow-y-auto px-4 pt-4 pb-8")} data-main-scroll data-panel-mode={mode}>
         {mode === "staffing" ? props.staffing : node && (
           <>
             {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} changes={props.changes} focusChangeId={props.focusChangeId} onSelectChange={props.onSelectChange} />}
@@ -583,8 +590,17 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
           </>
         )}
       </div>
+      {mode === "staffing" && props.staffingAside && (
+        <div className="shrink-0 min-h-0 border-l flex flex-col" style={{ width: STAFFING_THREAD_W, borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }} data-staffing-aside>
+          {props.staffingAside}
+        </div>
+      )}
+      </div>
     </div>
   );
 }
+
+/** The conversation column's width beside the 380px pane (S18). */
+export const STAFFING_THREAD_W = 400;
 
 

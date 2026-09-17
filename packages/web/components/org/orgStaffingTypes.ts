@@ -3,9 +3,9 @@
 // shapes; the pane, the fixture, the model helpers and the store slots agree
 // on one definition here.
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
-import type { OrgChange, OrgChangeKind, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode } from "@codecast/shared/contracts/orgProposal";
+import type { OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
 
-export type { HealthFlag, OrgChange, OrgChangeKind, OrgChangeStatus, OrgEvidenceLink };
+export type { HealthFlag, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
 
 // ---------------------------------------------------------------- org.health
 
@@ -76,6 +76,9 @@ export type OrgProposalChange = {
   applied_at?: number;
   /** What this row needs from, or gives to, another row of the proposal (orgChangeDependencies). */
   depends?: string;
+  /** What the author's revise did to this row (S18): removed (the row stays,
+   *  struck), amended (`before` is what it read as) or added. */
+  revision?: OrgChangeRevision;
 };
 
 /** Who wrote a proposal (S15). The server stores kind and id; the rest is
@@ -114,6 +117,10 @@ export type OrgProposalRow = {
   superseded_by?: OrgProposalPointer;
   created_at: number;
   resolved_at?: number;
+  /** The author's thread bound to this proposal (S18): the pane embeds it.
+   *  null = a person posted it and there is no agent to talk to. Absent on a
+   *  row from before the field: the web derives it from the author. */
+  thread?: OrgProposalThread | null;
   /** orgProposals.list and get both stamp these. */
   link?: string;
   counts?: { total: number; decided: number; applied: number; failed: number; skipped: number };
