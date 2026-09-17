@@ -455,7 +455,8 @@ async function handle(m) {
 
     case "tabs.list": {
       await loadOwnership();
-      const tabs = await bounded(chrome.tabs.query({}), "Chrome tabs.query", 8000);
+      // Under the host's 40 s listing budget; a frozen process answers when it wakes.
+      const tabs = await bounded(chrome.tabs.query({}), "Chrome tabs.query", 30_000);
       return { tabs: tabs.filter((t) => t.id !== undefined).map(describeTab) };
     }
 
