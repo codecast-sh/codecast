@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { canAccessConversation } from "./lib/access";
+import { FOLLOW_LEASE_MS } from "@codecast/shared/contracts/follow";
 
 // Follow mode: one person mirrors another's view until they stop.
 //
@@ -14,11 +15,6 @@ import { canAccessConversation } from "./lib/access";
 // uses. A view names a conversation only to a follower who could open it
 // themselves; otherwise the follower learns that the leader is somewhere they
 // cannot go, and nothing more.
-
-/** A lease older than this is dead: the follower's window closed or slept. */
-export const FOLLOW_LEASE_MS = 30_000;
-/** The follower renews at this cadence, well inside the lease. */
-export const FOLLOW_RENEW_MS = 10_000;
 
 async function requireAuth(ctx: any): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx);

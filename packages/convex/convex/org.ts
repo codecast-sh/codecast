@@ -2,7 +2,7 @@ import { query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { createTeamFeedFilter, isTeamMember } from "./privacy";
+import { checkConversationAccess, createTeamFeedFilter, isTeamMember } from "./privacy";
 import { classifyWorkStates } from "./conversations";
 import { isOrphanOrSubagent, type WorkState } from "./inboxFilters";
 import { nestParentIdOf } from "./ccAccountsShared";
@@ -349,6 +349,63 @@ export const sessionsUnder = query({
     const limit = Math.min(Math.max(1, args.limit ?? PAGE_DEFAULT), 200);
     const page = all.slice(offset, offset + limit);
     return { sessions: page, next_cursor: offset + limit < all.length ? String(offset + limit) : undefined };
+  },
+});
+
+// ── The hands a standing session started (scopes-and-feed.md F4.2) ───────────
+//
+// A message a person writes into a scope either gets its answer there or
+// starts a hand, and the hand renders under that message as a card. The card
+// is a render of rows that already exist: a hand is a conversation whose
+// `spawned_by_conversation_id` is the standing session and whose
+// `org_role_id` is set (spawn.ts recordHandStart). The web places each hand
+// under the wake whose turn started it by `started_at`, so the rows come with
+// that and with the same live state the org tree paints. Capped: a standing
+// session that has started more hands than this keeps only the newest, and
+// the oldest wake cards lose their card before anything else does.
+export const HANDS_STARTED_CAP = 200;
+
+export type HandStarted = StandingState & {
+  _id: Id<"conversations">;
+  short_id: string | null;
+  title: string;
+  state: WorkState;
+  started_at: number;
+  updated_at: number;
+  task_short_id: string | null;
+};
+
+export const handsStartedBy = query({
+  args: { api_token: v.optional(v.string()), conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<HandStarted[]> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    const standing = await ctx.db.get(args.conversation_id);
+    if (!standing || (await checkConversationAccess(ctx, userId, standing)) === "denied") return [];
+    const rows: any[] = await ctx.db
+      .query("conversations")
+      .withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", args.conversation_id))
+      .order("desc")
+      .take(HANDS_STARTED_CAP);
+    const hands = rows.filter((c) => c.org_role_id);
+    if (hands.length === 0) return [];
+    const now = Date.now();
+    const states = await classifyWorkStates(ctx, userId, hands, new Map(), now);
+    const out: HandStarted[] = [];
+    for (const c of hands) {
+      const task = c.active_task_id ? await ctx.db.get(c.active_task_id) : null;
+      out.push({
+        _id: c._id,
+        short_id: c.short_id ?? null,
+        title: c.title ?? "",
+        state: states.get(c._id.toString()) ?? "idle",
+        started_at: c.started_at,
+        updated_at: c.updated_at,
+        task_short_id: task?.short_id ?? null,
+        ...stateOf(c),
+      });
+    }
+    return out.sort((a, b) => a.started_at - b.started_at);
   },
 });
 
@@ -1025,6 +1082,51 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
 
 // org.brief — facts plus the narrative the role keeps (T2). Any member of the
 // boundary may read it; the CLI resolves @handle to the role first.
+// org.roleCard (docs/architecture/session-characters.md S4): what a hover
+// card needs to say who a role is and what it does, in one bounded read: the
+// face, the name and handle, status and tenure, the charter's first paragraph,
+// the scope as titles, who it reports to, trust, and today's use. Lean on
+// purpose: `brief` computes the whole board; this answers a hover.
+export const roleCard = query({
+  args: { role_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, undefined);
+    if (!userId) return null;
+    const role = await resolveRoleRef(ctx, args.role_id);
+    if (!role || !(await userCanAccessRole(ctx, userId, role))) return null;
+    const [projects, plans, charterDoc, anchor] = await Promise.all([
+      Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id))),
+      Promise.all((role.scope?.plan_ids ?? []).map((id: any) => ctx.db.get(id))),
+      role.charter_doc_id ? ctx.db.get(role.charter_doc_id) : Promise.resolve(null),
+      role.anchor_id ? ctx.db.get(role.anchor_id) : Promise.resolve(null),
+    ]);
+    const standing: any = (anchor as any)?.conversation_id ? await ctx.db.get((anchor as any).conversation_id) : null;
+    let reports_to: { kind: "user" | "role"; name: string; short_id?: string; avatar?: string } | null = null;
+    if (role.reports_to?.kind === "user") {
+      const u: any = await ctx.db.get(role.reports_to.user_id);
+      reports_to = u ? { kind: "user", name: u.name ?? u.email ?? "someone", avatar: u.image ?? u.github_avatar_url ?? undefined } : null;
+    } else if (role.reports_to?.kind === "role") {
+      const r: any = await ctx.db.get(role.reports_to.role_id);
+      reports_to = r ? { kind: "role", name: r.name, short_id: r.short_id, avatar: avatarOf(r) } : null;
+    }
+    const charterText: string = ((charterDoc as any)?.content ?? role.charter ?? "").trim();
+    // The first paragraph, minus a leading markdown heading, capped for a card.
+    const charter = charterText.replace(/^#+[^\n]*\n+/, "").split(/\n\s*\n/)[0]?.trim().slice(0, 280) ?? "";
+    return {
+      _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role),
+      status: role.status, tenure: role.tenure ?? { kind: "standing" }, trust: role.trust ?? "understand",
+      charter, reports_to,
+      scope: {
+        projects: projects.filter(Boolean).map((p: any) => ({ id: p._id.toString(), title: p.title, short_id: p.short_id ?? null })),
+        plans: plans.filter(Boolean).map((p: any) => ({ id: p._id.toString(), title: p.title, short_id: p.short_id })),
+      },
+      caps: role.caps ?? null, counters: role.counters ?? null, last_wake_at: role.last_wake_at ?? null,
+      standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id?.toString() ?? null,
+      standing_state: standing ? { line: standing.thread_state ?? null, status: standing.thread_state_status ?? null } : null,
+    };
+  },
+});
+
 export const brief = query({
   args: { api_token: v.optional(v.string()), role_id: v.string() },
   handler: async (ctx, args) => {

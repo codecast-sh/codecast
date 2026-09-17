@@ -49,9 +49,13 @@ describe("conversation field manifest", () => {
   // three stamps that give a row a clock deadline (dismissed, stashed, snoozed)
   // as INPUTS to deriveLiveAt, and a rest verdict has no deadline of its own —
   // it expires when activity moves updated_at, which is an event, not a time.
+  // Both projections spread identityFieldsOf into their row (the character and
+  // role identity, session-characters.md S6), so its body counts as part of
+  // each: a field it emits is a field the row carries.
+  const identity = functionBody(source("conversations.ts"), "async function identityFieldsOf");
   const rowProjections = [
-    ["enrichInboxSessionRow", functionBody(source("conversations.ts"), "async function enrichInboxSessionRow")],
-    ["buildSubagentChildRow", functionBody(source("conversations.ts"), "function buildSubagentChildRow")],
+    ["enrichInboxSessionRow", functionBody(source("conversations.ts"), "async function enrichInboxSessionRow") + identity],
+    ["buildSubagentChildRow", functionBody(source("conversations.ts"), "async function buildSubagentChildRow") + identity],
   ] as const;
 
   // Favorite membership belongs to the conversation's runner principal, not to
@@ -81,12 +85,12 @@ describe("conversation field manifest", () => {
 
   test("the derived allowlists still equal the literals they replaced", () => {
     expect([...PATCHABLE_CONVERSATION_FIELDS].sort()).toEqual([
-      "agent_type", "draft_message", "git_root", "inbox_deferred_at", "inbox_dismissed_at",
-      "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "project_path",
+      "agent_type", "character_avatar", "character_name", "draft_message", "git_root", "inbox_deferred_at",
+      "inbox_dismissed_at", "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "project_path",
     ]);
     expect([...DISPATCHABLE_CONVERSATION_FIELDS].sort()).toEqual([
-      "inbox_deferred_at", "inbox_dismissed_at", "inbox_pinned_at", "inbox_rest", "inbox_rest_at",
-      "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_favorite", "title",
+      "character_avatar", "character_name", "inbox_deferred_at", "inbox_dismissed_at", "inbox_pinned_at",
+      "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_favorite", "title",
     ]);
     expect([...TRIAGE_CONVERSATION_FIELDS].sort()).toEqual([
       "inbox_deferred_at", "inbox_dismissed_at", "inbox_killed_at", "inbox_pinned_at", "inbox_rest",

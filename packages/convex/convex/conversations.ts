@@ -12,6 +12,8 @@ import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
 import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
+import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import {
   openTasksVouchForWaiting,
   OPEN_TASKS_FRESH_MS,
@@ -36,6 +38,7 @@ import {
   INBOX_TRUNCATION_KINDS,
   INBOX_WINDOW_CAPS,
   isSessionActivityFresh,
+  isAssignedAwayFromViewer,
   type InboxBucket,
   type InboxPlacement,
   type InboxProjection,
@@ -8376,6 +8379,7 @@ async function enrichInboxSessionRow(
     parent_message_uuid: conv.parent_message_uuid || null,
     icon: conv.icon,
     icon_color: conv.icon_color,
+    ...(await identityFieldsOf(conv, getDoc)),
     team_id: conv.team_id ?? null,
     is_private: conv.is_private ?? false,
     owner_device_id: (conv as any).owner_device_id ?? null,
@@ -8402,7 +8406,7 @@ async function enrichInboxSessionRow(
 }
 
 // Build a subagent child row (lighter — children carry no AUQ/plan context).
-function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, parentId: Id<"conversations">) {
+async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, parentId: Id<"conversations">, getDoc: (id: any) => Promise<any>) {
   const childDaemon = maps.liveConvIds.has(child._id.toString());
   const childAgentStatus = trustedAgentStatus(
     maps.agentStatusMap.get(child._id.toString()),
@@ -8496,9 +8500,30 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     workflow_run_started_at: null,
     icon: child.icon,
     icon_color: child.icon_color,
+    ...(await identityFieldsOf(child, getDoc)),
     team_id: child.team_id ?? null,
     is_private: child.is_private ?? false,
     user_id: child.user_id,
+  };
+}
+
+/**
+ * The identity a row resolves to (docs/architecture/session-characters.md
+ * S1): its chosen character parts, its org pointers, and for a role's rows a
+ * snapshot of the role so the web can draw the role's face and name without
+ * loading the org tree. Only rows with a pointer pay the extra read.
+ */
+async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<any>) {
+  const roleId = conv.standing_role_id ?? conv.org_role_id ?? null;
+  const role = roleId ? await getDoc(roleId).catch(() => null) : null;
+  return {
+    character_avatar: conv.character_avatar ?? null,
+    character_name: conv.character_name ?? null,
+    org_role_id: conv.org_role_id?.toString() ?? null,
+    standing_role_id: conv.standing_role_id?.toString() ?? null,
+    role: role
+      ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing" }
+      : null,
   };
 }
 
@@ -8721,10 +8746,13 @@ export async function scanInboxConversations(
   const ownerHydrated = await Promise.all(
     ownerRowsToHydrate.map((r: any) => Promise.resolve(ctx.db.get(r.conversation_id)).catch(() => null))
   );
+  // An owned row is admitted on the owner seat ALONE — no recency window, no
+  // status gate. Assignment means the session sits in that person's inbox
+  // until they act on it, whatever state it is in: a handoff they have not
+  // opened for six weeks is exactly the one that must not quietly age out.
+  // The cost is bounded by the owner cap the query above already applies.
   for (const conv of ownerHydrated) {
     if (!conv) continue;
-    if ((conv.updated_at ?? 0) < sessionWindowCutoff && !conv.inbox_snoozed_until) continue;
-    if (conv.status !== "active" && conv.status !== "completed") continue;
     byId.set(conv._id.toString(), conv);
   }
 
@@ -8790,6 +8818,30 @@ export async function scanInboxConversations(
     byId.set(idStr, conv);
     extraBudget--;
   }
+
+  // Assignment moves the session into the owners' inboxes. The recent / pin /
+  // stash windows are keyed on the runner (`user_id`), so without this drop a
+  // session handed to a teammate stays in the host's QUESTIONS and Needs Input
+  // while also sitting in the assignee's owned window.
+  //
+  // Only rows the caller RUNS are dropped, and only when the caller did not ask
+  // for them by id. A teammate's row is here because the team board shows the
+  // team (its owner says nothing about my inbox), and an explicitly requested
+  // id was named by the caller — neither is mine to hide.
+  const uidForAssign = userId.toString();
+  for (const [idStr, conv] of [...byId.entries()]) {
+    if (conv.user_id?.toString() !== uidForAssign) continue;
+    if (extraIds.has(idStr)) continue;
+    if (
+      isAssignedAwayFromViewer(
+        { owner_user_id: conv.owner_user_id, owned_by_me: ownedByMeIds.has(idStr) },
+        uidForAssign,
+      )
+    ) {
+      byId.delete(idStr);
+    }
+  }
+
   const conversations = Array.from(byId.values());
 
   const deliberateIds = new Set<string>(extraIds);
@@ -9053,7 +9105,7 @@ export async function computeInboxSessions(
     // exposing them now would make active buckets pick them up as orphans.
     if (r.dismissed || r.stashed) continue;
     for (const child of r.subagentChildren) {
-      const childRow = buildSubagentChildRow(child, maps, now, r.conv._id);
+      const childRow = await buildSubagentChildRow(child, maps, now, r.conv._id, (id) => ctx.db.get(id));
       stampChildRow?.(child, childRow);
       childRowIds.add(childRow._id.toString());
       results.push(childRow);
@@ -10296,7 +10348,7 @@ export async function collectInboxSessionsPaginated(
     stripInboxLiveness(row);
     rows.push(row);
     for (const child of subagentChildren) {
-      const childRow = buildSubagentChildRow(child, maps, now, conv._id);
+      const childRow = await buildSubagentChildRow(child, maps, now, conv._id, (id) => ctx.db.get(id));
       stripInboxLiveness(childRow);
       rows.push(childRow);
     }
@@ -11317,6 +11369,7 @@ export const patchConversation = mutation({
       if (!PATCHABLE_FIELDS.has(key)) continue;
       patch[key] = value === null ? undefined : value;
     }
+    Object.assign(patch, normalizeCharacterFields(patch));
     if (await pinCapExceeded(ctx, userId, conv, patch)) throw new Error(PIN_CAP_ERROR);
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.id, patch);

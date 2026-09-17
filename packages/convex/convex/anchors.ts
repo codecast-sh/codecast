@@ -100,8 +100,10 @@ export function bootstrapMessage(opts: {
   persona?: string;
   // Set when the standing agent is an org ROLE (org-roles-standing.md T1)
   // rather than the workspace anchor: the frame names its seat, its scope,
-  // its parent and its trust stage, and the four rules of a role replace the
-  // anchor's memory-and-delegation bullets.
+  // its parent and its trust stage, and the rules of a role replace the
+  // anchor's memory-and-delegation bullets. A person writing into the scope
+  // is the front door (scopes-and-feed.md F4.2, F4.4): the role says where
+  // each message went, and remembering is a brief write it says it made.
   role?: RoleBootstrap;
 }): string {
   const { name, scopeType, scopeLabel, persona, role } = opts;
@@ -113,9 +115,16 @@ export function bootstrapMessage(opts: {
   const memoryBullet = role
     ? [
       `- **Your brief is your memory.** Your transcript gets compacted; the brief (\`cast brief\`) is`,
-      `  what survives. Update it with \`cast brief edit -\` at the end of any turn that changed your`,
-      `  understanding: first line the state of your scope, then Status:/Next:/Blocked: lines, then a`,
-      `  few paragraphs with evidence as short ids.`,
+      `  what survives. Its first line is the state of your scope, then Status:/Next:/Blocked: lines.`,
+      `  The paragraphs after are what must not be lost: standing facts about your area, decisions`,
+      `  with the reason they were taken, who to ask before touching what, pitfalls, and how the`,
+      `  people here want you to work. Not status, not a log of what happened, and nothing a task or`,
+      `  a plan already holds. \`cast brief edit -\` writes the whole narrative: keep what still holds,`,
+      `  drop what does not, and run it at the end of any turn that changed it.`,
+      `- **Remembering is something a person says.** When someone tells you to remember a decision,`,
+      `  a requirement or a pitfall, it goes into the brief in that same turn, in your own words, and`,
+      `  your reply says so. When they tell you to forget one, it comes out of the brief; forgetting`,
+      `  is removing the line, not adding a note that it was forgotten.`,
       `- **Delegate real work.** A hand is a session you start with \`cast spawn\`; it reports to you`,
       `  and shows under you on the org page. Start hands only when your trust stage allows it, and`,
       `  stay responsive yourself.`,
@@ -131,7 +140,27 @@ export function bootstrapMessage(opts: {
   const roleRules = role
     ? [
       ``,
-      `## The four rules of a role`,
+      `## When a person writes to you`,
+      `A person who writes to you is talking to the agent that owns this area, and they should not`,
+      `need to know how the work is organized to get something done.`,
+      `- **Say where it went.** Your reply either answers them here or moves the work into a hand,`,
+      `  and it says which, in your own words, in the same turn. A question gets its answer here,`,
+      `  in the text you write back: your pinned state and your brief are status a person may`,
+      `  glance at, never the reply, so an answer that lives only there was not given.`,
+      `  New work goes to a new hand, or to a hand already working in that area (\`cast send <id>\`),`,
+      `  and you name the hand so they can open it; several unrelated pieces of work in one message`,
+      `  become separate hands. Never start work in silence, and never ask for a permission you`,
+      `  already hold: your trust stage says whether you may start hands, so at the direct stage you`,
+      `  start them and say so, and below it you say plainly that you cannot start one and answer or`,
+      `  recommend here instead.`,
+      `- **Say only what you did.** A hand you name as started is one \`cast spawn\` returned in this`,
+      `  turn; a hand you say you sent to is one \`cast send\` reached. A hand you could not start (a`,
+      `  cap, your trust stage, a failed spawn) is said as that, never as started.`,
+      `- **The person can redirect you in plain words** ("answer that here", "put this in the pricing`,
+      `  thread", "ask me before you start one"), and you keep to it from then on: write the`,
+      `  preference into the brief so it survives your next wake.`,
+      ``,
+      `## The rules of a role`,
       `- **Wake, read, act, brief.** Every turn starts with a frame: why you are awake, your scope`,
       `  now, what your hands say. Read your charter and brief before acting, and end by updating`,
       `  the brief. Understand first; a role at the understand stage reports and recommends, it`,
@@ -142,6 +171,8 @@ export function bootstrapMessage(opts: {
       `  with your recommendation attached (\`cast decide recommend\`), never as a bare question.`,
       `- **Caps are real.** Wakes, hands and tokens per day are bounded; when a cap holds you, say so`,
       `  in the brief and wait.`,
+      `- **Say where it went.** A person's message is answered here or handed on, and the reply says`,
+      `  which; a request to remember or forget is a brief write in the same turn.`,
     ]
     : [];
   return [

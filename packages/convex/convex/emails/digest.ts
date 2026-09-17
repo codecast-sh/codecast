@@ -29,6 +29,7 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internalAction, internalMutation } from "../functions";
 import { MAX_CHANNELS_PER_TEAM, UNREAD_CAP, plainPreview } from "../chatText";
+import { rewriteNotificationMessage } from "../lib/notificationActor";
 import { deliver } from "./send";
 import { notificationDigest, type DigestEntry, type DigestSection } from "./templates";
 import { BRAND } from "./render";
@@ -295,7 +296,9 @@ async function buildDigestForUser(
     (n) => !n.read && n.created_at <= cutoff && EMAIL_WORTHY.has(n.type),
   );
 
-  // Resolve actor display names (actor_name is the snapshot fallback).
+  // Resolve actor display names. A snapshot on the row (a Slack person, an
+  // anonymous commenter) wins over the live user, which for Slack inbound is
+  // the workspace bridge rather than who posted.
   const actorNames = new Map<string, string>();
   for (const n of worthy) {
     const key = n.actor_user_id?.toString();
@@ -303,19 +306,20 @@ async function buildDigestForUser(
     const actor = await ctx.db.get(n.actor_user_id);
     actorNames.set(key, actor?.name || actor?.github_username || "Someone");
   }
-  const toEntry = (n: Doc<"notifications">): DigestEntry =>
-    notificationEntry(base, {
+  const toEntry = (n: Doc<"notifications">): DigestEntry => {
+    const live = n.actor_user_id ? actorNames.get(n.actor_user_id.toString()) : undefined;
+    const actor = n.actor_name ?? live;
+    return notificationEntry(base, {
       type: n.type,
-      message: n.message,
-      actor: n.actor_user_id
-        ? actorNames.get(n.actor_user_id.toString())
-        : (n.actor_name ?? undefined),
+      message: rewriteNotificationMessage(n.message, actor, live),
+      actor,
       link: n.link,
       entity_type: n.entity_type,
       entity_id: n.entity_id,
       chat_message_id: n.chat_message_id?.toString(),
       conversation_id: n.conversation_id?.toString(),
     });
+  };
 
   const personalTypes = new Set([
     "mention",

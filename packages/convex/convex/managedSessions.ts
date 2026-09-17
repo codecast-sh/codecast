@@ -5,7 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
-import { AGENT_STATUSES, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { AGENT_STATUSES, ACTIVE_AGENT_STATUSES, HEARTBEAT_REFRESH_MS } from "@codecast/shared/contracts";
 import { openTaskValidator } from "./lib/openTasksValidator";
 import { internal } from "./_generated/api";
 import {
@@ -385,15 +385,16 @@ const agentStatusValidator = v.union(
 // (the heartbeat re-sends the current status, so bumping it unconditionally
 // would track "last heard" instead of "entered this status", which idle
 // detection depends on).
-// Refresh last_heartbeat at most this often. Every managed_sessions write
-// invalidates listInboxSessions (it .collect()s the whole table), so an
-// unconditional last_heartbeat=now on every 30s beat — ×N sessions ×N
-// heartbeat sources — was a needless invalidation/OCC firehose. The liveness
-// window is 90s everywhere (HEARTBEAT_ALIVE_MS), so throttling the timestamp
-// write to 45s keeps the row at most ~60s stale: always live with a full beat
-// of margin. Status observations still persist their ordering stamp immediately:
-// even an active reassertion must defeat a delayed older park write.
-const HEARTBEAT_REFRESH_MS = 45 * 1000;
+// Refresh last_heartbeat at most this often (HEARTBEAT_REFRESH_MS, owned by
+// @codecast/shared/contracts because the liveness window is derived from it).
+// Every managed_sessions write invalidates listInboxSessions (it .collect()s
+// the whole table), so an unconditional last_heartbeat=now on every 30s beat —
+// ×N sessions ×N heartbeat sources — was a needless invalidation/OCC firehose.
+// The throttle means the stamp advances on the first flush PAST it, not on the
+// flush cadence: 60s apart in steady state and 85s behind a late flush, which
+// is why HEARTBEAT_ALIVE_MS is derived from this number rather than guessed
+// alongside it. Status observations still persist their ordering stamp
+// immediately: even an active reassertion must defeat a delayed older park write.
 
 // Returns null when neither status ordering nor heartbeat freshness advances.
 function buildHeartbeatPatch(

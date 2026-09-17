@@ -68,3 +68,150 @@ describe("assigned sessions and the inbox cluster cutoff", () => {
     }
   });
 });
+
+describe("a session I run that I assigned away leaves my inbox", () => {
+  const ME = "users_me";
+  const THEM = "users_them";
+  const NOW = Date.now();
+
+  function fixtures() {
+    return makeFakeDb({
+      users: [
+        { _id: ME, name: "Me", email: "me@example.com" },
+        { _id: THEM, name: "Samvit", email: "samvit@example.com" },
+      ],
+      conversations: [
+        {
+          _id: "conversations_handed",
+          user_id: ME,
+          owner_user_id: THEM,
+          status: "active",
+          updated_at: NOW,
+          message_count: 4,
+          title: "Infra lead",
+        },
+        {
+          _id: "conversations_mine",
+          user_id: ME,
+          owner_user_id: ME,
+          status: "active",
+          updated_at: NOW,
+          message_count: 2,
+          title: "Still mine",
+        },
+      ],
+      session_owners: [
+        { _id: "so_handed", conversation_id: "conversations_handed", user_id: THEM, added_by: ME, added_at: 1 },
+        { _id: "so_mine", conversation_id: "conversations_mine", user_id: ME, added_by: ME, added_at: 1 },
+      ],
+      managed_sessions: [],
+      messages: [],
+    });
+  }
+
+  test("the runner's inbox no longer lists it; the owner's inbox does", async () => {
+    const db = fixtures();
+    const mine = await computeInboxSessions({ db }, ME as any, { show_all: false, includeLiveness: false });
+    expect(mine.sessions.map((s: any) => s._id).sort()).toEqual(["conversations_mine"]);
+
+    const theirs = await computeInboxSessions({ db }, THEM as any, { show_all: false, includeLiveness: false });
+    expect(theirs.sessions.map((s: any) => s._id)).toEqual(["conversations_handed"]);
+    expect(theirs.sessions[0].owned_by_me).toBe(true);
+  });
+});
+
+// "Assignment means it is in that person's inbox, always — whatever state it is
+// in." The owner seat is admitted on its own: no recency window, no status
+// gate, and the hide stamps the previous holder left behind are cleared by the
+// handoff itself (sessionOwnership.performReparentSession).
+describe("an owned row holds its seat whatever state it is in", () => {
+  const ME = "users_me";
+  const RUNNER = "users_runner";
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.now();
+
+  function fixtures() {
+    return makeFakeDb({
+      users: [
+        { _id: ME, name: "Me", email: "me@example.com" },
+        { _id: RUNNER, name: "Runner", email: "runner@example.com" },
+      ],
+      conversations: [
+        { _id: "conversations_ancient", user_id: RUNNER, status: "active", updated_at: NOW - 90 * DAY, message_count: 7, title: "Handed over weeks ago" },
+        { _id: "conversations_failed", user_id: RUNNER, status: "failed", updated_at: NOW - 2 * DAY, message_count: 3, title: "Crashed after the handoff" },
+      ],
+      session_owners: [
+        { _id: "so_a", conversation_id: "conversations_ancient", user_id: ME, added_by: RUNNER, added_at: 1 },
+        { _id: "so_f", conversation_id: "conversations_failed", user_id: ME, added_by: RUNNER, added_at: 2 },
+      ],
+      managed_sessions: [],
+      messages: [],
+    });
+  }
+
+  test("neither the 30-day window nor a non-active status drops it", async () => {
+    const { sessions } = await computeInboxSessions({ db: fixtures() }, ME as any, {
+      show_all: false,
+      includeLiveness: false,
+    });
+    expect(sessions.map((s: any) => s._id).sort()).toEqual(["conversations_ancient", "conversations_failed"]);
+    for (const s of sessions) expect(s.owned_by_me).toBe(true);
+  });
+});
+
+// The drop that takes an assigned-away session out of the runner's inbox reads
+// the OWNER SET, so it must not reach rows that are in the candidate set for
+// another reason: a teammate's session on the team board, or a row the caller
+// named by id.
+describe("the assigned-away drop stays inside the caller's own rows", () => {
+  const ME = "users_me";
+  const MATE = "users_mate";
+  const THIRD = "users_third";
+  const NOW = Date.now();
+  const TEAM = "teams_1";
+
+  function fixtures() {
+    return makeFakeDb({
+      users: [
+        { _id: ME, name: "Me", email: "me@example.com", team_id: TEAM },
+        { _id: MATE, name: "Mate", email: "mate@example.com", team_id: TEAM },
+        { _id: THIRD, name: "Third", email: "third@example.com", team_id: TEAM },
+      ],
+      teams: [{ _id: TEAM, name: "Team" }],
+      team_memberships: [
+        { _id: "tm_me", team_id: TEAM, user_id: ME },
+        { _id: "tm_mate", team_id: TEAM, user_id: MATE },
+        { _id: "tm_third", team_id: TEAM, user_id: THIRD },
+      ],
+      conversations: [
+        // A teammate's session, owned by a third person. Nothing to do with me.
+        { _id: "conversations_mate", user_id: MATE, owner_user_id: THIRD, status: "active", updated_at: NOW, message_count: 5, team_id: TEAM, is_private: false, title: "Mate's work" },
+        // Mine, handed to a teammate.
+        { _id: "conversations_handed", user_id: ME, owner_user_id: MATE, status: "active", updated_at: NOW, message_count: 5, title: "Handed over" },
+      ],
+      session_owners: [
+        { _id: "so_mate", conversation_id: "conversations_mate", user_id: THIRD, added_by: MATE, added_at: 1 },
+        { _id: "so_handed", conversation_id: "conversations_handed", user_id: MATE, added_by: ME, added_at: 2 },
+      ],
+      managed_sessions: [],
+      messages: [],
+    });
+  }
+
+  test("team scope keeps the teammate's row; my own handed-over row still goes", async () => {
+    const scan = await scanInboxConversations({ db: fixtures() }, ME as any, NOW, {
+      includeLiveness: false,
+      teamScope: TEAM as any,
+    });
+    const ids = scan.conversations.map((c: any) => c._id.toString()).sort();
+    expect(ids).toEqual(["conversations_mate"]);
+  });
+
+  test("naming the id brings my handed-over row back", async () => {
+    const scan = await scanInboxConversations({ db: fixtures() }, ME as any, NOW, {
+      includeLiveness: false,
+      extraConvIds: ["conversations_handed"],
+    });
+    expect(scan.conversations.map((c: any) => c._id.toString())).toEqual(["conversations_handed"]);
+  });
+});

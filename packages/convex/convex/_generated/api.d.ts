@@ -132,6 +132,7 @@ import type * as lib_issueMapping from "../lib/issueMapping.js";
 import type * as lib_liveActivityRefresh from "../lib/liveActivityRefresh.js";
 import type * as lib_liveSessions from "../lib/liveSessions.js";
 import type * as lib_mentionResolve from "../lib/mentionResolve.js";
+import type * as lib_notificationActor from "../lib/notificationActor.js";
 import type * as lib_openTasksValidator from "../lib/openTasksValidator.js";
 import type * as lib_orgAccess from "../lib/orgAccess.js";
 import type * as lib_orgActivity from "../lib/orgActivity.js";
@@ -377,6 +378,7 @@ declare const fullApi: ApiFromModules<{
   "lib/liveActivityRefresh": typeof lib_liveActivityRefresh;
   "lib/liveSessions": typeof lib_liveSessions;
   "lib/mentionResolve": typeof lib_mentionResolve;
+  "lib/notificationActor": typeof lib_notificationActor;
   "lib/openTasksValidator": typeof lib_openTasksValidator;
   "lib/orgAccess": typeof lib_orgAccess;
   "lib/orgActivity": typeof lib_orgActivity;

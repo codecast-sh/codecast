@@ -479,6 +479,7 @@ describe("the notification fan-out", () => {
     expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
     expect(ctx._emitted[0].args.push_subtitle).toBe("#general");
     expect(ctx._emitted[0].args.push_body).toBe("morning all");
+    expect(ctx._emitted[0].args.actor_name).toBe("Alice");
   });
 
   test("chat_post never leaves a thread: replies stay with their participants", async () => {

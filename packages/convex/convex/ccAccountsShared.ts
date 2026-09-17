@@ -10,13 +10,21 @@ import {
   livePercent,
   worstUsagePercent,
   switchUsagePercent,
+  usageStanding,
+  standingLabel,
+  recoveryModeOf,
+  RESUME_BURST_SPACING_MS,
+  RESUME_BURST_BATCH,
+  type UsageStanding,
+  type RecoveryMode,
   type CcUsage,
 } from "@codecast/shared/contracts";
 
 // The usage snapshot type and its predicates live in @codecast/shared/contracts
 // (the CLI reads them too); re-exported here so existing web/convex imports keep
 // one path.
-export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted, fallbackProfiles, switchUsagePercent };
+export { isWindowRolled, livePercent, worstUsagePercent, isUsageExhausted, fallbackProfiles, switchUsagePercent, usageStanding, standingLabel, recoveryModeOf };
+export type { UsageStanding, RecoveryMode };
 export type { CcUsage };
 
 // Per-account usage snapshot the daemon probes from the OAuth usage API
@@ -293,6 +301,31 @@ export const ccAutoSwitchStateValidator = v.object({
   // A booked throttleContinueCheck (see accountSwitch.ts): a fresh throttle
   // park books one only when none is already booked for the future.
   throttle_check_at: v.optional(v.number()),
+  // The recovery decision most recently taken or proposed, so the park card
+  // and the notification can EXPLAIN what happened instead of the account
+  // silently changing. Written by autoSwitchCheck on every switch, continue,
+  // proposal (ask-first mode) and exhaustion. `target_percent` is the chosen
+  // account's standing (usageStanding.percent); absent means stale/unknown,
+  // the same "no confident number" the meters show.
+  last_decision: v.optional(
+    v.object({
+      kind: v.union(
+        v.literal("switch"),
+        v.literal("propose"),
+        v.literal("continue"),
+        v.literal("exhausted"),
+      ),
+      at: v.number(),
+      target_email: v.optional(v.string()),
+      target_name: v.optional(v.string()),
+      target_percent: v.optional(v.number()),
+      from_email: v.optional(v.string()),
+      parked_count: v.optional(v.number()),
+      // The window whose limit pegged on the account being left, e.g.
+      // "Fable (7d)" — what the human sees on the meter that closed.
+      pegged_window: v.optional(v.string()),
+    }),
+  ),
 });
 
 // Paced plain-continue recovery. Two park kinds (see apiErrorBanner.ts) are
@@ -307,8 +340,8 @@ export const ccAutoSwitchStateValidator = v.object({
 // burst again.
 export const PACED_CONTINUE_KINDS: ReadonlySet<string> = new Set(["throttle", "connection"]);
 export const THROTTLE_CONTINUE_DELAY_MS = 60 * 1000;
-export const THROTTLE_CONTINUE_BATCH = 3;
-export const THROTTLE_CONTINUE_SPACING_MS = 20 * 1000;
+export const THROTTLE_CONTINUE_BATCH = RESUME_BURST_BATCH;
+export const THROTTLE_CONTINUE_SPACING_MS = RESUME_BURST_SPACING_MS;
 // A session that 429s again after our continue is not a new burst: wait longer
 // each time, capped, so a misread usage limit cannot be retried every minute.
 export const THROTTLE_CONTINUE_BACKOFF_CAP_MS = 15 * 60 * 1000;
@@ -466,6 +499,7 @@ export const AUTO_CONTINUE_WINDOW_MS = 6 * 60 * 60 * 1000;
 export function isAutoContinueEnabled(device: { cc_auto_continue?: boolean | null }): boolean {
   return device.cc_auto_continue !== false;
 }
+
 
 /** Does the "every account is spent" stamp still describe NOW? Only a re-check
  * clears it, and that re-check may never run — auto-switch turned off, a lost

@@ -9,7 +9,8 @@ import {
   performWithdrawProposal,
   listProposals,
   readProposalOrigin,
-  readProposal, performBreachSnapshot, performWriteBreaches } from "./orgProposals";
+  readProposal, performBreachSnapshot, performWriteBreaches,
+  performReviseProposal, performSayInThread, formatProposalMessage, callerIsAuthor } from "./orgProposals";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): create from a
 // session or a person, one advisory decision for the addressed person, decide
@@ -664,5 +665,194 @@ describe("the light origin read", () => {
     expect(b!.author).toMatchObject({ kind: "role", id: GROWTH, name: "Growth lead", handle: "growth", short_id: "or-1" });
     expect(await readProposalOrigin(ctx, ("u".repeat(31) + "x") as any, bySession.short_id)).toBeNull();
     expect(await readProposalOrigin(ctx, ME as any, "op-404")).toBeNull();
+  });
+});
+
+// ── S18: the conversation is part of the proposal ───────────────────────────
+// The author revises its own open proposal (remove, amend, add) on changes
+// nobody has decided; the proposal names the thread a person talks to; a
+// person's words ride the pending message rail into it, naming the change.
+
+describe("orgProposals.revise", () => {
+  const three = () => spec([
+    change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }),
+    change({ kind: "trust", handle: "growth", trust: "decide" }),
+    change({ kind: "retire", handle: "growth" }),
+  ]);
+  const seeded = async (from_session = "s1") => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session, spec: three() });
+    return { db, r };
+  };
+
+  test("the posting session removes, amends and adds; rows keep their ids, the journal and the stamps say what happened, counts shrink", async () => {
+    const { db, r } = await seeded();
+    const out = await performReviseProposal(ctxOf(db), ME as any, {
+      proposal: "op-1", from_session: "s1",
+      ops: [
+        { op: "remove", seq: 3, note: "growth is not dead yet" },
+        { op: "amend", seq: 1, edits: { caps: { wakes_per_day: 6 } }, rationale: "half the wakes", note: "halved" },
+        { op: "add", change: change({ kind: "scope", handle: "growth", add: ["pr-2"] }) },
+      ],
+    });
+    expect(out.proposal).toBe("op-1");
+    expect(out.revisions.map((j: any) => [j.op, j.seq, j.line, j.was, j.note])).toEqual([
+      ["removed", 3, "retire @growth", undefined, "growth is not dead yet"],
+      ["amended", 1, "budget @growth wakes 6/day", "budget @growth wakes 12/day", "halved"],
+      ["added", 4, "scope @growth +pr-2", undefined, undefined],
+    ]);
+    expect(out.revisions.every((j: any) => j.by.kind === "session" && j.by.id === S1 && j.at > 0)).toBe(true);
+    // The rows: the removed one stays as `removed`, the amended one keeps its
+    // id and `before`, the added one is a new row with the next seq.
+    const rows = await db.query("org_proposal_changes").collect();
+    const byId = Object.fromEntries(r.changes.map((c: any) => [c.seq, c.id]));
+    expect(rows.find((c: any) => c._id === byId[3])).toMatchObject({ status: "removed", revision: { kind: "removed", note: "growth is not dead yet" } });
+    expect(rows.find((c: any) => c._id === byId[1])).toMatchObject({ status: "proposed", change: { kind: "budget", caps: { wakes_per_day: 6 } }, rationale: "half the wakes", revision: { kind: "amended", note: "halved", before: { kind: "budget", caps: { wakes_per_day: 12 } } } });
+    expect(rows.find((c: any) => c.seq === 4)).toMatchObject({ status: "proposed", change: { kind: "scope", handle: "growth" }, revision: { kind: "added", note: "added" } });
+    expect(out.counts).toEqual({ total: 3, decided: 0, applied: 0, failed: 0, skipped: 0 });
+    // The proposal carries the journal and stays open; the read hands it back.
+    const read = await readProposal(ctxOf(db), ME as any, "op-1");
+    expect(read.status).toBe("open");
+    expect(read.revisions.length).toBe(3);
+    expect(read.counts.total).toBe(3);
+    // The queue card now says three changes and lists what is left.
+    const d = await db.get(r.decision.id);
+    expect(d.question).toBe("Org analyzer proposes 3 changes: Reshape growth");
+    expect(d.context_md).toContain("- scope @growth +pr-2");
+    expect(d.context_md).not.toContain("- retire @growth");
+  });
+
+  test("a default note names what happened when the author gives none", async () => {
+    const { db } = await seeded();
+    const out = await performReviseProposal(ctxOf(db), ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 3 }, { op: "amend", seq: 1, rationale: "rewritten" }, { op: "amend", seq: 2, edits: { trust: "direct" } }] });
+    expect(out.changes.map((c: any) => c.revision?.note)).toEqual(["rationale rewritten", "was: trust @growth to decide", "removed"]);
+    expect(out.changes.map((c: any) => c.line)).toEqual(["budget @growth wakes 12/day", "trust @growth to direct", "retire @growth"]);
+  });
+
+  test("the role's standing session revises the role's proposal; a person revises their own without a session", async () => {
+    const db = fixtures();
+    const byRole = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s_growth", spec: three() });
+    expect(byRole.author).toEqual({ kind: "role", id: GROWTH });
+    const out = await performReviseProposal(ctxOf(db), ME as any, { proposal: byRole.short_id, from_session: "s_growth", ops: [{ op: "remove", seq: 3 }] });
+    expect(out.revisions[0]).toMatchObject({ op: "removed", by: { kind: "role", id: GROWTH } });
+    const byMe = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, spec: three() });
+    expect((await performReviseProposal(ctxOf(db), ME as any, { proposal: byMe.short_id, ops: [{ op: "remove", seq: 2 }] })).counts.total).toBe(2);
+    // Anyone else, by name.
+    await expect(performReviseProposal(ctxOf(db), ME as any, { proposal: byMe.short_id, from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow(`Only ${byMe.short_id}'s author may revise it`);
+    await expect(performReviseProposal(ctxOf(db), ME as any, { proposal: byRole.short_id, from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("author may revise it");
+    await expect(performReviseProposal(ctxOf(db), ME as any, { proposal: byRole.short_id, ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("author may revise it");
+    await expect(performReviseProposal(ctxOf(db), MATE as any, { proposal: byMe.short_id, ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("author may revise it");
+    expect(await callerIsAuthor(ctxOf(db), ME as any, await db.get(byRole.id), "s_growth")).toBe(true);
+    expect(await callerIsAuthor(ctxOf(db), ME as any, await db.get(byRole.id), "s1")).toBe(false);
+  });
+
+  test("refused: a closed proposal, a decided change by name, an unknown change, a bad edit, a bad op, a repeated subject; and one bad op writes nothing", async () => {
+    const { db, r } = await seeded();
+    const ctx = ctxOf(db);
+    // A decided change is named in the refusal, and the whole revise writes nothing.
+    await performDecideChange(ctx, ME as any, { change_id: String(r.changes[1].id), verdict: "skip" });
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 3 }, { op: "amend", seq: 2, edits: { trust: "direct" } }] }))
+      .rejects.toThrow("amend: op-1#2 (trust @growth to decide) is already skipped; a revise never touches a change a person decided");
+    expect((await db.get(r.changes[2].id)).status).toBe("proposed");
+    expect((await db.get(r.id)).revisions).toBeUndefined();
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 2 }] })).rejects.toThrow("is already skipped");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 9 }] })).rejects.toThrow("remove: op-1#9 does not exist");
+    // The amend runs the edit validator, so a revised change cannot be invalid.
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "amend", seq: 1, edits: { caps: { wakes_per_day: -1 } } }] })).rejects.toThrow("The edited change is not valid");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "amend", seq: 1 }] })).rejects.toThrow("amend: give edits, a rationale, or both");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: { change: { kind: "nope" }, rationale: "x" } }] })).rejects.toThrow("ops[0]: add:");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "explode", seq: 1 }] })).rejects.toThrow("op is one of remove, amend, add");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [] })).rejects.toThrow("ops is a non-empty list");
+    // One change per subject, the create rule, holds through a revise.
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: change({ kind: "retire", handle: "growth" }) }] })).rejects.toThrow("add: retire @growth repeats #3: one change per subject");
+    // Removing frees the subject for a fresh add in the same revise.
+    const out = await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 3 }, { op: "add", change: change({ kind: "retire", handle: "growth" }, "again") }] });
+    expect(out.changes.map((c: any) => [c.seq, c.status])).toEqual([[1, "proposed"], [2, "skipped"], [3, "removed"], [4, "proposed"]]);
+    // Closed: withdrawn, then refused.
+    await performWithdrawProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1" });
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("op-1 is withdrawn; only an open proposal can be revised");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-77", from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("Proposal not found: op-77");
+  });
+
+  test("removing the last undecided change leaves the proposal open; a removed change is never decided, and the next decision resolves what is left", async () => {
+    const { db, r } = await seeded();
+    const ctx = ctxOf(db);
+    await performDecideChange(ctx, ME as any, { change_id: String(r.changes[1].id), verdict: "skip" });
+    await performDecideChange(ctx, ME as any, { change_id: String(r.changes[2].id), verdict: "skip" });
+    const out = await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }] });
+    expect(out.status).toBe("open");
+    expect((await db.get(r.id)).status).toBe("open");
+    expect(out.counts).toEqual({ total: 2, decided: 2, applied: 0, failed: 0, skipped: 2 });
+    await expect(performDecideChange(ctx, ME as any, { change_id: String(r.changes[0].id), verdict: "skip" })).rejects.toThrow("op-1#1 is already removed");
+    // The author asks again on a subject the person already skipped (#2 was
+    // trust @growth); the person skips that too, and the decision resolves.
+    await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: change({ kind: "trust", handle: "growth", trust: "direct" }) }] });
+    const added = (await db.query("org_proposal_changes").collect()).find((c: any) => c.seq === 4);
+    expect(await performDecideChange(ctx, ME as any, { change_id: String(added._id), verdict: "skip" })).toMatchObject({ resolved: true });
+    expect((await db.get(r.id)).status).toBe("resolved");
+    // Accept all over a proposal with nothing left to decide is a person's act, and it resolves; a revise never does.
+    const { db: db2, r: r2 } = await seeded();
+    await performReviseProposal(ctxOf(db2), ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }, { op: "remove", seq: 2 }, { op: "remove", seq: 3 }] });
+    expect((await db2.get(r2.id)).status).toBe("open");
+    expect(await performAcceptAll(ctxOf(db2), ME as any, { proposal: "op-1", provision: false })).toMatchObject({ resolved: true });
+  });
+});
+
+describe("orgProposals thread (S18)", () => {
+  test("a session's proposal points at its conversation, a role's at its standing session, a person's at nothing; rows from before the field derive it", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const bySession = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "retire", handle: "growth" })]) });
+    const byRole = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s_growth", spec: spec([change({ kind: "retire", handle: "growth" })]) });
+    const byMe = await performCreateProposal(ctx, ME as any, { team_id: TEAM, spec: spec([change({ kind: "retire", handle: "growth" })]) });
+    expect((await db.get(bySession.id)).thread_conversation_id).toBe(S1);
+    expect((await db.get(byRole.id)).thread_conversation_id).toBe(S_GROWTH);
+    expect((await db.get(byMe.id)).thread_conversation_id).toBeUndefined();
+    expect((await readProposal(ctx, ME as any, bySession.short_id)).thread).toEqual({ conversation_id: S1, short_id: "jxanaly", title: "Org analyzer" });
+    expect((await readProposal(ctx, ME as any, byRole.short_id)).thread).toEqual({ conversation_id: S_GROWTH, short_id: "jxgrowt", title: "Growth lead" });
+    expect((await readProposal(ctx, ME as any, byMe.short_id)).thread).toBeNull();
+    const listed = await listProposals(ctx, ME as any, { team_id: TEAM });
+    expect(listed.map((p: any) => [p.short_id, p.thread?.conversation_id ?? null]).sort()).toEqual([[bySession.short_id, S1], [byRole.short_id, S_GROWTH], [byMe.short_id, null]]);
+    // Before the field: derived from the author, so an older open proposal still has its thread.
+    await db.patch(bySession.id, { thread_conversation_id: undefined });
+    await db.patch(byRole.id, { thread_conversation_id: undefined });
+    expect((await readProposal(ctx, ME as any, bySession.short_id)).thread.conversation_id).toBe(S1);
+    expect((await readProposal(ctx, ME as any, byRole.short_id)).thread.conversation_id).toBe(S_GROWTH);
+  });
+});
+
+describe("orgProposals.say", () => {
+  test("the words land in the thread as a turn, wrapped like a chat mention, naming the proposal and the change", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const p = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }), change({ kind: "retire", handle: "growth" })]) });
+    const out = await performSayInThread(ctx, ME as any, { proposal: p.short_id, change: 2, body: "growth is dead, drop it", client_id: "c1" });
+    expect(out).toMatchObject({ proposal: "op-1", change: 2, thread: { conversation_id: S1, short_id: "jxanaly" } });
+    const row = await db.get(out.message_id);
+    expect(row).toMatchObject({ conversation_id: S1, from_user_id: ME, owner_user_id: ME, client_id: "c1", status: "pending" });
+    expect(row.content).toBe(formatProposalMessage({ short_id: "op-1", title: "Reshape growth", change: { seq: 2, line: "retire @growth" }, from: "Me", body: "growth is dead, drop it" }));
+    expect(row.content.split("\n")).toEqual([
+      '<proposal-message proposal="op-1" change="2" from="Me">',
+      'About op-1 change 2 ("retire @growth"):',
+      "",
+      "growth is dead, drop it",
+      "",
+      "(Reply here; the org page shows this thread beside op-1. To change the proposal run `cast org revise op-1 --remove <n>`, `--amend <n> --edits '{...}'` or `--add change.json`. Accepting stays the person's.)",
+      "</proposal-message>",
+    ]);
+    // No change named: the header names the proposal.
+    const whole = await performSayInThread(ctx, ME as any, { proposal: p.short_id, body: "why growth at all?" });
+    expect((await db.get(whole.message_id)).content).toContain('<proposal-message proposal="op-1" from="Me">\nAbout op-1 ("Reshape growth"):\n\nwhy growth at all?');
+  });
+
+  test("refused: a person's proposal has no agent to talk to, an unknown change, an empty body, a proposal the caller cannot read", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const byMe = await performCreateProposal(ctx, ME as any, { team_id: TEAM, spec: spec([change({ kind: "retire", handle: "growth" })]) });
+    await expect(performSayInThread(ctx, ME as any, { proposal: byMe.short_id, body: "hi" })).rejects.toThrow("op-1 was posted by a person, so there is no agent to talk to about it");
+    const p = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "retire", handle: "growth" })]) });
+    await expect(performSayInThread(ctx, ME as any, { proposal: p.short_id, change: 5, body: "hi" })).rejects.toThrow("op-2#5 does not exist");
+    await expect(performSayInThread(ctx, ME as any, { proposal: p.short_id, body: "  " })).rejects.toThrow("Message body is empty");
+    await expect(performSayInThread(ctx, ME as any, { proposal: "op-9", body: "hi" })).rejects.toThrow("Proposal not found: op-9");
   });
 });

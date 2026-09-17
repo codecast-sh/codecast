@@ -44,6 +44,7 @@ import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
+  FALLBACK_TRANSCRIBE_MODEL,
   LIVE_TRANSCRIBE_MODEL,
   REC_LEASE_STALE_MS,
   RECORDING_SUMMARY_PUSH_TYPE,
@@ -1390,7 +1391,7 @@ export const mintAsrToken = action({
     if (!grant) return { error: "Not authorized for this room" };
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return { error: "Transcription is not configured" };
-    const model = LIVE_TRANSCRIBE_MODEL;
+    let model = LIVE_TRANSCRIBE_MODEL;
     let languages = unionTranscribeLanguages(args.languages, grant.languages);
     // GA realtime API: client secrets are minted at /v1/realtime/client_secrets
     // with the session config nested under `session` (audio.input vocabulary).
@@ -1408,7 +1409,15 @@ export const mintAsrToken = action({
       if (!resp.ok) {
         const body = (await resp.text()).slice(0, 300);
         console.error("[transcripts] mint failed", resp.status, body);
-        return { error: `ASR session mint failed (${resp.status})` };
+        let hint = "";
+        try {
+          const parsed = JSON.parse(body) as { error?: { message?: string }; message?: string };
+          const msg = parsed.error?.message ?? parsed.message;
+          if (typeof msg === "string" && msg) hint = `: ${msg.slice(0, 160)}`;
+        } catch {
+          // Body was not JSON; the status is enough.
+        }
+        return { error: `ASR session mint failed (${resp.status})${hint}` };
       }
       const data = (await resp.json()) as { value?: string; client_secret?: { value?: string } };
       const secret = data.value ?? data.client_secret?.value;
@@ -1420,6 +1429,14 @@ export const mintAsrToken = action({
     // unconstrained so the huddle still gets words; the client keeps its
     // own list for the script filter.
     if ("error" in minted && languages.length) {
+      languages = [];
+      minted = await mint(asrTranscriptionSession(model, languages));
+    }
+    // The live model 400'd the session even without languages (VAD body or
+    // the model itself). The previous recognizer still mints, and it closes
+    // turns on VAD without a client commit.
+    if ("error" in minted) {
+      model = FALLBACK_TRANSCRIBE_MODEL;
       languages = [];
       minted = await mint(asrTranscriptionSession(model, languages));
     }

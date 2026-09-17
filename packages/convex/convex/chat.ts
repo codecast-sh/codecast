@@ -409,6 +409,9 @@ async function notifyChat(
     /** A line a machine wrote (a bot author, or origin "agent"): the bell rings,
      *  the phone stays quiet (agent-channels.md C3). */
     agentLine?: boolean;
+    /** Face to store on the row when it is not the actor user's own — a Slack
+     *  person speaking through the workspace bridge, a session-typed line. */
+    actorAvatar?: string;
   },
 ): Promise<void> {
   if (opts.recipientId.toString() === opts.actorUserId.toString()) return;
@@ -433,6 +436,8 @@ async function notifyChat(
   await ctx.runMutation(internal.notificationRouter.emit, {
     event_type: opts.eventType,
     actor_user_id: opts.actorUserId,
+    actor_name: opts.actorName,
+    actor_avatar: opts.actorAvatar,
     entity_type: "chat_channel",
     entity_id: opts.channel._id.toString(),
     message: opts.message,
@@ -2418,8 +2423,11 @@ export async function postChatMessage(
   const inserted = await ctx.db.get(messageId);
   if (inserted) await queueSlackOutbound(ctx, { op: "message", message: inserted });
 
+  // A Slack person with no codecast account authors as the workspace bridge;
+  // the snapshot on the row is who actually spoke, and bells must name them.
+  const actorLabel = originSession?.title ?? opts.externalAuthor?.name;
   const { hereCount, actorName } = opts.history
-    ? { hereCount: 0, actorName: await actorNameFor(ctx, authorId, originSession?.title) }
+    ? { hereCount: 0, actorName: await actorNameFor(ctx, authorId, actorLabel) }
     : await announceChatMessage(ctx, {
       channel,
       root,
@@ -2432,7 +2440,8 @@ export async function postChatMessage(
       createdAt: now,
       agent: !!opts.agent,
       agentLine: !!opts.agent || opts.origin === "agent",
-      actorLabel: originSession?.title,
+      actorLabel,
+      actorAvatar: opts.externalAuthor?.avatar_url,
     });
 
   return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
@@ -2504,8 +2513,10 @@ async function announceChatMessage(
     agentLine?: boolean;
     /** Overrides the actor in bells and banners: a session-typed line notifies
      *  as the SESSION, not as the human it ran as — the same personification
-     *  the transcript renders. Already ownership-checked by the caller. */
+     *  the transcript renders. Already ownership-checked by the caller. A Slack
+     *  inbound line uses the mirrored person's name, not the workspace bridge. */
     actorLabel?: string;
+    actorAvatar?: string;
     /** Push body when the words are empty: an image send says what it carries,
      *  a burst whose transcript came back blank says "Voice note". */
     pushFallback?: string;
@@ -2524,6 +2535,7 @@ async function announceChatMessage(
   if (!opts.agent) await upsertRead(ctx, authorId, channel.team_id, channel._id, now, messageId, undefined);
 
   const actorName = await actorNameFor(ctx, authorId, opts.actorLabel);
+  const actorAvatar = opts.actorAvatar;
   const preview = plainPreview(content);
   // The banner's "where" line. A 1:1 DM gets none — the title already names
   // the person, and "Direct message" under their name is noise.
@@ -2542,6 +2554,7 @@ async function announceChatMessage(
       actorUserId: authorId,
       agentLine: opts.agentLine,
       actorName,
+      actorAvatar,
       channel,
       messageId,
       threadRootId: root?._id,
@@ -2561,6 +2574,7 @@ async function announceChatMessage(
         actorUserId: authorId,
         agentLine: opts.agentLine,
         actorName,
+        actorAvatar,
         channel,
         messageId,
         threadRootId: root._id,
@@ -2597,6 +2611,7 @@ async function announceChatMessage(
         actorUserId: authorId,
         agentLine: opts.agentLine,
         actorName,
+        actorAvatar,
         channel,
         messageId,
         recipientId,
@@ -2621,6 +2636,7 @@ async function announceChatMessage(
         actorUserId: authorId,
         agentLine: opts.agentLine,
         actorName,
+        actorAvatar,
         channel,
         messageId,
         recipientId,
@@ -2647,6 +2663,7 @@ async function announceChatMessage(
         actorUserId: authorId,
         agentLine: opts.agentLine,
         actorName,
+        actorAvatar,
         channel,
         messageId,
         threadRootId: root?._id,

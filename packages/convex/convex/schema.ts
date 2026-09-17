@@ -779,6 +779,11 @@ export default defineSchema({
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
+    // The session's character (docs/architecture/session-characters.md S1):
+    // an avatar key and a short name a person chose. Absent = the stable hash
+    // default; a role's standing session ignores both and wears the role.
+    character_avatar: v.optional(v.string()),
+    character_name: v.optional(v.string()),
     // Which device currently OWNS (runs) this session. Set by the managing
     // daemon. Absent = legacy/unowned. The single-owner invariant: a daemon
     // only manages sessions whose owner_device_id matches its own device id.
@@ -1235,6 +1240,24 @@ export default defineSchema({
     // "Replaced by op-6" instead of leaving two open proposals with no signal.
     supersedes: v.optional(v.id("org_proposals")),
     superseded_by: v.optional(v.id("org_proposals")),
+    // The conversation a person talks to about this proposal (org-staffing.md
+    // S18): the session that posted it, or the standing session of the role
+    // that did. Unset for a proposal a person posted: there is no agent to
+    // talk to. Rows from before the field derive it from `author` on read.
+    thread_conversation_id: v.optional(v.id("conversations")),
+    // The revision journal (S18): one entry per change a revise removed,
+    // amended or added, in order, so the page can show the conversation's
+    // effect on the list. `line` is the change as it reads after the op,
+    // `was` the line an amend replaced.
+    revisions: v.optional(v.array(v.object({
+      op: v.union(v.literal("removed"), v.literal("amended"), v.literal("added")),
+      seq: v.number(),
+      at: v.number(),
+      by: v.object({ kind: v.union(v.literal("role"), v.literal("session"), v.literal("user")), id: v.string() }),
+      line: v.string(),
+      was: v.optional(v.string()),
+      note: v.optional(v.string()),
+    }))),
     created_at: v.number(),
     updated_at: v.number(),
     resolved_at: v.optional(v.number()),
@@ -1255,7 +1278,17 @@ export default defineSchema({
     risk: v.optional(v.string()),
     // proposed → accepted → applied | failed, or proposed → skipped. accepted
     // is momentary: the accept applies in the same mutation.
-    status: v.union(v.literal("proposed"), v.literal("accepted"), v.literal("skipped"), v.literal("applied"), v.literal("failed")),
+    // `removed`: the author took it back with a revise (S18); the row stays
+    // so the page can show it struck through, and no count includes it.
+    status: v.union(v.literal("proposed"), v.literal("accepted"), v.literal("skipped"), v.literal("applied"), v.literal("failed"), v.literal("removed")),
+    // What the last revise did to this row (S18): removed, amended (then
+    // `before` is the change as it read) or added, with the author's note.
+    revision: v.optional(v.object({
+      kind: v.union(v.literal("removed"), v.literal("amended"), v.literal("added")),
+      note: v.string(),
+      at: v.number(),
+      before: v.optional(v.any()),
+    })),
     // The person's edits to the change (an object patch over its keys).
     edits: v.optional(v.any()),
     decided_by: v.optional(v.id("users")),
@@ -2377,6 +2410,14 @@ export default defineSchema({
     // means ON — see isAutoContinueEnabled; false is the explicit opt-out.
     // Web-set (setAutoContinueAccounts). Shares cc_auto_switch_state.
     cc_auto_continue: v.optional(v.boolean()),
+    // Ask before changing accounts. When on, a limit that would trigger an
+    // account switch instead records a PROPOSAL (cc_auto_switch_state
+    // .last_decision, kind "propose") and leaves the sessions parked for the
+    // human to approve from the park card — same-account resume still runs on
+    // its own. This is the default recovery for a new machine; auto-switch is
+    // the opt-in that acts without asking. Never both: setRecoveryMode keeps
+    // cc_auto_switch and this mutually exclusive.
+    cc_recovery_ask: v.optional(v.boolean()),
     cc_auto_switch_state: v.optional(ccAutoSwitchStateValidator),
     // The in-flight browser sign-in round trip (web CTA → daemon `claude auth
     // login` → outcome). Web-set to pending; daemon-set to confirmed/rejected.

@@ -1,6 +1,6 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
 import { enqueueRoleEvent } from "./orgEvents";
-import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting, isAssignedAwayFromOwnerSet } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { enqueuePush, readMissedSince } from "./pushRouter";
@@ -22,6 +22,7 @@ import {
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
 import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
+import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -300,13 +301,22 @@ export const list = query({
         const conversation = notification.conversation_id
           ? await ctx.db.get(notification.conversation_id)
           : null;
+        // Slack inbound lines are stored under the workspace bridge. The
+        // snapshot (or, for rows written before it was filled, the message's
+        // external_author) is the person who posted.
+        const needMessageFace = !notification.actor_name && actor?.bot_kind === "slack" && notification.chat_message_id;
+        const message = needMessageFace
+          ? await ctx.db.get(notification.chat_message_id!)
+          : null;
+        const face = displayNotificationActor(notification, actor, message);
         return {
           ...notification,
+          message: rewriteNotificationMessage(notification.message, face.name, actor?.name),
           actor: actor ? {
             _id: actor._id,
-            name: actor.name,
+            name: face.name,
             github_username: actor.github_username,
-            github_avatar_url: actor.github_avatar_url || actor.image,
+            github_avatar_url: face.avatar,
           } : null,
           conversation: conversation ? {
             title: conversation.title,
@@ -492,10 +502,6 @@ export async function deliverSessionNotificationToParties(
   title: string,
   message: string,
 ): Promise<boolean> {
-  let delivered = await deliverSessionNotification(
-    ctx, conversation.user_id, conversation._id, type, title, message,
-  );
-
   // Recipients are the UNION of the canonical owner set and the owner_user_id
   // cache. The cache is a safety net, not a second source of truth: a legacy row
   // written before the session_owners backfill has a cached owner but no join
@@ -504,7 +510,18 @@ export async function deliverSessionNotificationToParties(
   const recipients = await listSessionOwnerIds(ctx, conversation._id);
   if (conversation.owner_user_id) recipients.push(conversation.owner_user_id);
 
-  const seen = new Set<string>([conversation.user_id.toString()]); // runner: done above
+  // The alert follows the inbox row. A session whose owner set excludes the
+  // account that runs it has been handed over (the same rule the inbox scan
+  // applies), so the runner is not rung about work that is no longer theirs to
+  // answer. An unowned session is the runner's own and always rings them.
+  const runnerAssignedAway = isAssignedAwayFromOwnerSet(recipients, conversation.user_id.toString());
+  let delivered = runnerAssignedAway
+    ? false
+    : await deliverSessionNotification(
+      ctx, conversation.user_id, conversation._id, type, title, message,
+    );
+
+  const seen = new Set<string>(runnerAssignedAway ? [] : [conversation.user_id.toString()]); // runner: done above
   for (const ownerId of recipients) {
     const key = ownerId.toString();
     if (seen.has(key)) continue;

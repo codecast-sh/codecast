@@ -85,13 +85,18 @@ function seed(over: Record<string, any[]> = {}) {
 function context(user: string | null, over: Record<string, any[]> = {}) {
   const db = makeFakeDb(seed(over));
   const scheduled: Array<{ delay: number; name: string; args: any }> = [];
+  const emitted: Array<{ reference: unknown; args: any }> = [];
   const ctx: any = {
     db,
     auth: { async getUserIdentity() { return user ? { subject: `${user}|session` } : null; } },
     async runQuery() { throw new Error("no runQuery in this test"); },
-    async runMutation(_ref: unknown, _args: any) { return undefined; },
+    async runMutation(reference: unknown, args: any) {
+      emitted.push({ reference, args });
+      return undefined;
+    },
     scheduler: { async runAfter(delay: number, reference: unknown, args: any) { scheduled.push({ delay, name: getFunctionName(reference as any), args }); } },
     _scheduled: scheduled,
+    _emitted: emitted,
   };
   return ctx;
 }
@@ -181,6 +186,29 @@ describe("applyInboundMessage", () => {
     expect(ctx.db._tables.team_memberships.some((m: any) => m.user_id === row.user_id)).toBe(true);
     expect(scheduledNames(ctx)).not.toContain("slackSync:pushMessage");
     expect((await ctx.db.get(LINK)).inbound_count).toBe(1);
+  });
+  test("a live inbound line notifies as the Slack person, not the workspace bridge", async () => {
+    const ctx = context(null, {
+      chat_reads: [{
+        _id: "read-bob-all",
+        user_id: BOB,
+        channel_id: CHANNEL,
+        team_id: TEAM,
+        last_read_at: 0,
+        notify_level: "all",
+        joined_at: 1,
+        updated_at: 1,
+      }],
+    });
+    await call(applyInboundMessage, ctx, base);
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_post"]);
+    expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
+    expect(ctx._emitted[0].args.actor_name).toBe("Dana");
+    expect(ctx._emitted[0].args.actor_avatar).toBe("https://a/b.png");
+    expect(ctx._emitted[0].args.message).toMatch(/^Dana posted in #general:/);
+    const bridge = await ctx.db.get(messages(ctx)[0].user_id);
+    expect(bridge.name).toMatch(/Slack/);
+    expect(ctx._emitted[0].args.actor_user_id).toBe(bridge._id);
   });
   test("a mapped teammate is the author and the line still wears the Slack mark", async () => {
     const ctx = context(null);
