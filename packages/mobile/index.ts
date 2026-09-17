@@ -3,4 +3,6 @@
 // sorts first), so a polyfill import inside _layout is too late for modules
 // like lib/calls/callManager that touch DOMException at eval time.
 import "./lib/polyfills";
-import "expo-router/entry";
+import { bootMark } from "./lib/bootProfile";
+bootMark("after-polyfills");
+require("expo-router/entry");
