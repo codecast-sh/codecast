@@ -1,14 +1,11 @@
 // The phone as a meeting recorder.
 //
 // Somebody puts the phone on the table, presses record, and the microphone
-// hears the room. The words are not read here — React Native has no
-// AudioContext and no way to tap a microphone as samples, so there is no live
-// recognizer to stream to the way the browser recorder does. What the phone
-// does is capture a file and hand it to the server, which reads the words out
-// of it (convex/transcripts.ts transcribeRecording) and then runs the same
-// summary and action items every huddle gets. That is why this module has a
-// level meter and a clock and no live transcript: showing words the phone
-// cannot produce would be a lie about what is happening.
+// hears the room. Two things run at once: an m4a file that becomes the
+// recording you can replay, and a live recognizer (lib/asrCapture.ts) that
+// appends words as they are said so the call page fills in while the phone
+// is still recording. If the live path cannot start, the file still
+// transcribes after stop — that is the fallback, not the design.
 //
 // A MODULE SINGLETON, beside callManager and ringtone, for the same reason
 // they are: the recording has to outlive the screen. Somebody starts a
@@ -18,7 +15,7 @@
 // "audio" (the huddle needed it), which is what keeps the process alive with
 // the screen locked.
 
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import type { ConvexReactClient } from 'convex/react';
@@ -31,6 +28,7 @@ import {
   RECORDING_SAMPLE_RATE,
   recRoomKey,
 } from '@codecast/shared/contracts';
+import { startAsrCapture, type AsrCapture } from './asrCapture';
 import { getCallSnapshot } from './calls/callManager';
 import { uploadUriToStorage } from './uploadToStorage';
 
@@ -77,6 +75,10 @@ export type RecorderSnapshot = {
   /** Set when capture ended because the file reached the length a
    *  transcription can still read. */
   stoppedAtLimit: boolean;
+  /** Rolling caption tail from the live recognizer, newest last. */
+  tail: Array<{ text: string }>;
+  /** The sentence being spoken right now, or empty between utterances. */
+  partial: string;
 };
 
 const IDLE: RecorderSnapshot = {
@@ -85,6 +87,8 @@ const IDLE: RecorderSnapshot = {
   transcriptId: null,
   error: null,
   stoppedAtLimit: false,
+  tail: [],
+  partial: '',
 };
 
 let snapshot: RecorderSnapshot = IDLE;
@@ -133,10 +137,13 @@ function setLevel(v: number): void {
 type Run = {
   recorder: any;
   transcriptId: Id<'transcripts'>;
+  roomKey: string;
   convex: ConvexReactClient;
   beat: ReturnType<typeof setInterval> | null;
   meter: ReturnType<typeof setInterval> | null;
   limit: ReturnType<typeof setTimeout> | null;
+  appState: ReturnType<typeof AppState.addEventListener> | null;
+  asr: AsrCapture | null;
 };
 
 let run: Run | null = null;
@@ -148,8 +155,16 @@ function teardown(): void {
   if (run.beat) clearInterval(run.beat);
   if (run.meter) clearInterval(run.meter);
   if (run.limit) clearTimeout(run.limit);
+  try {
+    run.appState?.remove();
+  } catch {}
   run.beat = run.meter = run.limit = null;
+  run.appState = null;
   setLevel(0);
+}
+
+function beatNow(convex: ConvexReactClient, transcriptId: Id<'transcripts'>): void {
+  void convex.mutation(api.transcripts.beat, { transcript_id: transcriptId }).catch(() => {});
 }
 
 /** What the file is. See shared/contracts/recordingAudio for why it is speech
@@ -212,6 +227,7 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
   }
   let transcriptId: Id<'transcripts'> | null = null;
   let recorder: any = null;
+  const roomKey = recRoomKey(newRecordingId());
   try {
     const granted =
       (await a.getRecordingPermissionsAsync()).granted ||
@@ -221,7 +237,7 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
       return;
     }
     const started = await convex.mutation(api.transcripts.start, {
-      room_key: recRoomKey(newRecordingId()),
+      room_key: roomKey,
     });
     transcriptId = started.transcript_id;
 
@@ -233,6 +249,11 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
       allowsRecording: true,
       playsInSilentMode: true,
       shouldPlayInBackground: true,
+      // Without this, expo-audio pauses the recorder the moment the app
+      // backgrounds — which is what locking the phone does. The screen
+      // tells people they can lock it; this is what makes that true.
+      allowsBackgroundRecording: true,
+      interruptionMode: 'mixWithOthers',
     });
     recorder = new (a.AudioModule as any).AudioRecorder(recordingOptions(a));
     await recorder.prepareToRecordAsync();
@@ -255,23 +276,42 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
   // Unreachable: the try assigned it or the catch returned. The check exists
   // because a narrowing made inside a try does not survive the block.
   if (!transcriptId) return;
-  const active: Run = { recorder, transcriptId, convex, beat: null, meter: null, limit: null };
+  const active: Run = {
+    recorder,
+    transcriptId,
+    roomKey,
+    convex,
+    beat: null,
+    meter: null,
+    limit: null,
+    appState: null,
+    asr: null,
+  };
   run = active;
+  const startedAt = Date.now();
   set({
     phase: 'recording',
-    startedAt: Date.now(),
+    startedAt,
     transcriptId: String(transcriptId),
     error: null,
     stoppedAtLimit: false,
+    tail: [],
+    partial: '',
   });
 
   // The server lease. A recording has no room and therefore no seat leases, so
-  // this is the only thing telling the orphan sweep it is still going; without
-  // it the sweep ends the recording two minutes in.
+  // this is the only thing telling the orphan sweep it is still going. Beat
+  // immediately: waiting for the first interval used to leave a 15 second
+  // window where a lock-screen freeze looked like a dead process.
+  beatNow(convex, transcriptId);
   active.beat = setInterval(() => {
     const id = run?.transcriptId;
-    if (id) void convex.mutation(api.transcripts.beat, { transcript_id: id }).catch(() => {});
+    if (id) beatNow(convex, id);
   }, CALL_HEARTBEAT_MS);
+  active.appState = AppState.addEventListener('change', () => {
+    const id = run?.transcriptId;
+    if (id) beatNow(convex, id);
+  });
 
   active.meter = setInterval(() => {
     try {
@@ -288,6 +328,61 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
     set({ stoppedAtLimit: true });
     void stopRecording();
   }, MAX_RECORDING_MS);
+
+  // Live words. Best effort: a failure here must not stop the file. The
+  // recognizer appends as people speak so the call page fills in while this
+  // phone is still recording.
+  const liveId = transcriptId;
+  void (async () => {
+    // Let the file recorder take the session first. WebRTC getUserMedia is
+    // a second tap on the same microphone; starting it immediately can
+    // reset the session and pause the file.
+    await new Promise((r) => setTimeout(r, 400));
+    if (run?.transcriptId !== liveId) return;
+    const asr = await startAsrCapture({
+      convex,
+      roomKey,
+      clock: () => Math.max(0, Date.now() - startedAt),
+      events: {
+        onPartial: (text) => {
+          if (run?.transcriptId === liveId) set({ partial: text });
+        },
+        onUtterance: ({ text, t0, t1 }) => {
+          if (run?.transcriptId !== liveId) return;
+          set({
+            partial: '',
+            tail: [...snapshot.tail, { text }].slice(-6),
+          });
+          void convex
+            .mutation(api.transcripts.appendSegments, {
+              transcript_id: liveId,
+              segments: [{ speaker_id: 'mic', speaker_name: 'Speaker', text, t0, t1 }],
+            })
+            .catch(() => {});
+        },
+      },
+    });
+    if (!asr || run?.transcriptId !== liveId) {
+      asr?.close();
+      return;
+    }
+    try {
+      if (run.recorder.getStatus?.()?.isRecording === false) {
+        asr.close();
+        return;
+      }
+    } catch {}
+    run.asr = asr;
+    try {
+      await getAudio()?.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        allowsBackgroundRecording: true,
+        interruptionMode: 'mixWithOthers',
+      });
+    } catch {}
+  })().catch(() => {});
 }
 
 /**
@@ -301,9 +396,14 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
 export async function stopRecording(): Promise<string | null> {
   const active = run;
   if (!active || snapshot.phase !== 'recording') return null;
-  set({ phase: 'finishing' });
+  set({ phase: 'finishing', partial: '' });
   teardown();
   run = null;
+
+  try {
+    await active.asr?.finish();
+  } catch {}
+  active.asr = null;
 
   let uri: string | null = null;
   try {
@@ -357,7 +457,11 @@ export function dismissRecorderError(): void {
  *  the recording ended. */
 async function releaseAudioSession(): Promise<void> {
   try {
-    await getAudio()?.setAudioModeAsync({ allowsRecording: false, shouldPlayInBackground: false });
+    await getAudio()?.setAudioModeAsync({
+      allowsRecording: false,
+      shouldPlayInBackground: false,
+      allowsBackgroundRecording: false,
+    });
   } catch {}
 }
 

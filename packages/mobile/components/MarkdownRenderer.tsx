@@ -25,6 +25,7 @@ import { parseEntityUrl, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/sha
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
 import { parseInsightBlocks } from '@codecast/web/components/insightBlocks';
+import { replaceShortcodes } from '@codecast/shared/chat';
 
 /**
  * A tapped link. Every link in the app is this component, so they all open the
@@ -607,7 +608,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandle
   while ((match = codeBlockRegex.exec(text)) !== null) {
     if (match.index > lastIndex) {
       const t = text.slice(lastIndex, match.index);
-      if (t.trim()) blocks.push({ type: 'text', content: t });
+      if (t.trim()) blocks.push({ type: 'text', content: replaceShortcodes(t) });
     }
     blocks.push({ type: 'code', content: match[2].trimEnd(), language: match[1] || 'plaintext' });
     lastIndex = match.index + match[0].length;
@@ -615,10 +616,10 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandle
 
   if (lastIndex < text.length) {
     const t = text.slice(lastIndex);
-    if (t.trim()) blocks.push({ type: 'text', content: t });
+    if (t.trim()) blocks.push({ type: 'text', content: replaceShortcodes(t) });
   }
 
-  if (blocks.length === 0) blocks.push({ type: 'text', content: text });
+  if (blocks.length === 0) blocks.push({ type: 'text', content: replaceShortcodes(text) });
 
   return (
     <>

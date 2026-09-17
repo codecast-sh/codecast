@@ -15,7 +15,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { buildChatTimeline, memberHandle } from '@codecast/shared/chat';
+import { authorGroupKey, buildChatTimeline, memberHandle } from '@codecast/shared/chat';
 import { MessageRow, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
@@ -284,6 +284,7 @@ export default function ChatThreadScreen() {
       [...replies, ...pendingRows].map((m) => ({
         id: m.id,
         authorId: m.author.id,
+        groupKey: authorGroupKey(m.author),
         createdAt: m.createdAt,
         pendingAgent: m.agentStatus === 'thinking' || m.agentStatus === 'streaming',
         deleted: !!m.deletedAt,

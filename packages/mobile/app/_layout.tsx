@@ -7,7 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import { AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
@@ -23,8 +23,11 @@ import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { CallOverlay } from '@/components/calls/CallOverlay';
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
+import { bootMark } from '@/lib/bootProfile';
+import * as Font from 'expo-font';
+
+const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
 
 
 // Keychain failures must degrade to "signed out", never hang auth: a rejected
@@ -77,16 +80,11 @@ SplashScreen.preventAutoHideAsync();
 
 function RootLayout() {
   const [loaded, error] = useFonts({
-    // JetBrains Mono is the app face, same as web. One key per face — the
-    // resolver in constants/fonts.ts swaps families per fontWeight because a
-    // runtime-loaded family holds a single face (see monoStyle). The legacy
-    // "SpaceMono" key aliases Regular so old call sites keep rendering.
+    // First paint only needs Regular (body), SemiBold (Inbox title), and the
+    // icon font the list uses. Medium/Bold/Italic load after splash hide.
     SpaceMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
     JetBrainsMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
-    'JetBrainsMono-Medium': require('../assets/fonts/JetBrainsMono-Medium.ttf'),
     'JetBrainsMono-SemiBold': require('../assets/fonts/JetBrainsMono-SemiBold.ttf'),
-    'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
-    'JetBrainsMono-Italic': require('../assets/fonts/JetBrainsMono-Italic.ttf'),
     ...FontAwesome.font,
   });
 
@@ -111,18 +109,26 @@ function RootLayout() {
     if (error) throw error;
   }, [error]);
 
+  useEffect(() => {
+    if (!loaded) return;
+    bootMark("fonts-ready");
+    void Font.loadAsync({
+      'JetBrainsMono-Medium': require('../assets/fonts/JetBrainsMono-Medium.ttf'),
+      'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
+      'JetBrainsMono-Italic': require('../assets/fonts/JetBrainsMono-Italic.ttf'),
+    });
+  }, [loaded]);
+
   // CallKit + PushKit bridge — mounts once, before any call surface. Safe on
 
   // binaries without the native module (guarded require → no-op).
 
   useEffect(() => { startCallKitBridge(); }, []);
 
-
-  useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
+  // Splash stays up past fonts. AuthProvider releases it once the SQLite
+  // cache has hydrated (clientStateInitialized) and local boot trust is
+  // ready to render — otherwise kill-and-reopen paints the inbox skeleton
+  // on an empty store. preventAutoHideAsync above is the hold.
 
   // Publish the resolved appearance (Settings choice, else the OS setting)
   // into the live palette before paint. Every screen subscribes through
@@ -214,6 +220,8 @@ function solarizedNavTheme(scheme: ColorScheme) {
 function RootLayoutNav() {
   const scheme = useActiveScheme();
   const navTheme = useMemo(() => solarizedNavTheme(scheme), [scheme]);
+  const [calls, setCalls] = useState(false);
+  useEffect(() => { setCalls(true); }, []);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ConvexProvider client={convex}>
@@ -241,7 +249,11 @@ function RootLayoutNav() {
                     options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
                   />
                 </Stack>
-                <CallOverlay />
+                {calls ? (
+                  <Suspense fallback={null}>
+                    <CallOverlay />
+                  </Suspense>
+                ) : null}
               </AuthGate>
             </ThemeProvider>
           </AuthProvider>

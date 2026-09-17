@@ -1,5 +1,5 @@
 import { captureError } from '@/lib/analytics';
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type TextInput as NativeTextInput, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -15,6 +15,9 @@ import { AgentLogoSvg } from '@/components/AgentLogo';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
+import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
+import { useComposerField, nativeComposerText } from '@/lib/composerField';
+import { NativePressable } from '@/lib/gestureHandler';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
@@ -3052,15 +3055,39 @@ const AGENT_STATUS_META: Record<string, { color: string; label: string }> = {
   connected: { color: Theme.cyan, label: 'Connected' },
 };
 
+function seedComposerDraft(conversationId: string, draftProp?: string | null): string {
+  const store = useInboxStore.getState();
+  const persisted = store.getDraft(conversationId)?.draft_message ?? draftProp ?? '';
+  const msgs = [
+    ...(store.messages[conversationId] ?? []),
+    ...(store.pendingMessages[conversationId] ?? []),
+  ];
+  if (persisted && isResentCopyOfSentMessage(msgs, persisted)) {
+    store.clearDraftFinal(conversationId);
+    return '';
+  }
+  return persisted;
+}
+
 function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null; autoFocus?: boolean }) {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
-  const inputRef = useRef<NativeTextInput>(null);
   const [expanded, setExpanded] = useState(false);
   // Content height of the inline input; the fullscreen affordance only appears
   // once the text actually wraps, so a one-liner keeps the card minimal.
   const [inputHeight, setInputHeight] = useState(0);
+
+  const [seed] = useState(() => seedComposerDraft(conversationId as string, draft));
+  const {
+    value: message,
+    setValue: setMessage,
+    onChangeText,
+    epoch,
+    inputRef,
+    sendingRef,
+    clearAfterSend,
+  } = useComposerField(seed);
 
   // Focus after the push animation settles — focusing mid-transition on iOS
   // either drops the keyboard or stutters the navigation.
@@ -3069,11 +3096,6 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     const task = InteractionManager.runAfterInteractions(() => inputRef.current?.focus());
     return () => task.cancel();
   }, [autoFocus]);
-  // Seed from the local-first store draft first (survives the stub→real rekey on
-  // freshly-created sessions), then fall back to the server-synced draft prop.
-  const [message, setMessage] = useState<string>(
-    () => useInboxStore.getState().getDraft(conversationId)?.draft_message ?? draft ?? '',
-  );
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
   // Mirrors the web composer's pastedImagesRef: the `[Image N]` token paths
@@ -3091,36 +3113,46 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     ? { managed: true as const, agent_status: 'working' }
     : managedSessionQ;
 
-  const patchConversation = useMutation(api.conversations.patchConversation);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
-  const draftRef = useRef(useInboxStore.getState().getDraft(conversationId)?.draft_message ?? draft ?? '');
-  // The debounced server write of the draft. handleSend cancels it directly:
-  // the effect cleanup only runs on the next React commit, and on a streaming
-  // session a contended JS thread can let the timer fire first — persisting the
-  // just-sent text AFTER the send's clear, so it reappears on the next mount.
-  const draftPatchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const draftRef = useRef(seed);
+  // Same store path as web MessageInput: debounce setDraft / clearDraftFinal.
+  // A parallel patchConversation of conversations.draft_message is the race
+  // that writes the just-sent text back after the send's clear.
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
+    if (sendingRef.current) return;
     if (!message && !draftRef.current) return;
     if (message === draftRef.current) return;
     draftRef.current = message;
-    // Local-first draft: write through the store so it survives the stub→real
-    // rekey on a freshly-created session (the id is a non-Convex stub for ~1s).
-    // setDraft/clearDraft resolve stub ids; patchConversation would throw an
-    // ArgumentValidationError on a stub id (v.id) and silently lose the draft.
     const store = useInboxStore.getState();
-    if (message) store.setDraft(conversationId, { draft_message: message });
-    else store.clearDraft(conversationId);
-    clearTimeout(draftPatchTimerRef.current);
-    draftPatchTimerRef.current = setTimeout(() => {
-      // Server persistence only once the id is real; the store-resolved draft
-      // is dispatched through the outbox on rekey regardless.
-      if (isConvexId(conversationId as string)) {
-        patchConversation({ id: conversationId, fields: { draft_message: message || null } }).catch(() => {});
-      }
-    }, 1000);
-    return () => clearTimeout(draftPatchTimerRef.current);
-  }, [message, conversationId]);
+    clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      if (sendingRef.current) return;
+      if (message) store.setDraft(conversationId, { draft_message: message });
+      else store.clearDraftFinal(conversationId);
+    }, 300);
+    return () => clearTimeout(draftTimerRef.current);
+  }, [message, conversationId, sendingRef]);
+
+  // Web heals a resent-copy draft once the message window has loaded; the
+  // seed-time check often runs against an empty store on a cold visit.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (sendingRef.current) return;
+      const live = draftRef.current;
+      if (!live) return;
+      const store = useInboxStore.getState();
+      const msgs = [
+        ...(store.messages[conversationId] ?? []),
+        ...(store.pendingMessages[conversationId] ?? []),
+      ];
+      if (!isResentCopyOfSentMessage(msgs, live)) return;
+      clearAfterSend(live);
+      store.clearDraftFinal(conversationId);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [conversationId, clearAfterSend, sendingRef]);
 
   const uploadToStorage = async (uri: string) => {
     const uploadUrl = await generateUploadUrl({});
@@ -3201,7 +3233,10 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
   // fire-and-forget (rides the store outbox, dedups on client_id). The input
   // clears synchronously — no await, no spinner, no lock.
   const handleSend = () => {
-    const trimmedMessage = message.trim();
+    const trimmedMessage = nativeComposerText(
+      inputRef.current as { _lastNativeText?: unknown } | null,
+      message,
+    ).trim();
     if (!trimmedMessage && selectedImages.length === 0) return;
 
     if (selectedImages.some(img => img.uploading)) {
@@ -3221,28 +3256,19 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
       return;
     }
 
-    clearTimeout(draftPatchTimerRef.current);
-    setMessage('');
+    // Same send-clear as web: remount the native box, keep focus, ignore IME
+    // restores of the just-sent text. Do not dismiss the keyboard — a follow-up
+    // is the ordinary next gesture. clearDraftFinal is the only draft write
+    // (client_state + conversation row via the outbox); a parallel
+    // patchConversation is what used to put the sent text back.
+    clearTimeout(draftTimerRef.current);
     draftRef.current = '';
+    clearAfterSend(content);
     setSelectedImages([]);
-    // Clear the draft both locally and on the server. Without the local clear,
-    // a restart-right-after-send would re-hydrate the stale draft (cache-first).
-    // clearDraft resolves stub ids; the server patch is gated on a real id.
-    // clearDraftFinal (not clearDraft) — the web send path: it dispatches the
-    // clear through the outbox (client_state draft + the durable conversation
-    // row), so a cached-row push can't re-seed the composer on the next mount.
-    // syncRecord covers stub ids, which clearDraftFinal's row-clear skips.
-    const store = useInboxStore.getState();
-    store.clearDraftFinal(conversationId);
-    store.syncRecord('conversations', conversationId, { draft_message: null });
-    if (isConvexId(conversationId as string)) {
-      patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
-    }
+    setInputHeight(0);
+    useInboxStore.getState().clearDraftFinal(conversationId);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Sending is a completed gesture — give the conversation the screen back.
     setExpanded(false);
-    Keyboard.dismiss();
-
   };
 
   const canSend = !!message.trim() || selectedImages.length > 0;
@@ -3301,14 +3327,20 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
           </RNView>
         )}
       </RNView>
-      <TouchableOpacity
+      {/* Never `disabled` — a disabled TouchableOpacity drops the tap, and on a
+          new session the JS thread is often still catching up (create, cache
+          write, keyboard) while the native field already shows text. Keep the
+          grey look; handleSend no-ops if the box is still empty. */}
+      <NativePressable
         style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
         onPress={handleSend}
-        disabled={!canSend}
         activeOpacity={0.7}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityRole="button"
+        accessibilityLabel="Send"
       >
         <FontAwesome name="arrow-up" size={14} color="#fff" />
-      </TouchableOpacity>
+      </NativePressable>
     </RNView>
   );
 
@@ -3335,6 +3367,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
       )}
       <RNView style={styles.composerCard}>
         <TextInput
+          key={epoch}
           ref={inputRef}
           style={[
             styles.textInput,
@@ -3343,7 +3376,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
             inputHeight > 44 && styles.textInputWithExpand,
           ]}
           value={message}
-          onChangeText={setMessage}
+          onChangeText={onChangeText}
           placeholder={placeholder}
           placeholderTextColor={Theme.textMuted0}
           multiline
@@ -3386,9 +3419,10 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
             {errorBannerEl}
             {imageStripEl}
             <TextInput
+              key={epoch}
               style={styles.expandedInput}
               value={message}
-              onChangeText={setMessage}
+              onChangeText={onChangeText}
               placeholder={placeholder}
               placeholderTextColor={Theme.textMuted0}
               multiline
@@ -5108,17 +5142,19 @@ export default function SessionDetailScreen() {
             const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
             const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
             const isHighlighted = highlightedMessageId === item._id;
-            // Optimistic-send affordances: pending (optimistic/queued) renders
-            // dimmed with a "Sending"/"Queued" indicator; failed renders dimmed
-            // with a distinct "Failed to send" indicator.
-            const isPending = item._isOptimistic || item._isQueued;
+            // Local-first: an optimistic bubble is the message. Web only labels
+            // queued/stuck after a grace; a "Sending" chip made a landed send
+            // look like it was still waiting. Queued (agent busy/offline) and
+            // failed stay labeled because those are the states that need a verb.
+            const isQueued = !!item._isQueued;
             const isFailed = item._isFailed;
+            const isPending = item._isOptimistic || isQueued;
             return (
               <RNView style={[
                 isSearchDimmed ? { opacity: 0.25 } : undefined,
                 (isCurrentSearchMatch || isHighlighted) && styles.searchHighlight,
                 shareSelectionMode && { paddingLeft: 28 },
-                (isPending || isFailed) && { opacity: 0.55 },
+                isFailed ? { opacity: 0.55 } : isPending ? { opacity: 0.8 } : undefined,
               ]}>
                 {shareSelectionMode && (
                   <Pressable
@@ -5150,12 +5186,9 @@ export default function SessionDetailScreen() {
                   childConversationMap={conversation.child_conversation_map}
                   bookmarkedSet={bookmarkedSet}
               />
-                {isPending && (
+                {isQueued && (
                   <RNView style={styles.pendingStatusRow}>
-                    <ActivityIndicator size="small" color={Theme.textDim} />
-                    <RNText style={styles.pendingStatusText}>
-                      {item._isQueued ? 'Queued' : 'Sending'}
-                    </RNText>
+                    <RNText style={styles.pendingStatusText}>Queued</RNText>
                   </RNView>
                 )}
                 {isFailed && (
@@ -5245,16 +5278,9 @@ export default function SessionDetailScreen() {
           onScrubEnd={handleRailScrubEnd}
         />
 
-        <RNView>
-          <MessageInput
-            conversationId={id as Id<"conversations">}
-            isActive={isActive}
-            draft={conversation?.draft_message}
-            autoFocus={focusParam === '1'}
-          />
-        </RNView>
-
-        {/* Jump arrows */}
+        {/* Jump arrows. Unmount when empty: an absolute box-none layer with
+            zIndex still intercepts taps on some RN builds. */}
+        {(userScrolled || hasMoreAbove || (!isNearTop && allMessages.length > 0)) && (
         <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
           {/* The tick rail carries the position signal when it renders; only a
               thread with no rail (fewer than 2 ticks) keeps the old track. */}
@@ -5323,6 +5349,20 @@ export default function SessionDetailScreen() {
               </TouchableOpacity>
             </RNView>
           )}
+        </RNView>
+        )}
+
+        {/* After the jump overlay in the tree, and above it in zIndex. That
+            overlay is a full-width absolute layer whose bottom inset is a
+            guessed composer height; on a new session the keyboard is open and
+            the send button sat inside that layer, so the overlay won the tap. */}
+        <RNView style={styles.composerLayer}>
+          <MessageInput
+            conversationId={id as Id<"conversations">}
+            isActive={isActive}
+            draft={conversation?.draft_message}
+            autoFocus={focusParam === '1'}
+          />
         </RNView>
       </KeyboardAvoidingView>
       <Toast key={toastKey} message={toastMessage} visible={!!toastMessage && toastKey > 0} />
@@ -6496,6 +6536,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     right: 0,
     bottom: 116,
     zIndex: 100,
+  },
+  composerLayer: {
+    zIndex: 200,
+    elevation: 200,
   },
   jumpTopButtonWrap: {
     position: 'absolute',

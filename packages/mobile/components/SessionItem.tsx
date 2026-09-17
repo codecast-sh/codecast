@@ -6,6 +6,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
 import { liveActivityOf } from '@codecast/web/lib/sessionActivity';
+import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 import type { InboxSession } from '@codecast/web/store/inboxStore';
 import type { SessionActivity } from '@codecast/shared/contracts';
 import { gestureHandler } from '@/lib/gestureHandler';
@@ -206,13 +207,22 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress }: 
   const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
   // What the agent is doing right now, read off the live store row rather than
   // the prop: the list wakes on structural change only, and this field rides
-  // the liveness overlay. A scalar selector, so only this row re-renders when
-  // its own line changes; the show rule (working and fresh) is the shared one
-  // the web card and composer apply. Freshness reads the clock at render, like
-  // stateView above: the inbox's coarse ticker re-renders rows on its own.
+  // the liveness overlay. The show rule (working and fresh) is the shared one
+  // the web card and composer apply.
+  //
+  // Freshness is time driven, not field driven: a stamp ages past the cutoff
+  // with no store write, so a selector that read Date.now() kept a stale line
+  // on screen until some unrelated write. The threshold clock (same as the web
+  // card) re-renders this row only when its own line flips between shown and
+  // hidden; the scalar selector below then re-runs with the fresh clock, and
+  // still wakes the row only when its own text changes.
+  const activityNow = useNowWhen((t) => {
+    const row = useInboxStore.getState().sessions[session._id] as InboxSession | undefined;
+    return liveActivityOf(row, row?.activity, t) ? "1" : "0";
+  }, 30_000);
   const activityText = useInboxStore((s) => {
     const row = s.sessions[session._id] as InboxSession | undefined;
-    return liveActivityOf(row, row?.activity, Date.now())?.text ?? null;
+    return liveActivityOf(row, row?.activity, activityNow)?.text ?? null;
   });
   const [thumbZoom, setThumbZoom] = useState(false);
   // Broken preview image → drop the slot, otherwise it reserves row width.
