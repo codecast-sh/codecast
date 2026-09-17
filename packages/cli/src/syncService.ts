@@ -474,7 +474,7 @@ export class SyncService {
     default_branch?: string;
     head_sha?: string;
     rows: Array<{ kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean }>;
-    commits?: Array<{ sha: string; message: string; author_name: string; author_email: string; timestamp: number; files_changed: number; insertions: number; deletions: number; branch?: string; conversation_id?: string }>;
+    commits?: Array<{ sha: string; message: string; author_name: string; author_email: string; timestamp: number; files_changed: number; insertions: number; deletions: number; branch?: string; conversation_id?: string; files?: Array<{ filename: string; additions: number; deletions: number }> }>;
   }): Promise<{ published: boolean; reason?: string; rows?: number; commits_created?: number } | undefined> {
     try {
       return await this.mutate("repos:ingestLocal", { api_token: this.apiToken, ...payload });

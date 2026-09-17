@@ -39,6 +39,50 @@ cast hosts keepalive 30
 
 Each call creates an independent lease for 1–1440 whole minutes. Leases use the installed host's `/home/ubuntu/.codecast/host-keepalive` directory, not a session's `HOME` or `CODECAST_DIR`. A shorter later lease cannot cancel another caller's longer one. Expiry removes that lease's veto; the ordinary idle grace still applies. The command refuses an older watchdog without lease support; updating only the CLI binary does not upgrade an existing host's watchdog. The command does not wake, provision, or restart a host.
 
+## Updating a host
+
+A provisioned host cannot update itself, and this is deliberate rather than a
+gap in the updater. Provisioning installs the CLI as a shim that runs the
+bundle under bun, because `bun --compile` output segfaults on Linux, so the
+daemon's `process.execPath` is bun itself. The shared updater treats an
+execPath containing `bun` as a developer checkout and refuses before fetching,
+which is the `forced_update_failed ... error=dev_mode` line such a host logs on
+every check. The refusal is protecting you: `performUpdate` replaces the
+running executable in place, and on this shape that executable IS bun, so
+letting it proceed would overwrite the host's interpreter. The published Linux
+artifacts are compiled binaries and would not run here anyway.
+
+So a host moves version only when someone ships it a bundle. Until `cast hosts`
+grows an update verb (ct-52223), the procedure is:
+
+1. Build the release you want from a clean checkout, not from a shared tree,
+   so no other session's uncommitted work travels. `buildLinuxCast` builds into
+   its own directory and returns it.
+2. Ship the whole directory with `uploadLinuxCast`. The build is split, so its
+   entry is a few hundred bytes that imports its chunks, and there were 246
+   of them in 1.1.137. Copying only `main.js` and `daemon.js` leaves the host
+   restarting forever on a module it cannot find.
+   The upload merges into `/usr/local/lib/codecast` rather than replacing it,
+   which is what preserves adjacent files such as `idle-probe.py`.
+3. Run `cast --version` on the host BEFORE restarting the daemon. The old
+   daemon is still serving at this point, so a bad bundle costs nothing and
+   backs out by restoring the previous directory.
+4. Restart `codecast-daemon.service`.
+
+This updates the bundle, and only the bundle. The idle watchdog at
+`/usr/local/bin/cast-idle-check` and the probe beside it are written by
+`baseProvisionScript`, not by the build, so they keep whatever version the host
+was last provisioned with. Compare them against what the release you are
+shipping would generate before assuming a host is current; on 2026-09-17 they
+happened to match, which is not something to rely on.
+
+A restart does not by itself kill sessions on the host, but whether it does
+depends on who started the tmux server. A server the daemon spawned shares the
+daemon's control group and dies with it under `KillMode=control-group`; a
+server started from an SSH session sits in its own scope under the user slice
+and survives. The daemon re-adopts existing sessions by name either way. Check
+before assuming, and tell whoever is working on the host first.
+
 ## Verified on the existing AWS host
 
 The existing 12GiB volume was expanded to 32GiB, without creating an instance. One three-prompt invocation created these real Codecast installations:

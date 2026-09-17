@@ -74,3 +74,67 @@ test('heartbeat paths share a scan and refresh the result after thirty seconds',
   expect(read()).not.toBe(first);
   expect(calls).toBe(2);
 });
+
+const GROK_ID = '01a0a5e8-0951-7f13-a251-1200846e2fe9';
+
+function grokLine(tsSec: number, kind: string) {
+  return JSON.stringify({
+    timestamp: tsSec,
+    method: '_x.ai/session/update',
+    params: { sessionId: GROK_ID, update: { sessionUpdate: kind } },
+  }) + '\n';
+}
+
+function grokSession(now: number, lines: string[], lastSyncedAt: number) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-health-grok-'));
+  dirs.push(dir);
+  const sessionDir = path.join(dir, '.grok', 'sessions', '%2FUsers%2Fashot%2Fsrc%2Fcodecast', GROK_ID);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const file = path.join(sessionDir, 'updates.jsonl');
+  fs.writeFileSync(file, lines.join(''));
+  const mtimeSec = now / 1000;
+  fs.utimesSync(file, mtimeSec, mtimeSec);
+  const record: SyncRecord = {
+    lastSyncedAt,
+    lastSyncedPosition: 0,
+    messageCount: 1,
+    conversationId: 'jx75dz2dmvyhnktcnr2qj6crtd8eegwp',
+    sourceGeneration: {
+      client: 'grok', sessionId: GROK_ID, dev: 1, ino: 1, birthtimeMs: lastSyncedAt,
+      unit: 'signatures', watermark: 'abc', prefixProven: true,
+    },
+  };
+  return { file, record };
+}
+
+test('a grok hook-only tail after last ingest is not a stuck sync', async () => {
+  const now = Date.now();
+  const lastSyncedAt = now - 11 * 3_600_000;
+  const lastSyncedSec = Math.floor(lastSyncedAt / 1000);
+  const { file, record } = grokSession(now, [
+    grokLine(lastSyncedSec - 10, 'user_message_chunk'),
+    grokLine(lastSyncedSec - 5, 'agent_message_chunk'),
+    grokLine(lastSyncedSec + 60, 'hook_execution'),
+    grokLine(lastSyncedSec + 61, 'hook_execution'),
+  ], lastSyncedAt);
+  expect(await getStuckSyncs({ records: { [file]: record }, now })).toEqual([]);
+});
+
+test('a grok session with real writes after last ingest is stuck under its uuid, not "updates"', async () => {
+  const now = Date.now();
+  const lastSyncedAt = now - 11 * 3_600_000;
+  const lastSyncedSec = Math.floor(lastSyncedAt / 1000);
+  const { file, record } = grokSession(now, [
+    grokLine(lastSyncedSec - 10, 'user_message_chunk'),
+    grokLine(lastSyncedSec + 60, 'user_message_chunk'),
+    grokLine(lastSyncedSec + 120, 'hook_execution'),
+  ], lastSyncedAt);
+  const stuck = await getStuckSyncs({ records: { [file]: record }, now });
+  expect(stuck).toHaveLength(1);
+  expect(stuck[0].sessionId).toBe(GROK_ID);
+  expect(stuck[0].agentType).toBe('grok');
+  expect(stuck[0].projectPath).toBe('/Users/ashot/src/codecast');
+  expect(stuck[0].reason).toBe('unexamined_writes');
+  expect(stuck[0].unsyncedBytes).toBe(0);
+  expect(stuck[0].sessionId).not.toBe('updates');
+});

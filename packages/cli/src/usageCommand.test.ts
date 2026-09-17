@@ -118,3 +118,67 @@ describe("a stuck usage poll (ct-49527)", () => {
     expect(renderUsageReport(r, c)).not.toContain("usage poll failing");
   });
 });
+
+describe("auto-switch ranking vs extra spend", () => {
+  test("does not hop to a stale rolled snapshot that displays as 2% used", () => {
+    const active = {
+      name: "work",
+      email: "w@x.com",
+      active: true,
+      usage: {
+        fetched_at: now,
+        session: { percent: 16, resets_at: now + H },
+        weekly: { percent: 42, resets_at: now + 48 * H },
+        weekly_scoped: { percent: 77, resets_at: now + 48 * H, label: "Fable" },
+      },
+    };
+    const staleRolled = {
+      name: "stale",
+      email: "stale@x.com",
+      usage: {
+        fetched_at: now - 6 * H,
+        session: { percent: 2, resets_at: now + H },
+        weekly: { percent: 54, resets_at: now - 3 * H },
+        weekly_scoped: { percent: 100, resets_at: now - 3 * H, label: "Fable" },
+      },
+    };
+    const known = {
+      name: "known",
+      email: "known@x.com",
+      usage: {
+        fetched_at: now - 60_000,
+        session: { percent: 0, resets_at: now + H },
+        weekly: { percent: 37, resets_at: now + 48 * H },
+        weekly_scoped: { percent: 69, resets_at: now + 48 * H, label: "Fable" },
+      },
+    };
+    const r = buildUsageReport([active, staleRolled, known], now, { auto_switch: true, auto_continue: true });
+    expect(r.fallbacks.map((f) => f.name)).toEqual(["known", "stale"]);
+    expect(r.fallbacks[0].worst).toBe(69);
+    expect(r.fallbacks[1].worst).toBeNull();
+    expect(describeRecovery(r)).toContain("best: known at 69%");
+  });
+
+  test("prints extra spend dollars when the cap is reached", () => {
+    const r = buildUsageReport(
+      [
+        {
+          name: "union",
+          email: "u@x.com",
+          active: true,
+          usage: {
+            fetched_at: now,
+            weekly_scoped: { percent: 100, resets_at: now + H, label: "Fable" },
+            extra: { percent: 100, enabled: false, limit: 70000, used: 72740, spend_limit_reached: true },
+          },
+        },
+      ],
+      now,
+      { auto_switch: true, auto_continue: true },
+    );
+    const out = renderUsageReport(r, c);
+    expect(out).toContain("Extra spend");
+    expect(out).toContain("$72,740 / $70,000");
+    expect(out).toContain("cap reached");
+  });
+});

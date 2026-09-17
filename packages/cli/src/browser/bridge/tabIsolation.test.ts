@@ -122,13 +122,17 @@ await program.parseAsync(["node", "fixture", "browser", "tabs"]);
   expect(readBoundTarget("env-slow-tab-list-real")).toBeNull();
 }, 30_000);
 
-test("a stale saved tab ID cannot claim a human tab even with a live engine", async () => {
+test("a stale saved tab ID cannot claim a human tab even with a live engine; the session gets a fresh tab instead", async () => {
   const session = "env-stale-real";
   writeBoundTarget(session, targetIdOfTab(humanId), dir, "https://mail.google.com/");
   fs.writeFileSync(path.join(dir, `${session}.pid`), String(process.pid));
-  await expect(ensurePinnedTab(session, "https://admin.google.com/")).rejects.toThrow("ownership");
-  expect(await listTargets(endpoint(session))).toEqual([]);
-  expect(extension.seen.filter(m => m.op !== "tabs.list")).toEqual([]);
+  // The doubtful binding is dropped and a new agent tab opened: the human's
+  // tab is never attached, granted or listed as the session's.
+  expect(await ensurePinnedTab(session, "https://admin.google.com/")).toBe(true);
+  expect(readBoundTarget(session)).not.toBe(targetIdOfTab(humanId));
+  expect((await listTargets(endpoint(session))).map((t) => t.url)).toEqual(["https://admin.google.com/"]);
+  expect(extension.seen.filter(m => m.op !== "tabs.list").map((m) => m.op)).toEqual(["tabs.create"]);
+  expect(extension.tabs.find((t) => t.tabId === humanId)?.url).toBe(humanUrl);
 });
 
 test("a closed owned tab is replaced on open without adopting another tab", async () => {
@@ -151,7 +155,9 @@ test("scoped target commands require an existing grant; explicit agent sharing s
     for (const method of ["Target.attachToTarget", "Target.getTargetInfo", "Target.activateTarget", "Target.closeTarget"]) {
       await expect(b.send(method, { targetId: id })).rejects.toThrow("not granted");
     }
-    await expect(grantTab(endpoint(), "env-stranger-real", id, { own: true })).rejects.toThrow("ownership");
+    // A saved binding to a tab the host cannot vouch for is refused as a
+    // binding to drop (false), never adopted: no attach, no close below.
+    expect(await grantTab(endpoint(), "env-stranger-real", id, { own: true })).toBe(false);
   }
   expect(extension.seen.filter(m => ["attach", "tabs.close", "tabs.activate"].includes(m.op))).toEqual([]);
   await grantTab(endpoint(), "env-stranger-real", targetId);

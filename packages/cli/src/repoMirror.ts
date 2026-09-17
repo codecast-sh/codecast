@@ -66,7 +66,10 @@ export interface MirrorCommit {
   branch?: string;
   /** Set by the daemon when it can name the session that made the commit. */
   conversation_id?: string;
+  /** The files the commit touched, from numstat, capped (MIRROR_FILES_CAP). */
+  files?: Array<{ filename: string; additions: number; deletions: number }>;
 }
+export const MIRROR_FILES_CAP = 200;
 
 export interface RepoMirror {
   repository: string;
@@ -232,12 +235,18 @@ async function logPage(
     let insertions = 0;
     let deletions = 0;
     let files = 0;
+    const touched: NonNullable<MirrorCommit["files"]> = [];
     for (const line of stats.split("\n")) {
-      const m = /^(\d+|-)\t(\d+|-)\t/.exec(line);
+      const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line);
       if (!m) continue;
       files++;
-      if (m[1] !== "-") insertions += Number(m[1]);
-      if (m[2] !== "-") deletions += Number(m[2]);
+      const add = m[1] === "-" ? 0 : Number(m[1]);
+      const del = m[2] === "-" ? 0 : Number(m[2]);
+      insertions += add;
+      deletions += del;
+      // A rename prints "old => new" (or "{a => b}/rest"); the new name is the area.
+      const filename = m[3].includes(" => ") ? m[3].replace(/\{[^}]* => ([^}]*)\}/g, "$1").replace(/^.* => /, "") : m[3];
+      if (touched.length < MIRROR_FILES_CAP) touched.push({ filename, additions: add, deletions: del });
     }
     commits.push({
       sha,
@@ -249,6 +258,7 @@ async function logPage(
       insertions,
       deletions,
       branch: opts.branch ?? ref,
+      ...(touched.length ? { files: touched } : {}),
     });
   }
   return {

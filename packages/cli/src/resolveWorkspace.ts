@@ -10,7 +10,8 @@
 // The rule (matching web and mobile):
 //   • The CANONICAL pointer is `users.active_team_id`. Unset means the PERSONAL
 //     workspace — a real answer, not a missing one.
-//   • An explicit `--team` always wins.
+//   • An explicit `--team` always wins; `--team personal` names the personal
+//     workspace while the pointer is a team.
 //   • READS may resolve and default. WRITES must send an explicit workspace,
 //     so the server never has to guess where a created row belongs.
 //
@@ -63,6 +64,15 @@ export async function loadWorkspaceRoster(
   return roster;
 }
 
+/** The words `--team` accepts for the personal workspace, so a command can
+ *  name it while the active pointer is a team. A real team of the same name
+ *  still wins: the roster is matched first. */
+export const PERSONAL_WORKSPACE_WORDS = ["personal", "me"] as const;
+
+export function namesPersonalWorkspace(wanted: string): boolean {
+  return (PERSONAL_WORKSPACE_WORDS as readonly string[]).includes(wanted.trim().toLowerCase());
+}
+
 /** Match a `--team` value against the roster by id, exact name, or slug-ish
  *  name — a person types the name they see, not the id. */
 export function matchTeam(
@@ -92,6 +102,7 @@ export function resolveWorkspaceForRead(
   if (explicitTeam) {
     const hit = matchTeam(roster, explicitTeam);
     if (hit) return { kind: "team", teamId: hit._id, name: hit.name };
+    if (namesPersonalWorkspace(explicitTeam)) return { kind: "personal" };
     return { kind: "team", teamId: explicitTeam };
   }
   if (roster.activeTeamId) {
@@ -116,8 +127,12 @@ export function resolveWorkspaceForWrite(
 ): Workspace {
   if (explicitTeam) {
     const hit = matchTeam(roster, explicitTeam);
-    if (!hit) throw new WorkspaceUnresolved(unknownTeamMessage(roster, explicitTeam));
-    return { kind: "team", teamId: hit._id, name: hit.name };
+    if (hit) return { kind: "team", teamId: hit._id, name: hit.name };
+    if (namesPersonalWorkspace(explicitTeam)) {
+      if (opts.teamRequired) throw new WorkspaceUnresolved(noTeamMessage(roster));
+      return { kind: "personal" };
+    }
+    throw new WorkspaceUnresolved(unknownTeamMessage(roster, explicitTeam));
   }
   if (roster.activeTeamId) {
     const hit = roster.teams.find((t) => t._id === roster.activeTeamId);
@@ -135,7 +150,7 @@ function teamList(roster: WorkspaceRoster): string {
 }
 
 export function unknownTeamMessage(roster: WorkspaceRoster, wanted: string): string {
-  return `No team matching "${wanted}". Your teams:\n${teamList(roster)}`;
+  return `No team matching "${wanted}". Your teams:\n${teamList(roster)}\n  personal  your own workspace`;
 }
 
 export function noTeamMessage(roster: WorkspaceRoster): string {
@@ -150,6 +165,15 @@ export function stalePointerMessage(roster: WorkspaceRoster): string {
  *  personal workspace (which every chat endpoint treats as "no team"). */
 export function workspaceArgs(ws: Workspace): { team_id?: string } {
   return ws.kind === "team" ? { team_id: ws.teamId } : {};
+}
+
+/** The workspace as a positive value for the work routes (tasks, plans,
+ *  projects): a named team, or the personal workspace said outright, so a
+ *  shell whose active team is a team can still list and file personal work.
+ *  Nothing is sent when the person named no workspace: the route's own
+ *  default (the directory rule, the session's team) stays in force. */
+export function workspaceScope(ws: Workspace): { workspace: "team"; team_id: string } | { workspace: "personal" } {
+  return ws.kind === "team" ? { workspace: "team", team_id: ws.teamId } : { workspace: "personal" };
 }
 
 /** How to name the resolved workspace in output. */

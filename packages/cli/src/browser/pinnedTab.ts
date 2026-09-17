@@ -6,6 +6,7 @@ import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
 import { grantTab } from "./bridge/host.js";
+import { retryOnStall } from "./stall.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
 
@@ -112,7 +113,11 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
   if (!browser) throw new Error("the browser is unavailable; no tab was opened");
   let bound = readBoundTarget(session);
   if (bound && typeof browser.endpoint !== "number" && browser.endpoint.token && browser.endpoint.session) {
-    if (!await grantTab({ port: browser.endpoint.port, token: browser.endpoint.token }, session, bound, { own: true })) {
+    const bridge = { port: browser.endpoint.port, token: browser.endpoint.token };
+    const target = bound;
+    // The host verifies the grant with a tab listing from the worker, whose
+    // process may be frozen (stall.ts): asked once more before it counts.
+    if (!(await retryOnStall(() => grantTab(bridge, session, target, { own: true })))) {
       fs.rmSync(path.join(engineStateDir(), `${session}.target`), { force: true });
       bound = null;
     }
@@ -132,13 +137,19 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
   if (!browser.create) throw new Error("this session's desktop pane is gone — offer one with `cast browser pane <url>` and wait for the human to open it; an agent never opens a pane itself");
   if (!url) throw new Error("this session has no open page; use `cast browser open <url>` first. No blank tab was created.");
 
-  const conn = await CdpConnection.fromPort(browser.endpoint, cdpHttpTimeout(browser.endpoint, 5_000, 20_000));
-  try {
-    const r = await conn.send<{ targetId: string }>("Target.createTarget", { ...browser.create, url, background: true }, undefined, 20_000);
-    if (!r?.targetId) throw new Error("the browser did not return the requested tab");
-    writeBoundTarget(session, r.targetId, engineStateDir(), url);
-    return true;
-  } finally {
-    conn.close();
-  }
+  // Over the bridge the create is answered by the extension's worker, whose
+  // process may be frozen for a while (stall.ts): the request outlasts the
+  // host's own budget for it, and is asked once more after a stall.
+  const create = async () => {
+    const conn = await CdpConnection.fromPort(browser.endpoint, cdpHttpTimeout(browser.endpoint, 5_000, 45_000));
+    try {
+      return await conn.send<{ targetId: string }>("Target.createTarget", { ...browser.create, url, background: true }, undefined, 45_000);
+    } finally {
+      conn.close();
+    }
+  };
+  const r = await retryOnStall(create);
+  if (!r?.targetId) throw new Error("the browser did not return the requested tab");
+  writeBoundTarget(session, r.targetId, engineStateDir(), url);
+  return true;
 }

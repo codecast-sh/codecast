@@ -278,6 +278,18 @@ describe("trigger run lifecycle guidance", () => {
       .toBe(spawnedPrompt.slice(spawnedPrompt.indexOf(start), spawnedPrompt.indexOf('\n- To set a follow-up trigger:')));
   });
 
+  // The briefing and the server post by ONE rule (runResultThreadOf): a run is
+  // told its summary lands in a thread exactly when it does.
+  it("tells a run its summary is posted to a thread only when the server will post it", () => {
+    const { scheduler } = makeScheduler([]);
+    const posted = "Your summary will be posted as a message in the originating conversation thread.";
+    expect(scheduler.buildPrompt(task({ target_conversation_id: "thread1" }))).toContain(posted);
+    expect(scheduler.buildPrompt(task({ schedule_type: "once", created_by_conversation_id: "creator1" }))).toContain(posted);
+    // A repeating fresh run reports to its trigger row, never to the creator.
+    expect(scheduler.buildPrompt(task({ created_by_conversation_id: "creator1" }))).not.toContain(posted);
+    expect(scheduler.buildPrompt(task({ schedule_type: "once" }))).not.toContain(posted);
+  });
+
   it("keeps the safe-mode mandate and launch restrictions while deferring unauthorized cancellation", () => {
     const { scheduler } = makeScheduler([]);
     const input = task({ mode: "propose" });

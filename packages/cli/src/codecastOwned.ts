@@ -57,6 +57,7 @@ export const CODECAST_SKILL_NAMES = [
   "cast-loop",
   "cast-worktree",
   "cast-rethink",
+  "cast-org",
 ] as const;
 
 /** The agent definitions the orchestration snippet installs under ~/.claude/agents/. */

@@ -122,9 +122,10 @@ describe('extension tab lifecycle', () => {
 
   test('a stalled tab query identifies the Chrome API that did not answer', async () => {
     const w = worker({ hungTabQuery: true });
+    // The 30 s bound is 120 ms here, plus the 3 s grace for a frozen process (12 ms).
     await expect(Promise.race([
       w.context.handle({ op: 'tabs.list' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('tab query stayed pending')), 100)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tab query stayed pending')), 400)),
     ])).rejects.toThrow('Chrome tabs.query did not answer');
   });
 

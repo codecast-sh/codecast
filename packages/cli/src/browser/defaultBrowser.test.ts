@@ -233,4 +233,8 @@ test("full and short agent instructions make separate Chrome a last resort", () 
   expect(BROWSER_SNIPPET).not.toContain("help start");
   expect(BROWSER_SNIPPET).toContain("another agent");
   expect(BROWSER_SNIPPET).toContain("Connection checks and tab lists create nothing");
+  expect(BROWSER_SNIPPET).toContain("unless the human still needs them");
+  expect(BROWSER_SNIPPET).toContain("Close tabs you opened");
+  const stub = renderSectionBody(snippetBySlug("browser")!, "stub", "1.0.0");
+  expect(stub).toContain("unless the human still needs them");
 });

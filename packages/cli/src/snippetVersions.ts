@@ -11,7 +11,7 @@
 // ./update.ts re-exports every getter here, so existing importers are unchanged.
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
-const TASK_VERSION = "7"; // bumped: --precheck, a shell gate that skips a firing instead of spending a session
+const TASK_VERSION = "8"; // bumped: how to choose fresh versus inline runs; fresh runs stay out of the inbox, a once run posts its result back
 const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
@@ -19,13 +19,14 @@ const MESSAGING_VERSION = "10";
 const VISUAL_VERSION = "6"; // bumped: image captions from alt text + side-by-side rows for adjacent images
 const FORKS_VERSION = "8"; // bumped: with N directions this thread takes the first; a branch is seeded as its human's own turn, never a message from the parent
 const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-image sharing; never link local paths
-const BROWSER_VERSION = "15";
+const BROWSER_VERSION = "16"; // bumped: close tabs you opened unless the human still needs them
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "2"; // v2: age + messages-since on ls, stale-ask sweeping guidance
 const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
 const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const SKILLS_VERSION = "1"; // first release: the cast-* skills as one snippet
+const PR_VERSION = "1"; // first release: cast pr, the review loop, reviews delivered to the owning session
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
 
 export function getMemoryVersion(): string {
@@ -96,4 +97,8 @@ export function getComputerVersion(): string {
  *  body lands without a bump. Bump when a skill is added or removed. */
 export function getSkillsVersion(): string {
   return SKILLS_VERSION;
+}
+
+export function getPrVersion(): string {
+  return PR_VERSION;
 }

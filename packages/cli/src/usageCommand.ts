@@ -16,6 +16,7 @@ import {
   isUsageExhausted,
   isWindowRolled,
   livePercent,
+  switchUsagePercent,
   worstUsagePercent,
   type CcUsage,
 } from "@codecast/shared/contracts";
@@ -51,6 +52,13 @@ export interface UsageReport {
     email?: string;
     fetched_at?: number;
     windows: UsageWindowLine[];
+    extra?: {
+      enabled: boolean;
+      percent: number;
+      limit?: number;
+      used?: number;
+      spend_limit_reached?: boolean;
+    };
     // Why the reading may be older than the poll interval suggests.
     retry?: UsageRetryState;
   } | null;
@@ -111,13 +119,24 @@ export function buildUsageReport(
     push(usage.weekly_scoped?.label ? `${usage.weekly_scoped.label} (7d)` : "Model (7d)", usage.weekly_scoped);
     for (const s of usage.scoped ?? []) push(s.label, s);
   }
+  const extra = usage?.extra;
+  const extraNote =
+    extra && ((extra.limit ?? 0) > 0 || (extra.used ?? 0) > 0)
+      ? {
+          enabled: extra.enabled,
+          percent: extra.percent,
+          limit: extra.limit,
+          used: extra.used,
+          spend_limit_reached: extra.spend_limit_reached,
+        }
+      : undefined;
   const worst = worstUsagePercent(usage, now);
   const pressured = windows.filter((w) => !w.rolled && w.percent >= USAGE_WARN_PERCENT && w.resets_at && w.resets_at > now);
   const next_reset = pressured.length ? Math.min(...pressured.map((w) => w.resets_at as number)) : undefined;
   return {
     now,
     active: active
-      ? { name: active.name, email: active.email, fetched_at: usage?.fetched_at, windows, retry: active.retry }
+      ? { name: active.name, email: active.email, fetched_at: usage?.fetched_at, windows, extra: extraNote, retry: active.retry }
       : null,
     worst,
     exhausted: isUsageExhausted(usage, now),
@@ -125,7 +144,7 @@ export function buildUsageReport(
     fallbacks: fallbackProfiles(profiles, active?.email, now).map((p) => ({
       name: p.name,
       email: p.email,
-      worst: worstUsagePercent(p.usage, now),
+      worst: switchUsagePercent(p.usage, now),
     })),
     recovery,
   };
@@ -173,6 +192,20 @@ export function renderUsageReport(r: UsageReport, c: Record<string, string>): st
     lines.push(`  ${pad(w.label, 14)} ${pct} ${reset}`.trimEnd());
   }
   if (r.active.windows.length === 0) lines.push(`  ${c.dim}no limit windows reported${c.reset}`);
+  const extra = r.active.extra;
+  if (extra) {
+    const money = (n: number) =>
+      n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+    const dollars =
+      extra.limit != null && extra.used != null ? `${money(extra.used)} / ${money(extra.limit)}` : null;
+    const tone = extra.spend_limit_reached || extra.percent >= 100 ? c.red : extra.enabled ? c.yellow : c.dim;
+    const status = extra.spend_limit_reached
+      ? "cap reached"
+      : extra.enabled
+        ? `${Math.round(extra.percent)}% used`
+        : "off";
+    lines.push(`  ${pad("Extra spend", 14)} ${tone}${dollars ?? status}${c.reset}${dollars ? ` ${c.dim}${status}${c.reset}` : ""}`.trimEnd());
+  }
   const retry = r.active.retry;
   if (retry) {
     // The numbers above are the last GOOD reading. Without this line a stuck

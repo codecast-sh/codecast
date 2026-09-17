@@ -49,6 +49,7 @@ import fromcallSkill from "../skills/cast-from-call/SKILL.md" with { type: "text
 import loopSkill from "../skills/cast-loop/SKILL.md" with { type: "text" };
 import worktreeSkill from "../skills/cast-worktree/SKILL.md" with { type: "text" };
 import rethinkSkill from "../skills/cast-rethink/SKILL.md" with { type: "text" };
+import orgSkill from "../skills/cast-org/SKILL.md" with { type: "text" };
 
 export interface OrchestrationHookEntry {
   matcher?: string;
@@ -101,5 +102,6 @@ export const BUNDLED_SKILLS: readonly BundledSkill[] = [
   { name: "cast-loop", body: loopSkill },
   { name: "cast-worktree", body: worktreeSkill },
   { name: "cast-rethink", body: rethinkSkill },
+  { name: "cast-org", body: orgSkill },
 ];
 

@@ -106,6 +106,15 @@ export function markSynced(
   });
 }
 
+// Signature-sync clients (grok, pi) keep lastSyncedPosition at 0. A pass that
+// finds no new messages still examined the file, so stamp lastSyncedAt or the
+// next mtime bump (session-end hooks) looks like a wedged backlog.
+export function markExamined(filePath: string, at: number = Date.now()): void {
+  const existing = store.get(filePath);
+  if (!existing) return;
+  store.set(filePath, { ...existing, lastSyncedAt: at });
+}
+
 export function getAllSyncRecords(): SyncLedger {
   return store.getAll();
 }

@@ -53,6 +53,34 @@ describe("bundled skills", () => {
   });
 });
 
+describe("the org skill", () => {
+  // The skill is the conversation over `cast org`; the prompt those verbs
+  // print is the thinking. A verb the skill names must exist, and the rules
+  // the prompt owns must not be restated here (S8, org-staffing.md).
+  const body = BUNDLED_SKILLS.find((s) => s.name === "cast-org")!.body.replace(/\s+/g, " ");
+  const verbs = (src: string) => [...src.matchAll(/\.command\("([^"|]+)/g)].map((m) => m[1]);
+  const orgGroup = indexSrc.slice(indexSrc.indexOf("const org = program"), indexSrc.indexOf("const orgDeps = "));
+  const registered = new Set([...verbs(orgGroup), ...verbs(fs.readFileSync(path.join(import.meta.dir, "orgInit.ts"), "utf-8"))]);
+
+  test("every cast org verb it names is registered, and it names the ones the conversation needs", () => {
+    const named = [...body.matchAll(/cast org ([a-z]+)/g)].map((m) => m[1]);
+    expect(named.length).toBeGreaterThan(0);
+    for (const verb of named) expect(registered).toContain(verb);
+    for (const verb of ["ls", "proposals", "health", "apply", "init", "review", "propose", "staff"]) expect(named).toContain(verb);
+    // The two prompt verbs run here, in the person's session, never spawned.
+    expect(body).toContain("cast org init --here");
+    expect(body).toContain("cast org review --here");
+    expect(body).not.toContain("cast org update");
+  });
+
+  test("it leaves the thinking to the prompt and the deciding to the person", () => {
+    for (const owned of ["items_per_day", "split_on_first_breach", "intake draft", "when in doubt, a program"]) expect(body.toLowerCase()).not.toContain(owned);
+    expect(body).toContain("--team personal");
+    expect(body).toContain("--supersedes op-N");
+    expect(body).toContain("no session decides a staffing change");
+  });
+});
+
 describe("index.ts installs from the bundle", () => {
   test("the orchestration installer reads the bundle, never a path beside the binary", () => {
     const body = indexSrc.slice(indexSrc.indexOf("function installOrchestration("), indexSrc.indexOf("async function installSkillsSnippet("));

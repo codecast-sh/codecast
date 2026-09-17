@@ -22,6 +22,24 @@ describe("agent transcripts reach the session file diff extractor", () => {
     ].map(line => JSON.stringify(line)).join("\n");
     expect(extractFileChanges(synced(parseGrokSessionFile(transcript)))[0]).toMatchObject({ filePath: "grok.ts", newContent: "created" });
   });
+  test("Grok search_replace edits use the same file change list", () => {
+    const transcript = [
+      { timestamp: 1000, method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "edit", title: "search_replace", rawInput: { file_path: "grok.ts", old_string: "before", new_string: "after" } } } },
+      { timestamp: 1001, method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "edit", status: "completed", content: [{ type: "diff", path: "grok.ts", oldText: "before", newText: "after" }] } } },
+    ].map(line => JSON.stringify(line)).join("\n");
+    const messages = synced(parseGrokSessionFile(transcript));
+    expect(messages.some(hasFileChangeToolCall)).toBe(true);
+    expect(extractFileChanges(messages)[0]).toMatchObject({ filePath: "grok.ts", oldContent: "before", newContent: "after", changeType: "edit" });
+  });
+  test("Grok run_terminal_command commits use the same file change list", () => {
+    const transcript = [
+      { timestamp: 1000, method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "commit", title: "run_terminal_command", rawInput: { command: 'git commit -m "grok commit"' } } } },
+      { timestamp: 1001, method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "commit", status: "completed", content: [{ type: "content", content: { type: "text", text: "[main abcdef0] grok commit" } }] } } },
+    ].map(line => JSON.stringify(line)).join("\n");
+    expect(extractFileChanges(synced(parseGrokSessionFile(transcript)))[0]).toMatchObject({
+      changeType: "commit", commitMessage: "grok commit", commitHash: "abcdef0",
+    });
+  });
   test("Codex additions and deletions carry raw file content rather than patch text", () => {
     const message = threadItemToMessage({
       type: "fileChange", id: "files", status: "completed",

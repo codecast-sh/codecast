@@ -66,3 +66,21 @@ export const CODEX_TRUST_ACCEPTED_PANE = `  Do you trust the contents of this di
 › Ask Codex to do anything
 
   repro default · /private/var/folders/sr/…/untrusted-project-OIvHwz`;
+
+// `tmux capture-pane -p -J -S -80` from grok 1.0.30 in an untrusted directory
+// (cc-grok-taczwd8ehvj4, ~/src/mail, 2026-09-16, jx702ea). Trailing spaces on
+// each row are dropped; the blank rows between the y/n options and the footer
+// are kept — that gap is why a 25-line capture (and extractTmuxLiveRegion's
+// 5-line no-separator tail) never sees the dialog. The daemon must classify
+// this against the WHOLE pane, not the live-region tail.
+export const GROK_TRUST_PANE = `
+  Do you trust the contents of this directory?
+  /Users/ashot/src/mail
+
+  Grok Build may run or modify contents in this directory,
+  posing security risks.
+
+  Yes, proceed                 y
+  No, quit                     n
+${"\n".repeat(40)}  Grok Build  1.0.30 [stable]
+`.replace(/^\n/, "");

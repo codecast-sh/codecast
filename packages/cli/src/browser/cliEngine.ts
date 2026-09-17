@@ -42,6 +42,7 @@ import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } 
 import { matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
 import { ensurePinnedTab, pinnedTabBrowser, touchBoundTarget } from "./pinnedTab.js";
+import { shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
@@ -53,7 +54,7 @@ import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
-import { tabFooterLines, TAB_AFFECTING_VERBS } from "./tabFooter.js";
+import { tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFooter.js";
 import { tokenize } from "./batch.js";
 import { evalInPage, grantPermissions } from "./pageEval.js";
 import { ownerKey } from "./owner.js";
@@ -512,22 +513,6 @@ export interface RunOptions {
   stallRetryDelayMs?: number;
 }
 
-/**
- * A failure from the bridge's own plumbing before the verb reached the page:
- * the worker's process was not scheduled (Chrome runs it at background
- * priority) and a tab listing, an attach or a debugger step timed out. The
- * page was not touched, so running the same verb again is safe, and the
- * worker answers the moment it is scheduled, so the retry usually succeeds.
- * A timeout inside the page (an eval, a wait) is not this: it may have acted.
- */
-export function isStallFailure(output: string): boolean {
-  if (!/did not answer within \d+ms/.test(output)) return false;
-  return /tabs\.list|Target\.setDiscoverTargets|Target\.attachToTarget|debugger\.attach|domain enable|storage\.session|Chrome tabs\.query|overlay install|\battach\b/.test(output);
-}
-
-/** How long to let the worker's process get scheduled before the one retry. */
-export const STALL_RETRY_DELAY_MS = 3_000;
-
 /** What a verb's engine run is waiting on, for the narration while it runs long. */
 export function engineStepLabel(verb: string, engineArgs: string[]): string {
   const url = engineArgs.slice(1).find((x) => /^[a-z]+:\/\//i.test(x));
@@ -666,9 +651,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // The bridge stalled before the verb reached the page: the extension's
     // process was not scheduled. Once, after a pause, the same verb again;
     // the human should see a slow command, not a failed one.
-    if (res.status !== 0 && !retriedStall && isStallFailure(res.stderr + res.stdout)) {
+    if (res.status !== 0 && !retriedStall && shouldRetryAfterStall(verb, res.stderr + res.stdout)) {
       retriedStall = true;
-      console.error(fmt.muted(`  the Chrome extension did not answer in time (its process was not scheduled); trying once more…`));
+      console.error(fmt.muted(`  ${STALL_NOTE}`));
       await new Promise((r) => setTimeout(r, run.stallRetryDelayMs ?? STALL_RETRY_DELAY_MS));
       res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
     }
@@ -730,7 +715,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
   for (const line of verb === "open" ? lines.slice(-1) : lines) console.log(line);
   if (lines.length) console.log(fmt.muted(isPaneSession(o.session)
     ? "  When finished: `cast browser stop` releases this session's control; the human's desktop pane stays open."
-    : "  When finished: close extra tabs you opened with `cast browser tab close <id>`, then `cast browser stop` to close this session's tab. Leave the human's and other sessions' tabs alone."));
+    : TAB_CLEANUP_NOTE));
   if (NAVIGATING_VERBS.has(verb)) {
     const url = (tabs.find((t) => t.active) ?? tabs[0])?.url ?? "";
     // Tab identity on the engine path is the engine session: one active tab
@@ -875,7 +860,13 @@ async function showToPerson(choice: TargetChoice): Promise<number> {
 /** Run a verb and exit with its status — the shape commander actions want. */
 async function passthrough(verb: string, args: string[]): Promise<never> {
   const t = await targetOf(verb, args);
-  process.exit(await runVerb(verb, t.args, t.ctx));
+  // Whatever fails on the way (a stall that outlived its retry, a bridge
+  // that is down) is one line for the human, never a stack trace.
+  try {
+    process.exit(await runVerb(verb, t.args, t.ctx));
+  } catch (err) {
+    die((err as Error).message);
+  }
 }
 
 /** One line of the engine's snapshot that carries a ref, parsed for matching.
@@ -1202,7 +1193,13 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   br.hook("preAction", async (_thisCommand, actionCommand) => {
     const verb = actionCommand.name();
     if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br || actionCommand.args.some((arg) => arg === "--help" || arg === "-h")) return;
-    await ensurePinnedTab((await ctxFor(verb, targetChoiceOf(actionCommand))).session);
+    try {
+      await ensurePinnedTab((await ctxFor(verb, targetChoiceOf(actionCommand))).session);
+    } catch (err) {
+      // One line for the human, never a stack trace: a bridge that is down,
+      // or a stall that outlived its retry (stall.ts).
+      die((err as Error).message);
+    }
   });
 
   for (const p of PASSTHROUGH) {
