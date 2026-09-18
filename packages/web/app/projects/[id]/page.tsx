@@ -53,22 +53,12 @@ import {
   Megaphone,
 } from "lucide-react";
 import { DocDates } from "../../../components/DocDates";
-import { HireRoleDialog } from "../../../components/org/HireRoleDialog";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
-import { useOrgRoles } from "../../../hooks/useOrgRoles";
-import { Briefcase } from "lucide-react";
+import { ProjectLeadChip, useProjectLead } from "../../../components/charter/ProjectLeadChip";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 
 const api = _api as any;
-
-/** The hire form reads the whole org tree (reports-to choices, caps), so it
- *  subscribes to it only while open: the page around it reads the roles. */
-function HireLeadDialog(props: Omit<React.ComponentProps<typeof HireRoleDialog>, "tree">) {
-  const tree = useInboxStore((s) => s.orgTree);
-  if (!tree) return null;
-  return <HireRoleDialog tree={tree} {...props} />;
-}
 
 const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string }> = {
   backlog: { icon: CircleDotDashed, color: "text-sol-text-dim" },
@@ -270,26 +260,14 @@ function ProjectDetailContent() {
   const [titleDraft, setTitleDraft] = useState("");
   const updateProject = useInboxStore((s) => s.updateProject);
 
-  // "Add a lead" (org-init.md O3): the hire form with this project preselected.
   // The org tree feeds the store per view, the way the org page mounts it;
-  // the page reads only the roles (useOrgRoles), never the tree, so a message
-  // under any node does not re-render it. The hire dialog reads the tree
-  // itself while it is open.
+  // the page reads only the roles (useProjectLead), never the tree, so a
+  // message under any node does not re-render it. Who leads the project, and
+  // the way to name or hire a lead, is the header's ProjectLeadChip
+  // (org-roles-run-work.md R4); `roles` is null while the tree on screen is
+  // another workspace's, so the charter offers nothing the server would refuse.
   useSyncOrgTreeFeeder();
-  const { roles: orgRoles, workspace: orgWorkspace } = useOrgRoles();
-  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const createOrgRole = useInboxStore((s) => s.createOrgRole);
-  const [hireOpen, setHireOpen] = useState(false);
-  // A role lives in one workspace and its scope must sit inside it: the button
-  // shows only when the org tree on screen is the project's own workspace.
-  const treeIsProjectWorkspace = !!orgWorkspace && !!project && (orgWorkspace.kind === "team" ? project.team_id === orgWorkspace.id : !project.team_id);
-  const canHire = treeIsProjectWorkspace && !!meId;
-  // The owner chip offers only roles from the project's own workspace (the
-  // server refuses any other); when the tree on screen is another
-  // workspace's, the chip is disabled and says why instead of listing seats
-  // the server would reject.
-  const charterRoles = treeIsProjectWorkspace ? orgRoles : null;
-  const ownerBlockedReason = orgWorkspace && project && !treeIsProjectWorkspace ? "Switch to the project's workspace to assign an owner" : undefined;
+  const { roles: charterRoles } = useProjectLead(projectId);
 
   // The charter (org-staffing.md S7) reads the STORE row first: updateProject
   // patches it in the same tick, while webGet's snapshot only moves once the
@@ -454,29 +432,8 @@ function ProjectDetailContent() {
 
         <div className="flex items-center gap-3 flex-wrap">
           <RepositoryLinks projectId={project._id} />
-          {canHire && (
-            <button
-              type="button"
-              onClick={() => setHireOpen(true)}
-              title="A standing role that owns this project: it reads the project's plans, tasks and sessions and reports to you"
-              className="h-7 inline-flex items-center gap-1.5 px-2.5 rounded-md text-[12px] font-medium border transition-colors hover:bg-sol-bg-highlight/60"
-              style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-violet)" }}
-            >
-              <Briefcase className="w-3.5 h-3.5" /> Add a lead
-            </button>
-          )}
+          <ProjectLeadChip projectId={project._id} editable />
         </div>
-        {canHire && hireOpen && (
-          <HireLeadDialog
-            open={hireOpen}
-            onClose={() => setHireOpen(false)}
-            meId={meId}
-            title={`Add a lead for ${project.title}`}
-            initialProjects={[project]}
-            projectPath={project.project_path ?? undefined}
-            onCreate={(input) => { createOrgRole(input); setHireOpen(false); toast.success(`@${input.handle} is being created and started`); }}
-          />
-        )}
 
         <div className="flex items-center gap-4 ml-5">
           {/* Status dropdown */}
@@ -576,8 +533,7 @@ function ProjectDetailContent() {
           canEdit
           onChange={handleCharterChange}
           roles={charterRoles}
-          onHire={canHire ? () => setHireOpen(true) : undefined}
-          ownerBlockedReason={ownerBlockedReason}
+          hideOwner
           className="ml-5 mt-3"
         />
 

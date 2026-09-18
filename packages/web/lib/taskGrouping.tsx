@@ -10,15 +10,25 @@
  *
  * A group value is one or more axis names joined by "+": "assignee",
  * "assignee+project", "project+status". "none" means a flat list.
+ *
+ * One axis nests: Chain (org-roles-run-work.md R5) buckets by assignee like
+ * the Assignee axis, then orders the buckets by who reports to whom and gives
+ * each a depth, through the axis's `arrange` hook.
  */
 import { ReactNode } from "react";
 import Link from "next/link";
 import { User, MessageSquare, FolderKanban, Tag, ListChecks } from "lucide-react";
+import { isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import type { TaskItem, ProjectItem } from "../store/inboxStore";
 import type { ListGroup } from "../components/GenericListView";
+import type { OrgRole } from "../components/org/orgTypes";
 import { getLabelColor } from "./labelColors";
 import { orderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey } from "./taskStatuses";
 import { DEFAULT_TASK_STATUSES, type TeamTaskStatus } from "@codecast/shared/tasks";
+import { resolveAssigneeInfo } from "./liveEntities";
+import { arrangeChain, type ChainNode } from "./taskChain";
+import { AssigneeFace } from "../components/identity/AssigneeFace";
+import { OwnerRoleChip } from "../components/charter/CharterChips";
 
 /** What an axis needs from the page to draw a header (projects aren't on the
  *  task row, and the label header offers a one-click filter). */
@@ -28,6 +38,13 @@ export type TaskGroupContext = {
   /** The active workspace's status vocabulary (per-team custom statuses),
    *  already board-ordered. Defaults keep callers that predate the field working. */
   taskStatuses?: TeamTaskStatus[];
+  /** The org tree slice's roles (useOrgRoles). The Chain axis reads who
+   *  reports to whom from them, and a project header its lead. */
+  roles?: OrgRole[] | null;
+  /** The live roster and the viewer: what names a person who heads a chain
+   *  but holds no task on screen, and which chain sorts first. */
+  teamMembers?: any[] | null;
+  currentUser?: { _id: string } | null;
 };
 
 const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
@@ -35,7 +52,7 @@ const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
 
 /** One bucket, seen through a single axis. `key` is "" for the none bucket
  *  (unassigned, no project, unplanned…), which always sorts last. */
-type AxisBucket = { key: string; sample: TaskItem; tasks: TaskItem[] };
+type AxisBucket = { key: string; sample?: TaskItem; tasks: TaskItem[] };
 
 /** The header pieces an axis contributes. In a combined grouping these are
  *  concatenated left to right, so each axis only describes its own half. */
@@ -61,9 +78,54 @@ export type TaskAxis = {
    *  the none bucket). Omitted on axes a drop can't edit (plan membership,
    *  session provenance), which makes their groups refuse drops entirely. */
   dropUpdates?: (key: string, t: TaskItem, ctx: TaskGroupContext) => Record<string, any> | null;
+  /** A nesting axis orders its own buckets: given the keys that hold tasks, it
+   *  returns every group to draw, in order, each with a depth. It may add keys
+   *  that hold no task (the people and roles above one that does); `compare`
+   *  is then unused. Only honored on the first axis of a grouping. */
+  arrange?: (keys: string[], ctx: TaskGroupContext) => ChainNode[];
 };
 
 const byTitle = (a?: string, b?: string) => (a || "").localeCompare(b || "");
+
+/** Who a bucket key names. A bucket that holds tasks already carries the
+ *  answer on its sample (the page derives `assignee_info` for every row); a
+ *  chain group that holds none (a founder whose work is all delegated) is
+ *  resolved the same way, from the roster and the roles. */
+function assigneeOfKey(key: string, sample: TaskItem | undefined, ctx: TaskGroupContext): AssigneeInfo | null {
+  return (sample?.assignee_info as AssigneeInfo | null | undefined)
+    ?? resolveAssigneeInfo(key, undefined, ctx.teamMembers, ctx.currentUser as any, ctx.roles);
+}
+
+const HEADER_LINK = "text-[10px] text-sol-cyan hover:underline flex-shrink-0";
+
+// Roles and people are peers here: one bucket each, sorted together by name,
+// each headed by its face. A role's face opens the role hover card.
+const assigneeAxis: TaskAxis = {
+  label: "Assignee",
+  // assignee_info is the enriched twin; a task with an assignee we can't
+  // resolve reads as unassigned rather than as a bucket named by a raw id.
+  keyOf: (t) => (t.assignee && t.assignee_info ? t.assignee : ""),
+  compare: (a, b) => byTitle(a.sample?.assignee_info?.name, b.sample?.assignee_info?.name),
+  header: (b, ctx) => {
+    const info = assigneeOfKey(b.key, b.sample, ctx);
+    const href = isRoleAssignee(info)
+      ? { to: `/org/${info.role_short_id}`, label: "Open role" }
+      : info?.github_username
+        ? { to: `/team/${info.github_username}`, label: "Profile" }
+        : null;
+    return {
+      label: info?.name || b.key,
+      icon: info ? <AssigneeFace info={info} size={16} /> : <User className="w-3.5 h-3.5 text-sol-text-dim" />,
+      extra: href ? (
+        <Link href={href.to} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
+          {href.label}
+        </Link>
+      ) : undefined,
+    };
+  },
+  noneLabel: "Unassigned",
+  dropUpdates: (key) => ({ assignee: key }),
+};
 
 export const TASK_AXES: Record<string, TaskAxis> = {
   status: {
@@ -108,14 +170,19 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       return {
         label: project?.title || b.key,
         icon: <FolderKanban className="w-3.5 h-3.5 text-sol-cyan" />,
+        // Who leads the project (org-roles-run-work.md R4) sits with the link,
+        // outside the header's toggle button: the chip is itself a link.
         extra: project ? (
-          <Link
-            href={`/projects/${project._id}`}
-            onClick={(e) => e.stopPropagation()}
-            className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
-          >
-            View project
-          </Link>
+          <span className="flex items-center gap-2 flex-shrink-0">
+            <OwnerRoleChip roles={ctx.roles} ownerRoleId={project.owner_role_id} size="xs" />
+            <Link
+              href={`/projects/${project._id}`}
+              onClick={(e) => e.stopPropagation()}
+              className={HEADER_LINK}
+            >
+              View project
+            </Link>
+          </span>
         ) : undefined,
       };
     },
@@ -127,9 +194,9 @@ export const TASK_AXES: Record<string, TaskAxis> = {
   plan: {
     label: "Plan",
     keyOf: (t) => t.plan?._id || "",
-    compare: (a, b) => byTitle(a.sample.plan?.title, b.sample.plan?.title),
+    compare: (a, b) => byTitle(a.sample?.plan?.title, b.sample?.plan?.title),
     header: (b) => {
-      const plan = b.sample.plan!;
+      const plan = b.sample!.plan!;
       return {
         label: plan.title || b.key,
         icon: <ListChecks className="w-3.5 h-3.5 text-sol-cyan" />,
@@ -146,7 +213,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
           <Link
             href={`/plans/${plan._id}`}
             onClick={(e) => e.stopPropagation()}
-            className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
+            className={HEADER_LINK}
           >
             View plan
           </Link>
@@ -156,35 +223,20 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     noneLabel: "Unplanned",
   },
 
-  assignee: {
-    label: "Assignee",
-    // assignee_info is the enriched twin; a task with an assignee we can't
-    // resolve reads as unassigned rather than as a bucket named by a raw id.
-    keyOf: (t) => (t.assignee && t.assignee_info ? t.assignee : ""),
-    compare: (a, b) => byTitle(a.sample.assignee_info?.name, b.sample.assignee_info?.name),
-    header: (b) => {
-      const info = b.sample.assignee_info;
-      const github = (info as any)?.github_username;
-      return {
-        label: info?.name || b.key,
-        icon: info?.image ? (
-          <img src={info.image} alt={info.name} className="w-4 h-4 rounded-full" />
-        ) : (
-          <User className="w-3.5 h-3.5 text-sol-text-dim" />
-        ),
-        extra: github ? (
-          <Link
-            href={`/team/${github}`}
-            onClick={(e) => e.stopPropagation()}
-            className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
-          >
-            Profile
-          </Link>
-        ) : undefined,
-      };
-    },
-    noneLabel: "Unassigned",
-    dropUpdates: (key) => ({ assignee: key }),
+  assignee: assigneeAxis,
+
+  // The same buckets as Assignee, drawn as a tree: a person's group, then one
+  // nested group per role that reports to them, and the roles under those
+  // (org-roles-run-work.md R5). Read from the org tree at render, so a role
+  // moved on the chart moves here with no write to any task.
+  chain: {
+    ...assigneeAxis,
+    label: "Chain",
+    arrange: (keys, ctx) =>
+      arrangeChain(keys, ctx.roles ?? [], {
+        meId: ctx.currentUser?._id,
+        nameOf: (key) => assigneeOfKey(key, undefined, ctx)?.name ?? key,
+      }),
   },
 
   label: {
@@ -203,7 +255,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
             e.stopPropagation();
             ctx.onFilterLabel(b.key);
           }}
-          className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
+          className={HEADER_LINK}
         >
           Filter
         </button>
@@ -223,7 +275,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     compare: (a, b) =>
       Math.max(...b.tasks.map((t) => t.created_at)) - Math.max(...a.tasks.map((t) => t.created_at)),
     header: (b) => {
-      const session = b.sample.origin_session!;
+      const session = b.sample!.origin_session!;
       return {
         label: session.title || b.key.slice(0, 8),
         icon: <MessageSquare className="w-3.5 h-3.5 text-sol-cyan" />,
@@ -231,7 +283,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
           <Link
             href={`/sessions/${session.conversation_id}`}
             onClick={(e) => e.stopPropagation()}
-            className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
+            className={HEADER_LINK}
           >
             View session
           </Link>
@@ -243,7 +295,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
 };
 
 /** Axis order for the group menus. */
-export const TASK_AXIS_KEYS = ["status", "project", "plan", "assignee", "label", "session"] as const;
+export const TASK_AXIS_KEYS = ["status", "project", "plan", "assignee", "chain", "label", "session"] as const;
 
 /** Split a group value into its axes, dropping anything unknown. "none" (or an
  *  unrecognised value) yields an empty list, meaning a flat list. */
@@ -254,7 +306,15 @@ export function parseTaskGroup(group: string): string[] {
   // parser hands back as " ". Both should mean the same grouping.
   const axes = group.split(/[+ ]/).filter((a) => a in TASK_AXES);
   // Repeats would produce a header like "Open · Open"; keep the first.
-  return [...new Set(axes)];
+  return [...new Set(axes)].filter((a, i, all) => i === 0 || canSubGroup(all[0], a));
+}
+
+/** Whether `axis` can divide `primary`'s groups. A nesting axis (Chain) only
+ *  works first, since its tree IS the layout; and two axes that read the same
+ *  key off a task (Chain and Assignee) would only repeat each other. */
+export function canSubGroup(primary: string, axis: string): boolean {
+  const a = TASK_AXES[axis];
+  return !!a && axis !== primary && !a.arrange && a.keyOf !== TASK_AXES[primary]?.keyOf;
 }
 
 /** Whether a raw group value is legal — one or more known axes, or "none". */
@@ -301,6 +361,40 @@ export function taskGroupDropUpdates(
   return updates;
 }
 
+type Bucket = {
+  keys: string[];
+  sample?: TaskItem;
+  tasks: TaskItem[];
+  /** Set by a nesting first axis (Chain): how far under its top the group sits. */
+  depth?: number;
+  /** Tasks in this group and every group nested under it, on the first header
+   *  of a group that has any nested; absent where it would repeat the count. */
+  chainTotal?: number;
+};
+
+/**
+ * Lay sorted buckets out along a nesting axis's tree. Each node takes its own
+ * buckets (several, when a second axis splits it) in the order they already
+ * hold; a node with none gets an empty header, because the groups nested under
+ * it need something to hang from. The none bucket keeps its place at the end.
+ */
+function nestBuckets(ordered: Bucket[], nodes: ChainNode[]): Bucket[] {
+  const own = nodes.map((node) => ordered.filter((b) => b.keys[0] === node.key));
+  const count = (list: Bucket[]) => list.reduce((n, b) => n + b.tasks.length, 0);
+  const out: Bucket[] = [];
+  nodes.forEach((node, n) => {
+    let total = count(own[n]);
+    let nested = false;
+    for (let m = n + 1; m < nodes.length && nodes[m].depth > node.depth; m++) {
+      total += count(own[m]);
+      nested = true;
+    }
+    const mine: Bucket[] = own[n].length ? own[n] : [{ keys: [node.key], tasks: [] }];
+    mine.forEach((b, i) => out.push({ ...b, depth: node.depth, chainTotal: nested && i === 0 ? total : undefined }));
+  });
+  return [...out, ...ordered.filter((b) => !b.keys[0])];
+}
+
 /**
  * Bucket tasks by every axis in `group` and return the flat header list
  * GenericListView renders. `sortTasks` orders rows inside each bucket (it also
@@ -330,7 +424,7 @@ export function buildTaskGroups({
   }
 
   const axes = axisKeys.map((k) => TASK_AXES[k]);
-  const buckets = new Map<string, { keys: string[]; sample: TaskItem; tasks: TaskItem[] }>();
+  const buckets = new Map<string, Bucket>();
   for (const task of tasks) {
     const keys = axes.map((axis) => axis.keyOf(task, ctx));
     const id = bucketId(keys);
@@ -342,7 +436,7 @@ export function buildTaskGroups({
     bucket.tasks.push(task);
   }
 
-  const view = (bucket: { keys: string[]; sample: TaskItem; tasks: TaskItem[] }, i: number): AxisBucket => ({
+  const view = (bucket: Bucket, i: number): AxisBucket => ({
     key: bucket.keys[i],
     sample: bucket.sample,
     tasks: bucket.tasks,
@@ -360,7 +454,12 @@ export function buildTaskGroups({
     return 0;
   });
 
-  return ordered.map((bucket) => {
+  const arrange = axes[0].arrange;
+  const laid = arrange
+    ? nestBuckets(ordered, arrange([...new Set(ordered.map((b) => b.keys[0]).filter(Boolean))], ctx))
+    : ordered;
+
+  return laid.map((bucket) => {
     const parts = bucket.keys.map((key, i) =>
       key
         ? axes[i].header(view(bucket, i), ctx)
@@ -374,7 +473,10 @@ export function buildTaskGroups({
       icon: icons.length ? (
         <span className="flex items-center gap-1 flex-shrink-0">{icons.map((p, i) => <span key={i} className="flex">{p.icon}</span>)}</span>
       ) : undefined,
-      badge: parts.find((p) => p.badge)?.badge,
+      badge: bucket.chainTotal !== undefined ? (
+        <span className="text-[10px] text-sol-text-dim normal-case tracking-normal">{bucket.chainTotal} in chain</span>
+      ) : parts.find((p) => p.badge)?.badge,
+      depth: bucket.depth,
       extra: extras.length ? (
         <span className="flex items-center gap-2 flex-shrink-0">{extras.map((p, i) => <span key={i}>{p.extra}</span>)}</span>
       ) : undefined,
