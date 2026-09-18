@@ -3,6 +3,7 @@ import { useMentionServerSearch, useActiveMentionScope, SERVER_MENTION_TYPES } f
 import { mergeMentionSuggestions, mentionViewTimes } from "../../lib/mentionRanking";
 import { useInboxStore } from "../../store/inboxStore";
 import { MentionSuggestion } from "./MentionSuggestion";
+import type { IdentityRow } from "../../lib/sessionIdentity";
 
 export type MentionItem = {
   id: string;
@@ -29,6 +30,10 @@ export type MentionItem = {
   updatedAt?: number;
   viewedAt?: number;
   idleSummary?: string;
+  /** A session's identity row (session-characters.md S1): the character and
+   *  role fields, handed whole to `sessionIdentity` so the dropdown row wears
+   *  the face and name the inbox card wears. Nothing else reads them. */
+  identity?: IdentityRow;
 };
 
 interface MentionListProps {

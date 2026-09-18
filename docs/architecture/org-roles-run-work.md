@@ -81,6 +81,16 @@ and rule 6 of `ROLE_RULES`; its dry run (4 of 4 samples escalate the brand
 call with a reason and answer the charter question themselves; 0 of 4 escalate
 with the bullet cut) is in `/tmp/r1dry`.
 
+Two limits, decided 2026-09-18. The hand refusal on `cast escalate` is the
+T4 limit (org-roles-standing.md): a hand runs under its host's token, so a
+hand that strips its session variables passes as the person; the refusal
+keeps an honest hand from escalating itself and is not a boundary. And a
+reparent to a person clears the row's stash, because the new owner has never
+seen the session and it must appear in their inbox, while a reparent to a role
+keeps it, because the role triages and the row nests under it without needing
+anyone's eyes (`sessionOwnership.performReparentSession`, both cases pinned
+in orgRoles.test.ts).
+
 ## R2. A long running session is a role that has not been named
 
 The analyzer's grounding (S9) reads sessions for who commits where. It also
@@ -174,3 +184,50 @@ face and one line saying why it is in front of them. They hover a role
 anywhere and know in three seconds what it looks after. They open a project
 and see who leads it. They open the task board, group by chain, and see their
 whole company's work under the people who answer to them.
+
+## R6. A person who reports to a role
+
+From the team huddle of 2026-09-18. Two people asked to report to an agent and
+said what they meant by it: one place that keeps their three to five high
+level goals, tracks all of their sessions against those goals, and keeps them
+making forward progress; an agent that is "on top of me to make sure I am
+doing high priority stuff and not dropping the ball". Not permission to do
+things. So a role a person reports to is a goal tracker first.
+
+**Goals live in the role's brief, one section per person.** When a person
+reports to a role, the role keeps that person's goals (three to five, in the
+person's own words, set in the conversation: "my goals this month are...")
+in its brief under the person's name, with the sessions, tasks and plans it
+has matched to each goal. A goal with nothing matched to it for a week is a
+finding. Editing the goals is the same gesture as R4's remember: say it to
+the role, or edit the Brief tab.
+
+**Every wake, the role reads the person's sessions against the goals.** The
+frame's "Your sessions" section (R1) includes, for each person who reports
+to the role, their sessions that changed since the last wake, and the role
+matches them to goals in its own words. It never reads a private session it
+cannot open.
+
+**Where the person reads it.** The person's own view of a role they report
+to is the role's page, whose Scope tab (R3) shows, for that person, their
+goals with what moved on each and what stalled. The role's weekly note (its
+routine) says the same in prose, and a stall on a high priority goal is a
+fold wake to the person, one line, never more than one a day.
+
+**Tasks a role holds are visible to the person above it.** From the same
+call: a task leaving a person's list when a role takes it is "a little
+scary". The safeguards are R5's rule that a role never reassigns a task that
+names a person, the Chain axis that shows a role's tasks under the person it
+reports to, and the goal section above, where a task matched to a goal is
+reported on whether the role or the person holds it.
+
+## R7. What an assignee means
+
+From the same call: a session refused to ship a task because the task was
+assigned to someone else, and nothing in its instructions said to. The model
+inferred a permission boundary from the assignee field. Assignee means who is
+accountable for the task, never who may act on it; any session may work a
+task, and the assignee is who answers for it being done. The task context
+the CLI prints (`cast task context`, `cast task start`, the bound task line
+in the system text) says so in one sentence, so no model guesses the
+stricter reading. This matters more once roles hold tasks (R5).

@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
 import Link from "next/link";
 import { RoleFace } from "./org/RoleFace";
+import { SessionFace } from "./identity";
+import { sessionIdentity } from "../lib/sessionIdentity";
+import { usePersonifyAll } from "../hooks/usePersonifyAll";
 import {
   Target,
   ArrowUpRight,
@@ -920,7 +923,7 @@ export function EntityIdPill({
   const establishedByShortId = useIsEstablishedRef(entity?.short_id);
   const established = establishedByRaw || establishedByShortId;
   const compact = compactProp ?? (!mention?.named && ((mention?.nth ?? 1) > 1 || established));
-  const pillLabel = compact ? shortLabel : fullLabel;
+  const refLabel = compact ? shortLabel : fullLabel;
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
@@ -945,6 +948,16 @@ export function EntityIdPill({
   // `!type` guard further down, but the guard sits below the hooks and so runs
   // after this — every value it protects has to stand on its own until then.
   const taskV = taskVisual(status);
+
+  // Who a session IS (session-characters.md S3): once a session wears a
+  // character or a role, the reference reads as that person — the face in
+  // place of the generic session glyph, the character's name in place of the
+  // title. The title is still one hover away, and on the link's tooltip, so
+  // nothing is lost from a sentence that names four sessions.
+  const personifyAll = usePersonifyAll();
+  const identity = isSession && entity ? sessionIdentity(entity, personifyAll) : null;
+  const persona = identity && identity.kind !== "plain" ? identity : null;
+  const pillLabel = persona ? persona.name : refLabel;
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -1056,10 +1069,12 @@ export function EntityIdPill({
           onMouseLeave={closeSoon}
           aria-pressed={revealHost ? revealOpen : undefined}
           className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
-          title={compact && fullLabel !== pillLabel ? fullLabel : undefined}
+          title={fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
-            {isSession && (entity?.author_name || entity?.author_avatar) ? (
+            {persona && entity ? (
+              <SessionFace row={entity} size="1em" />
+            ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
               <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : ""}`} />

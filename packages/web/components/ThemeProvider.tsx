@@ -2,6 +2,7 @@ import { createContext, useContext, useState, ReactNode, useCallback } from "rea
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
 
 type Theme = "dark" | "light";
 export type VisualStyle = "classic" | "minimal";
@@ -37,6 +38,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const serverTheme = useInboxStore((s) => s.clientState.ui?.theme);
   const serverVisualStyle = useInboxStore((s) => s.clientState.ui?.visual_style);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const bubbleHue = useInboxStore((s) => resolveBubbleHue(s.clientState.ui?.user_bubble_color));
+
+  // One custom property on the root; the stylesheet mixes the fill from it.
+  useWatchEffect(() => {
+    document.documentElement.style.setProperty(BUBBLE_HUE_VAR, bubbleHue);
+  }, [bubbleHue]);
 
   useMountEffect(() => { setMounted(true); });
 

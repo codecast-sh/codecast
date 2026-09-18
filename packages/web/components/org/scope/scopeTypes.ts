@@ -2,6 +2,7 @@
 // org-roles-standing.md T2). `org.scopeFeed`, `org.scopeSummary` and
 // `org.brief` return these shapes; the page paints from them. Types live here
 // so the fixture, the hooks and the tabs agree on one definition.
+import type { GoalProgress } from "@codecast/shared/contracts/roleGoals";
 import type { WorkState } from "@codecast/shared/contracts";
 import type { OrgReportsTo, StateCounts } from "../orgTypes";
 
@@ -74,11 +75,31 @@ export type BriefHand = {
   task: { short_id: string; title: string; status: string; execution_status?: string; review_verdict?: string; review_note?: string } | null;
 };
 
+/** A goal of a person who reports to the role, as org.brief reads it off the
+ *  live rows (org-roles-run-work.md R6; convex/orgGoals.ts). */
+export type BriefGoal = GoalProgress & {
+  text: string;
+  priority: "high" | "medium" | "low" | null;
+  raw: string;
+  refs: Array<{ kind: "session" | "task" | "plan"; short_id: string; title: string; status: string; updated_at: number }>;
+};
+export type BriefPerson = {
+  user_id: string;
+  name: string;
+  has_section: boolean;
+  goals: BriefGoal[];
+  sessions_changed: Array<{ _id: string; short_id: string; title: string; state: WorkState; state_line: string | null; updated_at: number }>;
+  sessions_total: number;
+  stalled_high: number;
+};
+
 export type BriefFacts = {
   scope: { projects: { id: string; title: string; short_id?: string }[]; plans: { id: string; short_id: string; title: string }[]; whole_workspace: boolean };
   tasks: ScopeSummary["tasks"];
   plans: ScopeSummary["plans"];
   hands: BriefHand[];
+  /** The people who report to the role; empty when nobody does. */
+  people?: BriefPerson[];
   changed: { kind: "task" | "plan"; short_id?: string; title: string; status: string; updated_at: number }[];
   decisions: { open: number; answered_today: number };
   usage: { day: string; wakes: number; hands: number; tokens: number; caps: RoleCaps; uncounted_sessions: number };

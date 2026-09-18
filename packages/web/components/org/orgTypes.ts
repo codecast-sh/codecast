@@ -79,6 +79,9 @@ export type OrgRole = {
   counters?: { day: string; hands: number; wakes: number; tokens: number };
   coalesce_ms?: number;
   review_backend?: string;
+  /** People who report to the role (org-roles-run-work.md R6): the role keeps
+   *  their goals in its brief. Rides org.tree on the role row's own spread. */
+  reports_user_ids?: string[];
   // Standing or program (org-staffing.md S10); absent = undeclared, drawn as
   // standing. A program's ends carries plan/project ids as strings on the tree.
   tenure?: OrgTenureSpec;

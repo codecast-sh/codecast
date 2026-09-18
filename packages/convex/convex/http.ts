@@ -4126,6 +4126,7 @@ cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.r
 cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
 cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
+cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));
 cliRoute("/cli/role/wakes", async (ctx, body) => ctx.runQuery(api.orgRoles.wakes, body));
 cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
 // The scope's line (the-line.md L2): `cast role line <handle> [--set <slug>]`.
@@ -4556,6 +4557,9 @@ cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.
 // codegen on deploy; cast to any so the committed _generated typecheck stays green
 // until then.
 cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
+// `cast handoff --to <agent>`: brief + compose + spawn + link, one action
+// (handoff.start), the same one the web calls signed in.
+cliRoute("/cli/handoff", async (ctx, body) => ctx.runAction((api as any).handoff.start, body));
 
 // Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
 // session into a human's inbox). A session has a SET of owners — it can sit in

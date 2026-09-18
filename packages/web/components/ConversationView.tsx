@@ -93,7 +93,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
-import { RevealAncestryCtx, RevealInBandCtx, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
+import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -148,7 +148,7 @@ function extractTextFromHast(node: any): string {
   if (node.children) return node.children.map(extractTextFromHast).join('');
   return '';
 }
-import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { extractFileChanges, editStringsFromInput } from "../lib/fileChangeExtractor";
 import { parseWorkflowScriptMeta, parseWorkflowLaunch } from "../lib/workflowLaunch";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
@@ -157,7 +157,8 @@ import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
-import { AgentDefinitionPill, HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { AgentDefinitionPill, LaunchModelPill } from "./ModelEffortPicker";
+import { HeaderModelControl } from "./SessionControlMenu";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import {
   DropdownMenu,
@@ -223,7 +224,7 @@ import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem, resolveCloudStartFrom } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem, resolveCloudStartFrom, resolveSimpleView } from "../store/inboxStore";
 import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { DocDates } from "./DocDates";
@@ -268,10 +269,13 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionSuggestion } from "./editor/MentionSuggestion";
 import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft, Cpu } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
-import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+import { ContextMenu, CursorPopover, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+import { IdentityFace } from "./identity";
+import { CharacterPicker } from "./identity/CharacterPicker";
+import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
 import { useDevices, useDeviceMoveStatus, deviceDisplayName, type Device } from "./DeviceBadge";
 import { MachineChips } from "./MachineChips";
 import { SessionModeToggles } from "./SessionModeToggles";
@@ -292,6 +296,7 @@ const SessionHuddleButton = lazy(() => import("./calls/OccupancyChip").then((m) 
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
 import { expandEntityMentions } from "../lib/mentionExpansion";
+import { identityLine } from "../lib/sessionIdentity";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 import { devRenderCount, devCountElements } from "../lib/devRenderCount";
 
@@ -605,7 +610,7 @@ const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
 // Simple view reads calmer by default: tool activity as one-line receipts.
 // An explicit per-conversation choice (the map above) still wins.
 function defaultDensity(): ConversationDensity {
-  return useInboxStore.getState().clientState.ui?.simple_view ? "condensed" : "full";
+  return resolveSimpleView(useInboxStore.getState().clientState.ui) ? "condensed" : "full";
 }
 const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
   { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
@@ -786,6 +791,13 @@ export type ConversationData = {
   fork_status?: "copying" | "complete" | "failed";
   fork_copied?: number;
   fork_copy_total?: number;
+  // The handoff pair (`cast handoff --to`, handoff.start): a child carries
+  // where it came from, a source where it continued. Details mirror
+  // forked_from_details' access rules; the bare ids ride the list payload.
+  handed_off_from_conversation_id?: string | null;
+  handed_off_to_conversation_id?: string | null;
+  handed_off_from_details?: HandoffLinkDetails | null;
+  handed_off_to_details?: HandoffLinkDetails | null;
   forked_from_details?: {
     conversation_id: string;
     title?: string;
@@ -3427,6 +3439,46 @@ function assistantLabel(agentType?: string): string {
 }
 
 
+/** One side of a handoff link on the conversation payload. */
+type HandoffLinkDetails = {
+  conversation_id: string;
+  short_id: string;
+  title?: string | null;
+  agent_type?: string | null;
+  model?: string | null;
+};
+
+/**
+ * Header chip for the handoff pair: "From <id>" on the child, "Continued in
+ * <id>" on the source. Same treatment as the Parent chip — plain left-click is
+ * an instant store-driven switch, modified clicks fall through to the Link.
+ */
+function HandoffLinkChip({ details, direction, convLink, navigateToSession }: {
+  details: HandoffLinkDetails;
+  direction: "from" | "to";
+  convLink: (id: string) => string;
+  navigateToSession: (id: string) => void;
+}) {
+  const title = details.title ? `: ${details.title}` : "";
+  return (
+    <Link
+      href={convLink(details.conversation_id)}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        navigateToSession(details.conversation_id);
+      }}
+      data-handoff-chip={direction}
+      className="cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+      title={direction === "from" ? `Handed off from ${details.short_id}${title}` : `Continued in ${details.short_id}${title}`}
+    >
+      <ArrowRightLeft className={`w-3 h-3 ${direction === "from" ? "-scale-x-100" : ""}`} />
+      <span className="cq-sq2">{direction === "from" ? "From" : "Continued in"}</span>
+      <span className="font-mono">{details.short_id}</span>
+    </Link>
+  );
+}
+
 function ConversationMetadata({
   agentType,
   model,
@@ -3436,6 +3488,8 @@ function ConversationMetadata({
   shortId,
   conversationId,
   canEditModel,
+  controlOpen,
+  onControlOpenChange,
 }: {
   agentType?: string;
   model?: string;
@@ -3445,6 +3499,9 @@ function ConversationMetadata({
   shortId?: string;
   conversationId?: string;
   canEditModel?: boolean;
+  /** The session control panel's open state, shared with the overflow menu. */
+  controlOpen?: boolean;
+  onControlOpenChange?: (open: boolean) => void;
 }) {
   const live = useLiveSessionMeta(conversationId);
   const resolvedAgent = live?.agentType ?? agentType;
@@ -3470,6 +3527,8 @@ function ConversationMetadata({
         effort={live ? (live.effort ?? undefined) : effort}
         messageCount={messageCount}
         canEdit={!!canEditModel}
+        open={controlOpen}
+        onOpenChange={onControlOpenChange}
       />
       {startedAt && (
         <div className="flex items-center gap-1.5 flex-shrink-0 cq-sq2">
@@ -4189,6 +4248,9 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase),
   // grok read_file uses target_file and list_dir uses target_directory.
   const filePath = toolPathFromInput(parsedInput);
+  // Whichever names this client gives the two halves of a replacement — muse
+  // writes {find, replace}, Claude {old_string, new_string}.
+  const editStrings = editStringsFromInput(parsedInput);
   const relativePath = getRelativePath(filePath);
   // Enables inline line comments on the agent's edits (see DiffView). Scoped to a
   // live conversation; comments land in the shared review batch keyed by the
@@ -4671,10 +4733,10 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 <div className="p-2 text-xs text-sol-text-dim">No output</div>
               )}
             </div>
-          ) : isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
+          ) : isEdit && editStrings ? (
             <DiffView
-              oldStr={String(parsedInput.old_string)}
-              newStr={String(parsedInput.new_string)}
+              oldStr={editStrings.oldStr}
+              newStr={editStrings.newStr}
               startLine={startLine}
               language={language}
               commentContext={lineCommentCtx(filePath)}
@@ -10730,7 +10792,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       } else if (item.type === "file" || item.type === "skill") {
         inserted = `@${item.label} `;
       } else {
-        const truncTitle = item.label.length > 30 ? item.label.slice(0, 30) + "..." : item.label;
+        // A session that wears a character or a role is named as that person:
+        // the reference reads "@[Ember jx7abcd]" and renders as its face and
+        // name (session-characters.md S3). A plain session keeps its title.
+        const persona = item.type === "session" && item.identity
+          ? identityLine(item.identity, item.label, !!useInboxStore.getState().clientState?.ui?.personify_sessions).name
+          : null;
+        const refTitle = persona ?? item.label;
+        const truncTitle = refTitle.length > 30 ? refTitle.slice(0, 30) + "..." : refTitle;
         const id = item.shortId || (item.type === "doc" ? `doc:${item.id}` : "");
         const ref = id ? `@[${truncTitle} ${id}]` : `@[${truncTitle}]`;
         inserted = `${ref} `;
@@ -13096,7 +13165,7 @@ const ConversationViewInner = (
   }, [conversation?._id]);
   // Toggling Simple view retunes the open conversation immediately — but only
   // when the user hasn't explicitly picked a density for it (that choice wins).
-  const simpleViewPref = useInboxStore((st) => st.clientState.ui?.simple_view === true);
+  const simpleViewPref = useInboxStore((st) => resolveSimpleView(st.clientState.ui));
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
     setDensityState(resolveDefaultDensity());
@@ -13267,6 +13336,12 @@ const ConversationViewInner = (
   // teammates, spawns) carry spawned_by_conversation_id. The header chip and
   // the overflow menu row both link here, so folding the chip loses nothing.
   const parentLinkId = conversation?.parent_conversation_id || (conversation as any)?.spawned_by_conversation_id;
+  // The unified session control panel behind the header badge (model, effort,
+  // switch, fork, hand off). Controlled here so the overflow menu's one row
+  // opens the same panel instead of duplicating it.
+  const [sessionControlOpen, setSessionControlOpen] = useState(false);
+  const handedOffFrom = conversation?.handed_off_from_details ?? null;
+  const handedOffTo = conversation?.handed_off_to_details ?? null;
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
@@ -13442,6 +13517,15 @@ const ConversationViewInner = (
       team_id: sess.team_id,
     };
   }));
+  // Who this session is (docs/architecture/session-characters.md S3): the
+  // header wears the same face as its inbox card, at 22 px, and clicking it
+  // opens the character picker. Narrow like managedSession above — the
+  // identity fields alone, so the heartbeat's churn re-renders nothing.
+  const identityRow = useInboxStore(useShallow((s) => {
+    const sess = effectiveConversationId ? (s.sessions[effectiveConversationId] as any) : null;
+    return sess ? identityRowOf(sess) : null;
+  }));
+  const headerCharacterPicker = useContextMenu<IdentityRow[]>();
   const isSessionLive = !!managedSession?.is_connected;
   // The command palette's "Copy tmux attach command" — the same gesture as the
   // header pill's copy button, so it copies the same command for the same machine.
@@ -16533,13 +16617,11 @@ const ConversationViewInner = (
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
-  const openReveal = useOpenReveal();
   const inRevealBand = useContext(RevealInBandCtx);
-  const [hostingReveal, setHostingReveal] = useState(false);
-  useLayoutEffect(() => {
-    const root = headerRef.current?.closest("[data-cc-conversation]");
-    setHostingReveal(!!(openReveal && root && root.contains(openReveal.slot)));
-  }, [openReveal]);
+  // Keyed on the conversation as well as the band: one instance of this view
+  // serves every session the inbox selects, and a fold left over from the
+  // session that hosted a band used to follow the reader to the next one.
+  const hostingReveal = useHostsReveal(headerRef, "[data-cc-conversation]", effectiveConversationId);
   const compactChrome = inRevealBand || hostingReveal;
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
@@ -17232,6 +17314,16 @@ const ConversationViewInner = (
               </ShortcutTooltip>
             )}
             {headerLeft}
+            {identityRow && (
+              <IdentityFace
+                row={identityRow}
+                size={22}
+                className="flex-shrink-0"
+                onPick={(e) => headerCharacterPicker.open(e, [identityRow], { force: true })}
+                side="bottom"
+                align="start"
+              />
+            )}
             {isRenaming ? (
               <input
                 ref={renameInputRef}
@@ -17326,6 +17418,8 @@ const ConversationViewInner = (
                   shortId={conversation.short_id}
                   conversationId={conversation._id}
                   canEditModel={effectiveIsOwner}
+                  controlOpen={sessionControlOpen}
+                  onControlOpenChange={setSessionControlOpen}
                 />
               </span>
             )}
@@ -17383,6 +17477,13 @@ const ConversationViewInner = (
                     </svg>
                     <span className="cq-sq2">Parent</span>
                   </Link>
+                )}
+
+                {handedOffFrom && (
+                  <HandoffLinkChip details={handedOffFrom} direction="from" convLink={convLink} navigateToSession={navigateToSession} />
+                )}
+                {handedOffTo && (
+                  <HandoffLinkChip details={handedOffTo} direction="to" convLink={convLink} navigateToSession={navigateToSession} />
                 )}
 
                 {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
@@ -17727,6 +17828,22 @@ const ConversationViewInner = (
                         </Link>
                       </DropdownMenuItem>
                     )}
+                    {handedOffFrom && (
+                      <DropdownMenuItem asChild>
+                        <Link href={convLink(handedOffFrom.conversation_id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return; e.preventDefault(); navigateToSession(handedOffFrom.conversation_id); }}>
+                          <ArrowRightLeft className="w-3 h-3 mr-1.5 text-sol-cyan" />
+                          Handed off from {handedOffFrom.short_id}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {handedOffTo && (
+                      <DropdownMenuItem asChild>
+                        <Link href={convLink(handedOffTo.conversation_id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return; e.preventDefault(); navigateToSession(handedOffTo.conversation_id); }}>
+                          <ArrowRightLeft className="w-3 h-3 mr-1.5 text-sol-cyan" />
+                          Continued in {handedOffTo.short_id}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
                     {conversation.forked_from_details && (
                       <DropdownMenuItem asChild>
                         <Link href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : convLink(conversation.forked_from_details.conversation_id)}>
@@ -17740,54 +17857,19 @@ const ConversationViewInner = (
                     {isOwner && (
                       <>
                         <DropdownMenuSeparator />
-                        <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>
-                            <svg className="w-3 h-3 mr-1.5 text-sol-violet" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 5H4m0 0l4 4m-4-4l4-4" />
-                            </svg>
-                            Switch agent
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {AGENT_LAUNCH_OPTIONS
-                              .map((a) => a.convexType)
-                              .filter((t) => t !== conversation.agent_type && canSessionBecomeAgent(t, conversation.message_count))
-                              .map((t) => (
-                                <DropdownMenuItem
-                                  key={`switch-${t}`}
-                                  onClick={() => {
-                                    void switchSessionAgent(conversation as any, t).catch((error) => toast.error(error instanceof Error ? error.message : "Failed to switch agent"));
-                                  }}
-                                >
-                                  <AgentTypeIcon agentType={t} />
-                                  <span className="ml-1.5">{formatAgentType(t)}</span>
-                                </DropdownMenuItem>
-                              ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
-                        <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>
-                            <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
-                            Fork as
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {AGENT_LAUNCH_OPTIONS
-                              .map((a) => a.convexType)
-                              .filter((t) => t !== conversation.agent_type)
-                              .map((t) => (
-                                <DropdownMenuItem
-                                  key={`fork-${t}`}
-                                  onClick={() => {
-                                    const fork = forkSessionAsAgent(conversation as any, t);
-                                    useInboxStore.getState().requestNavigate(fork.sessionId);
-                                    void fork.ready.catch((error) => toast.error(error instanceof Error ? error.message : "Failed to fork session"));
-                                  }}
-                                >
-                                  <AgentTypeIcon agentType={t} />
-                                  <span className="ml-1.5">{formatAgentType(t)}</span>
-                                </DropdownMenuItem>
-                              ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
+                        {/* One row for the whole session control panel (model,
+                            effort, switch agent, fork as, hand off) — the
+                            header badge opens the same panel, so the menu
+                            never grows a second copy of its rails. The menu
+                            closes first; the panel opens on the next tick so
+                            the two Radix layers don't fight over focus. */}
+                        <DropdownMenuItem
+                          className="hidden sm:flex"
+                          onSelect={() => { setTimeout(() => setSessionControlOpen(true), 0); }}
+                        >
+                          <Cpu className="w-3 h-3 mr-1.5 text-sol-violet" />
+                          Model, agent, fork, hand off…
+                        </DropdownMenuItem>
                       </>
                     )}
                     {((conversation.fork_children && conversation.fork_children.length > 0) || conversation.forked_from) && (
@@ -18434,6 +18516,10 @@ const ConversationViewInner = (
           </button>
         </div>
       )}
+      {/* The header face's picker (session-characters.md S2), one instance. */}
+      <CursorPopover state={headerCharacterPicker}>
+        {(rows) => <CharacterPicker rows={rows as any} onDone={headerCharacterPicker.close} />}
+      </CursorPopover>
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
       {conversation && (
         <Suspense fallback={null}>

@@ -9,6 +9,8 @@ import { pathLabel } from "../lib/pathLabel";
 import { detachTab } from "../lib/openIntent";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentVisitRow";
+import { SessionGlyph } from "./identity";
+import { identityRowOf } from "../lib/sessionIdentity";
 import { LivenessDot } from "./LivenessDot";
 import { sessionLivenessState } from "../lib/liveness";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -223,6 +225,11 @@ export function TabBar() {
                   around the active tab and while hovering. */}
               {i > 0 && !isActive && !prevActive && (
                 <span aria-hidden className="absolute -left-[3px] top-1/2 -translate-y-1/2 h-3 w-px bg-sol-border/30 group-hover:opacity-0" />
+              )}
+              {/* The session's face (session-characters.md S3), then its
+                  liveness dot: who the tab is, and whether it is running. */}
+              {sessionRow && (
+                <SessionGlyph row={identityRowOf(sessionRow as any)} size={14} className="flex-shrink-0" />
               )}
               {sessionRow ? (
                 <LivenessDot state={sessionLivenessState(sessionRow)} size="xs" className="flex-shrink-0" />

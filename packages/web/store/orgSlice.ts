@@ -214,6 +214,9 @@ export type OrgUpdateRoleInput = {
   // orgRoles.update. Editable from the role's settings after creation.
   tenure?: OrgTenureSpec;
   avatar?: string;
+  // People who report to the role (org-roles-run-work.md R6); dispatch diffs
+  // the list against the tree and routes it to orgRoles.setReports.
+  reports_user_ids?: string[];
 };
 
 export type OrgSliceActions = {

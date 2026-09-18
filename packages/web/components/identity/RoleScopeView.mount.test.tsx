@@ -6,6 +6,7 @@
 // one link with nothing clickable inside it, and the card still says something
 // honest when the tree, or the enrichment, or both are missing.
 // Run: bun components/identity/RoleScopeView.mount.test.tsx
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { OrgRole, OrgTree } from "../org/orgTypes";
 
@@ -165,4 +166,4 @@ async function verifyRoleScopeView() {
   console.log("role scope view, both densities: ok");
 }
 
-if (import.meta.main) await verifyRoleScopeView().catch((e) => { console.error(e); process.exit(1); });
+test("the role scope view mounts", verifyRoleScopeView, 120_000);

@@ -4,6 +4,7 @@ import {
   mcpToolNames,
   codexToolNames,
   grokToolNames,
+  museToolNames,
   isShellTool,
   isReadTool,
   isEditTool,
@@ -66,6 +67,11 @@ describe("formatToolName", () => {
     ["get_command_or_subagent_output", "Wait"],
     ["spawn_subagent", "Agent"],
     ["Web search:", "Search"],
+    // muse snake_case ids land in the same family labels
+    ["edit_file", "Edit"],
+    ["write_file", "Write"],
+    ["write_todos", "Todos"],
+    ["search", "Search"],
     // already-friendly names pass through unchanged
     ["Bash", "Bash"],
     ["Read", "Read"],
@@ -84,10 +90,22 @@ describe("formatToolName", () => {
     for (const [id, label] of Object.entries(grokToolNames)) {
       expect(formatToolName(id)).toBe(label);
     }
+    for (const [id, label] of Object.entries(museToolNames)) {
+      expect(formatToolName(id)).toBe(label);
+    }
   });
 });
 
 describe("tool family classifiers", () => {
+  it("puts muse ids in the same families as the other clients'", () => {
+    expect(isEditTool("edit_file")).toBe(true);
+    expect(isWriteTool("write_file")).toBe(true);
+    expect(isGrepTool("search")).toBe(true);
+    expect(isTodoTool("write_todos")).toBe(true);
+    expect(isReadTool("read_file")).toBe(true);
+    expect(isShellTool("bash")).toBe(true);
+  });
+
   it("puts grok ids in the same families as claude/codex synonyms", () => {
     expect(isShellTool("run_terminal_command")).toBe(true);
     expect(isShellTool("Bash")).toBe(true);

@@ -537,6 +537,50 @@ async function computeOriginDivergentPreviews(
   return out;
 }
 
+// The handoff link's display payload (`cast handoff --to`, handoff.start):
+// enough for a chip and a click-through, nothing that needs access rules of
+// its own — same contract as forked_from_details, which likewise names the
+// origin to anyone who can see this row. `getDoc` is the memo on the inbox
+// paths; a plain db.get elsewhere.
+export type HandoffLinkDetails = {
+  conversation_id: string;
+  short_id: string;
+  title: string | null;
+  agent_type: string | null;
+  model: string | null;
+};
+
+export async function handoffLinkDetails(
+  getDoc: (id: any) => Promise<any>,
+  id: Id<"conversations"> | string | null | undefined,
+): Promise<HandoffLinkDetails | null> {
+  if (!id) return null;
+  const conv = await getDoc(id);
+  if (!conv) return null;
+  return {
+    conversation_id: String(conv._id),
+    short_id: conv.short_id ?? String(conv._id).slice(0, 7),
+    title: conv.title ?? null,
+    agent_type: conv.agent_type ?? null,
+    model: conv.model ?? null,
+  };
+}
+
+// The successor of a source row: the forward pointer, else the newest child
+// that points back (an older row, or a patch that never landed).
+export async function handedOffToId(
+  ctx: { db: any },
+  conv: { _id: Id<"conversations">; handed_off_to_conversation_id?: Id<"conversations"> | null },
+): Promise<Id<"conversations"> | null> {
+  if (conv.handed_off_to_conversation_id) return conv.handed_off_to_conversation_id;
+  const child = await ctx.db
+    .query("conversations")
+    .withIndex("by_handed_off_from", (q: any) => q.eq("handed_off_from_conversation_id", conv._id))
+    .order("desc")
+    .first();
+  return child?._id ?? null;
+}
+
 async function mapForkDetails(ctx: { db: any }, forks: any[]) {
   return Promise.all(
     forks.map(async (fork: any) => {
@@ -1431,6 +1475,10 @@ export const webGet = query({
       git_ahead: conv.git_ahead ?? null,
       git_behind: conv.git_behind ?? null,
       git_dirty: conv.git_dirty ?? null,
+      // Who the session IS (session-characters.md S1): the same identity the
+      // inbox card wears, so a reference pill in prose draws the character's
+      // face and name instead of a generic session glyph.
+      ...(await identityFieldsOf(conv, (id: any) => ctx.db.get(id))),
     };
   },
 });
@@ -1997,6 +2045,10 @@ export const getConversationWithMeta = query({
 
     const parentConversationId = await resolveSpawnParentId(ctx, conversation);
 
+    const getDocOnce = (id: any) => ctx.db.get(id);
+    const handedOffFromDetails = await handoffLinkDetails(getDocOnce, conversation.handed_off_from_conversation_id);
+    const handedOffToDetails = await handoffLinkDetails(getDocOnce, await handedOffToId(ctx, conversation));
+
     const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
@@ -2070,6 +2122,8 @@ export const getConversationWithMeta = query({
       fork_children: forkChildrenDetails,
       fork_siblings: forkSiblings.length > 0 ? forkSiblings : undefined,
       parent_conversation_id: parentConversationId,
+      handed_off_from_details: handedOffFromDetails,
+      handed_off_to_details: handedOffToDetails,
       main_divergent_previews_by_fork: mainDivergentPreviewsByFork,
       active_plan,
       active_task,
@@ -2759,6 +2813,10 @@ export const listConversations = query({
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
           spawned_by_conversation_id: visibilityMode === "full" ? (c.spawned_by_conversation_id || null) : null,
+          handed_off_from_conversation_id: visibilityMode === "full" ? (c.handed_off_from_conversation_id || null) : null,
+          handed_off_to_conversation_id: visibilityMode === "full" ? (c.handed_off_to_conversation_id || null) : null,
+          handed_off_from_details: visibilityMode === "full" ? await handoffLinkDetails((id) => ctx.db.get(id), c.handed_off_from_conversation_id) : null,
+          handed_off_to_details: visibilityMode === "full" ? await handoffLinkDetails((id) => ctx.db.get(id), c.handed_off_to_conversation_id) : null,
           parent_message_uuid: c.parent_message_uuid || null,
           is_subagent: !!(c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)),
           is_workflow_sub: c.is_workflow_sub || false,
@@ -3287,6 +3345,9 @@ export const searchConversations = query({
       titleMatch: boolean;
       projectPath: string | null;
       agentType: string | null;
+      // Who the row is (docs/architecture/session-characters.md S1), so a
+      // search result wears the same face as its inbox card.
+      identity: Awaited<ReturnType<typeof identityFieldsOf>>;
     }> = [];
 
     // Hydrate conversation docs for message matches in parallel (was a serial
@@ -3377,6 +3438,7 @@ export const searchConversations = query({
         titleMatch: messages.length === 0,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
+        identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
       });
     }
 
@@ -3433,7 +3495,7 @@ export const searchConversationTitles = query({
     const top = scoped.slice(0, args.limit ?? 20);
     const firstMsgByConv = await resolveFirstMessageTitles(ctx, top);
 
-    const results = top.map((conv) => {
+    const results = await Promise.all(top.map(async (conv) => {
       const conversationUser = scope.userById.get(conv.user_id.toString());
       const title = conv.title
         || firstMsgByConv.get(conv._id.toString())
@@ -3458,8 +3520,9 @@ export const searchConversationTitles = query({
         titleMatch: true,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
+        identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
       };
-    });
+    }));
 
     return { results, totalMatches: 0, totalSessions: results.length };
   },
@@ -8424,6 +8487,12 @@ async function enrichInboxSessionRow(
     // teammate/spawned session to its parent WITHOUT the subagent
     // nesting/hiding that parent_conversation_id implies.
     spawned_by_conversation_id: conv.spawned_by_conversation_id?.toString() || null,
+    // Handoff link (see schema): the card reads handed_off_from the way it
+    // reads spawned_by, since a handoff run from a human shell has no spawner.
+    handed_off_from_conversation_id: conv.handed_off_from_conversation_id?.toString() || null,
+    handed_off_to_conversation_id: conv.handed_off_to_conversation_id?.toString() || null,
+    handed_off_from_details: await handoffLinkDetails(getDoc, conv.handed_off_from_conversation_id),
+    handed_off_to_details: await handoffLinkDetails(getDoc, conv.handed_off_to_conversation_id),
     agent_team_name: conv.agent_team_name ?? null,
     agent_name: conv.agent_name ?? null,
     parent_message_uuid: conv.parent_message_uuid || null,
@@ -8566,7 +8635,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
  * snapshot of the role so the web can draw the role's face and name without
  * loading the org tree. Only rows with a pointer pay the extra read.
  */
-async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<any>) {
+export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<any>) {
   const roleId = conv.standing_role_id ?? conv.org_role_id ?? null;
   const role = roleId ? await getDoc(roleId).catch(() => null) : null;
   return {

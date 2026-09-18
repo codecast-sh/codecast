@@ -13,6 +13,13 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
+import { CollapsibleBody } from "../CollapsibleBody";
+import { AskingSession } from "./DecisionParties";
+import { OptionPages } from "./OptionPages";
+import { PublishedPageEmbed } from "../PublishedPageEmbed";
+import { MarkdownRenderer } from "../tools/MarkdownRenderer";
+import { stripMarkdown } from "../../lib/notificationText";
+import "./decisions.css";
 
 // The compact card: the queue's row, the task page's row. Question, who is
 // asking, the binding chips, and single-kind answers inline; every other
@@ -25,12 +32,16 @@ export function DecisionCompactCard({
   selected,
   onToggleSelect,
   showTask = true,
+  cta = false,
 }: {
   decision: SessionDecisionItem;
   keys?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
   showTask?: boolean;
+  /** This decision is what a surface is waiting on (a task held at its
+   *  station): a tint and a warm edge mark it as the thing to do. */
+  cta?: boolean;
 }) {
   const s = useTrackedStore([
     (st) => st.sessions[decision.conversation_id]?.title,
@@ -54,7 +65,8 @@ export function DecisionCompactCard({
   return (
     <div
       data-decision-card={decision.short_id ?? decision._id}
-      className={`rounded-lg border bg-sol-card/40 transition-colors ${selected ? "border-sol-violet/60 bg-sol-violet/5" : keys ? "border-sol-yellow/40" : "border-sol-border/70 hover:border-sol-border"}`}
+      data-cta={cta ? "true" : undefined}
+      className={`decision-card rounded-lg border bg-sol-card/40 transition-colors ${selected ? "border-sol-violet/60 bg-sol-violet/5" : keys ? "border-sol-yellow/40" : "border-sol-border/70 hover:border-sol-border"}`}
     >
       <div className="px-4 pt-3 pb-2">
         <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim min-w-0">
@@ -62,22 +74,14 @@ export function DecisionCompactCard({
             <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
           )}
           <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${decision.blocking ? "bg-sol-yellow animate-pulse" : "bg-sol-blue"}`} />
-          <Link
-            href={`/conversation/${decision.conversation_id}`}
-            className="text-sol-text-muted hover:text-sol-blue truncate max-w-[16rem]"
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-              e.preventDefault();
-              void jumpToAsk();
-            }}
-          >
-            {session?.title || decision.session_title || "See the conversation"}
-          </Link>
-          {(session?.project_path || decision.project_path) && <span className="truncate">{getProjectName(session?.project_path || decision.project_path!)}</span>}
+          <AskingSession decision={decision} className="max-w-[22rem]" />
           <span>· asked {formatTimeAgo(decision.created_at, now)}</span>
           {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
-          {decision.category && (
-            <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-border text-sol-text-dim"}`} title={isHumanOnlyCategory(decision.category) ? "Always answered by a person" : "A role may earn a grant for this category"}>
+          {/* The category decides who may answer, and only a real one says
+              anything: "unknown" is the absence of a proposal, so it earns no
+              chip here. The document page spells out what it means. */}
+          {decision.category && decision.category !== "unknown" && (
+            <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-border text-sol-text-dim"}`} title={isHumanOnlyCategory(decision.category) ? "Always answered by a person, never a role" : "A role can earn the right to answer these"}>
               {decision.category}
             </span>
           )}
@@ -106,11 +110,44 @@ export function DecisionCompactCard({
             {decision.short_id ?? "open"}<ArrowUpRight className="w-3 h-3" />
           </Link>
         </div>
-        <Link href={decisionHref(decision)} className="block mt-1.5 text-[15px] leading-snug text-sol-text hover:text-sol-blue transition-colors">
+        <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
           {decision.question}
         </Link>
+        {/* The reasoning, inline. A decision cannot be made from its title
+            and its option labels alone, so the context the asker wrote reads
+            here, clipped to a few lines with the way to open it. Collapsed it
+            renders as stripped text, not parsed markdown: a queue of ten
+            cards would otherwise parse ten bodies nobody has opened. */}
+        {decision.context_md && (
+          <CollapsibleBody
+            className="mt-2"
+            collapsedHeight={112}
+            toggleClassName="mt-1"
+            expandLabel="Read the whole thing"
+            collapseLabel="Show less"
+          >
+            {(expanded) => (
+              <div className="decision-card-body" data-decision-context>
+                {expanded
+                  ? <MarkdownRenderer content={decision.context_md!} />
+                  : <p className="whitespace-pre-wrap">{stripMarkdown(decision.context_md!, { keepNewlines: true })}</p>}
+              </div>
+            )}
+          </CollapsibleBody>
+        )}
+        {/* An attached report is the evidence the question rests on, so it
+            renders here rather than living one click away on the document
+            page. Clipped like the context: a page is taller than a card. */}
+        {decision.report_slug && (
+          <div className="mt-1" data-decision-report={decision.report_slug}>
+            <PublishedPageEmbed slug={decision.report_slug} height={240} />
+          </div>
+        )}
+        {pageCount > 0 && (
+          <div className="mt-2"><OptionPages decision={decision} answerable={pending && kind === "single"} onAnswer={(i) => onAnswer({ index: i })} /></div>
+        )}
         {rec !== undefined && (
-          <div className="mt-1 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
+          <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
         )}
       </div>
       {pending && (

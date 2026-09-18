@@ -43,7 +43,7 @@ import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
-import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import { addConversationToWorkItem } from "./conversationLinks";
 
 type TableConfig =
   | {
@@ -583,35 +583,19 @@ async function linkConversationToObject(
         .first();
       if (!membership) return;
     }
-    const existing = task.conversation_ids || [];
-    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
-      await ctx.db.patch(objectId as Id<"tasks">, {
-        conversation_ids: [...existing, conversationId],
-      });
-    }
     await ctx.db.patch(conversationId, {
       active_task_id: objectId as Id<"tasks">,
     });
-    // Dual-write onto the entity-conversation association rail (best-effort;
-    // legacy fields stay authoritative — see conversationLinks.ts).
-    await linkConversationToEntityBestEffort(ctx, userId, {
-      entityType: "task", entityId: objectId, conversationId, relationship: "work",
-    });
+    // The list append and the association rail (best-effort; legacy fields
+    // stay authoritative) are one helper — see conversationLinks.ts.
+    await addConversationToWorkItem(ctx, userId, "task", task, conversationId);
     return;
   }
 
   if (objectType === "plan") {
     const plan = await ctx.db.get(objectId as Id<"plans">);
     if (!plan || plan.user_id.toString() !== userId.toString()) return;
-    const existing = plan.session_ids || [];
-    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
-      await ctx.db.patch(objectId as Id<"plans">, {
-        session_ids: [...existing, conversationId],
-      });
-    }
-    await linkConversationToEntityBestEffort(ctx, userId, {
-      entityType: "plan", entityId: objectId, conversationId, relationship: "work",
-    });
+    await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId);
     return;
   }
 }
@@ -685,8 +669,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.caps !== undefined) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
     }
+    // Who reports to the role (org-roles-run-work.md R6): the list the tab
+    // wrote becomes an add and a remove against the row the server holds.
+    if (fields.reports_user_ids !== undefined) {
+      const row = await ctx.runQuery!((api as any).orgRoles.get, { role_id: roleId }).catch(() => null);
+      const before = new Set<string>((row?.reports_user_ids ?? []).map(String));
+      const after = new Set<string>(fields.reports_user_ids.map(String));
+      const add = [...after].filter((id) => !before.has(id));
+      const remove = [...before].filter((id) => !after.has(id));
+      if (add.length || remove.length) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, add, remove });
+    }
     const rest: Record<string, any> = { ...fields };
-    delete rest.trust; delete rest.caps;
+    delete rest.trust; delete rest.caps; delete rest.reports_user_ids;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
     // tenure (S10) and avatar (S13) go through the plain update.
     if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;

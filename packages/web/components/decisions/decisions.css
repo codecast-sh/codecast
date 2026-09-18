@@ -101,3 +101,43 @@
   cursor: pointer;
 }
 .decision-option-page-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+
+/* The compact card (the queue, a task, a gate) reads like the document page,
+   at list density: the question set in the same serif, the context in the
+   same body type, the options as full width rows. One decision, one look,
+   whether the reader meets it in a list of ten or on its own page. */
+.decision-card .decision-question {
+  font-family: var(--font-serif), serif;
+  font-weight: 500;
+  font-size: clamp(1rem, 0.95rem + 0.35vw, 1.2rem);
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  text-wrap: balance;
+}
+.decision-card .decision-card-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--sol-text-muted);
+}
+.decision-card .decision-card-body :where(p, li) { margin: 0.3em 0; }
+.decision-card .decision-card-body :where(h1, h2, h3, h4) {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sol-text);
+  margin: 0.6em 0 0.2em;
+}
+.decision-card .decision-card-body :where(ul, ol) { margin: 0.3em 0; padding-left: 1.1em; }
+.decision-card .decision-card-body :where(pre) { margin: 0.4em 0; }
+.decision-card .decision-card-body > :first-child { margin-top: 0; }
+.decision-card .decision-card-body > :last-child { margin-bottom: 0; }
+
+/* The call to action: the decision a task is held on. A tint and a warm edge,
+   no shout — the card is already the only thing between the reader and the
+   work moving again. */
+.decision-card[data-cta="true"] {
+  border-color: color-mix(in srgb, var(--sol-yellow) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-yellow) 6%, transparent);
+}
+.decision-card[data-cta="true"]:hover {
+  border-color: color-mix(in srgb, var(--sol-yellow) 65%, transparent);
+}
