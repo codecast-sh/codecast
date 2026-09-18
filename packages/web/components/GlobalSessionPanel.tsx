@@ -29,7 +29,7 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -60,9 +60,10 @@ import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
-import { IdentityFace, SessionIdentityLine } from "./identity";
+import { IdentityFace, RoleHoverCard, SessionIdentityLine } from "./identity";
+import { RoleFace } from "./org/RoleFace";
 import { CharacterPicker } from "./identity/CharacterPicker";
-import { sessionIdentity } from "../lib/sessionIdentity";
+import { escalationOf, roleLookingAfter, sessionIdentity, standingRoleIdOf } from "../lib/sessionIdentity";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
@@ -2378,6 +2379,7 @@ const SessionCard = memo(function SessionCard({
   isFavorite,
   isUnread,
   subRow,
+  escalatedCount = 0,
   isSelected = false,
 }: {
   session: InboxSession;
@@ -2405,7 +2407,12 @@ const SessionCard = memo(function SessionCard({
   // subagent — the trigger view renders a trigger's sessions as sub rows under
   // the trigger's own row. The ↳ arrow goes schedule-amber there (child of a
   // trigger, not of a parent session).
-  subRow?: "trigger";
+  // "role": one of a role's sessions under the role's card (org-roles-run-work
+  // .md R1). The role looks after it, so it is a small row with one gesture of
+  // its own: Put in my inbox.
+  subRow?: "trigger" | "role";
+  /** On a role's own card: how many of its sessions it has put in front of the person. */
+  escalatedCount?: number;
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
   // passed as scalar props, so a card does O(1) work per render instead of the two
   // selectors scanning the whole bucketAssignments / favorites collection on every
@@ -2502,6 +2509,14 @@ const SessionCard = memo(function SessionCard({
   // agent-team teammate (via nestParentIdOf). A worktree is only where the
   // session runs — it does not make a first-class card look like a child.
   const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);
+  // A role's triage on this row (R1): the role above a nested row, and the
+  // role's line on a card it escalated. Both read through lib/sessionIdentity.
+  const roleAbove = subRow === "role" ? roleLookingAfter(session) : null;
+  const escalation = escalationOf(session);
+  const putInMyInbox = () => {
+    const me = useInboxStore.getState().currentUser as { name?: string | null } | null;
+    useInboxStore.getState().putSessionInMyInbox(session._id, `${me?.name?.trim() || "Someone"} put this in their inbox`, Date.now());
+  };
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -2791,8 +2806,8 @@ const SessionCard = memo(function SessionCard({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit when a nested row is
                 focused or pinned without the parent immediately above. */}
-            <svg className={`w-3 h-3 flex-shrink-0 ${subRow ? "text-sol-amber/60" : "text-violet-400/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow ? "Trigger session" : "Subagent"}>
-              <title>{subRow ? "Session driven by the trigger above" : "Subagent — child of its parent session"}</title>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-violet-400/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
+              <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
@@ -2865,8 +2880,19 @@ const SessionCard = memo(function SessionCard({
             </div>
           )}
         </div>
-        {!isForeignSession && (onDismiss || onDefer || onPin) && (
-          <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
+        {!isForeignSession && (onDismiss || onDefer || onPin || roleAbove) && (
+          <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center gap-1 py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
+            {roleAbove && (
+              <button
+                type="button"
+                data-role-gesture="put-in-my-inbox"
+                onClick={(e) => { e.stopPropagation(); putInMyInbox(); }}
+                title={`Take this out from under @${roleAbove.handle} and make it a card in your needs input`}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/15 text-sol-violet border border-sol-violet/35 hover:bg-sol-violet/25 transition-colors whitespace-nowrap"
+              >
+                Put in my inbox
+              </button>
+            )}
             {onDismiss && (
               <button
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
@@ -2998,12 +3024,23 @@ const SessionCard = memo(function SessionCard({
           <SessionIdentityLine
             row={session}
             title={displayTitle}
-            face={false}
             className="min-w-0 flex-1"
             nameClassName={isUnread && !isActive ? "font-semibold" : ""}
             titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}
           />
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
+          {/* The role's one number (R1): how many of its sessions it has put
+              in front of the person. Silent at zero: a role with nothing
+              escalated asks nothing of them. */}
+          {escalatedCount > 0 && (
+            <span
+              data-role-escalated-count
+              className="flex-shrink-0 px-1 rounded border border-sol-yellow/35 bg-sol-yellow/10 text-[10px] font-medium text-sol-yellow tabular-nums whitespace-nowrap"
+              title={`This role put ${escalatedCount} of its sessions in your needs input`}
+            >
+              {escalatedCount} in your inbox
+            </span>
+          )}
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
               only surfaces on row-hover and lights up on direct hover. Toggle also
@@ -3022,6 +3059,36 @@ const SessionCard = memo(function SessionCard({
             </button>
           </ShortcutTooltip>
         </div>
+        {escalation && (
+          /* The role's face and its one line: why this card is in front of the
+             person (R1). Same strip anatomy as the assignment below, and the
+             same mr-5 that keeps its button clear of the hover toolbar. */
+          <div data-escalation className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/10 border border-sol-violet/30">
+            {escalation.role && (
+              <RoleHoverCard role={escalation.role} side="left" triggerClassName="flex-shrink-0 mt-px">
+                <RoleFace role={escalation.role} size={16} />
+              </RoleHoverCard>
+            )}
+            <div className="min-w-0 flex-1 text-[11px] leading-snug">
+              {escalation.role && <span className="font-semibold text-sol-violet">@{escalation.role.handle}: </span>}
+              <span className="text-sol-text break-words">{escalation.line}</span>
+              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(escalation.at)}>
+                {" · "}{formatRelative(escalation.at, coarseNow)}
+              </span>
+            </div>
+            {!isForeignSession && (
+              <button
+                type="button"
+                data-role-gesture="hand-back"
+                onClick={(e) => { e.stopPropagation(); useInboxStore.getState().handSessionBackToRole(session._id); }}
+                title="Take it out of your needs input. The role looks after it again and decides if it comes back."
+                className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors whitespace-nowrap"
+              >
+                Hand back{escalation.role ? ` to @${escalation.role.handle}` : ""}
+              </button>
+            )}
+          </div>
+        )}
         {session.assigned_ping && (
           /* mr-5 keeps the strip — and its "Got it" button — clear of the
              hover toolbar's column on the right, whose gradient would
@@ -3874,7 +3941,7 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
   );
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -4486,8 +4553,9 @@ function SessionListPanelImpl({
     // a no-op (the hoist would snap it right back), and a drop aimed at one
     // resolves to "after its parent's group".
     const inList = new Set(flatList.map((sess) => sess._id));
+    const nestParentOf = inboxNestParentOf(flatList);
     const nestedUnder = (sess: InboxSession) => {
-      const p = nestParentIdOf(sess);
+      const p = nestParentOf(sess);
       return p && p !== sess._id && inList.has(p) ? p : null;
     };
     const draggedRow = flatList.find((sess) => sess._id === draggedId);
@@ -4607,7 +4675,7 @@ function SessionListPanelImpl({
     // subagent (or nested teammate) renders under its parent's card, so the
     // parent's membership decides which section hosts the row.
     const activeRow = s.sessions[activeSessionId];
-    const parentId = activeRow ? nestParentIdOf(activeRow) : null;
+    const parentId = activeRow ? inboxNestParentOf(sortedSessions)(activeRow) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
     const sections: [InboxSession[], string][] = flatView
       ? [[flatList, "all"]]
@@ -4684,8 +4752,9 @@ function SessionListPanelImpl({
     const liveCount = items.filter(isBucketLive).length;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
+    const nestParentOf = inboxNestParentOf(items);
     for (const sess of items) {
-      const nestParent = nestParentIdOf(sess);
+      const nestParent = nestParentOf(sess);
       if (nestParent && allIds.has(nestParent)) {
         if (!subMap.has(nestParent)) subMap.set(nestParent, []);
         subMap.get(nestParent)!.push(sess);
@@ -4774,7 +4843,7 @@ function SessionListPanelImpl({
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
-                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
+                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId || !!roleLookingAfter(sub)).map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -4788,6 +4857,7 @@ function SessionListPanelImpl({
                     onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
+                    subRow={roleLookingAfter(sub) ? "role" : undefined}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -4915,6 +4985,10 @@ function SessionListPanelImpl({
           }
           const hiddenCount = items.length - visibleItems.length;
           globalRenderedCards += visibleItems.length;
+          // The flat views hoist a role's session under its role's card as a
+          // row of its own (hoistNestedUnderParent), so it takes the small row
+          // there too; with the role's card absent it stays a full card.
+          const flatNestParentOf = flat ? inboxNestParentOf(items) : null;
           return (<>
           {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level
@@ -4924,7 +4998,9 @@ function SessionListPanelImpl({
             // The selected subagent always renders — even when subagents are
             // globally hidden or fall past the "+N more" cutoff. The row being
             // viewed must never vanish from the list.
-            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
+            // A role's sessions are not helpers of one turn: they are the work
+            // the role looks after, so the subagent toggle never hides them.
+            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId || !!roleLookingAfter(sub));
             const subsExpanded = !!expandedSubSessions[session._id];
             let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
             if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {
@@ -4977,6 +5053,8 @@ function SessionListPanelImpl({
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
+                  escalatedCount={escalatedByRole.get(standingRoleIdOf(session) ?? "") ?? 0}
+                  subRow={flatNestParentOf && roleLookingAfter(session) && flatNestParentOf(session) ? "role" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
@@ -5015,6 +5093,7 @@ function SessionListPanelImpl({
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
+                    subRow={roleLookingAfter(sub) ? "role" : undefined}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -5025,7 +5104,7 @@ function SessionListPanelImpl({
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
                   >
-                    +{hiddenCount} more sub-session{hiddenCount > 1 ? "s" : ""}
+                    +{hiddenCount} more {standingRoleIdOf(session) ? "session" : "sub-session"}{hiddenCount > 1 ? "s" : ""}
                   </button>
                 )}
                 {subsExpanded && subs.length > 2 && (

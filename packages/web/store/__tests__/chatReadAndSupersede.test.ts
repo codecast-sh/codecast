@@ -181,6 +181,31 @@ describe("chat: reads, supersede and the rail's numbers", () => {
       expect(after[0].mentionCount).toBe(0);
     });
 
+    it("a room the live rail no longer lists stops rendering; a stub and a cold rail survive", () => {
+      // The channel cache only grows, so it keeps rooms the server stopped
+      // listing — two direct message rooms that merged when one Slack person
+      // turned out to be a teammate. The rail is the complete set once the
+      // server has answered, so it decides.
+      const GONE = serverId("gonedm");
+      const st = useInboxStore.getState();
+      st.syncTable("chatChannels", [
+        { _id: GONE, kind: "dm", dm_key: `t:${ME}:other`, created_at: 1, updated_at: 1 },
+      ] as any);
+      st.syncTable("chatChannels", [
+        { _id: "chatstub-new", kind: "dm", dm_key: `t:${ME}:third`, created_at: 2, updated_at: 2 },
+      ] as any);
+
+      const ids = (railLive: boolean) => {
+        _resetChatRailMemo();
+        return selectChatRail(chatState(), ME, undefined, "team", railLive).map((r) => String(r.id));
+      };
+      // Cold rail: absence means nothing yet, so both still show.
+      expect(ids(false)).toContain(GONE);
+      // Live rail: the merged room is gone, the unsent stub stays.
+      expect(ids(true)).not.toContain(GONE);
+      expect(ids(true)).toContain("chatstub-new");
+    });
+
     it("marking only the newest ROOT read leaves the thread mention standing", () => {
       // The reply (and its mention of you) sits past the root's timestamp, so a
       // marker that stops at the root must not clear it — this is why the read

@@ -60,6 +60,11 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // `ownedold` and `ownedfailed` fixtures are members now, because assignment
   // puts a session in that person's inbox whatever state it is in.
   10: "f7e7f5fe5a214990",
+  // v11: a role's sessions ride the role's standing session and leave needs
+  // input; the standing session surfaces once something rides it; an escalated
+  // session stands alone in needs input (the new `roles` fixture). No older
+  // fixture moved.
+  11: "7d991164c1cd119a",
 };
 
 type Expected = {

@@ -3,7 +3,7 @@ import { api } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { scopedFetch } from "./data";
-import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, type OrgScan, type ResolvedScope } from "./org";
+import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./orgEvents";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
@@ -512,13 +512,22 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const caps = capsFor(role);
     const reached = await readReachedItems(ctx, role._id, cut7);
     const hands = scan.byParent.get(`role:${rid}`) ?? [];
+    // A session of the role that has waited on a person past the window with
+    // no escalation (org-roles-run-work.md R1): it is out of the person's
+    // inbox, so nobody sees the wait but the role.
+    const waitMs = capacity("session_wait_hours") * 3_600_000;
+    const unseenWaits = hands.filter((h) => {
+      const raw = scan.sessions.get(String(h._id))?.raw;
+      const since = raw && !raw.escalated_by_role ? waitingSinceOf(h.state, raw) : null;
+      return since !== null && now - since > waitMs;
+    }).length;
     const load: RoleLoad = {
       items_per_day: reached.items / 7,
       decisions_per_day: decisions7 / 7,
       live_hands: hands.filter((s) => s.state === "working" || s.state === "needs_input" || s.state === "dormant").length,
       hands_cap: caps.hands_per_day,
       direct_reports: reportsOf.get(rid) ?? 0,
-      open_stalls: stalls + stuckHands,
+      open_stalls: stalls + stuckHands + unseenWaits,
       cap_hit_days: activity.wakes_7d.cap_hit_days,
     };
     const counters = countersFor(role, now);

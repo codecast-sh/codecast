@@ -115,6 +115,38 @@ describe("org.analysisInputs", () => {
     expect(r.caps).toBe(ANALYSIS_CAPS);
   });
 
+  // org-roles-run-work.md R2: the facts a person would use to say "this session is already a role".
+  test("a session older than a week is listed with its age, helpers, routines, pinned state, first message and projects; a young one and a standing one are not", async () => {
+    const D = 24 * H;
+    const base = { user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", is_private: false, updated_at: NOW - H, created_at: 1, message_count: 10 };
+    const db = fixtures({
+      conversations: [
+        { ...base, _id: "conversations_old", short_id: "jxold", title: "Market growth mandate", started_at: NOW - 34 * D, message_count: 17000, project_path: "/repo/growth", thread_state: "Daily market growth run is complete\nStatus: deploy verified", thread_state_status: "dormant" },
+        { ...base, _id: "conversations_h1", short_id: "jxh1", title: "helper", started_at: NOW - 2 * D, parent_conversation_id: "conversations_old", is_subagent: true },
+        { ...base, _id: "conversations_h2", short_id: "jxh2", title: "helper", started_at: NOW - D, parent_conversation_id: "conversations_old", is_subagent: true },
+        { ...base, _id: "conversations_young", short_id: "jxyoung", title: "Fix a bug", started_at: NOW - 2 * D },
+        { ...base, _id: "conversations_standing", short_id: "jxstand", title: "Chief of Staff", started_at: NOW - 60 * D, standing_role_id: "org_roles_1", anchor_id: "anchors_1" },
+      ],
+      agent_tasks: [
+        { _id: "agent_tasks_1", user_id: ME, short_id: "tr-886", title: "Daily growth run", originating_conversation_id: "conversations_old", schedule_type: "recurring", interval_ms: D, status: "scheduled" },
+        { _id: "agent_tasks_2", user_id: ME, short_id: "tr-2", title: "One check", originating_conversation_id: "conversations_old", schedule_type: "once", status: "scheduled" },
+      ],
+      messages: [
+        { _id: "messages_1", conversation_id: "conversations_old", role: "user", content: "Steer our top of funnel to get true breadth across all market segments." },
+        { _id: "messages_2", conversation_id: "conversations_old", role: "assistant", content: "I will work in three passes." },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.sessions.long_running).toMatchObject({ min_age_days: 7, old_enough: 1, listed: 1 });
+    expect(r.sessions.long_running.rows).toEqual([expect.objectContaining({
+      short_id: "jxold", title: "Market growth mandate", started_at: NOW - 34 * D, age_days: 34, messages: 17000, helpers: 2,
+      routines: [{ short_id: "tr-886", title: "Daily growth run", schedule: "recurring", every_ms: D }],
+      state_line: "Daily market growth run is complete", state_status: "dormant",
+      first_message: "Steer our top of funnel to get true breadth across all market segments.",
+      projects: [{ short_id: "pr-1", title: "Growth" }], private: false,
+    })]);
+  });
+
   test("the three slices merge to the one process read, and the org slice never reads tasks", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);

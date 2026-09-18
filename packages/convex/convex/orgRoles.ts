@@ -4,6 +4,7 @@ import { applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agent
 import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { orgTenureError } from "@codecast/shared/contracts/orgProposal";
+import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -14,6 +15,7 @@ import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionA
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { canAccessPlan, canAccessProject, isTeamMember, workspaceForResource, workspaceKey } from "./lib/access";
+import { charterPatch } from "./lib/orgCharter";
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor, type RoleBootstrap } from "./anchors";
 import { enqueuePendingMessage } from "./pendingMessages";
@@ -599,13 +601,17 @@ export const create = mutation({
     model: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    // "Make this a role" on a session (org-roles-run-work.md R2): the session
+    // becomes the role's standing session, so no new one starts. A session
+    // that cannot be seated throws, and the role is not created either.
+    adopt_conversation_id: v.optional(v.string()),
   },
-  handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, ...args }) => {
+  handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, adopt_conversation_id, ...args }) => {
     await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
     const userId = await requireCaller(ctx, api_token);
     const role = await performCreateRole(ctx, userId, args);
-    if (!provision) return role;
-    const provisioned = await performProvisionRole(ctx, userId, { role_id: String(role._id), model, project_path, agent_type });
+    if (!provision && !adopt_conversation_id) return role;
+    const provisioned = await performProvisionRole(ctx, userId, { role_id: String(role._id), model, project_path, agent_type, adopt_conversation_id });
     return { ...(await ctx.db.get(role._id)), provisioned };
   },
 });
@@ -638,6 +644,40 @@ export const setScope = mutation({
     from_session: v.optional(v.string()),
   },
   handler: async (ctx, { api_token, ...args }) => performSetRoleScope(ctx, await requireCaller(ctx, api_token), args),
+});
+
+// Naming a project's lead from the project page (org-roles-run-work.md R4):
+// one gesture that writes `owner_role_id` and, when the role's scope does not
+// list the project, adds it. The owner goes through the charter's own patch
+// (the workspace boundary, the retired check) and the scope through the one
+// role update (containment, the history row, the role's wake), so neither rule
+// is restated here. What happens to the scope is `leadScopeChange`, the same
+// answer the web gave the person when they clicked, and a person who may set
+// the owner but not reshape the role still names the lead: the scope is left
+// for an admin, and the answer says so.
+export async function performSetProjectLead(
+  ctx: Ctx,
+  userId: Id<"users">,
+  args: { project_id: Id<"projects">; role_id: string | null },
+): Promise<{ owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "cleared" }> {
+  const project = await ctx.db.get(args.project_id);
+  if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new Error("Project not found");
+  const patch = await charterPatch(ctx, project, { owner: args.role_id }, "projects");
+  await ctx.db.patch(project._id, { ...patch, updated_at: Date.now() });
+  if (!patch.owner_role_id) return { owner_role_id: null, scope: "cleared" };
+  const role = await ctx.db.get(patch.owner_role_id as Id<"org_roles">);
+  const change = leadScopeChange(project._id, role, await rolesInBoundary(ctx, role));
+  // The role hears it in its own words whatever happens to its scope.
+  await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `you now lead the project ${project.title}: a person named you its lead`, ref: { table: "projects", id: String(project._id) } });
+  if (change.kind !== "add") return { owner_role_id: String(role._id), scope: change.kind };
+  if (!(await userCanAdminRole(ctx, userId, role))) return { owner_role_id: String(role._id), scope: "not_admin" };
+  await performUpdateRole(ctx, userId, { role_id: String(role._id), scope: { project_ids: [...role.scope.project_ids, project._id], plan_ids: role.scope.plan_ids } });
+  return { owner_role_id: String(role._id), scope: "added" };
+}
+
+export const setProjectLead = mutation({
+  args: { project_id: v.id("projects"), role_id: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => performSetProjectLead(ctx, await requireCaller(ctx), args),
 });
 
 // ── Line (the-line.md L2) ────────────────────────────────────────────────────
@@ -814,6 +854,7 @@ export const ROLE_RULES = [
   "3. Escalate with a recommendation attached, never as a bare question.",
   "4. Caps on wakes, hands and tokens per day are real; a held cap is reported in the brief, not worked around.",
   "5. A person's message is answered here or handed on to a hand, and the reply says which; a request to remember or forget is a brief write in the same turn.",
+  "6. Your sessions stay out of a person's inbox, so at every wake you read which of them wait on a person, answer what you may, and escalate the rest with one line saying what the person will decide.",
 ];
 
 export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {

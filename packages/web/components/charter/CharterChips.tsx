@@ -9,6 +9,9 @@ import Link from "next/link";
 import { Briefcase, ChevronDown, UserPlus } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { OrgRole } from "../org/orgTypes";
+import { watchersLabel, type ProjectLead } from "@codecast/shared/contracts/orgLead";
+import { RoleAvatar } from "../org/avatars";
+import { RoleHoverCard, roleRingStyle } from "../identity";
 import { CHARTER_PRIORITIES, PRIORITY_META, ownerCandidates, ownerRoleOf, roleHref, type CharterPriority, type OrgRoles } from "./charterMeta";
 
 /** A chip with a menu under it. The trigger is the chip; the list floats
@@ -118,10 +121,32 @@ export function PriorityPill({ priority, onChange, size = "sm", className }: {
   );
 }
 
-export function OwnerRoleChip({ roles, ownerRoleId, onChange, onHire, blockedReason, size = "sm", className }: {
+/** A role's face at chip size, ringed the way every role face is. */
+export function ChipFace({ role, px }: { role: OrgRole; px: number }) {
+  return (
+    <span className="inline-block rounded-full shrink-0" style={{ width: px, height: px, lineHeight: 0, ...roleRingStyle(px) }}>
+      <RoleAvatar avatar={role.avatar ?? role.handle} size={px} title={role.name} />
+    </span>
+  );
+}
+
+/** The words a chip uses. A plan or a charter has an owner; a project has a
+ *  lead (org-roles-run-work.md R4). Same chip, same menu, two vocabularies. */
+const NOUN = {
+  owner: { none: "No owner", holds: "owns this", pick: "No role owns this yet. Click to pick one or hire a lead", label: "Owner" },
+  lead: { none: "No lead", holds: "leads this project", pick: "No role leads this project yet. Click to pick one", label: "Lead" },
+} as const;
+
+export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChange, onHire, blockedReason, size = "sm", className }: {
   /** The workspace's roles (useOrgRoles): null while they load. */
   roles: OrgRoles;
   ownerRoleId: string | undefined;
+  /** The answer of the one rule for who leads a project (projectLeadOf). When
+   *  set it replaces the plain owner lookup: the chip can then show a lead the
+   *  project does not name (the one role whose scope lists it) and the roles
+   *  that watch a project nobody leads. */
+  lead?: ProjectLead<OrgRole>;
+  noun?: keyof typeof NOUN;
   /** Editable when set: the chip opens the workspace's roles. */
   onChange?: (roleId: string | null) => void;
   /** "Hire a lead" in the menu, and the whole "no owner" chip when set. */
@@ -134,24 +159,49 @@ export function OwnerRoleChip({ roles, ownerRoleId, onChange, onHire, blockedRea
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const role = ownerRoleOf(roles, ownerRoleId);
+  const words = NOUN[noun];
+  const role = lead ? (lead.kind === "lead" ? lead.role : null) : ownerRoleOf(roles, ownerRoleId);
+  const watchers = lead?.kind === "watchers" ? lead.roles : [];
+  const named = !!role || watchers.length > 0;
   const editable = !!onChange || !!onHire;
-  if (!role && !editable) return null;
-  const color = role ? "var(--sol-violet)" : "var(--sol-text-dim)";
+  if (!named && !editable && noun === "owner") return null;
+  const color = role ? "var(--sol-violet)" : watchers.length ? "var(--sol-yellow)" : "var(--sol-text-dim)";
+  const px = size === "xs" ? 12 : 14;
   const cls = cn(
-    "inline-flex items-center gap-1.5 rounded-md border font-medium whitespace-nowrap max-w-[200px]",
+    "inline-flex items-center gap-1.5 rounded-md border font-medium whitespace-nowrap max-w-[220px]",
     size === "xs" ? "h-[18px] px-1.5 text-[10px]" : "h-[22px] px-2 text-[11px]",
-    !role && "italic",
+    !named && "italic",
     className,
   );
-  const style = { color, borderColor: `color-mix(in srgb, ${color} 45%, transparent)`, background: `color-mix(in srgb, ${color} ${role ? 12 : 0}%, transparent)` };
-  const label = role ? <span className="truncate">@{role.handle}</span> : <span>No owner</span>;
-  const icon = role ? <Briefcase className="w-3 h-3 shrink-0" /> : <UserPlus className="w-3 h-3 shrink-0" />;
+  const style = { color, borderColor: `color-mix(in srgb, ${color} 45%, transparent)`, background: `color-mix(in srgb, ${color} ${named ? 12 : 0}%, transparent)` };
+  // The face and the name open the role's card (session-characters.md S4);
+  // closed while the menu is open so the two never stack.
+  const inner = role ? (
+    <RoleHoverCard role={role} side="top" disabled={open} triggerClassName="inline-flex min-w-0 items-center gap-1.5">
+      <ChipFace role={role} px={px} /><span className="truncate">{role.name}</span>
+    </RoleHoverCard>
+  ) : watchers.length ? (
+    <>
+      <span className="inline-flex items-center shrink-0">
+        {watchers.map((w, i) => (
+          <RoleHoverCard key={w._id} role={w} side="top" disabled={open} triggerClassName={cn("inline-flex", i > 0 && "-ml-1")}>
+            <ChipFace role={w} px={px} />
+          </RoleHoverCard>
+        ))}
+      </span>
+      <span className="truncate">{watchersLabel(watchers.length)}</span>
+    </>
+  ) : (
+    <><UserPlus className="w-3 h-3 shrink-0" /><span>{words.none}</span></>
+  );
+  const watchersTitle = `${watchers.map((w) => w.name).join(" and ")} both look after this project and it names neither as its lead`;
   const candidates = ownerCandidates(roles);
 
-  // Read only: the chip IS the link to the role.
+  // Read only: the chip IS the link to the role. Roles that only watch have
+  // no one page to open, so the chip is plain and each face carries its card.
   if (!editable) {
-    return <Link href={roleHref(role!)} className={cn(cls, "hover:underline")} style={style} title={`${role!.name}: owns this`} data-owner={role!.short_id}>{icon}{label}</Link>;
+    if (role) return <Link href={roleHref(role)} className={cn(cls, "hover:underline")} style={style} title={`${role.name}: ${words.holds}`} data-owner={role.short_id}>{inner}</Link>;
+    return <span className={cls} style={style} title={watchers.length ? watchersTitle : undefined} data-owner={watchers.length ? "watchers" : "none"}>{inner}</span>;
   }
   // Editable with no menu to show (no roles and no way to hire): the chip is
   // the hire button, which the spec asks for on a project with no owner.
@@ -164,6 +214,10 @@ export function OwnerRoleChip({ roles, ownerRoleId, onChange, onHire, blockedRea
     if (openMenu) setOpen((o) => !o);
     else onHire?.();
   };
+  // The roles that already watch the project come first: one of them is the
+  // likely answer to "who leads this".
+  const watching = new Set(watchers.map((w) => w._id));
+  const ordered = [...candidates.filter((r) => watching.has(r._id)), ...candidates.filter((r) => !watching.has(r._id))];
   return (
     <ChipMenu
       open={open}
@@ -173,16 +227,16 @@ export function OwnerRoleChip({ roles, ownerRoleId, onChange, onHire, blockedRea
           type="button"
           className={cn(cls, blocked ? "cursor-default opacity-70" : "transition-colors hover:brightness-110")}
           style={style}
-          title={role ? `${role.name}: owns this. Click to change` : blocked ? reason : "No role owns this yet. Click to pick one or hire a lead"}
-          data-owner={role?.short_id ?? "none"}
+          title={role ? `${role.name}: ${words.holds}. Click to change` : watchers.length ? `${watchersTitle}. Click to name one` : blocked ? reason : words.pick}
+          data-owner={role?.short_id ?? (watchers.length ? "watchers" : "none")}
           data-owner-blocked={blocked ? "" : undefined}
           disabled={blocked}
           onClick={onClick}
           aria-haspopup={openMenu ? "menu" : undefined}
           aria-expanded={openMenu ? open : undefined}
-          aria-label={role ? `Owner: @${role.handle}` : blocked ? `No owner. ${reason}` : "No owner"}
+          aria-label={role ? `${words.label}: ${role.name}, @${role.handle}` : watchers.length ? watchersTitle : blocked ? `${words.none}. ${reason}` : words.none}
         >
-          {icon}{label}{openMenu && <ChevronDown className="w-3 h-3 opacity-60" />}
+          {inner}{openMenu && <ChevronDown className="w-3 h-3 opacity-60" />}
         </button>
       }
     >
@@ -192,22 +246,23 @@ export function OwnerRoleChip({ roles, ownerRoleId, onChange, onHire, blockedRea
             <span className="truncate">Open @{role.handle}</span>
           </Link>
         )}
-        {onChange && candidates.map((r: OrgRole) => (
-          <MenuItem key={r._id} active={r._id === role?._id} onClick={() => { setOpen(false); if (r._id !== role?._id) onChange(r._id); }}>
-            <span className="font-mono truncate">@{r.handle}</span>
-            <span className="text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>{r.name}</span>
+        {onChange && ordered.map((r: OrgRole) => (
+          <MenuItem key={r._id} active={r._id === role?._id} onClick={() => { setOpen(false); if (r._id !== role?._id || (lead?.kind === "lead" && lead.by === "scope")) onChange(r._id); }}>
+            <ChipFace role={r} px={14} />
+            <span className="truncate">{r.name}</span>
+            <span className="font-mono text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>@{r.handle}{watching.has(r._id) ? " · watches it" : ""}</span>
           </MenuItem>
         ))}
         {onHire && (
           <MenuItem onClick={() => { setOpen(false); onHire(); }}>
             <UserPlus className="w-3 h-3" />
-            <span>Hire a lead…</span>
+            <span>Hire a lead</span>
           </MenuItem>
         )}
-        {onChange && role && (
+        {onChange && role && (!lead || (lead.kind === "lead" && lead.by === "owner")) && (
           <MenuItem onClick={() => { setOpen(false); onChange(null); }}>
             <span className="w-3" />
-            <span>No owner</span>
+            <span>{words.none}</span>
           </MenuItem>
         )}
     </ChipMenu>

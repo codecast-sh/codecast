@@ -72,6 +72,20 @@ Live DM lines arrive as user events (`message.im`, `message.mpim`, declared in t
 
 Switching DMs off pauses that person's DM links; rooms and lines stay.
 
+## Rooms that already existed here
+
+A mirror never makes a second room for a conversation you already have.
+
+A direct message is identified by its member set (`chat.ensureDmRoom`, the same helper `openDm` and the anchor use), so your Slack DM with a teammate lands in the codecast DM you already had with them: one room, both histories, interleaved by time. A channel keeps its own room too, and takes the Slack channel's name (`adoptSlackName`), so #team stays one #team holding both sides.
+
+The one case that does make a second room is a Slack person nobody has matched to a teammate yet: they speak through a shadow identity, so their DM opens as its own room under their Slack name. Matching them (People popup, or `cast chat slack map`) merges it: `retargetPersonRooms` moves the lines into the room you already had with that teammate, repoints the link, and drops the duplicate. The surviving room adopts the dropped room's id as its `client_id`, which is the same forwarding address an optimistic create uses, so a reader standing in the room that just merged follows it rather than landing on a dead id.
+
+The client keeps a second copy of this rule. Its channel cache only ever grows, so a room the server stopped listing would linger in the rail as a duplicate. `selectChatRail` therefore drops any room absent from the rail once `isChatRailLive()` says a server payload has landed in this page load; a cold rail means nothing yet, and an optimistic stub has no server row to be absent from. The cache itself is left alone on purpose: `pruneAbsentScope` writes durable tombstones, and an empty payload for one beat would hide healthy rooms for good.
+
+## History is not unread
+
+An imported line was read where it was written, often months ago; arriving here is a move, not an event. `railFor` therefore excludes history from both unread numbers, using the derived `isHistoryLine` (`@codecast/shared/chat`: the line was synced more than five minutes after it was written) rather than a stored flag, so the rule applies to rooms that were imported before it existed. Imported lines also skip `announceChatMessage`, so they notify nobody. A line that arrives live in a mirrored room is synced as it is written, so it counts normally.
+
 ## Install flow
 
 `slack.getInstallUrl` signs a state carrying the scope, `return_to` and the allowlisted web `origin`; Slack returns to `<origin>/slack/connect`, which completes the exchange in the signed-in session and bounces to `return_to?slack=connected|error`. One trap on that return: `@convex-dev/auth` reads any `?code=` in the URL at boot as one of its own sign in codes, redeems it, fails, and signs the person out. `boot.tsx` therefore runs `lib/slackReturn.stashSlackReturn()` before React mounts, which moves Slack's code into session storage and rewrites the URL; the connect page takes it from there (`takeSlackReturn`). A team install requires a team admin and no longer requires an anchor. The redirect URIs registered on the Slack app are production, `https://local.codecast.sh` and `http://localhost:3200`.

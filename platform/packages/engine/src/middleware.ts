@@ -1345,6 +1345,9 @@ export function mutativeMiddleware(
       options?: { owner?: object },
     ) => {
       dispatchEpoch++;
+      // A send stranded by the rotation never settles under the old binding,
+      // so its row must be eligible for the successor's drain.
+      inFlightOutboxIds.clear();
       dispatchBinding = fn
         ? { epoch: dispatchEpoch, fn, owner: options?.owner }
         : null;
@@ -1358,6 +1361,7 @@ export function mutativeMiddleware(
     wrapped._clearDispatch = (owner: object) => {
       if (dispatchBinding?.owner !== owner) return;
       dispatchEpoch++;
+      inFlightOutboxIds.clear();
       dispatchBinding = null;
     };
 
@@ -1395,6 +1399,7 @@ export function mutativeMiddleware(
 
     wrapped._clearRuntimeBindings = () => {
       dispatchEpoch++;
+      inFlightOutboxIds.clear();
       dispatchBinding = null;
       idbWriteFn = null;
       outboxEnqueueFn = null;

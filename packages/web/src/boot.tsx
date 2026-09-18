@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, reportRecoverableRenderError, setupErrorToasts } from "../lib/analytics";
 import { initGoogleAds } from "../lib/googleAds";
-import { armChunkReloadGuardReset } from "../lib/chunkReloadGuard";
+import { armChunkReloadGuardReset, installStaleChunkReload } from "../lib/chunkReloadGuard";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
 import { createReloadWhenHidden } from "../lib/reloadWhenHidden";
@@ -25,6 +25,9 @@ stashSlackReturn();
 (window as any).__CODECAST_BUILD = __CODECAST_BUILD__;
 
 setupErrorToasts();
+// A stale hashed chunk (JS or CSS) whose preload fails outside a React
+// boundary: reload onto the current build rather than leaving a dead tab.
+installStaleChunkReload();
 // Stop compositing infinite animations while the desktop window is backgrounded.
 installIdleAnimationPause();
 

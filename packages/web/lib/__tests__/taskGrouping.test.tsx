@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { describe, expect, it } from "bun:test";
-import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, TASK_AXES } from "../taskGrouping";
+import { renderToStaticMarkup } from "react-dom/server";
+import { buildTaskGroups, canSubGroup, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES } from "../taskGrouping";
 import { DEFAULT_TASK_STATUSES } from "@codecast/shared/tasks";
 import { orderedStatuses, statusFill } from "../taskStatuses";
 
@@ -188,5 +189,91 @@ describe("buildTaskGroups", () => {
       const result = groups(key, [task(person("u1", "Ada"))]);
       expect(result?.length).toBe(1);
     }
+  });
+});
+
+// Roles own tasks like people do (org-roles-run-work.md R5). The fixture is the
+// shape lib/liveEntities resolveAssigneeInfo returns for a role.
+const roleRow = (id, name, reports_to) => ({ _id: id, short_id: `or-${id}`, name, handle: id, avatar: "fox", status: "active", reports_to });
+const asRole = (r) => ({ assignee: r._id, assignee_info: { kind: "role", name: r.name, handle: r.handle, avatar: "fox", role_id: r._id, role_short_id: r.short_id } });
+
+const growth = roleRow("growth", "Growth", { kind: "user", user_id: "founder" });
+const platform = roleRow("platform", "Platform", { kind: "user", user_id: "founder" });
+const ads = roleRow("ads", "Ads", { kind: "role", role_id: "growth" });
+const founder = { _id: "founder", name: "Ashot" };
+const sam = { _id: "sam", name: "Samvit" };
+const orgCtx = { ...ctx, roles: [growth, platform, ads], teamMembers: [founder, sam], currentUser: founder };
+
+const outline = (result) => result.map((g) => `${"  ".repeat(g.depth ?? 0)}${g.label} (${g.items.length})`);
+
+describe("the assignee axis with roles", () => {
+  it("sorts roles and people together by name, as peers", () => {
+    const result = groups("assignee", [task(asRole(platform)), task(person("sam", "Samvit")), task(asRole(growth)), task()], "", orgCtx);
+    expect(result.map((g) => g.label)).toEqual(["Growth", "Platform", "Samvit", "Unassigned"]);
+    expect(result.every((g) => g.depth === undefined)).toBe(true);
+  });
+
+  it("assigns to a role when a task is dropped on the role's group", () => {
+    const result = groups("assignee", [task(asRole(growth))], "", orgCtx);
+    expect(taskGroupDropUpdates("assignee", result[0].key, task(), orgCtx)).toEqual({ assignee: "growth" });
+  });
+});
+
+describe("the chain axis", () => {
+  it("nests a founder's two roles under the founder, own tasks first", () => {
+    const result = groups("chain", [task(asRole(platform)), task(person("founder", "Ashot")), task(asRole(growth)), task(asRole(growth))], "", orgCtx);
+    expect(outline(result)).toEqual(["Ashot (1)", "  Growth (2)", "  Platform (1)"]);
+  });
+
+  it("nests a role under the role it reports to", () => {
+    const result = groups("chain", [task(asRole(ads)), task(asRole(growth))], "", orgCtx);
+    expect(outline(result)).toEqual(["Ashot (0)", "  Growth (1)", "    Ads (1)"]);
+  });
+
+  it("gives a person with no roles one group with nothing under it, and trails unassigned", () => {
+    const result = groups("chain", [task(), task(person("sam", "Samvit")), task(asRole(growth))], "", orgCtx);
+    expect(outline(result)).toEqual(["Ashot (0)", "  Growth (1)", "Samvit (1)", "Unassigned (1)"]);
+  });
+
+  it("names a person who heads a chain but holds no task, from the roster", () => {
+    const result = groups("chain", [task(asRole(growth))], "", orgCtx);
+    expect(result[0].label).toBe("Ashot");
+    expect(result[0].items).toEqual([]);
+  });
+
+  it("counts the whole chain on a group that has groups under it, and nowhere else", () => {
+    const result = groups("chain", [task(person("founder", "Ashot")), task(asRole(growth)), task(asRole(ads)), task(asRole(ads)), task(person("sam", "Samvit"))], "", orgCtx);
+    const total = (g) => renderToStaticMarkup(<>{g.badge}</>);
+    expect(outline(result)).toEqual(["Ashot (1)", "  Growth (1)", "    Ads (2)", "Samvit (1)"]);
+    expect(total(result[0])).toContain("4 in chain");
+    expect(total(result[1])).toContain("3 in chain");
+    expect(result[2].badge).toBeUndefined();
+    expect(result[3].badge).toBeUndefined();
+  });
+
+  it("keeps every task exactly once", () => {
+    const tasks = [task(), task(person("founder", "Ashot")), task(asRole(growth)), task(asRole(ads)), task(person("sam", "Samvit"))];
+    const result = groups("chain", tasks, "", orgCtx);
+    expect(result.flatMap((g) => g.items.map((t) => t._id)).sort()).toEqual(tasks.map((t) => t._id).sort());
+  });
+
+  it("assigns to the person or role a task is dropped on, an empty group included", () => {
+    const result = groups("chain", [task(asRole(growth))], "", orgCtx);
+    expect(taskGroupDropUpdates("chain", result[0].key, task(), orgCtx)).toEqual({ assignee: "founder" });
+    expect(taskGroupDropUpdates("chain", result[1].key, task(), orgCtx)).toEqual({ assignee: "growth" });
+  });
+
+  it("divides each chain group by a second axis and keeps the nesting", () => {
+    const result = groups("chain+status", [task({ ...asRole(growth), status: "open" }), task({ ...asRole(growth), status: "done" }), task(asRole(ads))], "", orgCtx);
+    // Inside a chain group the second axis keeps its own order (Done leads the board).
+    expect(outline(result)).toEqual(["Ashot (0)", "  Growth · Done (1)", "  Growth · Open (1)", "    Ads · Open (1)"]);
+  });
+
+  it("only nests as the first axis, and never pairs with the assignee axis it repeats", () => {
+    expect(parseTaskGroup("project+chain")).toEqual(["project"]);
+    expect(parseTaskGroup("chain+assignee")).toEqual(["chain"]);
+    expect(parseTaskGroup("assignee+chain")).toEqual(["assignee"]);
+    expect(canSubGroup("chain", "status")).toBe(true);
+    expect(canSubGroup("status", "chain")).toBe(false);
   });
 });

@@ -115,6 +115,18 @@ describe("orgLayout", () => {
     expect(nodes.some((n) => n.kind === "anchor" && n.anchor.bot_user_id === "fixture-bot")).toBe(true);
   });
 
+  it("a role's seat is drawn inside the role card, never as an anchor node under the host (S16)", () => {
+    const seat = { ...ORG_FIXTURE.anchors[0], anchor_id: "fixture-growth-anchor", name: "Head of Growth", org_role_id: "fixture-role-growth", conversation_id: "fixture-growth-conv" };
+    const tree = { ...ORG_FIXTURE, anchors: [...ORG_FIXTURE.anchors, seat], roles: [{ ...ORG_FIXTURE.roles[0], anchor_id: "fixture-growth-anchor" }] };
+    const { nodes } = layoutOrgTree(tree, none);
+    expect(nodes.some((n) => n.kind === "anchor" && n.anchor.anchor_id === "fixture-growth-anchor")).toBe(false);
+    expect(nodes.some((n) => n.kind === "anchor" && n.anchor.anchor_id === "fixture-anchor")).toBe(true, "the workspace anchor still has its node");
+    expect(nodes.some((n) => n.kind === "role" && n.role._id === "fixture-role-growth")).toBe(true);
+    // A seat known only by the role's pointer (an older tree without org_role_id) is skipped the same way.
+    const older = { ...tree, anchors: tree.anchors.map((a) => ({ ...a, org_role_id: undefined })) };
+    expect(layoutOrgTree(older, none).nodes.some((n) => n.kind === "anchor" && n.anchor.anchor_id === "fixture-growth-anchor")).toBe(false);
+  });
+
   it("an opened stack with nothing extra loaded still shows every payload session", () => {
     const me = personNodeId("fixture-user-me");
     const { nodes } = layoutOrgTree(ORG_FIXTURE, { collapsed: new Set(), expanded: { [me]: [] } });

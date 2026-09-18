@@ -15,6 +15,7 @@ import {
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { enqueuePendingMessage, formatSessionMessage } from "./pendingMessages";
 import { requireRole, userCanAdminRole } from "./lib/orgAccess";
+import { resolveActor } from "./lib/actor";
 import { wakeCost, wakeFieldsOf } from "./wakeCost";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 
@@ -291,6 +292,21 @@ async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">
 
 const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
 
+// Take the previous holder's triage off a row that is being put in front of
+// someone: a handoff to a new owner, or a role's escalation. Only a stamp that
+// is set is cleared, so an untouched row takes no write. A kill is left alone:
+// that row is retired, and `cast restore` is the gesture that brings it back.
+async function unhide(ctx: { db: any }, conversation: any): Promise<void> {
+  const hidden: Record<string, undefined> = {};
+  if (conversation.inbox_dismissed_at) hidden.inbox_dismissed_at = undefined;
+  if (conversation.inbox_stashed_at) {
+    hidden.inbox_stashed_at = undefined;
+    hidden.inbox_stash_hidden = undefined;
+  }
+  if (conversation.inbox_snoozed_until) hidden.inbox_snoozed_until = undefined;
+  if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);
+}
+
 export async function performReparentSession(
   ctx: { db: any },
   authUserId: Id<"users">,
@@ -364,16 +380,7 @@ export async function performReparentSession(
     // see. Only a real addition clears them, and only a stamp that is set — an
     // untouched row takes no write. A kill is left alone: that row is retired,
     // and `cast restore` is the gesture that brings it back.
-    if (added.length > 0) {
-      const hidden: Record<string, undefined> = {};
-      if (conversation.inbox_dismissed_at) hidden.inbox_dismissed_at = undefined;
-      if (conversation.inbox_stashed_at) {
-        hidden.inbox_stashed_at = undefined;
-        hidden.inbox_stash_hidden = undefined;
-      }
-      if (conversation.inbox_snoozed_until) hidden.inbox_snoozed_until = undefined;
-      if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);
-    }
+    if (added.length > 0) await unhide(ctx, conversation);
     // The session reports to the person this act named: `add` hands it to the
     // added person (a handoff, the chart follows), `set` to the LAST listed —
     // callers put the person the act names at the end of `owners`. A remove
@@ -383,7 +390,8 @@ export async function performReparentSession(
     // A person is now the parent: the role pointer comes off (S11). A remove
     // is not a re-homing, so a session filed under a role stays there.
     if (mode !== "remove" && desired.length > 0 && roleId) {
-      await ctx.db.patch(conversation._id, { org_role_id: undefined });
+      // The escalation is the role's line (R1); with no role there is none.
+      await ctx.db.patch(conversation._id, { org_role_id: undefined, escalated_by_role: undefined });
       roleId = undefined;
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
@@ -394,7 +402,10 @@ export async function performReparentSession(
     if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
       throw new Error("That session is not in the role's team");
     }
-    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id });
+    // Another role's escalation does not carry over: the new role has not
+    // said why this is in front of a person.
+    const staleEscalation = conversation.escalated_by_role && String(conversation.escalated_by_role.role_id) !== String(targetRole._id);
+    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, ...(staleEscalation ? { escalated_by_role: undefined } : {}) });
     roleId = targetRole._id;
     owners = await listOwnerInfos(ctx, conversation._id);
   }
@@ -451,6 +462,124 @@ async function tellSession(
     defer,
   });
   return defer ? "deferred" : "told";
+}
+
+// ── A role's triage (org-roles-run-work.md R1) ───────────────────────────────
+// A session under a role stays out of its host's needs input. Escalation is
+// the one way back in: the role (or a person, with the same gesture on the
+// row) puts the session in front of the person with one line saying what they
+// will decide, and `clear` takes it back under the role.
+
+export const ESCALATION_LINE_MAX = 200;
+
+export type EscalateSessionResult = {
+  ok: true;
+  short_id: string;
+  conversation_id: Id<"conversations">;
+  changed: boolean;
+  escalated_by_role: { role_id: Id<"org_roles">; line: string; at: number } | null;
+  role: { short_id: string; handle: string; name: string };
+};
+
+export async function performEscalateSession(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; line?: string; clear?: boolean; from_session?: string },
+): Promise<EscalateSessionResult> {
+  const fromRef = args.from_session?.trim();
+  const caller = fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
+  const actor = await resolveActor(ctx, authUserId, caller);
+  // A hand that could escalate itself would make the role's triage mean
+  // nothing: every session would put itself in front of the person.
+  if (actor.kind === "hand") {
+    throw new Error(`Your role decides what reaches a person. Tell it why this needs one: cast send @${actor.role?.handle ?? "your-role"} "<why>"`);
+  }
+  // Who may: the role the session reports to, or a person who could have
+  // filed it there (an owner, or a team viewer who may reshape the role).
+  const conversation = await findConversationByAnyRefWhere(ctx, args.session_id, async (c: any) => {
+    if (actor.kind === "role") return !!c.org_role_id && String(c.org_role_id) === String(actor.role?._id);
+    const access = await checkConversationAccess(ctx, authUserId, c);
+    if (access === "owner") return true;
+    if (access !== "team" || !c.org_role_id) return false;
+    const role = await ctx.db.get(c.org_role_id);
+    return !!role && await userCanAdminRole(ctx, authUserId, role);
+  });
+  if (!conversation) throw new Error(actor.kind === "role" ? "Session not found among the sessions that report to you" : "Session not found, or you are not one of its owners");
+  const role = conversation.org_role_id ? await ctx.db.get(conversation.org_role_id) : null;
+  if (!role) throw new Error("That session reports to no role, so it is already in its owner's inbox");
+
+  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
+  const base = { ok: true as const, short_id: shortId, conversation_id: conversation._id, role: { short_id: role.short_id, handle: role.handle, name: role.name } };
+  if (args.clear) {
+    if (conversation.escalated_by_role) await ctx.db.patch(conversation._id, { escalated_by_role: undefined });
+    return { ...base, changed: !!conversation.escalated_by_role, escalated_by_role: null };
+  }
+  // The role never escalates silently: its line is the reason on the card. A
+  // person's own gesture needs no reason, so it is recorded as theirs.
+  const line = (args.line ?? "").replace(/\s+/g, " ").trim().slice(0, ESCALATION_LINE_MAX)
+    || (actor.kind === "user" ? `${personName(await ctx.db.get(authUserId))} put this in their inbox` : "");
+  if (!line) throw new Error("Say in one line what the person will decide: cast escalate <session> \"<one line>\"");
+  const escalated = { role_id: role._id, line, at: Date.now() };
+  await ctx.db.patch(conversation._id, { escalated_by_role: escalated });
+  await unhide(ctx, conversation);
+  return { ...base, changed: conversation.escalated_by_role?.line !== line, escalated_by_role: escalated };
+}
+
+// A role that gains scope takes over the sessions in it (R1): every session
+// the caller passes that reports to the role's host and to no role is filed
+// under the role through the one reparent core, so each is told once and its
+// open questions follow the new line. The caller reads the scope (org.ts
+// sessionsInScope) and passes the rows, which keeps this module free of the
+// scope reader. `dry` counts without writing, for the change's note before it
+// is accepted.
+export const REHOME_CAP = 100;
+
+export type RehomeResult = {
+  // Short ids of the sessions that moved (or would move, when dry).
+  sessions: string[];
+  // Of those, the ones that stay in front of the person: a question to a
+  // person was open at the takeover, so the card keeps its place.
+  kept_in_front: string[];
+  // Eligible sessions past the cap, left where they are for the next apply.
+  over_cap: number;
+  told: { sessions: number; roles: number; deferred: number };
+};
+
+export async function performRehomeSessions(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  role: any,
+  candidates: Array<{ raw: any }>,
+  opts: { note?: string; dry?: boolean; from_session?: string } = {},
+): Promise<RehomeResult> {
+  const result: RehomeResult = { sessions: [], kept_in_front: [], over_cap: 0, told: { sessions: 0, roles: 0, deferred: 0 } };
+  const eligible = candidates.map((c) => c.raw).filter((c: any) =>
+    !c.org_role_id && !c.standing_role_id && !c.anchor_id
+    && String(c.owner_user_id ?? c.user_id) === String(role.host_user_id)
+    && (!role.team_id || String(c.team_id ?? "") === String(role.team_id)));
+  result.over_cap = Math.max(0, eligible.length - REHOME_CAP);
+  for (const c of eligible.slice(0, REHOME_CAP)) {
+    const shortId = c.short_id ?? c._id.toString().slice(0, 7);
+    const openAsk = await ctx.db
+      .query("session_decisions")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", c._id).eq("status", "pending"))
+      .first();
+    result.sessions.push(shortId);
+    if (openAsk) result.kept_in_front.push(shortId);
+    if (opts.dry) continue;
+    const moved = await performReparentSession(ctx, authUserId, {
+      session_id: c._id.toString(),
+      target: { kind: "role", role_id: role._id.toString() },
+      note: opts.note,
+      from_session: opts.from_session,
+    });
+    result.told.sessions += moved.told.sessions;
+    result.told.deferred += moved.told.deferred ?? 0;
+    if (openAsk) {
+      await ctx.db.patch(c._id, { escalated_by_role: { role_id: role._id, line: "A question to you was open when this session moved", at: Date.now() } });
+    }
+  }
+  return result;
 }
 
 // ── The ownership menu's entry points ────────────────────────────────────────
@@ -615,6 +744,22 @@ export const addSessionOwner = mutation({
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
+  },
+});
+
+// Put a role's session in front of the person, or take it back (`cast
+// escalate`, and the row's Put in my inbox / Hand back gestures).
+export const escalateSession = mutation({
+  args: {
+    session_id: SESSION_REF,
+    line: v.optional(v.string()),
+    clear: v.optional(v.boolean()),
+    from_session: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await requireAuth(ctx, args.api_token);
+    return performEscalateSession(ctx, authUserId, args);
   },
 });
 

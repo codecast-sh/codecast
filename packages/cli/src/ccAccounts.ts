@@ -1240,11 +1240,22 @@ export function accountLaunchInfo(name: string): AccountLaunchInfo | null {
 /** Whether Claude Code at `claudeBin` honors CLAUDE_SECURESTORAGE_CONFIG_DIR.
  *  A version that ignores it silently runs every pinned session on the keychain
  *  login, so the daemon asks once per binary: with the store pointed at an empty
- *  directory, `auth status` must report no login. Cached by binary identity. */
+ *  directory, `auth status` must report no login. Cached by binary identity.
+ *
+ *  Three answers, not two. A binary that reports a login from an empty store is
+ *  proved "unsupported"; a probe that crashed, timed out or printed something
+ *  other than JSON proves nothing and answers "unknown". Only a proved answer is
+ *  cached: a first run of a freshly installed 215MB binary waits on Gatekeeper,
+ *  and on 2026-09-17 that timeout was recorded as a permanent "unsupported",
+ *  keyed by size+mtime so the binary was never asked again. The daemon then
+ *  deleted every profile store on every beat, and each browser sign-in a person
+ *  completed was erased seconds later. */
+export type SecureStorageVerdict = "supported" | "unsupported" | "unknown";
+
 export async function probeSecureStorageSupport(
   claudeBin: string,
   opts: { env?: NodeJS.ProcessEnv; execImpl?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string> } = {},
-): Promise<boolean> {
+): Promise<SecureStorageVerdict> {
   const cachePath = path.join(defaultConfigDir(), "cc-store", ".support.json");
   let identity = claudeBin;
   try {
@@ -1253,10 +1264,12 @@ export async function probeSecureStorageSupport(
   } catch {}
   try {
     const cached = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
-    if (cached?.identity === identity && typeof cached.supported === "boolean") return cached.supported;
+    if (cached?.identity === identity && typeof cached.supported === "boolean") {
+      return cached.supported ? "supported" : "unsupported";
+    }
   } catch {}
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-store-probe-"));
-  let supported = false;
+  let verdict: SecureStorageVerdict = "unknown";
   try {
     const env = { ...(opts.env ?? process.env), CLAUDE_SECURESTORAGE_CONFIG_DIR: probeDir };
     const exec =
@@ -1272,17 +1285,22 @@ export async function probeSecureStorageSupport(
         });
       });
     const out = await exec(claudeBin, ["auth", "status", "--json"], env);
-    supported = JSON.parse(out)?.loggedIn === false;
+    const loggedIn = JSON.parse(out)?.loggedIn;
+    // Anything but a real boolean is a binary that answered in a shape we do
+    // not understand — that is an unknown, never a negative.
+    if (loggedIn === false) verdict = "supported";
+    else if (loggedIn === true) verdict = "unsupported";
   } catch {
-    supported = false;
+    verdict = "unknown";
   } finally {
     fs.rmSync(probeDir, { recursive: true, force: true });
   }
+  if (verdict === "unknown") return verdict;
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true, mode: 0o700 });
-    atomicWriteFile(cachePath, JSON.stringify({ identity, supported }), { mode: 0o600 });
+    atomicWriteFile(cachePath, JSON.stringify({ identity, supported: verdict === "supported" }), { mode: 0o600 });
   } catch {}
-  return supported;
+  return verdict;
 }
 
 // ---------------------------------------------------------------------------

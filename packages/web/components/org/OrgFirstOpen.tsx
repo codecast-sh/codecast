@@ -13,6 +13,7 @@
 // last step's buttons ARE the two buttons above. Dismissing writes the
 // org_nux_seen pref through the store; "How this page works" in the toolbar
 // reopens it by hand.
+import { staffingPaneWord } from "./orgMeta";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { Sparkles, UserRoundPlus, X } from "lucide-react";
 import { OrgButton } from "./OrgButton";
@@ -44,18 +45,18 @@ export function orgGuideSteps(meNodeId: string | null, hasRoles: boolean, openPr
     {
       id: "role",
       target: '[data-org-guide="hire"]',
-      sentence: "A role is a standing seat with a scope of projects and plans; Add a role hires one, and its sessions then report to it instead of to you.",
+      sentence: "A role is an agent that keeps watching a scope of projects and plans; Add a role hires one, and its sessions then report to it instead of to you.",
     },
     openProposal ? {
       id: "proposals",
       target: '[data-org-guide="staffing"]',
-      sentence: `A proposal is already waiting: ${openProposal.short_id} drew the dashed ghosts on this canvas, and Staffing opens it so you can accept, edit or skip ${openProposal.remaining === 1 ? "its one change" : `each of its ${openProposal.remaining} changes`}.`,
+      sentence: `A proposal is already waiting: ${openProposal.short_id} drew the dashed ghosts on this canvas, and ${staffingPaneWord(true)} opens it as a conversation over each of its ${openProposal.remaining === 1 ? "one change" : `${openProposal.remaining} changes`}.`,
       action: { id: "open_proposal", label: `Open ${openProposal.short_id}` },
     } : {
       id: "proposals",
       target: hasRoles ? '[data-org-guide="staffing"]' : '[data-org-guide="start"]',
       sentence: hasRoles
-        ? "Proposals arrive as dashed ghosts on this canvas for you to accept, edit or skip; the Staffing pane holds them and starts a new one."
+        ? `Proposals arrive as dashed ghosts on this canvas for you to accept, edit or skip; ${staffingPaneWord(false)} shows how the company is doing and starts the next one.`
         : "Proposals arrive as dashed ghosts on this canvas for you to accept, edit or skip; these two buttons start the first one.",
     },
   ];

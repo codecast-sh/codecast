@@ -78,6 +78,8 @@ import {
   isAssignedAwayFromViewer,
   rollupParentIdOf,
   rideLeadPlacements,
+  roleLeadIdsOf,
+  isUnderRole,
   isHardBlocked,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
@@ -214,7 +216,7 @@ import {
   selectChannelReadMarker,
   type ChatSliceState,
 } from "./chatSlice";
-import { createOrgSlice, ORG_SYNC_REGISTRY, type OrgSliceState } from "./orgSlice";
+import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -459,6 +461,8 @@ export type ProjectItem = {
   icon?: string;
   target_date?: number;
   labels?: string[];
+  /** The checkout the project lives in; a lead hired for it starts there. */
+  project_path?: string;
   // The charter (docs/architecture/org-staffing.md S7; components/charter).
   goal?: string;
   success_metrics?: string[];
@@ -761,6 +765,10 @@ export type InboxSession = {
   org_role_id?: string | null;
   standing_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
+  // The role put this session in front of the person (org-roles-run-work.md
+  // R1): it is a card of its own in needs input, wearing the role's line.
+  // Absent, a session under a role nests under the role's card instead.
+  escalated_by_role?: { role_id: string; line: string; at: number } | null;
   // Kept-for-later flag. Drives the Favorites top-level view (a long-term set,
   // grouped by project) — the same session cache, filtered. Set optimistically
   // by toggleFavorite and carried on both the inbox and favorites server rows.
@@ -2012,6 +2020,10 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     spawned_by_conversation_id: s.spawned_by_conversation_id ?? null,
     agent_team_name: s.agent_team_name ?? null,
     agent_name: s.agent_name ?? null,
+    // The role a session rides (isUnderRole): same shared computation.
+    org_role_id: s.org_role_id ?? null,
+    standing_role_id: s.standing_role_id ?? null,
+    escalated_by_role: s.escalated_by_role ?? null,
   };
 }
 
@@ -2736,6 +2748,20 @@ export function sessionStructuralSig(s: InboxSession): string {
     // Presence of an unacked assignment flips the row's prominent treatment.
     // Changes only on assign/ack, never on heartbeats.
     s.assigned_ping ? 1 : 0,
+    // WHO OWNS IT decides whose inbox it is in (isForeignRow →
+    // isAssignedAwayFromViewer): a session I run and hand to a teammate leaves
+    // my scope entirely. Written by an ownership change alone, never by a
+    // heartbeat — and without it here the placement memo would keep serving
+    // the pre-handoff answer until some other row happened to move.
+    s.owner_user_id || "",
+    s.owned_by_me ? 1 : 0,
+    // WHICH ROLE LOOKS AFTER IT decides whether it is a card or a small row
+    // under the role's card, and an escalation makes it a card again with the
+    // role's line on it (isUnderRole). Written by a reparent or an escalate
+    // alone, never by a heartbeat.
+    s.org_role_id || "",
+    s.standing_role_id || "",
+    s.escalated_by_role ? `${s.escalated_by_role.at}:${s.escalated_by_role.line}` : "",
     // Harness loop state decides trigger-set membership and absorption
     // (partitionTriggerInbox reads it off this same subscription). Distilled to
     // the fields that change rows; stamps once per turn end/wakeup, never on
@@ -2889,8 +2915,10 @@ export interface PlacedInbox {
   forksByParent: Map<string, InboxSession[]>;
   /** Membership of the QUESTIONS section (the ask outranks placement). */
   isQuestion: (s: InboxSession) => boolean;
-  /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
+  /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. A role's nested sessions add to none. */
   counts: Record<InboxSectionKey, number>;
+  /** role id → how many of its sessions it has put in front of the person (escalated cards on the list): the number on the role's card. */
+  escalatedByRole: Map<string, number>;
 }
 
 // The number a section header claims, for every surface that renders those
@@ -3222,6 +3250,11 @@ function samePlacements(a: Map<string, InboxRowPlacement>, b: Map<string, InboxR
   }
   return true;
 }
+function sameCounts(a: Map<string, number>, b: Map<string, number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, n] of b) if (a.get(k) !== n) return false;
+  return true;
+}
 function sameTally(a: PlacedInbox["tally"], b: PlacedInbox["tally"]): boolean {
   for (const lane of ["shown", "folded"] as const) {
     for (const bucket in b[lane]) {
@@ -3404,9 +3437,13 @@ export function placeInboxRows(
   // that keeps its own bucket is one the viewer pinned, stashed or dismissed
   // on its own (RIDE_KEEPS_OWN): it files where that act put it and never
   // nests under a lead in another section.
+  // A role's session is a third child kind (isUnderRole): it nests under its
+  // role's standing session, which the shared ride already filed it with. An
+  // escalated one is not under its role, so it stays a card of its own.
+  const nestParentOf = inboxNestParentOf(sorted);
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
-    const nestParent = nestParentIdOf(s);
+    const nestParent = nestParentOf(s);
     if (!nestParent || !allIds.has(nestParent)) continue;
     if (isMemberCandidate(s)) {
       const own = placements.get(s._id)?.bucket;
@@ -3516,6 +3553,9 @@ export function placeInboxRows(
     if (!askingOf(s)) continue;
     if (s.inbox_killed_at || s.inbox_dismissed_at || s.inbox_snoozed_until) continue;
     if (rollupParentIdOf(s)) continue;
+    // A role's session asks its role first; it reaches the person by an
+    // escalation, never by lifting itself from outside the list.
+    if (isUnderRole(s)) continue;
     questionIds.add(s._id);
     questions.push(s);
   }
@@ -3528,10 +3568,21 @@ export function placeInboxRows(
     questions: questions.length, pinned: pinned.length, newSessions: newSessions.length,
     needsInput: needsInput.length, done: done.length, dormant: dormant.length, working: working.length,
   };
+  // A role's sessions are the role's to triage, so they add to no header:
+  // the number beside a section is what the person looks after there, and the
+  // role's card is one thing however many sessions sit under it (R1).
   for (const id of subsWithParent) {
+    if (isUnderRole(scoped[id] ?? {})) continue;
     const b = placements.get(id)?.bucket;
     const k = b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
+  }
+  // The one number a role's card carries: how many of its sessions it has put
+  // in front of the person, over the cards actually on the list.
+  const escalatedByRole = new Map<string, number>();
+  for (const s of sorted) {
+    const role = s.escalated_by_role?.role_id;
+    if (role && isFlat(s)) escalatedByRole.set(role, (escalatedByRole.get(role) ?? 0) + 1);
   }
   // Pinning is manual curation: stable order by pin time, oldest first, so
   // existing pins keep their place when a new one lands.
@@ -3590,6 +3641,7 @@ export function placeInboxRows(
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
     isQuestion,
     counts,
+    escalatedByRole: prev && sameCounts(prev.escalatedByRole, escalatedByRole) ? prev.escalatedByRole : escalatedByRole,
   };
 
   // 8. Dev-only convergence check (C5): the full shared computation over the
@@ -4207,8 +4259,9 @@ export function chipMatchesSession(
 // reviewers must not become their own Done cards.
 function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
   const present = new Set(list.map((s) => s._id));
+  const nestParentOf = inboxNestParentOf(list);
   const nestedHere = (s: InboxSession) => {
-    const p = nestParentIdOf(s);
+    const p = nestParentOf(s);
     return p && p !== s._id && present.has(p) ? p : null;
   };
   const kidsByParent = new Map<string, InboxSession[]>();
@@ -4271,7 +4324,7 @@ export function flatViewSessions(
     ? null
     : nestedSessionIds(subsByParent);
   const list = subIds
-    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId)
+    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId || isUnderRole(s))
     : [...sortedSessions];
   list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined));
   let ordered = list;
@@ -4304,6 +4357,19 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): I
     const p = nestParentIdOf(s);
     return !!p && p !== s._id && present.has(p);
   });
+}
+
+// Which row a session nests under in a session list, over the rows present:
+// the shared child kinds (nestParentIdOf: a Task subagent, an agent-team
+// teammate) and a role's session under its role's standing session
+// (isUnderRole, org-roles-run-work.md R1). The ONE resolver every web nesting
+// computation calls, so the sections, the flat view, the set aside buckets and
+// the keyboard order cannot disagree about where a role's session sits.
+export function inboxNestParentOf(rows: Iterable<InboxSession>): (s: InboxSession) => string | null {
+  const byId = new Map<string, InboxSession>();
+  for (const r of rows) byId.set(r._id, r);
+  const roleLeads = roleLeadIdsOf(byId.keys(), (id) => byId.get(id));
+  return (s) => nestParentIdOf(s) ?? (isUnderRole(s) && s.org_role_id ? roleLeads.get(s.org_role_id) ?? null : null);
 }
 
 // The manual sort key to give a row dropped at `insertIndex` among `orderedKeys`
@@ -4948,6 +5014,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   toggleFavorite: (id: string) => void;
   setPrivacy: (id: string, isPrivate: boolean) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
+  /** The row's two triage gestures on a role's session (org-roles-run-work.md
+   *  R1). Put in my inbox makes it a card of its own in needs input, wearing
+   *  `line`; Hand back returns it under its role's card. `at` and `line` are
+   *  passed in so the server stores exactly what the draft holds. */
+  putSessionInMyInbox: (id: string, line: string, at: number) => void;
+  handSessionBackToRole: (id: string) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
@@ -4962,7 +5034,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
    *  looking at. The bubble paints at once in that thread; dispatch runs
    *  orgProposals.say, which wraps it and enqueues it on the message rail
    *  under the same client id, so the echo retires the bubble. */
-  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string) => void;
+  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string, askIndex?: number | null) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
@@ -5578,6 +5650,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   // Charter fields (components/charter/charterMeta CharterPatch): null clears
   // a scalar, an empty array is a value.
   updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
+  /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
+  setProjectLead: (projectId: string, roleId: string | null) => void;
   updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
@@ -8915,6 +8989,29 @@ const inboxStoreConfig = (set: any, get: any) => ({
     apply(this.conversations[id]);
   }),
 
+  // A role's session, put in front of the person or handed back (R1). The
+  // field is server owned (sessionOwnership.performEscalateSession is its one
+  // writer), so the authoritative write is the escalateSession side effect
+  // and this patches local state; the placement reads the row, so the card
+  // moves in the same tick. The draft's object is key for key what the server
+  // stores, which is what lets the field lock retire on the echo.
+  putSessionInMyInbox: action(function (this: Draft, id: string, line: string, at: number) {
+    const apply = (c: any) => {
+      if (!c?.org_role_id) return;
+      c.escalated_by_role = { role_id: c.org_role_id, line, at };
+    };
+    apply(this.sessions[id]);
+    apply(this.conversations[id]);
+  }),
+
+  handSessionBackToRole: action(function (this: Draft, id: string) {
+    const apply = (c: any) => {
+      if (c?.escalated_by_role) c.escalated_by_role = null;
+    };
+    apply(this.sessions[id]);
+    apply(this.conversations[id]);
+  }),
+
   // Privacy/visibility live in the server's immutable applyPatches set because
   // flipping them re-resolves team sharing. So these actions optimistically
   // update local state, and the matching dispatch.ts SIDE_EFFECTS do the
@@ -9017,7 +9114,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // handler: [conversation_id, content, image_storage_ids, client_id].
   retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
 
-  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string) {
+  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string, _askIndex?: number | null) {
     appendOptimisticMessage(this, threadConvId, body, undefined, clientId);
     notePendingMessageSendRequested(clientId);
     for (const target of [this.sessions[threadConvId], this.conversations[threadConvId]]) {
@@ -10923,6 +11020,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
   updateProject: action(function (this: Draft, id: string, fields: Record<string, any>) {
     const project = (this.projects as any)[id] ?? Object.values(this.projects).find((p: any) => p._id === id);
     if (project) writeAsServerShape(project, fields);
+  }),
+
+  // Naming a project's lead (org-roles-run-work.md R4): one gesture, two
+  // things painted in the same tick. The project row takes the owner, and when
+  // the role's scope does not list the project it gains it, as a role fields
+  // intent so a tree push before the echo does not take it back. The named
+  // side effect (dispatch.setProjectLead) makes both writes in one transaction.
+  setProjectLead: action(function (this: Draft, projectId: string, roleId: string | null) {
+    const project = (this.projects as any)[projectId];
+    if (project) writeAsServerShape(project, { owner_role_id: roleId });
+    const tree = this.orgTree;
+    const role = roleId ? tree?.roles.find((r) => r._id === roleId) : undefined;
+    if (!tree || !role) return;
+    if (projectLeadScopeOutcome(tree, projectId, role).kind !== "add") return;
+    pushRoleFieldsIntent(this, role._id, { scope: { project_ids: [...role.scope.project_ids, projectId], plan_ids: role.scope.plan_ids } });
   }),
 
   // ── Issue sync sources (docs/architecture/issue-sync.md S1.3, S9) ────────

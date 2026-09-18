@@ -77,7 +77,12 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // its seat on the owner row alone (no recency, no status gate), and a session
 // whose owner set excludes the viewer leaves the viewer's inbox even though
 // their account runs it (isAssignedAwayFromViewer).
-export const INBOX_PROJECTION_VERSION = 10 as const;
+// v11: a role's sessions are the role's to triage (org-roles-run-work.md R1).
+// A session under a role rides the role's standing session and leaves the
+// person's needs input (isUnderRole); the standing session surfaces from
+// hidden once something rides it; an escalated session stands alone in needs
+// input until it is handed back.
+export const INBOX_PROJECTION_VERSION = 11 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -119,6 +124,8 @@ export interface WorkStateInput {
   killed?: boolean;
   /** The user's own rest verdict (inbox_rest, current per userRestOf): the row is filed where the user put it until the next activity. */
   userRest?: UserRest | null;
+  /** conversations.escalated_by_role set: the role this session reports to put it in front of the person (org-roles-run-work.md R1). */
+  escalated?: boolean;
   snoozed?: boolean;
   snoozeDue?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
@@ -264,6 +271,11 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Actively producing, or carrying deliverable queued work on a live daemon.
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
+  // Its role put it in front of the person (org-roles-run-work.md R1): the
+  // person acts next, whatever rest the session declared, until the role or
+  // the person hands it back. A session that is producing right now reads
+  // working above, so answering an escalated session shows the answer landed.
+  if (input.escalated && hasMsgs) return "needs_input";
   if (agentStatus === "hibernated" && !hasPending) return "dormant";
 
   // Dead or unresponsive with output → a human needs to read/restart it. A
@@ -647,6 +659,12 @@ export interface RollupRow extends InboxRowIdentity {
   spawned_by_conversation_id?: unknown;
   agent_team_name?: string | null;
   agent_name?: string | null;
+  /** The role this session reports to (a role's session). */
+  org_role_id?: unknown;
+  /** Set when the row IS a role's standing session. */
+  standing_role_id?: unknown;
+  /** The role put this session in front of the person; it stands alone again. */
+  escalated_by_role?: unknown;
 }
 
 export function rollupParentIdOf(row: RollupRow): string | null {
@@ -683,6 +701,8 @@ export function settleRiders(
   ride: (riderId: string, leadId: string) => void,
   keepsOwn: (id: string) => boolean = () => false,
 ): void {
+  const all = [...ids];
+  const roleLeads = roleLeadIdsOf(all, rowOf);
   const settled = new Set<string>();
   // Settles `id` and everything above it; false when the chain above closes
   // on itself, in which case nothing on it rides.
@@ -690,7 +710,7 @@ export function settleRiders(
     if (settled.has(id)) return true;
     if (trail.has(id)) return false;
     const row = rowOf(id);
-    const leadId = row && !keepsOwn(id) ? rollupParentIdOf(row) : null;
+    const leadId = row && !keepsOwn(id) ? rollupParentIdOf(row) ?? (isUnderRole(row) ? roleLeads.get(String(row.org_role_id)) ?? null : null) : null;
     if (leadId && leadId !== id && rowOf(leadId)) {
       trail.add(id);
       const acyclic = settle(leadId, trail);
@@ -701,7 +721,36 @@ export function settleRiders(
     settled.add(id);
     return true;
   };
-  for (const id of ids) settle(id, new Set());
+  for (const id of all) settle(id, new Set());
+}
+
+// ── A role's sessions ride the role (org-roles-run-work.md R1) ──────────────
+//
+// A session that reports to a role is the role's to triage: it rides the
+// role's standing session the way a teammate rides its lead, so it files in
+// the role's section, nests under the role's card and never counts toward the
+// person's needs input. Two things end the ride. The role escalates it
+// (escalated_by_role), which makes it a card of its own again; or the role's
+// standing session is not on the list, which leaves nobody triaging it, so it
+// stands where its own facts put it.
+//
+// This is a RIDE rule only, deliberately absent from rollupParentIdOf: a
+// child's open ask lifts its parent into QUESTIONS, and a role's session
+// asking a question must not reach the person until the role says so.
+export function isUnderRole(row: RollupRow): boolean {
+  return !!row.org_role_id && !row.standing_role_id && !row.escalated_by_role;
+}
+
+// role id → the id of the row that is that role's standing session, over the
+// rows present. Read off the rows themselves (standing_role_id), so every
+// channel resolves the same lead with no extra read.
+export function roleLeadIdsOf(ids: Iterable<string>, rowOf: (id: string) => RollupRow | undefined): Map<string, string> {
+  const leads = new Map<string, string>();
+  for (const id of ids) {
+    const role = rowOf(id)?.standing_role_id;
+    if (role) leads.set(String(role), id);
+  }
+  return leads;
 }
 
 export const RIDE_KEEPS_OWN: ReadonlySet<InboxBucket> = new Set<InboxBucket>(["dismissed", "stashed", "snoozed", "pinned"]);
@@ -724,6 +773,15 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
     (riderId, leadId) => {
       const rider = placements.get(riderId)!;
       const lead = placements.get(leadId)!;
+      if (isUnderRole(rowOf(riderId)!)) {
+        // A retired role triages nothing: its sessions are the person's again.
+        if (lead.bucket === "dismissed") return;
+        // A standing session is hidden until it needs a person (isAnchor). One
+        // with sessions under it is where they render, so it files by its own
+        // state instead; a role with nothing under it stays out of the inbox.
+        const state = (lead as { work_state?: WorkState }).work_state;
+        if (lead.bucket === "hidden" && state) lead.bucket = state;
+      }
       rider.bucket = lead.bucket;
       copy(rider, lead);
     },
@@ -1297,6 +1355,7 @@ export function placeProjectableRow(
     stashed: !!row.inbox_stashed_at,
     pinned: !!row.inbox_pinned_at,
     isAnchor: !!row.anchor_id,
+    escalated: !!row.escalated_by_role,
     asking,
   });
 }

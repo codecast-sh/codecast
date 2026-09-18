@@ -6,7 +6,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
 import { formatShortcutLabel, useShortcutAction } from "../shortcuts";
-import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
+import { FilterDropdown, FilterOptionList, type FilterOption } from "./FilterDropdown";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
@@ -356,7 +356,7 @@ export interface ListFilterDef {
   label: string;
   icon: ReactNode;
   value: string;
-  options: { key: string; label: string; icon?: any; color?: string }[];
+  options: FilterOption[];
   onChange: (v: string) => void;
   multi?: boolean;
   /** Show the empty-key option in the add-menu too. For most filters "" means
@@ -471,6 +471,43 @@ export interface ListGroup<T> {
   badge?: ReactNode;
   extra?: ReactNode;
   items: T[];
+  /** Nesting under the nearest earlier group with a smaller depth (the task
+   *  board's Chain grouping). The list stays one flat stream: depth only
+   *  indents the header and lets a collapsed parent take its nested groups
+   *  with it. Absent = a top level group. */
+  depth?: number;
+}
+
+/** How far each level of a nested group steps in, and where it stops: deeper
+ *  levels keep their order but stop eating the row's width. */
+const GROUP_INDENT_PX = 20;
+const MAX_GROUP_INDENT = 4;
+
+/** The groups a reader can see: a collapsed group keeps its header and hides
+ *  every group nested under it. */
+export function visibleGroups<T>(groups: ListGroup<T>[], collapsed: Set<string>): { group: ListGroup<T>; collapsed: boolean }[] {
+  const out: { group: ListGroup<T>; collapsed: boolean }[] = [];
+  let hiddenBelow: number | null = null;
+  for (const group of groups) {
+    const depth = group.depth ?? 0;
+    if (hiddenBelow !== null && depth > hiddenBelow) continue;
+    const isCollapsed = collapsed.has(group.key);
+    hiddenBelow = isCollapsed ? depth : null;
+    out.push({ group, collapsed: isCollapsed });
+  }
+  return out;
+}
+
+/** Drop the groups a search emptied, keeping an empty one that still has a
+ *  match nested under it: a nested group with nothing over it cannot be read. */
+export function groupsWithItems<T>(groups: ListGroup<T>[]): ListGroup<T>[] {
+  return groups.filter((g, i) => {
+    if (g.items.length > 0) return true;
+    for (let j = i + 1; j < groups.length && (groups[j].depth ?? 0) > (g.depth ?? 0); j++) {
+      if (groups[j].items.length > 0) return true;
+    }
+    return false;
+  });
 }
 
 export interface ItemRowState {
@@ -713,9 +750,9 @@ export function GenericListView<T>({
     if (!searching) return groups;
     if (crossScopeSearch) return null; // flat results from searchAllItems instead
     const q = searchQuery.toLowerCase();
-    return groups
-      .map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
-      .filter(g => g.items.length > 0);
+    return groupsWithItems(
+      groups.map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
+    );
   }, [groups, searching, crossScopeSearch, searchQuery, getSearchText]);
 
   const displayFlatItems = useMemo(() => {
@@ -728,8 +765,8 @@ export function GenericListView<T>({
 
   const visibleItems = useMemo(() => {
     if (displayGroups) {
-      return displayGroups.flatMap((g) =>
-        collapsedGroups.has(g.key) ? [] : g.items
+      return visibleGroups(displayGroups, collapsedGroups).flatMap(({ group, collapsed }) =>
+        collapsed ? [] : group.items
       );
     }
     return displayFlatItems;
@@ -744,25 +781,25 @@ export function GenericListView<T>({
   // workspace was a live DOM node and re-rendered on every j/k press — O(N) per
   // keystroke. Now only the visible window (~window height) is mounted.
   type RowEntry =
-    | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean }
-    | { kind: "item"; key: string; item: T; focusIndex: number; groupKey: string | null };
+    | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean; depth: number }
+    | { kind: "item"; key: string; item: T; focusIndex: number; groupKey: string | null; depth: number };
   const rowModel = useMemo<RowEntry[]>(() => {
     const rows: RowEntry[] = [];
     if (displayGroups) {
       let fi = 0;
-      for (const g of displayGroups) {
-        const collapsed = collapsedGroups.has(g.key);
-        rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed });
+      for (const { group: g, collapsed } of visibleGroups(displayGroups, collapsedGroups)) {
+        const depth = g.depth ?? 0;
+        rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed, depth });
         if (!collapsed) {
           for (const item of g.items) {
-            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi, groupKey: g.key });
+            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi, groupKey: g.key, depth });
             fi++;
           }
         }
       }
     } else {
       displayFlatItems.forEach((item, i) => {
-        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i, groupKey: null });
+        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i, groupKey: null, depth: 0 });
       });
     }
     return rows;
@@ -1498,7 +1535,9 @@ export function GenericListView<T>({
                       key={vi.key}
                       data-index={vi.index}
                       ref={rowVirtualizer.measureElement}
-                      style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+                      // A nested group (ListGroup.depth) steps in as one block,
+                      // header and rows together, so the nesting reads at a glance.
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)`, paddingLeft: row.depth ? Math.min(row.depth, MAX_GROUP_INDENT) * GROUP_INDENT_PX : undefined }}
                     >
                       {row.kind === "header"
                         ? renderGroupHeader(row.group, row.collapsed)

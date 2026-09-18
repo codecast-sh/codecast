@@ -19,7 +19,7 @@ import type { OrgParentRef, OrgTree } from "./orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type TrustStage } from "./scope/scopeTypes";
 import { OrgTemplateHire } from "./orgTemplateHire";
 import { AVATAR_KEYS, avatarOf } from "@codecast/shared/contracts/orgAvatars";
-import { ORG_TENURE_THEN, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { ORG_TENURE_THEN, seatSentence, type OrgRoleSeat, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { RoleFace } from "./RoleFace";
 
 function slugify(s: string): string {
@@ -60,7 +60,7 @@ export type HireRoleInitial = { name?: string; handle?: string; charter?: string
 export type HireRoleTouched = { scope: boolean; reports_to: boolean };
 export type HireRoleOutput = OrgCreateRoleInput & { touched: HireRoleTouched };
 
-export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initial, submitLabel = "Create and start" }: {
+export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initial, submitLabel = "Create and start", seat }: {
   open: boolean;
   onClose: () => void;
   tree: OrgTree;
@@ -75,6 +75,10 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   title?: string;
   initial?: HireRoleInitial;
   submitLabel?: string;
+  /** "Make this a role" on a session (org-roles-run-work.md R2): the role is
+   *  this session, so nothing new starts. The form says what naming changes,
+   *  offers no template, and the create seats the session. */
+  seat?: OrgRoleSeat;
 }) {
   const [mode, setMode] = useState<"manual" | "template">("manual");
   const [name, setName] = useState(initial?.name ?? "");
@@ -162,7 +166,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       tenure: buildTenure(),
       ...(avatar ? { avatar } : {}),
       provision: true,
-      ...(cwd ? { project_path: cwd } : {}),
+      ...(seat ? { adopt_conversation_id: seat.existing } : cwd ? { project_path: cwd } : {}),
       host_user_id: meId,
       client_id: `orgrolestub-${Math.random().toString(36).slice(2)}`,
       touched,
@@ -180,9 +184,9 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       <DialogContent className="max-w-[520px] grid-cols-1 max-h-[92vh] overflow-y-auto" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
         <DialogHeader>
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{mode === "manual" ? "A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists." : "Bring a complete job template into one project, with your approval before setup."}</DialogDescription>
+          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists." : "Bring a complete job template into one project, with your approval before setup."}</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" role="group" aria-label="Role setup">
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" role="group" aria-label="Role setup" hidden={!!seat}>
           {([["manual", "Write a role"], ["template", "From a folder"]] as const).map(([value, label]) => (
             <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className="rounded-md px-3 py-2 text-[12px] font-semibold transition-colors focus-visible:outline focus-visible:outline-sol-cyan" style={{ background: mode === value ? "var(--sol-card)" : undefined, color: mode === value ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{label}</button>
           ))}

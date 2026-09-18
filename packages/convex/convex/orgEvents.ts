@@ -221,21 +221,28 @@ export function describeWorkItem(table: "tasks" | "plans", row: any): string {
   return `${kind} ${id}"${(row.title ?? "").slice(0, 80)}" is ${row.status ?? "updated"}`;
 }
 
-// A task or plan changed: one fold row per role whose scope holds it.
+// A task handed to a role in this transaction (org-roles-run-work.md R5).
+export type OrgAssignment = { role_id: string; cause: string };
+
+// A task or plan changed: one fold row per role whose scope holds it. A role
+// the task was just assigned to gets its row whether or not the task sits in
+// its scope, and that row says so: the assignment is the news, and a second
+// row for the same task would fold over it with "task ct-N is open".
 export async function enqueueForScopeChange(
   ctx: any,
   table: "tasks" | "plans",
   row: any,
-  opts: { actorConversationId?: Id<"conversations"> | null; cause?: string } = {},
+  opts: { actorConversationId?: Id<"conversations"> | null; cause?: string; assigned?: OrgAssignment } = {},
 ): Promise<number> {
   if (!row) return 0;
   const roles = await standingRolesInBoundary(ctx, row);
   let n = 0;
   for (const role of roles) {
-    if (!(await rowInScope(ctx, role, table, row))) continue;
+    const assigned = opts.assigned && String(role._id) === opts.assigned.role_id ? opts.assigned : null;
+    if (!assigned && !(await rowInScope(ctx, role, table, row))) continue;
     const id = await enqueueRoleEvent(ctx, role._id, {
       kind: "fold",
-      cause: opts.cause ?? describeWorkItem(table, row),
+      cause: assigned?.cause ?? opts.cause ?? describeWorkItem(table, row),
       ref: { table, id: String(row._id), short_id: row.short_id },
       actorConversationId: opts.actorConversationId ?? null,
     });
@@ -255,7 +262,7 @@ const ORG_WRITES = Symbol.for("codecast.orgWrites");
 const ORG_ACTOR = Symbol.for("codecast.orgActor");
 const SCOPE_TABLES = new Set(["tasks", "plans"]);
 
-export type OrgWriteCollector = Map<string, { table: "tasks" | "plans"; id: any }>;
+export type OrgWriteCollector = Map<string, { table: "tasks" | "plans"; id: any; assigned?: OrgAssignment }>;
 
 export function makeOrgWriteTrackedDb(db: any, collector: OrgWriteCollector): any {
   if (typeof db?.normalizeId !== "function") return db;
@@ -272,7 +279,7 @@ export function makeOrgWriteTrackedDb(db: any, collector: OrgWriteCollector): an
       if (prop === "insert") {
         return async (table: string, doc: any) => {
           const id = await target.insert(table, doc);
-          if (SCOPE_TABLES.has(table)) collector.set(String(id), { table: table as any, id });
+          if (SCOPE_TABLES.has(table)) collector.set(String(id), { ...collector.get(String(id)), table: table as any, id });
           return id;
         };
       }
@@ -280,7 +287,7 @@ export function makeOrgWriteTrackedDb(db: any, collector: OrgWriteCollector): an
         return async (id: any, fields: any) => {
           const res = await target.patch(id, fields);
           const table = tableOf(id);
-          if (table) collector.set(String(id), { table, id });
+          if (table) collector.set(String(id), { ...collector.get(String(id)), table, id });
           return res;
         };
       }
@@ -302,6 +309,20 @@ export function markOrgActor(ctx: any, conversation: any | null | undefined): vo
   if (conversation) ctx[ORG_ACTOR] = conversation;
 }
 
+// The task writer that hands a task to a role names it here, and the post
+// write hook delivers it as that role's one row for the task. Outside a
+// wrapped mutation (no collector) there is nothing to record on, so the row
+// is enqueued directly.
+export async function noteOrgAssignment(ctx: any, task: any, assigned: OrgAssignment): Promise<void> {
+  const collector: OrgWriteCollector | undefined = ctx?.[ORG_WRITES];
+  if (!collector) {
+    await enqueueForScopeChange(ctx, "tasks", task, { actorConversationId: orgActorOf(ctx)?._id ?? null, assigned });
+    return;
+  }
+  const key = String(task._id);
+  collector.set(key, { ...collector.get(key), table: "tasks", id: task._id, assigned });
+}
+
 export function orgActorOf(ctx: any): any | null {
   return ctx?.[ORG_ACTOR] ?? null;
 }
@@ -311,10 +332,10 @@ export async function flushOrgWrites(ctx: any): Promise<number> {
   if (!collector || collector.size === 0) return 0;
   const actor = orgActorOf(ctx);
   let n = 0;
-  for (const { table, id } of collector.values()) {
+  for (const { table, id, assigned } of collector.values()) {
     const row = await ctx.db.get(id);
     if (!row) continue;
-    n += await enqueueForScopeChange(ctx, table, row, { actorConversationId: actor?._id ?? null });
+    n += await enqueueForScopeChange(ctx, table, row, { actorConversationId: actor?._id ?? null, assigned });
   }
   collector.clear();
   return n;

@@ -14,7 +14,7 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
@@ -33,7 +33,7 @@ function changeKindsReference(): string {
     `- plan_status: { plan: ref, status: "done" | "abandoned" | "active", reason }. A record brought in line with what happened: done when its evidence says the work landed, abandoned when nobody has worked it and nothing waits on it, active when a plan marked done still has sessions on it. The reason cites the evidence.`,
     `- task_status: { task: ref, status: "done" | "dropped" | "open" | "backlog", reason }. The same for a task: done when the commits or the sessions that carried it are finished, dropped when it was never picked up and its plan moved on, open or backlog when it was marked in progress and never worked but is still real work. Closing a plan drops its open tasks in the same accept (re-asserting done on a plan already marked done sweeps the rows still open under it the same way), so a task change under a plan change is only for a task whose evidence differs.`,
     `- project_status: { project: ref, status: "paused" | "done" | "active", reason }. The same for a business line: paused when its path had no commits and no sessions for the window, done when its goal is met, active when a paused one has work again.`,
-    `- role: { name, handle, tenure: { kind: "standing" } | { kind: "program", ends: { plan: ref } | { project: ref } | { date: unix ms }, then: "retire" | "review" }, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter?, trust?: "understand", caps?: { hands_per_day, wakes_per_day, tokens_per_day }, evidence?: [string] }. A new seat, with its tenure: standing, or a program with what ends it and what happens then. Scope refs are a project's short id (pr-N), id or a title that matches one project; a plan's pl-N.`,
+    `- role: { name, handle, tenure: { kind: "standing" } | { kind: "program", ends: { plan: ref } | { project: ref } | { date: unix ms }, then: "retire" | "review" }, seat?: { existing: a session's short id, title, started_at, helpers }, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter?, trust?: "understand", caps?: { hands_per_day, wakes_per_day, tokens_per_day }, evidence?: [string] }. A new seat, with its tenure: standing, or a program with what ends it and what happens then. With \`seat\`, the role is a session that already runs: the four fields are copied from its row in \`sessions.long_running\`, accepting makes that session the role's standing session, and the change needs no adopt. Scope refs are a project's short id (pr-N), id or a title that matches one project; a plan's pl-N.`,
     `- projects: { changes: [{ op: "create", title, description?, project_path?, horizon?: "ongoing" | "bounded" } | { op: "merge", from, into }] }. Business lines the chart needs and does not have, or two that are one thing; a bounded line ends with its work and a program role can end with it.`,
     `- file: { plan: ref, project: ref }. A plan filed under a project, so the role that owns the project sees it; the smallest change there is, and the one that answers an unfiled_plan flag.`,
     `- move: { handle, reports_to?, scope_add?: [ref], scope_remove?: [ref], reason? }. A role under a different parent, or with a different scope, in one change.`,
@@ -59,6 +59,9 @@ const SPEC_EXAMPLE = JSON.stringify({
       expected_effect: "What should be different at the next review, and how you will know.",
       risk: "What could go wrong, and what you would watch.",
     },
+  ],
+  asks: [
+    { title: "What the person is agreeing to, readable on its own", why: "One sentence of why.", effect: "One line of what changes for them when they accept.", seqs: [1] },
   ],
 }, null, 2);
 
@@ -100,7 +103,7 @@ ${summary.projects} projects, ${summary.plans} plans, ${summary.tasks_open} open
 
   const read = `## What to read, before you form a view
 
-1. \`cast org inputs${team} --json\`, its \`activity\` block first: where the commits and sessions of the last 30 days are, by repository and top level path, who works where, and the plans, tasks and projects the evidence says are stale, each with its reason. Then the rest, whole: projects with task counts, plans with progress, members with their sessions by path, git roots, insight themes, channels, existing roles and anchors, open decisions.
+1. \`cast org inputs${team} --json\`, its \`activity\` block first: where the commits and sessions of the last 30 days are, by repository and top level path, who works where, and the plans, tasks and projects the evidence says are stale, each with its reason. Then \`sessions.long_running\`: the sessions older than a week that still run, each with what it has done. Then the rest, whole: projects with task counts, plans with progress, members with their sessions by path, git roots, insight themes, channels, existing roles and anchors, open decisions.
 2. \`cast org health${team} --json\`: per role, per person and for the company, the load, spend and flow signals the capacity model needs, and the flags it raises. Every flag names its evidence; the stale flags (\`stale_plan\`, \`stale_task\`, \`stale_project\`) and \`program_ended\` are the ones you answer before any other.
 3. Each git root's layout: \`ls\` the root and the package names one level down. This is the only reading outside codecast; do not walk the tree.
 ${roots}
@@ -111,6 +114,10 @@ ${roots}
 ${ORG_GROUNDING_RULES.activity_first} ${ORG_GROUNDING_RULES.done_is_sync} ${ORG_GROUNDING_RULES.untouched_is_not_a_seat} ${ORG_GROUNDING_RULES.records_first}
 
 How to read the evidence. The activity block says which paths had commits and sessions and who made them; a plan whose tasks are all closed, whose bound sessions are all done, or whose area had no activity for three weeks is stale, and the block names which. A task in progress whose sessions finished two weeks ago, or whose commits landed while it stayed open, is finished or dropped, not in flight. A project whose path had no commits and no sessions for the window is paused, not unowned. Every stale record becomes one status change with its evidence in the reason, and the loads you size for a seat exclude it: the model measures work that is happening, and a seat sized on records that are behind it is a seat nobody needs. Bring the records in line first, then size: a seat's load is what will reach it once the stale rows are closed and the loose plans filed, and its ledger after those changes is context. Closing a plan closes its still open tasks in the same accept (they are dropped and the applied note lists them), so propose one change per plan and name a task on its own only when its evidence differs from its plan's: done because its commit landed, or open or backlog because it was filed in bulk as in progress and never picked up. The activity block says a record is stale; it does not say what became of the work, and two readers who stop there will guess differently. Before you set a task done, open, backlog or dropped, read the row (\`cast task show ct-N${team}\`: its comments, its plan, the commit that names it) and write the status the row itself shows: done when a commit, a closing comment or a finished sibling shows the work landed; open or backlog when it is still real work nobody started; dropped when nothing under it happened and nothing waits on it. A finished session is not evidence that the work landed; a plan already marked done is not either, and its close drops what it left open. A plan closes as done when the tasks that finished under it carried its goal, which its decisions, its done tasks or its own page show, and as abandoned when nothing under it finished; the reason names which. A row you did not read gets no status change. A weekly average hides its days: read \`spend.wakes_by_day\` and \`spend.last_wake_at\` before you call one burst a daily rate. A seat flagged \`bypassed\` is neither idle nor loaded: work closes in its scope and none of it passes through the seat; name it to the person as a finding and ask whether the work should route through the seat or the seat should be sized as a reader, and do not split, merge or retire on its first sighting. The activity block's \`commits\` says how many commits carried a file list; the areas can only show a seam for those, so report the rest as could not verify, never as work on the root. Where the record and the activity disagree and you cannot tell which is right, say so as a finding and size without the record.`;
+
+  const unnamed = `## Sessions that already are roles
+
+${ORG_UNNAMED_ROLES_RULE}`;
 
   const capacity = `## The capacity model
 
@@ -137,6 +144,10 @@ ${SPEC_EXAMPLE}
 \`\`\`
 
 Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. A proposal names each subject once: one status per plan or task, one project_meta carrying every field you set for a project, one row per role for each kind. Build the spec so no two of your lists can name the same subject; two rows that agree about one subject are folded into one at the post and named, and two that disagree are refused.
+
+${ORG_ASKS_RULE}
+
+${ORG_LETTER_RULE}
 
 The summary is the ask. ${ORG_ASK_RULES.reader} ${ORG_ASK_RULES.decision_first} ${ORG_ASK_RULES.invented_words} ${ORG_ASK_RULES.numbers_mean_something} ${ORG_ASK_RULES.cost_in_plain_words} ${ORG_ASK_RULES.readable_once} The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here. After the ask come the evidence, one line per finding, then what you could not verify and the findings that are not changes, as a short list; each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word.
 
@@ -165,7 +176,7 @@ ${opts.open.short_id} "${opts.open.title}" waits on a person: ${opts.open.decide
 
 End your turn with \`cast state --status done\` naming op-N and the page link. The person decides on the org page; that page is the only door, and nothing you run applies a change.`;
 
-  return [purpose, model, glance, standing, read, grounding, capacity, tenure, design, write, honesty, adopt, end].filter(Boolean).join("\n\n") + "\n";
+  return [purpose, model, glance, standing, read, grounding, unnamed, capacity, tenure, design, write, honesty, adopt, end].filter(Boolean).join("\n\n") + "\n";
 }
 
 /** The glance's last sentence: how many records the activity block says are behind. */
@@ -322,6 +333,7 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   if (options.json) { console.log(JSON.stringify({ ...result, url: proposalUrl(deps, result.short_id) }, null, 2)); return; }
   const n = result.changes?.length ?? parsed.spec.changes.length;
   console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${parsed.spec.mode}`)}`);
+  for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
 }
 
