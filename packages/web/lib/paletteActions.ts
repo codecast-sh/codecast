@@ -44,6 +44,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     return [
       row("agent_switch", "Switch agent…", Bot, "a"),
       row("agent_fork", "Fork session as…", GitBranch, "f"),
+      row("agent_handoff", "Hand off to…", ArrowRightLeft, "t"),
       ...(canControlModel(target.agent_type, (target.message_count ?? 0) === 0) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
       row("rename", "Rename session…", Pencil, "r", "session.rename"),
       // Personifying is opt in, so the verb names what it does for a row that

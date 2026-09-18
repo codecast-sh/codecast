@@ -1,7 +1,7 @@
 ---
 name: cast-handoff
 description: Package the current work so the next session or a teammate can continue without reading this thread. Writes the decisions, the direction, what is verified, open questions and ordered next steps as a shared doc, pins the state, and optionally forks, spawns or hands the work to a session. Use before stopping, before a long pause, or when handing work over.
-argument-hint: "[fork | spawn | <session-id> | <member>]"
+argument-hint: "[--to <agent> | fork | spawn | <session-id> | <member>]"
 ---
 
 Git holds what changed. Write what git does not: why it changed, where it is
@@ -41,6 +41,14 @@ Record any decision the doc names with `cast decisions add "<title>" --reason
 
 ## Hand it on
 
+- Another agent or model: `cast handoff --to codex` (or `--to claude --model
+  opus`, `--to gemini`, `--model sonnet` for the same agent). The server
+  writes a brief of this session, composes the new session's first prompt from
+  it with the read commands for this transcript, starts the session in this
+  directory as an inbox card linked both ways, binds it to this session's task
+  or plan, and pins this session's state as done. Add `-m "<direction>"` (or
+  `-m -` for stdin) to steer it; `--dry-run` prints the prompt and starts
+  nothing. End your turn after it: the new session continues the work.
 - `fork`: `cast fork --tip "<the first next step, naming doc:<id>>"` keeps the
   history and continues in the human's inbox.
 - `spawn`: `cast spawn -` with a self contained brief that opens with the doc

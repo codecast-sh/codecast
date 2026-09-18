@@ -227,6 +227,10 @@ export type Conversation = {
   // Visible-child pointer (agent-team teammate → its lead). The server folds it
   // into parent_conversation_id for the link; this field only picks the label.
   spawned_by_conversation_id?: string | null;
+  // The handoff pair (`cast handoff --to`): a child started from a human
+  // shell has no spawned_by, so the card reads this for its parent link too.
+  handed_off_from_conversation_id?: string | null;
+  handed_off_from_details?: { conversation_id: string; short_id: string; title?: string | null } | null;
   parent_message_uuid?: string | null;
   is_subagent?: boolean;
   is_workflow_sub?: boolean;
@@ -559,24 +563,38 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
               </div>
             </div>
 
-            {conv.parent_conversation_id && (
-              <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim min-w-0">
-                <svg className="w-3 h-3 rotate-180 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                </svg>
-                <span className="shrink-0">{conv.spawned_by_conversation_id && conv.parent_conversation_id === conv.spawned_by_conversation_id ? "spawned by" : "sub of"}</span>
-                <button
-                  className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[150px] sm:max-w-[200px] transition-colors text-left"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    router.push(`/conversation/${conv.parent_conversation_id}`);
-                  }}
-                >
-                  {conv.parent_title || "parent session"}
-                </button>
-              </div>
-            )}
+            {(() => {
+              // The parent link: a subagent's parent, a teammate's lead (the
+              // server folds spawned_by into parent_conversation_id), or a
+              // hand-off's source — one row, the label says which.
+              const handoffFrom = conv.handed_off_from_conversation_id || conv.handed_off_from_details?.conversation_id || null;
+              const linkId = conv.parent_conversation_id || handoffFrom;
+              if (!linkId) return null;
+              const label = conv.parent_conversation_id
+                ? (conv.spawned_by_conversation_id && conv.parent_conversation_id === conv.spawned_by_conversation_id ? "spawned by" : "sub of")
+                : "handed off from";
+              const title = conv.parent_conversation_id
+                ? (conv.parent_title || "parent session")
+                : (conv.handed_off_from_details?.title || conv.handed_off_from_details?.short_id || "previous session");
+              return (
+                <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim min-w-0" data-parent-link={label}>
+                  <svg className="w-3 h-3 rotate-180 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                  </svg>
+                  <span className="shrink-0">{label}</span>
+                  <button
+                    className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[150px] sm:max-w-[200px] transition-colors text-left"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      router.push(`/conversation/${linkId}`);
+                    }}
+                  >
+                    {title}
+                  </button>
+                </div>
+              );
+            })()}
 
             <ConvSubtitleSection conv={conv} expanded />
 

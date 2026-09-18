@@ -98,11 +98,21 @@ export function CollapsibleBody({
   collapsedHeight = 180,
   className = "",
   toggleClassName = "",
+  expandLabel = "Expand",
+  collapseLabel = "Collapse",
+  openOnFocus = false,
   children,
 }: {
   collapsedHeight?: number;
   className?: string;
   toggleClassName?: string;
+  /** What the toggle says. Name the content when the reader needs to know
+   *  what opens ("Show the description"), not just that something will. */
+  expandLabel?: string;
+  collapseLabel?: string;
+  /** Open when focus enters the body. An editable body (a description, a
+   *  form) must not stay clipped around the caret the reader just placed. */
+  openOnFocus?: boolean;
   children: React.ReactNode | ((expanded: boolean) => React.ReactNode);
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -129,7 +139,7 @@ export function CollapsibleBody({
   const clipped = overflows && !expanded;
 
   return (
-    <div className={className}>
+    <div className={className} onFocusCapture={openOnFocus && !expanded ? () => setExpanded(true) : undefined}>
       <div
         style={
           clipped
@@ -145,7 +155,7 @@ export function CollapsibleBody({
           className={`flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors ${toggleClassName}`}
         >
           {expanded ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
-          {expanded ? "Collapse" : "Expand"}
+          {expanded ? collapseLabel : expandLabel}
         </button>
       )}
     </div>

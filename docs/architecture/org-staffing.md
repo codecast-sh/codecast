@@ -628,3 +628,76 @@ proposal itself no longer needs it, because the author explains itself.
 without scrolling, can say what is being asked of them, what it will change,
 and what to press. If any word on the first screen needs the glossary, the
 screen failed.
+
+## S20. The first visit, and the introduction
+
+Written 2026-09-18. The founder asked for a beautiful, elegant first visit to
+the org page that describes the whole system succinctly, and for one global
+introduction that pops up anywhere in the app and introduces this work. S14's
+guide (three spotlight steps over the real canvas) stays as the way back from
+"How this page works"; the first visit is its own moment.
+
+**What a person needs to know, in five sentences.** Your company has roles:
+agents that each keep watching one area of work, with a face, a boss,
+sessions that report to them and tasks they own. A chief of staff reads your
+workspace, commits, sessions, plans and tasks, and proposes the roles it
+needs; you decide, and nothing changes until you accept. A role triages its
+own sessions and puts in front of you only what needs you, with one line
+saying why. You can talk to any role from its page, and hover any role
+anywhere to see what it looks after. All of this also works from any session
+by asking for /org.
+
+**The first visit.** The first time a person opens the org page with roles
+in it, or with none, the page opens on the introduction rather than the
+canvas: one screen, no scrolling on a laptop, that a person reads in thirty
+seconds. It is built from the painted faces, because the faces are the
+feature's own character: five or six of them arranged as a small company at
+the top, each one standing for one of the five sentences as it reveals, one
+after the other, in one orchestrated entrance (the faces first, then the
+lines, then the two actions). The type is the org page's serif for the one
+title and the app's mono for the lines. The palette is the app's own
+(`--sol-*`), warm and cream in light, the same faces in dark. No dark
+charcoal with an amber accent, no uppercase letterspaced kicker, no italic
+clause in an accent colour, no rule above the title. Two actions and only
+two: the one that starts (Ask the chief of staff to look at my workspace, or
+Open the chart when roles already exist) and Later. Later never returns on
+its own; "How this page works" in the header reopens it. Seen is one pref,
+`org_intro_seen`, written by either action or by the first accept of a
+proposal (S17), on the store and synced, so it is seen once per person and
+not once per browser.
+
+**The introduction anywhere.** Once per person, on the next visit to any
+page after the feature is available in their workspace, a card rises from the
+bottom right corner: one face, one title ("Meet your organization"), two
+lines (a chief of staff reads your workspace and proposes the roles it needs;
+each role watches one area and brings you only what needs you), and two
+actions: See it, which opens the org page on the first visit above, and Not
+now. It rises once the page has settled, never over a composer with text in
+it, never during a call, never on a phone narrower than a tablet (there the
+org page's own first visit does the introducing). Dismissing either way writes
+`org_upsell_seen`; seeing the org page by any route writes it too, so a person
+who found the feature on their own is never sold it afterwards. It reuses the
+banner and toast primitives the app already has for a rising card
+(NewSnippetsBanner, the call toasts) rather than adding a third.
+
+As shipped (2026-09-18): the first visit is `OrgIntro` (components/org),
+mounted by the org page over the whole page once the tree and the prefs have
+landed and `org_intro_seen` is unset; the five faces are the owl above a rail
+of fox, bear, hare and crane, the entrance is CSS keyframes keyed by one
+delay per piece (globals.css, "org-intro"), and the company scales with the
+room the screen has. "How this page works" now reopens this screen, so S14's
+guide keeps only its own auto open, and it waits for a later visit to an
+empty workspace instead of following the intro. The card is `OrgIntroCard`
+on the app's toast, gated by `orgIntroCardMayRise` and mounted once in the
+dashboard layout as `OrgIntroAnywhere`; `org_upsell_seen` is the pref, and
+both writes go through `markOrgIntroSeen` / `markOrgUpsellSeen`. With a
+composer on screen the card lifts its toast wrapper so its foot clears the
+composer's form (`composerLift`): a person can send under it without
+dismissing it. One name for one thing: the screen, the card and the lines
+say "organization", never "company".
+
+**The test.** A person who has never heard of the feature reads the first
+visit and can say, in their own words, what a role is, who proposes them, who
+decides, and what reaches their inbox. If they cannot, the lines failed. If
+they took longer than thirty seconds, the screen failed. If the screen reads
+as any AI product's onboarding, the design failed.

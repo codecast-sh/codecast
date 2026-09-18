@@ -23,54 +23,14 @@ import { toast } from "sonner";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../../components/ui/context-menu";
 import { SessionMenuItems } from "../../components/menus/ObjectContextMenus";
 import { useInboxStore, type InboxSession } from "../../store/inboxStore";
+import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
+import { useInstantSessionRows, mergeSearchRows } from "../../lib/instantSessionSearch";
 import { copyToClipboard, shareOrigin } from "../../lib/utils";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
   | { kind: "session"; result: any; session: InboxSession; isForeign: boolean }
   | { kind: "message"; result: any; messageId: string };
-
-function parseSearchTerms(query: string): string[] {
-  const terms: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    const term = match[1] || match[2];
-    if (term) terms.push(term.toLowerCase());
-  }
-  return terms;
-}
-
-function highlightMatch(text: string, query: string): React.ReactNode {
-  if (!query.trim()) return text;
-
-  const terms = parseSearchTerms(query);
-  if (terms.length === 0) return text;
-
-  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const regex = new RegExp(`(${pattern})`, "gi");
-  const parts = text.split(regex);
-
-  if (parts.length === 1) return text;
-
-  return (
-    <>
-      {parts.map((part, i) => {
-        const isMatch = terms.some((t) => part.toLowerCase() === t);
-        return isMatch ? (
-          <mark
-            key={i}
-            className="bg-amber-300/40 text-amber-900 dark:text-amber-200 rounded px-0.5 font-medium"
-          >
-            {part}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        );
-      })}
-    </>
-  );
-}
 
 function formatTimestamp(ts: number) {
   const date = new Date(ts);
@@ -255,14 +215,22 @@ export default function SearchPage() {
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
 
   const contentRows: any[] = searchData?.results || [];
-  // Content-match rows win; title-only rows fill in after.
-  const results: any[] = useMemo(() => {
-    const titleRows = titleData?.results || [];
-    if (!titleRows.length) return contentRows;
-    const seen = new Set(contentRows.map((r: any) => r.conversationId));
-    return [...contentRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
+  // Instant tier: sessions already in the store, matched off the RAW query, so
+  // the page has real rows before either server tier answers — the same rows
+  // ⌘K shows. Server rows supersede them by conversation id as they land.
+  // "My prompts only" filters by message role, which a cached session row has
+  // no way to evaluate — the instant tier stands down rather than claim a hit
+  // it cannot justify, exactly as the title tier does.
+  const instantRows = useInstantSessionRows(userOnly ? "" : query, PAGE_SIZE, { mineOnly });
+  // Content-match rows win; title-only rows next; cache rows fill the tail.
+  const results: any[] = useMemo(
+    () => mergeSearchRows(contentRows as any, titleData?.results as any, instantRows),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchData, titleData]);
+    [searchData, titleData, instantRows]
+  );
+  // Instant rows match what is typed NOW; server rows match the debounced term.
+  // Highlight against the live term so a fresh keystroke marks its own hits.
+  const hlQuery = query.trim().length >= 2 ? query : debouncedQuery;
   const totalMatches = searchData?.totalMatches || 0;
   const totalSessions = (searchData as any)?.totalSessions || 0;
   // Pagination is a content-search concept — title rows don't count against it.
@@ -426,10 +394,11 @@ export default function SearchPage() {
           )}
 
           {searchActive && !searchData && results.length > 0 && (
-            <div className="text-xs text-sol-text-dim">
+            <div className="flex items-center gap-2 text-xs text-sol-text-dim">
+              {!searchError && <Loader2 className="w-3 h-3 animate-spin text-sol-cyan" />}
               {searchError
-                ? "Content search timed out — showing title matches only. Try a more specific word or a quoted phrase."
-                : "Title matches — still searching message content…"}
+                ? "Content search timed out — showing sessions matched by name. Try a more specific word or a quoted phrase."
+                : "Sessions matched by name — still searching message content…"}
             </div>
           )}
 
@@ -492,7 +461,7 @@ export default function SearchPage() {
                           <MessageSquare className="w-4 h-4 text-sol-blue/70 flex-shrink-0" />
                         )}
                         <h3 className="text-[15px] font-medium text-sol-text truncate flex-1">
-                          {highlightMatch(result.title, debouncedQuery)}
+                          {highlightMatch(result.title, hlQuery)}
                         </h3>
                         <div className="flex items-center gap-2.5 text-[11px] text-sol-text-dim shrink-0 tabular-nums">
                           {result.titleMatch && (
@@ -517,6 +486,11 @@ export default function SearchPage() {
                         </div>
                       )}
                     </Link>
+                    {result.matches.length === 0 && result.instantSnippet && (
+                      <p className="px-4 py-2.5 text-[12px] text-sol-text-dim leading-relaxed">
+                        {highlightMatch(getSnippet(result.instantSnippet, hlQuery, 220), hlQuery)}
+                      </p>
+                    )}
                     {result.matches.length > 0 && (
                       <div className="divide-y divide-sol-border/50">
                         {result.matches.map((match: any, mIdx: number) => (
@@ -543,7 +517,7 @@ export default function SearchPage() {
                               </span>
                             </div>
                             <p className="text-[13px] text-sol-text-secondary leading-relaxed line-clamp-3">
-                              {highlightMatch(match.content, debouncedQuery)}
+                              {highlightMatch(match.content, hlQuery)}
                             </p>
                           </Link>
                         ))}

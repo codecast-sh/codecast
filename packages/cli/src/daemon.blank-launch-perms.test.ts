@@ -76,8 +76,13 @@ describe("buildBlankLaunchArgs", () => {
     expect(buildBlankLaunchArgs("grok", cfg)).toEqual(["--verbose", "--permission-mode", "bypassPermissions"]);
   });
 
-  test("muse defaults to --disable-approval (managed muse can't answer TUI prompts)", () => {
-    expect(buildBlankLaunchArgs("muse", null)).toEqual(["--disable-approval"]);
+  test("muse defaults to --yolo (managed muse can't answer TUI prompts)", () => {
+    expect(buildBlankLaunchArgs("muse", null)).toEqual(["--yolo"]);
+  });
+
+  test("muse: an explicit default mode opts out of yolo", () => {
+    const cfg = { agent_permission_modes: { muse: "default" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("muse", cfg)).toEqual([]);
   });
 
   test("muse: a user-pinned approval mode in agent_args.muse is not double-stacked", () => {
@@ -87,8 +92,8 @@ describe("buildBlankLaunchArgs", () => {
     expect(buildBlankLaunchArgs("muse", yoloCfg)).toEqual(["--yolo"]);
   });
 
-  test("muse: configured args without an approval flag still get --disable-approval appended", () => {
+  test("muse: configured args without an approval flag still get --yolo appended", () => {
     const cfg = { agent_args: { muse: "--verbose" } } as unknown as Config;
-    expect(buildBlankLaunchArgs("muse", cfg)).toEqual(["--verbose", "--disable-approval"]);
+    expect(buildBlankLaunchArgs("muse", cfg)).toEqual(["--verbose", "--yolo"]);
   });
 });

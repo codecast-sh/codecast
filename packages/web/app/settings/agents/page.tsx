@@ -11,6 +11,7 @@ import { toast } from "sonner";
 type ClaudeMode = "default" | "bypass";
 type CodexMode = "default" | "full_auto" | "bypass";
 type GeminiMode = "default" | "bypass";
+type MuseMode = "default" | "bypass";
 
 const claudeOptions: { value: ClaudeMode; label: string; description: string; flag: string }[] = [
   { value: "default", label: "Default", description: "Prompts for dangerous operations", flag: "(no extra flags)" },
@@ -28,6 +29,11 @@ const geminiOptions: { value: GeminiMode; label: string; description: string; fl
   { value: "bypass", label: "Full access", description: "Every permission prompt is skipped", flag: "(bypass flags)" },
 ];
 
+const museOptions: { value: MuseMode; label: string; description: string; flag: string }[] = [
+  { value: "default", label: "Default", description: "Standard approval prompts for dangerous operations", flag: "(no extra flags)" },
+  { value: "bypass", label: "Yolo", description: "No approval prompts, no sandbox, workspace trusted", flag: "--yolo" },
+];
+
 export default function AgentsPage() {
   const { user } = useCurrentUser();
   const modes = user?.agent_permission_modes;
@@ -38,17 +44,22 @@ export default function AgentsPage() {
   const claude = modes?.claude ?? "default";
   const codex = modes?.codex ?? "default";
   const gemini = modes?.gemini ?? "default";
+  // Muse runs yolo unless explicitly set to "default" (the daemon default),
+  // so the switch shows Yolo selected when nothing is stored.
+  const muse = modes?.muse ?? "bypass";
 
   const handleUpdate = async (updates: {
     claude?: ClaudeMode;
     codex?: CodexMode;
     gemini?: GeminiMode;
+    muse?: MuseMode;
   }) => {
     try {
       await updateModes({
         claude: updates.claude ?? claude,
         codex: updates.codex ?? codex,
         gemini: updates.gemini ?? gemini,
+        muse: updates.muse ?? muse,
       });
       toast.success("Permission mode updated");
     } catch (err) {
@@ -59,7 +70,7 @@ export default function AgentsPage() {
   const updateDefaultParams = async (args: { agent: string; params: Record<string, string> }) => {
     try {
       await updateDefaultParamsMutation({
-        agent: args.agent as "claude" | "codex" | "gemini" | "cursor",
+        agent: args.agent as "claude" | "codex" | "gemini" | "cursor" | "muse",
         params: args.params,
       });
     } catch (err) {
@@ -94,6 +105,13 @@ export default function AgentsPage() {
           disabled
           note="Not yet supported for Gemini — sessions launch with Gemini's own defaults for now."
         />
+        <AgentSection
+          name="Muse Spark"
+          current={muse}
+          options={museOptions}
+          onChange={(v) => handleUpdate({ muse: v as MuseMode })}
+          note="Yolo is on unless you pick Default: managed sessions run without a terminal to answer prompts."
+        />
       </SettingsSection>
 
       <SettingsSection
@@ -123,6 +141,12 @@ export default function AgentsPage() {
           name="Cursor"
           agent="cursor"
           params={defaultParams?.cursor}
+          onUpdate={updateDefaultParams}
+        />
+        <AgentParams
+          name="Muse Spark"
+          agent="muse"
+          params={defaultParams?.muse}
           onUpdate={updateDefaultParams}
         />
       </SettingsSection>

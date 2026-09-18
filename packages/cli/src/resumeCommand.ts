@@ -275,8 +275,8 @@ export function buildNonClaudeResumeCommand(
   if (agentType === "codex") return withFlags(opts.codexArgs, opts.codexPermFlags);
   if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags) + grokStableRulesFragment(opts.stableRulesFile);
   // muse, like grok: its approval mode is a launch flag (never persisted in
-  // the session dir), so a bare `muse resume <id>` would re-enter on-request
-  // mode and park on TUI approval prompts nobody can answer.
+  // the session dir), so the resume carries the same flags as launch
+  // (`--yolo` unless the stored mode is explicitly "default").
   if (agentType === "muse") return withFlags(opts.museArgs, opts.musePermFlags);
   return withFlags();
 }

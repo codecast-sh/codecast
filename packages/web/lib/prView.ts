@@ -6,7 +6,7 @@
 // Both are plain functions over plain rows, so the page's arithmetic is
 // testable without a DOM and the components stay layout only.
 
-import type { ExternalEventAccent } from "./externalEvents";
+import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEvents";
 import { checkLabel } from "@codecast/shared/contracts";
 import {
   diffLineKey,
@@ -348,12 +348,35 @@ export type PrCommitRow = {
   url?: string;
 };
 
-export type PrEventRow = { _id: string; created_at: number };
+export type PrEventRow = { _id: string; created_at: number; kind?: string };
 
 export type PrTimelineItem =
   | { key: string; at: number; kind: "event"; event: PrEventRow }
   | { key: string; at: number; kind: "review"; review: PrReviewRow }
   | { key: string; at: number; kind: "comment"; comment: CodeCommentRow; replies: CodeCommentRow[] };
+
+/** Merge-state kinds say where the PR stands, not that something happened.
+ *  Two of the same in a row therefore carry one piece of news, and only the
+ *  latest of them is still true, so a run collapses to its last member. */
+const MERGE_STATE_EVENT_KINDS: ReadonlySet<string> = new Set(["pr_behind", "pr_conflict", "pr_ready"]);
+
+export function collapseMergeStateEvents(events: PrEventRow[]): PrEventRow[] {
+  const ordered = [...events].sort((a, b) => a.created_at - b.created_at);
+  const kept: PrEventRow[] = [];
+  for (const event of ordered) {
+    const previous = kept[kept.length - 1];
+    if (
+      previous &&
+      previous.kind === event.kind &&
+      MERGE_STATE_EVENT_KINDS.has(event.kind ?? "")
+    ) {
+      kept[kept.length - 1] = event;
+      continue;
+    }
+    kept.push(event);
+  }
+  return kept;
+}
 
 /** One list, oldest first: what happened to the PR outside codecast (events),
  *  what reviewers said, and what people said here. Replies hang off their
@@ -372,7 +395,10 @@ export function buildPrTimeline(input: {
   }
 
   const items: PrTimelineItem[] = [
-    ...input.events.map<PrTimelineItem>((event) => ({
+    // "Fell behind" is the header's job: it reads "Behind by N" from the live
+    // row, always current, while a row per transition only says the PR was
+    // once behind by something else. Same rule as the feed and the transcript.
+    ...collapseMergeStateEvents(input.events.filter((event) => !isQuietExternalEvent(event))).map<PrTimelineItem>((event) => ({
       key: `e:${event._id}`,
       at: event.created_at,
       kind: "event",

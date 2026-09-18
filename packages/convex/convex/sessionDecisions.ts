@@ -1785,7 +1785,8 @@ export const getWithDoc = query({
     if (!userId) return null;
     const row = await findDecision(ctx, args.decision_id);
     if (!row || !(await userMayRead(ctx, userId, row))) return null;
-    return { decision: row, ...(await decisionContext(ctx, row, userId)) };
+    const [live] = await withLiveSession(ctx, [row]);
+    return { decision: live, ...(await decisionContext(ctx, row, userId)) };
   },
 });
 
@@ -1855,6 +1856,34 @@ export const findAskMessage = query({
 // their decisions, plus the day's resolved ones. Rows minted before the inbox
 // existed have no inbox row and no asked_user_ids: they still list through the
 // owner index as before, so nothing already in a queue disappears.
+// The asking session, resolved when the row is READ. session_title and
+// project_path are stamped at ask time, and a session is usually untitled in
+// its first minutes — the stamp taken then is empty forever, which is why an
+// old decision read "See the conversation" with nothing to identify it. The
+// conversation's current title is the truth, so every read overlays it.
+export async function withLiveSession<T extends { conversation_id: Id<"conversations">; session_title?: string; project_path?: string }>(
+  ctx: Ctx,
+  rows: T[],
+): Promise<T[]> {
+  const seen = new Map<string, { title?: string; project_path?: string }>();
+  const out: T[] = [];
+  for (const r of rows) {
+    const key = String(r.conversation_id);
+    let live = seen.get(key);
+    if (!live) {
+      const conversation = await ctx.db.get(r.conversation_id);
+      live = { title: conversation?.title, project_path: conversation?.project_path };
+      seen.set(key, live);
+    }
+    out.push({
+      ...r,
+      session_title: live.title ?? r.session_title,
+      project_path: live.project_path ?? r.project_path,
+    });
+  }
+  return out;
+}
+
 export async function listForUserCore(ctx: Ctx, userId: Id<"users">, now: number): Promise<DecisionRow[]> {
   const cutoff = now - RESOLVED_WINDOW_MS;
   const out = new Map<string, DecisionRow>();
@@ -1884,7 +1913,7 @@ export async function listForUserCore(ctx: Ctx, userId: Id<"users">, now: number
       if (r.status === "pending" || (r.resolved_at ?? 0) >= cutoff) out.set(String(r._id), r);
     }
   }
-  return Array.from(out.values());
+  return withLiveSession(ctx, Array.from(out.values()));
 }
 
 export const listForUser = query({

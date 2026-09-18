@@ -21,6 +21,15 @@ const newestResolved = (a: SessionDecisionItem, b: SessionDecisionItem) => (b.re
 
 const RESOLVED_WORD: Record<string, string> = { answered: "answered", dismissed: "dismissed", withdrawn: "withdrawn" };
 
+/** Whether any pending decision blocks this task. Wider than useTaskHold,
+ *  which matches the station too: the page collapses its description for a
+ *  blocking question wherever the task stands, so the answer is above the
+ *  fold rather than below a body nobody can act on yet. */
+export function useTaskIsBlocked(taskId: string): boolean {
+  const where = useMemo(() => (d: SessionDecisionItem) => d.task_id === taskId && d.status === "pending" && d.blocking, [taskId]);
+  return useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig }).length > 0;
+}
+
 /** L5: the pending blocking decision holding the task at its current
  *  station, from the store's decision rows. */
 export function useTaskHold(task: Pick<LineTask, "_id" | "status" | "status_id">): SessionDecisionItem | undefined {
@@ -61,7 +70,7 @@ export function TaskDecisions({ taskId }: { taskId: string }) {
       </h2>
       {open.length > 0 && (
         <div className="space-y-2">
-          {open.map((d) => <DecisionCompactCard key={d._id} decision={d} showTask={false} />)}
+          {open.map((d) => <DecisionCompactCard key={d._id} decision={d} showTask={false} cta={d.blocking} />)}
         </div>
       )}
       {resolved.length > 0 && (
