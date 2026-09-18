@@ -365,7 +365,11 @@ describe("churn exemption (design D1)", () => {
       const patch: Record<string, unknown> = { message_count: 1, updated_at: 100 };
       await rollUpUsage({ db: tracked }, conversation, [{ usage: { input_tokens: 10, output_tokens: 5 }, inserted: true }], patch, 100);
       await tracked.patch(lastId, patch);
-      expect((await db.get(lastId)).usage_totals).toEqual({
+      // The assertion this test cares about is the sync head below; the totals
+      // are here to prove the rollup ran. Match its fields loosely so a new
+      // counter on the rollup (context_tokens, the calibration slot) is not a
+      // failure of the churn exemption.
+      expect((await db.get(lastId)).usage_totals).toMatchObject({
         input: 10, output: 5, cache_read: 0, cache_write: 0, updated_at: 100,
       });
     }

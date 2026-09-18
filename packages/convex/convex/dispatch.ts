@@ -79,6 +79,10 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       // would bypass performReparentSession's rules and let the role's brief
       // and actor resolution treat the row as acting for the role.
       "org_role_id", "standing_role_id",
+      // A role's escalation has one writer (sessionOwnership
+      // .performEscalateSession), which checks who may put a role's session in
+      // front of a person. It rides escalateSession.
+      "escalated_by_role",
       // An agent's pane offer is written by the agent and retired by the
       // reader's click, and the retiring write must pass a VISIBILITY check
       // rather than the ownership one this gate applies — a teammate reading a
@@ -664,6 +668,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.tenure ? { tenure: input.tenure } : {}),
       ...(input.avatar ? { avatar: input.avatar } : {}),
       ...(input.provision ? { provision: true, project_path: input.project_path } : {}),
+      ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
     });
     if (input.caps && role?._id) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: String(role._id), hands: input.caps.hands_per_day, wakes: input.caps.wakes_per_day, tokens: input.caps.tokens_per_day });
@@ -742,6 +747,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   acceptAllOrgProposal: async (ctx, _userId, [proposalId, opts]: [string, { kinds?: string[] } | undefined]) => {
     const kinds = Array.isArray(opts?.kinds) && opts!.kinds!.length > 0 ? opts!.kinds : undefined;
     return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId, ...(kinds ? { kinds } : {}) });
+  },
+  // One ask of a proposal, accepted or skipped whole (org-staffing.md S19):
+  // `ask` is the index into the asks the server resolves, the same function
+  // the web ran to flip the rows.
+  decideOrgProposalAsk: async (ctx, _userId, [proposalId, ask, verdict]: [string, number, "accept" | "skip"]) => {
+    return await ctx.runMutation!((api as any).orgProposals.decideAsk, { proposal: proposalId, ask, verdict });
   },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
@@ -1121,9 +1132,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // A person's message from the staffing pane into the thread bound to a
   // proposal (org-staffing.md S18). orgProposals.say wraps it with the row it
   // is about and enqueues it on the message rail under the pane's client id.
-  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId]: [string, string, number | null, string, string]) => {
+  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId, askIndex]: [string, string, number | null, string, string, (number | null)?]) => {
     return await ctx.runMutation!((api as any).orgProposals.say, {
-      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}),
+      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}), ...(askIndex != null ? { ask: askIndex } : {}),
     });
   },
 
@@ -1239,6 +1250,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // own timestamp, written verbatim, so the optimistic value and the server's
   // echo are the same object and the local field lock retires (see
   // stampBrowserPaneOfferHandled).
+  // The row's two triage gestures on a role's session (org-roles-run-work.md
+  // R1). `line` and `at` are the draft's, so the echo equals it.
+  putSessionInMyInbox: async (ctx, _userId, [convId, line, at]: [string, string, number]) => {
+    return await ctx.runMutation!((api as any).sessionOwnership.escalateSession, { session_id: convId, line, at });
+  },
+  handSessionBackToRole: async (ctx, _userId, [convId]: [string]) => {
+    return await ctx.runMutation!((api as any).sessionOwnership.escalateSession, { session_id: convId, clear: true });
+  },
+
   dismissBrowserPaneOffer: async (ctx, userId, [convId, at]: [string, number]) => {
     await stampBrowserPaneOfferHandled(ctx, userId, convId as Id<"conversations">, at);
   },
@@ -1408,6 +1428,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   updateProject: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...charterWire(fields) });
+  },
+
+  // Naming a project's lead (org-roles-run-work.md R4): the owner and, when
+  // the role's scope does not list the project, the scope, in one transaction.
+  setProjectLead: async (ctx, userId, [projectId, roleId]: [string, string | null]) => {
+    if (!isServerId(projectId) || (roleId !== null && !isServerId(roleId))) return null;
+    return await (ctx as any).runMutation((api as any).orgRoles.setProjectLead, { project_id: projectId, role_id: roleId });
   },
 
   // Issue sync sources (docs/architecture/issue-sync.md S1.3, S9). Like plans

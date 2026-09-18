@@ -268,6 +268,20 @@ describe("switchSessionAgent refuses agents that cannot rebuild history", () => 
     expect(db._tables.daemon_commands.length).toBe(0);
   });
 
+  test("muse on a session with messages: no patch, no divider, no daemon command", async () => {
+    // No transcript writer exists that muse will load, so a switch into muse
+    // with history refuses up front (same shape as cursor) instead of
+    // stamping an agent the daemon then cannot launch.
+    const db = seedConv();
+    await expect(
+      (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, agent_type: "muse" }),
+    ).rejects.toThrow(/Muse Spark cannot take over/);
+
+    const conv = db._tables.conversations.find((r: any) => r._id === CONV);
+    expect(conv.agent_type).toBe("claude_code");
+    expect(db._tables.daemon_commands.length).toBe(0);
+  });
+
   test("grok on a session with messages is a rebuild and goes through", async () => {
     const db = seedConv();
     const result = await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, agent_type: "grok" });

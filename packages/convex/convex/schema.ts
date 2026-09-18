@@ -418,7 +418,8 @@ export default defineSchema({
       // before descriptors exist; see shared ConvexAgentType.
       v.literal("opencode"),
       v.literal("pi"),
-      v.literal("grok")
+      v.literal("grok"),
+      v.literal("muse"),
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),
@@ -881,6 +882,12 @@ export default defineSchema({
     // session files under its primary owner in the org tree. Owners are
     // untouched by it — the role sits between the session and the person.
     org_role_id: v.optional(v.id("org_roles")),
+    // The role put this session in front of the person (org-roles-run-work.md
+    // R1). A session under a role stays out of its host's needs input; with
+    // this set it is a first class card there, carrying the role's line.
+    // Written only by sessionOwnership.performEscalateSession; clearing
+    // removes it. A reparent to a person drops it with the role pointer.
+    escalated_by_role: v.optional(v.object({ role_id: v.id("org_roles"), line: v.string(), at: v.number() })),
     // Set when this row IS a role's standing session (org-roles-standing.md
     // T1), the way anchor_id marks the workspace anchor's. Reserved for the
     // provisioning wave; nothing writes it in the org page slice.
@@ -905,6 +912,13 @@ export default defineSchema({
       // The Claude message id last counted, so a turn split across two sync
       // batches counts once (messages.rollUpUsage).
       last_api_message_id: v.optional(v.string()),
+      // Cost-weighted tokens billed inside ONE calibration slot, and which slot
+      // that is. The usage calibration needs tokens spent in a period, and every
+      // other field here is a lifetime total; a slot-stamped bucket gives the
+      // period figure without a second write or a second table. Reset by
+      // rollUpUsage the first time a conversation bills into a new slot.
+      slot: v.optional(v.number()),
+      slot_weighted: v.optional(v.number()),
     })),
     // Durable execution fencing is opt-in during the mixed-version rollout.
     // Absence means the conversation is still served by the legacy daemon rail.
@@ -1303,6 +1317,11 @@ export default defineSchema({
       was: v.optional(v.string()),
       note: v.optional(v.string()),
     }))),
+    // The asks (org-staffing.md S19): what the proposal asks of the person,
+    // each with the changes folded inside it, by seq. Written by the author
+    // at create and checked as a partition of the changes; a row without
+    // them derives them on read (resolveOrgAsks).
+    asks: v.optional(v.array(v.object({ title: v.string(), why: v.string(), effect: v.string(), seqs: v.array(v.number()) }))),
     created_at: v.number(),
     updated_at: v.number(),
     resolved_at: v.optional(v.number()),
@@ -2120,6 +2139,7 @@ export default defineSchema({
         v.literal("opencode"),
         v.literal("pi"),
         v.literal("grok"),
+        v.literal("muse"),
       ),
       transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
       project_path: v.string(),
@@ -2209,6 +2229,7 @@ export default defineSchema({
       v.literal("opencode"),
       v.literal("pi"),
       v.literal("grok"),
+      v.literal("muse"),
     ),
     transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
     project_path: v.string(),
@@ -2255,6 +2276,7 @@ export default defineSchema({
       v.literal("opencode"),
       v.literal("pi"),
       v.literal("grok"),
+      v.literal("muse"),
     )),
     runtime_id: v.optional(v.string()),
     handle: v.optional(v.string()),
@@ -6158,6 +6180,33 @@ export default defineSchema({
   })
     .index("by_channel_user", ["channel_id", "user_id"])
     .index("by_channel_updated", ["channel_id", "updated_at"]),
+
+  // One row ("global"): how many cost-weighted tokens one percentage point of a
+  // 5h session window is worth. The provider publishes utilization as a percent
+  // and never a size, so this rate is FITTED from our own traffic against our own
+  // meters (usageCalibration.ts) and refreshed on a cron. `recent` holds the last
+  // samples so one odd window cannot move the published median.
+  usage_calibration: defineTable({
+    key: v.literal("global"),
+    tokens_per_percent: v.optional(v.number()),
+    samples: v.optional(v.number()),
+    recent: v.optional(v.array(v.number())),
+    updated_at: v.number(),
+    // The previous reading, which the next run diffs against: when it was taken
+    // and, per user, the utilization of every window their devices reported.
+    last_sample: v.optional(v.object({
+      at: v.number(),
+      slot: v.number(),
+      users: v.array(v.object({
+        user_id: v.id("users"),
+        windows: v.array(v.object({
+          key: v.string(),
+          percent: v.number(),
+          resets_at: v.optional(v.number()),
+        })),
+      })),
+    })),
+  }).index("by_key", ["key"]),
 
   ...issueSyncTables,
   ...agentTables,
