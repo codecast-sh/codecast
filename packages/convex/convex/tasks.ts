@@ -3,6 +3,9 @@ import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { resolveActor } from "./lib/actor";
+import { liveRoleByHandle, rolesInBoundary } from "./lib/orgAccess";
+import { chainAssignees } from "@codecast/shared/contracts/orgAssignee";
+import { noteOrgAssignment } from "./orgEvents";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
@@ -32,7 +35,7 @@ import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import { linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { dropThreadRead, taskThreadParticipants, touchThread } from "./threadReads";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 import { webBaseUrl } from "./slack";
@@ -238,7 +241,10 @@ export async function resolveStatusWrite(
 async function findTeamMemberId(
   ctx: any,
   query: string,
-  teamId?: Id<"teams">
+  teamId?: Id<"teams">,
+  // "@handle" names one thing exactly; a substring would hand "@ads" to
+  // whoever has "ads" in their email.
+  opts: { exactOnly?: boolean } = {},
 ): Promise<Id<"users"> | null> {
   if (!teamId) return null;
   const lower = query.toLowerCase();
@@ -254,6 +260,7 @@ async function findTeamMemberId(
     u.alternate_emails?.some((e: string) => e.toLowerCase() === lower)
   );
   if (exact) return exact._id;
+  if (opts.exactOnly) return null;
   const partial = members.filter((u: any) =>
     u.name?.toLowerCase().includes(lower) ||
     u.email?.toLowerCase().includes(lower) ||
@@ -282,15 +289,62 @@ export async function resolveAssigneeToUserId(
   return findTeamMemberId(ctx, assignee, teamId);
 }
 
+// ── A role as assignee (docs/architecture/org-roles-run-work.md R5) ─────────
+//
+// `tasks.assignee` holds a user's id or a role's id. A role owns a task only
+// inside its own boundary: a team's role takes that team's tasks, a personal
+// role its owner's. The by_assignee indexes key on the string either way.
+
+type AssigneeBoundary = { team_id?: Id<"teams">; scope_user_id?: Id<"users"> };
+
+const boundaryOfWorkspace = (w: { type: "team"; teamId: Id<"teams"> } | { type: "personal"; userId: Id<"users"> }): AssigneeBoundary =>
+  w.type === "team" ? { team_id: w.teamId } : { scope_user_id: w.userId };
+
+const boundaryOfTask = (task: { team_id?: Id<"teams">; user_id: Id<"users"> }): AssigneeBoundary =>
+  task.team_id ? { team_id: task.team_id } : { scope_user_id: task.user_id };
+
+/** The role an assignee value names, or null when it names anything else. */
+export async function roleAssigneeOf(ctx: { db: any }, assignee: string | undefined | null): Promise<any | null> {
+  if (!assignee) return null;
+  const id = ctx.db.normalizeId("org_roles", assignee);
+  return id ? await ctx.db.get(id) : null;
+}
+
+/** Why this role cannot take a task in this boundary, in words for the person
+ *  who tried; null when it can. */
+function roleAssigneeRefusal(role: any, boundary: AssigneeBoundary): string | null {
+  if (role.status === "retired") return `@${role.handle} is retired, so it cannot take tasks. Pick a live role or a person.`;
+  const inside = boundary.team_id
+    ? String(role.team_id ?? "") === String(boundary.team_id)
+    : !role.team_id && String(role.scope_user_id ?? "") === String(boundary.scope_user_id ?? "");
+  return inside ? null : `@${role.handle} belongs to another workspace, so it cannot take this task.`;
+}
+
 export async function resolveAssigneeStr(
   ctx: any,
   assignee: string | undefined,
-  userId: Id<"users">
+  userId: Id<"users">,
+  boundary?: AssigneeBoundary,
 ): Promise<string | undefined> {
   if (!assignee) return undefined;
   if (assignee === "me") return userId.toString();
   if (assignee.startsWith("agent:")) return assignee;
-  if (/^[a-z0-9]{32}$/.test(assignee)) return assignee;
+  if (/^[a-z0-9]{32}$/.test(assignee)) {
+    const role = boundary ? await roleAssigneeOf(ctx, assignee) : null;
+    const refusal = role && roleAssigneeRefusal(role, boundary!);
+    if (refusal) throw new Error(refusal);
+    return assignee;
+  }
+  // "@growth": a teammate with that handle wins, as in chat (mentionResolve);
+  // else the live role with that handle in the task's workspace.
+  if (assignee.startsWith("@")) {
+    const handle = assignee.slice(1).trim();
+    const member = await findTeamMemberId(ctx, handle, boundary?.team_id, { exactOnly: true });
+    if (member) return member.toString();
+    const role = boundary ? await liveRoleByHandle(ctx, boundary, handle) : null;
+    if (role) return role._id.toString();
+    assignee = handle;
+  }
   const lower = assignee.toLowerCase();
   const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
   if (found) return found._id.toString();
@@ -368,6 +422,45 @@ async function handoffTaskThread(
     muted: true,
   });
   await dropThreadRead(ctx, actorId, "task", String(taskId));
+}
+
+// A task has a new assignee: tell them. ONE path for every writer (create,
+// update, the board, bulk assign), so a person and a role are each told the
+// same way wherever the assignment came from.
+//
+// A person is subscribed, the assigner's follow is handed over when a human
+// did it, and they are notified; assigning yourself is not an event. A role
+// (org-roles-run-work.md R5) is woken with the task as the cause, a fold row
+// on its wake rail. The rail's loop rules decide who counts as somebody else:
+// a role's own session or hand taking a task never wakes it, a person or the
+// role above it does. The assigner keeps their follow, since a person who
+// hands work to a role wants to hear how it went.
+async function announceAssignment(
+  ctx: any,
+  o: { task: { _id: Id<"tasks">; short_id: string; title: string; team_id?: Id<"teams"> }; assignee: string | undefined; actorUserId: Id<"users">; actorName?: string; via: SubscriptionVia },
+): Promise<void> {
+  if (!o.assignee) return;
+  const role = await roleAssigneeOf(ctx, o.assignee);
+  if (role) {
+    const by = o.actorName || (await ctx.db.get(o.actorUserId))?.name || "Someone";
+    await noteOrgAssignment(ctx, o.task, {
+      role_id: String(role._id),
+      cause: `${by} assigned you ${o.task.short_id} "${(o.task.title ?? "").slice(0, 80)}"`,
+    });
+    return;
+  }
+  const assigneeId = await resolveAssigneeToUserId(ctx, o.assignee, o.task.team_id);
+  if (!assigneeId || String(assigneeId) === String(o.actorUserId)) return;
+  await subscribeUser(ctx, assigneeId, o.task._id, "assignee", o.via);
+  if (o.via === "human") await handoffTaskThread(ctx, o.task._id, o.actorUserId, assigneeId);
+  await ctx.runMutation(internal.notificationRouter.emit, {
+    event_type: "task_assigned",
+    actor_user_id: o.actorUserId,
+    entity_type: "task",
+    entity_id: o.task._id.toString(),
+    message: `assigned you to ${o.task.short_id}: ${o.task.title}`,
+    direct_recipient_id: assigneeId,
+  });
 }
 
 export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
@@ -637,6 +730,22 @@ async function boundConversations(ctx: any, task: any): Promise<any[]> {
 
 const roleOf = (conv: any): string | undefined =>
   conv?.org_role_id ? String(conv.org_role_id) : conv?.standing_role_id ? String(conv.standing_role_id) : undefined;
+
+// The role that takes a task when `conv` starts it: the role the session
+// reports to, or the role whose standing session it is. Null when the session
+// works for no role, when the task already names a person (a user, or a name
+// nobody resolved: either way a human meant someone), or when the role cannot
+// own a task here (retired, another workspace). Another role's task does move:
+// the work is now being done under this one, and the chain view still rolls
+// it up to the same person when one reports to the other.
+async function roleTakingTask(ctx: any, task: any, conv: any, boundary: AssigneeBoundary): Promise<any | null> {
+  const roleId = roleOf(conv);
+  if (!roleId) return null;
+  const current: string | undefined = task.assignee || undefined;
+  if (current && !current.startsWith("agent:") && !(await roleAssigneeOf(ctx, current))) return null;
+  const role = await roleAssigneeOf(ctx, roleId);
+  return role && !roleAssigneeRefusal(role, boundary) ? role : null;
+}
 
 /**
  * Independent review (docs/architecture/the-line.md L3). When the task's
@@ -968,7 +1077,7 @@ export const create = mutation({
       if (!project_id && parent.project_id) project_id = parent.project_id;
     }
 
-    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
+    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundaryOfWorkspace(db.workspace));
 
     if (args.client_key) {
       const existing = await ctx.db
@@ -1063,19 +1172,7 @@ export const create = mutation({
     }
     if (resolvedAssignee) {
       const createdTask = await ctx.db.get(id) as any;
-      const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, createdTask?.team_id);
-      if (assigneeId) {
-        await subscribeUser(ctx, assigneeId, id, "assignee", cliVia(args));
-        if (cliVia(args) === "human") await handoffTaskThread(ctx, id, auth.userId, assigneeId);
-        await ctx.runMutation(internal.notificationRouter.emit, {
-          event_type: "task_assigned",
-          actor_user_id: auth.userId,
-          entity_type: "task",
-          entity_id: id.toString(),
-          message: `assigned you to ${short_id}: ${args.title}`,
-          direct_recipient_id: assigneeId,
-        });
-      }
+      await announceAssignment(ctx, { task: createdTask, assignee: resolvedAssignee, actorUserId: auth.userId, via: cliVia(args) });
     }
 
     await schedulePushNewTask(ctx, project_id, id);
@@ -1279,6 +1376,12 @@ async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Pr
       names[id] = id;
       continue;
     }
+    // The CLI names a role the way a person types it: "@growth".
+    const role = await roleAssigneeOf(ctx, id);
+    if (role) {
+      names[id] = `@${role.handle}`;
+      continue;
+    }
     const user = /^[a-z0-9]{32}$/.test(id) ? await ctx.db.get(id as any).catch(() => null) as any : null;
     if (user?.name) names[id] = user.name;
     else if (user?.github_username) names[id] = user.github_username;
@@ -1347,6 +1450,11 @@ export const list = query({
     project_path: v.optional(v.string()),
     query: v.optional(v.string()),
     assignee: v.optional(v.string()),
+    // A person ("me", a name, a handle): their tasks plus the tasks of every
+    // role that reports up to them (`cast task ls --chain me`). The chain is
+    // read from the roles' reports_to at query time, never stored on a task
+    // (org-roles-run-work.md R5).
+    chain: v.optional(v.string()),
     plan_id: v.optional(v.string()),
     // Case-insensitive match against the task's labels (CLI --label).
     label: v.optional(v.string()),
@@ -1354,6 +1462,7 @@ export const list = query({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
+    if (args.chain && args.assignee) throw new Error("Use --assignee or --chain, not both: --chain already covers the person and every role under them.");
 
     let teamIdForScope: Id<"teams"> | undefined;
     if (args.team) {
@@ -1366,9 +1475,17 @@ export const list = query({
       ...explicitWorkspace(args, args.team && teamIdForScope ? { workspace: "team" as const, team_id: teamIdForScope } : {}),
     });
 
-    let resolvedAssignee: string | undefined;
+    // The assignee values to read: one for --assignee, the person and every
+    // role under them for --chain.
+    const boundary = boundaryOfWorkspace(db.workspace);
+    let assignees: string[] = [];
     if (args.assignee) {
-      resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
+      const one = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary);
+      if (one) assignees = [one];
+    } else if (args.chain) {
+      const head = await resolveAssigneeToUserId(ctx, (await resolveAssigneeStr(ctx, args.chain, auth.userId)) ?? "", boundary.team_id);
+      if (!head) throw new Error(`No person matches "${args.chain}". --chain takes a person: me, a name or a GitHub handle.`);
+      assignees = chainAssignees(head, await rolesInBoundary(ctx, boundary));
     }
 
     let tasks: any[];
@@ -1377,16 +1494,14 @@ export const list = query({
     // owner-or-team-member filter below. The other branches are already
     // user/workspace-scoped.
     let needsAccessFilter = false;
-    if (resolvedAssignee) {
+    if (assignees.length > 0) {
       // When filtering by assignee, query the assignee index directly so
       // tasks assigned to the user but missing team_id aren't dropped by
       // the workspace-scoped query.
-      tasks = await ctx.db
+      tasks = (await Promise.all(assignees.map((assignee) => ctx.db
         .query("tasks")
-        .withIndex("by_assignee_updated", (q: any) =>
-          q.eq("assignee", resolvedAssignee)
-        )
-        .collect();
+        .withIndex("by_assignee_updated", (q: any) => q.eq("assignee", assignee))
+        .collect()))).flat();
       needsAccessFilter = true;
     } else if (args.project_id) {
       tasks = await ctx.db
@@ -1658,7 +1773,6 @@ export const update = mutation({
       updates.short_title = undefined;
     }
     if (args.description !== undefined) updates.description = args.description;
-    if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     if (args.labels) updates.labels = args.labels;
     if (args.promoted !== undefined) updates.promoted = args.promoted;
     const targetWorkspace = args.team_id
@@ -1666,6 +1780,7 @@ export const update = mutation({
       : task.team_id
         ? { type: "team" as const, teamId: task.team_id }
         : { type: "personal" as const, userId: task.user_id };
+    if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundaryOfWorkspace(targetWorkspace)) || args.assignee;
     if (args.team_id) {
       await requireTeamMembership(ctx, auth.userId, args.team_id);
       if (task.team_id && String(task.team_id) !== String(args.team_id) && String(task.user_id) !== String(auth.userId)) {
@@ -1738,6 +1853,7 @@ export const update = mutation({
     // update without the link, never reject the update itself (see
     // resolveSessionConversation).
     let linkedConvId: Id<"conversations"> | undefined;
+    let startedForRole: any | null = null;
     const conv = args.conversation_id
       ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
       : null;
@@ -1783,6 +1899,14 @@ export const update = mutation({
       // reviewer to the work it judges.
       if (convMatchesWorkspace && nextStatus === "in_progress" && !args.review_verdict && (!conv.active_task_id || conv.active_task_id === task._id)) {
         await ctx.db.patch(conv._id, { active_task_id: task._id });
+        // A session that takes a task assigns it to the role it works for
+        // (org-roles-run-work.md R5), so the board shows who owns the work. A
+        // task that already names a person stays theirs: the session is
+        // helping them, not taking it from them.
+        if (args.assignee === undefined) {
+          const taker = await roleTakingTask(ctx, task, conv, boundaryOfWorkspace(targetWorkspace));
+          if (taker) { updates.assignee = String(taker._id); startedForRole = taker; }
+        }
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
           if (
@@ -1828,7 +1952,7 @@ export const update = mutation({
     if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-    if (args.assignee !== undefined && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
+    if ("assignee" in updates && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
     if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
     if (args.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", args.review_verdict]);
 
@@ -1884,20 +2008,7 @@ export const update = mutation({
       await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${nextStatus}`, linkedConvId);
     }
     if (args.assignee !== undefined && updates.assignee !== task.assignee) {
-      const assigneeId = await resolveAssigneeToUserId(ctx, updates.assignee || "", task.team_id);
-      // Same rule as webUpdate: assigning yourself is not an event to announce.
-      if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
-        await subscribeUser(ctx, assigneeId, task._id, "assignee", cliVia(args));
-        if (cliVia(args) === "human") await handoffTaskThread(ctx, task._id, auth.userId, assigneeId);
-        await ctx.runMutation(internal.notificationRouter.emit, {
-          event_type: "task_assigned",
-          actor_user_id: auth.userId,
-          entity_type: "task",
-          entity_id: task._id.toString(),
-          message: `assigned you to ${task.short_id}: ${task.title}`,
-          direct_recipient_id: assigneeId,
-        });
-      }
+      await announceAssignment(ctx, { task, assignee: updates.assignee, actorUserId: auth.userId, actorName: actor.name, via: cliVia(args) });
     }
 
     let planShortId: string | undefined;
@@ -1912,7 +2023,13 @@ export const update = mutation({
       }
     }
     await schedulePushTask(ctx, task, updates);
-    return { success: true, plan_id: planShortId };
+    return {
+      success: true,
+      plan_id: planShortId,
+      // Set when this start handed the task to the caller's role, so the CLI
+      // can say so.
+      assigned_role: startedForRole && updates.assignee !== task.assignee ? { handle: startedForRole.handle, name: startedForRole.name } : undefined,
+    };
   },
 });
 
@@ -2297,6 +2414,13 @@ async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promis
   }
   const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
   await Promise.all([...allUserIds].map(async (uid) => {
+    // A role assignee (org-roles-run-work.md R5) is NOT read here. A role row
+    // is patched on every message its sessions sync (the daily token counter),
+    // so reading one would re-run and re-ship this whole list each time. The
+    // client resolves a role's face from the org tree slice instead
+    // (lib/liveEntities resolveAssigneeInfo), which is also what makes a
+    // rename show everywhere at once. normalizeId reads no row.
+    if (ctx.db.normalizeId("org_roles", uid)) return;
     try {
       const u = await ctx.db.get(uid as Id<"users">);
       if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
@@ -2911,18 +3035,63 @@ export const webMentionList = query({
   },
 });
 
+// The tasks linked to one conversation, read through the reverse indexes
+// instead of a scan.
+//
+// This used to `.collect()` every task the caller owned and filter in JS on
+// `conversation_ids.includes(...)`. That is O(all the caller's tasks) in both
+// documents read and bytes deserialized — an account with tens of thousands of
+// tasks moved megabytes per execution, which is what the 1s user-JS cap and the
+// system-operation budget both measure. It timed out in production on both
+// counts (Sentry JAVASCRIPT-REACT-5K and -5F).
+//
+// A conversation's tasks are a handful of rows, and two indexes already point
+// that way, so the answer costs a bounded number of reads:
+//   - entity_conversations.by_conversation — the association rail every linking
+//     path dual-writes (conversationLinks.ts), the only true reverse index;
+//   - tasks.by_created_from_conversation — the task a session filed, which
+//     predates the rail;
+//   - conversations.active_task_id — the task a session is working right now.
+// Rows written before the rail existed (2026-08-01) are reachable through the
+// last two, and migrations.backfillTaskConversationLinks fills the rest in.
+export const TASKS_PER_CONVERSATION_LIMIT = 200;
+
 export const webListByConversation = query({
   args: { conversationId: v.id("conversations") },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const tasks = await ctx.db
+
+    // Gate on the conversation first, the same way conversationLinks'
+    // webListForConversation does: the task list of a session the caller cannot
+    // open is not theirs to enumerate.
+    const conv = await ctx.db.get(args.conversationId);
+    if (!conv || !(await canAccessConversation(ctx, userId, conv))) return [];
+
+    const candidates = new Set<string>(
+      await linkedEntityIdsForConversation(ctx, args.conversationId, "task"),
+    );
+    // Bounded, like every other read here — a session that filed a hundred
+    // tasks must not turn this back into an unbounded scan.
+    const origin = await ctx.db
       .query("tasks")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    return tasks
-      .filter((t: any) => t.conversation_ids?.includes(args.conversationId))
-      .map((t: any) => ({ _id: t._id.toString(), short_id: t.short_id, title: t.title, status: t.status, external: t.external }));
+      .withIndex("by_created_from_conversation", (q) =>
+        q.eq("created_from_conversation", args.conversationId))
+      .take(TASKS_PER_CONVERSATION_LIMIT);
+    for (const t of origin) candidates.add(String(t._id));
+    if (conv.active_task_id) candidates.add(String(conv.active_task_id));
+
+    const rows = [];
+    for (const raw of [...candidates].slice(0, TASKS_PER_CONVERSATION_LIMIT)) {
+      // Rail ids are plain strings, and a stale row may name a deleted or
+      // foreign-table id; normalizeId keeps ctx.db.get from throwing on one.
+      const id = ctx.db.normalizeId("tasks", raw);
+      if (!id) continue;
+      const t = await ctx.db.get(id);
+      if (!t || !(await canAccessTask(ctx, userId, t))) continue;
+      rows.push({ _id: t._id.toString(), short_id: t.short_id, title: t.title, status: t.status, external: t.external });
+    }
+    return rows;
   },
 });
 
@@ -3044,7 +3213,7 @@ export const webUpdate = mutation({
     }
     if (args.description !== undefined) updates.description = args.description;
     if (args.assignee !== undefined) {
-      updates.assignee = args.assignee === "me" ? userId : args.assignee;
+      updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, boundaryOfTask(task)) || args.assignee;
     }
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) {
@@ -3157,21 +3326,7 @@ export const webUpdate = mutation({
       await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${nextStatus}`);
     }
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) {
-      const assigneeUserId = resolvedAssignee === userId?.toString()
-        ? userId
-        : await resolveAssigneeToUserId(ctx, resolvedAssignee || "", task.team_id);
-      if (assigneeUserId && assigneeUserId.toString() !== userId.toString()) {
-        await subscribeUser(ctx, assigneeUserId, task._id, "assignee", "human");
-        await handoffTaskThread(ctx, task._id, userId, assigneeUserId);
-        await ctx.runMutation(internal.notificationRouter.emit, {
-          event_type: "task_assigned",
-          actor_user_id: userId,
-          entity_type: "task",
-          entity_id: task._id.toString(),
-          message: `assigned you to ${task.short_id}: ${task.title}`,
-          direct_recipient_id: assigneeUserId,
-        });
-      }
+      await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
     }
 
     await schedulePushTask(ctx, task, updates);
@@ -3377,7 +3532,7 @@ export async function spawnSessionForTask(
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok"), v.literal("muse")),
     // Optional lead-in the user types before launch (defaults to "lets do this
     // task" in the palette). Prepended to the structured task prompt below.
     initial_message: v.optional(v.string()),
@@ -3554,14 +3709,7 @@ export const webCreate = mutation({
 
     const short_id = await nextShortId(ctx.db, "ct");
 
-    let resolvedAssignee = args.assignee;
-    if (resolvedAssignee === "me") {
-      resolvedAssignee = userId.toString();
-    } else if (resolvedAssignee && !resolvedAssignee.match(/^[a-z0-9]{32}$/)) {
-      const lower = resolvedAssignee.toLowerCase();
-      const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
-      if (found) resolvedAssignee = found._id.toString();
-    }
+    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, userId, boundaryOfWorkspace(db.workspace));
 
     // Category + custom-status resolution against the resolved workspace's
     // team. Also validates args.status (this path used to skip the assert and
@@ -3619,6 +3767,9 @@ export const webCreate = mutation({
       action: "created",
       created_at: now,
     });
+    if (resolvedAssignee) {
+      await announceAssignment(ctx, { task: (await ctx.db.get(id)) as any, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
+    }
 
     await schedulePushNewTask(ctx, project_id, id);
 
@@ -3918,7 +4069,6 @@ export const batchAssign = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const now = Date.now();
-    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     const results: { short_id: string; success: boolean }[] = [];
 
     for (const short_id of args.short_ids) {
@@ -3930,6 +4080,7 @@ export const batchAssign = mutation({
         results.push({ short_id, success: false });
         continue;
       }
+      const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundaryOfTask(task)) || args.assignee;
 
       if (resolvedAssignee !== task.assignee) {
         await ctx.db.insert("task_history", {
@@ -3947,19 +4098,7 @@ export const batchAssign = mutation({
       await ctx.db.patch(task._id, { assignee: resolvedAssignee, updated_at: now });
 
       if (resolvedAssignee !== task.assignee) {
-        const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, task.team_id);
-        if (assigneeId) {
-          await subscribeUser(ctx, assigneeId, task._id, "assignee", "human");
-          await handoffTaskThread(ctx, task._id, auth.userId, assigneeId);
-          await ctx.runMutation(internal.notificationRouter.emit, {
-            event_type: "task_assigned",
-            actor_user_id: auth.userId,
-            entity_type: "task",
-            entity_id: task._id.toString(),
-            message: `assigned you to ${task.short_id}: ${task.title}`,
-            direct_recipient_id: assigneeId,
-          });
-        }
+        await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: auth.userId, via: "human" });
       }
 
       results.push({ short_id, success: true });

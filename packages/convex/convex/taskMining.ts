@@ -1360,8 +1360,12 @@ export const webGetTaskDetail = query({
     } : null;
 
     // Get assignee info
+    // A role assignee is resolved by the client from the org tree slice, never
+    // read here: a role row is patched on every message its sessions sync, and
+    // reading it would re-run this detail query each time (see tasks.ts
+    // enrichTasks; org-roles-run-work.md R5).
     let assignee_info = null;
-    if (task.assignee) {
+    if (task.assignee && !ctx.db.normalizeId("org_roles", task.assignee)) {
       try {
         const assigneeUser = await ctx.db.get(task.assignee as any);
         if (assigneeUser) assignee_info = { name: (assigneeUser as any).name || (assigneeUser as any).email || "Unknown", image: (assigneeUser as any).image || (assigneeUser as any).github_avatar_url, github_username: (assigneeUser as any).github_username };
