@@ -23,10 +23,20 @@ export type OrgTenureSpec =
   | { kind: "standing" }
   | { kind: "program"; ends: { plan: string } | { project: string } | { date: number }; then: "retire" | "review" };
 
+/** A session that already works as this role (org-roles-run-work.md R2).
+ *  Accepting the role names it: the session becomes the role's standing
+ *  session with its history intact, and no new session starts. `title`,
+ *  `started_at` and `helpers` are what the author read about the session (its
+ *  title, when it started in unix ms, how many sessions it has started as
+ *  helpers); the ghost card's sentence is built from them (seatSentence). */
+export type OrgRoleSeat = { existing: string; title?: string; started_at?: number; helpers?: number };
+
 export type OrgRoleProposal = {
   kind: "role";
   name: string;
   handle: string;
+  /** Absent = a fresh standing session is started for the role. */
+  seat?: OrgRoleSeat;
   scope?: OrgProposalScope;
   tenure?: OrgTenureSpec;
   /** A key from orgAvatars.AVATAR_KEYS; absent = the default for the handle. */
@@ -36,6 +46,8 @@ export type OrgRoleProposal = {
   charter?: string;
   trust?: "understand";
   caps?: OrgProposalCaps;
+  /** See OrgLeaveSessions: the sessions in the new role's scope stay with their owner. */
+  leave_sessions?: boolean;
   /** The counts and session titles the proposal rests on; prose for the reader. */
   evidence?: string[];
 };
@@ -72,7 +84,11 @@ export const ORG_PROPOSAL_KINDS = ["role", "projects", "move", "retire"] as cons
 export type OrgTrustStage = "understand" | "decide" | "direct";
 export type OrgPriority = "p0" | "p1" | "p2" | "p3";
 
-export type OrgScopeChange = { kind: "scope"; handle: string; add?: string[]; remove?: string[] };
+/** A role that gains scope takes over the sessions in it that report to its
+ *  host and to no role (org-roles-run-work.md R1). `leave_sessions` is the
+ *  person's one edit on a role, scope or adopt change: leave them where they are. */
+export type OrgLeaveSessions = { leave_sessions?: boolean };
+export type OrgScopeChange = { kind: "scope"; handle: string; add?: string[]; remove?: string[] } & OrgLeaveSessions;
 export type OrgBudgetChange = { kind: "budget"; handle: string; caps: OrgProposalCaps };
 export type OrgTrustChange = { kind: "trust"; handle: string; trust: OrgTrustStage };
 export type OrgRoutineChange = { kind: "routine"; handle: string; title: string; prompt: string; every: string };
@@ -88,7 +104,7 @@ export type OrgProjectMetaChange = {
   risks?: string[];
 };
 /** This session becomes the role's standing session (the analyzer offering to be the chief of staff). */
-export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: string };
+export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: string } & OrgLeaveSessions;
 /** File a plan under a project (plans.project_id), so a role's scope can see it. Both are refs. */
 export type OrgFileChange = { kind: "file"; plan: string; project: string };
 
@@ -154,6 +170,28 @@ export function orgTenureError(raw: any): string | null {
   if (keys[0] === "date" ? !(typeof e.date === "number" && e.date > 0) : !nonEmpty(e[keys[0]])) return keys[0] === "date" ? "a program's end date is unix ms" : `a program's end ${keys[0]} is a ref`;
   return (ORG_TENURE_THEN as readonly string[]).includes(raw.then) ? null : "a program's then is retire or review";
 }
+/** Why a role's seat is not one, or null. */
+export function orgRoleSeatError(raw: any): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !nonEmpty(raw.existing)) return "seat is { existing: the short id of the session that becomes the role's standing session }";
+  if (!optString(raw.title)) return "seat title is the session's title";
+  const count = (x: any) => x === undefined || (typeof x === "number" && x >= 0);
+  return count(raw.started_at) && count(raw.helpers) ? null : "seat started_at is unix ms and helpers is a count";
+}
+
+const DAY_MS = 86_400_000;
+/** What naming an existing session changes, said to a person who has never
+ *  seen a role (R2): the ghost card, the derived ask and the CLI walk all print
+ *  these words. The age is read at render, so it stays true while the proposal
+ *  waits. */
+export function seatSentence(seat: OrgRoleSeat, now: number = Date.now()): string {
+  const days = seat.started_at ? Math.floor((now - seat.started_at) / DAY_MS) : 0;
+  const ran = days >= 1 ? `has run for ${days} ${days === 1 ? "day" : "days"}` : "";
+  const helped = seat.helpers ? `${ran ? "with" : "has started"} ${seat.helpers.toLocaleString("en-US")} helper ${seat.helpers === 1 ? "session" : "sessions"}` : "";
+  const facts = [ran, helped].filter(Boolean).join(" ");
+  const who = seat.title?.trim() ? seat.title.trim() : `the session ${seat.existing}`;
+  return `This is ${who}${facts ? `, which ${facts}` : ""}. Naming it changes nothing about how it works and gives it a place on the chart.`;
+}
+
 const HANDLE_RE = /^[a-z0-9-]{2,32}$/;
 const EVERY_RE = /^\d+(m|h|d|w)$/;
 
@@ -179,6 +217,7 @@ export function orgChangeError(raw: any): string | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "a change is an object with a kind";
   if (!ORG_CHANGE_KINDS.includes(raw.kind)) return `unknown change kind ${JSON.stringify(raw.kind)}; one of ${ORG_CHANGE_KINDS.join(", ")}`;
   const handle = (): string | null => nonEmpty(raw.handle) ? (HANDLE_RE.test(raw.handle.replace(/^@/, "")) ? null : `handle ${JSON.stringify(raw.handle)} is not a-z, 0-9 and - (2 to 32 chars)`) : "handle is required";
+  if (raw.leave_sessions !== undefined && typeof raw.leave_sessions !== "boolean") return "leave_sessions is true or false";
   switch (raw.kind as OrgChangeKind) {
     case "role": case "projects": case "move": case "retire": {
       if (!isOrgProposal(raw)) return `${raw.kind} is missing its required fields`;
@@ -186,6 +225,7 @@ export function orgChangeError(raw: any): string | null {
         const h = handle(); if (h) return h;
         if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
         if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
+        if (raw.seat !== undefined) { const s = orgRoleSeatError(raw.seat); if (s) return s; }
       }
       if (raw.kind === "projects") {
         const bad = raw.changes.find((c: any) => c.op === "create" && c.horizon !== undefined && !(ORG_PROJECT_HORIZONS as readonly string[]).includes(c.horizon));
@@ -287,6 +327,15 @@ export function aboutChangeHeader(proposalShortId: string, seq: number, line: st
 export function withAboutChange(content: string, proposalShortId: string, seq: number, line: string): string {
   return `${aboutChangeHeader(proposalShortId, seq, line)}\n\n${content}`;
 }
+/** The same header for a reply about one ask (S19). `index` is the ask's
+ *  place in the resolved asks, from 0, the number `decideAsk` takes; the
+ *  header counts from 1, the way a person counts the cards. */
+export function aboutAskHeader(proposalShortId: string, index: number, title: string): string {
+  return `About ${proposalShortId} ask ${index + 1} ("${title.replace(/"/g, "'")}"):`;
+}
+export function withAboutAsk(content: string, proposalShortId: string, index: number, title: string): string {
+  return `${aboutAskHeader(proposalShortId, index, title)}\n\n${content}`;
+}
 const ABOUT_RE = /^About (op-\d+) change (\d+) \("([^\n]*)"\):\n\n?/;
 /** The change a message names, and the words after the header; null when it names none. */
 export function parseAboutChange(content: string): { proposal: string; seq: number; line: string; body: string } | null {
@@ -379,12 +428,227 @@ export type OrgProposalMode = "init" | "review" | "request";
 export const ORG_PROPOSAL_MODES: readonly OrgProposalMode[] = ["init", "review", "request"];
 
 /** The file `cast org propose --spec` reads and `orgProposals.create` stores. */
+/** One thing the proposal asks of the person (org-staffing.md S19): a title
+ *  they can read cold, one sentence of why, one line of what accepting
+ *  changes, and the changes folded inside it, by seq. The asks of a proposal
+ *  partition its changes: every change is in exactly one. */
+export type OrgAsk = { title: string; why: string; effect: string; seqs: number[] };
+
 export type OrgProposalSpec = {
   title: string;
   summary_md: string;
   mode: OrgProposalMode;
   changes: OrgSpecChange[];
+  /** Written by the author at propose time; a spec without them derives them (deriveAsks). */
+  asks?: OrgAsk[];
 };
+
+/** The faults of a spec's asks against its changes as written (seq 1 is the
+ *  first change). The partition is the contract: a change in no ask would
+ *  never reach the person, and a change in two would be decided twice. */
+export function orgAsksErrors(asks: unknown, changes: ReadonlyArray<{ change: OrgChange }>): string[] {
+  if (!Array.isArray(asks) || !asks.length) return ["asks is a non-empty list of { title, why, effect, seqs }"];
+  const errors: string[] = [];
+  const owner = new Map<number, number[]>();
+  // A seqs list that does not read says nothing about the partition, so the
+  // partition is reported only once every list reads.
+  let malformed = false;
+  asks.forEach((a: any, i: number) => {
+    if (!a || typeof a !== "object" || !nonEmpty(a.title) || !nonEmpty(a.why) || !nonEmpty(a.effect)) errors.push(`asks[${i}]: title, why and effect are required`);
+    if (!Array.isArray(a?.seqs) || !a.seqs.length || !a.seqs.every((n: unknown) => Number.isInteger(n) && (n as number) >= 1)) { errors.push(`asks[${i}]: seqs is a non-empty list of change numbers (1 is the first change)`); malformed = true; return; }
+    for (const n of new Set<number>(a.seqs)) {
+      if (n > changes.length) errors.push(`asks[${i}] names change ${n}, and the spec has ${changes.length}`);
+      else owner.set(n, [...(owner.get(n) ?? []), i]);
+    }
+  });
+  const partition: string[] = [];
+  if (!malformed) changes.forEach((c, i) => {
+    const in_ = owner.get(i + 1) ?? [];
+    if (in_.length === 1) return;
+    partition.push(`changes[${i}] (${describeOrgChange(c.change)}) is in ${in_.length ? in_.map((a) => `asks[${a}]`).join(" and ") : "no ask"}: every change belongs to exactly one ask`);
+  });
+  const SHOWN = 10;
+  errors.push(...partition.slice(0, SHOWN), ...(partition.length > SHOWN ? [`and ${partition.length - SHOWN} more changes outside the partition`] : []));
+  return errors;
+}
+
+/** Every role handle a change refers to, lower case and without the @: its
+ *  own subject, the parent a role or a move names, a charter's owner. "me"
+ *  and a person's name are not roles. */
+export function orgChangeHandles(c: OrgChange): string[] {
+  const h = (x: unknown) => (typeof x === "string" && x.trim().startsWith("@") ? x.trim().slice(1).toLowerCase() : null);
+  const any = c as any;
+  const own = typeof any.handle === "string" ? any.handle.trim().replace(/^@/, "").toLowerCase() : null;
+  return [own, h(any.reports_to), c.kind === "project_meta" ? h(any.owner) : null].filter((x): x is string => !!x);
+}
+
+type AskRow = { seq: number; change: OrgChange; status?: string; rationale?: string; expected_effect?: string };
+const askHandle = (c: OrgChange): string | null => ("handle" in c && typeof c.handle === "string" ? c.handle.trim().replace(/^@/, "").toLowerCase() : null);
+
+/** "a, b and c" */
+export const andList = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+const number = (n: number) => n.toLocaleString("en-US");
+/** The three limits in words, in one order: "2 hands, 8 wakes and 800,000 tokens". */
+export function capsWords(caps: { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number }): string {
+  const parts: string[] = [];
+  if (caps.hands_per_day !== undefined) parts.push(`${number(caps.hands_per_day)} ${caps.hands_per_day === 1 ? "hand" : "hands"}`);
+  if (caps.wakes_per_day !== undefined) parts.push(`${number(caps.wakes_per_day)} ${caps.wakes_per_day === 1 ? "wake" : "wakes"}`);
+  if (caps.tokens_per_day !== undefined) parts.push(`${number(caps.tokens_per_day)} tokens`);
+  return andList(parts);
+}
+/** "1d" reads as every day, "7d" as every week, "12h" as every 12 hours. */
+export function everyWords(every: string): string {
+  const m = every.trim().match(/^(\d+)\s*([dhwm])$/i);
+  if (!m) return `every ${every}`;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  if (unit === "d" && n === 1) return "every day";
+  if (unit === "d" && n === 7) return "every week";
+  if (unit === "w" && n === 1) return "every week";
+  const word = { d: "day", h: "hour", w: "week", m: "minute" }[unit as "d" | "h" | "w" | "m"];
+  return n === 1 ? `every ${word}` : `every ${n} ${word}s`;
+}
+
+/** The names a derived ask speaks in (S19): an agent by its handle, a
+ *  project or a plan by the id or title a change carries. Each answers
+ *  undefined for a ref it does not know, and the ref itself stands. The
+ *  server derives asks with no names at all; the page passes the tree's. */
+export type OrgAskNames = {
+  role?: (handle: string) => string | undefined;
+  project?: (ref: string) => string | undefined;
+  plan?: (ref: string) => string | undefined;
+};
+
+/**
+ * A derived ask's words, for a person reading cold: no handle, no
+ * parenthetical, a sentence for what accepting changes. The row's own line
+ * (describeOrgChange) is for the fold, where the row is the subject; up
+ * here the subject is the agent and what happens to it.
+ */
+function askWords(names?: OrgAskNames) {
+  const handle = (h: string) => h.trim().replace(/^@/, "");
+  const agent = (h: string) => names?.role?.(handle(h).toLowerCase()) ?? handle(h);
+  // "you": the card has no speaker, so the deciding person is the reader, the way the row line says it.
+  const parent = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref.startsWith("@") ? agent(ref) : names?.role?.(ref) ?? ref;
+  const projects = (refs: string[]) => refs.length ? `the ${andList(refs.map((r) => names?.project?.(r) ?? r))} ${refs.length === 1 ? "project" : "projects"}` : "";
+  const plans = (refs: string[]) => refs.length ? `the ${andList(refs.map((r) => names?.plan?.(r) ?? r))} ${refs.length === 1 ? "plan" : "plans"}` : "";
+  /** A scope a change names without saying which kind each ref is. */
+  const things = (refs: string[]) => andList(refs.map((r) => {
+    const project = names?.project?.(r), plan = names?.plan?.(r);
+    return project ? `the ${project} project` : plan ? `the ${plan} plan` : r;
+  }));
+  const tenure = (t: OrgRoleProposal["tenure"]): string => {
+    if (!t) return "";
+    if (t.kind === "standing") return " It stays until you retire it.";
+    const e: any = t.ends;
+    const ends = e.plan !== undefined ? `with ${plans([String(e.plan)])}` : e.project !== undefined ? `with ${projects([String(e.project)])}` : `on ${humanEndDate(e.date)}`;
+    return ` It ends ${ends}, then ${t.then === "retire" ? "retires" : "comes up for review"}.`;
+  };
+  /** What rides with a new agent: its limit, its routine, the session that becomes it. */
+  const rider = (c: OrgChange): string => {
+    switch (c.kind) {
+      // The units (hands, wakes, tokens) are glossary words; the numbers are one tap away in the fold and the cost sheet.
+      case "budget": return " It gets a daily limit of its own.";
+      case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
+      case "trust": return c.trust === "understand" ? " It reads and reports, and does not act on its own." : c.trust === "decide" ? " It may decide on its own." : " It may direct work on its own.";
+      case "adopt": return ` The session ${c.conversation} becomes it.`;
+      default: return "";
+    }
+  };
+  const title = (c: OrgChange): string => {
+    switch (c.kind) {
+      case "role": return c.seat ? `Name ${c.name} as a role` : `Add an agent: ${c.name}`;
+      case "retire": return `Retire ${agent(c.handle)}`;
+      case "move": return `Move ${agent(c.handle)}`;
+      case "scope": return `Change what ${agent(c.handle)} looks after`;
+      default: return describeOrgChange(c);
+    }
+  };
+  const effect = (c: OrgChange, riders: ReadonlyArray<OrgChange> = []): string => {
+    switch (c.kind) {
+      case "role": {
+        const scope = [projects(c.scope?.projects ?? []), plans(c.scope?.plans ?? [])].filter(Boolean).join(" and ");
+        const line = `reporting to ${parent(c.reports_to)}${scope ? ` and looking after ${scope}` : ""}.${tenure(c.tenure)}${riders.map(rider).join("")}`;
+        return c.seat ? `${seatSentence(c.seat)} It becomes a role, ${line}` : `A new agent, ${c.name}, ${line}`;
+      }
+      case "retire": return `${agent(c.handle)} retires. Its sessions go back to their owners, and anything under it reports one level up.`;
+      case "move": {
+        const parts = [c.reports_to ? `reports to ${parent(c.reports_to)} from now on` : "", c.scope_add?.length ? `takes on ${things(c.scope_add)}` : "", c.scope_remove?.length ? `hands off ${things(c.scope_remove)}` : ""].filter(Boolean);
+        return `${agent(c.handle)} ${andList(parts)}.`;
+      }
+      case "scope": {
+        const parts = [c.add?.length ? `takes on ${things(c.add)}` : "", c.remove?.length ? `hands off ${things(c.remove)}` : ""].filter(Boolean);
+        return `${agent(c.handle)} ${andList(parts)}.`;
+      }
+      default: return describeOrgChange(c);
+    }
+  };
+  /** Why, when the author gave no rationale: the charter or reason the
+   *  change itself carries, else an honest blank that points at the control. */
+  const why = (c: OrgChange): string => {
+    if (c.kind === "role" && c.charter?.trim()) return c.charter.trim();
+    if (c.kind === "retire" && c.reason?.trim()) return c.reason.trim();
+    return "The author did not say why. Ask about this.";
+  };
+  return { title, effect, why };
+}
+
+/**
+ * The asks of a proposal that carries none (S19): one written before asks
+ * existed, or one a person posted. The record changes are one ask; each role,
+ * retire, move and scope change is its own, and a change on the handle of a
+ * role this proposal creates (its adopt, its routine, its budget) rides with
+ * that role, because accepting a seat without them leaves it half made;
+ * whatever is left is one ask. Removed changes belong to no ask.
+ */
+export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames): OrgAsk[] {
+  const words = askWords(names);
+  const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
+  const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
+  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "move" || c.change.kind === "scope");
+  const created = new Map<string, AskRow>(own.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  const riders = new Map<AskRow, AskRow[]>();
+  const rest: AskRow[] = [];
+  for (const c of live) {
+    if (records.includes(c) || own.includes(c)) continue;
+    const role = created.get(askHandle(c.change) ?? "");
+    if (role) riders.set(role, [...(riders.get(role) ?? []), c]);
+    else rest.push(c);
+  }
+  const seqs = (rows: AskRow[]) => rows.map((c) => c.seq).sort((a, b) => a - b);
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const out: OrgAsk[] = [];
+  if (records.length) out.push({
+    title: `Bring ${n(records.length, "record", "records")} up to date`,
+    why: "These plans, tasks and projects show as active, but the work on them is finished, was dropped, or never started.",
+    effect: `${n(records.length, "record changes", "records change")} status. No work starts or stops.`,
+    seqs: seqs(records),
+  });
+  for (const c of own) {
+    const rode = riders.get(c) ?? [];
+    out.push({ title: words.title(c.change), why: c.rationale?.trim() || words.why(c.change), effect: c.expected_effect?.trim() || words.effect(c.change, rode.map((r) => r.change)), seqs: seqs([c, ...rode]) });
+  }
+  if (rest.length) out.push({
+    title: `${n(rest.length, "smaller change", "smaller changes")}: filing, goals and settings`,
+    why: "Plans filed under the area they belong to, written goals for an area, and settings of agents that already exist.",
+    effect: `${n(rest.length, "change", "changes")}, each listed inside. No agent is added or removed.`,
+    seqs: seqs(rest),
+  });
+  return out;
+}
+
+/** The asks a page renders: the stored ones, less the changes a revise
+ *  removed, plus derived asks for any change no stored ask names (a revise
+ *  added it). With nothing stored, all of them derive. Always a partition of
+ *  the live changes. */
+export function resolveOrgAsks(stored: ReadonlyArray<OrgAsk> | undefined | null, changes: ReadonlyArray<AskRow>, names?: OrgAskNames): OrgAsk[] {
+  const live = changes.filter((c) => c.status !== "removed");
+  if (!stored?.length) return deriveAsks(live, names);
+  const liveSeqs = new Set(live.map((c) => c.seq));
+  const asks = stored.map((a) => ({ ...a, seqs: a.seqs.filter((q) => liveSeqs.has(q)) })).filter((a) => a.seqs.length);
+  const covered = new Set(asks.flatMap((a) => a.seqs));
+  return [...asks, ...deriveAsks(live.filter((c) => !covered.has(c.seq)), names)];
+}
 
 /** Validate a spec. Every fault is reported, each naming the change by index
  *  and kind, so a long spec is fixed in one pass. */
@@ -420,17 +684,43 @@ export function orgChangeDependencies(rows: ReadonlyArray<{ seq: number; change:
   const out: Record<number, string> = {};
   const adopts = new Map<string, number>();
   const roles = new Map<string, number>();
+  const seated = new Map<string, number>();
   for (const r of rows) {
     if (r.change.kind === "adopt") adopts.set(h(r.change.handle), r.seq);
-    if (r.change.kind === "role") roles.set(h(r.change.handle), r.seq);
+    if (r.change.kind === "role") { roles.set(h(r.change.handle), r.seq); if (r.change.seat) seated.set(h(r.change.handle), r.seq); }
   }
   for (const r of rows) {
     const c = r.change;
     if (c.kind === "role") { const a = adopts.get(h(c.handle)); if (a !== undefined) out[r.seq] = `created without a standing session; #${a} seats it`; }
     else if (c.kind === "adopt") { const ro = roles.get(h(c.handle)); if (ro !== undefined) out[r.seq] = `seats the role #${ro} creates; skip it and that role is provisioned a fresh session instead`; }
-    else if (c.kind === "routine") { const a = adopts.get(h(c.handle)); if (a !== undefined) out[r.seq] = `runs on the session #${a} seats`; }
+    else if (c.kind === "routine") { const a = adopts.get(h(c.handle)) ?? seated.get(h(c.handle)); if (a !== undefined) out[r.seq] = `runs on the session #${a} seats`; }
   }
   return out;
+}
+
+/** The faults of a spec's seats (R2): a session is named by one role, and a
+ *  role that names its session carries no adopt, because two changes would
+ *  then seat one role and a person could accept one and skip the other. */
+export function orgSeatErrors(changes: ReadonlyArray<{ change: OrgChange }>): string[] {
+  const h = (x: string) => x.trim().replace(/^@/, "").toLowerCase();
+  const errors: string[] = [];
+  const named = new Map<string, number>();
+  const seatedAt = new Map<string, number>();
+  changes.forEach((row, i) => {
+    const c = row.change;
+    if (c.kind !== "role" || !c.seat) return;
+    const session = c.seat.existing.trim();
+    const first = named.get(session);
+    if (first !== undefined) errors.push(`changes[${i}] (${describeOrgChange(c)}) names session ${session}, which changes[${first}] already names: one session is one role`);
+    else named.set(session, i);
+    seatedAt.set(h(c.handle), i);
+  });
+  changes.forEach((row, i) => {
+    const c = row.change;
+    const role = c.kind === "adopt" ? seatedAt.get(h(c.handle)) : undefined;
+    if (role !== undefined) errors.push(`changes[${i}] (${describeOrgChange(c)}) repeats the seat changes[${role}] already carries: a role that names its session needs no adopt`);
+  });
+  return errors;
 }
 
 /** Two rows about one subject that agree fold into one: the fields union,
@@ -440,15 +730,18 @@ export function orgChangeDependencies(rows: ReadonlyArray<{ seq: number; change:
  *  lists, and a project that sits in its charter list and its owner list is
  *  the ordinary way two rows meet; folding here means the post never refuses
  *  what one row could have carried, and the note says what was folded. */
-export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: string[]; errors: string[] } {
+export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: string[]; errors: string[]; index: number[] } {
   const out: any[] = []; const notes: string[] = []; const errors: string[] = [];
+  /** Where each row as written ended up: its own place, or the row it folded into. */
+  const index: number[] = [];
   const at = new Map<string, { out: number; src: number }>();
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const prose = (a?: string, b?: string) => !a ? b : !b || a.trim() === b.trim() ? a : `${a}\n\n${b}`;
   rows.forEach((row, i) => {
     const key = orgChangeKey(row.change);
     const hit = key ? at.get(key) : undefined;
-    if (!hit) { if (key) at.set(key, { out: out.length, src: i }); out.push(row); return; }
+    if (!hit) { if (key) at.set(key, { out: out.length, src: i }); index[i] = out.length; out.push(row); return; }
+    index[i] = hit.out;
     const first = out[hit.out];
     const conflict = Object.keys(row.change).find((k) => k !== "reason" && k in first.change && !same(first.change[k], row.change[k]));
     if (conflict) { errors.push(`changes[${i}] (${describeOrgChange(row.change)}) repeats changes[${hit.src}] with a different ${conflict}: one change per subject`); return; }
@@ -463,7 +756,7 @@ export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: stri
     };
     notes.push(`changes[${i}] (${describeOrgChange(row.change)}) folded into changes[${hit.src}]: one change per subject`);
   });
-  return { changes: out, notes, errors };
+  return { changes: out, notes, errors, index };
 }
 
 export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; errors: []; notes?: string[] } | { spec: null; errors: string[] } {
@@ -480,11 +773,35 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
   });
   let changes: any[] = r.changes;
   let notes: string[] = [];
+  let asks: OrgAsk[] | undefined;
+  if (!errors.length) errors.push(...orgSeatErrors(r.changes));
+  if (!errors.length && r.asks !== undefined) errors.push(...orgAsksErrors(r.asks, r.changes));
   if (!errors.length) {
     const folded = foldRepeatedSubjects(r.changes);
     errors.push(...folded.errors);
     changes = folded.changes;
     notes = folded.notes;
+    // The asks name changes as written; a folded row answers to the ask of
+    // the row it folded into, so the partition survives the fold.
+    if (r.asks !== undefined) {
+      // A row folded from two asks follows the agent it names: the ask that
+      // creates a role the merged change refers to (a charter's owner, a
+      // routine's handle) holds it, so accepting the other ask alone never
+      // applies a change that rests on an agent nobody accepted. With no such
+      // ask, the first one that named it keeps it.
+      const written: OrgAsk[] = r.asks;
+      const creates = written.map((a) => new Set(a.seqs.map((q) => r.changes[q - 1].change).filter((c: OrgChange) => c.kind === "role").map((c: any) => askHandle(c))));
+      const home = new Map<number, number>();
+      changes.forEach((row, out) => {
+        const named = written.map((a, i) => (a.seqs.some((q) => folded.index[q - 1] === out) ? i : -1)).filter((i) => i >= 0);
+        const refs = orgChangeHandles(row.change);
+        home.set(out + 1, named.find((i) => refs.some((h) => creates[i].has(h))) ?? named[0]);
+      });
+      asks = written.map((a, i) => ({
+        title: a.title.trim(), why: a.why.trim(), effect: a.effect.trim(),
+        seqs: [...new Set(a.seqs.map((q) => folded.index[q - 1] + 1))].filter((q) => home.get(q) === i).sort((x, y) => x - y),
+      })).filter((a) => a.seqs.length);
+    }
   }
   if (errors.length) return { spec: null, errors };
   return {
@@ -493,6 +810,7 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
       summary_md: r.summary_md,
       mode: r.mode,
       changes: changes.map(normalizeOrgSpecChange),
+      ...(asks ? { asks } : {}),
     },
     errors: [],
     ...(notes.length ? { notes } : {}),
@@ -524,7 +842,7 @@ export function editedOrgChange<T extends OrgChange>(change: T, edits: unknown):
 /** One line per change, the words the CLI walk and the ghost chips use. */
 export function describeOrgChange(c: OrgChange): string {
   switch (c.kind) {
-    case "role": return `create role ${c.name} ${at(c.handle)}${c.reports_to ? ` reporting to ${c.reports_to}` : ""}${c.scope?.projects?.length || c.scope?.plans?.length ? ` over ${list([...(c.scope.projects ?? []), ...(c.scope.plans ?? [])])}` : ""}${c.tenure ? ` (${describeTenure(c.tenure)})` : ""}`;
+    case "role": return `${c.seat ? `name session ${c.seat.existing} as role` : "create role"} ${c.name} ${at(c.handle)}${c.reports_to ? ` reporting to ${c.reports_to}` : ""}${c.scope?.projects?.length || c.scope?.plans?.length ? ` over ${list([...(c.scope.projects ?? []), ...(c.scope.plans ?? [])])}` : ""}${c.tenure ? ` (${describeTenure(c.tenure)})` : ""}`;
     case "projects": return c.changes.map((x) => x.op === "create" ? `create project ${x.title}${x.horizon ? ` (${x.horizon})` : ""}` : `merge project ${x.from} into ${x.into}`).join("; ");
     case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${c.reports_to}` : ""}${c.scope_add?.length ? ` +${list(c.scope_add)}` : ""}${c.scope_remove?.length ? ` -${list(c.scope_remove)}` : ""}`;
     case "retire": return `retire ${at(c.handle)}`;
