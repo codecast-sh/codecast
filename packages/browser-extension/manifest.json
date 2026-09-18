@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "116",
   "name": "Codecast",
   "short_name": "Codecast",
   "version": "0.1.2",
@@ -16,7 +17,7 @@
     "tabs",
     "tabGroups",
     "storage",
-    "alarms"
+    "alarms", "offscreen"
   ],
   "background": {
     "service_worker": "background.js"

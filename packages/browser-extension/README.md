@@ -49,6 +49,27 @@ control Google Chrome.
 Chrome warns that the extension can use the debugger API. That is the point:
 `chrome.debugger` is what lets cast drive tabs.
 
+## Why there is an offscreen page
+
+Chrome treats a bare service worker as disposable: it ends the worker after
+30 seconds without an event, and on macOS it puts a process that hosts only a
+worker in the background tier, where a busy machine gives it almost no CPU.
+Measured on 2026-09-17: the worker's process sat at scheduling priority 4,
+runnable, with 0.6 seconds of CPU in 25 minutes, and its 20 second keepalive
+went silent for five minutes at a time, while an extension with a page in its
+process sat at priority 47 in the same Chrome and answered at once.
+`offscreen.html` is that page for this extension. It messages the worker every
+20 seconds, which is an event, so the idle clock never runs down, and its
+presence keeps the process at normal priority. The worker creates it at every
+boot and checks it on every alarm.
+
+The same throttling applies to a tab that is not visible, and every agent tab
+is opened in the background so it never takes the human's screen. On a busy
+machine that tab's renderer answers nothing for tens of seconds. Chrome's own
+switch for this is `--disable-renderer-backgrounding`; the CLI passes it when
+it starts Chrome itself, and a Chrome the human opened from the Dock keeps the
+default.
+
 ## Releasing to the Chrome Web Store
 
 The store is the only distribution Chrome updates on its own; an unpacked load

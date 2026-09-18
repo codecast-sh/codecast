@@ -30,11 +30,36 @@ async function pairFromFragment() {
   // The message is the wake; the worker reconnects and closes this tab.
   if (frag.has("wake")) {
     history.replaceState(null, "", location.pathname);
-    let timer;
-    await Promise.race([
-      chrome.runtime.sendMessage({ op: "wake" }).catch(() => {}),
-      new Promise((resolve) => { timer = setTimeout(resolve, 3000); }),
-    ]).finally(() => clearTimeout(timer));
+    // This visible page is what makes the extension's process foreground.
+    // Chrome starts a worker in a background priority process, and on a
+    // saturated machine that process is killed before the worker finishes
+    // booting, over and over (2026-09-17: no worker for twenty minutes after
+    // a reload at load 777, while a page in the process boots it in
+    // seconds). So the page stays until the worker has answered, saying so,
+    // for up to WAKE_STAY_MS, asking every WAKE_ASK_MS. One ask that the
+    // worker answers is all it takes; a worker that is already up answers
+    // the first one and the page is gone in a moment.
+    const WAKE_STAY_MS = 180_000;
+    const WAKE_ASK_MS = 2_000;
+    const root = $("status");
+    root.classList.remove("state-ok", "state-wait", "state-bad", "state-none");
+    root.classList.add("state-wait");
+    root.querySelector("[data-title]").textContent = "Starting the Codecast worker";
+    root.querySelector("[data-text]").textContent =
+      "A terminal asked for the extension and its worker was not running. This page keeps the extension awake while the worker starts, and closes itself when it answers.";
+    $("reconnect").hidden = true;
+    const deadline = Date.now() + WAKE_STAY_MS;
+    let answered = false;
+    while (!answered && Date.now() < deadline) {
+      let timer;
+      answered = await Promise.race([
+        chrome.runtime.sendMessage({ op: "wake" }).then((r) => !!(r && r.ok), () => false),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(false), WAKE_ASK_MS); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!answered) await new Promise((r) => setTimeout(r, WAKE_ASK_MS));
+    }
+    // The worker closes this tab itself when it answers a wake; this is the
+    // path for a worker that never did, or answered without closing.
     const tab = await chrome.tabs.getCurrent().catch(() => null);
     if (tab?.id !== undefined) await chrome.tabs.remove(tab.id).catch(() => {});
     return false;
