@@ -142,11 +142,12 @@ export class TmuxSpawnRegistry {
     return Object.keys(this.load()).length > 0;
   }
 
+  // A pane line is "<session name> <pane pid> [<session created, epoch seconds>]".
   parentForPanes(panes: string, pids: readonly number[], startedAt: number): string | undefined {
     for (const line of panes.trim().split("\n")) {
-      const [name, pid] = line.trim().split(/\s+/);
+      const [name, pid, created] = line.trim().split(/\s+/);
       if (!pids.includes(Number(pid))) continue;
-      const parent = this.parent(name, startedAt);
+      const parent = this.parent(name, startedAt, created ? Number(created) * 1000 : undefined);
       if (parent) return parent;
     }
     return undefined;
@@ -167,9 +168,15 @@ export class TmuxSpawnRegistry {
     return spawns.map(s => s.name);
   }
 
-  parent(name: string, startedAt: number): string | undefined {
+  // A tmux name is reused by other agents over time, so an entry claims a
+  // transcript only when it is near the recorded launch. "Near" is measured on
+  // the tmux session when its creation time is known: a session created at the
+  // launch IS the recorded one, and every run inside it belongs to the parent
+  // however long it lives. tmux reports whole seconds, hence the slack below.
+  parent(name: string, startedAt: number, sessionCreatedAt?: number): string | undefined {
     const entry = this.load()[name];
-    return entry && startedAt >= entry.timestamp && startedAt - entry.timestamp < 5 * 60_000
-      ? entry.parent : undefined;
+    if (!entry || !(startedAt >= entry.timestamp)) return undefined;
+    const launched = sessionCreatedAt === undefined ? startedAt : sessionCreatedAt + 1000;
+    return launched >= entry.timestamp && launched - entry.timestamp < 5 * 60_000 ? entry.parent : undefined;
   }
 }

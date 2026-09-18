@@ -173,7 +173,7 @@ export class ManagedTmuxRuntimeDriver implements RuntimeDriver {
   constructor(options: ManagedTmuxRuntimeDriverOptions) {
     this.io = options.io;
     this.buildLaunch = options.buildLaunch;
-    this.supportedAgents = new Set(options.supportedAgents ?? ["claude", "codex", "cursor", "gemini", "opencode", "pi", "grok"]);
+    this.supportedAgents = new Set(options.supportedAgents ?? ["claude", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"]);
     this.runtimeIdForOperation = options.runtimeIdForOperation ?? defaultRuntimeId;
     this.sessionNameFactory = options.sessionNameFactory ?? defaultSessionName;
     this.capabilities = options.capabilities ?? [...FENCED_RUNTIME_CAPABILITIES];

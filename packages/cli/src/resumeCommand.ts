@@ -43,6 +43,9 @@ const SHELL_SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
  *    the watcher and spawn both mint UUIDs) would silently resume a DIFFERENT
  *    session on a unique title match. Only the one real shape may reach the
  *    command.
+ *  - muse: exact UUID, same reason as grok — `muse resume <session-ref>`
+ *    accepts a Session Name as well as a UUID, so a name-shaped id could
+ *    silently resume a different session.
  *  - gemini: always true — its resume ignores the id (`gemini --resume latest`),
  *    so the id is never interpolated and there is nothing to inject through.
  *  - claude / codex / cursor / pi: the id IS interpolated, so require the
@@ -53,6 +56,7 @@ export function isValidResumeSessionId(agentType: AgentClientId, sessionId: stri
   if (typeof sessionId !== "string" || sessionId.length === 0) return false;
   if (agentType === "opencode") return OPENCODE_SESSION_ID_RE.test(sessionId);
   if (agentType === "grok") return CLAUDE_UUID_RE.test(sessionId);
+  if (agentType === "muse") return CLAUDE_UUID_RE.test(sessionId);
   if (agentType === "gemini") return true;
   return SHELL_SAFE_SESSION_ID_RE.test(sessionId);
 }
@@ -224,8 +228,8 @@ export function combineClaudeResumeFlags(
  * no configured flags today.
  *
  * The base command per client is the single source of truth in the registry
- * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the codex/grok
- * config flags on top and gates claude out.
+ * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the
+ * codex/grok/muse config flags on top and gates claude out.
  */
 export function buildNonClaudeResumeCommand(
   agentType: AgentClientId,
@@ -235,6 +239,8 @@ export function buildNonClaudeResumeCommand(
     codexPermFlags?: string | null;
     grokArgs?: string | null;
     grokPermFlags?: string | null;
+    museArgs?: string | null;
+    musePermFlags?: string | null;
     model?: string;
     effort?: string;
     /** Launch the client's NATIVE fork of this parent instead of a plain resume:
@@ -268,6 +274,10 @@ export function buildNonClaudeResumeCommand(
   };
   if (agentType === "codex") return withFlags(opts.codexArgs, opts.codexPermFlags);
   if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags) + grokStableRulesFragment(opts.stableRulesFile);
+  // muse, like grok: its approval mode is a launch flag (never persisted in
+  // the session dir), so a bare `muse resume <id>` would re-enter on-request
+  // mode and park on TUI approval prompts nobody can answer.
+  if (agentType === "muse") return withFlags(opts.museArgs, opts.musePermFlags);
   return withFlags();
 }
 
@@ -292,9 +302,9 @@ export function grokStableRulesFragment(file: string | undefined): string {
 /**
  * Which agent a resume dispatches on, from the explicit hint plus whatever
  * findSessionFile returned for the local transcript. An explicit cursor, opencode,
- * pi, or grok hint is trusted OVER the local file: cursor and opencode own their
- * session stores (SQLite) so there is no local JSONL to detect, and a pi or grok
- * transcript may be absent on a fresh device (cross-device resume) — in all cases
+ * pi, grok, or muse hint is trusted OVER the local file: cursor and opencode own their
+ * session stores (SQLite) so there is no local JSONL to detect, and a pi, grok, or
+ * muse transcript may be absent on a fresh device (cross-device resume) — in all cases
  * the file is either missing or, after a bogus reconstitution, claude-labeled, and
  * without trusting the hint the resume falls through to `claude --resume` and runs
  * Claude's repair machinery against a session that never had a Claude transcript.
@@ -304,7 +314,7 @@ export function resolveResumeAgentType(
   agentTypeHint: AgentClientId | undefined,
   sessionFileAgentType: AgentClientId | undefined,
 ): AgentClientId {
-  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi" || agentTypeHint === "grok") return agentTypeHint;
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi" || agentTypeHint === "grok" || agentTypeHint === "muse") return agentTypeHint;
   return sessionFileAgentType ?? "claude";
 }
 

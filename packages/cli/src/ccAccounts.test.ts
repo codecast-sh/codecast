@@ -1684,17 +1684,38 @@ describe("per-profile credential stores (sandboxed $HOME, file store)", () => {
     };
     const bin = path.join(home, "claude");
     fs.writeFileSync(bin, "#!/bin/sh\n");
-    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe(true);
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe("supported");
     expect(calls[0].args).toEqual(["auth", "status", "--json"]);
     expect(calls[0].dir).toBeDefined();
     expect(fs.existsSync(calls[0].dir!)).toBe(false); // probe dir cleaned up
     // Cached: the same binary is not asked twice.
-    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe(true);
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe("supported");
     expect(calls).toHaveLength(1);
     // A changed binary is asked again — and this one still sees the login.
     fs.writeFileSync(bin, "#!/bin/sh\n# v2\n");
-    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe(false);
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe("unsupported");
     expect(calls).toHaveLength(2);
+  });
+
+  it("a probe that cannot answer is unknown, and is never cached as a negative", async () => {
+    const bin = path.join(home, "claude");
+    fs.writeFileSync(bin, "#!/bin/sh\n");
+    // A first run that waits on Gatekeeper past the timeout, then the same
+    // binary answering normally once the machine is quiet again.
+    const thrown = async () => { throw new Error("spawn timed out"); };
+    expect(await probeSecureStorageSupport(bin, { execImpl: thrown })).toBe("unknown");
+    // Output that is not the JSON we asked for proves nothing either.
+    const garbage = async () => "Downloading update...\n";
+    expect(await probeSecureStorageSupport(bin, { execImpl: garbage })).toBe("unknown");
+    // A binary answering in a shape we do not understand is also unknown.
+    const shapeless = async () => JSON.stringify({ loggedIn: "no" });
+    expect(await probeSecureStorageSupport(bin, { execImpl: shapeless })).toBe("unknown");
+    // Nothing above poisoned the cache: the same binary is asked again and the
+    // real answer stands.
+    const healthy = async () => JSON.stringify({ loggedIn: false });
+    expect(await probeSecureStorageSupport(bin, { execImpl: healthy })).toBe("supported");
+    const cache = path.join(sandbox.dir, "cc-store", ".support.json");
+    expect(JSON.parse(fs.readFileSync(cache, "utf-8")).supported).toBe(true);
   });
 });
 

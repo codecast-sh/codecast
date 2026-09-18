@@ -137,6 +137,8 @@ export interface Config {
   browser_version?: string;
   computer_enabled?: boolean;
   computer_version?: string;
+  check_enabled?: boolean;
+  check_version?: string;
   // Machine-wide site allowlist for `cast browser` — origins agents may
   // navigate to, unioned with any project list in .codecast/workspace.toml
   // [browser].allow. Undefined = no policy. See browser/policy.ts.
@@ -194,6 +196,13 @@ export interface Config {
   // The daemon reads both knobs from the config it loaded at boot, so editing
   // them here changes nothing until the daemon restarts (`cast restart`).
   hibernate_idle_ms?: number;
+  // Report what the two knobs above WOULD park, and park nothing. The safe way
+  // to turn hibernation on: set the real values with this true, read the
+  // "hibernation DRY RUN" line in reaper.log for a day, then clear it. The
+  // preview runs every gate the real pass runs except the locks and the final
+  // re-validation at the kill, so it can only over-report: a session it names
+  // may still refuse for real. Absent = off (the pass parks).
+  hibernate_dry_run?: boolean;
 
   // --- OpenCode rich transport (daemon.ts, opencodeServer.ts) ---
   // The optional `opencode serve` sidecar the daemon attaches to for opencode's

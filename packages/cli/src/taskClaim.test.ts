@@ -86,3 +86,28 @@ describe("cast task verdict argument parsing", () => {
     expect(verdictCommentText("approve")).toBe("Verdict: approve");
   });
 });
+
+import { groupTasksByAssignee, startedForRoleLine } from "./taskClaim.js";
+
+describe("a role as assignee in the CLI (org-roles-run-work.md R5)", () => {
+  test("task start says which role took the task, and says nothing otherwise", () => {
+    expect(startedForRoleLine({ assigned_role: { handle: "growth", name: "Head of Growth" } }))
+      .toBe("Assigned to @growth (Head of Growth), the role this session works for");
+    expect(startedForRoleLine({})).toBeNull();
+    expect(startedForRoleLine(null)).toBeNull();
+  });
+
+  test("--chain groups by assignee: the person first, then each role by handle", () => {
+    const rows = [
+      { short_id: "ct-3", assignee: "r2", assignee_name: "@seo" },
+      { short_id: "ct-1", assignee: "u1", assignee_name: "Ashot" },
+      { short_id: "ct-2", assignee: "r1", assignee_name: "@ads" },
+      { short_id: "ct-4", assignee: "u1", assignee_name: "Ashot" },
+    ];
+    expect(groupTasksByAssignee(rows).map((g) => [g.label, g.tasks.map((t) => t.short_id)])).toEqual([
+      ["Ashot", ["ct-1", "ct-4"]],
+      ["@ads", ["ct-2"]],
+      ["@seo", ["ct-3"]],
+    ]);
+  });
+});

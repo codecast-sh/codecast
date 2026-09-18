@@ -229,7 +229,7 @@ function isAuthError(error: any): boolean {
   );
 }
 
-export type AgentType = "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok";
+export type AgentType = "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
 
 export interface SyncConfig {
   convexUrl: string;

@@ -141,6 +141,33 @@ export function clientFixture(id: AgentClientId): ClientFixture {
         readySample: "❯ ",
         // sqlite store — no file-event watcher.
       };
+    case "muse": {
+      // session.jsonl envelopes: a run `started` user turn, one committed
+      // assistant message, and the run's `terminal` marker (recorded_at in
+      // unix MICROSECONDS by design). The session id is the uuid DIRECTORY
+      // name, so the watch path is date-sharded four deep.
+      const runId = uuid();
+      const sessionId = uuid();
+      const env = (kind: string, event: unknown, ts: number) =>
+        JSON.stringify({
+          schema_version: 1,
+          id: uuid(),
+          stream: { kind: "session", id: sessionId },
+          recorded_at: ts,
+          payload_type: "runtime.session",
+          payload: { kind, run_id: runId, event },
+        });
+      return {
+        transcript:
+          `${env("run", { kind: "started", prompt: PROBE }, 1789742968906636)}\n` +
+          `${env("run", { kind: "assistant_message_committed", message_id: "m1", text: "pong" }, 1789742968907636)}\n` +
+          `${env("run", { kind: "terminal", terminal: "completed", reason: null }, 1789742968908636)}\n`,
+        // Provisional registry pattern (see the muse descriptor): the doctor
+        // proves the pattern is meaningful, not that the glyph is muse's own.
+        readySample: "❯ ",
+        watchRelPath: path.join("2026", "09", "18", sessionId, "session.jsonl"),
+      };
+    }
   }
 }
 
@@ -192,12 +219,13 @@ export async function watcherFires(id: AgentClientId, fixture: ClientFixture, ti
   const filePath = path.join(root, fixture.watchRelPath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
-  // claude has its own SessionWatcher (projectsPath override); codex/gemini/pi/grok
-  // share the generic TranscriptDirWatcher (basePath override from the registry config).
+  // claude has its own SessionWatcher (projectsPath override); codex/gemini/pi/
+  // grok/muse share the generic TranscriptDirWatcher (basePath override from
+  // the registry config).
   const watcher =
     id === "claude"
       ? new SessionWatcher(root)
-      : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi" | "grok", root));
+      : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi" | "grok" | "muse", root));
 
   try {
     await watcher.start();

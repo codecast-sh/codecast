@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { Command } from "commander";
 import { buildHostsCommand } from "../hosts/cli.js";
 import { createHostKeepalive, registerHostKeepaliveCommand, type KeepaliveOptions } from "./keepalive.js";
-import { baseProvisionScript } from "../browser/provisionLinux.js";
+import { baseProvisionScript, idleWatchdogScript } from "../browser/provisionLinux.js";
 import { cloudIdleProbeScript } from "./idleProbe.js";
 
 const scratch: string[] = [];
@@ -39,7 +39,7 @@ function fixture(): KeepaliveOptions & { configDir: string; idleConfigPath: stri
   fs.writeFileSync(idleConfigPath, "20\n");
   const idleWatchdogPath = path.join(root, "cast-idle-check");
   const idleProbePath = path.join(root, "idle-probe.py");
-  fs.writeFileSync(idleWatchdogPath, baseProvisionScript(20).split("<<'IDLE'\n")[1]!.split("\nIDLE")[0]!);
+  fs.writeFileSync(idleWatchdogPath, idleWatchdogScript());
   fs.writeFileSync(idleProbePath, cloudIdleProbeScript);
   return { configDir: path.join(root, "config"), idleConfigPath, idleWatchdogPath, idleProbePath, platform: "linux", now };
 }

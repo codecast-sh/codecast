@@ -32,8 +32,28 @@ const target = args.find((arg) => arg.startsWith("--target="))?.split("=")[1];
  * splitting under `--compile` would cost the win silently.
  */
 const SPLIT_COMPILED_BUILDS = args.includes("--compile") && !args.includes("--splitting");
-const needsMac = target?.includes("darwin") || (!target?.includes("linux") && !target?.includes("windows") && process.platform === "darwin");
-const stage = fs.mkdtempSync(path.join(os.tmpdir(), "cast-native-build-"));
+const needsMac = needsMacHelper(target);
+/**
+ * Whether this build embeds the macOS helpers (the browser icon and the
+ * computer helper app).
+ *
+ * A compiled binary names its platform in `--target`, and that decides. A
+ * `--target=node` dist names none, so it falls to where the bundle will run:
+ * the machine building it by default, or `CODECAST_BUNDLE_PLATFORM` when the
+ * caller knows better. Provisioning builds a dist on a Mac for a Linux host,
+ * where the universal Swift build is minutes of work for a payload that host
+ * can never open.
+ */
+export function needsMacHelper(
+  target: string | undefined,
+  platform: string = process.platform,
+  bundlePlatform: string | undefined = process.env.CODECAST_BUNDLE_PLATFORM,
+): boolean {
+  if (target?.includes("darwin")) return true;
+  if (target?.includes("linux") || target?.includes("windows")) return false;
+  return (bundlePlatform || platform) === "darwin";
+}
+
 const run = (command: string, argv: string[]) => {
   const result = spawnSync(command, argv, { stdio: "inherit" });
   if (result.error) throw result.error;
@@ -142,6 +162,9 @@ function dropChunkSourcemaps() {
 }
 
 if (import.meta.main) {
+  // Only a real build owns a scratch directory; importing this file for its
+  // exports must not leave one behind.
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), "cast-native-build-"));
   try {
     let helper = "";
     if (needsMac) {

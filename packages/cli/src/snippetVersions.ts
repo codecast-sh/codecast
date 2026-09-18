@@ -12,7 +12,7 @@
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
 const TASK_VERSION = "8"; // bumped: how to choose fresh versus inline runs; fresh runs stay out of the inbox, a once run posts its result back
-const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
+const WORK_VERSION = "10"; // bumped: small quick work needs no task; bind only when the work warrants a task or plan
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "10";
@@ -25,6 +25,7 @@ const DECIDE_VERSION = "2"; // v2: age + messages-since on ls, stale-ask sweepin
 const CALLS_VERSION = "1"; // first release: cast calls / cast call (transcripts, summaries)
 const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
+const CHECK_VERSION = "1"; // first release: cast check, one shared tsc watcher per tree and project
 const SKILLS_VERSION = "1"; // first release: the cast-* skills as one snippet
 const PR_VERSION = "1"; // first release: cast pr, the review loop, reviews delivered to the owning session
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
@@ -91,6 +92,10 @@ export function getLimitsVersion(): string {
 
 export function getComputerVersion(): string {
   return COMPUTER_VERSION;
+}
+
+export function getCheckVersion(): string {
+  return CHECK_VERSION;
 }
 
 /** Display only: the skills installer byte-compares each file, so an edited
