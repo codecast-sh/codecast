@@ -13,6 +13,7 @@ import {
   parseCursorTranscriptFile,
   parseOpencodeSessionFile,
   parseGrokSessionFile,
+  parseMuseSessionFile,
 } from "./parser.js";
 import { classifyGlyphlessClientPaneState, classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
 
@@ -206,6 +207,21 @@ describe("parseTranscriptFor dispatches to the per-client parser", () => {
     expect(parseTranscriptFor("grok", grokUpdates)).toEqual(parseGrokSessionFile(grokUpdates));
     expect(parseGrokSessionFile(grokUpdates).length).toBeGreaterThan(0);
   });
+  // muse's session.jsonl envelope: recorded_at (µs) + payload {kind, run_id, event}.
+  const museSession = [
+    '{"recorded_at":1789742968906636,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"r1","event":{"kind":"started","prompt":"hi"}}}',
+    '{"recorded_at":1789742968907636,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"r1","event":{"kind":"assistant_message_committed","message_id":"m1","text":"hello"}}}',
+    '{"recorded_at":1789742968908636,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"r1","event":{"kind":"terminal","terminal":"completed"}}}',
+  ].join("\n");
+  test("muse -> parseMuseSessionFile", () => {
+    expect(parseTranscriptFor("muse", museSession)).toEqual(parseMuseSessionFile(museSession));
+    expect(parseMuseSessionFile(museSession).map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+  test("muse resolves to a classifier reading run terminal markers", () => {
+    const classify = classifyTranscriptTailFor("muse")!;
+    expect(classify(museSession)).toBe("idle");
+    expect(classify(museSession.split("\n").slice(0, 2).join("\n"))).toBe("active");
+  });
 });
 
 // ── Cluster 5: process-table grep token ─────────────────────────────────────
@@ -228,5 +244,12 @@ describe("sessionProcessGrepToken reproduces both per-client grep ternaries", ()
     // grok is a compiled Rust binary (ps comm "grok") — it must never fall
     // through to the claude pattern.
     expect(sessionProcessGrepToken("grok", "/claude\\b|claude-code")).toBe("grok");
+  });
+  test("muse matches muse-bin, never the shim name or the claude pattern", () => {
+    // muse launches through a bash shim that execs muse-bin-<version>; the
+    // registry binary "muse" never appears in ps (same reason pi matches its
+    // package path instead of "pi").
+    expect(sessionProcessGrepToken("muse", "claude")).toBe("muse-bin");
+    expect(sessionProcessGrepToken("muse", "/claude\\b|claude-code")).toBe("muse-bin");
   });
 });

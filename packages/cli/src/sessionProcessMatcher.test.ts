@@ -472,6 +472,13 @@ describe("argvSessionId", () => {
     expect(argvSessionId("claude --dangerously-skip-permissions")).toBeNull();
     expect(argvSessionId("-bash")).toBeNull();
   });
+  test("reads muse resume <uuid> and muse exec --session-id <uuid>", () => {
+    const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    expect(argvSessionId(`muse resume ${id} --disable-approval`)).toBe(id);
+    expect(argvSessionId(`muse exec --session-id ${id} "do the thing"`)).toBe(id);
+    // "resume" inside a muse prompt argument is just a word.
+    expect(argvSessionId('muse "please resume abcdefghijk where we left off"')).toBeNull();
+  });
 });
 
 describe("parsePsEtimeSeconds", () => {

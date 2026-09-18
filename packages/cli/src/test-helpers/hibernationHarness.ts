@@ -6,7 +6,7 @@ import { functionBlock } from "./sourceRegion.js";
 
 const names = [
   "collectHibernationCandidates", "hibernationRefusalReason", "hibernateSessionNow", "runHibernationPass",
-  "attemptHibernation", "hibernationLocalUnchanged",
+  "attemptHibernation", "previewHibernation", "refuseTarget", "takeTargetRefusal", "hibernationLocalUnchanged",
   "trackSessionPaneForTests", "sessionParkStateForTests", "setSyncServiceForTests",
   "wakeStatusAfterPark", "clearHibernationPark", "forgetHibernationPark", "clearSessionTrackingForKill",
   "subagentParentSessionFromPath", "noteSubagentActivity", "subagentActiveAgoMs", "resetSubagentActivityForTests",
@@ -58,7 +58,7 @@ export function createHibernationHarness() {
     "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
     "lastAgentStatusSentAt", "turnCompletedAtBySession",
     "pendingOpenTaskReports", "lastOpenTasksSentAt", "lastOpenTasksSentJson", "tmuxTargetLocks",
-    "hibernationInFlight", "hibernationEvidenceJobs", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared",
+    "hibernationInFlight", "hibernationEvidenceJobs", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared", "lastTargetRefusal",
   ].map((name) => `const ${name} = new Map();`).join("\n");
   const sets = ["managedHeartbeatSessions", "hibernatedSessions", "restartingSessionIds"]
     .map((name) => `const ${name} = new Set();`).join("\n");

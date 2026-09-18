@@ -76,6 +76,12 @@ export type HibernationPolicy = {
   /** Awake idle age that parks a session on its own. 0 = no idle bar. */
   idleMs: number;
   maxPerPass: number;
+  /**
+   * Report what this policy WOULD park and park nothing. The way to turn
+   * hibernation on: run the real knobs against the real fleet, read the pass
+   * line for a day, then clear the flag.
+   */
+  dryRun?: boolean;
 };
 
 /**

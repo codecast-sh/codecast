@@ -196,7 +196,7 @@ function fixture(transport = "tmux", cached = true) {
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
-      "captureTmuxComposerPane", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder",
+      "captureTmuxComposerPane", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
