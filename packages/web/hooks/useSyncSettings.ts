@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { useConvexAuth } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
@@ -26,10 +25,9 @@ function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const teamId = requestedTeamId === undefined ? activeTeamId : requestedTeamId;
   const isHost = useIsSyncHost();
-  const { isAuthenticated } = useConvexAuth();
   const key = settingsDataKey(name, userId, teamId);
   const teamQuery = name === "teamMembers" || name === "githubInstallations";
-  const args = !key || !isHost || !isAuthenticated || (teamQuery && !isConvexId(String(teamId)))
+  const args = !key || !isHost || (teamQuery && !isConvexId(String(teamId)))
     ? "skip"
     : teamQuery ? { team_id: teamId }
       : name === "syncProjects" ? { limit: 100 } : {};

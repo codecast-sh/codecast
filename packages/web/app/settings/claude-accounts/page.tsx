@@ -34,7 +34,7 @@ import {
   type ProfileLoginFlow,
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
-import { formatAgo } from "@codecast/shared/contracts";
+import { formatAgo, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
@@ -61,7 +61,12 @@ type DeviceAccounts = {
   auto_switch: boolean;
   /** Absent on servers that predate the field — treated as on. */
   auto_continue?: boolean;
-  auto_switch_state?: { last_action_at?: number; last_action?: string; exhausted_at?: number };
+  auto_switch_state?: {
+    last_action_at?: number;
+    last_action?: string;
+    exhausted_at?: number;
+    last_decision?: RecoveryDecision;
+  };
   login_flow?: ProfileLoginFlow | null;
   mint_flow?: MintFlow | null;
 };
@@ -256,6 +261,14 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
 
   const online = device.online !== false;
   const activeProfile = device.profiles.find((p) => profileIsCurrentLogin(p, device.active_email));
+  // Most room left first, so the top of the list is what a switch would pick —
+  // except the current login, which stays pinned above it: the reader needs to
+  // see what is on now beside what comes next.
+  const ranked = rankByHeadroom(device.profiles, now);
+  const orderedProfiles = [
+    ...ranked.filter((p) => profileIsCurrentLogin(p, device.active_email)),
+    ...ranked.filter((p) => !profileIsCurrentLogin(p, device.active_email)),
+  ];
   // Suggest the email's local part as the profile name (claude2@almostcandid.com -> claude2).
   const suggested = (device.active_email?.split("@")[0] ?? "work").toLowerCase();
   const rowBusy = busy ?? sw.switching;
@@ -303,7 +316,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
         </p>
       )}
 
-      {device.profiles.map((p) => {
+      {orderedProfiles.map((p) => {
           const isActive = profileIsCurrentLogin(p, device.active_email);
           const plan = planLabel(p);
           return (

@@ -62,6 +62,12 @@ export function initAnalytics(): Promise<void> {
       // after 1000 events. A browser that sets Do Not Track loads no PostHog
       // at all. See packages/shared/analytics/events.ts (ct-49565).
       catalog: CODECAST_EVENTS,
+      // The same known-benign list the window listeners below use, applied at
+      // the Sentry boundary so it also covers an ErrorBoundary's captureError.
+      // The package contributes the environment-level noise (stale-deploy
+      // chunk preloads, a full user disk, an IndexedDB connection closing
+      // mid-transaction) on top of these.
+      extraIgnoreErrors: IGNORED_ERROR_PATTERNS,
     });
     runtime = analytics;
     for (const call of queuedCalls.splice(0)) call(analytics);

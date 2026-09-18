@@ -24,6 +24,7 @@ const AGENT_TYPES: { key: AgentKey; convex: string; label: string; active: strin
   { key: "opencode", convex: "opencode", label: "OpenCode", active: "bg-orange-500/20 text-orange-400 border-orange-500/50" },
   { key: "pi", convex: "pi", label: "pi", active: "bg-teal-500/20 text-teal-400 border-teal-500/50" },
   { key: "grok", convex: "grok", label: "Grok", active: "bg-sol-text/15 text-sol-text border-sol-text/40" },
+  { key: "muse", convex: "muse", label: "Muse Spark", active: "bg-emerald-500/15 text-emerald-400 border-emerald-500/40" },
 ];
 
 interface ContextChatInputProps {

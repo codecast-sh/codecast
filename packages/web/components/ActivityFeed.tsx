@@ -17,8 +17,8 @@ import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSes
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { ExternalEventRow } from "./feed/ExternalEventRow";
-import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
+import { ExternalEventGroupRow } from "./feed/ExternalEventGroupRow";
+import { groupExternalEvents, isQuietExternalEvent, type ExternalEventGroup, type ExternalEventRecord } from "../lib/externalEvents";
 import { useExternalEvents, externalEventsNewestFirst } from "../hooks/useSyncExternalEvents";
 import { FolderGit2 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -361,10 +361,11 @@ function RollupHeader({ convs, compact }: {
 const NO_EXTERNAL_EVENTS: ExternalEventRecord[] = [];
 
 // A day holds two kinds of rows: the sessions it always held, and the team's
-// git events from the same day. `ts` is what the two are ordered by.
+// git events from the same day, folded into one row per thread of work (a
+// pull request, else a branch). `ts` is what the two are ordered by.
 type FeedEntry =
   | { kind: "conv"; ts: number; conv: Conversation }
-  | { kind: "git"; ts: number; event: ExternalEventRecord };
+  | { kind: "git"; ts: number; group: ExternalEventGroup };
 
 // Place the git rows among the sessions by time WITHOUT reordering the
 // sessions. Their order comes from the stable-order hook and from the inbox
@@ -444,11 +445,7 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
         <div className="space-y-1.5">
           {entries.map((entry) =>
             entry.kind === "git" ? (
-              <ExternalEventRow
-                key={`git-${entry.event._id}`}
-                event={externalEventRowToExternalEvent(entry.event)}
-                density="feed"
-              />
+              <ExternalEventGroupRow key={`git-${entry.group.key}`} group={entry.group} />
             ) : (
               <FeedCard
                 key={entry.conv._id}
@@ -537,7 +534,8 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
   // External events get their own window so they never eat the session window: keep
   // the ones that fall inside the time span the shown sessions already cover,
   // capped so a busy repo cannot flood a quiet day. The same actor and project
-  // filters apply, by the person who did it and by the repository name.
+  // filters apply, by the person who did it and by the repository name. Quiet
+  // kinds (a PR falling behind) never reach the feed.
   const gitInView = useMemo(() => {
     if (externalEvents.length === 0) return NO_EXTERNAL_EVENTS;
     let floor = 0;
@@ -551,6 +549,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
       .filter((e) => {
         const ts = e.created_at ?? 0;
         if (!ts || ts < floor) return false;
+        if (isQuietExternalEvent(e)) return false;
         if (actor && e.actor_user_id?.toString() !== actor) return false;
         if (proj) {
           const repo = e.repository?.split("/").filter(Boolean).pop()?.toLowerCase();
@@ -587,14 +586,14 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
       if (!convDays.has(date)) convDays.set(date, []);
       convDays.get(date)!.push({ kind: "conv", ts, conv: c });
     }
-    const gitDays = new Map<string, FeedEntry[]>();
+    const gitDays = new Map<string, ExternalEventRecord[]>();
     if (showGit) {
       for (const e of gitInView) {
         const ts = e.created_at ?? 0;
         if (!ts) continue;
         const date = dayKey(ts);
         if (!gitDays.has(date)) gitDays.set(date, []);
-        gitDays.get(date)!.push({ kind: "git", ts, event: e });
+        gitDays.get(date)!.push(e);
       }
     }
     const dates = new Set([...convDays.keys(), ...gitDays.keys()]);
@@ -602,9 +601,10 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
       .sort((a, b) => b.localeCompare(a))
       .map((date) => ({
         date,
+        // Groups come back newest first, which is the order mergeDayEntries wants.
         entries: mergeDayEntries(
           convDays.get(date) ?? [],
-          (gitDays.get(date) ?? []).sort((a, b) => b.ts - a.ts),
+          groupExternalEvents(gitDays.get(date) ?? []).map((group) => ({ kind: "git" as const, ts: group.at, group })),
         ),
       }));
   }, [windowed, gitInView, showGit, tz]);

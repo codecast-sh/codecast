@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { AvatarImg } from "../lib/avatarCache";
 import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
+import { AgentTypeIcon } from "./AgentTypeIcon";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useRouter } from "next/navigation";
@@ -60,6 +61,14 @@ function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; cl
     return (
       <span className={`${className} rounded-full bg-[#0a0a0a] flex items-center justify-center shrink-0`}>
         <GrokIcon className="w-4 h-4 text-white" />
+      </span>
+    );
+  } else if (agentType === "muse") {
+    // No dedicated brand glyph — reuse the canonical AgentTypeIcon so muse
+    // never falls through to the Claude badge.
+    return (
+      <span className={`${className} rounded-full bg-sol-bg-alt flex items-center justify-center shrink-0`}>
+        <AgentTypeIcon agentType={agentType} className="w-4 h-4" />
       </span>
     );
   }

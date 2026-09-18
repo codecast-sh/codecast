@@ -12,13 +12,14 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
-import { X, UserCheck, ArrowRightLeft, Network } from "lucide-react";
+import { X, UserCheck, ArrowRightLeft, Network, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type HandoffInfo } from "../hooks/useOwners";
 import { useOrgRoles } from "../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { reparentToastLine } from "../store/orgSlice";
 import { RoleFace } from "./org/RoleFace";
+import { sessionFitsARole } from "./org/MakeRoleDialog";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
 import {
@@ -106,9 +107,13 @@ export function useOwnersFromStore(conversationId: string): OwnersApi {
 export function OwnerMenuItems({
   owners,
   conversationId,
+  onMakeRole,
 }: {
   owners: OwnersApi;
   conversationId: string;
+  /** Opens "Make this a role" (R2). The dialog lives outside the menu, which
+   *  unmounts its content when it closes. */
+  onMakeRole?: () => void;
 }) {
   const { ownerIds, ownerList, displayFor, toggle, moveToRole, clearAll, currentUser } = owners;
   // Mounted only while the assignment menu is open (Radix unmounts Content
@@ -133,6 +138,13 @@ export function OwnerMenuItems({
     const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
     const row = (s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId];
     return !!(row?.is_anchor || row?.anchor_id || row?.standing_role_id);
+  });
+  // A session older than a week may already be a role nobody has named
+  // (org-roles-run-work.md R2); the analyzer proposes those it finds, and this
+  // is the way to name one it left out. Read once: the menu is short lived.
+  const fitsARole = useInboxStore((s) => {
+    const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
+    return sessionFitsARole((s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId], Date.now());
   });
   const selectable = pickRoster(serverRoster, owners.selectable).filter(
     (m: any) => m && !m.is_bot,
@@ -179,6 +191,15 @@ export function OwnerMenuItems({
               ))}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          <DropdownMenuSeparator />
+        </>
+      )}
+      {onMakeRole && fitsARole && (
+        <>
+          <DropdownMenuItem onSelect={onMakeRole} className="text-xs gap-2" data-make-role>
+            <BadgePlus className="w-3.5 h-3.5 shrink-0" />
+            <span>Make this a role<span className="block text-[10px] text-sol-text-dim">It keeps running as it is, and gets a name and a place on the chart</span></span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
         </>
       )}

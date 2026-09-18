@@ -496,6 +496,16 @@ describe("worstDaemonHealth", () => {
     expect(fleetDaemonHealth([], { daemon_last_seen: NOW - 51 * 60 * 1000 }, NOW)).toMatchObject({ kind: "offline", tier: "warn" });
   });
 
+  // A second, unrelated provider hit the same gap: "Linux - htch-runtime:
+  // daemon offline 1h" in the global header, for a box the viewer never sits
+  // at and cannot restart from where they are.
+  it("leaves an unflagged htch-runtime box out of the fleet verdict", () => {
+    const htchRuntime = { device_id: "h", label: "Linux - htch-runtime", last_seen: NOW - 60 * 60 * 1000 };
+    const laptopOk = { device_id: "a", label: "MacBook", last_seen: NOW - 1000 };
+    expect(worstDaemonHealth([laptopOk, htchRuntime], NOW)).toEqual({ kind: "ok" });
+    expect(worstDaemonHealth([htchRuntime], NOW)).toBeNull();
+  });
+
   it("ranks unreachable above busy above restarting", () => {
     const busy = { device_id: "d", label: "Busy", last_seen: NOW - 1000, loop_freeze_ms: 40_000 };
     const fresh = { device_id: "e", label: "Fresh", last_seen: NOW - 1000, daemon_started_at: NOW - 5000 };
