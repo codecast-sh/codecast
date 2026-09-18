@@ -3,167 +3,54 @@
 // be exercised by a real-shell regression test without importing the CLI entry
 // point (which calls program.parse() on load).
 //
-// The whole event -> status mapping runs in ONE python3 process. The previous
-// version spawned 6-8 python3 interpreters per event; under machine load those
-// spawns alone blew Claude Code's hook timeout, the output was discarded, and
-// the daemon never learned the session had started a turn — which is how a
-// delivered message kept showing "hasn't reached the agent" in the web UI.
-// The python program prints one tab-separated line:
-//   session_id \t status \t url_query_string \t fallback_json
-// and the shell around it does exactly one curl (or one fallback file write).
-export const CODECAST_STATUS_HOOK = `#!/bin/bash
-# Reports Claude Code lifecycle events to codecast daemon via status files
-set -uo pipefail
+// The event -> status mapping is bash + awk. The previous version spawned
+// python3 per event; under machine load that interpreter startup blew Claude
+// Code's hook timeout, the output was discarded, and the daemon never learned
+// the session had started a turn — which is how a delivered message kept
+// showing "hasn't reached the agent" in the web UI.
+// python3 remains only for the AskUserQuestion sidecar (nested JSON dump).
+import { HOOK_FIELDS_READ } from "./hookJson.js";
 
-INPUT=$(cat)
+/** Report STATUS to the daemon. Returns instead of exiting so a combined
+ *  UserPromptSubmit script can run the other jobs after a successful curl. */
+export const CODECAST_STATUS_EMIT = `
+codecast_status_emit() {
+[ -n "\${STATUS:-}" ] || return 0
+ts=$(date +%s)
+LT="\${CODECAST_LAUNCH_TOKEN:-}"
 
-OUT=$(printf '%s' "$INPUT" | python3 -c "
-import sys, json, os, re, tempfile, time, urllib.parse
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-sid = str(d.get('session_id') or '')
-if not sid:
-    sys.exit(0)
-# Why: the AskUserQuestion sidecar further down names its file after this id, so
-# an id of ../../elsewhere/evil drops the questions payload wherever it points
-# (ct-49677). Same rule as the shell guard on the fallback below and as
-# isSafeStatusSessionId in the daemon: the first character from [A-Za-z0-9_-] so
-# no id starts with a dot, the rest from [A-Za-z0-9._-] so no id carries a
-# separator, 128 characters at most. Real ids are uuids, so no real caller is
-# turned away. Only the sidecar is gated: the status line still goes out, and
-# the daemon's route answers an unsafe id with 400 before anything reads it.
-safe_sid = bool(re.fullmatch('[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}', sid))
-ev = str(d.get('hook_event_name') or '')
-tool = str(d.get('tool_name') or '')
-status = ''
-extra = {}
-if ev == 'UserPromptSubmit':
-    status = 'thinking'
-elif ev == 'PreToolUse':
-    # AskUserQuestion blocks the agent on a user prompt with no further hook
-    # until it is answered, so it must report as waiting-for-input, not working.
-    # The tool name is carried so the daemon classifies it via SKIP_TOOLS
-    # without a transcript read (and never injects a permission Enter/Escape).
-    if tool == 'AskUserQuestion':
-        status = 'permission_blocked'
-        extra['message'] = 'AskUserQuestion'
-    else:
-        status = 'working'
-elif ev == 'PreCompact':
-    status = 'compacting'
-elif ev == 'Stop':
-    status = 'idle'
-    # The lead turn ended, whatever the daemon then makes of the settle. A
-    # session the harness keeps alive for background work reports 'waiting'
-    # from here on, and its status stops moving; this stamp is the per-turn
-    # identity every completion-reactive consumer keys on so a second turn
-    # under one unchanged status still announces once.
-    extra['turn_completed_at'] = str(int(time.time()))
-elif ev == 'PermissionRequest':
-    # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the
-    # generic Notification ('Claude needs your permission', no tool name), it
-    # carries the real tool_name + tool_input + permission_mode, so the daemon
-    # can name the blocked tool and build a preview without parsing the
-    # transcript. This is the authoritative source for the web Approve/Deny
-    # card. AskUserQuestion arrives here too; tagged by name so the daemon
-    # routes it to needs-input.
-    if tool:
-        status = 'permission_blocked'
-        prev = ''
-        ti = d.get('tool_input') or {}
-        for k in ('command', 'file_path', 'pattern', 'path', 'url'):
-            v = ti.get(k)
-            if isinstance(v, str) and v:
-                prev = v
-                break
-        extra['message'] = (tool if not prev else tool + ': ' + prev)[:300]
-elif ev == 'Notification':
-    nt = str(d.get('notification_type') or '')
-    if nt == 'permission_prompt':
-        # Forward only transcript_path so the daemon resolves the real tool
-        # from the transcript. The Notification message is a generic 'Claude
-        # needs your permission' with no tool name — forwarding it would only
-        # mislead the daemon's first-token tool extraction.
-        status = 'permission_blocked'
-        tp = str(d.get('transcript_path') or '')
-        if tp:
-            extra['transcript_path'] = tp
-    elif nt == 'idle_prompt':
-        status = 'idle'
-elif ev == 'SessionStart':
-    src = str(d.get('source') or '')
-    if src == 'compact':
-        # An auto-compact runs INSIDE a turn that then resumes: the agent is
-        # working, not settling.
-        status = 'working'
-    elif src in ('startup', 'resume', 'clear'):
-        # The only signal a resumed or cleared session emits before its first
-        # prompt. It lands the pane at an idle prompt with no turn behind it,
-        # so it settles the row as a SESSION BOUNDARY: the daemon and the
-        # server read the flag and keep every completion-reactive consumer
-        # (the needs-input push, the settle classifier, unread) out of it.
-        status = 'idle'
-        extra['session_boundary'] = '1'
-elif ev == 'PostCompact':
-    # A manual /compact swallows the turn boundary: it ends at an idle prompt
-    # and emits no Stop, so this is the pane's only clearing signal. An auto
-    # compact runs inside a turn that emits its own Stop, so it claims nothing.
-    if str(d.get('trigger') or '') == 'manual':
-        status = 'idle'
-        extra['session_boundary'] = '1'
-# A pending AskUserQuestion buffers its whole turn (the reasoning prose AND the
-# tool_use) out of the JSONL until it is answered, so the daemon cannot read the
-# real questions from the transcript. Drop the full tool_input in a per-session
-# sidecar (too large for the status URL) so the daemon builds a full-fidelity
-# card — option descriptions, headers, multiSelect — instead of scraping the
-# box-art menu. Written atomically; best-effort.
-if safe_sid and ev in ('PreToolUse', 'PermissionRequest') and tool == 'AskUserQuestion':
-    try:
-        qs = (d.get('tool_input') or {}).get('questions')
-        if qs:
-            dd = os.path.join(os.path.expanduser('~'), '.codecast', 'ask-input')
-            os.makedirs(dd, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=dd)
-            with os.fdopen(fd, 'w') as f:
-                json.dump({'questions': qs, 'ts': int(time.time())}, f)
-            os.replace(tmp, os.path.join(dd, sid + '.json'))
-    except Exception:
-        pass
-if not status:
-    sys.exit(0)
-ts = int(time.time())
-pm = str(d.get('permission_mode') or '')
-# Which LAUNCH this process is: the daemon stamps it into the pane env at every
-# spawn and resume and drops posts that carry a superseded one, so an orphan
-# left behind by a kill or a resume stops speaking for the pane (ct-49532).
-lt = str(os.environ.get('CODECAST_LAUNCH_TOKEN') or '')
-q = {'session_id': sid, 'status': status, 'ts': str(ts)}
-if pm:
-    q['permission_mode'] = pm
-if lt:
-    q['launch_token'] = lt
-q.update(extra)
-fb = {'status': status, 'ts': ts}
-if pm:
-    fb['permission_mode'] = pm
-if lt:
-    fb['launch_token'] = lt
-fb.update(extra)
-print(sid + '\\t' + status + '\\t' + urllib.parse.urlencode(q) + '\\t' + json.dumps(fb))
-" 2>/dev/null)
+json_esc() {
+  v=\$1
+  v=\${v//\\\\/\\\\\\\\}
+  v=\${v//\\\"/\\\\\\\"}
+  printf '%s' "\$v"
+}
 
-[ -z "$OUT" ] && exit 0
-IFS=$'\\t' read -r SESSION_ID STATUS QS FALLBACK <<< "$OUT"
-if [ -z "$SESSION_ID" ] || [ -z "$STATUS" ] || [ -z "$QS" ]; then exit 0; fi
+FB="{\\"status\\":\\"$(json_esc "$STATUS")\\",\\"ts\\":$ts"
+[ -n "\${PERM:-}" ] && FB="$FB,\\"permission_mode\\":\\"$(json_esc "$PERM")\\""
+[ -n "\$LT" ] && FB="$FB,\\"launch_token\\":\\"$(json_esc "\$LT")\\""
+[ -n "\${MESSAGE:-}" ] && FB="$FB,\\"message\\":\\"$(json_esc "$MESSAGE")\\""
+[ -n "\${TRANSCRIPT_PATH:-}" ] && FB="$FB,\\"transcript_path\\":\\"$(json_esc "$TRANSCRIPT_PATH")\\""
+[ -n "\${SESSION_BOUNDARY:-}" ] && FB="$FB,\\"session_boundary\\":\\"$(json_esc "$SESSION_BOUNDARY")\\""
+[ -n "\${TURN_COMPLETED_AT:-}" ] && FB="$FB,\\"turn_completed_at\\":\\"$TURN_COMPLETED_AT\\""
+FB="$FB}"
 
 # Try HTTP push first (instant), fall back to file write (polled)
 HOOK_PORT_FILE="$HOME/.codecast/hook-port"
 if [ -f "$HOOK_PORT_FILE" ]; then
   PORT=$(cat "$HOOK_PORT_FILE" 2>/dev/null)
   if [ -n "$PORT" ]; then
-    curl -s "http://127.0.0.1:$PORT/hook/status?$QS" --connect-timeout 1 --max-time 2 >/dev/null 2>&1 && exit 0
+    set -- -s -G "http://127.0.0.1:$PORT/hook/status" --connect-timeout 1 --max-time 2
+    set -- "$@" --data-urlencode "session_id=$SESSION_ID"
+    set -- "$@" --data-urlencode "status=$STATUS"
+    set -- "$@" --data-urlencode "ts=$ts"
+    [ -n "\${PERM:-}" ] && set -- "$@" --data-urlencode "permission_mode=$PERM"
+    [ -n "\$LT" ] && set -- "$@" --data-urlencode "launch_token=\$LT"
+    [ -n "\${MESSAGE:-}" ] && set -- "$@" --data-urlencode "message=$MESSAGE"
+    [ -n "\${TRANSCRIPT_PATH:-}" ] && set -- "$@" --data-urlencode "transcript_path=$TRANSCRIPT_PATH"
+    [ -n "\${SESSION_BOUNDARY:-}" ] && set -- "$@" --data-urlencode "session_boundary=$SESSION_BOUNDARY"
+    [ -n "\${TURN_COMPLETED_AT:-}" ] && set -- "$@" --data-urlencode "turn_completed_at=$TURN_COMPLETED_AT"
+    curl "$@" >/dev/null 2>&1 && return 0
   fi
 fi
 
@@ -194,8 +81,166 @@ esac
 STATUS_DIR="$HOME/.codecast/agent-status"
 mkdir -p "$STATUS_DIR"
 if [ "$STATUS" != "working" ]; then
-  printf '%s\\n' "$FALLBACK" >> "$STATUS_DIR/$SESSION_ID.jsonl"
+  printf '%s\\n' "$FB" >> "$STATUS_DIR/$SESSION_ID.jsonl"
 fi
-printf '%s\\n' "$FALLBACK" > "$STATUS_DIR/$SESSION_ID.json"
-exit 0
+printf '%s\\n' "$FB" > "$STATUS_DIR/$SESSION_ID.json"
+}
+`;
+
+export const CODECAST_STATUS_HOOK = `#!/bin/bash
+# Reports Claude Code lifecycle events to codecast daemon via status files
+set -uo pipefail
+
+# Envelope keys sit at the front. A UserPromptSubmit payload can carry a
+# megabyte prompt after them; copying all of it into the shell is wasted work
+# except when we need the AskUserQuestion questions array for the sidecar.
+INPUT=$(dd bs=65536 count=1 2>/dev/null || true)
+case "$INPUT" in
+  *AskUserQuestion*) INPUT="$INPUT$(cat)" ;;
+esac
+[ -n "$INPUT" ] || exit 0
+
+${HOOK_FIELDS_READ}
+
+SESSION_ID="\${HOOK_session_id:-}"
+[ -z "$SESSION_ID" ] && SESSION_ID="\${HOOK_sessionId:-}"
+[ -z "$SESSION_ID" ] && SESSION_ID="\${GROK_SESSION_ID:-}"
+[ -z "$SESSION_ID" ] && exit 0
+
+# Same rule as isSafeStatusSessionId / the file-path guard below: do not build
+# any path or sidecar name until the id is a plain session id.
+case "$SESSION_ID" in
+  ""|[!A-Za-z0-9_-]*|*[!A-Za-z0-9._-]*) exit 0 ;;
+esac
+[ \${#SESSION_ID} -le 128 ] || exit 0
+
+EVENT="\${HOOK_hook_event_name:-}"
+PERM="\${HOOK_permission_mode:-}"
+TOOL="\${HOOK_tool_name:-}"
+STATUS=""
+MESSAGE=""
+SESSION_BOUNDARY=""
+TURN_COMPLETED_AT=""
+TRANSCRIPT_PATH=""
+
+if [ "$EVENT" = "UserPromptSubmit" ]; then
+  STATUS=thinking
+elif [ "$EVENT" = "PreToolUse" ]; then
+  # AskUserQuestion blocks the agent on a user prompt with no further hook
+  # until it is answered, so it must report as waiting-for-input, not working.
+  # The tool name is carried so the daemon classifies it via SKIP_TOOLS
+  # without a transcript read (and never injects a permission Enter/Escape).
+  if [ "$TOOL" = "AskUserQuestion" ]; then
+    STATUS=permission_blocked
+    MESSAGE=AskUserQuestion
+  else
+    STATUS=working
+  fi
+elif [ "$EVENT" = "PreCompact" ]; then
+  STATUS=compacting
+elif [ "$EVENT" = "Stop" ]; then
+  STATUS=idle
+  # The lead turn ended, whatever the daemon then makes of the settle. A
+  # session the harness keeps alive for background work reports 'waiting'
+  # from here on, and its status stops moving; this stamp is the per-turn
+  # identity every completion-reactive consumer keys on so a second turn
+  # under one unchanged status still announces once.
+  TURN_COMPLETED_AT=$(date +%s)
+elif [ "$EVENT" = "PermissionRequest" ]; then
+  # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the
+  # generic Notification ('Claude needs your permission', no tool name), it
+  # carries the real tool_name + tool_input + permission_mode, so the daemon
+  # can name the blocked tool and build a preview without parsing the
+  # transcript. This is the authoritative source for the web Approve/Deny
+  # card. AskUserQuestion arrives here too; tagged by name so the daemon
+  # routes it to needs-input.
+  if [ -n "$TOOL" ]; then
+    PREV="\${HOOK_command:-}"
+    [ -z "$PREV" ] && PREV="\${HOOK_file_path:-}"
+    [ -z "$PREV" ] && PREV="\${HOOK_pattern:-}"
+    [ -z "$PREV" ] && PREV="\${HOOK_path:-}"
+    [ -z "$PREV" ] && PREV="\${HOOK_url:-}"
+    if [ \${#PREV} -gt 300 ]; then
+      PREV=$(printf '%s' "$PREV" | cut -c1-300)
+    fi
+    STATUS=permission_blocked
+    if [ "$TOOL" = "AskUserQuestion" ]; then
+      MESSAGE=AskUserQuestion
+    elif [ -n "$PREV" ]; then
+      MESSAGE="$TOOL: $PREV"
+    else
+      MESSAGE="$TOOL"
+    fi
+  fi
+elif [ "$EVENT" = "Notification" ]; then
+  NOTIF="\${HOOK_notification_type:-}"
+  if [ "$NOTIF" = "permission_prompt" ]; then
+    # Forward only transcript_path so the daemon resolves the real tool
+    # from the transcript. The Notification message is a generic 'Claude
+    # needs your permission' with no tool name — forwarding it would only
+    # mislead the daemon's first-token tool extraction.
+    STATUS=permission_blocked
+    TRANSCRIPT_PATH="\${HOOK_transcript_path:-}"
+  elif [ "$NOTIF" = "idle_prompt" ]; then
+    STATUS=idle
+  fi
+elif [ "$EVENT" = "SessionStart" ]; then
+  SOURCE="\${HOOK_source:-}"
+  if [ "$SOURCE" = "compact" ]; then
+    # An auto-compact runs INSIDE a turn that then resumes: the agent is
+    # working, not settling.
+    STATUS=working
+  elif [ "$SOURCE" = "startup" ] || [ "$SOURCE" = "resume" ] || [ "$SOURCE" = "clear" ]; then
+    # The only signal a resumed or cleared session emits before its first
+    # prompt. It lands the pane at an idle prompt with no turn behind it,
+    # so it settles the row as a SESSION BOUNDARY: the daemon and the
+    # server read the flag and keep every completion-reactive consumer
+    # (the needs-input push, the settle classifier, unread) out of it.
+    STATUS=idle
+    SESSION_BOUNDARY=1
+  fi
+elif [ "$EVENT" = "PostCompact" ]; then
+  # A manual /compact swallows the turn boundary: it ends at an idle prompt
+  # and emits no Stop, so this is the pane's only clearing signal. An auto
+  # compact runs inside a turn that emits its own Stop, so it claims nothing.
+  TRIGGER="\${HOOK_trigger:-}"
+  if [ "$TRIGGER" = "manual" ]; then
+    STATUS=idle
+    SESSION_BOUNDARY=1
+  fi
+fi
+
+# A pending AskUserQuestion buffers its whole turn (the reasoning prose AND the
+# tool_use) out of the JSONL until it is answered, so the daemon cannot read the
+# real questions from the transcript. Drop the full tool_input in a per-session
+# sidecar (too large for the status URL) so the daemon builds a full-fidelity
+# card — option descriptions, headers, multiSelect — instead of scraping the
+# box-art menu. Written atomically; best-effort. SESSION_ID is already gated.
+if [ "$TOOL" = "AskUserQuestion" ] && { [ "$EVENT" = "PreToolUse" ] || [ "$EVENT" = "PermissionRequest" ]; }; then
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/bin:$HOME/.local/bin:$PATH"
+  printf '%s' "$INPUT" | SESSION_ID="$SESSION_ID" python3 -c "
+import sys, json, os, tempfile, time
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+sid = str(os.environ.get('SESSION_ID') or '')
+if not sid:
+    sys.exit(0)
+try:
+    qs = (d.get('tool_input') or {}).get('questions')
+    if qs:
+        dd = os.path.join(os.path.expanduser('~'), '.codecast', 'ask-input')
+        os.makedirs(dd, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=dd)
+        with os.fdopen(fd, 'w') as f:
+            json.dump({'questions': qs, 'ts': int(time.time())}, f)
+        os.replace(tmp, os.path.join(dd, sid + '.json'))
+except Exception:
+    pass
+" 2>/dev/null || true
+fi
+
+${CODECAST_STATUS_EMIT}
+codecast_status_emit
 `;

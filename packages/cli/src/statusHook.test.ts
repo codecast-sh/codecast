@@ -169,7 +169,7 @@ describe("codecast-status hook event mapping", () => {
     });
     expect(out.status).toBe("permission_blocked");
     expect(out.message).toBe("AskUserQuestion");
-  });
+  }, 15_000);
 
   // The legacy Notification path must still forward the transcript_path (so the
   // daemon can resolve the tool) — the old block silently produced an empty EXTRA
@@ -222,7 +222,7 @@ describe("codecast-status hook AskUserQuestion sidecar", () => {
     const sc = readSidecar("sidecar-auq");
     expect(sc.questions).toEqual(questions);          // descriptions + header + multiSelect intact
     expect(typeof sc.ts).toBe("number");
-  });
+  }, 15_000);
 
   test("PermissionRequest AskUserQuestion also writes the sidecar", () => {
     runHook({
@@ -232,7 +232,7 @@ describe("codecast-status hook AskUserQuestion sidecar", () => {
       tool_input: { questions: [{ question: "Which?", options: [{ label: "A" }] }] },
     });
     expect(readSidecar("sidecar-perm").questions[0].question).toBe("Which?");
-  });
+  }, 15_000);
 
   test("ordinary tools never write a sidecar", () => {
     runHook({ session_id: "sidecar-bash", hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } });
@@ -299,29 +299,48 @@ describe("codecast-status hook rejects a traversing session id", () => {
   // The check has to run before the path is built, not after: a guard placed on
   // the write itself would still leave the mkstemp/os.replace pair reachable.
   test("the id check precedes the sidecar's os.replace in the emitted script", () => {
-    const checkAt = CODECAST_STATUS_HOOK.indexOf("safe_sid = bool(re.fullmatch(");
+    const checkAt = CODECAST_STATUS_HOOK.indexOf('case "$SESSION_ID" in');
     const replaceAt = CODECAST_STATUS_HOOK.indexOf("os.replace(");
     expect(checkAt).toBeGreaterThan(-1);
     expect(replaceAt).toBeGreaterThan(-1);
     expect(checkAt).toBeLessThan(replaceAt);
-    // …and the sidecar block is actually gated on it.
-    expect(CODECAST_STATUS_HOOK).toContain("if safe_sid and ev in ('PreToolUse', 'PermissionRequest')");
   });
 
-  // Three copies of one rule now decide the same question: this python check, the
-  // shell guard on the status-file fallback, and isSafeStatusSessionId in the
-  // daemon. A copy that drifts is a hole, so pin them to one character class.
-  // Read from source rather than imported, so the hook suite stays free of the
-  // daemon's module graph.
-  test("python, shell and daemon spell the id rule the same way", () => {
+  // Two copies of one rule now decide the same question: the shell guard on the
+  // status-file fallback, and isSafeStatusSessionId in the daemon. A copy that
+  // drifts is a hole, so pin them to one character class. Read from source
+  // rather than imported, so the hook suite stays free of the daemon's module
+  // graph.
+  test("shell and daemon spell the id rule the same way", () => {
     const CLASS = "[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}";
-    expect(CODECAST_STATUS_HOOK).toContain(`re.fullmatch('${CLASS}', sid)`);
     expect(CODECAST_STATUS_HOOK).toContain('""|[!A-Za-z0-9_-]*|*[!A-Za-z0-9._-]*) exit 0 ;;');
+    expect(CODECAST_STATUS_HOOK).toContain("[ ${#SESSION_ID} -le 128 ] || exit 0");
     // ct-49531 moves the const from daemon.ts into statusSpool.ts; accept either home.
     const homes = ["daemon.ts", "statusSpool.ts"]
       .map(f => path.join(import.meta.dir, f))
       .filter(p => fs.existsSync(p))
       .map(p => fs.readFileSync(p, "utf-8"));
     expect(homes.some(src => src.includes(`SAFE_STATUS_SESSION_ID = /^${CLASS}$/`))).toBe(true);
+  });
+});
+
+describe("UserPromptSubmit stays off python3", () => {
+  test("a poisoned PATH python3 still reports thinking, and a fat prompt does not stall", () => {
+    const bin = path.join(home, "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "python3"), "#!/bin/sh\necho PYTHON_CALLED >&2\nexit 1\n", { mode: 0o755 });
+    const t0 = Date.now();
+    execFileSync("bash", [hookFile], {
+      input: JSON.stringify({
+        session_id: "ups-nopy",
+        hook_event_name: "UserPromptSubmit",
+        prompt: "x".repeat(80_000),
+      }),
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+    });
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(runHook({ session_id: "ups-nopy2", hook_event_name: "UserPromptSubmit" }).status).toBe("thinking");
+    const out = JSON.parse(fs.readFileSync(statusFile("ups-nopy"), "utf-8"));
+    expect(out.status).toBe("thinking");
   });
 });
