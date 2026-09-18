@@ -52,36 +52,49 @@ running executable in place, and on this shape that executable IS bun, so
 letting it proceed would overwrite the host's interpreter. The published Linux
 artifacts are compiled binaries and would not run here anyway.
 
-So a host moves version only when someone ships it a bundle. Until `cast hosts`
-grows an update verb (ct-52223), the procedure is:
+So a host moves version only when someone ships it a bundle, which is what
+`cast hosts update` does:
 
-1. Build the release you want from a clean checkout, not from a shared tree,
-   so no other session's uncommitted work travels. `buildLinuxCast` builds into
-   its own directory and returns it.
-2. Ship the whole directory with `uploadLinuxCast`. The build is split, so its
-   entry is a few hundred bytes that imports its chunks, and there were 246
-   of them in 1.1.137. Copying only `main.js` and `daemon.js` leaves the host
-   restarting forever on a module it cannot find.
-   The upload merges into `/usr/local/lib/codecast` rather than replacing it,
-   which is what preserves adjacent files such as `idle-probe.py`.
-3. Run `cast --version` on the host BEFORE restarting the daemon. The old
-   daemon is still serving at this point, so a bad bundle costs nothing and
-   backs out by restoring the previous directory.
-4. Restart `codecast-daemon.service`.
+```sh
+cast hosts update             # install, check, restart the daemon
+cast hosts update --no-restart  # install and check; the running daemon stays
+```
+
+It builds the CLI from the checkout it runs in, keeps the host's current bundle
+as `/usr/local/lib/codecast.previous`, ships the whole build, and runs
+`cast --version` on the host before anything restarts. If the upload fails or
+the host does not print the version just built, the previous bundle goes back
+and the command fails, with the old daemon still serving throughout. Only then
+does it restart the daemon. `cast hosts provision` installs the CLI the same
+way, so it gets the same check.
+
+The build takes the working tree as it is and says which commit it came from
+and how many uncommitted files ride along. In a checkout shared with other
+sessions, run it from a clean worktree so their unfinished edits stay home.
+
+The build is split, so its entry is a few hundred bytes that imports its
+chunks, and there were 246 of them in 1.1.137. Shipping only `main.js` and
+`daemon.js` leaves the host restarting forever on a module it cannot find;
+the upload moves the whole tree and merges it into `/usr/local/lib/codecast`,
+which also preserves adjacent files such as `idle-probe.py`.
 
 This updates the bundle, and only the bundle. The idle watchdog at
 `/usr/local/bin/cast-idle-check` and the probe beside it are written by
 `baseProvisionScript`, not by the build, so they keep whatever version the host
-was last provisioned with. Compare them against what the release you are
-shipping would generate before assuming a host is current; on 2026-09-17 they
-happened to match, which is not something to rely on.
+was last provisioned with. The command compares the host's copy against the one
+this build installs and says so when they differ, because a host provisioned by
+an older build never recorded a watchdog version to compare against.
+`cast hosts provision` is what replaces them.
 
 A restart does not by itself kill sessions on the host, but whether it does
 depends on who started the tmux server. A server the daemon spawned shares the
 daemon's control group and dies with it under `KillMode=control-group`; a
 server started from an SSH session sits in its own scope under the user slice
-and survives. The daemon re-adopts existing sessions by name either way. Check
-before assuming, and tell whoever is working on the host first.
+and survives. The daemon re-adopts existing sessions by name either way.
+`cast hosts update` looks in the daemon's control group first and refuses to
+restart when a tmux server is in it, leaving the new bundle installed and the
+old daemon running; `--force` restarts anyway. Tell whoever is working on the
+host before you pass it.
 
 ## Verified on the existing AWS host
 

@@ -238,7 +238,7 @@ grouped by (table, id) at render, newest first, the latest cause with the
 counts summed, so a backlog released by a resume is one line per work item;
 15 lines, then one count line), `Your scope now` (plans active or draft only,
 8 lines; changes since the last frame, 12 lines; each overflow is one count
-line, and the 3000 character budget stays the ceiling), `Hands say` (each hand's pin, its task's status, execution status
+line, and the 3000 character budget stays the ceiling), `Your sessions` (org-roles-run-work.md R1; `Hands say` in frames before it, and the wake card reads both: the sessions waiting on a person lead, longest wait first, each with how long it has waited and whether the role escalated it, then the rest; each line carries the hand's pin, its task's status, execution status
 and review verdict), `Channels` (when the role follows any), `Charter`
 (hash; full text plus the brief after a restart). Facts come from
 `org.computeBriefFacts`, which reuses `resolveScope` and
