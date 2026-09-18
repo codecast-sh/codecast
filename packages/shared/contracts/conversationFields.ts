@@ -78,6 +78,9 @@ export const CONVERSATION_FIELDS = {
   // them so a session can resolve its identity to the role it belongs to.
   org_role_id: { send: true },
   standing_role_id: { send: true },
+  // The role's line on a session it put in front of the person. Server owned:
+  // sessionOwnership.performEscalateSession is its one writer.
+  escalated_by_role: { send: true },
   is_favorite: { send: true, dispatch: true },
   // Per-user and delivered on its own path, so it is writable but never part
   // of the shared row.

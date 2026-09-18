@@ -153,8 +153,15 @@ export function standingLabel(usage: CcUsage | undefined | null, now: number): s
  * same standing the bars render, so the top pick is the one a person would
  * point to on the meters. */
 export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: P[], now: number): P[] {
-  const score = (p: P): number => usageStanding(p.usage, now).percent ?? 101;
-  return [...profiles].sort((a, b) => score(a) - score(b));
+  return [...profiles].sort((a, b) => headroomScore(a.usage, now) - headroomScore(b.usage, now));
+}
+
+/** The sort key behind rankByHeadroom, for callers that order something other
+ * than a flat list of profiles (a panel that groups an email's accounts, say):
+ * the worst live window's percent, and 101 when the current windows have not
+ * been measured, so an unproven account ranks behind every known number. */
+export function headroomScore(usage: CcUsage | undefined | null, now: number): number {
+  return usageStanding(usage, now).percent ?? 101;
 }
 
 /** The other accounts a limit-parked session could fall back to: every saved
@@ -278,3 +285,95 @@ export const RESUME_BURST_SPACING_MS = 20_000;
  * sessions a single pass still walks the whole fleet, and the tail is spending
  * an account's window on work nobody is waiting for. */
 export const RESUME_BURST_BATCH = 3;
+
+// ---------------------------------------------------------------------------
+// What a restart costs against the limit windows
+//
+// The provider reports utilization as a percentage and nothing else: no tokens,
+// no dollars (limit_dollars/used_dollars are null on subscription plans, and the
+// rate-limit headers carry the same two numbers). So "this restart spends 14% of
+// what is left" needs a rate nobody publishes — how many tokens one percentage
+// point of a window is worth — and the only way to have it is to measure our own
+// traffic against our own meters. usageCalibration (convex) does that across the
+// whole fleet and refreshes one global rate; everything below is the pure
+// arithmetic both that job and the UI apply, so the number is derived the same
+// way wherever it is read.
+//
+// Tokens are counted in COST-WEIGHTED units, never raw, because a window does
+// not treat a token the same way twice: a cached read is a tenth of fresh input
+// and an output token is worth several. Ordinary traffic is mostly cache reads
+// while a restart is nearly all cache WRITES, so a rate calibrated on raw totals
+// would understate a restart several times over. The weights are the provider's
+// own published price ratios relative to input, which is the closest public
+// proxy for how a limit counts.
+// ---------------------------------------------------------------------------
+
+export const TOKEN_COST_WEIGHTS = { input: 1, cache_read: 0.1, cache_write: 1.25, output: 5 } as const;
+
+export type RawTokenCounts = { input?: number; cache_read?: number; cache_write?: number; output?: number };
+
+/** Billed tokens in cost-weighted units — the unit the calibration rate is in. */
+export function weightedTokens(t: RawTokenCounts): number {
+  return (
+    (t.input ?? 0) * TOKEN_COST_WEIGHTS.input +
+    (t.cache_read ?? 0) * TOKEN_COST_WEIGHTS.cache_read +
+    (t.cache_write ?? 0) * TOKEN_COST_WEIGHTS.cache_write +
+    (t.output ?? 0) * TOKEN_COST_WEIGHTS.output
+  );
+}
+
+/** What reloading a context costs in those same units. A session that comes back
+ *  cold re-sends its whole context and the provider writes the cache again, so
+ *  the reload is priced as a cache write, not as the raw token count the row
+ *  shows. */
+export function reloadCostTokens(contextTokens: number): number {
+  return contextTokens * TOKEN_COST_WEIGHTS.cache_write;
+}
+
+/** The measured rate, as the calibration job publishes it. `samples` is how many
+ *  account-windows it was fitted over — a rate from one sample is a guess, and
+ *  callers use MIN_CALIBRATION_SAMPLES to decide whether to show it at all. */
+export type UsageCalibration = {
+  /** Cost-weighted tokens per one percentage point of the 5h session window. */
+  tokens_per_percent: number;
+  samples: number;
+  updated_at: number;
+};
+
+/** Below this the rate has not been fitted over enough windows to show a person
+ *  a number; the UI falls back to naming tokens alone. */
+export const MIN_CALIBRATION_SAMPLES = 3;
+
+export function isCalibrated(c: UsageCalibration | null | undefined): c is UsageCalibration {
+  return !!c && c.tokens_per_percent > 0 && c.samples >= MIN_CALIBRATION_SAMPLES;
+}
+
+/** Cost-weighted tokens still available in a window before it pegs. Null when
+ *  the window is unknown or unmeasured (a rolled snapshot), which is a different
+ *  answer from zero: zero means spent. */
+export function remainingWindowTokens(
+  usage: CcUsage | undefined | null,
+  calibration: UsageCalibration | null | undefined,
+  now: number,
+): number | null {
+  if (!isCalibrated(calibration) || !usage?.session) return null;
+  if (isWindowRolled(usage.session, now) && usage.fetched_at <= (usage.session.resets_at ?? 0)) return null;
+  const used = livePercent(usage.session, now);
+  return Math.max(0, 100 - used) * calibration.tokens_per_percent;
+}
+
+/** The share of the window's REMAINING room a restart would spend, as a fraction.
+ *  Can exceed 1 — a restart bigger than what is left is exactly the thing worth
+ *  seeing before clicking it. Null when nothing can be said honestly. */
+export function restartShareOfRemaining(
+  contextTokens: number,
+  usage: CcUsage | undefined | null,
+  calibration: UsageCalibration | null | undefined,
+  now: number,
+): number | null {
+  const remaining = remainingWindowTokens(usage, calibration, now);
+  if (remaining === null || contextTokens <= 0) return null;
+  // A spent window has no room to divide by; the honest answer is "all of it".
+  if (remaining === 0) return Infinity;
+  return reloadCostTokens(contextTokens) / remaining;
+}

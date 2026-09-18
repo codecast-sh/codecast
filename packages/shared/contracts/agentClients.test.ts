@@ -37,6 +37,7 @@ describe("fromConvexAgentType", () => {
     expect(fromConvexAgentType("opencode")).toBe("opencode");
     expect(fromConvexAgentType("pi")).toBe("pi");
     expect(fromConvexAgentType("grok")).toBe("grok");
+    expect(fromConvexAgentType("muse")).toBe("muse");
   });
 
   it("normalizes cowork, unknown, null and undefined to claude", () => {
@@ -56,6 +57,7 @@ describe("toConvexAgentType", () => {
     expect(toConvexAgentType("opencode")).toBe("opencode");
     expect(toConvexAgentType("pi")).toBe("pi");
     expect(toConvexAgentType("grok")).toBe("grok");
+    expect(toConvexAgentType("muse")).toBe("muse");
   });
 });
 
@@ -70,6 +72,7 @@ describe("parseExecutionAgentClientId", () => {
     expect(parseExecutionAgentClientId("opencode")).toBe("opencode");
     expect(parseExecutionAgentClientId("pi")).toBe("pi");
     expect(parseExecutionAgentClientId("grok")).toBe("grok");
+    expect(parseExecutionAgentClientId("muse")).toBe("muse");
   });
 
   it("fails closed for unknown, nullish, and non-string execution values", () => {
@@ -101,6 +104,7 @@ describe("print mode", () => {
     expect(AGENT_CLIENTS.gemini.printMode).toEqual({ kind: "flag", token: "-p", promptAsValue: true });
     expect(AGENT_CLIENTS.codex.printMode).toEqual({ kind: "subcommand", token: "exec" });
     expect(AGENT_CLIENTS.opencode.printMode).toEqual({ kind: "subcommand", token: "run" });
+    expect(AGENT_CLIENTS.muse.printMode).toEqual({ kind: "subcommand", token: "exec" });
   });
 });
 
@@ -113,6 +117,7 @@ describe("fenced execution transports", () => {
     expect(AGENT_CLIENTS.opencode.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.pi.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.grok.executionTransports).toEqual(["tmux"]);
+    expect(AGENT_CLIENTS.muse.executionTransports).toEqual(["tmux"]);
   });
 
   it("rejects unsupported app-server and external routing without fallback", () => {
@@ -128,7 +133,7 @@ describe("fenced execution transports", () => {
 // The new-session agent row (web AgentSwitcher + mobile sheet) renders from
 // AGENT_LAUNCH_OPTIONS; the launch model/effort rail from launchRailOptions.
 // Both are pure registry derivations — these tests pin the shape each surface
-// relies on (six clients, honest labels, launch rail hides picker-only models
+// relies on (eight clients, honest labels, launch rail hides picker-only models
 // and prepends the "default" effort stop).
 describe("new-session launch options", () => {
   it("derives one launch option per registry client, in declaration order", () => {
@@ -159,6 +164,15 @@ describe("new-session launch options", () => {
       "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
     ]);
     expect(codex.efforts).toEqual(["default", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
+
+  it("offers the observed Muse Spark model and full reasoning-effort range", () => {
+    const muse = launchRailOptions(AGENT_CLIENTS.muse.modelConfig!);
+    expect(muse.models.map((model) => model.key)).toEqual([
+      "default",
+      "muse-spark-1.3-contributor",
+    ]);
+    expect(muse.efforts).toEqual(["default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 });
 
@@ -245,6 +259,22 @@ describe("capabilitySupport", () => {
       plugin: "unsupported",
       hook: "unsupported",
     },
+    // Verified with a scratch HOME: `muse skills install --scope user`
+    // lands under ~/.config/muse/skills, `muse skills list --source`
+    // shows ~/.agents/skills (user) and .agents/skills (project, trusted);
+    // `muse init --dry-run` scaffolds project AGENTS.md as project rules;
+    // `mcpServers` lives in ~/.config/muse/settings.json with
+    // `muse mcp login|logout` as the native manager. No user instruction
+    // file, project settings file, hooks, subagents, or plugins verified.
+    muse: {
+      snippet: "write",
+      skill: "write",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "native",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
   };
 
   it("answers a defined support value for every (kind, client) pair", () => {
@@ -297,7 +327,7 @@ describe("agentFileTargets path templates", () => {
   const withTargets = Object.values(AGENT_CLIENTS).filter((d) => d.agentFileTargets);
 
   it("declares targets for exactly the verified clients", () => {
-    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor", "grok"]);
+    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor", "grok", "muse"]);
   });
 
   // The cross-client `.agents/skills` project dir is read by cursor (via
@@ -314,6 +344,16 @@ describe("agentFileTargets path templates", () => {
     expect(AGENT_CLIENTS.grok.agentFileTargets?.skillsDir?.sharedProject).toBe(".agents/skills");
     expect(AGENT_CLIENTS.codex.agentFileTargets?.skillsDir?.project).toBe(".agents/skills");
     expect(AGENT_CLIENTS.codex.agentFileTargets?.skillsDir?.sharedProject).toBeUndefined();
+    // muse reads the user config dir, the shared user dir, and the shared
+    // project dir — but has no muse-native project dir (a planted
+    // .muse/skills is ignored) and no verified user instruction file.
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.skillsDir?.user).toBe("~/.config/muse/skills");
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.skillsDir?.shared).toBe("~/.agents/skills");
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.skillsDir?.sharedProject).toBe(".agents/skills");
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.skillsDir?.project).toBeUndefined();
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.instructionFile?.project).toBe("AGENTS.md");
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.instructionFile?.user).toBeUndefined();
+    expect(AGENT_CLIENTS.muse.agentFileTargets?.mcpConfig?.user).toBe("~/.config/muse/settings.json");
     expect(AGENT_CLIENTS.claude.agentFileTargets?.skillsDir?.shared).toBeUndefined();
     expect(AGENT_CLIENTS.claude.agentFileTargets?.skillsDir?.sharedProject).toBeUndefined();
   });
@@ -374,6 +414,7 @@ describe("fork and switch capability helpers", () => {
     expect(agentSupportsFork("cursor")).toBe(false);
     expect(agentSupportsFork("gemini")).toBe(false);
     expect(agentSupportsFork("pi")).toBe(false);
+    expect(agentSupportsFork("muse")).toBe(false);
   });
 
   it("forks from any message only where the history can be rebuilt or cut by API", () => {
@@ -383,6 +424,7 @@ describe("fork and switch capability helpers", () => {
     // grok: native copy at the tip, rebuilt bundle for an earlier message.
     expect(agentForksFromAnyMessage("grok")).toBe(true);
     expect(agentForksFromAnyMessage("pi")).toBe(false);
+    expect(agentForksFromAnyMessage("muse")).toBe(false);
   });
 
   it("grok is the native-fork client and declares the resume-flag command", () => {
@@ -411,6 +453,9 @@ describe("fork and switch capability helpers", () => {
     expect(agentReconstitutes("opencode")).toBe(true);
     // cursor's SQLite store: nothing codecast can write.
     expect(agentReconstitutes("cursor")).toBe(false);
+    // muse: transcript sync reads session.jsonl, but no writer exists yet
+    // that muse will load — a switch into muse with history refuses up front.
+    expect(agentReconstitutes("muse")).toBe(false);
   });
 
   it("a blank session can become any agent; one with history only a rebuildable one", () => {
@@ -422,5 +467,7 @@ describe("fork and switch capability helpers", () => {
     expect(canSessionBecomeAgent("grok", 12)).toBe(true);
     expect(canSessionBecomeAgent("codex", 12)).toBe(true);
     expect(canSessionBecomeAgent("claude_code", 12)).toBe(true);
+    expect(canSessionBecomeAgent("muse", 0)).toBe(true);
+    expect(canSessionBecomeAgent("muse", 12)).toBe(false);
   });
 });
