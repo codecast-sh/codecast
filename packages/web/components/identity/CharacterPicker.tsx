@@ -18,7 +18,7 @@ import {
 } from "@codecast/shared/contracts/sessionCharacter";
 import { AVATAR_LABELS, RoleAvatar } from "../org/avatars";
 import { useInboxStore } from "../../store/inboxStore";
-import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
+import { characterFor, type IdentityRow } from "../../lib/sessionIdentity";
 import { moveRadioIndex } from "../team/radioNav";
 
 const COLUMNS = 6;
@@ -37,8 +37,8 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
   const store = useInboxStore;
   const many = rows.length > 1;
   const first = rows[0];
-  const current = useMemo(() => (first ? sessionIdentity(first) : null), [first]);
-  const currentAvatar = current?.kind === "character" ? current.avatar : AVATAR_KEYS[0];
+  const current = useMemo(() => (first ? characterFor(first) : null), [first]);
+  const currentAvatar = current?.avatar ?? AVATAR_KEYS[0];
 
   const [avatar, setAvatar] = useState<AvatarKey>(currentAvatar);
   const [name, setName] = useState(current?.name ?? "");
@@ -83,12 +83,10 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
 
   const reset = useCallback(() => {
     setNudge(0);
+    // Clearing both fields is how a session opts back out (personification is
+    // opt in), so the popover closes on the plain card rather than lingering
+    // on a face the row no longer wears.
     apply({ avatar: null as unknown as AvatarKey, name: null });
-    if (first) {
-      const d = sessionIdentity({ _id: first._id });
-      setAvatar(d.avatar);
-      setName(d.name);
-    }
     onDone?.();
   }, [apply, first, onDone]);
 
@@ -120,9 +118,9 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
           type="button"
           onClick={reset}
           className="inline-flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text"
-          title="Back to the one this session was given"
+          title="Take the character off; the card goes back to its title"
         >
-          <RotateCcw className="w-3 h-3" /> Default
+          <RotateCcw className="w-3 h-3" /> Remove
         </button>
       </div>
 

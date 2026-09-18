@@ -14,7 +14,10 @@ import { isAvatarKey, defaultAvatarFor } from "@codecast/shared/contracts/orgAva
 type HoverRow = IdentityRow & Record<string, any>;
 
 export function SessionIdentityHeader({ row, size = 36 }: { row: HoverRow; size?: number }) {
-  const id = sessionIdentity(row);
+  // Resolved as personified: this header sits under a face (the card opens
+  // off one, the picker previews one), so it names the character that face
+  // belongs to even when the row itself has not opted in.
+  const id = sessionIdentity(row, true) as Exclude<ReturnType<typeof sessionIdentity>, { kind: "plain" }>;
   const title = (row.title ?? "").trim();
   const showTitle = title && !(id.kind === "role" && title === id.name);
   return (

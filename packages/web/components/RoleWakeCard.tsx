@@ -39,6 +39,10 @@ export type RoleWakeCardProps = {
   canEdit: boolean;
   onSetPaused?: (paused: boolean) => void;
   routing?: RoleWakeRouting;
+  /** Fold mode (ConversationView foldWorkingTurns): the frame itself is a
+   *  prompt a machine sent and folds away; only where the turn's message
+   *  went (F4.2) stays, and nothing renders when nothing went anywhere. */
+  routingOnly?: boolean;
 };
 
 // The card under a person's message (scopes-and-feed.md F4.2): each hand the
@@ -154,8 +158,16 @@ function FooterButton({ icon: Icon, label, href, onClick, title, disabled }: { i
   return <button type="button" onClick={onClick} className={cls} style={style} title={title} disabled={disabled}>{inner}</button>;
 }
 
-export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused, routing }: RoleWakeCardProps) {
+export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused, routing, routingOnly }: RoleWakeCardProps) {
   const at = frame.at ?? (timestamp && timestamp > 0 ? timestamp : null);
+  if (routingOnly) {
+    if (!routing || (routing.hands.length === 0 && routing.sentTo.length === 0)) return null;
+    return (
+      <div className="mb-2 mx-1 rounded-lg overflow-hidden" style={{ background: soft(5), border: `1px solid ${soft(24)}` }} data-role-wake={frame.roleShortId} data-role-wake-routing-only>
+        <WhereItWent routing={routing} now={now} />
+      </div>
+    );
+  }
   const name = role?.name ?? frame.you?.name ?? frame.roleShortId;
   const handle = role?.handle ?? frame.you?.handle;
   const rolePath = `/org/${frame.roleShortId}`;

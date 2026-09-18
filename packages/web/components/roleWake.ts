@@ -68,7 +68,8 @@ const SECTION_KEYS: Array<[RegExp, RoleWakeSectionKey]> = [
   [/^you$/i, "you"],
   [/^why you are awake$/i, "why"],
   [/^your scope now$/i, "scope"],
-  [/^hands say$/i, "hands"],
+  // "Hands say" is the heading frames carried before org-roles-run-work.md R1.
+  [/^(your sessions|hands say)$/i, "hands"],
   [/^channels$/i, "channels"],
   [/^charter$/i, "charter"],
   [/^brief$/i, "brief"],

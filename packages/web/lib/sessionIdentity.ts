@@ -23,6 +23,7 @@ export type IdentityRow = {
   standing_role_id?: string | null;
   org_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
+  escalated_by_role?: { role_id: string; line: string; at: number } | null;
 };
 
 export type SessionIdentity =
@@ -65,4 +66,27 @@ export function identityLine(
   if (id.kind === "plain") return { name: null, title: t || null, handle: null };
   if (id.kind === "role") return { name: id.name, title: t && t !== id.name ? t : null, handle: id.handle };
   return { name: id.name, title: t || null, handle: null };
+}
+
+/** The role a row IS the standing session of, or null. The inbox reads it to
+ *  put the role's one number on its card (org-roles-run-work.md R1). */
+export function standingRoleIdOf(row: IdentityRow): string | null {
+  return row.standing_role_id ?? null;
+}
+
+/** The role a session reports to, when the role still looks after it: the
+ *  session renders as a small row under that role's card. An escalated session
+ *  answers null here and `escalationOf` instead. */
+export function roleLookingAfter(row: IdentityRow): SessionRoleSnapshot | null {
+  if (row.standing_role_id || row.escalated_by_role) return null;
+  return row.org_role_id && row.role ? row.role : null;
+}
+
+/** A role put this session in front of the person: who, and the one line that
+ *  says what the person will decide. `role` is null when the row's snapshot
+ *  has not arrived, and the line still renders. */
+export function escalationOf(row: IdentityRow): { role: SessionRoleSnapshot | null; line: string; at: number } | null {
+  const e = row.escalated_by_role;
+  if (!e) return null;
+  return { role: row.role && row.role._id === e.role_id ? row.role : null, line: e.line, at: e.at };
 }
