@@ -43,7 +43,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 ### When to create structure
 
-**Create a task** when your work will change code, fix a bug, or produce a deliverable. Run `cast task create "Title" -p <priority>` before you start implementing. This is the default — skip it only for simple questions, explanations, or quick lookups that don't produce changes.
+**Create a task** when your work will change code, fix a bug, or produce a deliverable AND will run long enough that someone could check on it in flight. Run `cast task create "Title" -p <priority>` before you start implementing. Skip it for questions, explanations and quick lookups, and for a small change you will finish within a few minutes: a task that opens and closes before anyone reads it is noise on the board, not progress. File one late rather than early — when the work turns out bigger than it looked, create the task then and carry on.
 
 **Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add `--human` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
 
@@ -55,7 +55,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run `cast plan create "Title" -g "goal"` and add tasks with `cast task create "Title" --plan <plan_id>`. Don't create plans for single-task work.
 
-**Bind before you build.** Whatever this session is working on right now should be a task or plan with your session bound to it — `cast task start <id>` claims a task, `cast plan bind <plan_id>` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; work done unbound is invisible to the human tracking it. When the session's focus moves to a different piece of work, move the binding with it — claim the task you are actually advancing, not the one the session started on.
+**Bind before you build.** Whenever the work warrants a task or plan, your session should be bound to it — `cast task start <id>` claims a task, `cast plan bind <plan_id>` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; work done unbound is invisible to the human tracking it. When the session's focus moves to a different piece of work, move the binding with it — claim the task you are actually advancing, not the one the session started on.
 
 **Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — `cast task ls -q "<topic>"` and `cast plan ls -q "<topic>"` filter by title/description so you don't have to scan a wall of IDs. Use `cast task ready` (optionally `-q`) for unclaimed work. Claim existing tasks with `cast task start <id>` rather than creating duplicates.
 
