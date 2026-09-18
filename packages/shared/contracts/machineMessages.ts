@@ -37,6 +37,17 @@ export function isToolResultCarrier(m: { role?: string; content?: string | null;
   return m.role === "user" && !!m.tool_results?.length;
 }
 
+// A poll answer the dashboard sends on the person's behalf (lib/pollPayload:
+// a permission prompt's key, a question's option, a "Continue"). It is JSON
+// with a `__cc_poll` marker, never words a person typed, so no surface may
+// show it as the person's prompt: the feed hides it, the sticky header and
+// the navigator skip it.
+export function isPollResponsePayload(rawContent: string | null | undefined): boolean {
+  const t = (rawContent ?? "").trimStart();
+  if (!t.startsWith("{") || !t.includes("__cc_poll")) return false;
+  try { return !!JSON.parse(t).__cc_poll; } catch { return false; }
+}
+
 export function isTurnInterruptionNotice(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
   const text = stripInjectionNoise(rawContent);
@@ -119,7 +130,7 @@ export function isProposalMessage(rawContent: string | null | undefined): boolea
   if (!rawContent) return false;
   return /^<proposal-message\s/.test(stripInjectionNoise(rawContent));
 }
-export function parseProposalMessage(rawContent: string | null | undefined): { proposal: string; change: number | null; from: string; about: string | null; body: string } | null {
+export function parseProposalMessage(rawContent: string | null | undefined): { proposal: string; change: number | null; ask?: number; from: string; about: string | null; body: string } | null {
   if (!rawContent) return null;
   const text = stripInjectionNoise(rawContent);
   const m = text.match(/^<proposal-message\s+([^>]*)>([\s\S]*?)(?:<\/proposal-message>\s*$|$)/);
@@ -129,10 +140,13 @@ export function parseProposalMessage(rawContent: string | null | undefined): { p
   // The trailing reply note is for the agent, not the reader.
   body = body.replace(/\n*\(Reply here;[\s\S]*\)\s*$/, "").trim();
   let about: string | null = null;
-  const head = body.match(/^(About \S+ change \d+ \("[^\n]*"\):)\s*\n+/);
+  const head = body.match(/^(About \S+ (?:change|ask) \d+ \("[^\n]*"\):)\s*\n+/);
   if (head) { about = head[1]; body = body.slice(head[0].length).trim(); }
   const change = attr("change");
-  return { proposal: attr("proposal"), change: change ? Number(change) : null, from: attr("from").trim(), about, body };
+  // `ask` (S19) is the index `orgProposals.decideAsk` takes, from 0; present
+  // only on a reply a person sent from an ask's card.
+  const ask = attr("ask");
+  return { proposal: attr("proposal"), change: change ? Number(change) : null, ...(ask ? { ask: Number(ask) } : {}), from: attr("from").trim(), about, body };
 }
 
 // The multi-agent harness wraps a message from another agent in

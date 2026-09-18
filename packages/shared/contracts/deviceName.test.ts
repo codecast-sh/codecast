@@ -32,10 +32,12 @@ describe("deviceDisplayName", () => {
 });
 
 describe("isCloudAssignedHostname / isRemoteHost", () => {
-  it("treats AWS ip-* and grok-bot-vm hostnames as cloud boxes", () => {
+  it("treats AWS ip-*, grok-bot-vm and htch-runtime hostnames as cloud boxes", () => {
     expect(isCloudAssignedHostname("Linux - grok-bot-vm-2307902")).toBe(true);
     expect(isCloudAssignedHostname("Linux - ip-172-31-40-243")).toBe(true);
     expect(isCloudAssignedHostname("macOS - ip-172-31-29-242.us-east-2.compute.internal")).toBe(true);
+    expect(isCloudAssignedHostname("Linux - htch-runtime")).toBe(true);
+    expect(isCloudAssignedHostname("Linux - htch-runtime-4f21")).toBe(true);
     expect(isCloudAssignedHostname("Linux - Anduril")).toBe(false);
     expect(isCloudAssignedHostname("macOS - MacBook-Pro-4.local")).toBe(false);
     expect(isCloudAssignedHostname("Linux - ip-man")).toBe(false);
@@ -44,6 +46,7 @@ describe("isCloudAssignedHostname / isRemoteHost", () => {
   it("counts a flagged remote and an unflagged cloud hostname as a remote host", () => {
     expect(isRemoteHost({ is_remote: true, label: "Mac-mini" })).toBe(true);
     expect(isRemoteHost({ is_remote: false, label: "Linux - grok-bot-vm-2307902" })).toBe(true);
+    expect(isRemoteHost({ is_remote: false, label: "Linux - htch-runtime" })).toBe(true);
     expect(isRemoteHost({ is_remote: false, label: "Linux - Anduril" })).toBe(false);
     expect(isRemoteHost({ label: "MacBook" })).toBe(false);
   });

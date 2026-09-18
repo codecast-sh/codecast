@@ -49,7 +49,7 @@ export const CODECAST_EVENTS = defineCatalog({
   first_session_synced: {
     agent_type: {
       type: "string",
-      values: ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok"],
+      values: ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"],
     },
   },
 
