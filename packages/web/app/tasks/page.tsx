@@ -10,7 +10,11 @@ import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { TaskDetailContent } from "./[id]/page";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
 import { dragCarriesPane } from "../../lib/stage";
-import { AvatarImg } from "../../lib/avatarCache";
+import { AssigneeFace } from "../../components/identity/AssigneeFace";
+import { chainAssignees, roleAssigneeInfo, sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
+import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
+import { useOrgRoles } from "../../hooks/useOrgRoles";
+import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
@@ -24,7 +28,7 @@ const NO_MEMBERS: RosterIdentity[] = [];
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge, TASK_STATUS, TASK_STATUS_ORDER, type TaskStatus } from "../../components/TaskStatusBadge";
-import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
+import { buildTaskGroups, canSubGroup, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
 import { boardOrderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
@@ -109,8 +113,10 @@ const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string;
 };
 
 const STATUS_ORDER = TASK_STATUS_ORDER;
-/** What the default "Not done" tab shows: every status but the terminal two. */
-const NOT_DONE: TaskStatus[] = STATUS_ORDER.filter((st) => st !== "done" && st !== "dropped");
+/** What the default "Active" tab shows: work that is live. Done and Dropped are
+ *  finished, and Backlog is not started — a pile you keep rather than a queue
+ *  you work, so it belongs behind the Status filter, not in the default list. */
+const ACTIVE: TaskStatus[] = STATUS_ORDER.filter((st) => st !== "done" && st !== "dropped" && st !== "backlog");
 
 export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, indent = 0, hiddenDescendantCount = 0, progress, collapsed = false, onToggleCollapse, parentChip }: {
   task: TaskItem;
@@ -318,18 +324,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}
       {task.assignee_info && (() => {
-        const avatar = (
-          <AvatarImg
-            src={task.assignee_info.image}
-            alt={task.assignee_info.name}
-            className="w-5 h-5 rounded-full ring-1 ring-sol-cyan/30"
-            fallback={
-              <div className="w-5 h-5 rounded-full bg-sol-cyan/10 border border-sol-cyan/30 flex items-center justify-center text-[8px] font-medium text-sol-cyan">
-                {task.assignee_info.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
-              </div>
-            }
-          />
-        );
+        const avatar = <AssigneeFace info={task.assignee_info} size={20} />;
         return (
           <button
             type="button"
@@ -554,19 +549,7 @@ function KanbanCard({
             />
           ) : null}
           {assignee ? (() => {
-            const av = (
-              <AvatarImg
-                src={assignee.image}
-                alt={assignee.name}
-                className="w-4 h-4 rounded-full"
-                title={assignee.name}
-                fallback={
-                  <div className="w-4 h-4 rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[7px] font-medium text-sol-text-muted" title={assignee.name}>
-                    {assignee.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
-                }
-              />
-            );
+            const av = <AssigneeFace info={assignee} size={16} />;
             return (
               <button
                 type="button"
@@ -1033,15 +1016,13 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     return projectId ? url.replace("/tasks", `/projects/${projectId}`) : url;
   }, [buildShareUrl, projectId]);
 
-  // One status control. `status` holds the selection: "" is the default (not
-  // done), "all" is everything, otherwise a comma list of status categories.
-  // Older links and saved views carried a separate multi `statuses` filter;
-  // it is read as the same thing and cleared the moment the tabs write.
+  // One status selection, two controls over it (the preset pills and the Status
+  // filter). `status` holds it: "" is the default (active work), "all" is
+  // everything, otherwise a comma list of statuses — the team's own status ids,
+  // which on a default team are the category names. Older links and saved views
+  // carried a separate multi `statuses` filter, and named categories; both are
+  // read as the same thing and rewritten the moment either control writes.
   const statusFilter = urlStatus || statusesFilter || (completedFilter ? "done" : "");
-  const setStatusFilter = useCallback((s: string) => {
-    setTaskFilter({ status: s });
-    setParam({ status: s, statuses: "", ...(s !== "all" && !s.split(",").includes("done") ? { completed: "" } : {}) });
-  }, [setTaskFilter, setParam]);
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   // The prefs a view should store: what is on screen now, minus bookkeeping.
   const livePrefs = useMemo(
@@ -1093,6 +1074,16 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // the defaults in the personal space. Everything visible is one workspace
   // (filterToWorkspace below), so one list serves columns, groups and drops.
   const taskStatuses = useTeamTaskStatusList(activeTeamId);
+  const setStatusFilter = useCallback((s: string) => {
+    // The "completed in the last N days" window only means anything while
+    // finished work is on screen, so a selection that drops it drops the window
+    // too. A team's done status may be named anything, so ask the category.
+    const keys = new Set(s.split(","));
+    const keepsDone = s === "all" || keys.has("done")
+      || taskStatuses.some((st) => st.category === "done" && keys.has(st.id));
+    setTaskFilter({ status: s });
+    setParam({ status: s, statuses: "", ...(keepsDone ? {} : { completed: "" }) });
+  }, [setTaskFilter, setParam, taskStatuses]);
   const kanbanKeyFor = useCallback((t: TaskItem) => taskStatusKey(t as any, taskStatuses), [taskStatuses]);
   // Board columns run pipeline order (open left, done right), then any order
   // the user dragged into place. The order is presentation, so it lives in the
@@ -1113,6 +1104,37 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // than as the last team's people.
   const roster = useTeamRosterIdentity();
   const teamMembers = effectiveTeamId ? roster : NO_MEMBERS;
+  // Roles own tasks like people do (org-roles-run-work.md R5). The board only
+  // names roles and reads who reports to whom, so it takes the wake signature
+  // reader, never the whole tree (a message under any node would repaint it),
+  // and mounts the feeder because nothing guarantees the org page came first.
+  useSyncOrgTreeFeeder();
+  const { roles: orgRoles } = useOrgRoles();
+  // The assignee filter lists people, then roles, each under its own heading
+  // and drawn with its face. People come first so the list a person already
+  // knows keeps its order. "My reporting chain" is the filter form of the
+  // Chain grouping: my tasks and those of every role that answers to me.
+  const assigneeOptions = useMemo(() => {
+    const roles = orgRoles
+      .filter((r) => r.status !== "retired")
+      .map((r) => ({ key: r._id, label: r.name, section: "Roles", face: <AssigneeFace info={roleAssigneeInfo(r)} size={14} hover={false} /> }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    const people = teamMembers.map((m) => {
+      const name = memberDisplayName(m, m._id);
+      return { key: m._id, label: name, section: roles.length ? "People" : undefined, face: <AssigneeFace info={{ name, image: memberAvatarUrl(m) }} size={14} /> };
+    });
+    return [
+      { key: "", label: "Anyone" },
+      { key: "_unassigned", label: "Unassigned" },
+      ...(roles.length ? [{ key: "_chain", label: "My reporting chain" }] : []),
+      ...people,
+      ...roles,
+    ];
+  }, [orgRoles, teamMembers]);
+  const myChain = useMemo(
+    () => (assigneeFilter === "_chain" && currentUser ? new Set(chainAssignees(currentUser._id, orgRoles)) : null),
+    [assigneeFilter, currentUser, orgRoles]
+  );
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -1223,15 +1245,22 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     // terminal states.
     if (statusFilter && statusFilter !== "all") {
       const set = new Set(statusFilter.split(","));
-      list = list.filter((t) => set.has(t.status));
+      // A selection names STATUSES, which on a team with custom ones are finer
+      // than categories ("Today" and "In Progress" both sit in in_progress), so
+      // membership tests the resolved status. A category name survives as a key
+      // only where the team has no status of that id — an older link or saved
+      // view, which still means "everything in this category".
+      const legacyCats = new Set(
+        [...set].filter((k) => (STATUS_ORDER as string[]).includes(k) && !taskStatuses.some((st) => st.id === k)),
+      );
+      list = list.filter((t) => set.has(kanbanKeyFor(t)) || legacyCats.has(t.status));
     } else if (statusFilter !== "all" && viewMode !== "kanban" && sourceFilter !== "triage" && sourceFilter !== "dismissed") {
-      // Default "Not done" tab (no explicit status selected): exclude terminal
-      // states so the list contents match the tab's label AND its badge count
-      // (taskCounts.active, which already excludes done/dropped). The kanban
-      // board is a full-pipeline view that legitimately renders Done/Dropped
-      // columns, so it keeps all statuses; likewise the triage/dismissed
-      // source views.
-      list = list.filter((t) => t.status !== "done" && t.status !== "dropped");
+      // Default "Active" tab (no explicit status selected): live work only, so
+      // the list matches the tab's label AND its badge count (taskCounts.active,
+      // which drops the same three). The kanban board is a full-pipeline view
+      // that legitimately renders Backlog and Done columns, so it keeps every
+      // status; likewise the triage/dismissed source views.
+      list = list.filter((t) => (ACTIVE as string[]).includes(t.status));
     }
 
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
@@ -1243,9 +1272,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
       list = list.filter((t) => t.labels?.some((l) => wanted.includes(l)));
     }
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
+    else if (assigneeFilter === "_chain") list = list.filter((t) => !!t.assignee && !!myChain?.has(t.assignee));
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [completionFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, sourceFilter, viewMode]);
+  }, [completionFilteredTasks, priorityFilter, labelFilter, assigneeFilter, myChain, statusFilter, sourceFilter, viewMode, taskStatuses, kanbanKeyFor]);
 
   // Session-linkage filter, layered last. "Has session" must match exactly what
   // the row shows a session pill for, so it mirrors the badge's union: a live
@@ -1270,12 +1300,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     // instantly. Keep the same task reference when nothing changed so the
     // downstream sort/group memos stay referentially stable.
     return base.map((t) => {
-      const info = resolveAssigneeInfo(t.assignee, t.assignee_info, teamMembers as any[], currentUser);
-      const cur = t.assignee_info as any;
-      const same = (!info && !cur) || (!!info && !!cur && info.name === cur.name && info.image === cur.image && info.github_username === cur.github_username);
-      return same ? t : ({ ...t, assignee_info: info } as TaskItem);
+      const info = resolveAssigneeInfo(t.assignee, t.assignee_info, teamMembers as any[], currentUser, orgRoles);
+      return sameAssigneeInfo(info, t.assignee_info) ? t : ({ ...t, assignee_info: info } as TaskItem);
     });
-  }, [baseFilteredTasks, sessionFilter, taskHasSession, teamMembers, currentUser]);
+  }, [baseFilteredTasks, sessionFilter, taskHasSession, teamMembers, currentUser, orgRoles]);
 
   // One comparator drives both the flat list and within-group ordering, so the
   // chosen sort field + direction applies everywhere. Ties fall back to a stable
@@ -1321,8 +1349,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // "Assignee · Project" — comes out of one keyed grouper (lib/taskGrouping),
   // so an added axis or pairing costs a descriptor rather than a memo.
   const groupCtx = useMemo(
-    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses }),
-    [projects, setParam, taskStatuses]
+    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser }),
+    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser]
   );
 
   const listGroups = useMemo(
@@ -1346,39 +1374,68 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     }, {});
   }, [filteredTasks, kanbanKeyFor]);
 
+  // Counts for both vocabularies at once: by category (what the presets mean)
+  // and by resolved status (what the Status filter offers, custom ones included).
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0, all: 0 };
     for (const t of completionFilteredTasks) {
       counts[t.status] = (counts[t.status] || 0) + 1;
+      const key = kanbanKeyFor(t);
+      if (key !== t.status) counts[key] = (counts[key] || 0) + 1;
       counts.all++;
-      if (t.status !== "done" && t.status !== "dropped") counts.active++;
+      if ((ACTIVE as string[]).includes(t.status)) counts.active++;
     }
     return counts;
-  }, [completionFilteredTasks]);
-  // The status tabs that exist for this list: the four everyone has, plus the
-  // categories only some teams use (in_review, dropped) once rows carry them.
-  const statusTabKeys = useMemo(
-    () => STATUS_ORDER.filter((st) => (st !== "in_review" && st !== "dropped") || (taskCounts[st] || 0) > 0),
-    [taskCounts],
+  }, [completionFilteredTasks, kanbanKeyFor]);
+  // One status vocabulary, two controls over it. The pills carry the three
+  // answers people want without thinking — the live work, everything, the
+  // finished work — and every finer selection (one status, a handful, a team's
+  // custom ones) is the Status filter beside Priority and Assignee. Both write
+  // the same `status` value, so whichever you use the other tells the truth.
+  // Dropped is the one status worth hiding while it is empty — it is a category
+  // most teams never use. It comes back the moment a row carries it, or while
+  // the current selection names it, so no selection can point at a status the
+  // list does not offer.
+  const statusOptionList = useMemo(() => {
+    const picked = new Set(statusFilter.split(","));
+    return boardStatuses.filter(
+      (st) => st.category !== "dropped" || (taskCounts[st.id] || 0) > 0 || picked.has(st.id),
+    );
+  }, [boardStatuses, taskCounts, statusFilter]);
+  // A selection is written in board order so the same set is always the same
+  // string — that is what lets the presets below be compared by value.
+  const canonicalStatuses = useCallback(
+    (keys: Iterable<string>) => {
+      const want = new Set(keys);
+      return statusOptionList.filter((st) => want.has(st.id)).map((st) => st.id).join(",");
+    },
+    [statusOptionList],
   );
-  // What the current selection means as a set of visible statuses.
-  const selectedStatuses = useMemo(() => {
-    if (statusFilter === "all") return new Set(statusTabKeys);
-    if (!statusFilter) return new Set(statusTabKeys.filter((st) => NOT_DONE.includes(st)));
-    return new Set(statusFilter.split(","));
-  }, [statusFilter, statusTabKeys]);
-  // Add or remove one status. The result is written back in its shortest
-  // form: the default set folds to "", the whole set to "all", and an empty
-  // set means no constraint at all — the same as every checkbox filter.
-  const toggleStatus = useCallback((key: string) => {
-    const next = new Set(selectedStatuses);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    const same = (keys: string[]) => keys.length === next.size && keys.every((k) => next.has(k));
-    const notDone = statusTabKeys.filter((st) => NOT_DONE.includes(st));
-    if (next.size === 0 || same(statusTabKeys)) setStatusFilter("all");
-    else if (same(notDone)) setStatusFilter("");
-    else setStatusFilter(STATUS_ORDER.filter((st) => next.has(st)).join(","));
-  }, [selectedStatuses, statusTabKeys, setStatusFilter]);
+  const activeValue = useMemo(
+    () => canonicalStatuses(statusOptionList.filter((st) => ACTIVE.includes(st.category as TaskStatus)).map((st) => st.id)),
+    [canonicalStatuses, statusOptionList],
+  );
+  const doneValue = useMemo(
+    () => canonicalStatuses(statusOptionList.filter((st) => st.category === "done").map((st) => st.id)),
+    [canonicalStatuses, statusOptionList],
+  );
+  // What the popover shows ticked. "all" means no constraint, so nothing is
+  // ticked and its "Any status" row is the selected one.
+  const statusFilterValue = useMemo(() => {
+    if (statusFilter === "all") return "";
+    if (!statusFilter) return activeValue;
+    return canonicalStatuses(statusFilter.split(","));
+  }, [statusFilter, activeValue, canonicalStatuses]);
+  // Ticking statuses in the popover folds back into the shortest value that
+  // means the same thing, so picking exactly the open statuses lands you back
+  // on the "Active" pill rather than on an identical-looking custom set.
+  const setStatusSelection = useCallback((v: string) => {
+    const picked = canonicalStatuses(v.split(",").filter(Boolean));
+    if (!picked) setStatusFilter("all");
+    else if (picked === canonicalStatuses(statusOptionList.map((st) => st.id))) setStatusFilter("all");
+    else if (picked === activeValue) setStatusFilter("");
+    else setStatusFilter(picked);
+  }, [canonicalStatuses, statusOptionList, activeValue, setStatusFilter]);
 
   // View-scope pass, ONE tree walk per rendered list: indent per row (nesting
   // stays inside each group, so a parent under one header never adopts a child
@@ -1549,25 +1606,18 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           getComposeRef={(t) => t.short_id}
           title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
           tabs={[
-            // Two presets, then the statuses they are made of. Each preset
-            // declares its members so the pills/checkboxes show what it means.
-            { key: "all", label: "All", count: taskCounts.all, icon: Layers, implies: statusTabKeys, title: "Every status, including Done and Dropped" },
-            {
-              key: "", label: "Not done", count: taskCounts.active, icon: Activity,
-              implies: statusTabKeys.filter((st) => NOT_DONE.includes(st)),
-              title: "Not finished: " + NOT_DONE.filter((st) => statusTabKeys.includes(st)).map((st) => STATUS_CONFIG[st].label).join(", "),
-            },
-            ...statusTabKeys.map((s) => ({
-              key: s,
-              label: STATUS_CONFIG[s].label,
-              count: taskCounts[s] || 0,
-              icon: STATUS_CONFIG[s].icon,
-              toggle: true,
-            })),
+            // The three answers worth a click: everything, the open work, the
+            // finished work. Anything finer is the Status filter in the bar
+            // below — the pills would otherwise grow a segment per custom
+            // status until the header could not hold them.
+            { key: "", label: "Active", count: taskCounts.active, icon: Activity,
+              title: "Live work: " + statusOptionList.filter((st) => ACTIVE.includes(st.category as TaskStatus)).map((st) => st.name).join(", ") },
+            { key: "all", label: "All", count: taskCounts.all, icon: Layers, title: "Every status, Backlog and Done and Dropped included" },
+            { key: doneValue || "done", label: "Done", count: taskCounts.done || 0, icon: STATUS_CONFIG.done.icon,
+              title: "Finished work" },
           ]}
           activeTab={statusFilter}
           onTabChange={setStatusFilter}
-          onTabToggle={toggleStatus}
           groupBy={primaryAxis}
           groupOptions={[
             { value: "none", label: "No grouping" },
@@ -1577,7 +1627,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           subGroupBy={secondaryAxis}
           subGroupOptions={[
             { value: "none", label: "Nothing" },
-            ...axisKeys.filter((k) => k !== primaryAxis).map((k) => ({ value: k, label: TASK_AXES[k].label })),
+            ...axisKeys.filter((k) => canSubGroup(primaryAxis, k)).map((k) => ({ value: k, label: TASK_AXES[k].label })),
           ]}
           onSubGroupChange={setSecondaryAxis}
           sortBy={sort}
@@ -1592,8 +1642,23 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           sortDir={dir}
           onSortDirChange={toggleSortDir}
           filters={{
-            hasActive: !!(priorityFilter || labelFilter || assigneeFilter || sourceFilter || sessionFilter || completedFilter),
+            hasActive: !!(priorityFilter || labelFilter || assigneeFilter || sourceFilter || sessionFilter || completedFilter || (statusFilter && statusFilter !== "all")),
             defs: [
+              {
+                key: "status", label: "Status", icon: <Circle className="w-3 h-3" />, value: statusFilterValue, multi: true,
+                // The pills already say Active / All / Done, so those three
+                // values draw no chip — the chip appears exactly when the
+                // selection is something the pill row cannot show.
+                presetValues: ["", activeValue, doneValue],
+                options: [
+                  { key: "", label: "Any status" },
+                  ...statusOptionList.map((st) => {
+                    const v = statusVisual(st, taskStatuses);
+                    return { key: st.id, label: v.label, icon: v.icon, color: v.color, count: taskCounts[st.id] || 0 };
+                  }),
+                ],
+                onChange: setStatusSelection,
+              },
               {
                 key: "completed", label: "Completed", icon: <CalendarDays className="w-3 h-3" />, value: completedFilter,
                 options: [{ key: "", label: "Any time" }, ...COMPLETION_WINDOWS],
@@ -1617,11 +1682,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
               },
               {
                 key: "assignee", label: "Assignee", icon: <User className="w-3 h-3" />, value: assigneeFilter,
-                options: [
-                  { key: "", label: "Anyone" },
-                  { key: "_unassigned", label: "Unassigned" },
-                  ...teamMembers.map((m) => ({ key: m._id, label: m.name || m.email || m.github_username || m._id })),
-                ],
+                options: assigneeOptions,
                 onChange: (v: string) => setParam({ assignee: v }),
               },
               {
@@ -1648,7 +1709,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
                 onChange: (v: string) => setParam({ source: v }),
               },
             ],
-            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "", completed: "" }),
+            onClear: () => setParam({ status: "", statuses: "", priority: "", label: "", assignee: "", source: "", session: "", completed: "" }),
             onSaveView: handleSaveView,
             dirtyView,
           }}
