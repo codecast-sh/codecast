@@ -38,7 +38,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "9"
+      "work_version": "10"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -88,7 +88,7 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "8f6abcfbd8d599e9",
+      ".claude/hooks/thread-state.sh": "dd54097bea0ced4d",
       ".claude/settings.json": "db62c7a6cc130605"
     }
   },
@@ -113,7 +113,7 @@
   "browser": {
     "config": {
       "browser_enabled": true,
-      "browser_version": "16"
+      "browser_version": "17"
     },
     "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -125,6 +125,15 @@
       "computer_version": "1"
     },
     "stdout": "* Computer — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
+  "check": {
+    "config": {
+      "check_enabled": true,
+      "check_version": "1"
+    },
+    "stdout": "* Typecheck — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -149,7 +158,7 @@
   "orchestration": {
     "config": {
       "orch_enabled": true,
-      "orch_version": "9"
+      "orch_version": "10"
     },
     "stdout": "* Orchestration — updated in ~/.claude/skills/, ~/.claude/agents/, and ~/.claude/settings.json (hooks)\n",
     "wroteClaudeMd": false,
@@ -181,6 +190,7 @@
       ".claude/skills/cast-lessons/SKILL.md": "0a7b06647136ecc4",
       ".claude/skills/cast-loop/SKILL.md": "45281d9e9adc4bd3",
       ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
+      ".claude/skills/cast-org/SKILL.md": "0f105b434ba5be45",
       ".claude/skills/cast-pass/SKILL.md": "a2f0deecd382bf8d",
       ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
       ".claude/skills/cast-plan/SKILL.md": "a830b8850214b8aa",
