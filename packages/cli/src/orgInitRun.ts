@@ -14,7 +14,7 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
@@ -59,6 +59,9 @@ const SPEC_EXAMPLE = JSON.stringify({
       expected_effect: "What should be different at the next review, and how you will know.",
       risk: "What could go wrong, and what you would watch.",
     },
+  ],
+  asks: [
+    { title: "What the person is agreeing to, readable on its own", why: "One sentence of why.", effect: "One line of what changes for them when they accept.", seqs: [1] },
   ],
 }, null, 2);
 
@@ -137,6 +140,8 @@ ${SPEC_EXAMPLE}
 \`\`\`
 
 Every change carries its own rationale, evidence a person can click (a label, and a link where one exists: \`cast link <id>\` prints the link for a session, a task, a plan or a project; a role's page is \`/org/or-N\`), the effect you expect and the risk you see. Order the changes so the status changes that bring records in line come first, as their own group, then a project before the role that owns it and a parent before its child; a retirement goes last. The page groups the status changes under "Bring records in line" at the top, and the person decides them before the seats that rest on them. Every role change carries its tenure, and its rationale says why standing or why a program and what ends it. A proposal names each subject once: one status per plan or task, one project_meta carrying every field you set for a project, one row per role for each kind. Build the spec so no two of your lists can name the same subject; two rows that agree about one subject are folded into one at the post and named, and two that disagree are refused.
+
+${ORG_ASKS_RULE}
 
 The summary is the ask. ${ORG_ASK_RULES.reader} ${ORG_ASK_RULES.decision_first} ${ORG_ASK_RULES.invented_words} ${ORG_ASK_RULES.numbers_mean_something} ${ORG_ASK_RULES.cost_in_plain_words} ${ORG_ASK_RULES.readable_once} The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here. After the ask come the evidence, one line per finding, then what you could not verify and the findings that are not changes, as a short list; each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word.
 
@@ -322,6 +327,7 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   if (options.json) { console.log(JSON.stringify({ ...result, url: proposalUrl(deps, result.short_id) }, null, 2)); return; }
   const n = result.changes?.length ?? parsed.spec.changes.length;
   console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${parsed.spec.mode}`)}`);
+  for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
 }
 

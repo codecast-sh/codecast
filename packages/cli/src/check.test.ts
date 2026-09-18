@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
-import { checkProject, classifyWatchLine, outputPath, readWatchState, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import * as os from "node:os";
+import { checkProject, classifyWatchLine, IDLE_EXIT_MS, makeRoom, shouldIdleExit, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -54,7 +55,7 @@ describe("checkProject", () => {
     writeWatchState(dir, { pid: process.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: Date.now() - 1000, errors: 2 });
     fs.writeFileSync(outputPath(dir), "a.ts(1,1): error TS1\n");
     let starts = 0;
-    const r = await checkProject("web", "/tree", { start: () => { starts++; } });
+    const r = await checkProject({ name: "web", tsconfig: "x" }, "/tree", { start: () => { starts++; } });
     expect(r).toMatchObject({ errors: 2, diagnostics: "a.ts(1,1): error TS1\n", started: false });
     expect(starts).toBe(0);
     expect(readWatchState(dir)?.askedAt).toBeGreaterThan(Date.now() - 5_000);
@@ -67,7 +68,7 @@ describe("checkProject", () => {
       writeWatchState(dir, { ...readWatchState(dir)!, inProgress: false, finishedAt: Date.now(), errors: 0 });
       fs.writeFileSync(outputPath(dir), "\n");
     }, 1200);
-    const r = await checkProject("cli", "/tree", { start: () => {} });
+    const r = await checkProject({ name: "cli", tsconfig: "x" }, "/tree", { start: () => {} });
     expect(r.errors).toBe(0);
   });
 
@@ -80,12 +81,95 @@ describe("checkProject", () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(outputPath(dir), "\n");
     };
-    const r = await checkProject("convex", "/tree", { start });
+    const r = await checkProject({ name: "convex", tsconfig: "x" }, "/tree", { start });
     expect(r.started).toBe(true);
     expect(starts).toBe(1);
     // A dead pid is a watcher to replace.
     writeWatchState(dir, { ...readWatchState(dir)!, pid: 999999999 });
-    await checkProject("convex", "/tree", { start });
+    await checkProject({ name: "convex", tsconfig: "x" }, "/tree", { start });
     expect(starts).toBe(2);
+  });
+});
+
+describe("which programs a tree carries", () => {
+  let tree: string;
+  beforeEach(() => {
+    tree = fs.mkdtempSync(path.join(os.tmpdir(), "cast-check-tree-"));
+    for (const d of ["packages/a", "packages/b", "packages/b/deep"]) fs.mkdirSync(path.join(tree, d), { recursive: true });
+    fs.writeFileSync(path.join(tree, "packages/a/tsconfig.json"), "{}");
+    fs.writeFileSync(path.join(tree, "packages/b/tsconfig.json"), "{}");
+  });
+  afterEach(() => fs.rmSync(tree, { recursive: true, force: true }));
+
+  test("names come from .codecast/check.toml, and every listed project is the default set", () => {
+    fs.mkdirSync(path.join(tree, ".codecast"));
+    fs.writeFileSync(path.join(tree, ".codecast/check.toml"), '[projects]\na = "packages/a/tsconfig.json"\nb = "packages/b/tsconfig.json"\ngone = "packages/gone/tsconfig.json"\n');
+    expect(readCheckConfig(tree)).toEqual([
+      { name: "a", tsconfig: "packages/a/tsconfig.json" },
+      { name: "b", tsconfig: "packages/b/tsconfig.json" },
+      { name: "gone", tsconfig: "packages/gone/tsconfig.json" },
+    ]);
+    // A listed program that is not in this tree (a worktree from before it existed) is skipped, not an error.
+    expect(resolveProjects(tree, [], tree).map((p) => p.name)).toEqual(["a", "b"]);
+    expect(resolveProjects(tree, ["b"], tree)).toEqual([{ name: "b", tsconfig: "packages/b/tsconfig.json" }]);
+    expect(() => resolveProjects(tree, ["nope"], tree)).toThrow(/one of a, b, gone/);
+  });
+
+  test("a malformed config is named, not guessed around", () => {
+    fs.mkdirSync(path.join(tree, ".codecast"));
+    fs.writeFileSync(path.join(tree, ".codecast/check.toml"), "[projects]\na = 3\n");
+    expect(() => readCheckConfig(tree)).toThrow(/projects.a must be a tsconfig path/);
+    fs.writeFileSync(path.join(tree, ".codecast/check.toml"), "[setup]\n");
+    expect(() => readCheckConfig(tree)).toThrow(/\[projects\] table/);
+  });
+
+  test("without a config, the program nearest the caller's directory is the default", () => {
+    expect(nearestTsconfig(tree, path.join(tree, "packages/b/deep"))).toBe("packages/b/tsconfig.json");
+    expect(nearestTsconfig(tree, tree)).toBeNull();
+    expect(resolveProjects(tree, [], path.join(tree, "packages/b/deep"))).toEqual([{ name: "packages-b", tsconfig: "packages/b/tsconfig.json" }]);
+    expect(() => resolveProjects(tree, [], tree)).toThrow(/no tsconfig.json between/);
+  });
+
+  test("a project can be named by its directory or its tsconfig, inside the tree only", () => {
+    expect(resolveProjects(tree, ["packages/a"], tree)).toEqual([{ name: "packages-a", tsconfig: "packages/a/tsconfig.json" }]);
+    expect(resolveProjects(tree, ["packages/a/tsconfig.json"], tree)).toEqual([{ name: "packages-a", tsconfig: "packages/a/tsconfig.json" }]);
+    expect(resolveProjects(tree, ["a"], path.join(tree, "packages"))).toEqual([{ name: "packages-a", tsconfig: "packages/a/tsconfig.json" }]);
+    expect(() => resolveProjects(tree, [os.tmpdir()], tree)).toThrow(/unknown project/);
+    expect(slugOf("")).toBe("root");
+    expect(slugOf("./packages/cli")).toBe("packages-cli");
+  });
+});
+
+describe("the machine wide watcher cap", () => {
+  test("the least recently asked watchers are stopped to make room, and their state files go with them", () => {
+    const now = Date.now();
+    const seed = (root: string, project: string, askedAt: number) =>
+      writeWatchState(watchDir(root, project), { pid: process.pid, project, tsconfig: "x", root, startedAt: 1, inProgress: false, finishedAt: now, errors: 0, askedAt });
+    seed("/t1", "a", now - 3_000);
+    seed("/t1", "b", now - 1_000);
+    seed("/t2", "a", now - 2_000);
+    const killed: number[] = [];
+    const evicted = makeRoom(2, (pid) => killed.push(pid));
+    expect(evicted.map((w) => `${w.root}/${w.project}`)).toEqual(["/t1/a", "/t2/a"]);
+    expect(killed).toHaveLength(2);
+    expect(readWatchState(watchDir("/t1", "a"))).toBeNull();
+    expect(readWatchState(watchDir("/t1", "b"))).not.toBeNull();
+    // A state file whose pid is dead is cleared on listing rather than counted.
+    writeWatchState(watchDir("/t3", "z"), { pid: 999999999, project: "z", tsconfig: "x", root: "/t3", startedAt: 1, inProgress: true });
+    expect(makeRoom(2, () => {})).toEqual([]);
+    expect(readWatchState(watchDir("/t3", "z"))).toBeNull();
+  });
+});
+
+describe("idle exit", () => {
+  test("a watcher exits only when idle past the window, and never while a pass is in flight", () => {
+    const t = 10_000_000;
+    const base = { startedAt: t - 2 * IDLE_EXIT_MS, inProgress: false };
+    expect(shouldIdleExit({ ...base, askedAt: t - IDLE_EXIT_MS - 1 }, t)).toBe(true);
+    expect(shouldIdleExit({ ...base, askedAt: t - IDLE_EXIT_MS + 1 }, t)).toBe(false);
+    // A pass that just finished is as good as an ask.
+    expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 }, t)).toBe(false);
+    // A first pass still building on a loaded machine is not idle, however old.
+    expect(shouldIdleExit({ ...base, inProgress: true, askedAt: t - 3 * IDLE_EXIT_MS }, t)).toBe(false);
   });
 });

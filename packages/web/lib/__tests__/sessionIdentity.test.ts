@@ -21,10 +21,13 @@ describe("sessionIdentity", () => {
     expect(src).toMatch(/export function sessionIdentity\b/);
   });
 
-  test("a plain session wears its hash default until something is chosen", () => {
+  test("a session nobody personified stays plain — the face is opt in", () => {
+    expect(sessionIdentity({ _id: ID })).toEqual({ kind: "plain", reportsTo: null });
+  });
+
+  test("the workspace switch personifies a plain session with its hash default", () => {
     const d = defaultCharacterFor(ID);
-    const id = sessionIdentity({ _id: ID });
-    expect(id).toEqual({ kind: "character", avatar: d.avatar, name: d.name, chosen: false, reportsTo: null });
+    expect(sessionIdentity({ _id: ID }, true)).toEqual({ kind: "character", avatar: d.avatar, name: d.name, chosen: false, reportsTo: null });
   });
 
   test("a chosen face and name win, and mark the row as chosen", () => {
@@ -45,15 +48,23 @@ describe("sessionIdentity", () => {
   });
 
   test("a hand under a role keeps its own character and points at the role", () => {
-    const id = sessionIdentity({ _id: ID, org_role_id: ROLE._id, role: { ...ROLE } });
+    // Reporting to a role does NOT personify you: only the role's own standing
+    // session wears the role. The pointer rides along either way, so the hover
+    // card can say who this session answers to.
+    expect(sessionIdentity({ _id: ID, org_role_id: ROLE._id, role: { ...ROLE } })).toEqual({ kind: "plain", reportsTo: { ...ROLE } });
+    const id = sessionIdentity({ _id: ID, org_role_id: ROLE._id, role: { ...ROLE }, character_avatar: "owl" });
     expect(id.kind).toBe("character");
     if (id.kind !== "character") throw new Error("unreachable");
-    expect(id.avatar).toBe(defaultCharacterFor(ID).avatar);
+    expect(id.avatar).toBe("owl");
     expect(id.reportsTo).toEqual({ ...ROLE });
   });
 
   test("a standing pointer with no role snapshot falls back rather than throwing", () => {
-    expect(sessionIdentity({ _id: ID, standing_role_id: ROLE._id }).kind).toBe("character");
+    // The row claims to be a role's session but the snapshot has not synced.
+    // Falling back to plain is right: inventing a character for a row that is
+    // about to become a role would flash the wrong identity.
+    expect(sessionIdentity({ _id: ID, standing_role_id: ROLE._id }).kind).toBe("plain");
+    expect(sessionIdentity({ _id: ID, standing_role_id: ROLE._id }, true).kind).toBe("character");
   });
 });
 
@@ -61,6 +72,11 @@ describe("identityLine", () => {
   test("a character leads with its name and keeps the title", () => {
     expect(identityLine({ _id: ID, character_name: "Ember" }, "Fixing the auth race"))
       .toEqual({ name: "Ember", title: "Fixing the auth race", handle: null });
+  });
+
+  test("a session nobody personified is the title alone, as the card always read", () => {
+    expect(identityLine({ _id: ID }, "Fixing the auth race"))
+      .toEqual({ name: null, title: "Fixing the auth race", handle: null });
   });
 
   test("a role drops a title that only repeats its name", () => {

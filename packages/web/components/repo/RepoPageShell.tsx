@@ -16,7 +16,6 @@ import { useRepoFamily } from "./useRepoFamily";
 import { useRepoAccess } from "../../hooks/useRepoAccess";
 import { RepoTransportProvider, publicRepoUrl, usePublicRepoRead } from "../../lib/repoTransport";
 import { LoadingSkeleton } from "../LoadingSkeleton";
-import { useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "../../hooks/useSyncCollection";
 import { useIsSyncHost } from "../../hooks/useSyncRole";
@@ -57,9 +56,8 @@ function StandaloneRepoShell({ repository, children }: { repository: string; chi
 export function RepoPageShell({ repository, children }: { repository: string; children: ReactNode }) {
   const family = useRepoFamily();
   const signedIn = useLocalAuth();
-  const { isAuthenticated } = useConvexAuth();
   const isHost = useIsSyncHost();
-  useSyncCollection("currentUser", api.users.getCurrentUser, family === "standalone" && isHost && isAuthenticated ? {} : "skip");
+  useSyncCollection("currentUser", api.users.getCurrentUser, family === "standalone" && isHost ? {} : "skip");
   const access = useRepoAccess(repository, signedIn);
   const mode = access.allowed === true ? "convex" : "public";
   const publicMeta = usePublicRepoRead<{ private: boolean }>(family === "standalone" && mode === "public"

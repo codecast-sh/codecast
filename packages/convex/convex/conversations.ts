@@ -68,7 +68,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
-import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
+import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -13052,23 +13052,74 @@ export const switchSessionProject = mutation({
 // window. Removing both caps re-introduces the timeout.
 export const NAV_USER_MESSAGES_SCAN_LIMIT = 2000;
 export const NAV_USER_MESSAGES_OLDEST_LIMIT = 500;
+// The scan's real ceiling. A "user" message is not only a person's prompt: in
+// an agent transcript every TOOL RESULT is written with role "user", carrying
+// the whole command output or file body, and the navigator throws all of those
+// away. Reading 2500 of them to keep a few dozen prompts moved megabytes per
+// execution, which is exactly what the 1s user-JS cap and the
+// system-operation budget both measure — this query timed out in production on
+// both counts (Sentry JAVASCRIPT-REACT-5J and -5B).
+//
+// So the scan is bounded in BYTES as well as in documents, and it streams:
+// each document is judged and reduced to its two-line row as it arrives, so
+// only one heavy body is ever in the heap and the discarded ones cost nothing
+// past the read. Both ceilings below are spent ACROSS the two directions, not
+// per direction, so they bound the whole execution.
+export const NAV_USER_MESSAGES_BYTE_BUDGET = 2_000_000;
+// The byte budget alone could starve the very list it protects: a transcript
+// whose newest turns are two 1MB file reads would spend the budget before
+// reaching a single prompt, and the navigator would open empty. So the soft
+// budget only stops a scan that already has this many rows — a heavy document
+// is discarded, and discarding it is not a reason to stop looking.
+export const NAV_USER_MESSAGES_MIN_ROWS = 50;
+// The stop with no floor under it. Whatever the transcript looks like, one
+// execution never deserializes past this — the timeout must not come back just
+// because the rows were slow to appear.
+export const NAV_USER_MESSAGES_HARD_BYTE_CEILING = 4_000_000;
+
+// Bytes and rows spent so far, shared by both direction passes.
+type NavScanBudget = { bytes: number; kept: number };
+
+// Walk one direction of the user-message index, keeping only navigable rows.
+// Stops at whichever ceiling comes first — documents, or bytes deserialized.
+async function streamNavigableUserMessages(
+  db: { query: (table: "messages") => any },
+  conversationId: Id<"conversations">,
+  order: "desc" | "asc",
+  docLimit: number,
+  into: Map<string, FilteredUserMessage>,
+  budget: NavScanBudget,
+): Promise<void> {
+  const q = db.query("messages")
+    .withIndex("by_conversation_role_timestamp", (qq: any) =>
+      qq.eq("conversation_id", conversationId).eq("role", "user"))
+    .order(order);
+  let docs = 0;
+  for await (const m of q) {
+    docs++;
+    budget.bytes += approxMessageBytes(m as any);
+    if (isNavigableUserMessage(m as any)) {
+      if (!into.has(m._id)) budget.kept++;
+      into.set(m._id, toNavigatorRow(m as any));
+    }
+    if (budget.bytes >= NAV_USER_MESSAGES_HARD_BYTE_CEILING) break;
+    if (budget.bytes >= NAV_USER_MESSAGES_BYTE_BUDGET && budget.kept >= NAV_USER_MESSAGES_MIN_ROWS) break;
+    if (docs >= docLimit) break;
+  }
+}
 
 export async function collectNavigableUserMessages(
   db: { query: (table: "messages") => any },
   conversationId: Id<"conversations">,
 ) {
-  const newest = await db.query("messages")
-    .withIndex("by_conversation_role_timestamp", (q: any) =>
-      q.eq("conversation_id", conversationId).eq("role", "user"))
-    .order("desc").take(NAV_USER_MESSAGES_SCAN_LIMIT);
-  const oldest = await db.query("messages")
-    .withIndex("by_conversation_role_timestamp", (q: any) =>
-      q.eq("conversation_id", conversationId).eq("role", "user"))
-    .order("asc").take(NAV_USER_MESSAGES_OLDEST_LIMIT);
-  const byId = new Map<string, (typeof newest)[number]>();
-  for (const m of newest) byId.set(m._id, m);
-  for (const m of oldest) byId.set(m._id, m);
-  return filterUserMessages([...byId.values()]);
+  const byId = new Map<string, FilteredUserMessage>();
+  // Newest first: the end of the transcript is what the navigator opens on, so
+  // it gets the budget first and the oldest pass only fills in the head with
+  // whatever is left.
+  const budget: NavScanBudget = { bytes: 0, kept: 0 };
+  await streamNavigableUserMessages(db, conversationId, "desc", NAV_USER_MESSAGES_SCAN_LIMIT, byId, budget);
+  await streamNavigableUserMessages(db, conversationId, "asc", NAV_USER_MESSAGES_OLDEST_LIMIT, byId, budget);
+  return [...byId.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
 export const getUserMessages = query({

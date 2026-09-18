@@ -11,17 +11,25 @@ import { ConversationData } from "../ConversationView";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore } from "../../store/inboxStore";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AnchorGlyph } from "./AnchorIdentity";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput }: {
+export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, leadNode, initialDensity, hideDiff }: {
   conversationId: string;
   hideHeader?: boolean;
   /** The staffing pane owns the send into a proposal's thread (S18). */
   onSendOverride?: ConversationDiffLayoutProps["onSendOverride"];
   composerNode?: React.ReactNode;
   autoFocusInput?: boolean;
+  /** A proposal's thread (org-staffing.md S19) is a standing session with a
+   *  history from before the proposal: the embed shows what was said from
+   *  `since` on, under the host's `leadNode` (the letter), and stops paging
+   *  older once the loaded window reaches back past it. */
+  since?: number;
+  leadNode?: ConversationDiffLayoutProps["leadNode"];
+  initialDensity?: ConversationDiffLayoutProps["initialDensity"];
+  hideDiff?: boolean;
   /** The anchor page owns its anchor by construction, so it seeds `is_own`
    *  before the row lands and the owner UI paints at once. A thread embedded
    *  elsewhere (the staffing pane's chief of staff, hosted by whoever hired
@@ -46,14 +54,16 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
     jumpToTimestamp,
   } = useConversationMessages(conversationId);
 
-  if (!conversation) return <CenteredNote>Loading conversation…</CenteredNote>;
+  const windowed = useMemo(() => windowConversationSince(conversation as WindowedConversation | null, since), [conversation, since]);
+
+  if (!conversation || !windowed) return <CenteredNote>Loading conversation…</CenteredNote>;
 
   return (
     <div className="h-full">
       <ConversationDiffLayout
-        conversation={conversation as ConversationData}
+        conversation={windowed.conversation as ConversationData}
         embedded
-        hasMoreAbove={hasMoreAbove}
+        hasMoreAbove={hasMoreAbove && !windowed.reachedStart}
         hasMoreBelow={hasMoreBelow}
         isLoadingOlder={isLoadingOlder}
         isLoadingNewer={isLoadingNewer}
@@ -68,9 +78,27 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
         onSendOverride={onSendOverride}
         composerNode={composerNode}
         autoFocusInput={autoFocusInput}
+        leadNode={leadNode}
+        initialDensity={initialDensity}
+        hideDiff={hideDiff}
       />
     </div>
   );
+}
+
+type WindowedConversation = { messages?: Array<{ timestamp: number }>; loaded_start_index?: number } & Record<string, unknown>;
+
+/** The conversation from `since` on. `reachedStart` is true once a loaded
+ *  message is older than the cut: everything the window can hold is here, so
+ *  the view stops asking for older pages. The same object back when nothing
+ *  is cut, so the view's memo holds. */
+export function windowConversationSince<T extends WindowedConversation>(conversation: T | null | undefined, since: number | undefined): { conversation: T; reachedStart: boolean } | null {
+  if (!conversation) return null;
+  const messages = conversation.messages ?? [];
+  const cut = since === undefined ? 0 : messages.findIndex((m) => m.timestamp >= since);
+  const dropped = cut === -1 ? messages.length : cut;
+  if (dropped === 0) return { conversation, reachedStart: false };
+  return { conversation: { ...conversation, messages: messages.slice(dropped), loaded_start_index: (conversation.loaded_start_index ?? 0) + dropped }, reachedStart: true };
 }
 
 export function CenteredNote({ children }: { children: React.ReactNode }) {

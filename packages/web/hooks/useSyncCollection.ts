@@ -12,6 +12,17 @@
 // survive its query failing (a client ahead of a deploy, a saturated backend).
 // The store keeps its cached rows; the caller gets `error` if it wants to say
 // so.
+//
+// Every feeder here reads authenticated, workspace-scoped data, and the tree
+// it mounts in is released on the LOCAL auth signal (offline-safe boot), so
+// without a gate a feeder fires its query before the websocket has an
+// authenticated identity and the handler's requireUser throws. The gate lives
+// here, once, rather than as an `isAuthenticated ? args : "skip"` term in each
+// of the ~50 call sites: useServerAuthSettled holds args at "skip" until the
+// server has confirmed the caller. A surface that must read for an ANONYMOUS
+// visitor (a share link resolving its own token, the community rooms) is not a
+// feeder in this sense — it calls useQueryNoThrow itself, as the guest
+// conversation path does.
 import { useCallback, useRef } from "react";
 import type { FunctionArgs, FunctionReference } from "convex/server";
 import { getFunctionName } from "convex/server";
@@ -19,6 +30,7 @@ import { captureError } from "@/lib/analytics";
 import { useInboxStore } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useServerAuthSettled } from "./useServerAuthSettled";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -71,7 +83,12 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
   args: FunctionArgs<Query> | "skip",
   opts?: SyncCollectionOpts,
 ): SyncCollectionResult {
-  const { data, error, retry } = useQueryNoThrow(query, args, opts?.breakAfterMs ? { breakAfterMs: opts.breakAfterMs } : undefined);
+  // Held at "skip" until the server has confirmed the caller — see the header.
+  // "skip" is the same mechanism a caller uses for a scope it does not have
+  // yet, so nothing downstream needs to know why this one is waiting.
+  const authSettled = useServerAuthSettled();
+  const gatedArgs = authSettled ? args : "skip";
+  const { data, error, retry } = useQueryNoThrow(query, gatedArgs, opts?.breakAfterMs ? { breakAfterMs: opts.breakAfterMs } : undefined);
   useFeederError(getFunctionName(query), error);
   const syncTable = useInboxStore((s) => s.syncTable);
   const select = opts?.select;

@@ -139,6 +139,61 @@ export async function serializeTranscript<T>(key: string, run: () => Promise<T>,
     }
   },options);
 }
+// One (uuid, signature) pair into the watermark hash. Length-prefixed so no
+// two different pair sequences can feed the hash the same bytes.
+async function hashSignatureEntry(hash: ReturnType<typeof createHash>, uuid: string, signature: string, tick: {chunks: number}): Promise<void> {
+  for (const value of [uuid, signature]) {
+    hash.update(String(value.length)).update(":");
+    for (let offset = 0; offset < value.length; offset += 8192) {
+      hash.update(value.slice(offset, offset + 8192));
+      if (++tick.chunks % 128 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); checkTranscriptDeadline(); }
+    }
+  }
+}
+
+/** The persisted fingerprint of a signature-synced transcript: an ordered hash of every synced (uuid, signature). */
+export async function transcriptSignatureWatermark(signatures: ReadonlyMap<string,string>, drop = 0): Promise<string> {
+  const hash = createHash("sha256"), tick = {chunks: 0};
+  let remaining = signatures.size - drop;
+  for (const [uuid, signature] of signatures) {
+    if (remaining-- <= 0) break;
+    await hashSignatureEntry(hash, uuid, signature, tick);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * Which of a transcript's messages a previous daemon already synced, proven
+ * from the watermark it persisted, or null when nothing can be proven.
+ *
+ * The synced set is built in file order (computeIngestSyncDelta), so what was
+ * synced is a prefix of the current file: messages appended since, and a last
+ * message still streaming under the same uuid, only ever change the tail.
+ * Hashing the current pairs in order and comparing at every prefix finds that
+ * point exactly. A last message still streaming under its uuid carries a
+ * signature that changed since, so its own pair can never match; that is what
+ * the settled watermark (the same hash one entry short) is for. Without this a restart forgot every signature-synced
+ * transcript and re-sent each one whole: 97,225 messages in 6,734 passes over
+ * one day of restarts on 2026-09-17.
+ */
+export async function provenSyncedPrefix(messages: ReadonlyArray<{uuid?: string}>, signatures: string[], watermarks: ReadonlyArray<string | undefined>): Promise<Map<string,string> | null> {
+  if (signatures.length !== messages.length) return null;
+  const targets = new Set(watermarks.filter((w): w is string => !!w));
+  if (!targets.size) return null;
+  const hash = createHash("sha256"), tick = {chunks: 0}, prefix = new Map<string,string>();
+  let best: Map<string,string> | null = null;
+  for (let i = 0; i < messages.length; i++) {
+    const uuid = messages[i].uuid;
+    if (!uuid) continue; // never in a synced set: always re-offered
+    if (prefix.has(uuid)) break; // a repeated uuid breaks the order the hash assumed
+    prefix.set(uuid, signatures[i]);
+    await hashSignatureEntry(hash, uuid, signatures[i], tick);
+    // Longest wins: `settled` matches one entry before `watermark` does.
+    if (targets.has(hash.copy().digest("hex"))) best = new Map(prefix);
+  }
+  return best;
+}
+
 export async function computeIngestSyncDelta<T extends {uuid?: string}>(messages: T[], signatures: string[], synced: ReadonlyMap<string,string>): Promise<{newMessages:T[];orphanUuids:string[];nextSynced:Map<string,string>}> {
   if (signatures.length !== messages.length) throw new Error('invalid ingest signatures');
   const nextSynced = new Map<string,string>(), newMessages:T[] = [], orphanUuids:string[] = [];

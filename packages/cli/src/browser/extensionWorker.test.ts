@@ -6,11 +6,13 @@ import { webcrypto } from 'node:crypto';
 const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
 const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
 
-function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; slowOverlay?: boolean } = {}) {
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean } = {}) {
   const grouped: unknown[] = [];
   const detached: number[] = [];
   const created: unknown[] = [];
   const selfSessions: string[] = [];
+  const keeperDocs: object[] = [];
+  let keeperExists = !!opts.keeperAlreadyOpen;
   let selfHeld = !!opts.selfAlreadyAttached;
   const event = () => {
     const listeners: Array<(tab: object) => void> = [];
@@ -26,6 +28,11 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
         ? new Promise(() => {}) : { ownedTabs: opts.ownedTabs ?? [] },
     } },
     action: { setTitle: async () => {}, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
+    ...(opts.noOffscreenApi ? {} : { offscreen: {
+      Reason: { WORKERS: 'WORKERS' },
+      hasDocument: async () => keeperExists,
+      createDocument: async (p: object) => { keeperDocs.push(p); keeperExists = true; },
+    } }),
     runtime: { onStartup: event(), onInstalled: event(), onMessage: event(), getManifest: () => ({ version: '0.1.0' }), getURL: (path: string) => `chrome-extension://ext/${path}` },
     alarms: { create: async () => {}, onAlarm: event() },
     tabs: {
@@ -92,8 +99,39 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
   vm.runInContext(source, context);
   const selfSettled = () => vm.runInContext('selfSync', context);
   const dropSelf = () => { selfHeld = false; chrome.debugger.onDetach.emit({ targetId: 'sw-self' }); };
-  return { context, grouped, detached, created, selfSessions, selfSettled, dropSelf };
+  const keeperSettled = () => vm.runInContext('keeperPending || Promise.resolve()', context);
+  const alarm = (name: string) => chrome.alarms.onAlarm.emit({ name });
+  const message = (msg: object) => chrome.runtime.onMessage.emit(msg);
+  return { context, grouped, detached, created, selfSessions, selfSettled, dropSelf, keeperDocs, keeperSettled, alarm, message, dropKeeper: () => { keeperExists = false; } };
 }
+
+// A guard that fails a test whose call truly never settles. Generous on purpose: the worker's timers are
+// scaled down 250x here, and on a loaded machine a real 100 ms clock fired before an 80 ms scaled one.
+const HANG_GUARD_MS = 5_000;
+
+describe('the keeper page', () => {
+  test('is created at boot, once, with a reason that has no lifetime limit', async () => {
+    const w = worker();
+    await w.keeperSettled();
+    expect(w.keeperDocs).toEqual([expect.objectContaining({ url: 'offscreen.html', reasons: ['WORKERS'] })]);
+  });
+
+  test('an existing page is kept, and one that Chrome dropped comes back on the next alarm', async () => {
+    const w = worker({ keeperAlreadyOpen: true });
+    await w.keeperSettled();
+    expect(w.keeperDocs).toHaveLength(0);
+    w.dropKeeper();
+    w.alarm('cast-bridge-reconnect');
+    await w.keeperSettled();
+    expect(w.keeperDocs).toHaveLength(1);
+  });
+
+  test('a Chrome without the offscreen API boots and answers as before', async () => {
+    const w = worker({ noOffscreenApi: true, ownedTabs: [7] });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    expect(result.tabs).toHaveLength(1);
+  });
+});
 
 describe('extension tab lifecycle', () => {
   test('a stalled ownership read times out and the next command can recover safely', async () => {
@@ -101,7 +139,7 @@ describe('extension tab lifecycle', () => {
     // The 20 s bound is 80 ms here, plus the 3 s grace for a frozen process (12 ms).
     await expect(Promise.race([
       w.context.handle({ op: 'tabs.list' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('ownership stayed pending')), 250)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('ownership stayed pending')), HANG_GUARD_MS)),
     ])).rejects.toThrow('Chrome storage.session.get did not answer');
     const result = await w.context.handle({ op: 'tabs.list' });
     expect(result.tabs[0]).toMatchObject({ tabId: 7, owned: true });
@@ -111,7 +149,7 @@ describe('extension tab lifecycle', () => {
     const w = worker({ hungGroupQuery: true, ownedTabs: [7] });
     const result = await Promise.race([
       w.context.handle({ op: 'tabs.list' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('tab listing stalled on group metadata')), 100)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tab listing stalled on group metadata')), HANG_GUARD_MS)),
     ]);
     expect(result.tabs).toHaveLength(1);
     expect(result.tabs[0]).toMatchObject({ tabId: 7, owned: true });
@@ -138,7 +176,7 @@ describe('extension tab lifecycle', () => {
     // The 30 s bound is 120 ms here, plus the 3 s grace for a frozen process (12 ms).
     await expect(Promise.race([
       w.context.handle({ op: 'tabs.list' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('tab query stayed pending')), 400)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tab query stayed pending')), HANG_GUARD_MS)),
     ])).rejects.toThrow('Chrome tabs.query did not answer');
   });
 

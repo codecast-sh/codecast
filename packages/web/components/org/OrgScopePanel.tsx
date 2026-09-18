@@ -57,9 +57,10 @@ export type OrgScopePanelProps = {
   onMode: (mode: OrgPanelMode) => void;
   /** The staffing pane, rendered in the body when mode is "staffing". */
   staffing: React.ReactNode;
-  /** The proposal's conversation in its own column beside the body, on a
-   *  desktop wide enough for both (org-staffing.md S18). */
-  staffingAside?: React.ReactNode;
+  /** The proposal's conversation, leading: the wider column to the left of
+   *  the body on a desktop (org-staffing.md S19), `staffingLeadWidth` wide. */
+  staffingLead?: React.ReactNode;
+  staffingLeadWidth?: number;
   /** The body is one full height view with its own scroll (the phone
    *  sheet's conversation view), not the padded scroll of the pane. */
   staffingFill?: boolean;
@@ -579,7 +580,12 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
         </button>
       </div>
       <div className="flex-1 min-h-0 flex">
-      <div className={cn("flex-1 min-w-0 min-h-0", mode === "staffing" && props.staffingFill ? "flex flex-col overflow-hidden" : "overflow-y-auto px-4 pt-4 pb-8")} data-main-scroll data-panel-mode={mode}>
+      {mode === "staffing" && props.staffingLead && (
+        <div className="min-w-0 min-h-0 border-r flex flex-col" style={{ width: props.staffingLeadWidth ?? STAFFING_LEAD_W.tight, flex: "1 1 auto", borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }} data-staffing-lead>
+          {props.staffingLead}
+        </div>
+      )}
+      <div className={cn("min-w-0 min-h-0", mode === "staffing" && props.staffingLead ? "shrink-0" : "flex-1", mode === "staffing" && props.staffingFill ? "flex flex-col overflow-hidden" : "overflow-y-auto px-4 pt-4 pb-8")} style={mode === "staffing" && props.staffingLead ? { width: STAFFING_ASKS_W } : undefined} data-main-scroll data-panel-mode={mode}>
         {mode === "staffing" ? props.staffing : node && (
           <>
             {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} changes={props.changes} focusChangeId={props.focusChangeId} onSelectChange={props.onSelectChange} />}
@@ -590,17 +596,16 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
           </>
         )}
       </div>
-      {mode === "staffing" && props.staffingAside && (
-        <div className="shrink-0 min-h-0 border-l flex flex-col" style={{ width: STAFFING_THREAD_W, borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }} data-staffing-aside>
-          {props.staffingAside}
-        </div>
-      )}
       </div>
     </div>
   );
 }
 
-/** The conversation column's width beside the 380px pane (S18). */
-export const STAFFING_THREAD_W = 400;
+/** The asks column (S19): the panel's own 380px. */
+export const STAFFING_ASKS_W = 380;
+/** The conversation's column to its left: wider, as the eye should land
+ *  there; `roomy` when the window leaves a strip of chart beside both,
+ *  `tight` when it does not. */
+export const STAFFING_LEAD_W = { roomy: 600, tight: 420 } as const;
 
 
