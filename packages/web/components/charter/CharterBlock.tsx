@@ -40,6 +40,10 @@ export type CharterBlockProps = {
   /** Why no owner can be picked here (no hire path and no role to offer):
    *  the chip renders disabled and says so. */
   ownerBlockedReason?: string;
+  /** The surface already says who leads, beside the title (the project page's
+   *  ProjectLeadChip): the block then leaves the owner chip out rather than
+   *  naming the same role twice within one screen. */
+  hideOwner?: boolean;
   className?: string;
 };
 
@@ -130,7 +134,7 @@ function BudgetLine({ budget, canEdit, onChange }: { budget: CharterFields["budg
   );
 }
 
-export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, onHire, ownerBlockedReason, className }: CharterBlockProps) {
+export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, onHire, ownerBlockedReason, hideOwner, className }: CharterBlockProps) {
   // "No charter yet" until someone opens the fields or a value lands.
   const [opened, setOpened] = useState(false);
   const filled = hasCharter(charter);
@@ -173,7 +177,7 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
   const metrics = charter.success_metrics ?? [];
   const nonGoals = charter.non_goals ?? [];
   const risks = charter.risks ?? [];
-  const showOwner = kind === "project" ? true : !!charter.owner_role_id || canEdit;
+  const showOwner = hideOwner ? false : kind === "project" ? true : !!charter.owner_role_id || canEdit;
 
   return (
     <section
