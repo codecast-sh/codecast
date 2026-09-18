@@ -185,8 +185,15 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   let webLoadedRelease = null;
   function broadcastWebUpdate(result) {
     if (!result || result.status !== "updated") return;
-    if (!mainWindow || mainWindow.isDestroyed() || !webLoadedRelease) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     if (webLoadedRelease === result.release) return;
+    if (cfg.web.reloadOnUpdate) {
+      const alreadyLoaded = !!webLoadedRelease;
+      webLoadedRelease = result.release;
+      if (alreadyLoaded) mainWindow.webContents.reloadIgnoringCache();
+      return;
+    }
+    if (!webLoadedRelease) return;
     mainWindow.webContents.send("web-update", { release: result.release, from: result.from });
   }
   function refreshWeb() {
@@ -688,9 +695,16 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     }, 30);
   }
 
+  let lastFocusRefresh = 0;
   app.on("browser-window-focus", (_e, win) => {
     lastFocusedAt.set(win.id, Date.now());
     broadcastWindowRole();
+    // A deploy while the app sat in the background should be on screen the
+    // next time someone looks at it, not 15 minutes later.
+    if (win === mainWindow && Date.now() - lastFocusRefresh > 30_000) {
+      lastFocusRefresh = Date.now();
+      refreshWeb();
+    }
   });
   app.on("browser-window-blur", () => broadcastWindowRole());
 
@@ -1475,6 +1489,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
         cache: webCache,
         appHosts: webHosts,
         passthrough: cfg.web.passthrough,
+        preferNetwork: cfg.web.preferNetwork,
         net,
         productName: PRODUCT,
       });
