@@ -8,8 +8,9 @@ import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
-import { computeIngestSyncDelta, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
+import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
 import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { selfExecInfo } from "./selfExec.js";
 import { cursorPassBoundary, readCodexSessionMetaHeadAsync, readCompleteLines, readCompleteLinesSync, readIngestWindow, sessionMetaHeadCut } from "./transcriptWindow.js";
 export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
 export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type PassBoundary, type ReadWindowOpts } from "./transcriptWindow.js";
@@ -34,6 +35,7 @@ import {
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
+  type HibernationPolicy,
 } from "./hibernation.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
@@ -175,7 +177,7 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
-import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -1039,6 +1041,14 @@ export function buildBlankLaunchArgs(
     // blank grok launched in its default permission mode and parked on TUI
     // prompts nobody can answer.
     const flags = [getAgentArgs(config, "grok") || "", permFlags || ""].filter(Boolean).join(" ");
+    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+  }
+  if (agentType === "muse") {
+    // Same codex shape: getPermissionFlags returns null when agent_args.muse
+    // pins an approval mode, so concatenating can't double up. Without this
+    // branch a blank muse launched in its default on-request mode and parked
+    // on TUI approval prompts nobody can answer.
+    const flags = [getAgentArgs(config, "muse") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
   // cursor/gemini/pi: no configured args or permission flags yet.
@@ -3347,6 +3357,9 @@ async function maintainAgentBridges(): Promise<void> {
 let secureStorageSupport: { bin: string; supported: boolean } | null = null;
 let profileStoresInFlight = false;
 let lastStoreReport = "";
+// The binary whose probe last came back inconclusive, so the retry every beat
+// stays silent after the first report.
+let lastUnknownProbeBin = "";
 
 async function ensureProfileStores(reason: string): Promise<void> {
   if (isRemoteDevice() || profileStoresInFlight) return;
@@ -3357,16 +3370,31 @@ async function ensureProfileStores(reason: string): Promise<void> {
     const bin = launchBinary("claude", { warn: log });
     const resolved = path.isAbsolute(bin) ? bin : await _execFileAsync("which", [bin], { encoding: "utf-8", timeout: 5000 }).then(r => r.stdout.trim() || bin, () => bin);
     if (!secureStorageSupport || secureStorageSupport.bin !== resolved) {
-      const supported = await probeSecureStorageSupport(resolved, { env: { ...process.env, PATH: agentSpawnPath() } });
-      secureStorageSupport = { bin: resolved, supported };
+      const verdict = await probeSecureStorageSupport(resolved, { env: { ...process.env, PATH: agentSpawnPath() } });
+      // A probe that could not answer leaves every store exactly as it is and
+      // asks again next beat. Treating it as a negative deletes the credential
+      // a person just signed in for, which is what happened on 2026-09-17.
+      if (verdict === "unknown") {
+        if (lastUnknownProbeBin !== resolved) {
+          lastUnknownProbeBin = resolved;
+          log(`[CC-STORE] ${resolved} did not answer the credential-store probe — leaving saved logins alone and asking again next beat`);
+        }
+        return;
+      }
+      lastUnknownProbeBin = "";
+      secureStorageSupport = { bin: resolved, supported: verdict === "supported" };
       log(
-        supported
+        verdict === "supported"
           ? `[CC-STORE] ${resolved} honors per-session credential stores`
           : `[CC-STORE] ${resolved} ignores CLAUDE_SECURESTORAGE_CONFIG_DIR — sessions cannot be pinned to saved logins until Claude Code is updated`,
       );
     }
     if (!secureStorageSupport.supported) {
-      for (const name of profiles) await deleteProfileStoreAsync(name);
+      const dropped: string[] = [];
+      for (const name of profiles) if (await deleteProfileStoreAsync(name)) dropped.push(name);
+      // Deleting a store throws away a browser sign-in. Say so: the silence
+      // here is what hid the poisoned probe for a day.
+      if (dropped.length) log(`[CC-STORE] dropped the credential store for ${dropped.join(", ")} — this Claude Code cannot use them`);
       return;
     }
     const provisioned: string[] = [];
@@ -3471,6 +3499,16 @@ async function startLoginFlow(email: string | undefined, force = false, profile?
   // instead: bump the generation (silences the old watcher), kill its pane,
   // start fresh.
   if (loginFlowActive && !force) return "login_flow_already_running";
+  // A profile sign-in writes only into that profile's store. On a Claude Code
+  // that has been PROVED to ignore the store, that credential is deleted on the
+  // next beat, so opening a browser would spend a real sign-in on nothing. Say
+  // that instead of taking it. A verdict we never reached does not block.
+  if (profile && secureStorageSupport && !secureStorageSupport.supported) {
+    throw new Error(
+      "This machine's Claude Code ignores per-account credential stores, so a sign-in here would be discarded — " +
+      "update Claude Code, or run `claude auth login` in a terminal to change the machine's own login",
+    );
+  }
   const gen = ++loginFlowGeneration;
   loginFlowActive = true;
   try {
@@ -7699,6 +7737,10 @@ function saveTitleCache(cache: TitleCache): void {
 }
 
 export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
+// Muse's tail classifier lives in the ingest worker module (the single home —
+// unlike the older pi/grok classifiers, which predate that seam and exist in
+// both places) and is wired into the daemon's classifier map below.
+import { classifyMuseTranscriptTail } from "./workers/ingestMetadata.js";
 
 // Every watcher event, the command poll and the sweeps read the state file
 // first; on a 200 session fleet that is one sync read per transcript append.
@@ -8469,37 +8511,24 @@ function assertTranscriptAuthority(sessionId: string, conversationId: string | u
     throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed`);
   }
 }
-async function transcriptSignatureWatermark(signatures: ReadonlyMap<string,string>): Promise<string> {
-  const hash = createHash("sha256");
-  let chunks = 0;
-  for (const [uuid, signature] of signatures) {
-    for (const value of [uuid, signature]) {
-      hash.update(String(value.length)).update(":");
-      for (let offset = 0; offset < value.length; offset += 8192) {
-        hash.update(value.slice(offset, offset + 8192));
-        if (++chunks % 128 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); checkTranscriptDeadline(); }
-      }
-    }
-  }
-  return hash.digest("hex");
-}
 function transcriptCountReplaced(result: object, count: number): boolean {
   const source = ingestSource(result);
   if (!source) throw new Error("unknown transcript count source");
   const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
-  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && (previous.dev !== source.identity.dev || previous.ino !== source.identity.ino || previous.birthtimeMs !== source.identity.birthtimeMs));
+  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && !samePersistedFile(previous, source.identity));
 }
 async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionId: string, conversationId: string | undefined, cache: ConversationCache, commit: () => void, keys: readonly string[] = [sessionId], signatureState?: ReadonlyMap<string,string>, consumedMessages: RawMessage[] = result.messages): Promise<void> {
   const source = ingestSource(result);
   if (!source) throw new Error("unknown transcript source commit");
-  const unit = ["claude","cursor","codex"].includes(source.client) ? "bytes" : ["pi","grok"].includes(source.client) ? "signatures" : "count";
+  const unit = ["claude","cursor","codex"].includes(source.client) ? "bytes" : ["pi","grok","muse"].includes(source.client) ? "signatures" : "count";
   const currentWatermark = () => source.client === "gemini" ? geminiSyncedCounts.get(source.file) ?? 0 : source.client === "opencode" ? opencodeSyncedCounts.get(sessionId) ?? 0 : getPosition(source.file);
   const priorSignatures = piSyncedSigs.get(source.file) ?? new Map<string,string>();
   const before = unit === "signatures" ? await transcriptSignatureWatermark(priorSignatures) : currentWatermark();
   const nextSignatures = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures) : undefined;
+  const settledWatermark = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures, 1) : undefined;
   const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
   const paired = previous?.client === source.client && previous.sessionId === sessionId && previous.unit === unit && previous.watermark === before && (unit === "signatures" ? ledger?.lastSyncedPosition === 0 : ledger?.lastSyncedPosition === before);
-  const same = paired && previous.dev === source.identity.dev && previous.ino === source.identity.ino && previous.birthtimeMs === source.identity.birthtimeMs;
+  const same = paired && samePersistedFile(previous, source.identity);
   const prefixProven = (unit === "signatures" ? priorSignatures.size === 0 : before === 0) || !!(same && previous.prefixProven);
   assertTranscriptAuthority(sessionId,conversationId,cache,keys);
   await validateTranscriptIngest(result);
@@ -8510,7 +8539,7 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
     lastSyncedAt: Date.now(),
     lastSyncedPosition: unit === "signatures" ? 0 : watermark as number,
     conversationId,
-    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,prefixProven},
+    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,settledWatermark,prefixProven},
   });
   const consumed=new Set<string>();
   for(let i=0;i<consumedMessages.length;i++){
@@ -9200,7 +9229,7 @@ async function walkSpawnerCandidates(
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
   const tmuxPanes = spawnRegistry.hasEntries()
-    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid} #{session_created}"]).catch(() => ({ stdout: "" }))).stdout
     : "";
   const startedAt = transcriptStartedAt(filePath);
   const candidates: SpawnerCandidate[] = [];
@@ -9506,7 +9535,7 @@ async function ingestStat(filePath: string, lastPosition: number, client: string
     const saved = ledger?.sourceGeneration;
     const previous = saved?.client === client && saved.sessionId === sessionId && saved.unit === "bytes" && saved.watermark === lastPosition && ledger?.lastSyncedPosition === lastPosition ? saved : undefined;
     size = identity.size;
-    if (previous && (previous.dev !== identity.dev || previous.ino !== identity.ino || previous.birthtimeMs !== identity.birthtimeMs)) {
+    if (previous && !samePersistedFile(previous, identity)) {
       lastPosition = 0;
       setPosition(filePath,0);
       codexModelPositions.delete(filePath);
@@ -11512,6 +11541,26 @@ async function processOpencodeSessionPass(
 // whatever prefix the first watcher pass caught.
 const piSyncedSigs = new Map<string, Map<string, string>>();
 
+// A restarted daemon starts with piSyncedSigs empty, and an empty map re-sends
+// the whole transcript. The ledger survives the restart with the watermark of
+// what was synced; when the file is the same one (identity), for the same
+// session and still the same conversation, the prefix that hashes to that
+// watermark is exactly what the server already has. Seeds the map and returns
+// it, or null so the caller falls back to a full idempotent re-sync. Seeding
+// only ever holds messages present in the file now, so it cannot orphan any.
+async function restoreSyncedSignatures(ingest: { messages: RawMessage[]; signatures?: string[] }, sessionId: string, cache: ConversationCache): Promise<Map<string, string> | null> {
+  const source = ingestSource(ingest);
+  const record = source ? getSyncRecord(source.file) : null;
+  const g = record?.sourceGeneration;
+  if (!source || !g || !ingest.signatures || g.unit !== "signatures" || typeof g.watermark !== "string") return null;
+  if (g.client !== source.client || g.sessionId !== sessionId) return null;
+  if (!samePersistedFile(g, source.identity)) return null;
+  if (!record!.conversationId || cache[sessionId] !== record!.conversationId) return null;
+  const seeded = await provenSyncedPrefix(ingest.messages, ingest.signatures, [g.watermark, g.settledWatermark]);
+  if (seeded) piSyncedSigs.set(source.file, seeded);
+  return seeded;
+}
+
 /**
  * Write a transcript codecast REBUILT for a delta-synced client (pi) so the
  * watcher ingests only what the client appends afterwards. The delta sync has
@@ -11614,18 +11663,18 @@ export function isGrokInternalSessionDir(updatesPath: string): boolean {
   }
 }
 
-// pi and grok share this whole-file delta sync pipeline: both are file-per-session
+// pi, grok, and muse share this whole-file delta sync pipeline: all are file-per-session
 // JSONL clients whose parser rebuilds the ACTIVE branch each pass (pi's parentId
 // chain, grok's rewind filter), so sync is the same computePiSyncDelta diff —
 // upsert the new turns, delete the orphaned ones. Everything client-specific is
-// parameterized here; the wrappers below (processPiSession / processGrokSession)
-// are what the watcher registrations bind.
+// parameterized here; the wrappers below (processPiSession / processGrokSession /
+// processMuseSession) are what the watcher registrations bind.
 export async function processTranscriptDeltaSession(...args: Parameters<typeof processTranscriptDeltaSessionPass>): Promise<void> {
   return runTranscriptPass(args[2], path.resolve(args[1]), () => processTranscriptDeltaSessionPass(...args));
 }
 
 async function processTranscriptDeltaSessionPass(
-  client: Extract<AgentClientId, "pi" | "grok">,
+  client: Extract<AgentClientId, "pi" | "grok" | "muse">,
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -11648,7 +11697,7 @@ async function processTranscriptDeltaSessionPass(
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
-    const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
+    const syncedSigs = piSyncedSigs.get(filePath) ?? await restoreSyncedSignatures(ingest, sessionId, conversationCache) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
     if (newMessages.length === 0 && orphanUuids.length === 0) {
       markExamined(ingestSource(ingest)?.file ?? filePath);
@@ -11665,6 +11714,10 @@ async function processTranscriptDeltaSessionPass(
         // grok's long-path hash dirs don't decode at all).
         const projectPath = client === "pi"
           ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
+          : client === "muse"
+            // muse's date-sharded dirs carry no cwd — only the log's own
+            // route_facts record (ingest metadata) can place the session.
+            ? ingest.metadata.cwd ?? undefined
           : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
 
         // Bind a daemon-launched agent to its start_session stub (codex pattern):
@@ -11844,6 +11897,7 @@ async function processTranscriptDeltaSessionPass(
 
 const processPiSession = processTranscriptDeltaSession.bind(null, "pi");
 const processGrokSession = processTranscriptDeltaSession.bind(null, "grok");
+const processMuseSession = processTranscriptDeltaSession.bind(null, "muse");
 
 interface ActiveSession {
   sessionId: string;
@@ -12086,6 +12140,10 @@ export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern:
   // (verified live on v1.0.5) — same rule as codex/gemini. Falling through to the
   // claude pattern would grep for claude processes and never find a grok session.
   if (agentType === "codex" || agentType === "gemini" || agentType === "grok") return AGENT_CLIENTS[agentType].binary;
+  // muse launches through a bash launcher shim that execs `muse-bin-<version>`,
+  // so the registry binary "muse" never appears in ps — match the real binary
+  // (same reason pi matches "pi-coding-agent" instead of "pi").
+  if (agentType === "muse") return "muse-bin";
   // pi runs as `node …/@mariozechner/pi-coding-agent/dist/cli.js`, so its registry
   // binary "pi" is far too generic for `ps … | grep` (would match python/pip/…). Match
   // the distinctive package path that always appears in the process command line.
@@ -13560,10 +13618,36 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // prompt IS our message sitting in the input box: the submit-verify loop must
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
-export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
+export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
   const recent = paneContent.split("\n").slice(-80).join("\n");
   const composer = tmuxComposerRegion(recent);
-  return composer !== null && /\[[^\]\n]*pasted[^\]\n]*\]/i.test(composer);
+  if (composer === null) return false;
+  const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
+  return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
+}
+
+// The "+N lines" a collapsed chip prints for this payload. Claude Code counts
+// the line BREAKS, not the lines, so a four-line paste with no trailing newline
+// reads "+3 lines" (measured on 2.1.275; wrapping a 400-column line in a
+// 200-column pane does not change the number). Null when the payload is one
+// line, which is the case whose chip prints no count at all.
+export function pasteChipLines(payload: string): number | null {
+  const breaks = (payload.match(/\n/g) ?? []).length;
+  return breaks > 0 ? breaks : null;
+}
+
+// Does this chip belong to someone else? A collapsed chip hides its text, so
+// the count it prints is the only thing on screen that says whose paste it is.
+// Reading ANY single chip as our own payload is how a human's unsent paste got
+// submitted as our message — and acked as delivered while the agent received
+// the bare "[Pasted text #1 +20 lines]" placeholder (ct-51354). A chip that
+// prints no count says nothing either way and keeps the benefit of the doubt:
+// not every client's chip carries one, and a single-line paste never does.
+export function pasteChipContradicts(chip: string, expectedLines: number | null | undefined): boolean {
+  if (expectedLines === undefined) return false;
+  const shown = /\+\s*(\d+)\s+lines?/i.exec(chip);
+  if (!shown) return false;
+  return Number(shown[1]) !== expectedLines;
 }
 
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
@@ -14863,8 +14947,8 @@ export function classifyGrokTranscriptTail(tailContent: string): TranscriptTurnS
   return "unknown";
 }
 
-// The single client -> transcript-tail classifier mapping. claude, codex and pi have
-// a tail classifier; cursor/gemini return undefined, which every caller treats as
+// The single client -> transcript-tail classifier mapping. claude, codex, pi, grok
+// and muse have a tail classifier; cursor/gemini return undefined, which every caller treats as
 // "this client's transcript format isn't classified — defer" (the old
 // `agentType !== "claude" && agentType !== "codex"` gate). A new jsonl client wires
 // its classifier in here rather than adding another branch at each reconcile site.
@@ -14878,6 +14962,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
   opencode: classifyOpencodeTranscriptTail,
   pi: classifyPiTranscriptTail,
   grok: classifyGrokTranscriptTail,
+  muse: classifyMuseTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -15821,6 +15906,8 @@ export type TmuxSubmitVerifyOpts = {
   pasteConfirmed: boolean;
   contentPrefix: string;
   bracketedPaste?: boolean;
+  /** The "+N lines" our own payload's chip would print — see pasteChipLines. */
+  chipLines?: number | null;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15933,7 +16020,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again, opts.chipLines));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15970,7 +16057,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane, opts.chipLines));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -16263,7 +16350,9 @@ export async function awaitTmuxComposerPayload(
     const composer = tmuxComposerRegion(pane) ?? "";
     const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+      ? chips.length === 1
+        && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+        && !pasteChipContradicts(chips[0], pasteChipLines(payload))
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -16610,6 +16699,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
       bracketedPaste: bracketed,
+      chipLines: pasteChipLines(sanitized),
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
@@ -17373,6 +17463,32 @@ function sessionFileIndexStores(home: string): IndexStore[] {
       agentType: "grok",
       walk: { policy: { files: "grokIndex" }, maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
       idOf: (f) => segs(f.rel)[1],
+    },
+    // muse: ~/.local/share/muse/sessions/YYYY/MM/DD/<sessionId>/session.jsonl —
+    // the session DIRECTORY is named by the id (same shape as grok). The full
+    // date-sharded shape is validated (not just the parent dir name) so a
+    // uuid-named dir anywhere else — the .msp-view-v1 view-index tree, a
+    // subagent/ nest, a crafted path — never indexes as a session.
+    {
+      root: path.join(home, ".local", "share", "muse", "sessions"),
+      agentType: "muse",
+      walk: {
+        policy: { files: "museWatch" },
+        maxDepth: 5,
+        dirFilter: (rel) => !segs(rel).some((s) => s.startsWith(".")),
+        fileFilter: (rel) => {
+          const d = segs(rel);
+          return (
+            d.length === 5 &&
+            d[4] === "session.jsonl" &&
+            /^\d{4}$/.test(d[0]) &&
+            /^\d{2}$/.test(d[1]) &&
+            /^\d{2}$/.test(d[2]) &&
+            CLAUDE_UUID_RE.test(d[3])
+          );
+        },
+      },
+      idOf: (f) => segs(f.rel)[3] ?? null,
     },
   ];
 }
@@ -18912,6 +19028,8 @@ async function runHeartbeatMaintenance(): Promise<void> {
     // Same cadence as the reaper, and deliberately after it: a session the
     // reaper just retired is not a live session the cap has to park.
     await runHibernationPass().catch((e) => log(`[HIBERNATE] pass error: ${(e as Error)?.message ?? e}`));
+    // And the browser engines those agents left behind (engineReap.ts).
+    await reapOrphanEngines().catch((e) => reaperLog(`engine reap failed: ${(e as Error)?.message ?? e}`, false));
   }
 
   // Keep each session's working tree recoverable from another machine. See
@@ -19484,7 +19602,17 @@ const REAP_TMUX_PREFIXES = ["cc-resume-", "cx-resume-"];
 // goes LAST because it is the only human-named field, so a stray separator in
 // it re-joins instead of shifting the stamps.
 const REAP_FIELD_SEP = "|";
-const REAP_LIST_FORMAT = `#{@codecast_session_id}${REAP_FIELD_SEP}#{@codecast_conversation_id}${REAP_FIELD_SEP}#{session_name}`;
+// Pane facts ride the same call: the foreground command and its pid, whether
+// tmux holds the pane dead, clients, layout and the time of last OUTPUT
+// (window_activity; session_activity only moves on client input and read 63
+// minutes stale on a pane printing that second).
+const REAP_LIST_FORMAT = [
+  "#{@codecast_session_id}", "#{@codecast_conversation_id}",
+  "#{session_attached}", "#{window_activity}", "#{session_windows}", "#{window_panes}",
+  "#{pane_pid}", "#{pane_dead}", "#{pane_current_command}",
+  "#{session_name}",
+].join(REAP_FIELD_SEP);
+const REAP_FIELD_COUNT = 10;
 
 function reaperLog(message: string, mirror = true): void {
   const line = `[${new Date().toISOString()}] ${message}\n`;
@@ -19511,6 +19639,19 @@ export type ReapCandidate = {
   convId: string | null;
   /** "resume" panes reap on idle alone; "stamped" panes also need a hide state. */
   kind: "resume" | "stamped";
+  /** What tmux reports about the pane itself; null when a field did not parse. */
+  pane?: ReapPaneFacts | null;
+};
+
+export type ReapPaneFacts = {
+  attached: number;
+  /** Epoch ms of the pane's last output. */
+  activityMs: number;
+  windows: number;
+  panes: number;
+  pid: number;
+  dead: boolean;
+  command: string;
 };
 
 // One `tmux list-sessions` row: the two codecast stamps + name (see
@@ -19524,9 +19665,10 @@ export function parseReapCandidateRow(row: string): ReapCandidate | null {
   // Fewer fields than the format emits means the separators never survived:
   // take the whole row as the name and treat it as unstamped.
   const [name, sessionId, convId] =
-    parts.length < 3
+    parts.length < REAP_FIELD_COUNT
       ? [row, "", ""]
-      : [parts.slice(2).join(REAP_FIELD_SEP), parts[0], parts[1]];
+      : [parts.slice(REAP_FIELD_COUNT - 1).join(REAP_FIELD_SEP), parts[0], parts[1]];
+  const pane = parts.length < REAP_FIELD_COUNT ? null : parseReapPaneFacts(parts.slice(2, REAP_FIELD_COUNT - 1));
   const tmux = (name ?? "").trim();
   if (!tmux) return null;
   const unexpanded = (v: string) => v.includes("#{");
@@ -19535,12 +19677,69 @@ export function parseReapCandidateRow(row: string): ReapCandidate | null {
   const stampedSessionId = stampedSession && !unexpanded(stampedSession) ? stampedSession : null;
   const stampedConvId = stampedConv && !unexpanded(stampedConv) ? stampedConv : null;
   if (REAP_TMUX_PREFIXES.some((p) => tmux.startsWith(p))) {
-    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "resume" };
+    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "resume", pane };
   }
   if (stampedSessionId || stampedConvId) {
-    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "stamped" };
+    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "stamped", pane };
   }
   return null;
+}
+
+function parseReapPaneFacts(f: string[]): ReapPaneFacts | null {
+  const [attached, activity, windows, panes, pid, dead] = f.slice(0, 6).map((v) => (/^\d+$/.test(v.trim()) ? Number(v) : NaN));
+  const command = (f[6] ?? "").trim();
+  if ([attached, activity, windows, panes, pid, dead].some(Number.isNaN) || !command || command.includes("#{")) return null;
+  return { attached, activityMs: activity * 1000, windows, panes, pid, dead: dead === 1, command };
+}
+
+// Login shells tmux reports as the foreground command once an agent exits.
+const EXITED_AGENT_SHELLS = new Set(["bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
+// A dead pane must print nothing for this long before it goes: long enough to
+// outlast any resume the daemon starts in it, short enough that a night of
+// finished agents does not pile up (250 of them held a load average of 245 on
+// 2026-09-17).
+export const DEAD_PANE_QUIET_MS = 30 * 60 * 1000;
+// Killing a pane that runs nothing costs no agent anything, so this cap is
+// about pacing the log, not caution.
+const DEAD_PANE_MAX_PER_PASS = 20;
+
+/**
+ * Has the agent in this pane exited? Structural, from tmux alone: the pane is
+ * dead, or its foreground program is a bare login shell. Transcript age cannot
+ * answer this. A live agent idle at its prompt has an old transcript too, and
+ * reading one as the other killed a scheduled run mid delivery (2026-09-17).
+ */
+export function paneAgentExited(p: ReapPaneFacts): boolean {
+  return p.dead || EXITED_AGENT_SHELLS.has(p.command.replace(/^-/, ""));
+}
+
+/**
+ * Why a pane whose agent exited must stay, or null when it may go. The kill
+ * takes the whole tmux session, so it must be one pane nobody is attached to;
+ * the shell must run nothing (a script the human started keeps it); no resume
+ * or delivery may be headed for it; and it must have printed nothing for
+ * DEAD_PANE_QUIET_MS. `children` is null when the process table could not be
+ * read, which blocks: a failed read answers nothing.
+ */
+export function deadPaneReapBlock(p: ReapPaneFacts, facts: { now: number; children: number | null; deliveryActive: boolean }): string | null {
+  if (p.windows !== 1 || p.panes !== 1) return "multi-pane";
+  if (p.attached > 0) return "attached";
+  if (facts.children === null) return "children-unknown";
+  if (facts.children > 0) return "shell-busy";
+  if (facts.deliveryActive) return "delivery-active";
+  if (facts.now - p.activityMs < DEAD_PANE_QUIET_MS) return "dead-recent";
+  return null;
+}
+
+/** Child processes of a pane's shell, or null when `pgrep` could not answer. */
+async function paneChildCount(pid: number): Promise<number | null> {
+  try {
+    const { stdout } = await _execFileAsync("pgrep", ["-P", String(pid)], { timeout: 4000 });
+    return String(stdout).split("\n").filter((l) => l.trim()).length;
+  } catch (err) {
+    // pgrep exits 1 when it matched nothing: that is an answer, zero.
+    return (err as { code?: unknown })?.code === 1 ? 0 : null;
+  }
 }
 
 // Whether a stamped (primary-terminal) pane's conversation is hidden enough to
@@ -19810,18 +20009,28 @@ async function reapOneTerminal(
   tmux: string,
   convId: string | undefined,
   idleHours: number,
-  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated"; boundary?: HibernationBoundary } = {},
+  opts: {
+    gcWorktree?: boolean;
+    parkAs?: "idle" | "hibernated";
+    boundary?: HibernationBoundary;
+    /** The kill-time recheck: why the pane must now survive, or null. Defaults to "an agent still idle at its prompt". */
+    stillReapable?: () => Promise<string | null>;
+  } = {},
 ): Promise<boolean> {
   if (opts.parkAs === "hibernated") {
     return opts.boundary ? parkHibernationTerminal(sessionId, tmux, convId, idleHours, opts.boundary) : false;
   }
-  // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
-  // False here means the pane survived, so no caller may count or report a kill.
-  try {
+  // TOCTOU guard: re-confirm the pane is still reapable in the instant before the
+  // kill. False here means the pane survived, so no caller may count or report a kill.
+  const recheck = opts.stillReapable ?? (async () => {
     const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 });
     const live = classifyLivePaneFor(detectSessionAgentType(sessionId), pane);
-    if (live !== "idle") { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): pane became "${live}" at kill time`); return false; }
-  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck capture failed`); return false; }
+    return live === "idle" ? null : `pane became "${live}"`;
+  });
+  try {
+    const why = await recheck();
+    if (why) { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): ${why} at kill time`); return false; }
+  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck failed`); return false; }
 
   // Stop tracking BEFORE the kill so heartbeatHealthCheck can't see the vanished
   // tmux and reconstitute it.
@@ -19848,6 +20057,16 @@ async function reapOneTerminal(
   return true;
 }
 
+// Engine browsers outlive their agents until something reaps them, and only a
+// `cast browser` start used to. Runs as a child so its tmux and ps reads stay
+// off this loop; the verb throttles itself, so a slow tick costs nothing extra.
+async function reapOrphanEngines(): Promise<void> {
+  const { executablePath, args } = selfExecInfo("browser", "reap");
+  const { stdout } = await _execFileAsync(executablePath, args, { timeout: 60_000, env: scrubAgentEnv({ ...process.env }) });
+  const line = String(stdout ?? "").trim();
+  if (line) reaperLog(`engines: ${line}`);
+}
+
 async function reapIdleOrphanTerminals(): Promise<void> {
   const now = Date.now();
   let candidates: ReapCandidate[];
@@ -19861,8 +20080,37 @@ async function reapIdleOrphanTerminals(): Promise<void> {
 
   const convCache = readConversationCache();
   const skips: string[] = [];
-  let reaped = 0;
+  let reaped = 0, deadReaped = 0;
   for (const cand of candidates) {
+    // An exited agent's pane is judged by tmux's facts, never the transcript,
+    // and has its own pacing: it runs nothing, so no turn can be cut short.
+    if (cand.pane && paneAgentExited(cand.pane)) {
+      if (deadReaped >= DEAD_PANE_MAX_PER_PASS) { skips.push("dead:pass-cap"); continue; }
+      const sessionId = cand.sessionId ?? await resolveReapSessionId(cand.tmux);
+      if (!sessionId) { skips.push("unidentified"); continue; } // never kill what we can't name
+      const convId = cand.convId ?? convCache[sessionId];
+      const pane = cand.pane;
+      const block = async (p: ReapPaneFacts) => deadPaneReapBlock(p, {
+        now: Date.now(),
+        children: await paneChildCount(p.pid),
+        deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
+      });
+      const reason = await block(pane);
+      if (reason) { skips.push(`dead:${reason}`); continue; }
+      const idleHours = Math.round((now - pane.activityMs) / 3600000);
+      const killed = await reapOneTerminal(sessionId, cand.tmux, convId, idleHours, {
+        stillReapable: async () => {
+          const { stdout } = await tmuxExec(["display-message", "-p", "-t", `=${cand.tmux}:0.0`, REAP_LIST_FORMAT], { timeout: 4000 });
+          const fresh = parseReapCandidateRow(stdout.split("\n")[0] ?? "")?.pane;
+          if (!fresh) return "pane facts unreadable";
+          if (!paneAgentExited(fresh)) return `an agent is running again (${fresh.command})`;
+          return block(fresh);
+        },
+      });
+      if (killed) deadReaped++;
+      else skips.push("dead:changed-at-kill");
+      continue;
+    }
     if (reaped >= REAP_MAX_PER_PASS) { skips.push("pass-cap"); continue; }
     const sessionId = cand.sessionId ?? await resolveReapSessionId(cand.tmux);
     if (!sessionId) { skips.push("unidentified"); continue; } // never kill what we can't name
@@ -19894,7 +20142,7 @@ async function reapIdleOrphanTerminals(): Promise<void> {
   // Every pass leaves a line: without it the skip reasons were invisible and a
   // reaper that had quietly stopped reaping looked identical to one with nothing
   // to do. File-only (mirror=false) — this fires every ~5 min.
-  reaperLog(`pass: ${candidates.length} candidates, reaped ${reaped}, skipped: ${summarizeReapSkips(skips)}`, false);
+  reaperLog(`pass: ${candidates.length} candidates, reaped ${reaped}, exited panes reaped ${deadReaped}, skipped: ${summarizeReapSkips(skips)}`, false);
 }
 
 // ─── Hibernation ───────────────────────────────────────────────────────────
@@ -19909,7 +20157,10 @@ async function reapIdleOrphanTerminals(): Promise<void> {
 export type HibernationTarget = {
   session: string;
   pane: string;
+  /** The PANE's own process, which the tmux boundary checks before the kill. */
   pid: number;
+  /** The agent process itself, which every identity check is made against. */
+  agentPid: number;
   start: string;
   stamp: string;
   conversationStamp: string;
@@ -19954,62 +20205,127 @@ export function publishHookStatus(sync: SyncService, conversationId: string, ses
 }
 const HIBERNATION_PANE_FORMAT = "#{session_id}|#{pane_id}|#{pane_pid}|#{session_name}|#{session_attached}|#{@codecast_session_id}|#{@codecast_conversation_id}|#{pane_dead}";
 
+// Why inspectHibernationTarget last refused a session, so a dry run can say
+// which rule stopped a park instead of only "target-unverified". Written on
+// the refusal, read by the preview on the same tick; bounded because a machine
+// with thousands of sessions would otherwise keep every id forever.
+const lastTargetRefusal = new Map<string, string>();
+function refuseTarget(sessionId: string, reason: string): null {
+  if (lastTargetRefusal.size > 2000) lastTargetRefusal.clear();
+  lastTargetRefusal.set(sessionId, reason);
+  return null;
+}
+/** The named reason, once. Absent when the refusal came from somewhere else. */
+export function takeTargetRefusal(sessionId: string): string | null {
+  const reason = lastTargetRefusal.get(sessionId) ?? null;
+  lastTargetRefusal.delete(sessionId);
+  return reason;
+}
+
+/**
+ * The process in this pane that IS the agent, or null when nothing there
+ * proves it. Either the pane's own process names the session on its command
+ * line, or the pane holds exactly one other process and that one names it —
+ * the shape the daemon creates, since it starts an agent inside a login shell.
+ *
+ * Exactly one is the point. A pane running a second thing is a pane somebody
+ * is using, and the park kills the whole pane, so anything ambiguous refuses.
+ */
+export function resolveAgentPid(
+  procs: ProcRow[],
+  panePid: number,
+  paneCommand: string,
+  sessionId: string,
+): number | null {
+  if (argvSessionId(paneCommand) === sessionId) return panePid;
+  const under = descendantRows(procs, panePid);
+  if (under.length !== 1) return null;
+  return argvSessionId(under[0].command) === sessionId ? under[0].pid : null;
+}
+
 export async function inspectHibernationTarget(sessionId: string, tmux: string, conversationId: string, registryDir?: string): Promise<HibernationTarget | null> {
-  if (!validateTmuxTarget(tmux)) return null;
+  if (!validateTmuxTarget(tmux)) return refuseTarget(sessionId, "bad-tmux-name");
   await ensureSessionFileIndex();
-  if (!sessionFileIndexReady || sessionFileIndexHome !== (process.env.HOME || "") || codexRolloutIndex?.has(sessionId)) return null;
-  try { if ((await freshCodexOwnershipFiles()).has(sessionId)) return null; } catch { return null; }
+  if (!sessionFileIndexReady || sessionFileIndexHome !== (process.env.HOME || "") || codexRolloutIndex?.has(sessionId)) return refuseTarget(sessionId, "session-index-cold");
+  try { if ((await freshCodexOwnershipFiles()).has(sessionId)) return refuseTarget(sessionId, "codex-owned"); } catch { return refuseTarget(sessionId, "codex-ownership-unreadable"); }
   const { stdout } = await tmuxExec(["list-panes", "-s", "-t", `=${tmux}`, "-F", HIBERNATION_PANE_FORMAT], { timeout: 3000 });
-  if (!tmuxSessionIsSinglePane(stdout)) return null;
+  if (!tmuxSessionIsSinglePane(stdout)) return refuseTarget(sessionId, "multi-pane");
   const [session, pane, rawPid, name, attached, stamp, conversationStamp, dead] = stdout.trim().split("|");
-  if (!/^\$\d+$/.test(session) || !/^%\d+$/.test(pane) || name !== tmux || attached !== "0" || dead !== "0") return null;
-  if (stamp && stamp !== sessionId) return null;
-  if (conversationStamp && conversationStamp !== conversationId) return null;
-  const pid = Number(rawPid);
-  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return null;
-  const { stdout: identity } = await _execFileAsync("ps", ["-p", String(pid), "-o", "lstart=,uid=,command="], { timeout: 3000 });
+  if (!/^\$\d+$/.test(session) || !/^%\d+$/.test(pane) || name !== tmux || attached !== "0" || dead !== "0") return refuseTarget(sessionId, "pane-facts-changed");
+  if (stamp && stamp !== sessionId) return refuseTarget(sessionId, "stamp-mismatch");
+  if (conversationStamp && conversationStamp !== conversationId) return refuseTarget(sessionId, "stamp-mismatch");
+  const panePid = Number(rawPid);
+  if (!Number.isInteger(panePid) || panePid <= 1 || panePid === process.pid) return refuseTarget(sessionId, "pane-pid-implausible");
+  // The pane's own process is not always the agent. The daemon starts an agent
+  // INSIDE a login shell, so tmux's pane_pid is that shell and the agent is its
+  // one child: on 2026-09-18 all 69 agent panes on this machine had that shape
+  // and none had the agent on top, so reading the pane process alone refused
+  // every session as "argv-session-mismatch" and nothing could ever park.
+  // Follow one level down, and only when the shell holds exactly one process
+  // and that process names this session on its own command line.
+  const resolving = await snapshotProcessTableAsync({ timeout: 3000 });
+  const paneRow = resolving.find(p => p.pid === panePid);
+  if (!paneRow || paneRow.uid !== process.getuid?.()) return refuseTarget(sessionId, "process-not-ours");
+  const agentPid = resolveAgentPid(resolving, panePid, paneRow.command, sessionId);
+  if (agentPid === null) return refuseTarget(sessionId, "argv-session-mismatch");
+  const { stdout: identity } = await _execFileAsync("ps", ["-p", String(agentPid), "-o", "lstart=,uid=,command="], { timeout: 3000 });
   const match = identity.trim().match(/^(\S+\s+\S+\s+\d+\s+\S+\s+\d+)\s+(\d+)\s+(.+)$/);
-  if (!match || process.getuid?.() !== Number(match[2])) return null;
+  if (!match || process.getuid?.() !== Number(match[2])) return refuseTarget(sessionId, "process-not-ours");
   const argvId = argvSessionId(match[3]);
-  if (argvId !== sessionId) return null;
+  if (argvId !== sessionId) return refuseTarget(sessionId, "argv-session-mismatch");
   const processStartSec = Date.parse(match[1]) / 1000;
-  if (!Number.isFinite(processStartSec)) return null;
-  const claims = await hookClaimsForPid(pid, { fresh: true, registryDir });
-  if (!claims || judgeProcessIdentity({ sessionId, argvId, claims, processStartSec }).verdict !== "owned") return null;
+  if (!Number.isFinite(processStartSec)) return refuseTarget(sessionId, "process-start-unreadable");
+  const claims = await hookClaimsForPid(agentPid, { fresh: true, registryDir });
+  if (!claims || judgeProcessIdentity({ sessionId, argvId, claims, processStartSec }).verdict !== "owned") return refuseTarget(sessionId, "process-not-owned");
   const newestClaim = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
-  if (claims.some(c => c.ts >= processStartSec - 5 && c.sessionId !== sessionId && c.ts === newestClaim)) return null;
-  if (!await hibernationChildHistoryIsClear(sessionId)) return null;
+  if (claims.some(c => c.ts >= processStartSec - 5 && c.sessionId !== sessionId && c.ts === newestClaim)) return refuseTarget(sessionId, "process-claimed-by-other");
+  if (!await hibernationChildHistoryIsClear(sessionId)) return null; // reason recorded inside
+  // Read the table again, after the slow checks above, and make the final
+  // judgement on that one: the agent must still be there, still be ours, still
+  // name this session, and still be running nothing of its own.
   const procs = await snapshotProcessTableAsync({ timeout: 3000 });
-  const root = procs.find(p => p.pid === pid);
-  if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return null;
-  if (descendantRows(procs, pid).length > 0) return null;
-  return { session, pane, pid, start: match[1], stamp, conversationStamp };
+  const root = procs.find(p => p.pid === agentPid);
+  if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return refuseTarget(sessionId, "process-vanished");
+  if (descendantRows(procs, agentPid).length > 0) return refuseTarget(sessionId, "agent-has-children");
+  if (agentPid !== panePid && descendantRows(procs, panePid).length !== 1) return refuseTarget(sessionId, "pane-runs-more-than-the-agent");
+  return { session, pane, pid: panePid, agentPid, start: match[1], stamp, conversationStamp };
 }
 
 async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolean> {
-  if (subagentActiveAgoMs(sessionId) !== Infinity) return false;
+  if (subagentActiveAgoMs(sessionId) !== Infinity) { refuseTarget(sessionId, "live-subagents"); return false; }
   const file = findReapTranscript(sessionId);
-  if (!file || file.agentType !== "claude") return false;
+  if (!file || file.agentType !== "claude") { refuseTarget(sessionId, "not-a-claude-transcript"); return false; }
   const dir = path.join(path.dirname(file.path), sessionId, "subagents");
   try {
-    if ((await fs.promises.readdir(dir)).length > 0) return false;
+    if ((await fs.promises.readdir(dir)).length > 0) { refuseTarget(sessionId, "has-subagent-history"); return false; }
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") { refuseTarget(sessionId, "subagent-dir-unreadable"); return false; }
   }
+  // Read it a window at a time, the way primeOpenTaskScan reads the same file
+  // for the same kind of question. Reading it whole instead cost 111 MB of heap
+  // on a 55 MB transcript, which is why this gate used to refuse anything over
+  // 1 MB rather than answer — and 63% of live transcripts here are over it, so
+  // the biggest sessions, the ones worth parking most, could never park.
   const stat = await fs.promises.stat(file.path);
-  if (stat.size > 1024 * 1024) return false;
-  const content = await fs.promises.readFile(file.path, "utf8");
-  const after = await fs.promises.stat(file.path);
-  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return false;
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    const row = JSON.parse(line);
-    if (!Array.isArray(row.message?.content)) continue;
-    for (const block of row.message.content) {
-      if (block?.type === "tool_use" &&
-          (["Agent", "Task", "Workflow", "Monitor"].includes(block.name) || block.input?.run_in_background)) return false;
+  for (let at = 0; at < stat.size; ) {
+    const { content, bytesConsumed } = await readIngestWindow(file.path, at, stat.size - at, { step: SCAN_CHUNK_BYTES });
+    if (!bytesConsumed) break;
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      const row = JSON.parse(line);
+      if (!Array.isArray(row.message?.content)) continue;
+      for (const block of row.message.content) {
+        if (block?.type === "tool_use" &&
+            (["Agent", "Task", "Workflow", "Monitor"].includes(block.name) || block.input?.run_in_background)) { refuseTarget(sessionId, "transcript-started-background-work"); return false; }
+      }
     }
+    at += bytesConsumed;
+    await yieldScanBatch();
   }
+  // The file must not have moved under the scan: a window read after an append
+  // would have covered bytes the earlier windows never saw.
+  const after = await fs.promises.stat(file.path);
+  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) { refuseTarget(sessionId, "transcript-changed-while-read"); return false; }
   return true;
 }
 
@@ -20027,6 +20343,22 @@ function hibernationLocalUnchanged(cand: HibernationCandidate, io: HibernationPa
     messagesInFlight: io.deliveryActive(cand.sessionId, cand.conversationId),
   };
   return hibernationBlockReason(fresh) === null;
+}
+
+/**
+ * Why this session would refuse the park, or null when it would be taken.
+ *
+ * Every gate the real attempt applies, in the same order, minus the two that
+ * cannot run without committing: the in-flight reservation and the boundary
+ * re-validation at the kill. Both of those only ever ADD refusals, so a
+ * preview over-reports and never under-reports — the safe direction for a
+ * number somebody reads before switching the thing on.
+ */
+async function previewHibernation(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
+  const refusal = await hibernationRefusalReason(cand, io);
+  if (refusal) return refusal;
+  if (await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!)) return null;
+  return takeTargetRefusal(cand.sessionId) ?? "target-unverified";
 }
 
 async function attemptHibernation(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
@@ -20054,7 +20386,7 @@ async function attemptHibernation(cand: HibernationCandidate, io: HibernationPas
     if (refusal) return refusal;
     if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
     const target = await io.inspectTarget(cand.sessionId, cand.tmux, cand.conversationId!);
-    if (!target) return "target-unverified";
+    if (!target) return takeTargetRefusal(cand.sessionId) ?? "target-unverified";
     if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
     for (const alias of [target.session, target.pane]) {
       if (tmuxTargetLocks.has(alias)) return "in-flight-messages";
@@ -20160,7 +20492,7 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
 export type HibernationPassIo = {
   attemptTimeoutMs?: number;
   terminal(args: string[]): Promise<{ stdout: string }>;
-  policy(): { maxLive: number; idleMs: number; maxPerPass: number };
+  policy(): HibernationPolicy;
   /** tmux session name to the number of clients attached to it. */
   tmuxSessions(): Promise<Map<string, number>>;
   awakeIdleMs(sessionId: string): number;
@@ -20189,6 +20521,7 @@ const productionHibernationIo: HibernationPassIo = {
     maxLive: activeConfig?.max_live_sessions ?? DEFAULT_MAX_LIVE_SESSIONS,
     idleMs: activeConfig?.hibernate_idle_ms ?? DEFAULT_HIBERNATE_IDLE_MS,
     maxPerPass: HIBERNATE_MAX_PER_PASS,
+    dryRun: activeConfig?.hibernate_dry_run === true,
   }),
   // Its own listing rather than the reaper's rows from the same tick, for one
   // reason: REAP_LIST_FORMAT carries no session_attached, so those rows cannot
@@ -20421,6 +20754,16 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   if (candidates.length === 0) return 0;
 
   const { picked, skips } = selectHibernationCandidates(candidates, policy);
+  if (policy.dryRun) {
+    const would: string[] = [];
+    for (const cand of picked) {
+      const refusal = await previewHibernation(cand, io);
+      if (refusal) skips.push(refusal);
+      else would.push(`${cand.sessionId.slice(0, 8)}@${Math.round(cand.awakeIdleMs / 3600000)}h`);
+    }
+    reaperLog(`hibernation DRY RUN: ${candidates.length} live, cap=${policy.maxLive}, would park ${would.length}${would.length ? ` (${would.join(", ")})` : ""}, skipped: ${summarizeReapSkips(skips)}`, false);
+    return 0;
+  }
   let hibernated = 0;
   for (const cand of picked) {
     const refusal = await attemptHibernation(cand, io);
@@ -22208,6 +22551,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       // grok's updates.jsonl carries no cwd — the sibling summary.json (info.cwd)
       // is authoritative, with the encoded dir name as fallback.
       : agentType === "grok" ? grokSessionCwdFromTranscriptPath(jsonlPath)
+      // muse's date-sharded dirs carry no cwd — the log's own route_facts
+      // record (extractMuseCwd) is authoritative.
+      : agentType === "muse" ? (extractMuseCwd(jsonlContent) || undefined)
       : (extractCwd(jsonlContent) || undefined);
     const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
     if (resolvedCwd) {
@@ -22250,6 +22596,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
     grokArgs: getAgentArgs(config, "grok"),
     grokPermFlags: agentType === "grok" ? getPermissionFlags("grok", config) : null,
+    museArgs: getAgentArgs(config, "muse"),
+    musePermFlags: agentType === "muse" ? getPermissionFlags("muse", config) : null,
   });
   if (nonClaudeResumeCmd !== null) {
     // codex / gemini / cursor: a single self-contained resume invocation. The
@@ -28347,6 +28695,23 @@ async function main(): Promise<void> {
     ),
   );
 
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("muse")),
+    "muse",
+    (event) => processMuseSession(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
+
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;
   let permissionUnsubscribe: (() => void) | null = null;
@@ -29333,13 +29698,7 @@ export async function runWatchdog(): Promise<void> {
 }
 
 function getDaemonExecInfo(): { executablePath: string; args: string[] } {
-  const execPath = process.execPath;
-  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
-  if (isBinary) {
-    return { executablePath: execPath, args: ["--", "_daemon"] };
-  }
-  const source = path.resolve(__dirname, "daemon.ts");
-  return { executablePath: execPath, args: [fs.existsSync(source) ? source : path.resolve(__dirname, "daemon.js"), "_daemon"] };
+  return selfExecInfo("_daemon");
 }
 
 // Only run directly if executed as the main module (not when imported)
