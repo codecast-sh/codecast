@@ -3,10 +3,11 @@ import { api } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { scopedFetch } from "./data";
-import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, type OrgScan, type ResolvedScope } from "./org";
+import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./orgEvents";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
+import { projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import { computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
@@ -512,13 +513,22 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const caps = capsFor(role);
     const reached = await readReachedItems(ctx, role._id, cut7);
     const hands = scan.byParent.get(`role:${rid}`) ?? [];
+    // A session of the role that has waited on a person past the window with
+    // no escalation (org-roles-run-work.md R1): it is out of the person's
+    // inbox, so nobody sees the wait but the role.
+    const waitMs = capacity("session_wait_hours") * 3_600_000;
+    const unseenWaits = hands.filter((h) => {
+      const raw = scan.sessions.get(String(h._id))?.raw;
+      const since = raw && !raw.escalated_by_role ? waitingSinceOf(h.state, raw) : null;
+      return since !== null && now - since > waitMs;
+    }).length;
     const load: RoleLoad = {
       items_per_day: reached.items / 7,
       decisions_per_day: decisions7 / 7,
       live_hands: hands.filter((s) => s.state === "working" || s.state === "needs_input" || s.state === "dormant").length,
       hands_cap: caps.hands_per_day,
       direct_reports: reportsOf.get(rid) ?? 0,
-      open_stalls: stalls + stuckHands,
+      open_stalls: stalls + stuckHands + unseenWaits,
       cap_hit_days: activity.wakes_7d.cap_hit_days,
     };
     const counters = countersFor(role, now);
@@ -630,6 +640,11 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   for (const p of plans) if (p.project_id && !PLAN_CLOSED.has(p.status)) bump(openPlansByProject, String(p.project_id));
   const hasWork = (p: any) => (openByProject.get(String(p._id)) ?? 0) > 0 || (openPlansByProject.get(String(p._id)) ?? 0) > 0;
   const unowned_projects = liveProjects.filter((p) => hasWork(p) && !p.owner_role_id && !coveredProjects.has(String(p._id))).map((p) => ({ id: String(p._id), title: p.title }));
+  // Two roles on separate lines list the project and it names neither as its
+  // lead (org-roles-run-work.md R4): the one rule every surface reads, so the
+  // analyzer proposes the owner for exactly the projects the web marks "two
+  // roles watch this".
+  const watched_without_lead = projectsWithoutAnOwnerAmongWatchers(liveProjects, roles).map(({ project, roles: watchers }) => ({ id: String(project._id), title: project.title as string, roles: watchers.map((r: any) => r.handle as string) }));
   const openByPlan = new Map<string, number>();
   for (const t of tasks) if (isOpen(t) && t.plan_id) bump(openByPlan, String(t.plan_id));
   // The company's budget as it stands: the caps of every active role summed,
@@ -643,6 +658,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   const company = {
     caps_total,
     unowned_projects,
+    watched_without_lead,
     unfiled_tasks: tasks.filter((t) => isOpen(t) && !t.project_id && !t.plan_id).length,
     unfiled_plans: plans.filter((p) => !p.project_id && !PLAN_CLOSED.has(p.status) && (openByPlan.get(String(p._id)) ?? 0) > 0)
       .map((p) => ({ id: String(p._id), title: p.title, short_id: p.short_id ?? undefined, open_tasks: openByPlan.get(String(p._id))! })),

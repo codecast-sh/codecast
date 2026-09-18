@@ -25,6 +25,8 @@ import {
   orgReviseOpError,
   normalizeOrgSpecChange,
   parseOrgProposalSpec,
+  resolveOrgAsks,
+  withAboutAsk,
   withAboutChange,
   type OrgChange,
   type OrgChangeRevision,
@@ -147,6 +149,9 @@ export async function performCreateProposal(
     // The thread a person talks to about it (S18): the posting session,
     // which for a role is its standing session. A person's proposal has none.
     ...(conversation ? { thread_conversation_id: conversation._id } : {}),
+    // The asks (S19), already checked as a partition of the changes and
+    // carried through the fold by the parser.
+    ...(spec.asks ? { asks: spec.asks } : {}),
     created_at: now,
     updated_at: now,
   });
@@ -272,7 +277,7 @@ export async function readProposal(ctx: Ctx, userId: Id<"users">, ref: string): 
   const rows = await changesOf(ctx, proposal._id);
   const depends = orgChangeDependencies(rows.filter((c) => c.status !== "removed").map((c) => ({ seq: c.seq, change: c.change })));
   const changes = rows.map((c) => ({ ...c, line: describeOrgChange(c.change), depends: depends[c.seq] }));
-  return { ...proposal, ...(await enrichSupersession(ctx, proposal)), ...(await enrichThread(ctx, proposal)), author: await enrichAuthor(ctx, proposal.author), changes, link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
+  return { ...proposal, ...(await enrichSupersession(ctx, proposal)), ...(await enrichThread(ctx, proposal)), author: await enrichAuthor(ctx, proposal.author), changes, asks: resolveOrgAsks(proposal.asks, rows), link: PROPOSAL_LINK(proposal.short_id), counts: countsOf(changes) };
 }
 
 /** The conversation bound to a proposal (S18): the stored pointer, else,
@@ -324,7 +329,10 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
   const rank = (s: string) => (s === "open" ? 0 : s === "resolved" ? 1 : 2);
   const kept = rows.filter((p) => !args.status || p.status === args.status).sort((a, b) => rank(a.status) - rank(b.status) || b.created_at - a.created_at).slice(0, PROPOSAL_LIST_CAP);
   const out = [];
-  for (const p of kept) out.push({ ...p, ...(await enrichSupersession(ctx, p)), ...(await enrichThread(ctx, p)), author: await enrichAuthor(ctx, p.author), link: PROPOSAL_LINK(p.short_id), counts: countsOf(await changesOf(ctx, p._id)) });
+  for (const p of kept) {
+    const rows = await changesOf(ctx, p._id);
+    out.push({ ...p, ...(await enrichSupersession(ctx, p)), ...(await enrichThread(ctx, p)), author: await enrichAuthor(ctx, p.author), asks: resolveOrgAsks(p.asks, rows), link: PROPOSAL_LINK(p.short_id), counts: countsOf(rows) });
+  }
   return out;
 }
 
@@ -393,6 +401,24 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
   return { change_id: change._id, seq: change.seq, status: ok ? "applied" : "failed", note, role: ok && "role" in result ? result.role : undefined, line: describeOrgChange(merged) };
 }
 
+/** Skip one change. Skipping the adopt of a role this proposal created
+ *  awaiting it would leave that seat with no standing session for ever, and
+ *  only the order of two clicks would decide it. The skip provisions the seat
+ *  then, and the note says so; the person who wanted no session retires it. */
+async function skipOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, change: ChangeRow, now: number, provision: boolean) {
+  let note: string | undefined;
+  if (change.change.kind === "adopt") {
+    const handle = change.change.handle.trim().replace(/^@/, "").toLowerCase();
+    const role = (await rolesInBoundary(ctx, boundaryOf(proposal))).find((r: any) => r.handle === handle);
+    if (role && !role.anchor_id && provision) {
+      await performProvisionRole(ctx, userId, { role_id: String(role._id) });
+      note = `skipped; @${role.handle} was created awaiting this adopt, so a fresh standing session was provisioned for it instead`;
+    }
+  }
+  await ctx.db.patch(change._id, { status: "skipped", decided_by: userId, decided_at: now, ...(note ? { applied_note: note, applied_at: now } : {}) });
+  return { change_id: change._id, seq: change.seq, status: "skipped", note, line: describeOrgChange(change.change) };
+}
+
 export async function performDecideChange(
   ctx: Ctx,
   userId: Id<"users">,
@@ -406,26 +432,9 @@ export async function performDecideChange(
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   if (!decidable(change)) throw new Error(`${proposal.short_id}#${change.seq} is already ${change.status}`);
   const now = Date.now();
-  let out: any;
-  if (args.verdict === "skip") {
-    // Skipping the adopt of a role this proposal created awaiting it would
-    // leave that seat with no standing session for ever, and only the order
-    // of two clicks would decide it. The skip provisions the seat then, and
-    // the note says so; the person who wanted no session retires it.
-    let note: string | undefined;
-    if (change.change.kind === "adopt") {
-      const handle = change.change.handle.trim().replace(/^@/, "").toLowerCase();
-      const role = (await rolesInBoundary(ctx, boundaryOf(proposal))).find((r: any) => r.handle === handle);
-      if (role && !role.anchor_id && (args.provision ?? true)) {
-        await performProvisionRole(ctx, userId, { role_id: String(role._id) });
-        note = `skipped; @${role.handle} was created awaiting this adopt, so a fresh standing session was provisioned for it instead`;
-      }
-    }
-    await ctx.db.patch(change._id, { status: "skipped", decided_by: userId, decided_at: now, ...(note ? { applied_note: note, applied_at: now } : {}) });
-    out = { change_id: change._id, seq: change.seq, status: "skipped", note, line: describeOrgChange(change.change) };
-  } else {
-    out = await acceptOne(ctx, userId, proposal, change, args.edits, now, args.provision ?? true);
-  }
+  const out = args.verdict === "skip"
+    ? await skipOne(ctx, userId, proposal, change, now, args.provision ?? true)
+    : await acceptOne(ctx, userId, proposal, change, args.edits, now, args.provision ?? true);
   await ctx.db.patch(proposal._id, { updated_at: now });
   const resolved = await resolveIfDone(ctx, proposal, now);
   return { ...out, proposal: proposal.short_id, resolved };
@@ -463,7 +472,7 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * runMutation's writes back); the test harness has no runMutation and runs
  * the change inline, which covers the throws that happen before any write.
  */
-export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; tried?: string[]; continuation?: boolean }): Promise<any> {
+export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; tried?: string[]; continuation?: boolean }): Promise<any> {
   // The person's gate runs on the call they made; a continuation is the same
   // act carried on by the server, scheduled only from inside that call.
   if (!args.continuation) await refuseUnlessHumanDecider(ctx, args);
@@ -475,8 +484,11 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // `kinds` narrows the sweep ("Accept group" on the pane's records card,
   // S9): only decidable changes of those kinds, still in apply order.
   const kinds = args.kinds?.length ? new Set(args.kinds) : null;
+  // `seqs` narrows it to one ask (S19): the changes folded inside the card
+  // the person accepted, still in apply order.
+  const seqs = args.seqs ? new Set(args.seqs) : null;
   const triedSet = new Set(args.tried ?? []);
-  const all = orderForApply((await changesOf(ctx, proposal._id)).filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !triedSet.has(String(c._id))));
+  const all = orderForApply((await changesOf(ctx, proposal._id)).filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
   // One call applies one chunk and hands the rest to its own transaction
   // (acceptAllContinue): a hundred records, each plan close cascading over its
   // tasks, do not fit one read and write budget, and a late failure must not
@@ -502,10 +514,39 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // tried: a refusal is reported once, never retried in a loop.
   const tried = [...(args.tried ?? []), ...pending.map((c) => String(c._id))];
   if (remaining > 0 && (ctx as any).scheduler) {
-    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, provision, tried });
+    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried });
   }
   const resolved = await resolveIfDone(ctx, proposal, now);
   return { proposal: proposal.short_id, results, resolved, remaining: (ctx as any).scheduler ? remaining : 0, applied: results.filter((r) => r.status === "applied").length, failed: results.filter((r) => r.status === "failed").length };
+}
+
+/**
+ * Decide one ask (S19): every undecided change folded inside it. `ask` is the
+ * index into the asks the server resolves (stored, else derived), so the page
+ * and this call cannot disagree about what an ask holds. Accept is the accept
+ * all core narrowed to the ask's seqs: apply order, a sub-transaction per
+ * change, the same chunks and continuation. Skip marks each skipped through
+ * the skip one change takes. A change the person already decided inside the
+ * fold is left as they decided it.
+ */
+export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; from_session?: string; api_token?: string; provision?: boolean }): Promise<any> {
+  await refuseUnlessHumanDecider(ctx, args);
+  const proposal = await findProposal(ctx, args.proposal);
+  if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
+  await requireAdmin(ctx, userId, proposal);
+  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
+  const rows = await changesOf(ctx, proposal._id);
+  const asks = resolveOrgAsks(proposal.asks, rows);
+  const ask = asks[args.ask];
+  if (!ask) throw new Error(`${proposal.short_id} has ${asks.length} ask${asks.length === 1 ? "" : "s"}; there is no ask ${args.ask}`);
+  if (args.verdict === "accept") return { ask: args.ask, title: ask.title, ...(await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: ask.seqs, provision: args.provision, continuation: true })) };
+  const now = Date.now();
+  const inAsk = new Set(ask.seqs);
+  const results = [];
+  for (const change of rows.filter(decidable).filter((c) => inAsk.has(c.seq))) results.push(await skipOne(ctx, userId, proposal, change, now, args.provision ?? true));
+  await ctx.db.patch(proposal._id, { updated_at: now });
+  const resolved = await resolveIfDone(ctx, proposal, now);
+  return { ask: args.ask, title: ask.title, proposal: proposal.short_id, results, resolved, remaining: 0, applied: 0, failed: 0, skipped: results.length };
 }
 
 /** Changes one accept all call applies before it hands the rest on. */
@@ -513,11 +554,11 @@ export const ACCEPT_ALL_CHUNK = 12;
 
 /** The rest of an accept all, in its own transaction (see performAcceptAll). */
 export const acceptAllContinue = internalMutation({
-  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), provision: v.boolean(), tried: v.array(v.string()) },
+  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()) },
   handler: async (ctx, args): Promise<any> => {
     const proposal = await ctx.db.get(args.proposal_id);
     if (!proposal || proposal.status !== "open") return null;
-    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, provision: args.provision, tried: args.tried, continuation: true });
+    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true });
   },
 });
 
@@ -700,11 +741,11 @@ export const PROPOSAL_MESSAGE_TAG = "proposal-message";
  * same way. The inner text starts with the shared "About op-N change 3"
  * header when a change is named, which the pane parses back.
  */
-export function formatProposalMessage(o: { short_id: string; title: string; change: { seq: number; line: string } | null; from: string; body: string }): string {
+export function formatProposalMessage(o: { short_id: string; title: string; change: { seq: number; line: string } | null; ask?: { index: number; title: string } | null; from: string; body: string }): string {
   const q = (x: string) => x.replace(/"/g, "'");
-  const inner = o.change ? withAboutChange(o.body, o.short_id, o.change.seq, o.change.line) : `About ${o.short_id} ("${q(o.title)}"):\n\n${o.body}`;
+  const inner = o.change ? withAboutChange(o.body, o.short_id, o.change.seq, o.change.line) : o.ask ? withAboutAsk(o.body, o.short_id, o.ask.index, o.ask.title) : `About ${o.short_id} ("${q(o.title)}"):\n\n${o.body}`;
   const tail = `(Reply here; the org page shows this thread beside ${o.short_id}. To change the proposal run \`cast org revise ${o.short_id} --remove <n>\`, \`--amend <n> --edits '{...}'\` or \`--add change.json\`. Accepting stays the person's.)`;
-  const attrs = `proposal="${o.short_id}"${o.change ? ` change="${o.change.seq}"` : ""} from="${q(o.from)}"`;
+  const attrs = `proposal="${o.short_id}"${o.change ? ` change="${o.change.seq}"` : ""}${o.ask ? ` ask="${o.ask.index}"` : ""} from="${q(o.from)}"`;
   return `<${PROPOSAL_MESSAGE_TAG} ${attrs}>\n${inner}\n\n${tail}\n</${PROPOSAL_MESSAGE_TAG}>`;
 }
 
@@ -716,7 +757,7 @@ export function formatProposalMessage(o: { short_id: string; title: string; chan
  * when the proposal has no thread (a person posted it), when the caller
  * cannot send into that thread, or when the change does not exist.
  */
-export async function performSayInThread(ctx: Ctx, userId: Id<"users">, args: { proposal: string; change?: number; body: string; client_id?: string }): Promise<any> {
+export async function performSayInThread(ctx: Ctx, userId: Id<"users">, args: { proposal: string; change?: number; ask?: number; body: string; client_id?: string }): Promise<any> {
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal || !(await userCanAccessRole(ctx, userId, hostShape(proposal)))) throw new Error(`Proposal not found: ${args.proposal}`);
   const body = (args.body ?? "").trim();
@@ -730,14 +771,22 @@ export async function performSayInThread(ctx: Ctx, userId: Id<"users">, args: { 
     if (!row) throw new Error(`${proposal.short_id}#${args.change} does not exist`);
     change = { seq: row.seq, line: describeOrgChange(row.change) };
   }
+  // A reply from an ask's card (S19) names the ask, by the index decideAsk
+  // takes, resolved the way the reads resolve it.
+  let ask: { index: number; title: string } | null = null;
+  if (args.ask !== undefined) {
+    const found = resolveOrgAsks(proposal.asks, await changesOf(ctx, proposal._id))[args.ask];
+    if (!found) throw new Error(`${proposal.short_id} has no ask ${args.ask}`);
+    ask = { index: args.ask, title: found.title };
+  }
   const from = (await resolveActor(ctx as any, userId, null)).name ?? "A person";
-  const content = formatProposalMessage({ short_id: proposal.short_id, title: proposal.title, change, from, body });
+  const content = formatProposalMessage({ short_id: proposal.short_id, title: proposal.title, change, ask, from, body });
   const message_id = await enqueuePendingMessage(ctx, thread, userId, {
     content,
     client_id: args.client_id ?? `proposal-message:${proposal._id}:${Date.now()}`,
     human: true,
   });
-  return { message_id, proposal: proposal.short_id, change: change?.seq, thread: { conversation_id: String(thread._id), short_id: thread.short_id ?? undefined, title: thread.title ?? undefined } };
+  return { message_id, proposal: proposal.short_id, change: change?.seq, ask: ask?.index, thread: { conversation_id: String(thread._id), short_id: thread.short_id ?? undefined, title: thread.title ?? undefined } };
 }
 
 // ── Functions ───────────────────────────────────────────────────────────────
@@ -818,6 +867,8 @@ export const create = mutation({
     summary_md: v.string(),
     mode: v.string(),
     changes: v.array(v.any()),
+    /** The asks (S19); the parser checks them as a partition of the changes. */
+    asks: v.optional(v.array(v.any())),
   },
   handler: async (ctx, { api_token, team_id, from_session, evidence_doc_id, supersedes, ...spec }) => {
     const userId = await requireCaller(ctx, api_token, team_id);
@@ -862,6 +913,11 @@ export const decide = mutation({
   handler: async (ctx, { api_token, ...args }) => performDecideChange(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
+export const decideAsk = mutation({
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ask: v.number(), verdict: v.union(v.literal("accept"), v.literal("skip")) },
+  handler: async (ctx, { api_token, ...args }) => performDecideAsk(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
+});
+
 export const acceptAll = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), kinds: v.optional(v.array(v.string())) },
   handler: async (ctx, { api_token, ...args }) => performAcceptAll(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
@@ -900,6 +956,6 @@ export const revise = mutation({
 /** A person's words into the proposal's thread (S18), naming the change
  *  they were looking at. */
 export const say = mutation({
-  args: { api_token: v.optional(v.string()), proposal: v.string(), change: v.optional(v.number()), body: v.string(), client_id: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), proposal: v.string(), change: v.optional(v.number()), ask: v.optional(v.number()), body: v.string(), client_id: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSayInThread(ctx, await requireCaller(ctx, api_token, undefined), args),
 });

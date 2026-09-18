@@ -130,6 +130,12 @@ export function stampWakeId(text: string, wakeShortId: string): string {
   return text.replace(/^<role-wake (\S+) (?:wake="[^"]*" )?/, `<role-wake $1 wake="${wakeShortId}" `);
 }
 
+// How long a session has waited, in the one unit a reader needs: 40m, 5h, 3d.
+function waited(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+}
+
 // Lists under a shared character budget: overflow becomes "+N more".
 function budgeted(lines: string[], budget: { left: number }): string[] {
   const out: string[] = [];
@@ -195,13 +201,25 @@ export function buildFrame(input: FrameInput): Frame {
     ...(changedLines.length ? [`Changed since your last frame:`, ...budgeted(changedLines, budget)] : [`Nothing in scope changed since your last frame.`]),
   ].join("\n"));
 
-  const handLines = facts.hands.map((h) => {
+  // Your sessions (org-roles-run-work.md R1): the ones waiting on a person
+  // lead, longest wait first, each with how long it has waited and whether
+  // the role already put it in front of the person. The role acts on that
+  // list; the rest follow as one line each.
+  const handLine = (h: (typeof facts.hands)[number]) => {
     const task = h.task
       ? ` · ${h.task.short_id} ${h.task.status}${h.task.execution_status ? ` (${h.task.execution_status})` : ""}${h.task.review_verdict ? ` · review: ${h.task.review_verdict}` : ""}`
       : "";
-    return `- ${h.short_id} ${h.title}: ${h.state}${task}${h.state_line ? ` — ${h.state_line}` : ""}`;
-  });
-  sections.push([`## Hands say`, ...(handLines.length ? budgeted(handLines, budget) : ["- no hands"])].join("\n"));
+    const wait = h.waiting_since ? ` · waited ${waited(now - h.waiting_since)}${h.escalated ? ` · escalated: ${h.escalated.line}` : " · not escalated"}` : "";
+    return `- ${h.short_id} ${h.title}: ${h.state}${wait}${task}${h.state_line ? ` — ${h.state_line}` : ""}`;
+  };
+  const waiting = facts.hands.filter((h) => h.waiting_since).sort((a, b) => a.waiting_since! - b.waiting_since!);
+  const others = facts.hands.filter((h) => !h.waiting_since);
+  sections.push([
+    `## Your sessions`,
+    ...(waiting.length ? [`Waiting on a person:`, ...budgeted(waiting.map(handLine), budget)] : []),
+    ...(others.length ? [...(waiting.length ? [`The rest:`] : []), ...budgeted(others.map(handLine), budget)] : []),
+    ...(facts.hands.length ? [] : ["- no sessions report to you"]),
+  ].join("\n"));
 
   if (input.channelLines.length) {
     const lines = input.channelLines.map((l) => `- #${l.channel_name} ${l.author_name}: ${l.text} (thread ${l.thread_root_id ?? l.message_id})`);

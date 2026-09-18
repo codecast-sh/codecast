@@ -10,7 +10,7 @@ import {
   listProposals,
   readProposalOrigin,
   readProposal, performBreachSnapshot, performWriteBreaches,
-  performReviseProposal, performSayInThread, formatProposalMessage, callerIsAuthor } from "./orgProposals";
+  performReviseProposal, performSayInThread, formatProposalMessage, callerIsAuthor, performDecideAsk } from "./orgProposals";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): create from a
 // session or a person, one advisory decision for the addressed person, decide
@@ -592,6 +592,31 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
     expect(res.note).toContain("already has a standing session, so jxanaly was not adopted");
     expect((await db.get(S1 as any)).standing_role_id).toBeUndefined();
   });
+
+  // org-roles-run-work.md R2: a long running session proposed as a role is one
+  // change. Accepting it names the session; there is no adopt to skip.
+  test("a role that names its session is seated on it in the same apply, with or without provision, and its routine runs there", async () => {
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const named = [
+      change({ kind: "role", name: "Market growth mandate", handle: "market-growth", seat: { existing: "jxanaly", title: "Market growth mandate", helpers: 391 }, tenure: { kind: "standing" }, reports_to: "me" }),
+      change({ kind: "routine", handle: "market-growth", title: "Daily run", prompt: "Run the daily pass", every: "1d" }),
+    ];
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(named) });
+    expect(r.changes.map((c: any) => c.depends)).toEqual([undefined, "runs on the session #1 seats"]);
+    const out = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: false });
+    expect(out.results.map((x: any) => x.status)).toEqual(["applied", "applied"]);
+    expect(out.results[0].note).toContain("jxanaly is its standing session, with its history and its helper sessions as they were");
+    const role = (db as any)._tables.org_roles.find((x: any) => x.handle === "market-growth");
+    const standing = (db as any)._tables.conversations.filter((c: any) => String(c.standing_role_id ?? "") === String(role._id));
+    expect(standing.map((c: any) => c.short_id)).toEqual(["jxanaly"]);
+  });
+
+  test("a role that names a session nobody can find fails with the reason, and no fresh session is started for it", async () => {
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Ghost", handle: "ghost-role", seat: { existing: "jxnosuch" }, reports_to: "me" })]) });
+    await expect(performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: true })).rejects.toThrow("Session not found");
+    expect((db as any)._tables.conversations.filter((c: any) => c.standing_role_id).map((c: any) => c.short_id)).toEqual(["jxgrowt"]);
+  });
 });
 
 // Review findings, each with its regression: a streak ticks once per review
@@ -854,5 +879,75 @@ describe("orgProposals.say", () => {
     await expect(performSayInThread(ctx, ME as any, { proposal: p.short_id, change: 5, body: "hi" })).rejects.toThrow("op-2#5 does not exist");
     await expect(performSayInThread(ctx, ME as any, { proposal: p.short_id, body: "  " })).rejects.toThrow("Message body is empty");
     await expect(performSayInThread(ctx, ME as any, { proposal: "op-9", body: "hi" })).rejects.toThrow("Proposal not found: op-9");
+  });
+});
+
+// S19: a proposal is a few asks with its changes folded inside each. Create
+// stores the author's asks, the reads return them resolved (stored, else
+// derived), and deciding an ask is the accept all core narrowed to its seqs.
+describe("orgProposals asks (S19)", () => {
+  const asked = () => spec([
+    change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }),
+    change({ kind: "projects", changes: [{ op: "create", title: "Platform" }] }),
+    change({ kind: "file", plan: "pl-1", project: "Platform" }),
+    change({ kind: "role", name: "Ops", handle: "ops", scope: { projects: ["pr-2"] } }),
+  ], { asks: [
+    { title: "Start a Platform area and file the loose plan under it", why: "The plan has no home.", effect: "One plan moves.", seqs: [3, 2] },
+    { title: "Add an agent for billing", why: "Nobody watches it.", effect: "One more agent.", seqs: [4] },
+    { title: "Let the growth agent start up more often", why: "It hit its limit.", effect: "12 starts a day.", seqs: [1] },
+  ] });
+
+  test("create stores the asks; get and list return them; a proposal without asks derives them on read", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: asked() });
+    expect((await db.get(r.id)).asks.map((a: any) => a.seqs)).toEqual([[2, 3], [4], [1]]);
+    const got = await readProposal(ctxOf(db), ME as any, r.short_id);
+    expect(got.asks.map((a: any) => a.title)).toEqual(["Start a Platform area and file the loose plan under it", "Add an agent for billing", "Let the growth agent start up more often"]);
+    expect((await listProposals(ctxOf(db), ME as any, { team_id: TEAM }))[0].asks.length).toBe(3);
+    // No asks written: the records, each role and the rest derive.
+    const plain = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "retire", handle: "growth" }), change({ kind: "file", plan: "pl-1", project: "pr-2" })]) });
+    expect((await db.get(plain.id)).asks).toBeUndefined();
+    expect((await readProposal(ctxOf(db), ME as any, plain.short_id)).asks.map((a: any) => [a.title, a.seqs])).toEqual([["Retire growth", [1]], ["1 smaller change: filing, goals and settings", [2]]]);
+  });
+
+  test("a spec whose asks leave a change out is refused at create, naming the change", async () => {
+    const bad = asked(); bad.asks.pop();
+    await expect(performCreateProposal(ctxOf(fixtures()), ME as any, { team_id: TEAM, from_session: "s1", spec: bad })).rejects.toThrow("changes[0] (budget @growth wakes 12/day) is in no ask");
+  });
+
+  test("accepting an ask applies only its changes, in apply order; skipping an ask skips only its changes; a session is refused", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: asked() });
+    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", from_session: "s_growth" })).rejects.toThrow("a person's act");
+    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 7, verdict: "accept" })).rejects.toThrow("has 3 asks; there is no ask 7");
+    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
+    // The project is created before the plan is filed under it, whatever order the ask listed them in.
+    expect(out.results.map((x: any) => [x.seq, x.status])).toEqual([[2, "applied"], [3, "applied"]]);
+    expect(out).toMatchObject({ ask: 0, title: "Start a Platform area and file the loose plan under it", applied: 2, failed: 0, resolved: false });
+    const after = await readProposal(ctxOf(db), ME as any, r.short_id);
+    expect(after.changes.map((c: any) => [c.seq, c.status])).toEqual([[1, "proposed"], [2, "applied"], [3, "applied"], [4, "proposed"]]);
+    const skipped = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 1, verdict: "skip" });
+    expect(skipped).toMatchObject({ skipped: 1, resolved: false });
+    expect(skipped.results.map((x: any) => [x.seq, x.status])).toEqual([[4, "skipped"]]);
+    expect((await db.query("org_roles").collect()).some((x: any) => x.handle === "ops")).toBe(false);
+    const last = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 2, verdict: "accept", provision: false });
+    expect(last).toMatchObject({ applied: 1, resolved: true });
+  });
+
+  test("a reply from an ask's card carries the ask: the index decideAsk takes in the tag, the card's number and title in the header, parsed back", async () => {
+    const { parseProposalMessage } = await import("@codecast/shared/contracts");
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: asked() });
+    const out = await performSayInThread(ctxOf(db), ME as any, { proposal: r.short_id, ask: 1, body: "billing is handled by the accountant, drop this", client_id: "c9" });
+    expect(out).toMatchObject({ proposal: "op-1", ask: 1 });
+    const content = (await db.get(out.message_id)).content;
+    expect(content.split("\n").slice(0, 4)).toEqual([
+      '<proposal-message proposal="op-1" ask="1" from="Me">',
+      'About op-1 ask 2 ("Add an agent for billing"):',
+      "",
+      "billing is handled by the accountant, drop this",
+    ]);
+    expect(parseProposalMessage(content)).toEqual({ proposal: "op-1", change: null, ask: 1, from: "Me", about: 'About op-1 ask 2 ("Add an agent for billing"):', body: "billing is handled by the accountant, drop this" });
+    await expect(performSayInThread(ctxOf(db), ME as any, { proposal: r.short_id, ask: 9, body: "x" })).rejects.toThrow("op-1 has no ask 9");
   });
 });

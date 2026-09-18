@@ -605,7 +605,7 @@ describe("project and plan charters", () => {
       charter: null, brief: null, channelLines: [], parentName: "Me", restart: false, now: NOW,
     };
     const frame = buildFrame(input).text;
-    const scope = frame.slice(frame.indexOf("## Your scope now"), frame.indexOf("## Hands say"));
+    const scope = frame.slice(frame.indexOf("## Your scope now"), frame.indexOf("## Your sessions"));
     expect(scope.split("\n")[1]).toBe("Direction:");
     expect(scope.split("\n")[2]).toBe("- project Growth [p1] · goal: Double weekly signups · metrics: signups/week");
     expect(scope.indexOf("Direction:")).toBeLessThan(scope.indexOf("Tasks:"));
