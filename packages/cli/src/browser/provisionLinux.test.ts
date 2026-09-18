@@ -3,7 +3,7 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport } from "./provisionLinux.js";
+import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, DAEMON_CGROUP_TMUX_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport } from "./provisionLinux.js";
 import * as remote from "./remote.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
 import { listCloudRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
@@ -207,6 +207,104 @@ describe("Linux split bundle transfer", () => {
     }) as typeof childProcess.execFileSync);
     expect(() => buildLinuxCast(() => {})).toThrow(failure === "failed" ? "build failed" : "daemon.js");
     expect(fs.existsSync(buildDirs.at(-1)!)).toBe(false);
+  });
+
+  // The version the real build would report: installLinuxCast reads it from the
+  // same package.json, so the fixture bundle prints it back when it is healthy.
+  const sourceVersion = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf-8")).version as string;
+
+  /** A split build the way `bun run build` emits one: a tiny entry that cannot run without its chunk. */
+  function fakeBuild(bundle: "healthy" | "missing chunk" | "wrong version") {
+    return spyOn(childProcess, "execFileSync").mockImplementation(((command: string, args: readonly string[], options: childProcess.ExecFileSyncOptions) => {
+      if (command !== "bun" || args?.[0] !== "run") return execFileSync(command, args, options);
+      const out = String(args[3]);
+      buildDirs.push(out);
+      const version = bundle === "wrong version" ? "0.0.0" : sourceVersion;
+      fs.writeFileSync(path.join(out, "main.js"), 'import { v } from "./main-chunk.js"; console.log(process.argv.includes("--version") ? v : "cli");');
+      fs.writeFileSync(path.join(out, "daemon.js"), 'import { v } from "./main-chunk.js"; console.log(v);');
+      if (bundle !== "missing chunk") fs.writeFileSync(path.join(out, "main-chunk.js"), `export const v = ${JSON.stringify(version)};`);
+      return Buffer.alloc(0);
+    }) as typeof childProcess.execFileSync);
+  }
+
+  test("installs a bundle only after it runs on the host, keeping the previous one for rollback", () => {
+    const target = localRemote();
+    fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
+    fakeBuild("healthy");
+    expect(installLinuxCast(host)).toEqual({ version: sourceVersion });
+    expect(execFileSync(target.launcher, ["--version"], { encoding: "utf8" }).trim()).toBe(sourceVersion);
+    expect(fs.readFileSync(path.join(`${target.install}.previous`, "index.js"), "utf8")).toBe("existing entry");
+    expect(fs.readFileSync(path.join(target.install, "idle-probe.py"), "utf8")).toBe("preserve probe");
+    expect(fs.existsSync(buildDirs.at(-1)!)).toBe(false);
+  }, 60_000);
+
+  test.each(["missing chunk", "wrong version"] as const)("puts the previous bundle back when the new one fails its check (%s)", (bundle) => {
+    const target = localRemote();
+    fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
+    fakeBuild(bundle);
+    expect(() => installLinuxCast(host)).toThrow("previous bundle is back in place");
+    // The host is exactly as it was: the old entry, the adjacent files, and no
+    // leftover copy, so nothing about the failed attempt survives it.
+    expect(fs.readFileSync(path.join(target.install, "index.js"), "utf8")).toBe("existing entry");
+    expect(fs.readFileSync(path.join(target.install, "unrelated.txt"), "utf8")).toBe("preserve unrelated");
+    expect(fs.existsSync(path.join(target.install, "main-chunk.js"))).toBe(false);
+    expect(fs.existsSync(`${target.install}.previous`)).toBe(false);
+  }, 60_000);
+
+  test("puts the previous bundle back when the upload itself fails", () => {
+    const target = localRemote();
+    fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
+    target.copy.mockImplementation(() => { throw new Error("upload interrupted"); });
+    fakeBuild("healthy");
+    expect(() => installLinuxCast(host)).toThrow("upload interrupted");
+    expect(fs.readFileSync(path.join(target.install, "index.js"), "utf8")).toBe("existing entry");
+  }, 60_000);
+});
+
+describe("restartHostDaemon", () => {
+  const host: RemoteHost = { address: "unused", user: "ubuntu", keyPath: "/unused", remoteBaseDir: "/home/ubuntu/work" };
+  afterEach(() => mock.restore());
+
+  function scripted(tmuxPids: string) {
+    const seen: string[] = [];
+    spyOn(remote, "remoteExec").mockImplementation((_host, command) => {
+      seen.push(command);
+      return command === DAEMON_CGROUP_TMUX_SCRIPT ? tmuxPids : "active\n4242";
+    });
+    return seen;
+  }
+
+  test("refuses when a tmux server lives in the daemon's control group, and restarts nothing", () => {
+    const seen = scripted("91\n");
+    expect(() => restartHostDaemon(host)).toThrow("tmux server 91");
+    expect(seen.some((c) => c.includes("systemctl restart"))).toBe(false);
+  });
+
+  test("restarts when no tmux server would die with it, or when forced", () => {
+    const seen = scripted("");
+    expect(restartHostDaemon(host)).toEqual({ pid: "4242" });
+    expect(seen.some((c) => c.includes("systemctl restart"))).toBe(true);
+    mock.restore();
+    scripted("91");
+    expect(restartHostDaemon(host, { force: true })).toEqual({ pid: "4242" });
+  });
+
+  test("the control group check names tmux servers and nothing else", () => {
+    // Run the real script against a fake cgroup listing and /proc.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daemon-cgroup-"));
+    try {
+      fs.mkdirSync(path.join(root, "proc", "10"), { recursive: true });
+      fs.mkdirSync(path.join(root, "proc", "11"), { recursive: true });
+      fs.writeFileSync(path.join(root, "proc", "10", "comm"), "bun\n");
+      fs.writeFileSync(path.join(root, "proc", "11", "comm"), "tmux: server\n");
+      fs.writeFileSync(path.join(root, "procs"), "10\n11\n");
+      const script = DAEMON_CGROUP_TMUX_SCRIPT
+        .replace("/sys/fs/cgroup/system.slice/codecast-daemon.service/cgroup.procs", path.join(root, "procs"))
+        .replace("/proc/$p/comm", `${root}/proc/$p/comm`);
+      expect(childProcess.execFileSync("bash", ["-c", script], { encoding: "utf8" }).trim()).toBe("11");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

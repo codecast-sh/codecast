@@ -1,7 +1,7 @@
 // Presentation facts the org surfaces share: how each work state reads, and
 // how a parent reference is named. Data only; the cards render it.
 import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contracts";
-import { describeOrgChange, describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { andList, capsWords, describeOrgChange, describeTenure, everyWords, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import type { OrgParentRef, OrgStandingState, OrgTree } from "./orgTypes";
@@ -106,29 +106,9 @@ export function changeLine(change: OrgChange): string {
 
 /** "you" for the reader, else the parent as the proposal names it. */
 const who = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref;
-/** "a, b and c" */
-const andList = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
-const number = (n: number) => n.toLocaleString("en-US");
-/** The three limits in words, in one order: "2 hands, 8 wakes and 800,000 tokens". */
-export function capsWords(caps: { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number }): string {
-  const parts: string[] = [];
-  if (caps.hands_per_day !== undefined) parts.push(`${number(caps.hands_per_day)} ${caps.hands_per_day === 1 ? "hand" : "hands"}`);
-  if (caps.wakes_per_day !== undefined) parts.push(`${number(caps.wakes_per_day)} ${caps.wakes_per_day === 1 ? "wake" : "wakes"}`);
-  if (caps.tokens_per_day !== undefined) parts.push(`${number(caps.tokens_per_day)} tokens`);
-  return andList(parts);
-}
-/** "1d" reads as every day, "7d" as every week, "12h" as every 12 hours. */
-export function everyWords(every: string): string {
-  const m = every.trim().match(/^(\d+)\s*([dhwm])$/i);
-  if (!m) return `every ${every}`;
-  const n = Number(m[1]);
-  const unit = m[2].toLowerCase();
-  if (unit === "d" && n === 1) return "every day";
-  if (unit === "d" && n === 7) return "every week";
-  if (unit === "w" && n === 1) return "every week";
-  const word = { d: "day", h: "hour", w: "week", m: "minute" }[unit as "d" | "h" | "w" | "m"];
-  return n === 1 ? `every ${word}` : `every ${n} ${word}s`;
-}
+/** The words for limits and cadences are the shared contract's, so a derived
+ *  ask (server or page) and a row line say them the same way. */
+export { capsWords, everyWords } from "@codecast/shared/contracts/orgProposal";
 const TRUST_WORDS: Record<string, string> = {
   understand: "may read and report, not act on its own",
   decide: "may decide on its own",

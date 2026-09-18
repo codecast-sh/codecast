@@ -914,6 +914,35 @@ export function buildHostsCommand(parent: Command): Command {
     });
 
   hosts
+    .command("update [id]")
+    .description("Put the CLI built from this checkout on a host, check it runs there, then restart its daemon onto it")
+    .option("--no-restart", "Install and check the new bundle, but leave the running daemon alone")
+    .option("--force", "Restart even when that would end the sessions in the daemon's own tmux server")
+    .action(async (id: string | undefined, o: { restart: boolean; force?: boolean }) => {
+      const h = pick(id, "no linux host registered");
+      const { installLinuxCast, restartHostDaemon, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
+      console.log(`updating ${h.id} (${h.region})…`);
+      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      const remote = toRemoteHost(up);
+      try {
+        const { version } = installLinuxCast(remote, (m) => console.log(fmt.muted(`  ${m}`)));
+        console.log(`${OK} cast ${version} is installed on ${h.id} and runs there`);
+        if (!o.restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
+        else {
+          const { pid } = restartHostDaemon(remote, { force: o.force });
+          console.log(`${OK} daemon restarted onto ${version} (pid ${pid})`);
+        }
+      } catch (err) {
+        die((err as Error).message);
+      }
+      // The bundle is not the whole host: the idle watchdog and its probe are
+      // written by provisioning, so an update leaves them where they were.
+      if ((up.watchdogVersion ?? 0) < IDLE_WATCHDOG_VERSION) {
+        console.log(fmt.muted(`  its idle watchdog is older than this build's (v${up.watchdogVersion ?? "unknown"} < v${IDLE_WATCHDOG_VERSION}); \`cast hosts provision\` brings that over`));
+      }
+    });
+
+  hosts
     .command("wake [id]")
     .description("Start a sleeping host and wait until it accepts connections")
     .action(async (id: string | undefined) => {

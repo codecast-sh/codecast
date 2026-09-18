@@ -49,7 +49,7 @@ export function orgGuideSteps(meNodeId: string | null, hasRoles: boolean, openPr
     openProposal ? {
       id: "proposals",
       target: '[data-org-guide="staffing"]',
-      sentence: `A proposal is already waiting: ${openProposal.short_id} drew the dashed ghosts on this canvas, and Staffing opens it so you can accept, edit or skip ${openProposal.remaining === 1 ? "its one change" : `each of its ${openProposal.remaining} changes`}.`,
+      sentence: `A proposal is already waiting: it drew the dashed ghosts on this canvas, and Staffing opens it as a conversation with ${openProposal.remaining === 1 ? "one thing to decide" : `${openProposal.remaining} things to decide`}.`,
       action: { id: "open_proposal", label: `Open ${openProposal.short_id}` },
     } : {
       id: "proposals",

@@ -8,8 +8,11 @@ import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
-import { computeIngestSyncDelta, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
+import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
 import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { selfExecInfo } from "./selfExec.js";
+import { mtimeNeedsContentCheck, readFileTailAsync, readFileTailSync, transcriptActivityMs } from "./transcriptActivity.js";
+export { readFileTailAsync, readFileTailSync };
 import { cursorPassBoundary, readCodexSessionMetaHeadAsync, readCompleteLines, readCompleteLinesSync, readIngestWindow, sessionMetaHeadCut } from "./transcriptWindow.js";
 export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
 export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type PassBoundary, type ReadWindowOpts } from "./transcriptWindow.js";
@@ -8469,25 +8472,11 @@ function assertTranscriptAuthority(sessionId: string, conversationId: string | u
     throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed`);
   }
 }
-async function transcriptSignatureWatermark(signatures: ReadonlyMap<string,string>): Promise<string> {
-  const hash = createHash("sha256");
-  let chunks = 0;
-  for (const [uuid, signature] of signatures) {
-    for (const value of [uuid, signature]) {
-      hash.update(String(value.length)).update(":");
-      for (let offset = 0; offset < value.length; offset += 8192) {
-        hash.update(value.slice(offset, offset + 8192));
-        if (++chunks % 128 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); checkTranscriptDeadline(); }
-      }
-    }
-  }
-  return hash.digest("hex");
-}
 function transcriptCountReplaced(result: object, count: number): boolean {
   const source = ingestSource(result);
   if (!source) throw new Error("unknown transcript count source");
   const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
-  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && (previous.dev !== source.identity.dev || previous.ino !== source.identity.ino || previous.birthtimeMs !== source.identity.birthtimeMs));
+  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && !samePersistedFile(previous, source.identity));
 }
 async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionId: string, conversationId: string | undefined, cache: ConversationCache, commit: () => void, keys: readonly string[] = [sessionId], signatureState?: ReadonlyMap<string,string>, consumedMessages: RawMessage[] = result.messages): Promise<void> {
   const source = ingestSource(result);
@@ -8497,9 +8486,10 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
   const priorSignatures = piSyncedSigs.get(source.file) ?? new Map<string,string>();
   const before = unit === "signatures" ? await transcriptSignatureWatermark(priorSignatures) : currentWatermark();
   const nextSignatures = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures) : undefined;
+  const settledWatermark = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures, 1) : undefined;
   const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
   const paired = previous?.client === source.client && previous.sessionId === sessionId && previous.unit === unit && previous.watermark === before && (unit === "signatures" ? ledger?.lastSyncedPosition === 0 : ledger?.lastSyncedPosition === before);
-  const same = paired && previous.dev === source.identity.dev && previous.ino === source.identity.ino && previous.birthtimeMs === source.identity.birthtimeMs;
+  const same = paired && samePersistedFile(previous, source.identity);
   const prefixProven = (unit === "signatures" ? priorSignatures.size === 0 : before === 0) || !!(same && previous.prefixProven);
   assertTranscriptAuthority(sessionId,conversationId,cache,keys);
   await validateTranscriptIngest(result);
@@ -8510,7 +8500,7 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
     lastSyncedAt: Date.now(),
     lastSyncedPosition: unit === "signatures" ? 0 : watermark as number,
     conversationId,
-    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,prefixProven},
+    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,settledWatermark,prefixProven},
   });
   const consumed=new Set<string>();
   for(let i=0;i<consumedMessages.length;i++){
@@ -9200,7 +9190,7 @@ async function walkSpawnerCandidates(
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
   const tmuxPanes = spawnRegistry.hasEntries()
-    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid} #{session_created}"]).catch(() => ({ stdout: "" }))).stdout
     : "";
   const startedAt = transcriptStartedAt(filePath);
   const candidates: SpawnerCandidate[] = [];
@@ -9506,7 +9496,7 @@ async function ingestStat(filePath: string, lastPosition: number, client: string
     const saved = ledger?.sourceGeneration;
     const previous = saved?.client === client && saved.sessionId === sessionId && saved.unit === "bytes" && saved.watermark === lastPosition && ledger?.lastSyncedPosition === lastPosition ? saved : undefined;
     size = identity.size;
-    if (previous && (previous.dev !== identity.dev || previous.ino !== identity.ino || previous.birthtimeMs !== identity.birthtimeMs)) {
+    if (previous && !samePersistedFile(previous, identity)) {
       lastPosition = 0;
       setPosition(filePath,0);
       codexModelPositions.delete(filePath);
@@ -11512,6 +11502,26 @@ async function processOpencodeSessionPass(
 // whatever prefix the first watcher pass caught.
 const piSyncedSigs = new Map<string, Map<string, string>>();
 
+// A restarted daemon starts with piSyncedSigs empty, and an empty map re-sends
+// the whole transcript. The ledger survives the restart with the watermark of
+// what was synced; when the file is the same one (identity), for the same
+// session and still the same conversation, the prefix that hashes to that
+// watermark is exactly what the server already has. Seeds the map and returns
+// it, or null so the caller falls back to a full idempotent re-sync. Seeding
+// only ever holds messages present in the file now, so it cannot orphan any.
+async function restoreSyncedSignatures(ingest: { messages: RawMessage[]; signatures?: string[] }, sessionId: string, cache: ConversationCache): Promise<Map<string, string> | null> {
+  const source = ingestSource(ingest);
+  const record = source ? getSyncRecord(source.file) : null;
+  const g = record?.sourceGeneration;
+  if (!source || !g || !ingest.signatures || g.unit !== "signatures" || typeof g.watermark !== "string") return null;
+  if (g.client !== source.client || g.sessionId !== sessionId) return null;
+  if (!samePersistedFile(g, source.identity)) return null;
+  if (!record!.conversationId || cache[sessionId] !== record!.conversationId) return null;
+  const seeded = await provenSyncedPrefix(ingest.messages, ingest.signatures, [g.watermark, g.settledWatermark]);
+  if (seeded) piSyncedSigs.set(source.file, seeded);
+  return seeded;
+}
+
 /**
  * Write a transcript codecast REBUILT for a delta-synced client (pi) so the
  * watcher ingests only what the client appends afterwards. The delta sync has
@@ -11648,7 +11658,7 @@ async function processTranscriptDeltaSessionPass(
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
-    const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
+    const syncedSigs = piSyncedSigs.get(filePath) ?? await restoreSyncedSignatures(ingest, sessionId, conversationCache) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
     if (newMessages.length === 0 && orphanUuids.length === 0) {
       markExamined(ingestSource(ingest)?.file ?? filePath);
@@ -13560,10 +13570,36 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // prompt IS our message sitting in the input box: the submit-verify loop must
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
-export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
+export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
   const recent = paneContent.split("\n").slice(-80).join("\n");
   const composer = tmuxComposerRegion(recent);
-  return composer !== null && /\[[^\]\n]*pasted[^\]\n]*\]/i.test(composer);
+  if (composer === null) return false;
+  const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
+  return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
+}
+
+// The "+N lines" a collapsed chip prints for this payload. Claude Code counts
+// the line BREAKS, not the lines, so a four-line paste with no trailing newline
+// reads "+3 lines" (measured on 2.1.275; wrapping a 400-column line in a
+// 200-column pane does not change the number). Null when the payload is one
+// line, which is the case whose chip prints no count at all.
+export function pasteChipLines(payload: string): number | null {
+  const breaks = (payload.match(/\n/g) ?? []).length;
+  return breaks > 0 ? breaks : null;
+}
+
+// Does this chip belong to someone else? A collapsed chip hides its text, so
+// the count it prints is the only thing on screen that says whose paste it is.
+// Reading ANY single chip as our own payload is how a human's unsent paste got
+// submitted as our message — and acked as delivered while the agent received
+// the bare "[Pasted text #1 +20 lines]" placeholder (ct-51354). A chip that
+// prints no count says nothing either way and keeps the benefit of the doubt:
+// not every client's chip carries one, and a single-line paste never does.
+export function pasteChipContradicts(chip: string, expectedLines: number | null | undefined): boolean {
+  if (expectedLines === undefined) return false;
+  const shown = /\+\s*(\d+)\s+lines?/i.exec(chip);
+  if (!shown) return false;
+  return Number(shown[1]) !== expectedLines;
 }
 
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
@@ -15821,6 +15857,8 @@ export type TmuxSubmitVerifyOpts = {
   pasteConfirmed: boolean;
   contentPrefix: string;
   bracketedPaste?: boolean;
+  /** The "+N lines" our own payload's chip would print — see pasteChipLines. */
+  chipLines?: number | null;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15933,7 +15971,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again, opts.chipLines));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15970,7 +16008,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane, opts.chipLines));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -16263,7 +16301,9 @@ export async function awaitTmuxComposerPayload(
     const composer = tmuxComposerRegion(pane) ?? "";
     const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+      ? chips.length === 1
+        && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+        && !pasteChipContradicts(chips[0], pasteChipLines(payload))
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -16610,6 +16650,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
       bracketedPaste: bracketed,
+      chipLines: pasteChipLines(sanitized),
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
@@ -18912,6 +18953,8 @@ async function runHeartbeatMaintenance(): Promise<void> {
     // Same cadence as the reaper, and deliberately after it: a session the
     // reaper just retired is not a live session the cap has to park.
     await runHibernationPass().catch((e) => log(`[HIBERNATE] pass error: ${(e as Error)?.message ?? e}`));
+    // And the browser engines those agents left behind (engineReap.ts).
+    await reapOrphanEngines().catch((e) => reaperLog(`engine reap failed: ${(e as Error)?.message ?? e}`, false));
   }
 
   // Keep each session's working tree recoverable from another machine. See
@@ -19762,16 +19805,25 @@ async function reapBlockReason(
   if (!file) return { reason: "no-transcript" };
   const classifyTail = classifyTranscriptTailFor(file.agentType);
   if (!classifyTail) return { reason: `agent=${file.agentType}` };
-  let idleMs: number;
-  try { idleMs = now - fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
+  let mtimeMs: number;
+  try { mtimeMs = fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
+  // A fresh mtime is not proof of life: transcripts get touched with no new
+  // content, and reading mtime alone left 174 dead terminals "active" for good
+  // (transcriptActivity.ts). An old mtime settles it without a read.
+  let tail: string | null = null;
+  if (mtimeNeedsContentCheck(mtimeMs, REAP_IDLE_MS, now)) {
+    try { tail = await readFileTailAsync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  }
+  const idleMs = now - transcriptActivityMs(mtimeMs, tail);
   if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
   let pane: string;
   try { ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 })); }
   catch { return { reason: "pane-capture-failed" }; }
   const live = classifyLivePaneFor(file.agentType, pane);
   if (live !== "idle") return { reason: `pane=${live}` };
-  let tail: string;
-  try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  if (tail === null) {
+    try { tail = await readFileTailAsync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  }
   const turn = classifyTail(tail);
   let idleHours = Math.round(idleMs / 3600000);
   if (turn !== "idle") {
@@ -19846,6 +19898,16 @@ async function reapOneTerminal(
     reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
   }
   return true;
+}
+
+// Engine browsers outlive their agents until something reaps them, and only a
+// `cast browser` start used to. Runs as a child so its tmux and ps reads stay
+// off this loop; the verb throttles itself, so a slow tick costs nothing extra.
+async function reapOrphanEngines(): Promise<void> {
+  const { executablePath, args } = selfExecInfo("browser", "reap");
+  const { stdout } = await _execFileAsync(executablePath, args, { timeout: 60_000, env: scrubAgentEnv({ ...process.env }) });
+  const line = String(stdout ?? "").trim();
+  if (line) reaperLog(`engines: ${line}`);
 }
 
 async function reapIdleOrphanTerminals(): Promise<void> {
@@ -20430,44 +20492,6 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   // File-only, like the reaper's pass line: this fires every ~5 min.
   reaperLog(`hibernation pass: ${candidates.length} live, cap=${policy.maxLive}, hibernated ${hibernated}, skipped: ${summarizeReapSkips(skips)}`, false);
   return hibernated;
-}
-
-// Reads the last ~64KB of a file as UTF-8 without loading the whole thing --
-// transcripts run to MBs and this is called per-session on every heartbeat.
-export function readFileTailSync(filePath: string, maxBytes = 64 * 1024): string {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const size = fs.fstatSync(fd).size;
-    const { start, len } = tailRange(size, maxBytes);
-    if (len <= 0) return "";
-    const buf = Buffer.allocUnsafe(len);
-    fs.readSync(fd, buf, 0, len, start);
-    return buf.toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function tailRange(size: number, maxBytes: number): { start: number; len: number } {
-  const start = Math.max(0, size - maxBytes);
-  return { start, len: size - start };
-}
-
-// The promise twin of readFileTailSync, for the hook path: a settle and a
-// permission prompt each read a transcript tail, and the hook server runs on
-// the daemon's loop.
-export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024): Promise<string> {
-  const fh = await fs.promises.open(filePath, "r");
-  try {
-    const size = (await fh.stat()).size;
-    const { start, len } = tailRange(size, maxBytes);
-    if (len <= 0) return "";
-    const buf = Buffer.allocUnsafe(len);
-    const { bytesRead } = await fh.read(buf, 0, len, start);
-    return buf.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    await fh.close();
-  }
 }
 
 // Self-heals a status latch frozen on a lost lifecycle transition by reconciling
@@ -29333,13 +29357,7 @@ export async function runWatchdog(): Promise<void> {
 }
 
 function getDaemonExecInfo(): { executablePath: string; args: string[] } {
-  const execPath = process.execPath;
-  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
-  if (isBinary) {
-    return { executablePath: execPath, args: ["--", "_daemon"] };
-  }
-  const source = path.resolve(__dirname, "daemon.ts");
-  return { executablePath: execPath, args: [fs.existsSync(source) ? source : path.resolve(__dirname, "daemon.js"), "_daemon"] };
+  return selfExecInfo("_daemon");
 }
 
 // Only run directly if executed as the main module (not when imported)

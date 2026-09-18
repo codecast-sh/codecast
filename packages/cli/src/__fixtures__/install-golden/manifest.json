@@ -38,7 +38,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "9"
+      "work_version": "10"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

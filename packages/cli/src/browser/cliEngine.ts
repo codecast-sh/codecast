@@ -1652,6 +1652,18 @@ sessions' tabs).`,
       }
     });
 
+  // The daemon runs this on its maintenance tick, in a child process so the
+  // tmux and ps reads never block its loop. Without it, engines outlived their
+  // agents until some session happened to start a browser: 12 orphans, the
+  // oldest 42 hours, on 2026-09-17. Throttled inside reapEngineOrphans, and no
+  // session is kept: the daemon drives no tab of its own.
+  br.command("reap", { hidden: true })
+    .description("Close engine browsers whose agent is gone")
+    .action(async () => {
+      const swept = describeReap(await reapEngineOrphans({ keep: null }));
+      if (swept) console.log(swept);
+    });
+
   targetFlags(br.command("stop"))
     .description("Close this session's tab; --all closes every session's and the browser")
     .option("--all", "Close every session's tab and the browser itself")

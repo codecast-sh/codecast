@@ -10,7 +10,9 @@ Work directly in the main checkout. Other sessions may have uncommitted work in 
 
 ## Typechecking
 
-Typecheck with `cast check` (`cast check cli`, `cast check web`, `cast check convex`, or all three by default). Never run `tsc --noEmit` yourself. One watcher per tree and project holds the program in memory and re-checks only what changed, so an ask answers in seconds and costs nothing extra when ten sessions ask at once. A fresh `tsc` per session rebuilds the same graph every time: seventeen of them at once (2026-09-17) put this machine into swap and stalled everything on it, Chrome's extension included. Sessions in the shared checkout share a watcher; a worktree gets its own on first use; an idle watcher exits on its own. `cast check --fresh` restarts a watcher that lost track; `cast check-status` lists them. Run test files directly (`bun test <file>`), but keep whole suite runs rare: they are the other load the box cannot absorb in parallel.
+Typecheck with `cast check`. Never run `tsc --noEmit` yourself, in any tree. One watcher per tree and project holds the program in memory and re-checks only what changed, so an ask answers in seconds and costs nothing extra when ten sessions ask at once. A fresh `tsc` per session rebuilds the same graph every time: thirty of them across two repos (2026-09-17) put this machine into swap and stalled everything on it, Chrome's extension included.
+
+The projects a tree carries are listed in `.codecast/check.toml` (tracked, so a worktree inherits it): here `cli`, `web` and `convex`. `cast check` runs all of them; `cast check web` one; any directory or tsconfig path also works (`cast check packages/mobile`). Sessions in the shared checkout share a watcher; a worktree gets its own on first use; an idle watcher exits after 45 minutes, and the machine keeps at most six alive, stopping the one idle longest. `cast check --fresh` restarts a watcher that lost track; `cast check-status` lists them and `--stop` stops them all. Run test files directly (`bun test <file>`), but keep whole suite runs rare: they are the other load the box cannot absorb in parallel.
 
 ## Git history
 

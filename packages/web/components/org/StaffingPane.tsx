@@ -1,25 +1,22 @@
 "use client";
 // The staffing pane (docs/architecture/org-staffing.md S5): the "Staffing"
-// mode of the org page's right sheet. With a proposal open it is the review
-// surface: header, the change list with accept, edit and skip, the rationale
-// and evidence of the selected change inline under its row, accept all, the
-// flags the proposal addresses, and a composer to the chief of staff's
-// standing session with its thread below. With no proposal it is the health
-// summary and the composer. With no chief of staff it is two buttons.
+// mode of the org page's right sheet. With a proposal open it is the asks
+// column (S19): one line of header, one card per ask with its changes folded
+// inside, one line of cost; the conversation with the author is the page's
+// own column beside it. With no proposal it is the health summary and the
+// composer to the chief of staff. With no chief of staff it is two buttons.
 // Everything it shows arrives through props from the store (OrgPage owns the
 // reads and the actions); it computes nothing beyond what staffingModel.ts
 // hands it.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, BookOpen, Check, ChevronDown, ChevronRight, ClipboardCheck, CornerDownRight, ExternalLink, Flag as FlagGlyph, ListChecks, MessageSquareText, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
-import { ORG_SYNC_KINDS } from "@codecast/shared/contracts/orgProposal";
+import { ArrowRight, Check, ChevronDown, ChevronRight, CornerDownRight, ExternalLink, Flag as FlagGlyph, MessageSquareText, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
-import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
-import { ProposalAuthorPill } from "./ProposalAuthorPill";
 import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
+import { askNames, askOfChange, asksProgress, costLine, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -33,27 +30,19 @@ import {
   changeLine,
   changeTenure,
   collectHealthFlags,
-  groupChanges,
   isDecidable,
+  isSyncChange,
   openProposals,
-  proposalProgress,
-  recordsInLine,
-  relatedFlags,
   spanOfControl,
   staffingMode,
   syncEvidence,
   syncGroupSummary,
   tenureLine,
-  SYNC_CARD_THRESHOLD,
   budgetArithmetic,
   capsLine,
-  hasAcceptedBefore,
-  kindDescription,
-  splitAsk,
   type BudgetArithmetic,
   type ChangeField,
   type HealthFlagRow,
-  type SyncGroupSummary,
 } from "./staffingModel";
 
 export type StaffingPaneProps = {
@@ -81,9 +70,8 @@ export type StaffingPaneProps = {
   now: number;
   onSelectChange: (changeId: string | null) => void;
   onDecide: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
-  /** Accept every remaining change, or with `kinds` only those kinds
-   *  ("Accept group" on the records card, S9). */
-  onAcceptAll: (proposalId: string, opts?: { kinds?: string[] }) => void;
+  /** Accept or skip one ask whole (S19): every change in it that still waits. */
+  onDecideAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip") => void;
   /** Edit on a role change opens the hire dialog prefilled (the page owns it). */
   onEditRole: (change: OrgProposalChange) => void;
   onSelectNode: (nodeId: string) => void;
@@ -95,18 +83,19 @@ export type StaffingPaneProps = {
   onProposeNow: () => void;
   /** Resume a paused chief of staff (its wakes are held while paused). */
   onResumeChief?: (roleId: string) => void;
-  /** The proposal's conversation (org-staffing.md S18), built by the page
-   *  (ProposalThread). `undefined` = the proposal has no thread (a person
-   *  posted it): the pane falls back to the chief of staff's composer. `null`
-   *  = the page renders the thread itself (its own column, or the phone
-   *  sheet's second view). A node = place it under the list. */
-  threadNode?: React.ReactNode;
-  /** Phone: the list leads, and this bar at its foot opens the conversation. */
-  discuss?: { name: string; named: boolean; updated: number; onOpen: () => void } | null;
+  /** The page renders the proposal's conversation (ProposalThread, S19) in
+   *  its own column. False = the proposal has no thread (a person posted
+   *  it): the pane falls back to the chief of staff's composer. */
+  hasThread?: boolean;
+  /** Set when the panel shows no tab strip above the asks (the proposal is
+   *  the page, S19): the asks header carries the close instead. */
+  onClose?: () => void;
   /** A row's "Ask about this": select the change and bring the composer to it. */
   onAskAbout?: (change: OrgProposalChange) => void;
+  /** A card's "Ask about this": the next message is about that ask. */
+  onAskAboutAsk?: (ask: AskView) => void;
   /** Changes the author revised since the reader last looked
-   *  (staffingRevise.revisedSince): the strip above the list says so, each
+   *  (staffingRevise.revisedSince): the card that holds them says so, each
    *  row is marked, and `onSeen` clears both. */
   revised?: { rows: OrgProposalChange[]; who: string; onSeen: () => void };
   /** A `?proposal=op-N` link that does not resolve in the active workspace
@@ -114,16 +103,6 @@ export type StaffingPaneProps = {
    *  switch when the proposal lives in a workspace the viewer can open. The
    *  active workspace's own body would answer a question nobody asked. */
   link?: ProposalLinkLine;
-  /** The viewer's user id: whether they have accepted a change before
-   *  (staffingModel.hasAcceptedBefore) decides whether the cold read intro
-   *  shows (S17). */
-  meId?: string | null;
-  /** The intro was dismissed or the person accepted a change once: never again. */
-  introSeen?: boolean;
-  onIntroSeen?: () => void;
-  /** Open the glossary dialog (OrgGlossary) on a page: the pane's "how this
-   *  works" link and its "Words" control. */
-  onOpenGlossary?: (page: "how" | "words") => void;
 };
 
 export type ProposalLinkLine =
@@ -147,11 +126,10 @@ export function StaffingPane(props: StaffingPaneProps) {
       {mode === "proposal" && props.proposal && <ProposalBody {...props} proposal={props.proposal} />}
       {mode === "health" && <HealthBody {...props} />}
       {mode === "no_chief" && <NoChiefBody {...props} />}
-      {/* S18: with a proposal open the conversation is the author's thread, placed
-          here only when the page has no column for it; the chief of staff's
-          composer stays for the health summary and a proposal nobody agent wrote. */}
-      {mode === "proposal" ? (props.threadNode === undefined && !props.discuss ? <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} /> : props.threadNode) : null}
-      {mode === "proposal" && props.discuss && <DiscussBar {...props.discuss} />}
+      {/* S19: a proposal's conversation is the page's own column. The chief of
+          staff's composer stays for the health summary and for a proposal no
+          agent wrote. */}
+      {mode === "proposal" && !props.hasThread && <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} />}
       {mode === "health" && <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} />}
     </div>
   );
@@ -176,284 +154,222 @@ function LinkLine({ link }: { link: ProposalLinkLine }) {
   );
 }
 
-// ---------------------------------------------------------------- proposal
+// ---------------------------------------------------------------- proposal (S19)
 
-/** How the proposal came about, in words a cold reader can place. */
-const MODE_WORD: Record<OrgProposalRow["mode"], string> = { init: "the first proposal for this company", review: "from a company review", request: "asked for" };
-
+/**
+ * The asks column: one line of header, one card per ask, one line of cost.
+ * Who wrote the proposal, when, and why is the letter in the conversation
+ * beside it; the 157 rows are inside the cards' folds. Nothing else is here
+ * on purpose: every line added to this column is a line a person reads
+ * before they find what to press.
+ */
 function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
-  const { proposal, tree, health, now, selectedChangeId } = props;
-  const progress = proposalProgress(proposal);
-  const groups = useMemo(() => groupChanges(proposal.changes), [proposal.changes]);
-  const flags = useMemo(() => collectHealthFlags(health, tree), [health, tree]);
-  const related = useMemo(() => relatedFlags(flags, proposal.changes), [flags, proposal.changes]);
+  const { proposal, tree, now, selectedChangeId } = props;
+  const asks = useMemo(() => proposalAsks(proposal, askNames(tree)), [proposal.asks, proposal.changes, tree]); // eslint-disable-line react-hooks/exhaustive-deps
+  const progress = asksProgress(asks);
+  const loading = proposal.changes.length === 0 && (proposal.counts?.total ?? 0) > 0;
+  const budget = useMemo(() => budgetArithmetic(tree, proposal.changes), [tree, proposal.changes]);
   const others = openProposals(props.proposals).filter((p) => p._id !== proposal._id);
-  const [confirmAll, setConfirmAll] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [allFlags, setAllFlags] = useState(false);
-  // A records group past the threshold is one card until "Review each".
-  const [reviewSync, setReviewSync] = useState(false);
-  const syncSummary = useMemo(() => { const g = groups.find((x) => x.sync); return g ? syncGroupSummary(g.changes) : null; }, [groups]);
-  const edit = (c: OrgProposalChange) => {
-    if (c.change.kind === "role") props.onEditRole(c);
-    else { props.onSelectChange(c._id); setEditing(c._id); }
+  // One fold open at a time. A change focused from the chart opens the card
+  // that holds it; closing that card lets go of the change.
+  const focusedAsk = askOfChange(asks, selectedChangeId)?.index ?? null;
+  const [opened, setOpened] = useState<{ proposalId: string; index: number } | null>(null);
+  const openIndex = focusedAsk ?? (opened?.proposalId === proposal._id ? opened.index : null);
+  const toggleFold = (i: number) => {
+    if (selectedChangeId) props.onSelectChange(null);
+    setOpened(openIndex === i ? null : { proposalId: proposal._id, index: i });
   };
-  const flagRows = allFlags ? flags : related;
-  // S17: the two sentences over the ask, for a person who has never accepted
-  // a change. Dismissed once or stamped by a first accept, gone for good.
-  const showIntro = !props.introSeen && !hasAcceptedBefore(props.proposals, props.meId);
+  const [costOpen, setCostOpen] = useState(false);
+  const revisedIds = useMemo(() => new Set(props.revised?.rows.map((r) => r._id) ?? []), [props.revised?.rows]);
   return (
     <>
-      {showIntro && <ProposalIntro onDismiss={() => props.onIntroSeen?.()} onHow={() => props.onOpenGlossary?.("how")} />}
-      {/* header */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{proposal.short_id}</span>
-        {others.length > 0 && (
-          <select aria-label="Open proposal" value={proposal.short_id} onChange={(e) => props.onPickProposal(e.target.value)} className="ml-auto h-[20px] rounded-md border bg-transparent text-[10.5px] px-1" style={{ borderColor: BORDER, color: "var(--sol-text-muted)", fontFamily: "var(--font-mono)" }}>
-            <option value={proposal.short_id}>{proposal.short_id}</option>
-            {others.map((p) => <option key={p._id} value={p.short_id}>{p.short_id} · {p.title}</option>)}
-          </select>
+      <div className="flex items-baseline gap-3" data-asks-header>
+        <h2 className="min-w-0 flex-1 text-[17px] leading-snug font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
+        <span className="shrink-0 text-[12px] tabular-nums" style={{ color: progress.remaining === 0 && !loading ? "var(--sol-green)" : "var(--sol-text-muted)" }} data-progress>
+          {loading ? "loading" : `${progress.decided} of ${progress.total} decided`}
+        </span>
+        {props.onClose && (
+          <button type="button" onClick={props.onClose} className="shrink-0 w-7 h-7 -mr-1.5 self-center inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" aria-label="Close the proposal" title="Back to the chart" style={{ color: "var(--sol-text-dim)" }} data-asks-close>
+            <X className="w-4 h-4" />
+          </button>
         )}
       </div>
-      {/* supersession (S4): the replaced proposal says so first, with Withdraw right there */}
+      {/* supersession (S4): only when it applies, with Withdraw right there */}
       {proposal.superseded_by && (
         <div className="mt-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px]" data-superseded-by={proposal.superseded_by.short_id} style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
           <Undo2 className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-orange)" }} />
           <span className="min-w-0 flex-1">
-            Replaced by <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>{proposal.superseded_by.short_id}</button>, posted {compactAge(now - proposal.superseded_by.created_at)} ago{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}.
+            A newer proposal replaced this one {compactAge(now - proposal.superseded_by.created_at)} ago{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}. <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }}>Open it</button>
           </span>
           {proposal.status === "open" && props.onWithdraw && (
             <OrgButton size="sm" onClick={() => props.onWithdraw!(proposal._id)} data-withdraw>Withdraw</OrgButton>
           )}
         </div>
       )}
-      <h2 className="mt-2 text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
       {proposal.supersedes && (
         <div className="mt-1 flex items-center gap-1 text-[11.5px]" data-supersedes={proposal.supersedes.short_id} style={{ color: "var(--sol-text-muted)" }}>
           <ArrowRight className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />
-          Replaces <button type="button" onClick={() => props.onPickProposal(proposal.supersedes!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>{proposal.supersedes.short_id}</button>{proposal.supersedes.status !== "open" ? <span style={{ color: "var(--sol-text-dim)" }}> · {proposal.supersedes.status}</span> : null}
+          Replaces <button type="button" onClick={() => props.onPickProposal(proposal.supersedes!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }}>an earlier proposal</button>{proposal.supersedes.status !== "open" ? <span style={{ color: "var(--sol-text-dim)" }}> · {proposal.supersedes.status}</span> : null}
         </div>
       )}
-      {/* provenance (S15): who wrote it, one click from here */}
-      <div className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[11.5px]" style={{ color: "var(--sol-text-muted)" }}>
-        <ProposalAuthorPill author={proposal.author} onOpenSession={props.onOpenSession} />
-        <Dot />
-        <span>{MODE_WORD[proposal.mode] ?? proposal.mode}</span>
-        <Dot />
-        <span className="tabular-nums" title={new Date(proposal.created_at).toLocaleString()}>{compactAge(now - proposal.created_at)} ago</span>
-        <Dot />
-        <span className="tabular-nums font-medium" style={{ color: "var(--sol-text)" }} data-progress>{progress.decided} of {progress.total} decided</span>
-        {progress.fromCounts && <span style={{ color: "var(--sol-text-dim)" }} data-progress-loading>· loading changes</span>}
-      </div>
-      <ProgressStrip changes={proposal.changes} selectedId={selectedChangeId} onPick={props.onSelectChange} />
-      {/* S17: the plain ask, then the detail behind one control each; the
-          groups with counts are the list headers below. */}
-      <ProposalSummary
-        proposal={proposal}
-        tree={tree}
-        findings={
-          props.healthMissing ? (
-            <FlagList rows={[]} missing onSelectNode={props.onSelectNode} />
-          ) : props.healthError && !props.health ? (
-            <FlagList rows={[]} error={props.healthError} hasHealth={false} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
-          ) : (
-            <>
-              {flagRows.length === 0 ? (
-                <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>{flags.length === 0 ? "Nothing is flagged. The company is inside its limits." : "No finding names a role this proposal touches."}</p>
-              ) : (
-                <FlagList rows={flagRows} onSelectNode={props.onSelectNode} limit={allFlags ? 5 : 3} />
-              )}
-              {flags.length > related.length && (
-                <button type="button" onClick={() => setAllFlags((v) => !v)} className="mt-1 self-start inline-flex items-center gap-1 text-[11px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-all-flags={allFlags}>
-                  {allFlags ? "Only this proposal's findings" : `See all ${flags.length} findings in the company`}
-                </button>
-              )}
-            </>
-          )
-        }
-        findingsCount={flagRows.length}
-      />
 
-      {/* changes: the pane's job in this mode, so they come first */}
-      <SectionLabel right={progress.remaining > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{progress.remaining} to decide</span> : undefined}>Changes</SectionLabel>
-      {props.revised && props.revised.rows.length > 0 && <RevisedStrip rows={props.revised.rows} who={props.revised.who} onSeen={props.revised.onSeen} onPick={props.onSelectChange} />}
-      {proposal.changes.length === 0 && (
-        <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>{progress.fromCounts ? `Loading the ${progress.total} changes…` : "This proposal has no changes."}</p>
-      )}
-      <div className="flex flex-col gap-3">
-        {groups.map((g) => (
-          <div key={g.kind} data-change-group={g.kind}>
-            {g.sync ? (
-              // S9: the records the evidence says are already finished come
-              // first, as their own group; the header counts them.
-              <div className="sticky top-0 z-[1] flex items-center gap-1.5 py-1 px-1" style={{ background: "var(--sol-bg)" }} data-sync-header>
-                <ClipboardCheck className="w-3 h-3 shrink-0" style={{ color: "var(--sol-green)" }} />
-                <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: "var(--sol-green)" }}>{g.label}</span>
-                <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-sync-count>{recordsInLine(g.changes)} {recordsInLine(g.changes) === 1 ? "record" : "records"}</span>
-              </div>
-            ) : (
-              <div className="sticky top-0 z-[1] flex items-center gap-1.5 py-1 px-1" style={{ background: "var(--sol-bg)" }} title={kindDescription(g.kind)} data-group-header={g.kind}>
-                <span className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{g.label}</span>
-                <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-group-count>{g.changes.length}</span>
-              </div>
-            )}
-            {g.sync && syncSummary && g.changes.length > SYNC_CARD_THRESHOLD && !reviewSync ? (
-              <SyncGroupCard
-                summary={syncSummary}
-                onAcceptGroup={() => props.onAcceptAll(proposal._id, { kinds: [...ORG_SYNC_KINDS] })}
-                onReview={() => setReviewSync(true)}
-                onPick={(id) => props.onSelectChange(id)}
-              />
-            ) : (
-            <div className="flex flex-col gap-1">
-              {g.sync && reviewSync && (
-                <button type="button" onClick={() => setReviewSync(false)} className="self-start inline-flex items-center gap-1 text-[11px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-sync-collapse>
-                  <ChevronDown className="w-3 h-3" /> Back to the summary
-                </button>
-              )}
-              {(g.sync && syncSummary ? syncSummary.rows : g.changes).map((c) => (
-                <ChangeRow
-                  key={c._id}
-                  change={c}
-                  tree={tree}
-                  nested={g.sync && syncSummary ? syncSummary.nested[c._id] : undefined}
-                  selected={c._id === selectedChangeId}
-                  revisedNew={!!props.revised?.rows.some((r) => r._id === c._id)}
-                  onAsk={props.onAskAbout ? () => props.onAskAbout!(c) : undefined}
-                  editing={editing === c._id}
-                  onPick={() => props.onSelectChange(c._id === selectedChangeId ? null : c._id)}
-                  onAccept={() => props.onDecide(c._id, "accept")}
-                  onSkip={() => props.onDecide(c._id, "skip")}
-                  onEdit={() => edit(c)}
-                  onCancelEdit={() => setEditing(null)}
-                  onAcceptWithEdits={(edits) => { setEditing(null); props.onDecide(c._id, "accept", edits); }}
-                />
-              ))}
-            </div>
-            )}
-          </div>
+      <div className="mt-3 flex flex-col gap-2.5" data-asks>
+        {loading && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>Loading what this proposal asks…</p>}
+        {!loading && asks.length === 0 && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This proposal asks for nothing.</p>}
+        {asks.map((ask) => (
+          <AskCard
+            key={ask.index}
+            ask={ask}
+            number={ask.index + 1}
+            tree={tree}
+            open={openIndex === ask.index}
+            onToggle={() => toggleFold(ask.index)}
+            selectedChangeId={selectedChangeId}
+            revisedIds={revisedIds}
+            revised={props.revised}
+            onDecideAsk={(verdict) => props.onDecideAsk(proposal._id, ask.index, verdict)}
+            onAskAboutAsk={props.onAskAboutAsk ? () => props.onAskAboutAsk!(ask) : undefined}
+            onAskAboutChange={props.onAskAbout}
+            onSelectChange={props.onSelectChange}
+            onDecide={props.onDecide}
+            onEditRole={props.onEditRole}
+          />
         ))}
       </div>
-      {progress.remaining > 1 && (
-        <div className="mt-3">
-          {!confirmAll ? (
-            <OrgButton onClick={() => setConfirmAll(true)} className="w-full justify-center">
-              <Check className="w-3.5 h-3.5" /> Accept all remaining ({progress.remaining})
-            </OrgButton>
-          ) : (
-            <div className="rounded-lg p-3 border" style={{ borderColor: "color-mix(in srgb, var(--sol-cyan) 40%, transparent)", background: "color-mix(in srgb, var(--sol-cyan) 6%, transparent)" }}>
-              <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>
-                Apply the {progress.remaining} remaining changes now: records first, then projects and plans, then the agents, their areas and their limits. Each applies as proposed{progress.failed > 0 ? `; the ${progress.failed} failed ${progress.failed === 1 ? "one is" : "ones are"} retried` : ""}.
-              </p>
-              <div className="mt-2 flex items-center gap-2">
-                <button type="button" onClick={() => { setConfirmAll(false); props.onAcceptAll(proposal._id); }} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>Accept {progress.remaining}</button>
-                <button type="button" onClick={() => setConfirmAll(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-              </div>
-            </div>
-          )}
+
+      {!loading && asks.length > 0 && (
+        <div className="mt-3" data-cost>
+          <button type="button" onClick={() => setCostOpen((v) => !v)} aria-expanded={costOpen} className="w-full flex items-center gap-1.5 text-left text-[12.5px] px-1 h-7 rounded-md hover:bg-sol-bg-highlight/60" style={{ color: "var(--sol-text-secondary)" }} data-cost-line>
+            <span className="min-w-0 flex-1 truncate">{costLine(budget)}</span>
+            <span className="shrink-0 text-[11.5px]" style={{ color: "var(--sol-violet)" }}>{costOpen ? "Hide the numbers" : "See the numbers"}</span>
+          </button>
+          {costOpen && <BudgetSheet budget={budget} />}
         </div>
       )}
 
+      {others.length > 0 && (
+        <div className="mt-5 pt-3 border-t flex flex-col gap-1" style={{ borderColor: BORDER }} data-other-proposals>
+          <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>{others.length === 1 ? "One more proposal is open" : `${others.length} more proposals are open`}</span>
+          {others.map((p) => (
+            <button key={p._id} type="button" onClick={() => props.onPickProposal(p.short_id)} className="text-left text-[12.5px] px-1 py-0.5 rounded-md hover:bg-sol-bg-highlight/60 truncate" style={{ color: "var(--sol-violet)" }}>{p.title}</button>
+          ))}
+        </div>
+      )}
     </>
   );
 }
 
-// ---------------------------------------------------------------- the cold read (S17)
+/** How many rows a fold shows before "Show all": a records ask runs past a
+ *  hundred, and the person who opened it is looking for one row. */
+const FOLD_PAGE = 25;
 
 /**
- * Two sentences a person who has never seen a proposal can read cold: what
- * codecast is proposing and what accepting costs. One "how this works" link
- * to the short page, one dismiss that never returns.
+ * One ask (S19): a title a person can read cold, one sentence of why, one
+ * line of what accepting changes, and Accept, Skip, Ask about this. The
+ * changes are inside, folded, with the count on the fold; open, they are the
+ * same rows and per row controls the pane always had, and a single skipped
+ * row inside an accepted ask is the exception the fold is for. A decided ask
+ * keeps its title and says its verdict; Accept and Skip go, the question stays.
  */
-function ProposalIntro({ onDismiss, onHow }: { onDismiss: () => void; onHow: () => void }) {
-  return (
-    <div className="mb-3 rounded-xl border px-3 py-2.5 flex items-start gap-2" data-proposal-intro style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 40%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 7%, transparent)" }}>
-      <div className="min-w-0 flex-1 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>
-        Codecast is proposing a set of people and standing agents, each with a named area of work, so an agent knows what to look after and what to leave alone. Nothing moves until you accept a change, and each one can be undone unless its own line says otherwise.
-        <button type="button" onClick={onHow} className="ml-1.5 font-medium underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-intro-how>How this works</button>
-      </div>
-      <button type="button" onClick={onDismiss} aria-label="Dismiss, and do not show this again" title="Do not show this again" className="w-6 h-6 -mr-1 -mt-0.5 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-intro-dismiss>
-        <X className="w-3.5 h-3.5" />
-      </button>
-    </div>
-  );
-}
-
-type SummaryControl = "budget" | "findings" | "tail";
-
-/**
- * The summary a person reads before the change list (S17): the ask, whole
- * on a desktop pane and clamped on a phone with the rest one tap away, then
- * one quiet row of text links that hold the detail: the evidence page (only
- * when the proposal has one), the budget arithmetic, the findings, the rest
- * of the letter. The glossary opens from the intro's link and the page
- * header's "Words"; a second link on the same screen was one too many.
- * The groups with their counts are the list's own headers, right below, so
- * the first screen reaches a change instead of a table about the changes.
- */
-function ProposalSummary({ proposal, tree, findings, findingsCount }: {
-  proposal: OrgProposalRow; tree: OrgTree | null;
-  findings: React.ReactNode; findingsCount: number;
+function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedIds, revised, onDecideAsk, onAskAboutAsk, onAskAboutChange, onSelectChange, onDecide, onEditRole }: {
+  ask: AskView; number: number; tree: OrgTree | null; open: boolean; onToggle: () => void;
+  selectedChangeId: string | null;
+  revisedIds: Set<string>;
+  revised?: StaffingPaneProps["revised"];
+  onDecideAsk: (verdict: "accept" | "skip") => void;
+  onAskAboutAsk?: () => void;
+  onAskAboutChange?: (c: OrgProposalChange) => void;
+  onSelectChange: (id: string | null) => void;
+  onDecide: StaffingPaneProps["onDecide"];
+  onEditRole: (c: OrgProposalChange) => void;
 }) {
-  const [askOpen, setAskOpen] = useState(false);
-  const [control, setControl] = useState<SummaryControl | null>(null);
-  const { ask, tail, evidenceHref } = useMemo(() => splitAsk(proposal.summary_md), [proposal.summary_md]);
-  const budget = useMemo(() => budgetArithmetic(tree, proposal.changes), [tree, proposal.changes]);
-  const toggle = (c: SummaryControl) => setControl((cur) => cur === c ? null : c);
-  // The ask is the first paragraph of the agent's letter, about two hundred
-  // words: whole on a desktop pane, clamped to five lines on a phone with
-  // the rest one tap away, so the first screen holds the ask and the counts.
-  const longAsk = ask.length > 220;
+  const [editing, setEditing] = useState<string | null>(null);
+  const [all, setAll] = useState(false);
+  const decided = ask.state !== "open";
+  const tone = ask.state === "accepted" ? "var(--sol-green)" : ask.state === "skipped" ? "var(--sol-text-dim)" : "var(--sol-violet)";
+  // A plan change that closes its tasks carries them under its own row (S9).
+  const sync = useMemo(() => ask.changes.some((c) => isSyncChange(c.change)) ? syncGroupSummary(ask.changes) : null, [ask.changes]);
+  const rows = useMemo(() => {
+    if (!sync) return ask.changes;
+    const nested = new Set(Object.values(sync.nested).flat().map((c) => c._id));
+    return ask.changes.filter((c) => !nested.has(c._id));
+  }, [ask.changes, sync]);
+  const revisedHere = revised ? revised.rows.filter((r) => ask.changes.some((c) => c._id === r._id)) : [];
+  const selectedAt = rows.findIndex((c) => c._id === selectedChangeId);
+  const shown = all || selectedAt >= FOLD_PAGE ? rows : rows.slice(0, FOLD_PAGE);
+  const edit = (c: OrgProposalChange) => {
+    if (c.change.kind === "role") onEditRole(c);
+    else { onSelectChange(c._id); setEditing(c._id); }
+  };
   return (
-    <div className="mt-3" data-proposal-summary>
-      {ask && (
-        <div data-ask={askOpen || !longAsk ? "open" : "folded"}>
-          <div className={cn("text-[12.5px] leading-relaxed", !askOpen && longAsk && "line-clamp-5 sm:line-clamp-none")} style={{ color: "var(--sol-text-secondary)" }}>
-            <MarkdownRenderer content={ask} />
-          </div>
-          {longAsk && (
-            <button type="button" onClick={() => setAskOpen((v) => !v)} className="sm:hidden mt-0.5 inline-flex items-center gap-1 text-[11.5px] px-1 -ml-1 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-ask-toggle>
-              {askOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              {askOpen ? "Fold the ask" : "Read the whole ask"}
-            </button>
+    <section className={cn("rounded-xl border transition-colors", decided && "opacity-80")} data-ask={ask.index} data-ask-state={ask.state} style={{ borderColor: decided ? BORDER : "color-mix(in srgb, var(--sol-violet) 32%, transparent)", background: decided ? "transparent" : "var(--sol-card)" }}>
+      <div className="flex items-start gap-3 px-3.5 pt-3 pb-3">
+        <span className="shrink-0 w-6 h-6 mt-[1px] inline-flex items-center justify-center rounded-full text-[12px] font-semibold tabular-nums" aria-hidden style={{ background: `color-mix(in srgb, ${tone} 16%, transparent)`, color: tone }}>
+          {ask.state === "accepted" ? <Check className="w-3.5 h-3.5" /> : ask.state === "skipped" ? <X className="w-3.5 h-3.5" /> : number}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className={cn("text-[14.5px] leading-snug font-semibold", ask.state === "skipped" && "line-through")} style={{ color: "var(--sol-text)" }} data-ask-title>{ask.title}</h3>
+          {ask.verdictLine && (
+            <p className="mt-0.5 text-[12px] flex items-center gap-2" style={{ color: ask.failed > 0 ? CHANGE_STATUS_META.failed.color : tone }}>
+              <span data-ask-verdict>{ask.verdictLine}</span>
+              {decided && onAskAboutAsk && <button type="button" onClick={onAskAboutAsk} className="inline-flex items-center gap-1 hover:underline underline-offset-2" style={{ color: "var(--sol-violet)" }} data-ask-about>Ask about this</button>}
+            </p>
+          )}
+          {!decided && (
+            <>
+              <p className="mt-1 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-ask-why>{ask.why}</p>
+              <p className="mt-1.5 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text)" }} data-ask-effect>
+                <span style={{ color: "var(--sol-text-dim)" }}>If you accept: </span>{ask.effect}
+              </p>
+              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap" data-ask-controls>
+                <OrgButton primary size="sm" onClick={() => onDecideAsk("accept")} data-ask-accept>Accept</OrgButton>
+                <OrgButton size="sm" onClick={() => onDecideAsk("skip")} data-ask-skip>Skip</OrgButton>
+                {onAskAboutAsk && (
+                  <button type="button" onClick={onAskAboutAsk} className="ml-auto inline-flex items-center gap-1 h-7 px-1.5 rounded-md text-[12px] font-medium hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-violet)" }} data-ask-about>
+                    <MessageSquareText className="w-3.5 h-3.5" /> Ask about this
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+          {revisedHere.length > 0 && revised && (
+            <p className="mt-2 text-[12px] leading-snug org-pop-in" style={{ color: "var(--sol-text-secondary)" }} data-ask-revised={revisedHere.length}>
+              <Sparkles className="inline w-3 h-3 mr-1 align-[-1px]" style={{ color: "var(--sol-violet)" }} />
+              {revisedLine(revisedHere, revised.who)} <button type="button" onClick={revised.onSeen} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }} data-revised-seen>Got it</button>
+            </p>
+          )}
+        </div>
+      </div>
+      <button type="button" onClick={onToggle} aria-expanded={open} className="w-full flex items-center gap-1.5 px-3.5 h-8 border-t text-[12px] rounded-b-xl hover:bg-sol-bg-highlight/50" style={{ borderColor: BORDER, color: "var(--sol-text-muted)" }} data-ask-fold>
+        {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        <span className="tabular-nums">{ask.foldLabel}</span>
+      </button>
+      {open && (
+        <div className="px-1.5 pb-2 flex flex-col gap-1" data-ask-rows>
+          {shown.map((c) => (
+            <ChangeRow
+              key={c._id}
+              change={c}
+              tree={tree}
+              nested={sync?.nested[c._id]}
+              selected={c._id === selectedChangeId}
+              revisedNew={revisedIds.has(c._id)}
+              onAsk={onAskAboutChange ? () => onAskAboutChange(c) : undefined}
+              editing={editing === c._id}
+              onPick={() => onSelectChange(c._id === selectedChangeId ? null : c._id)}
+              onAccept={() => onDecide(c._id, "accept")}
+              onSkip={() => onDecide(c._id, "skip")}
+              onEdit={() => edit(c)}
+              onCancelEdit={() => setEditing(null)}
+              onAcceptWithEdits={(edits) => { setEditing(null); onDecide(c._id, "accept", edits); }}
+            />
+          ))}
+          {shown.length < rows.length && (
+            <button type="button" onClick={() => setAll(true)} className="self-start text-[12px] px-2 h-7 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-ask-show-all>Show all {rows.length}</button>
           )}
         </div>
       )}
-
-      {/* three controls that keep the detail behind the summary */}
-      <div className="mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap" data-summary-controls>
-        {evidenceHref && (
-          <Link href={evidenceHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 h-6 text-[11.5px] hover:underline underline-offset-2" style={{ color: "var(--sol-violet)" }} data-summary-control="evidence">
-            Evidence <ExternalLink className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />
-          </Link>
-        )}
-        <SummaryToggle active={control === "budget"} onClick={() => toggle("budget")} name="budget">Budget</SummaryToggle>
-        <SummaryToggle active={control === "findings"} onClick={() => toggle("findings")} name="findings" count={findingsCount}>Findings</SummaryToggle>
-        {tail && <SummaryToggle active={control === "tail"} onClick={() => toggle("tail")} name="tail">The rest of the letter</SummaryToggle>}
-      </div>
-      {control === "budget" && <BudgetSheet budget={budget} />}
-      {control === "tail" && (
-        <div className="mt-2 rounded-lg border p-2.5 text-[12.5px] leading-relaxed" style={{ borderColor: BORDER, background: "var(--sol-card)", color: "var(--sol-text-secondary)" }} data-summary-detail="tail">
-          <MarkdownRenderer content={tail} />
-        </div>
-      )}
-      {control === "findings" && (
-        <div className="mt-2 flex flex-col" data-summary-detail="findings">
-          <p className="text-[11px] leading-snug px-1 mb-1.5" style={{ color: "var(--sol-text-dim)" }}>What the review found about the standing agents this proposal touches. A finding points at an agent or a person; click one to see it on the chart.</p>
-          {findings}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SummaryToggle({ active, onClick, name, count, children }: { active: boolean; onClick: () => void; name: SummaryControl; count?: number; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-expanded={active} className="inline-flex items-center gap-1 h-6 text-[11.5px] hover:underline underline-offset-2" style={{ color: active ? "var(--sol-text)" : "var(--sol-violet)" }} data-summary-control={name}>
-      {children}
-      {count !== undefined && count > 0 && <span className="tabular-nums text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>{count}</span>}
-      {active ? <ChevronDown className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} /> : <ChevronRight className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />}
-    </button>
+    </section>
   );
 }
 
@@ -485,35 +401,6 @@ function BudgetSheet({ budget }: { budget: BudgetArithmetic }) {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function Dot() {
-  return <span style={{ color: "var(--sol-text-dim)" }}>·</span>;
-}
-
-/** One block per change, coloured by status, in list order: the "N of M" as
- *  a strip. A real control: each block is a button named by its change, so
- *  the strip is reachable by keyboard and read by a screen reader. */
-function ProgressStrip({ changes: all, selectedId, onPick }: { changes: OrgProposalChange[]; selectedId: string | null; onPick: (id: string) => void }) {
-  // A change the author removed (S18) left the ask, so it leaves the strip.
-  const changes = all.filter((c) => c.status !== "removed");
-  if (changes.length === 0) return null;
-  return (
-    <div className="mt-2 flex gap-[3px]" role="group" aria-label="Changes, one block each">
-      {changes.map((c) => (
-        <button
-          key={c._id}
-          type="button"
-          onClick={() => onPick(c._id)}
-          aria-label={`${CHANGE_STATUS_META[c.status].label} · ${changeLine(c.change)}`}
-          aria-pressed={c._id === selectedId}
-          title={`${CHANGE_STATUS_META[c.status].label} · ${changeLine(c.change)}`}
-          className={cn("h-[6px] flex-1 rounded-sm transition-transform focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2", c._id === selectedId && "scale-y-[1.8]")}
-          style={{ background: c.status === "proposed" ? "color-mix(in srgb, var(--sol-violet) 35%, transparent)" : CHANGE_STATUS_META[c.status].color, outlineColor: "var(--sol-violet)" }}
-        />
-      ))}
     </div>
   );
 }
@@ -667,89 +554,6 @@ function RevisionNote({ change, selected }: { change: OrgProposalChange; selecte
         </span>
       )}
     </span>
-  );
-}
-
-/** The author revised the list since the reader last looked (S18): said
- *  once above the changes, in the author's name; the marked rows clear
- *  together. Clicking a count focuses the first such row. */
-function RevisedStrip({ rows, who, onSeen, onPick }: { rows: OrgProposalChange[]; who: string; onSeen: () => void; onPick: (id: string | null) => void }) {
-  return (
-    <div className="mb-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px] org-pop-in" data-revised-strip={rows.length} style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
-      <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-violet)" }} />
-      <button type="button" onClick={() => onPick(rows[0]._id)} className="min-w-0 flex-1 text-left hover:underline">{revisedLine(rows, who)}</button>
-      <button type="button" onClick={onSeen} className="shrink-0 text-[11px] font-medium px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-revised-seen>Got it</button>
-    </div>
-  );
-}
-
-/** Phone (S18): the list leads; this bar at its foot opens the conversation
- *  as the sheet's view, and says when the author changed rows meanwhile. */
-function DiscussBar({ name, named, updated, onOpen }: { name: string; named: boolean; updated: number; onOpen: () => void }) {
-  return (
-    <div className="sticky bottom-0 -mx-4 px-4 pt-2 pb-3 mt-4" style={{ background: "linear-gradient(to bottom, transparent, var(--sol-bg) 30%)" }} data-discuss-bar>
-      <button type="button" onClick={onOpen} className="w-full h-10 rounded-xl border flex items-center gap-2.5 px-3 text-left shadow-[0_8px_24px_-12px_rgba(0,0,0,0.5)]" style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)", background: "var(--sol-card)", color: "var(--sol-text)" }}>
-        <MessageSquareText className="w-4 h-4 shrink-0" style={{ color: "var(--sol-violet)" }} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{named ? `Talk to ${name} about this` : "Talk to the agent that wrote this"}</span>
-        {updated > 0 && <span className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10.5px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{updated} revised</span>}
-        <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
-      </button>
-    </div>
-  );
-}
-
-/**
- * A records group past the threshold (S9): one card instead of a hundred
- * rows. The count by kind, the three most consequential lines (a click
- * focuses that change), the evidence the reasons rest on as counts, then
- * Accept group (a confirm first: it applies every remaining record) and
- * Review each, which expands to the rows.
- */
-function SyncGroupCard({ summary, onAcceptGroup, onReview, onPick }: { summary: SyncGroupSummary; onAcceptGroup: () => void; onReview: () => void; onPick: (changeId: string) => void }) {
-  const [confirm, setConfirm] = useState(false);
-  const decided = summary.total - summary.remaining;
-  return (
-    <div className="rounded-xl border p-3" style={{ borderColor: "color-mix(in srgb, var(--sol-green) 35%, transparent)", background: "color-mix(in srgb, var(--sol-green) 5%, transparent)" }} data-sync-card>
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--sol-text)", fontFamily: "var(--font-serif)" }} data-sync-count-line>{summary.countLine}</span>
-        <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{decided > 0 ? `${decided} decided · ` : ""}{summary.remaining} to decide</span>
-      </div>
-      <p className="mt-1 text-[11.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>Plans, tasks and projects whose record is behind what already happened. Accepting updates each record the way you would by hand; nothing else changes.</p>
-      <div className="mt-2.5 flex flex-col gap-1" data-sync-top>
-        {summary.top.map((c) => {
-          const ev = syncEvidence(c.change);
-          const nested = summary.nested[c._id]?.length ?? 0;
-          return (
-            <button key={c._id} type="button" onClick={() => onPick(c._id)} className="text-left rounded-lg px-2 py-1.5 hover:bg-sol-bg-highlight/70 transition-colors" data-sync-top-row={c._id}>
-              <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{changeLine(c.change)}{nested > 0 ? <span style={{ color: "var(--sol-green)" }}> · closes {nested} {nested === 1 ? "task" : "tasks"}</span> : null}</span>
-              {ev && <span className="block text-[11px] leading-snug line-clamp-2 mt-0.5" style={{ color: "var(--sol-text-muted)" }} title={ev}>{ev}</span>}
-            </button>
-          );
-        })}
-      </div>
-      {summary.evidence.length > 0 && (
-        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap text-[11px]" data-sync-evidence-summary>
-          <span className="uppercase tracking-[0.08em] text-[9.5px]" style={{ color: "var(--sol-green)" }}>evidence</span>
-          {summary.evidence.slice(0, 4).map((e, i) => (
-            <span key={e.label} style={{ color: "var(--sol-text-muted)" }}>{i > 0 && <span style={{ color: "var(--sol-text-dim)" }}>· </span>}<span className="tabular-nums font-medium" style={{ color: "var(--sol-text)" }}>{e.count}</span> {e.label}</span>
-          ))}
-        </div>
-      )}
-      {!confirm ? (
-        <div className="mt-3 flex items-center gap-1.5">
-          <OrgButton primary size="sm" onClick={() => setConfirm(true)} disabled={summary.remaining === 0} data-sync-accept-group><Check className="w-3 h-3" /> Accept group ({summary.remaining})</OrgButton>
-          <OrgButton size="sm" onClick={onReview} data-sync-review-each><ListChecks className="w-3 h-3" /> Review each</OrgButton>
-        </div>
-      ) : (
-        <div className="mt-3 rounded-lg p-2.5 border" style={{ borderColor: "color-mix(in srgb, var(--sol-cyan) 40%, transparent)", background: "color-mix(in srgb, var(--sol-cyan) 6%, transparent)" }} data-sync-confirm>
-          <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>Bring the {summary.remaining} remaining records up to date now: {summary.countLine}. Each applies as proposed; the rest of the proposal waits for you.</p>
-          <div className="mt-2 flex items-center gap-2">
-            <button type="button" onClick={() => { setConfirm(false); onAcceptGroup(); }} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-cyan)", color: "var(--sol-bg)" }}>Accept {summary.remaining}</button>
-            <button type="button" onClick={() => setConfirm(false)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }
 

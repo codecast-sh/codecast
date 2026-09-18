@@ -34,6 +34,7 @@ import { CdpConnection, type CdpEndpoint } from "./cdp.js";
 import { authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
 import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
 import { defaultConfigDir } from "../config/configDir.js";
+import { mtimeNeedsContentCheck, readFileTailSync, transcriptActivityMs } from "../transcriptActivity.js";
 
 /** How long a browser whose owner is `unverifiable` may sit untouched. */
 export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
@@ -115,13 +116,24 @@ export function sessionRegistryDir(): string {
   return path.join(defaultConfigDir(), "session-registry");
 }
 
-/** Newest mtime of a transcript for this session id under any project, or 0. */
-export function transcriptMtime(id: string, projectsDir = path.join(os.homedir(), ".claude", "projects")): number {
+/** A transcript written within this window means the agent is at work. */
+export const TRANSCRIPT_FRESH_MS = 30 * 60 * 1000;
+
+/**
+ * When this session's transcript last showed real activity, under any
+ * project, or 0. A fresh mtime is checked against the file's own newest
+ * timestamp, because transcripts get touched with no new content
+ * (transcriptActivity.ts) and a touched one would keep a dead owner "live".
+ */
+export function transcriptActivity(id: string, projectsDir = path.join(os.homedir(), ".claude", "projects"), now = Date.now()): number {
   let newest = 0;
+  let newestPath: string | null = null;
   try {
     for (const dir of fs.readdirSync(projectsDir)) {
+      const file = path.join(projectsDir, dir, `${id}.jsonl`);
       try {
-        newest = Math.max(newest, fs.statSync(path.join(projectsDir, dir, `${id}.jsonl`)).mtimeMs);
+        const m = fs.statSync(file).mtimeMs;
+        if (m > newest) { newest = m; newestPath = file; }
       } catch {
         /* not this project */
       }
@@ -129,11 +141,15 @@ export function transcriptMtime(id: string, projectsDir = path.join(os.homedir()
   } catch {
     /* no transcripts here */
   }
-  return newest;
+  if (!newestPath || !mtimeNeedsContentCheck(newest, TRANSCRIPT_FRESH_MS, now)) return newest;
+  let tail: string | null = null;
+  try {
+    tail = readFileTailSync(newestPath);
+  } catch {
+    /* unreadable: mtime is all we have */
+  }
+  return transcriptActivityMs(newest, tail);
 }
-
-/** A transcript written within this window means the agent is at work. */
-export const TRANSCRIPT_FRESH_MS = 30 * 60 * 1000;
 
 export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: string; now?: number } = {}): LiveOwners {
   const registryDir = opts.registryDir ?? sessionRegistryDir();
@@ -158,7 +174,7 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
       } catch {
         /* no registry entry */
       }
-      if (now - transcriptMtime(id, opts.projectsDir) < TRANSCRIPT_FRESH_MS) return "live";
+      if (now - transcriptActivity(id, opts.projectsDir, now) < TRANSCRIPT_FRESH_MS) return "live";
       return "unverifiable";
     },
   };

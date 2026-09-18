@@ -43,7 +43,9 @@ import { BrowserSessionContext, BROWSER_ROW_PILL } from "../hooks/useBrowserTabA
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, isStrippedCommand, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, computeConversationTaskStats, isForkSeedClientId, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { isPollResponsePayload } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, agentForksFromAnyMessage, canSessionBecomeAgent, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, computeConversationTaskStats, isForkSeedClientId, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown } from "@codecast/shared/contracts";
@@ -102,7 +104,7 @@ import { tryRenderCanvas, tryRenderHtmlMessage } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
-import { formatElapsedClock, shouldShowElapsed, deriveRunningPhrase } from "./workingStatus";
+import { formatElapsedClock, shouldShowElapsed, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { activitySig } from "../lib/sessionActivity";
 import { LivePulseDot } from "./SessionActivityLine";
 import { isSessionActivityFresh } from "@codecast/shared/contracts";
@@ -946,6 +948,17 @@ export type ConversationViewProps = {
   onSendOverride?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>;
   /** A host's line above the box (what the next message is about). */
   composerNode?: React.ReactNode;
+  /** A host's node above the first message, inside the scroll (a proposal's
+   *  letter as the author's own bubble, org-staffing.md S19). Shown only when
+   *  the top of the transcript is loaded, like the context cards. */
+  leadNode?: React.ReactNode;
+  /** Keep the lead above whatever window is loaded, not only at the
+   *  transcript's start: an introduction (the scope page's), not a message
+   *  in time (the proposal letter). */
+  leadPinned?: boolean;
+  /** The density this view opens in when the person has not picked one for
+   *  the conversation (a proposal's thread reads as a conversation, S19). */
+  initialDensity?: ConversationDensity;
 };
 
 export interface ConversationViewHandle {
@@ -3049,7 +3062,7 @@ type UserMessageKind =
   | { kind: 'continuation' }
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' }
-  | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
+  | { kind: 'machine_move'; destination?: string; fromLabel?: string; machineChanged: boolean }
   | { kind: 'agent_switch'; toLabel: string; fromLabel?: string }
   // `variant: 'agent'` is a subagent's report to the session that launched it
   // (<agent-message from="…">): the same card, chrome that says so, and a sender
@@ -3154,9 +3167,7 @@ function classifyUserMessage(
   if (chatWake) return { kind: 'chat_wake', wake: chatWake };
   const decisionAnswer = parseDecisionAnswer(tNoReminders);
   if (decisionAnswer) return { kind: 'decision_answer', decision: decisionAnswer };
-  if (t.startsWith('{') && t.includes('__cc_poll')) {
-    try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
-  }
+  if (isPollResponsePayload(t)) return { kind: 'poll_response' };
   if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => isAskTool(tc.name))) {
     return { kind: 'poll_response' };
   }
@@ -3206,7 +3217,15 @@ function classifyUserMessage(
   if (isModelSwitchStdout(tNoReminders)) {
     return { kind: "agent_switch", toLabel: modelSwitchStdoutLabel(tNoReminders) || "new model" };
   }
-  if (isMachineMoveNotice(tNoReminders)) return { kind: 'machine_move', ...parseMachineMoveNotice(tNoReminders) };
+  if (isMachineSwitchNotice(tNoReminders) || msg.subtype === "machine_switch") {
+    const parsed = parseMachineSwitchNotice(tNoReminders);
+    return {
+      kind: "machine_move",
+      destination: parsed?.toLabel,
+      fromLabel: parsed?.fromLabel,
+      machineChanged: parsed?.machineChanged ?? true,
+    };
+  }
   if (isBackgroundAgentStoppedNotice(t)) return { kind: 'background_agent_stopped', agentName: backgroundAgentStoppedName(t) ?? undefined };
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
   if (isTaskNotification(t)) {
@@ -7209,67 +7228,19 @@ function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl }: {
   );
 }
 
-// The reorientation notice a moved session's agent receives as its first turn on
-// the destination machine (cli/src/sessionMoveNotice.ts). Detected by its composed
-// prefix: the notice rides the pending-message rail into the agent's pane and syncs
-// back from the agent's own transcript as a plain user message, so no subtype
-// survives the round-trip — the content itself is the only durable marker. Prefix
-// detection also picks up every historical move already in transcripts.
-function isMachineMoveNotice(content: string): boolean {
-  return content.trim().startsWith("[codecast] This session just moved");
-}
-
-function parseMachineMoveNotice(content: string): { destination?: string; machineChanged: boolean } {
-  const firstLine = content.trim().split("\n", 1)[0];
-  const machine = firstLine.match(/moved to a different machine\. It now runs on (.+?) in \S/);
-  if (machine) return { destination: machine[1], machineChanged: true };
-  return { machineChanged: false };
-}
-
-// Quiet switch divider for a session that changed machines (or directories)
-// mid-conversation. The gesture it reflects is "the session moved", not "someone
-// typed this", so it renders as a boundary rather than a user bubble; clicking
-// discloses the full notice text the agent was given.
-function MachineMoveDivider({ content, destination, machineChanged, timestamp }: { content: string; destination?: string; machineChanged: boolean; timestamp: number }) {
-  const [open, setOpen] = useState(false);
-  const label = machineChanged ? `switched to ${destination ?? "another machine"}` : "moved to another directory";
-  return (
-    <div className="my-5">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 group cursor-pointer"
-        title={`${formatFullTimestamp(timestamp)} — click for details`}
-      >
-        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-border to-transparent" />
-        <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
-          </svg>
-          {label}
-        </span>
-        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-border to-transparent" />
-      </button>
-      {open && (
-        <div className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-border bg-sol-card text-xs text-sol-text-muted whitespace-pre-wrap leading-relaxed">
-          {content.trim()}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AgentSwitchDivider({
-  toLabel, fromLabel, content, timestamp,
+// One captioned rule for an in-place switch (agent or machine). Clicking
+// discloses the notice text the agent was given.
+function SwitchDivider({
+  caption, fromLabel, content, extra, timestamp,
 }: {
-  toLabel: string;
+  caption: string;
   fromLabel?: string;
   content: string;
+  extra?: string;
   timestamp: number;
 }) {
   const [open, setOpen] = useState(false);
-  const caption = `now using ${toLabel}`;
-  const details = content.trim();
+  const details = [content.trim(), extra?.trim()].filter(Boolean).join("\n\n");
   const hasDetails = details.includes("\n");
   return (
     <div className="my-5">
@@ -7295,6 +7266,48 @@ function AgentSwitchDivider({
         </div>
       )}
     </div>
+  );
+}
+
+function MachineMoveDivider({
+  content, destination, fromLabel, machineChanged, extra, timestamp,
+}: {
+  content: string;
+  destination?: string;
+  fromLabel?: string;
+  machineChanged: boolean;
+  extra?: string;
+  timestamp: number;
+}) {
+  const caption = machineChanged
+    ? `now running on ${destination ?? "another machine"}`
+    : "moved to another directory";
+  return (
+    <SwitchDivider
+      caption={caption}
+      fromLabel={fromLabel}
+      content={content}
+      extra={extra}
+      timestamp={timestamp}
+    />
+  );
+}
+
+function AgentSwitchDivider({
+  toLabel, fromLabel, content, timestamp,
+}: {
+  toLabel: string;
+  fromLabel?: string;
+  content: string;
+  timestamp: number;
+}) {
+  return (
+    <SwitchDivider
+      caption={`now using ${toLabel}`}
+      fromLabel={fromLabel}
+      content={content}
+      timestamp={timestamp}
+    />
   );
 }
 
@@ -13023,7 +13036,7 @@ function settleTimelineItemAtOffset(
 // that adds a hook here keeps the fiber and crashes on the shifted hook slot
 // ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, initialDensity }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const renderStart = performance.now();
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
@@ -13046,8 +13059,8 @@ const ConversationViewInner = (
   // Guests read in simple view (DashboardLayout's guest branch), so they get
   // its calmer condensed default too — without owning a simple_view pref.
   const resolveDefaultDensity = useCallback(
-    (): ConversationDensity => (guest ? "condensed" : defaultDensity()),
-    [guest]
+    (): ConversationDensity => initialDensity ?? (guest ? "condensed" : defaultDensity()),
+    [guest, initialDensity]
   );
   const [density, setDensityState] = useState<ConversationDensity>(resolveDefaultDensity);
   const setDensity = useCallback((d: ConversationDensity) => {
@@ -14299,7 +14312,7 @@ const ConversationViewInner = (
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'chat_wake', 'role_wake', 'agent_switch']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'chat_wake', 'role_wake', 'agent_switch', 'machine_move']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -14395,13 +14408,28 @@ const ConversationViewInner = (
     const consumed = new Set<string>();          // expansion msg _ids
     // Same pairing for `!` bash mode: input msg _id -> the output msg's parsed streams.
     const bashByInput = new Map<string, { stdout: string; stderr: string }>();
+    const machineMoveExtra = new Map<string, string>();
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
       if (msg.role !== 'user') continue;
       const kind = userMsgKindMap.get(msg._id)?.kind;
-      if (kind !== 'command' && kind !== 'bash_input' && kind !== 'agent_switch') continue;
+      if (kind !== 'command' && kind !== 'bash_input' && kind !== 'agent_switch' && kind !== 'machine_move') continue;
+      if (kind === 'machine_move') {
+        if (consumed.has(msg._id)) continue;
+        const extras: string[] = [];
+        for (let j = i + 1; j < timeline.length; j++) {
+          if (timeline[j].type !== 'message') continue;
+          const later = timeline[j].data as Message;
+          if (later.role !== 'user') break;
+          if (userMsgKindMap.get(later._id)?.kind !== 'machine_move') break;
+          consumed.add(later._id);
+          if (later.content) extras.push(later.content);
+        }
+        if (extras.length) machineMoveExtra.set(msg._id, extras.join("\n\n"));
+        continue;
+      }
       let next: Message | null = null;
       for (let j = i + 1; j < timeline.length; j++) {
         if (timeline[j].type === 'message') { next = timeline[j].data as Message; break; }
@@ -14419,7 +14447,7 @@ const ConversationViewInner = (
         consumed.add(next._id);
       }
     }
-    return { byCommand, consumed, bashByInput };
+    return { byCommand, consumed, bashByInput, machineMoveExtra };
   }, [timeline, userMsgKindMap]);
 
   // Bare nudges ("continue") render as one compact line, and a run of the same
@@ -14930,7 +14958,7 @@ const ConversationViewInner = (
         case 'bash_input': return 130;
         case 'bash_output': return commandExpansionMap.consumed.has(msg._id) ? 0 : 110;
         case 'interrupt': return 30;
-        case 'machine_move': return 34;
+        case 'machine_move': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'agent_switch': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'continuation': return 30;
         case 'normal':
@@ -16246,7 +16274,17 @@ const ConversationViewInner = (
     }
     return undefined;
   }, [timeline]);
-  const lastActivityAt = latestMessageTimestamp ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
+  // ConversationView stays mounted across session switches. Stamp the last
+  // moment we saw this row producing so a mid-turn session whose loaded tail
+  // is days old is not labeled "3d ago" under a response that just landed.
+  const lastLiveAtRef = useRef({ id: "", at: 0 });
+  const convIdForLive = conversation?._id ? String(conversation._id) : "";
+  if (lastLiveAtRef.current.id !== convIdForLive) lastLiveAtRef.current = { id: convIdForLive, at: 0 };
+  if (isProducingAgentStatus(managedSession?.agent_status)) lastLiveAtRef.current.at = Date.now();
+  const lastActivityAt = Math.max(latestMessageTimestamp ?? 0, lastLiveAtRef.current.at)
+    || conversation?.updated_at
+    || conversation?.started_at
+    || 0;
   const lastMessageRole = useMemo(() => {
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
@@ -16662,7 +16700,7 @@ const ConversationViewInner = (
     }
     const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
     const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
-    const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant" || !sameMessageAuthor(prevMsg, msg, messageAuthors);
+    const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant" || !sameMessageAuthor(prevMsg, msg, messageAuthors) || msg.timestamp - prevMsg.timestamp > GROUP_WINDOW_MS;
     // Compute all message IDs in the current run (for sharing)
     let runMessageIds: string[] = [];
     for (let i = index; i >= 0; i--) {
@@ -16828,7 +16866,8 @@ const ConversationViewInner = (
         case 'interrupt':
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
         case 'machine_move':
-          return <MachineMoveDivider key={msg._id} content={msg.content || ""} destination={kind.destination} machineChanged={kind.machineChanged} timestamp={msg.timestamp} />;
+          if (commandExpansionMap.consumed.has(msg._id)) return null;
+          return <MachineMoveDivider key={msg._id} content={msg.content || ""} destination={kind.destination} fromLabel={kind.fromLabel} machineChanged={kind.machineChanged} extra={commandExpansionMap.machineMoveExtra.get(msg._id)} timestamp={msg.timestamp} />;
         case 'agent_switch':
           if (commandExpansionMap.consumed.has(msg._id)) return null;
           return <AgentSwitchDivider key={msg._id} toLabel={kind.toLabel} fromLabel={kind.fromLabel} content={msg.content || ""} timestamp={msg.timestamp} />;
@@ -17861,7 +17900,9 @@ const ConversationViewInner = (
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">
-        {(!conversation || timeline.length === 0) ? (
+        {conversation && timeline.length === 0 && leadNode ? (
+          <div className="flex-1">{leadNode}</div>
+        ) : (!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
               (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
@@ -17926,6 +17967,7 @@ const ConversationViewInner = (
           {conversation?.stable_context && !hasMoreAbove && !isLoadingOlder && (
             <StableContextCards stableContext={conversation.stable_context} />
           )}
+          {leadNode && (leadPinned || (!hasMoreAbove && !isLoadingOlder)) && leadNode}
           {(density === "story" || density === "summary") ? (
             <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">
               {density === "story" ? (
@@ -17994,7 +18036,7 @@ const ConversationViewInner = (
                       )}
                       {handoffRulesAt(virtualItem.index)}
                       <GalleryMessageScope messageId={item.type === 'message' ? (item.data as Message)._id : undefined}>{content}</GalleryMessageScope>
-                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
+                      {virtualItem.index === timeline.length - 1 && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status }) && (
                         <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
                         </TimelineRule>
@@ -18117,7 +18159,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

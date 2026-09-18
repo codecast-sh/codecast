@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
 import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
@@ -230,6 +230,21 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(at("The summary is the ask.")).toBeLessThan(at("## What not to invent"));
       expect(at(ORG_ASK_RULES.reader)).toBeLessThan(at(ORG_ASK_RULES.decision_first));
       expect(at(ORG_ASK_RULES.decision_first)).toBeLessThan(at(ORG_ASK_RULES.invented_words));
+      // S19: the analyzer writes the asks, a partition of the changes, in
+      // the words its summary already uses; the spec example carries one and
+      // parses with it.
+      expect(p).toContain(ORG_ASKS_RULE);
+      expect(p).toContain("every change is in exactly one ask; the post refuses a spec that leaves a change out or names one twice");
+      expect(p).toContain("when the summary says one, two, three, those are the asks");
+      // The first run of the rule wrote titles of 30, 25 and 17 words, each
+      // carrying its own reason; a title is the head of a card.
+      expect(p).toContain("A title is the head of a card: a short line, about ten words, that names the act the person is agreeing to");
+      expect(p).toContain("The reason does not go in the title, it goes in why");
+      expect(at("## How to write")).toBeLessThan(at(ORG_ASKS_RULE));
+      expect(at(ORG_ASKS_RULE)).toBeLessThan(at("The summary is the ask."));
+      const example = parseOrgProposalSpec(JSON.parse(p.split("```json\n")[1].split("\n```")[0]));
+      expect(example.errors).toEqual([]);
+      expect(example.spec!.asks).toEqual([{ title: "What the person is agreeing to, readable on its own", why: "One sentence of why.", effect: "One line of what changes for them when they accept.", seqs: [1] }]);
       // What comes after the ask is written for the same reader.
       expect(p).toContain("each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word");
       // The packing instruction that produced an inventory is gone.

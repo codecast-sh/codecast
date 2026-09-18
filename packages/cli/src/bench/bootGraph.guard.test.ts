@@ -175,7 +175,10 @@ describe("command groups stay off the boot graph", () => {
     // hosts/cli.ts, fastPath.ts, index.ts). The credential helper's own module
     // stays off this graph: it is a COMMAND_GROUPS entry that fastPath reaches
     // through a dynamic import, which assertOffGraph above proves.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(231);
+    //
+    // 232 after ct-52405: selfExec.ts, the one "run this build again" resolver
+    // index.ts and the daemon each used to carry a copy of. Imports only node.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(232);
     expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3204);
   }, GRAPH_WALK_TIMEOUT);
 
@@ -218,7 +221,10 @@ describe("command groups stay off the boot graph", () => {
     // directly. The agent logins fan out and the ssh agent bridge are the
     // daemon's own work (it runs both on its credential tick), so these are
     // leaves it legitimately gained rather than a subsystem arriving sideways.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(320);
+    // 322 after ct-52405: selfExec.ts (above) and transcriptActivity.ts, the
+    // "when did this agent last do anything" clock the terminal reaper shares
+    // with the browser engine reaper. Both import only node.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(322);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

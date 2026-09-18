@@ -222,6 +222,113 @@ describe("a proposal carries one change per subject", () => {
   });
 });
 
+// S19: a proposal is a few asks with its changes folded inside each. The
+// author writes them; the parser holds the partition; a proposal with none
+// derives them, so nothing old stops rendering.
+describe("asks partition a proposal's changes", () => {
+  const task = (t: string) => ({ change: { kind: "task_status", task: t, status: "done", reason: "landed" }, rationale: "r" });
+  const role = { change: { kind: "role", name: "Head of Quality", handle: "quality", tenure: { kind: "standing" } }, rationale: "Nobody watches the quality line.", expected_effect: "One daily list of fixes waiting on you." };
+  const ask = (title: string, seqs: number[]) => ({ title, why: "why", effect: "effect", seqs });
+  const spec = (changes: any[], asks?: any) => parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes, ...(asks !== undefined ? { asks } : {}) });
+
+  test("a partition parses and is kept; a spec without asks carries none", () => {
+    const r = spec([task("ct-1"), task("ct-2"), role], [ask("Close two tasks", [1, 2]), ask("Add an agent for quality", [3])]);
+    expect(r.errors).toEqual([]);
+    expect(r.spec!.asks).toEqual([{ title: "Close two tasks", why: "why", effect: "effect", seqs: [1, 2] }, { title: "Add an agent for quality", why: "why", effect: "effect", seqs: [3] }]);
+    expect(spec([task("ct-1")]).spec!.asks).toBeUndefined();
+  });
+  test("a change in no ask, in two asks, or an ask naming a change that is not there is refused, naming the change", () => {
+    const left = spec([task("ct-1"), task("ct-2"), role], [ask("a", [1]), ask("b", [3])]);
+    expect(left.spec).toBeNull();
+    expect(left.errors).toEqual(["changes[1] (mark task ct-2 done) is in no ask: every change belongs to exactly one ask"]);
+    const twice = spec([task("ct-1"), role], [ask("a", [1, 2]), ask("b", [2])]);
+    expect(twice.errors).toEqual(["changes[1] (create role Head of Quality @quality (standing)) is in asks[0] and asks[1]: every change belongs to exactly one ask"]);
+    expect(spec([task("ct-1")], [ask("a", [1, 9])]).errors).toEqual(["asks[0] names change 9, and the spec has 1"]);
+    expect(spec([task("ct-1")], []).errors).toEqual(["asks is a non-empty list of { title, why, effect, seqs }"]);
+    expect(spec([task("ct-1")], [{ title: "a", seqs: [1] }]).errors).toEqual(["asks[0]: title, why and effect are required"]);
+    expect(spec([task("ct-1")], [{ title: "a", why: "w", effect: "e", seqs: [0] }]).errors).toEqual(["asks[0]: seqs is a non-empty list of change numbers (1 is the first change)"]);
+    // A long miss is capped, so a spec that forgot a hundred rows reads in one screen.
+    const many = spec(Array.from({ length: 14 }, (_, i) => task(`ct-${i}`)), [ask("a", [1])]);
+    expect(many.errors.length).toBe(11);
+    expect(many.errors[10]).toBe("and 3 more changes outside the partition");
+  });
+  test("asks name changes as written, and survive the fold: a folded row answers to the ask of the row it folded into", () => {
+    const goal = { change: { kind: "project_meta", project: "pr-7", goal: "Inbox zero" }, rationale: "r" };
+    const owner = { change: { kind: "project_meta", project: "pr-7", owner: "@quality" }, rationale: "r" };
+    const r = spec([task("ct-1"), goal, role, owner], [ask("Records", [1]), ask("Goals", [2]), ask("The agent", [3, 4])]);
+    expect(r.errors).toEqual([]);
+    expect(r.spec!.changes.length).toBe(3);
+    // The goal sat in the goals ask and the owner in the agent's ask. The
+    // merged row names @quality as owner, so it follows the ask that creates
+    // @quality: accepting the goals alone never sets an owner nobody accepted.
+    expect(r.spec!.asks!.map((a) => [a.title, a.seqs])).toEqual([["Records", [1]], ["The agent", [2, 3]]]);
+    expect(r.spec!.asks!.flatMap((a) => a.seqs).sort()).toEqual([1, 2, 3]);
+    // With no ask creating the agent it names, the first ask that named the row keeps it.
+    const plain = spec([task("ct-1"), goal, owner], [ask("Goals", [2]), ask("Rest", [1, 3])]);
+    expect(plain.spec!.asks!.map((a) => a.seqs)).toEqual([[2], [1]]);
+  });
+  test("deriveAsks: the records are one ask, each role, retire, move and scope its own with its riders, the rest one ask; removed rows are in none", async () => {
+    const { deriveAsks, resolveOrgAsks } = await import("./orgProposal");
+    const rows = [
+      { seq: 1, change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "x" } },
+      { seq: 2, change: { kind: "task_status", task: "ct-1", status: "dropped", reason: "x" } },
+      { seq: 3, change: { kind: "file", plan: "pl-2", project: "pr-1" } },
+      { seq: 4, change: role.change, rationale: role.rationale, expected_effect: role.expected_effect },
+      { seq: 5, change: { kind: "routine", handle: "@quality", title: "Daily list", prompt: "p", every: "1d" } },
+      { seq: 6, change: { kind: "retire", handle: "test-lead" } },
+      { seq: 7, change: { kind: "project_meta", project: "pr-1", goal: "g" } },
+      { seq: 8, change: { kind: "budget", handle: "growth", caps: { wakes_per_day: 10 } } },
+      { seq: 9, change: { kind: "task_status", task: "ct-9", status: "done", reason: "x" }, status: "removed" },
+    ] as any[];
+    const asks = deriveAsks(rows);
+    expect(asks.map((a) => [a.title, a.seqs])).toEqual([
+      ["Bring 2 records up to date", [1, 2]],
+      ["Add an agent: Head of Quality", [4, 5]],
+      ["Retire test-lead", [6]],
+      ["3 smaller changes: filing, goals and settings", [3, 7, 8]],
+    ]);
+    expect(asks[1].why).toBe("Nobody watches the quality line.");
+    expect(asks[1].effect).toBe("One daily list of fixes waiting on you.");
+    // A derived ask with no words of its own reads as sentences: no handle,
+    // no parenthetical tenure, the riders said in the same breath.
+    expect(asks[2].effect).toBe("test-lead retires. Its sessions go back to their owners, and anything under it reports one level up.");
+    expect(asks[2].why).toBe("The author did not say why. Ask about this.");
+    const bare = deriveAsks([
+      { seq: 1, change: { kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me", scope: { projects: ["Platform"] }, charter: "Owns the sync layer.", tenure: { kind: "standing" } } },
+      { seq: 2, change: { kind: "budget", handle: "platform", caps: { tokens_per_day: 800_000 } } },
+      { seq: 3, change: { kind: "routine", handle: "@platform", title: "Release check", prompt: "p", every: "1d" } },
+      { seq: 4, change: { kind: "role", name: "Content Lead", handle: "content", reports_to: "@growth", scope: { plans: ["pl-88"] }, tenure: { kind: "program", ends: { plan: "pl-88" }, then: "review" } } },
+      { seq: 5, change: { kind: "move", handle: "@ops", reports_to: "@growth", scope_add: ["pr-1"], scope_remove: ["pr-2"] } },
+      { seq: 6, change: { kind: "scope", handle: "product", add: ["Calls"] } },
+    ] as any[]);
+    expect(bare.map((a) => [a.title, a.why, a.effect])).toEqual([
+      ["Add an agent: Head of Platform", "Owns the sync layer.", "A new agent, Head of Platform, reporting to me and looking after the Platform project. It stays. It may use up to 800,000 tokens a day. It runs Release check every day."],
+      ["Add an agent: Content Lead", "The author did not say why. Ask about this.", "A new agent, Content Lead, reporting to growth and looking after the pl-88 plan. It ends with the pl-88 plan, then comes up for review."],
+      ["Move ops", "The author did not say why. Ask about this.", "ops reports to growth from now on, takes on pr-1 and hands off pr-2."],
+      ["Change what product looks after", "The author did not say why. Ask about this.", "product takes on Calls."],
+    ]);
+    // With names from the chart, the handles and refs become what the person calls them.
+    const names = { role: (h: string) => ({ growth: "Growth lead", ops: "Ops" } as Record<string, string>)[h], project: (r: string) => ({ "pr-1": "Calls", "pr-2": "Billing" } as Record<string, string>)[r], plan: (r: string) => ({ "pl-88": "SEO" } as Record<string, string>)[r] };
+    const named = deriveAsks([
+      { seq: 4, change: { kind: "role", name: "Content Lead", handle: "content", reports_to: "@growth", scope: { plans: ["pl-88"] }, tenure: { kind: "program", ends: { plan: "pl-88" }, then: "retire" } } },
+      { seq: 5, change: { kind: "move", handle: "@ops", reports_to: "@growth", scope_add: ["pr-1"], scope_remove: ["pr-2"] } },
+    ] as any[], names);
+    expect(named.map((a) => [a.title, a.effect])).toEqual([
+      ["Add an agent: Content Lead", "A new agent, Content Lead, reporting to Growth lead and looking after the SEO plan. It ends with the SEO plan, then retires."],
+      ["Move Ops", "Ops reports to Growth lead from now on, takes on the Calls project and hands off the Billing project."],
+    ]);
+    // Every live change is in exactly one ask.
+    expect(asks.flatMap((a) => a.seqs).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(deriveAsks([])).toEqual([]);
+    // Stored asks lose a removed change and gain a derived ask for a change a revise added.
+    const stored = [{ title: "Records", why: "w", effect: "e", seqs: [1, 2, 9] }, { title: "The agent", why: "w", effect: "e", seqs: [4, 5] }];
+    const resolved = resolveOrgAsks(stored, rows);
+    expect(resolved.slice(0, 2).map((a) => a.seqs)).toEqual([[1, 2], [4, 5]]);
+    expect(resolved.slice(2).map((a) => [a.title, a.seqs])).toEqual([["Retire test-lead", [6]], ["3 smaller changes: filing, goals and settings", [3, 7, 8]]]);
+    expect(resolveOrgAsks(undefined, rows)).toEqual(asks);
+  });
+});
+
 describe("what one change needs from another (orgChangeDependencies)", () => {
   test("a role, its adopt and its routine name each other by seq; unrelated rows say nothing", async () => {
     const { orgChangeDependencies } = await import("./orgProposal");

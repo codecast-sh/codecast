@@ -1,6 +1,6 @@
 import { query } from "./functions";
 import { v } from "convex/values";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { checkConversationAccess, createTeamFeedFilter, isTeamMember } from "./privacy";
 import { classifyWorkStates } from "./conversations";
@@ -393,7 +393,12 @@ export const handsStartedBy = query({
     const states = await classifyWorkStates(ctx, userId, hands, new Map(), now);
     const out: HandStarted[] = [];
     for (const c of hands) {
-      const task = c.active_task_id ? await ctx.db.get(c.active_task_id as Id<"tasks">) : null;
+      // The wrapped ctx.db.get widens to a union of every table, so the id
+      // cast alone does not narrow the RESULT — assert the doc type too, or
+      // reading task.short_id fails the deploy typecheck.
+      const task = c.active_task_id
+        ? ((await ctx.db.get(c.active_task_id as Id<"tasks">)) as Doc<"tasks"> | null)
+        : null;
       out.push({
         _id: c._id,
         short_id: c.short_id ?? null,
@@ -440,6 +445,9 @@ const FEED_LIMIT_DEFAULT = 40;
 const FEED_LIMIT_MAX = 200;
 const COMMIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const ARTIFACTS_PER_MEMBER = 200;
+/** Tasks whose pages, decisions and runs the feed reads, newest by last
+ *  change (computeScopeFeed): the fan out is one read per task per source. */
+const FEED_TASK_FANOUT = 150;
 const PREVIEW_CHARS = 200;
 
 const preview = (text: string | undefined | null): string | undefined => {
@@ -590,6 +598,13 @@ export async function computeScopeFeed(
   const sessionRawById = new Map(sessions.map((s) => [s.session._id.toString(), s.raw]));
 
   const sources = new Map<FeedKind, FeedRow[]>();
+  // Three sources hang off tasks (pages attached, decisions asked, runs bound)
+  // and each costs one read per task, so a whole workspace scope pays them
+  // hundreds of times over: the chief of staff's feed died on 860 tasks
+  // against Convex's 4,096 reads per query (2026-09-17). The newest tasks by
+  // last change carry those sources for the feed; an older task's pages,
+  // decisions and runs stay reachable from their own tabs and the task page.
+  const fanoutTasks = [...resolved.tasks].sort((a, b) => b.updated_at - a.updated_at).slice(0, FEED_TASK_FANOUT);
 
   if (want("session")) {
     sources.set("session", await Promise.all(sessions.map(async ({ session, raw }) => ({
@@ -671,7 +686,7 @@ export async function computeScopeFeed(
         pageBySlug.set(a.slug, a);
       }
     }
-    for (const t of resolved.tasks) {
+    for (const t of fanoutTasks) {
       for (const a of await ctx.db.query("artifacts").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) pageBySlug.set(a.slug, a);
     }
     const rows: FeedRow[] = [];
@@ -696,7 +711,7 @@ export async function computeScopeFeed(
     // Decisions on a task in scope, plus the open ones asked by a session in
     // scope that name no task (the-line.md L10). One row per decision.
     const decisionById = new Map<string, any>();
-    for (const t of resolved.tasks) {
+    for (const t of fanoutTasks) {
       for (const d of await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) decisionById.set(d._id.toString(), d);
     }
     for (const { session } of sessions) {
@@ -753,7 +768,7 @@ export async function computeScopeFeed(
     // so a feed row names the work the run belongs to.
     const runById = new Map<string, any>();
     const runShortId = new Map<string, string>();
-    for (const t of resolved.tasks) {
+    for (const t of fanoutTasks) {
       for (const r of await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) {
         runById.set(r._id.toString(), r);
         runShortId.set(r._id.toString(), t.short_id);
