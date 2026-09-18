@@ -7,7 +7,8 @@ import { scopedFetch } from "./data";
 import { workspaceForResource, workspaceKey } from "./lib/access";
 import { userCanAdminRole } from "./lib/orgAccess";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
-import { collectOrgSessions, requireWorkspaceCaller } from "./org";
+import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInScope } from "./org";
+import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
 import { computeOrgActivity } from "./lib/orgActivity";
 import { isActiveTask } from "@codecast/shared/tasks";
@@ -26,7 +27,7 @@ import {
 } from "./orgRoles";
 import { capsFor, countersFor, trustOf } from "./orgEvents";
 import { findDecision } from "./sessionDecisions";
-import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
+import { extractRepoFromRemoteUrl, threadStateHeadline } from "@codecast/shared/contracts";
 import {
   applyProposalChanges,
   extractOrgProposal,
@@ -81,7 +82,12 @@ export const ANALYSIS_CAPS = {
   titles_per_path: 5,
   git_roots: 40,
   members: 50,
+  long_running: 12,
+  tasks_filed_per_session: 300,
+  first_message_chars: 600,
 } as const;
+/** A session this old that still runs may be a role nobody has named (org-roles-run-work.md R2). */
+export const LONG_RUNNING_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const bump = (m: Map<string, number>, k: string, by = 1) => m.set(k, (m.get(k) ?? 0) + by);
 const topOf = (m: Map<string, number>, n: number) =>
@@ -98,7 +104,7 @@ type AnalysisOrg = Awaited<ReturnType<typeof computeAnalysisOrg>>;
 type AnalysisSignals = Awaited<ReturnType<typeof computeAnalysisSignals>>;
 /** What the org slice needs from the work slice: small rows, never the tasks. */
 export type AnalysisHandoff = {
-  projects: Array<{ id: string; short_id?: string; title: string; open_tasks: number }>;
+  projects: Array<{ id: string; short_id?: string; title: string; open_tasks: number; project_path?: string }>;
   plans: Array<{ id: string; short_id: string }>;
   latest_event: number | null;
 };
@@ -156,7 +162,7 @@ function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[], tas
   let latest: number | null = null;
   for (const r of [...tasks, ...plans]) if (r.updated_at && (latest === null || r.updated_at > latest)) latest = r.updated_at;
   const handoff: AnalysisHandoff = {
-    projects: projectRows.map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.tasks.open })),
+    projects: projectRows.map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.tasks.open, project_path: p.project_path })),
     plans: planRows.map((p) => ({ id: p.id, short_id: p.short_id })),
     latest_event: latest,
   };
@@ -299,14 +305,79 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
   const projectsWithoutRole = wholeWorkspaceRoles > 0 ? [] : work.projects.filter((p) => !coveredProjects.has(p.id)).map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.open_tasks }));
   let sessionsUnfiled = 0;
   for (const [key, list] of scan.byParent) if (key.startsWith("user:")) sessionsUnfiled += list.length;
+  const longRunning = await longRunningSessions(ctx, scan, now, work);
 
   return {
     members,
     labels: topOf(labels, ANALYSIS_CAPS.labels),
     git_roots: Array.from(gitRoots.values()).sort((a, b) => b.sessions - a.sessions).slice(0, ANALYSIS_CAPS.git_roots),
-    sessions: { total: scan.sessions.size, truncated: scan.truncated, unfiled: sessionsUnfiled, titles_by_path: Object.fromEntries(titlesByPath) },
+    sessions: { total: scan.sessions.size, truncated: scan.truncated, unfiled: sessionsUnfiled, titles_by_path: Object.fromEntries(titlesByPath), long_running: longRunning },
     org: { roles, anchors, projects_without_role: projectsWithoutRole, whole_workspace_roles: wholeWorkspaceRoles },
   };
+}
+
+// ── Long running sessions (org-roles-run-work.md R2) ───────────────────────
+// A session older than a week that still runs may be a role nobody has named.
+// This lists the facts and judges nothing: how old it is, how many helper
+// sessions it started inside the window, the routines that wake it, its pinned
+// state, its first message and the projects it touched. Whether a session has
+// a standing purpose is the analyzer's reading. A session that already is a
+// role's standing session (or the workspace's standing agent) is left out; a
+// session that reports to a role stays in, with the role named, because a
+// manager under a manager is still a manager. The list is the busiest few,
+// and `old_enough` says how many sessions the age rule let through, so the
+// analyzer can say what it did not see.
+type OrgScanResult = Awaited<ReturnType<typeof collectOrgSessions>>;
+async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, work: AnalysisHandoff) {
+  const old = Array.from(scan.sessions.values())
+    .filter(({ raw }) => !raw.anchor_id && !raw.standing_role_id && now - (raw.started_at ?? raw._creationTime ?? now) >= LONG_RUNNING_MIN_AGE_MS)
+    .sort((a, b) => b.session.subagent_count - a.session.subagent_count || (b.raw.message_count ?? 0) - (a.raw.message_count ?? 0));
+  const projectByPath = new Map(work.projects.filter((p) => p.project_path).map((p) => [p.project_path!, p]));
+  const projectById = new Map(work.projects.map((p) => [p.id, p]));
+  const roleHandle = new Map(scan.roles.map((r: any) => [String(r._id), r.handle]));
+  const rows = [];
+  for (const { session, raw } of old.slice(0, ANALYSIS_CAPS.long_running)) {
+    const startedAt = raw.started_at ?? raw._creationTime;
+    const routines: any[] = (await ctx.db.query("agent_tasks").withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", raw._id)).collect())
+      .filter((t: any) => (t.status === "scheduled" || t.status === "running") && t.schedule_type !== "once");
+    const opening: any[] = await ctx.db.query("messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", raw._id)).order("asc").take(8);
+    const first = opening.find((m) => m.role === "user" && typeof m.content === "string" && m.content.trim());
+    // The projects it touched, strongest evidence first: the tasks it filed,
+    // the task and plans it is bound to, and last its working directory, which
+    // on a single repository company names one project for every session and
+    // is marked as such so the analyzer weighs it as a hint.
+    const task = raw.active_task_id ? await ctx.db.get(raw.active_task_id) : null;
+    const touched = new Map<string, { tasks_filed: number; bound: boolean; by_path: boolean }>();
+    const touch = (id: unknown) => { const k = String(id); const t = touched.get(k) ?? { tasks_filed: 0, bound: false, by_path: false }; touched.set(k, t); return t; };
+    const filed: any[] = await ctx.db.query("tasks").withIndex("by_created_from_conversation", (q: any) => q.eq("created_from_conversation", raw._id)).take(ANALYSIS_CAPS.tasks_filed_per_session);
+    for (const t of filed) if (t.project_id) touch(t.project_id).tasks_filed++;
+    if (task?.project_id) touch(task.project_id).bound = true;
+    for (const planId of new Set([raw.active_plan_id, task?.plan_id, ...(raw.plan_ids ?? [])].filter(Boolean).map(String))) { const plan = await ctx.db.get(planId as Id<"plans">); if (plan?.project_id) touch(plan.project_id).bound = true; }
+    if (raw.project_path && projectByPath.has(raw.project_path)) touch(projectByPath.get(raw.project_path)!.id).by_path = true;
+    const state = raw.thread_state ? threadStateHeadline(String(raw.thread_state)) : "";
+    rows.push({
+      short_id: session.short_id ?? undefined,
+      title: session.title,
+      owner: (await ctx.db.get(session.owner_user_id ?? raw.user_id))?.name ?? undefined,
+      started_at: startedAt,
+      age_days: Math.floor((now - startedAt) / (24 * 60 * 60 * 1000)),
+      last_active_at: session.updated_at,
+      messages: raw.message_count ?? 0,
+      helpers: session.subagent_count,
+      routines: routines.map((t: any) => ({ short_id: t.short_id ?? undefined, title: t.title ?? undefined, schedule: t.schedule_type, every_ms: t.interval_ms ?? undefined })),
+      state_line: state || undefined,
+      state_status: raw.thread_state_status ?? undefined,
+      first_message: first ? String(first.content).trim().slice(0, ANALYSIS_CAPS.first_message_chars) : undefined,
+      project_path: session.project_path ?? undefined,
+      git_root: raw.git_root ?? undefined,
+      projects: Array.from(touched).filter(([id]) => projectById.has(id)).map(([id, how]) => ({ short_id: projectById.get(id)!.short_id, title: projectById.get(id)!.title, tasks_filed: how.tasks_filed, bound: how.bound, by_path_only: how.by_path && !how.bound && !how.tasks_filed }))
+        .sort((a, b) => b.tasks_filed - a.tasks_filed || Number(b.bound) - Number(a.bound)),
+      tasks_filed: filed.length,
+      reports_to_role: raw.org_role_id ? `@${roleHandle.get(String(raw.org_role_id)) ?? "?"}` : undefined,
+      private: raw.is_private !== false,
+    });
+  }
+  return { min_age_days: LONG_RUNNING_MIN_AGE_MS / (24 * 60 * 60 * 1000), old_enough: old.length, listed: rows.length, rows };
 }
 
 // ── Activity: ground in what is happening, not what was filed (S9) ─────────
@@ -506,6 +577,83 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
   return { project_ids, plan_ids };
 }
 
+// Taking over a scope takes over its sessions (org-roles-run-work.md R1). The
+// sessions in the role's scope that report to its host and to no role are
+// filed under the role through the one reparent core, in the same apply that
+// gave the role the scope. `dry` counts without writing, for the note a
+// person reads before accepting; `leave` is their one edit on the row. A role
+// that looks after the whole workspace takes over nothing: it would empty a
+// person's inbox into one seat, which is not what gaining a scope means.
+const TAKEOVER_NOTE = "It looks after the area you work in. It reads what you need first and decides what reaches a person.";
+
+export async function takeOverSessions(ctx: Ctx, userId: Id<"users">, roleId: Id<"org_roles">, opts: { leave?: boolean; dry?: boolean } = {}): Promise<RehomeResult | null> {
+  if (opts.leave) return null;
+  const role = await ctx.db.get(roleId);
+  if (!role || role.status === "retired" || isWholeWorkspace(role.scope)) return null;
+  const resolved = await resolveScope(ctx, userId, { role_id: String(role._id) });
+  if (!resolved) return null;
+  const candidates = await sessionsInScope(ctx, resolved, Date.now());
+  return performRehomeSessions(ctx, userId, role, candidates, { dry: opts.dry, note: TAKEOVER_NOTE });
+}
+
+// A bare ref in a change ("pr-1", "pl-7", a project title) in the form the
+// scope resolver takes.
+const toRef = (s: string) => (/^(project|plan):/.test(s) ? s : /^pl-\d+$/.test(s) ? `plan:${s}` : `project:${s}`);
+
+// The count a person reads BEFORE accepting a role, scope or adopt change. A
+// proposed role has no row yet, so this reads a scope and a host rather than a
+// role: the live role's scope plus what the change adds, or the proposed
+// scope alone with the person applying as the host (performCreateRole's
+// default). Always dry.
+export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle?: string; add?: string[] }): Promise<RehomeResult | null> {
+  const handle = (p.handle ?? "").replace(/^@/, "").toLowerCase();
+  const live = handle ? (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle) : undefined;
+  const scope = { project_ids: [...(live?.scope?.project_ids ?? [])], plan_ids: [...(live?.scope?.plan_ids ?? [])] };
+  for (const raw of p.add ?? []) {
+    const ref = await resolveScopeRef(ctx, boundary, toRef(raw)).catch(() => null);
+    if (ref?.kind === "project") scope.project_ids.push(ref.id);
+    else if (ref?.kind === "plan") scope.plan_ids.push(ref.id);
+  }
+  if (isWholeWorkspace(scope)) return null;
+  const resolved = await resolveScope(ctx, userId, { scope, team_id: boundary.team_id });
+  if (!resolved) return null;
+  const candidates = await sessionsInScope(ctx, resolved, Date.now());
+  const subject = live ?? { host_user_id: userId, team_id: boundary.team_id };
+  // A live role's own sessions are already its; the filter drops them (they
+  // carry a role), so only sessions that would newly move are counted.
+  return performRehomeSessions(ctx, userId, subject, candidates, { dry: true });
+}
+
+export const takeoverPreview = query({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    handle: v.optional(v.string()),
+    add: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<{ sessions: string[]; kept_in_front: string[]; over_cap: number; phrase: string } | null> => {
+    const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
+    if (!userId) return null;
+    const r = await previewTakeover(ctx, userId, { team_id: args.team_id, scope_user_id: args.team_id ? undefined : userId }, { handle: args.handle, add: args.add });
+    if (!r) return null;
+    return { sessions: r.sessions, kept_in_front: r.kept_in_front, over_cap: r.over_cap, phrase: takeoverPhrase((args.handle ?? "").replace(/^@/, "").toLowerCase(), r, false) };
+  },
+});
+
+// One writer for the sentence, so the note before accept and the note after
+// apply say the same thing. After apply it adds the told counts.
+export function takeoverPhrase(handle: string, r: RehomeResult | null, applied: boolean): string {
+  const n = r?.sessions.length ?? 0;
+  if (!r || n === 0) return "";
+  const one = n === 1;
+  const parts = [`${n} session${one ? "" : "s"} now report${one ? "s" : ""} to @${handle} and leave${one ? "s" : ""} your needs input`];
+  const kept = r.kept_in_front.length;
+  if (kept) parts.push(`${kept} of them stay${kept === 1 ? "s" : ""} in front of you with a question still open`);
+  if (applied) parts.push(`${r.told.sessions} told now${r.told.deferred ? `, ${r.told.deferred} will read it on their next turn` : ""}`);
+  if (r.over_cap) parts.push(`${r.over_cap} more stay where they are until the next change`);
+  return parts.join("; ");
+}
+
 export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string; awaiting_adopt?: string }): Promise<ApplyResult> {
   const handle = p.handle.trim().toLowerCase();
   const charter = [p.charter?.trim(), note ? `Changes asked for by the person who approved this role:\n${note}` : undefined].filter(Boolean).join("\n\n") || undefined;
@@ -520,15 +668,25 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
   const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
+  // A role that names its session (org-roles-run-work.md R2) is seated on it
+  // in this same apply, whatever `provision` says: the session IS the role, so
+  // a role row without it would be a name for nothing. A session that cannot
+  // be seated throws, the mutation rolls back, and the change lands as failed
+  // with the reason, never as a role with a fresh session nobody asked for.
   let provisioned = false;
-  if (opts.provision && !opts.awaiting_adopt) {
+  let seated: string | undefined;
+  if (p.seat) {
+    seated = await seatExistingSession(ctx, userId, role, p.seat.existing);
+  } else if (opts.provision && !opts.awaiting_adopt) {
     const firstProject = role.scope?.project_ids?.[0] ? await ctx.db.get(role.scope.project_ids[0]) : null;
     await performProvisionRole(ctx, userId, { role_id: String(role._id), project_path: firstProject?.project_path ?? undefined });
     provisioned = true;
   }
+  // After the seat exists, so the seated session is never a candidate (R1).
+  const tookOver = takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true);
   return {
     status: "applied",
-    note: `created @${role.handle} (${role.short_id})${provisioned ? ", standing session provisioned" : opts.awaiting_adopt ? `; its standing session is the adopt of ${opts.awaiting_adopt} in this proposal (skip that and provision from the role's page)` : ""}`,
+    note: `created @${role.handle} (${role.short_id})${seated ? `; ${seated} is its standing session, with its history and its helper sessions as they were` : provisioned ? ", standing session provisioned" : opts.awaiting_adopt ? `; its standing session is the adopt of ${opts.awaiting_adopt} in this proposal (skip that and provision from the role's page)` : ""}${tookOver ? `; ${tookOver}` : ""}`,
     role: { id: String(role._id), short_id: role.short_id, handle: role.handle },
   };
 }
@@ -576,15 +734,18 @@ export async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Bou
   return { status: "applied", note: done.join("; ") || "nothing to change" };
 }
 
-export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[] }, humanDecision: string): Promise<ApplyResult> {
+export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[]; leave_sessions?: boolean }, humanDecision: string): Promise<ApplyResult> {
   const handle = p.handle.replace(/^@/, "").toLowerCase();
   const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle);
   if (!role) throw new Error(`No live role @${handle} in this workspace`);
   const did: string[] = [];
   if (p.scope_add?.length || p.scope_remove?.length) {
-    const toRef = (s: string) => (/^(project|plan):/.test(s) ? s : /^pl-\d+$/.test(s) ? `plan:${s}` : `project:${s}`);
     await performSetRoleScope(ctx, userId, { role_id: String(role._id), add: (p.scope_add ?? []).map(toRef), remove: (p.scope_remove ?? []).map(toRef), human_decision: humanDecision });
     did.push(`scope ${[...(p.scope_add ?? []).map((s) => `+${s}`), ...(p.scope_remove ?? []).map((s) => `-${s}`)].join(" ")}`);
+    // Gained scope takes over the sessions in it (R1); a role that only lost
+    // scope has nothing new to take.
+    const tookOver = p.scope_add?.length ? takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true) : "";
+    if (tookOver) did.push(tookOver);
   }
   if (p.reports_to) {
     await performReparentRole(ctx, userId, { role_id: String(role._id), reports_to: await resolveReportsTo(ctx, userId, boundary, p.reports_to) });
@@ -627,7 +788,7 @@ async function liveRole(ctx: Ctx, boundary: Boundary, handleRef: string) {
 const roleRef = (role: any) => ({ id: String(role._id), short_id: role.short_id, handle: role.handle });
 
 export async function applyScope(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgScopeChange, opts: ApplyOpts): Promise<ApplyResult> {
-  return applyMove(ctx, userId, boundary, { handle: p.handle, scope_add: p.add, scope_remove: p.remove }, opts.human_decision);
+  return applyMove(ctx, userId, boundary, { handle: p.handle, scope_add: p.add, scope_remove: p.remove, leave_sessions: p.leave_sessions }, opts.human_decision);
 }
 
 export async function applyBudget(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgBudgetChange, opts: ApplyOpts): Promise<ApplyResult> {
@@ -686,12 +847,27 @@ export async function applyProjectMeta(ctx: Ctx, userId: Id<"users">, boundary: 
 // row id or the native session id the CLI knows itself by.
 export async function applyAdopt(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgAdoptChange, _opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
-  const r = await performProvisionRole(ctx, userId, { role_id: String(role._id), adopt_conversation_id: p.conversation.trim() });
-  // Provision is idempotent per role: a role that already has a standing
-  // session keeps it and adopts nothing. Saying "adopted" then would be a
-  // lie with a second root agent behind it, so the change lands as failed.
-  if (!r?.adopted) return { status: "error", error: `@${role.handle} already has a standing session, so ${p.conversation} was not adopted; retire that session first (or skip this change) rather than run two agents for one seat` };
-  return { status: "applied", note: `@${role.handle}: adopted ${r?.short_id ?? p.conversation} as its standing session`, role: roleRef(role) };
+  try {
+    const seated = await seatExistingSession(ctx, userId, role, p.conversation);
+    const tookOver = takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true);
+    return { status: "applied", note: `@${role.handle}: adopted ${seated} as its standing session${tookOver ? `; ${tookOver}` : ""}`, role: roleRef(role) };
+  } catch (e: any) {
+    if (e instanceof SeatTakenError) return { status: "error", error: e.message };
+    throw e;
+  }
+}
+
+class SeatTakenError extends Error {}
+/** The one seating of an existing session on a role, for an adopt change and
+ *  for a role change that names its session. Answers the seated session's
+ *  short id. Provision is idempotent per role: a role that already has a
+ *  standing session keeps it and adopts nothing. Saying "adopted" then would
+ *  be a lie with a second agent behind it, so that case throws. */
+async function seatExistingSession(ctx: Ctx, userId: Id<"users">, role: any, conversation: string): Promise<string> {
+  const ref = conversation.trim();
+  const r = await performProvisionRole(ctx, userId, { role_id: String(role._id), adopt_conversation_id: ref });
+  if (!r?.adopted) throw new SeatTakenError(`@${role.handle} already has a standing session, so ${ref} was not adopted; retire that session first (or skip this change) rather than run two agents for one seat`);
+  return r?.short_id ?? ref;
 }
 
 // File a plan under a project (the review's "18 plans with open work under no
