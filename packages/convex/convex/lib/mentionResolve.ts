@@ -107,21 +107,59 @@ export type ChatMentions = {
   refs: ChatMentionRef[];
 };
 
+/** How many of a workspace's people one handle lookup may read. Big enough for
+ *  any real workspace, bounded so the scan can never run away. */
+const SLACK_PEOPLE_SCAN = 2000;
+
 // A handle nobody in codecast answers to may be somebody in the team's Slack
-// workspace (slack_users, filled as people speak in mirrored channels and by
-// the People popup). Their handle is Slack's own @name. A Slack person already
+// workspace (slack_users, filled by the roster sync and as people speak in
+// mirrored channels). Their handle is Slack's own @name. A Slack person already
 // matched to a teammate IS that teammate: the mention reaches them here, and
 // the Slack copy pages them there through the ordinary mapping.
-async function slackPersonByHandle(
+//
+// People write the name they see, not the login Slack keeps underneath, so one
+// exact @name is not enough: "Avery" is a display name, "avery.chen" is the
+// login behind it, and an agent posting into the room is a bot user with no
+// login at all. Three tiers, each answered only when exactly ONE row matches,
+// so an ambiguous handle names nobody rather than the wrong person:
+//   1. the Slack @name, exactly
+//   2. the slug of the @name, display name, real name or email local part
+//   3. the slug of the FIRST word of the display or real name
+// Display names are self-editable in Slack, but this path is reached only
+// after every codecast teammate handle has already missed, so a Slack name can
+// never intercept a teammate's mentions.
+export async function slackPersonForHandle(
   ctx: ReadCtx,
   workspaceId: string,
   handle: string,
 ): Promise<Doc<"slack_users"> | null> {
-  const row = await ctx.db
+  const want = handle.replace(/^@/, "").toLowerCase();
+  if (!want) return null;
+  const exact = await ctx.db
     .query("slack_users")
-    .withIndex("by_workspace_handle", (q: any) => q.eq("workspace_id", workspaceId).eq("handle", handle))
+    .withIndex("by_workspace_handle", (q: any) => q.eq("workspace_id", workspaceId).eq("handle", want))
     .first();
-  return row && !row.deleted && !row.is_bot ? row : null;
+  if (exact && !exact.deleted) return exact;
+  const rows = (await ctx.db
+    .query("slack_users")
+    .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", workspaceId))
+    .take(SLACK_PEOPLE_SCAN)) as Doc<"slack_users">[];
+  const live = rows.filter((r) => !r.deleted && r.slack_user_id !== "USLACKBOT");
+  const firstWord = (value: string | undefined): string | null =>
+    botHandle(value?.trim().split(/\s+/)[0]);
+  const one = (match: (r: Doc<"slack_users">) => boolean): Doc<"slack_users"> | null => {
+    const hits = live.filter(match);
+    return hits.length === 1 ? hits[0] : null;
+  };
+  return (
+    one((r) =>
+      (r.handle ?? "").toLowerCase() === want ||
+      botHandle(r.handle) === want ||
+      botHandle(r.name) === want ||
+      botHandle(r.real_name) === want ||
+      emailLocalHandle(r.email) === want)
+    ?? one((r) => firstWord(r.name) === want || firstWord(r.real_name) === want)
+  );
 }
 
 export async function resolveChatMentions(
@@ -185,7 +223,7 @@ export async function resolveChatMentions(
     }
     if (person) continue;
     const workspace = await slackWorkspace();
-    const slackPerson = workspace ? await slackPersonByHandle(ctx, workspace, handle) : null;
+    const slackPerson = workspace ? await slackPersonForHandle(ctx, workspace, handle) : null;
     if (!slackPerson) continue;
     if (slackPerson.codecast_user_id) {
       // Matched to a teammate: address the teammate. Same membership gate as

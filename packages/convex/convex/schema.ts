@@ -231,12 +231,14 @@ export default defineSchema({
       claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
       gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+      muse: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
     })),
     agent_default_params: v.optional(v.object({
       claude: v.optional(v.record(v.string(), v.string())),
       codex: v.optional(v.record(v.string(), v.string())),
       gemini: v.optional(v.record(v.string(), v.string())),
       cursor: v.optional(v.record(v.string(), v.string())),
+      muse: v.optional(v.record(v.string(), v.string())),
     })),
     available_agents: v.optional(v.array(v.object({
       name: v.string(),
@@ -532,6 +534,15 @@ export default defineSchema({
     // the child stays a first-class inbox card with a click-through to its
     // parent. Set by conversations.linkSpawnedBy (daemon-resolved).
     spawned_by_conversation_id: v.optional(v.id("conversations")),
+    // Handoff link (`cast handoff --to <agent>`, handoff.start): the session
+    // this one continues, and the session that continues this one. Both are
+    // labels and click-throughs only: the child stays a first-class inbox
+    // card and usually also carries spawned_by. Written together in one
+    // mutation (spawn.createSessionFromCli with handoff_from_session) so the
+    // pair never disagrees. by_handed_off_from is the reverse lookup for a
+    // source whose forward pointer is missing (an older row, a failed patch).
+    handed_off_from_conversation_id: v.optional(v.id("conversations")),
+    handed_off_to_conversation_id: v.optional(v.id("conversations")),
     // Agent-team identity, from the teamName/agentName stamps Claude Code
     // writes on every teammate JSONL line (the lead's transcript is never
     // stamped; linkSpawnedBy stamps the lead as "team-lead" when it links a
@@ -961,6 +972,7 @@ export default defineSchema({
     // teammates (spawned_by + agent_team_name), which by_parent_conversation_id
     // can't see. See cascadeHideToNestedChildren (cleanup.ts).
     .index("by_spawned_by", ["spawned_by_conversation_id"])
+    .index("by_handed_off_from", ["handed_off_from_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
@@ -6192,6 +6204,16 @@ export default defineSchema({
     samples: v.optional(v.number()),
     recent: v.optional(v.array(v.number())),
     updated_at: v.number(),
+    // Why the last run kept or dropped each user, so a rate that never moves can
+    // be diagnosed from the row instead of by instrumenting the job again.
+    last_run: v.optional(v.object({
+      users: v.number(),
+      added: v.number(),
+      unpaired: v.number(),
+      below_floor: v.number(),
+      no_tokens: v.number(),
+      best_rise: v.number(),
+    })),
     // The previous reading, which the next run diffs against: when it was taken
     // and, per user, the utilization of every window their devices reported.
     last_sample: v.optional(v.object({
@@ -6203,6 +6225,9 @@ export default defineSchema({
           key: v.string(),
           percent: v.number(),
           resets_at: v.optional(v.number()),
+          // When that account was last polled: a window nobody re-read between
+          // two runs cannot testify about the traffic between them.
+          fetched_at: v.optional(v.number()),
         })),
       })),
     })),

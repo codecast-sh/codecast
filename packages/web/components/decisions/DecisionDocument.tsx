@@ -6,7 +6,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
-import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -16,11 +16,10 @@ import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
 import { DecisionOptionList } from "./DecisionOptionList";
+import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
 import { ladderRecommendation } from "../../lib/decisionLinks";
-import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
-import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import "./decisions.css";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 import { proposalRefInContext } from "../org/staffingModel";
@@ -56,16 +55,12 @@ function Empty({ text }: { text: string }) {
 }
 
 function DocumentBody({ decision, detail, answerable }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean }) {
-  const s = useTrackedStore([
-    (st) => st.sessions[decision.conversation_id]?.title,
-    (st) => st.sessions[decision.conversation_id]?.project_path,
-    (st) => st.currentUser?._id,
-  ]);
-  const session = s.sessions[decision.conversation_id];
+  // AskingSession subscribes to the session row itself; this page needs only
+  // who the viewer is.
+  const s = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = String(s.currentUser?._id ?? "");
   const answerDecision = useInboxStore((st) => st.answerDecision);
   const reopenDecision = useInboxStore((st) => st.reopenDecision);
-  const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
   const grant = useMutation(api.sessionDecisions.grant);
   const now = useCoarseNow(30_000);
   const pending = decision.status === "pending";
@@ -86,17 +81,6 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     toast.success("Reopened — it is back in your queue.");
   }, [reopenDecision, decision._id]);
 
-  // Who assigned the category: the server pins a protected one whatever the
-  // asker proposed; an open one stands only when the asker proposed it.
-  const categoryBy =
-    decision.category && decision.category_proposed && decision.category !== decision.category_proposed
-      ? `pinned by the server (the asker proposed ${decision.category_proposed})`
-      : decision.category_proposed
-        ? "proposed by the asker"
-        : decision.category === "unknown"
-          ? "no proposal, so a person holds it"
-          : "assigned by the server";
-
   const holderLine = decision.holder?.kind === "role"
     ? `held by ${detail.holder_role?.name ?? "a role"} under a grant`
     : detail.asked_users.length
@@ -104,13 +88,14 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
       : "held by its people";
 
   const answeredBy = decision.answered_by;
+  const answeredPerson = answeredBy?.kind === "user" ? detail.asked_users.find((u) => u._id === answeredBy.id) : undefined;
   const answeredByLine = !answeredBy
     ? null
     : answeredBy.kind === "policy"
-      ? `answered by policy: stack ${detail.stack?.short_id ?? answeredBy.id.replace(/^stack:/, "")} default`
+      ? <>answered by policy: stack {detail.stack?.short_id ?? answeredBy.id.replace(/^stack:/, "")} default</>
       : answeredBy.kind === "role"
-        ? `answered by ${detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant`
-        : `answered by ${detail.asked_users.find((u) => u._id === answeredBy.id)?.name ?? (answeredBy.id === meId ? "you" : "a person")}`;
+        ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
+        : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
 
   // Reopen is the people's (asked_users): gate on the detail's people set, not
   // on whether the 24 hour queue cache still holds the row.
@@ -139,18 +124,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
           <dl className="mt-4 decision-meta text-[12px]">
             <dt>asked by</dt>
-            <dd>
-              <Link
-                href={`/conversation/${decision.conversation_id}`}
-                className="text-sol-blue hover:underline"
-                onClick={(e) => {
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-                  e.preventDefault();
-                  void jumpToAsk();
-                }}
-              >{session?.title || decision.session_title || "See the conversation"}</Link>
-              {(session?.project_path || decision.project_path) && <span className="text-sol-text-dim"> · {getProjectName(session?.project_path || decision.project_path!)}</span>}
-            </dd>
+            <dd><AskingSession decision={decision} /></dd>
             {proposalRefInContext(decision.context_md) && (
               <>
                 <dt>proposal</dt>
@@ -168,11 +142,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
                 </dd>
               </>
             )}
-            <dt>category</dt>
-            <dd>
-              <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-green/30 text-sol-green"}`}>{decision.category ?? "unknown"}</span>
-              <span className="text-sol-text-dim"> {categoryBy}{isHumanOnlyCategory(decision.category) ? " · always a person" : ""}</span>
-            </dd>
+            <dt title="A category decides who may answer a question like this one">who may answer</dt>
+            <dd><CategoryNote category={decision.category} proposed={decision.category_proposed} /></dd>
             {detail.stack && (
               <>
                 <dt>stack</dt>
@@ -185,7 +156,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               </>
             )}
             <dt>holder</dt>
-            <dd className="text-sol-text-muted">{holderLine}</dd>
+            <dd><HolderLine people={detail.asked_users} roleName={decision.holder?.kind === "role" ? (detail.holder_role?.name ?? "a role") : undefined} /></dd>
           </dl>
         </header>
 

@@ -11,64 +11,10 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
-import { parseSearchTerms } from "@codecast/shared/search";
+import { highlightMatch, getSnippet, parseSearchTerms } from "../lib/searchHighlight";
+import { useInstantSessionRows, mergeSearchRows } from "../lib/instantSessionSearch";
 
-export { parseSearchTerms };
-
-export function highlightMatch(text: string, query: string): React.ReactNode {
-  if (!query.trim()) return text;
-
-  const terms = parseSearchTerms(query);
-  if (terms.length === 0) return text;
-
-  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const regex = new RegExp(`(${pattern})`, "gi");
-  const parts = text.split(regex);
-
-  if (parts.length === 1) return text;
-
-  return (
-    <>
-      {parts.map((part, i) => {
-        const isMatch = terms.some((t) => part.toLowerCase() === t);
-        return isMatch ? (
-          <mark
-            key={i}
-            className="bg-amber-300/40 text-amber-900 dark:text-amber-200 rounded px-0.5 font-medium"
-          >
-            {part}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        );
-      })}
-    </>
-  );
-}
-
-export function getSnippet(content: string, query: string, maxLen = 400): string {
-  const lowerContent = content.toLowerCase();
-  const terms = parseSearchTerms(query);
-
-  let bestIndex = -1;
-  for (const term of terms) {
-    const idx = lowerContent.indexOf(term);
-    if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
-      bestIndex = idx;
-    }
-  }
-
-  if (bestIndex === -1) return content.slice(0, maxLen);
-
-  const start = Math.max(0, bestIndex - 100);
-  const end = Math.min(content.length, bestIndex + 300);
-  let snippet = content.slice(start, end);
-
-  if (start > 0) snippet = "..." + snippet;
-  if (end < content.length) snippet = snippet + "...";
-
-  return snippet;
-}
+export { parseSearchTerms, highlightMatch, getSnippet };
 
 export function GlobalSearch() {
   const [isOpen, setIsOpen] = useState(false);
@@ -103,7 +49,10 @@ export function GlobalSearch() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchIsSlow, setSearchIsSlow] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  // Selection follows the SESSION, not its position: the content tier lands
+  // after the instant rows are already on screen and reorders the list, and a
+  // stored index would silently move the highlight onto a different session.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [userOnly, setUserOnly] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -171,17 +120,31 @@ export function GlobalSearch() {
   );
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
 
-  // Merge: content-match rows win, title-only rows fill in after.
-  const groupedResults = useMemo(() => {
-    const msgRows = searchData?.results ?? [];
-    const titleRows = titleData?.results ?? [];
-    if (!titleRows.length) return msgRows;
-    const seen = new Set(msgRows.map((r: any) => r.conversationId));
-    return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
-  }, [searchData, titleData]);
+  // Instant tier: the sessions already in the store, matched off the RAW query
+  // — no debounce, no round trip. The panel therefore has real rows on the
+  // first keystroke, and the two server tiers land on top of them as they
+  // resolve. Same rows ⌘K shows, same ranking.
+  const instantRows = useInstantSessionRows(query, 12);
+
+  // Content-match rows win, title-only rows next, cache rows fill the tail.
+  const groupedResults = useMemo(
+    () => mergeSearchRows(searchData?.results as any, titleData?.results as any, instantRows),
+    [searchData, titleData, instantRows]
+  );
+
+  // Nothing selected (or the selected session dropped out of the list) falls
+  // back to the first row, so Enter always has a target.
+  const selectedIndex = useMemo(() => {
+    if (!selectedId) return 0;
+    const i = groupedResults.findIndex((r: any) => r.conversationId === selectedId);
+    return i >= 0 ? i : 0;
+  }, [groupedResults, selectedId]);
 
   const totalMatches = searchData?.totalMatches || 0;
   const sessionCount = groupedResults.length;
+  // What the header line may claim. Content is the slow tier; until it answers
+  // the count on screen is "what we can already see", never a total.
+  const contentPending = debouncedQuery.length >= 2 && !searchData && !searchError;
 
   const formatTimestamp = (ts: number) => {
     const date = new Date(ts);
@@ -215,8 +178,8 @@ export function GlobalSearch() {
   }, document);
 
   useWatchEffect(() => {
-    setSelectedIndex(0);
-  }, [searchResults, titleResults]);
+    setSelectedId(null);
+  }, [query]);
 
   const goToFullSearch = useCallback(() => {
     router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&user=1" : ""}`);
@@ -229,12 +192,12 @@ export function GlobalSearch() {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const results = groupedResults;
-      if (e.key === "ArrowDown") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, results.length - 1));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedIndex((i) => Math.max(i - 1, 0));
+        const next = e.key === "ArrowDown"
+          ? Math.min(selectedIndex + 1, results.length - 1)
+          : Math.max(selectedIndex - 1, 0);
+        setSelectedId(results[next]?.conversationId ?? null);
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (query.trim().length < 2) return;
@@ -400,12 +363,20 @@ export function GlobalSearch() {
               </div>
             ) : (
               <div className="max-h-[80vh] overflow-y-auto">
-                <div className="px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
+                <div className="relative px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
                   {searchData
                     ? <>{totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}</>
-                    : <>{sessionCount} title match{sessionCount !== 1 ? "es" : ""}</>}
-                  {!searchData && !searchError && <span className="text-sol-text-dim"> · searching message content…</span>}
+                    : <>{sessionCount} session{sessionCount !== 1 ? "s" : ""} matched by name</>}
+                  {contentPending && <span className="text-sol-text-dim"> · searching message content…</span>}
                   {searchError && <span className="text-sol-text-dim"> · content search timed out</span>}
+                  {/* The one thing a moving bar should say: the slower tier is
+                      still running. It rides the header's bottom edge so rows
+                      never shift when it appears or goes. */}
+                  {contentPending && (
+                    <span className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 overflow-hidden">
+                      <span className="search-scan-bar block h-full w-1/3 bg-gradient-to-r from-transparent via-sol-cyan to-transparent" />
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-1 py-1">
                 {groupedResults.map((session: any, sessionIndex: number) => (
@@ -435,7 +406,15 @@ export function GlobalSearch() {
                         {formatTimestamp(session.updatedAt)}
                       </span>
                     </div>
-                    <div className="ml-4 pb-2 space-y-1 border-l-2 border-sol-border/40 pl-3">
+                    <div className={`ml-4 space-y-1 border-l-2 border-sol-border/40 pl-3 ${session.matches.length || session.instantSnippet ? "pb-2" : ""}`}>
+                      {/* No message hits yet (or ever): show where the name
+                          match landed rather than a bare header row. When the
+                          content tier lands, its snippets replace this. */}
+                      {session.matches.length === 0 && session.instantSnippet && (
+                        <p className="px-2 py-1 text-xs text-sol-text-dim leading-relaxed line-clamp-2">
+                          {highlightMatch(getSnippet(session.instantSnippet, query, 180), query)}
+                        </p>
+                      )}
                       {session.matches.slice(0, 3).map((match: any, matchIndex: number) => (
                         <div
                           key={`${session.conversationId}-${matchIndex}`}

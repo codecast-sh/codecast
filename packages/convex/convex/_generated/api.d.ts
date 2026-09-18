@@ -106,6 +106,7 @@ import type * as githubIssuesApi from "../githubIssuesApi.js";
 import type * as githubWebhooks from "../githubWebhooks.js";
 import type * as googleOAuth from "../googleOAuth.js";
 import type * as googleOAuthSchema from "../googleOAuthSchema.js";
+import type * as handoff from "../handoff.js";
 import type * as health from "../health.js";
 import type * as heartbeatBacklog from "../heartbeatBacklog.js";
 import type * as htmlEscape from "../htmlEscape.js";
@@ -356,6 +357,7 @@ declare const fullApi: ApiFromModules<{
   githubWebhooks: typeof githubWebhooks;
   googleOAuth: typeof googleOAuth;
   googleOAuthSchema: typeof googleOAuthSchema;
+  handoff: typeof handoff;
   health: typeof health;
   heartbeatBacklog: typeof heartbeatBacklog;
   htmlEscape: typeof htmlEscape;

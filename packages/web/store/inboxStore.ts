@@ -682,6 +682,13 @@ export type InboxSession = {
   // click-through. agent_team_name/agent_name identify the teammate so a
   // name in a transcript can resolve to the sibling session carrying it.
   spawned_by_conversation_id?: string | null;
+  // The handoff pair (`cast handoff --to`, handoff.start): where a child came
+  // from and where a source continued. Links only; neither marks the row a
+  // subagent.
+  handed_off_from_conversation_id?: string | null;
+  handed_off_to_conversation_id?: string | null;
+  handed_off_from_details?: { conversation_id: string; short_id: string; title?: string | null; agent_type?: string | null; model?: string | null } | null;
+  handed_off_to_details?: { conversation_id: string; short_id: string; title?: string | null; agent_type?: string | null; model?: string | null } | null;
   agent_team_name?: string | null;
   agent_name?: string | null;
   active_plan?: PlanRef;
@@ -1716,6 +1723,12 @@ export type ClientUI = {
   // accepting costs. Dismissed once, or stamped by the first accepted change,
   // and never shown again. Stamped LWW: read on one device is read everywhere.
   org_intro_seen?: boolean;
+  // The introduction anywhere (org-staffing.md S20): the card that rises
+  // bottom right on the next visit to any page and introduces the org
+  // feature. Dismissed either way, or stamped by seeing the org page by any
+  // route, and never shown again. Stamped LWW: sold once, on one device, is
+  // sold once everywhere.
+  org_upsell_seen?: boolean;
   // The review "Propose an org now" started on the org page: when, in which
   // workspace, and the session doing it (its stub id first, the real id once
   // the server names it). Kept here, not in component state, so a reload or
@@ -1779,8 +1792,8 @@ export type ClientUI = {
   // re-derived from where you are now.
   workspace?: PersistedWorkspace;
   // Simple view: calm, low-chrome rendering of conversations and inbox cards —
-  // secondary badges, counts and meta rows drop away. A per-user preference
-  // ("my reading style follows me") → stamped LWW.
+  // secondary badges, counts and meta rows drop away. On by default; a
+  // per-user preference ("my reading style follows me") → stamped LWW.
   simple_view?: boolean;
   // Open an agent's pane offer (`cast browser pane <url>`) without a click,
   // while the offered session is the one being read and the stage has room.

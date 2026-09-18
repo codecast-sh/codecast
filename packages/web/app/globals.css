@@ -1606,6 +1606,34 @@ pre[class*="language-"] {
   opacity: 1;
 }
 
+/* Nested rows under an expanded nav section (channels under Chat, projects,
+   tasks, docs). The sub-area spans the full rail and reads as a shallow
+   recess: a whisper of crosshatch over a faint wash, framed by an inset
+   shadow along the top edge and a soft lift along the bottom. No side edges,
+   so it reads as a band cut into the rail rather than a box sitting on it.
+   Hatch lines follow the text colour so they stay visible on every theme;
+   the wash and shadow are black because a recess is darker than its surround
+   on every theme. Row hover/active fills paint over it, so a chosen row reads
+   as solid. */
+.nav-subsection {
+  --hatch: color-mix(in srgb, var(--sol-text) 3%, transparent);
+  background-color: rgb(0 0 0 / 0.02);
+  background-image:
+    repeating-linear-gradient(45deg, transparent 0 7px, var(--hatch) 7px 8px),
+    repeating-linear-gradient(-45deg, transparent 0 7px, var(--hatch) 7px 8px);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.08),
+    inset 0 6px 8px -6px rgb(0 0 0 / 0.06),
+    inset 0 -1px 0 rgb(255 255 255 / 0.30);
+}
+.dark .nav-subsection {
+  background-color: rgb(0 0 0 / 0.08);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.28),
+    inset 0 6px 8px -6px rgb(0 0 0 / 0.22),
+    inset 0 -1px 0 rgb(255 255 255 / 0.05);
+}
+
 /* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
 .simple-view [data-sv-nav] {
   font-size: 12px;
@@ -4183,6 +4211,27 @@ pre[class*="language-"] {
 /* The first open guide's highlight ring (org-staffing.md S14): a slow breath, so the eye finds it. */
 @keyframes org-guide-ring { 0%, 100% { box-shadow: 0 0 0 2px var(--sol-violet), 0 0 0 8px color-mix(in srgb, var(--sol-violet) 22%, transparent); } 50% { box-shadow: 0 0 0 2px var(--sol-violet), 0 0 0 14px color-mix(in srgb, var(--sol-violet) 10%, transparent); } }
 .org-guide-ring { animation: org-guide-ring 1.8s ease-in-out infinite; }
+/* The first visit (org-staffing.md S20): one orchestrated entrance. Every piece
+   carries its own delay in --d; the faces also carry --dn, the moment their
+   line lands, when they nod. Reduced motion collapses all of it through the
+   global rule above. */
+@keyframes org-intro-pop { from { opacity: 0; transform: translateY(10px) scale(0.6); } to { opacity: 1; transform: none; } }
+@keyframes org-intro-nod { 0%, 100% { transform: none; } 45% { transform: translateY(-7px); } }
+@keyframes org-intro-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes org-intro-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.org-intro-face { border-radius: 9999px; box-shadow: 0 0 0 3px var(--sol-bg), 0 10px 24px -12px rgba(0, 0, 0, 0.45); animation: org-intro-pop 520ms cubic-bezier(0.34, 1.45, 0.64, 1) var(--d, 0ms) both, org-intro-nod 600ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--dn, 0ms) 1; }
+.org-intro-in { animation: org-intro-in 460ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms) both; }
+.org-intro-draw { stroke-dasharray: 1; animation: org-intro-draw 420ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms) both; }
+/* The introduction anywhere (S20): the card that rises bottom right on the
+   app's toast, one face, one title, two lines, two actions. */
+.org-meet { display: flex; gap: 12px; width: 352px; padding: 13px 14px 12px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--sol-violet) 34%, transparent); background: color-mix(in srgb, var(--sol-card) 97%, transparent); box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px); }
+.org-meet-face { flex-shrink: 0; border-radius: 9999px; box-shadow: 0 0 0 2px var(--sol-card), 0 0 0 3px color-mix(in srgb, var(--sol-violet) 30%, transparent); }
+.org-meet-body { min-width: 0; flex: 1; }
+.org-meet-title { font-family: var(--font-serif); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; color: var(--sol-text); }
+.org-meet-copy { margin: 5px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--sol-text-muted); }
+.org-meet-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.org-meet-later { padding: 5px 9px; border-radius: 8px; font-size: 12px; color: var(--sol-text-muted); transition: color 120ms, background 120ms; }
+.org-meet-later:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-bg-highlight) 70%, transparent); }
 .org-flow .react-flow__node { transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .org-flow .react-flow__node.dragging { transition: none; }
 .org-flow .react-flow__edge-path { transition: d 260ms; }
@@ -4558,4 +4607,17 @@ mark.search-hit[data-search-active] {
 }
 @media (prefers-reduced-motion: reduce) {
   mark.search-hit[data-search-active] { animation: none; }
+}
+
+/* Search: the content tier is still running. One sweep across the header's
+   bottom edge — it occupies no layout, so rows never move when it appears. */
+@keyframes searchScan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.search-scan-bar {
+  animation: searchScan 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-scan-bar { animation: none; opacity: 0.5; }
 }

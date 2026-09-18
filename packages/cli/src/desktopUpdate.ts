@@ -90,6 +90,27 @@ export function shouldApplyWhileRunning(
   return isBelowMinimum(installed, opts.minVersion);
 }
 
+// Whether a forced run should reinstall an app that is ALREADY at the feed
+// version. `cast desktop-update --force` means "put a fresh copy down" and
+// reinstalls. The web's below-floor gate sends the same forced command to every
+// daemon of the user (it cannot name the machine it runs on: the shell bridge
+// is exactly what is dead on the builds it rescues), so a second Mac that is
+// already current must not have its app quit and rewritten for nothing.
+export function wantsReinstall(opts: { force?: boolean; reinstall?: boolean }): boolean {
+  return opts.force === true && opts.reinstall !== false;
+}
+
+export interface DesktopUpdateOpts {
+  force?: boolean;
+  minVersion?: string | null;
+  reinstall?: boolean;
+  // Where a bail-out goes when the run MATTERED: a forced request, or an app
+  // below the floor. The daemon uploads only warn and error lines, so a
+  // routine "deferring, app is running" stays local while "below the floor but
+  // the daemon runs from a source checkout" reaches the server.
+  warn?: Logger;
+}
+
 function plistValue(plistPath: string, key: string): string | null {
   try {
     const out = execFileSync(
@@ -245,18 +266,36 @@ function rmrf(p: string): void {
  */
 export async function checkForDesktopUpdate(
   log: Logger,
-  opts: { force?: boolean; minVersion?: string | null } = {},
+  opts: DesktopUpdateOpts = {},
 ): Promise<boolean> {
   const force = opts.force === true;
-  if (!shouldAttemptDesktopUpdate(process.platform, isDevMode(), force)) return false;
+  if (process.platform !== "darwin") return false;
+  // The installed version is read before any gate, so a run that matters (a
+  // forced request, or an app below the floor) can say WHY it did nothing at a
+  // level the server sees. Silent gates are how a client sits on a broken
+  // build for weeks with every dashboard reading "up to date".
+  const installed = fs.existsSync(APP_PATH) ? plistVersion(APP_PLIST) : null;
+  const belowFloor = installed != null && isBelowMinimum(installed, opts.minVersion);
+  const bail: Logger = force || belowFloor ? (opts.warn ?? log) : log;
+
+  if (!shouldAttemptDesktopUpdate(process.platform, isDevMode(), force)) {
+    if (belowFloor) {
+      bail(
+        `desktop update: v${installed} is below the floor v${opts.minVersion}, but this daemon runs from a source checkout and never swaps the app on its own; run \`cast desktop-update --force\` from the installed cast`,
+      );
+    }
+    return false;
+  }
   if (!fs.existsSync(APP_PATH)) {
-    if (force) log("desktop update: /Applications/Codecast.app not found");
+    if (force || opts.minVersion) bail("desktop update: /Applications/Codecast.app not found");
     return false;
   }
 
   try {
-    const installed = plistVersion(APP_PLIST);
-    if (!installed) return false;
+    if (!installed) {
+      bail("desktop update: could not read the installed app version");
+      return false;
+    }
 
     // Server-pinned floor: when the installed app is below min_desktop_version,
     // apply even while the app is running (quit + swap + relaunch) so an
@@ -267,10 +306,13 @@ export async function checkForDesktopUpdate(
     const applyWhileRunning = shouldApplyWhileRunning(installed, opts);
 
     const res = await fetch(DESKTOP_FEED);
-    if (!res.ok) return false;
+    if (!res.ok) {
+      bail(`desktop update: feed answered ${res.status}`);
+      return false;
+    }
     const { version, zip, sha512 } = parseFeed(await res.text());
     if (!version || !zip || !sha512) {
-      log("desktop update: could not parse latest-mac.yml");
+      bail("desktop update: could not parse latest-mac.yml");
       return false;
     }
 
@@ -278,9 +320,10 @@ export async function checkForDesktopUpdate(
       // Already current — clear any stale per-version attempt bookkeeping.
       const st = readState();
       if (st.appliedVersion !== installed) writeState({ ...st, appliedVersion: installed });
-      if (force) {
+      if (wantsReinstall(opts)) {
         log(`desktop update: already on v${installed} (forcing reinstall of v${version})`);
       } else {
+        if (force) log(`desktop update: already on v${installed}; nothing to apply`);
         return false;
       }
     }
@@ -304,6 +347,10 @@ export async function checkForDesktopUpdate(
       state.lastAttemptAt &&
       Date.now() - state.lastAttemptAt < RETRY_INTERVAL_MS
     ) {
+      if (belowFloor) {
+        const ago = Math.round((Date.now() - state.lastAttemptAt) / 60_000);
+        bail(`desktop update: v${installed} is below the floor v${opts.minVersion}; the last attempt at v${version} failed ${ago} min ago, retrying after ${RETRY_INTERVAL_MS / 3_600_000}h`);
+      }
       return false;
     }
     writeState({ ...state, lastAttemptVersion: version, lastAttemptAt: Date.now() });
@@ -322,7 +369,7 @@ export async function checkForDesktopUpdate(
 
     const got = await sha512Base64(zipPath);
     if (got !== sha512) {
-      log("desktop update: sha512 mismatch; aborting");
+      bail("desktop update: sha512 mismatch; aborting");
       rmrf(WORK_DIR);
       return false;
     }
@@ -335,25 +382,25 @@ export async function checkForDesktopUpdate(
     });
     const newApp = path.join(extractDir, "Codecast.app");
     if (!fs.existsSync(newApp)) {
-      log("desktop update: Codecast.app not found in archive; aborting");
+      bail("desktop update: Codecast.app not found in archive; aborting");
       rmrf(WORK_DIR);
       return false;
     }
 
     const newVersion = plistVersion(path.join(newApp, "Contents", "Info.plist"));
     if (newVersion !== version) {
-      log(`desktop update: archive version ${newVersion} != feed ${version}; aborting`);
+      bail(`desktop update: archive version ${newVersion} != feed ${version}; aborting`);
       rmrf(WORK_DIR);
       return false;
     }
-    if (!verifyBundleSignature(newApp, log)) {
+    if (!verifyBundleSignature(newApp, bail)) {
       rmrf(WORK_DIR);
       return false;
     }
     const minimumOs = plistValue(path.join(newApp, "Contents", "Info.plist"), "LSMinimumSystemVersion");
     const currentOs = macosVersion();
     if (!macosMeetsMinimum(currentOs, minimumOs)) {
-      log(`desktop update: v${version} needs macOS ${minimumOs}; this Mac runs ${currentOs}; keeping v${installed}`);
+      bail(`desktop update: v${version} needs macOS ${minimumOs}; this Mac runs ${currentOs}; keeping v${installed}`);
       rmrf(WORK_DIR);
       return false;
     }
@@ -362,7 +409,7 @@ export async function checkForDesktopUpdate(
     // time. Forced/below-floor: graceful quit → SIGTERM → SIGKILL. Routine: this
     // bails if the app launched mid-download (we'll swap on a later closed check).
     if (!(await ensureAppNotRunning(applyWhileRunning, log))) {
-      log("desktop update: could not stop the app; deferring swap");
+      bail("desktop update: could not stop the app; deferring swap");
       rmrf(WORK_DIR);
       return false;
     }
@@ -382,7 +429,7 @@ export async function checkForDesktopUpdate(
         try { fs.renameSync(old, APP_PATH); } catch {}
       }
       rmrf(incoming);
-      log(`desktop update: swap failed: ${e instanceof Error ? e.message : String(e)}`);
+      bail(`desktop update: swap failed: ${e instanceof Error ? e.message : String(e)}`);
       rmrf(WORK_DIR);
       return false;
     }
@@ -418,7 +465,7 @@ export async function checkForDesktopUpdate(
     } catch {}
     return true;
   } catch (e) {
-    log(`desktop update: ${e instanceof Error ? e.message : String(e)}`);
+    bail(`desktop update: ${e instanceof Error ? e.message : String(e)}`);
     rmrf(WORK_DIR);
     return false;
   }

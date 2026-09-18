@@ -3,7 +3,9 @@ import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvexAuth } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { floorRequestDue, isBelowFloor } from "../lib/desktopFloor";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
@@ -14,6 +16,7 @@ import {
   restartForUpdate,
   checkForUpdate,
   hasInProcessUpdater,
+  desktopShellVersion,
   notifyNative,
   requestNotificationPermission,
   hasBrowserNotificationPermission,
@@ -72,6 +75,19 @@ export function DesktopProvider() {
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
   const requestDesktopUpdate = useMutation(api.users.requestDesktopUpdate);
+
+  // The version floor, judged from the user agent rather than the bridge: a
+  // build whose preload died (1.1.100) has no bridge, so every bridge-based
+  // check above reads it as a browser and it never learns it must update. The
+  // floor query is public and the version is in the user agent, so this window
+  // can tell on its own that it is below the floor and start the update with
+  // no click, through the same paths the button uses. Also the only route that
+  // reaches a machine whose daemon runs from a source checkout: the daemon
+  // command is forced, and forced runs skip the dev-mode gate.
+  const shellVersion = useRef(desktopShellVersion()).current;
+  const { isAuthenticated } = useConvexAuth();
+  const floor = useQueryNoThrow(api.systemConfig.getMinDesktopVersion, shellVersion ? {} : "skip").data ?? null;
+  const belowFloor = isBelowFloor(shellVersion, floor);
 
   const startUpdate = () => {
     setStalled(false);
@@ -373,8 +389,33 @@ export function DesktopProvider() {
   const ready = ipc?.status === "ready";
   const downloading = ipc?.status === "downloading";
   const errored = ipc?.status === "error";
-  const latest = ipc?.version ?? update?.latest;
+  const latest = ipc?.version ?? update?.latest ?? (belowFloor ? floor ?? undefined : undefined);
+  const current = update?.current ?? shellVersion;
   const inProgress = updating || downloading;
+
+  // Below the floor: start on our own, once per window per interval. The
+  // daemon path quits and relaunches the app to apply, so the relaunched
+  // window must not ask again at once — a swap that keeps failing would
+  // otherwise restart the app on every boot.
+  useWatchEffect(() => {
+    if (!belowFloor || !isAuthenticated || !shellVersion) return;
+    const key = `codecast:floor-update-requested:${shellVersion}`;
+    let last: number | null = null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      last = raw ? Number(raw) : null;
+    } catch {}
+    if (!floorRequestDue(Date.now(), last)) return;
+    try {
+      window.localStorage.setItem(key, String(Date.now()));
+    } catch {}
+    startUpdate();
+  }, [belowFloor, isAuthenticated, shellVersion]);
+
+  // Below the floor, a staged update installs without waiting for a click.
+  useWatchEffect(() => {
+    if (belowFloor && ready) restartForUpdate();
+  }, [belowFloor, ready]);
 
   // "Stalled" means NO SIGN OF PROGRESS for 90s — not merely "slow". The timer
   // re-arms on every reported percent, so a big download over a cold CDN edge
@@ -415,7 +456,7 @@ export function DesktopProvider() {
 
   // Nothing to surface: no known update (and not mid-update or failed), or
   // this version was dismissed while idle.
-  if (!ready && !inProgress && !showStalled && (!update || update.latest === dismissedVersion)) return null;
+  if (!belowFloor && !ready && !inProgress && !showStalled && (!update || update.latest === dismissedVersion)) return null;
   if (!latest) return null;
 
   if (minimized) {
@@ -472,6 +513,19 @@ export function DesktopProvider() {
           <div className="flex-1 min-w-0">
             {ready ? (
               <p className="text-xs text-sol-text">Codecast v{latest} is ready to install</p>
+            ) : showStalled && belowFloor ? (
+              <>
+                <p className="text-xs text-sol-text">Codecast could not update on its own</p>
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
+                  v{current} no longer works with this version of Codecast. Run{" "}
+                  <code className="rounded bg-sol-bg px-1 text-sol-text">cast desktop-update --force</code> in a
+                  terminal, or{" "}
+                  <a href="/download/mac" target="_blank" rel="noopener" className="text-sol-cyan hover:underline">
+                    download v{latest}
+                  </a>
+                  .
+                </p>
+              </>
             ) : showStalled ? (
               <>
                 <p className="text-xs text-sol-text">
@@ -497,9 +551,9 @@ export function DesktopProvider() {
               </>
             ) : (
               <p className="text-xs text-sol-text">
-                Codecast v{latest} is available
-                {update?.current && (
-                  <span className="text-sol-text-dim"> · you&rsquo;re on v{update.current}</span>
+                {belowFloor ? `Codecast v${latest} is required` : `Codecast v${latest} is available`}
+                {current && (
+                  <span className="text-sol-text-dim"> · you&rsquo;re on v{current}</span>
                 )}
               </p>
             )}
@@ -529,12 +583,14 @@ export function DesktopProvider() {
                 >
                   Update now
                 </button>
-                <button
-                  onClick={() => setDismissedVersion(latest)}
-                  className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
-                >
-                  Later
-                </button>
+                {!belowFloor && (
+                  <button
+                    onClick={() => setDismissedVersion(latest)}
+                    className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
+                  >
+                    Later
+                  </button>
+                )}
               </>
             )}
             {(inProgress || ready || showStalled) && (

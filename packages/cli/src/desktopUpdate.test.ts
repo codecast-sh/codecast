@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate } from "./desktopUpdate";
+import { macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate, wantsReinstall } from "./desktopUpdate";
 
 // Gate at the very top of checkForDesktopUpdate. The dev-mode skip exists so a
 // developer's source checkout (cast/daemon under `bun src/…`) doesn't auto-swap
@@ -71,5 +71,23 @@ describe("macosMeetsMinimum", () => {
   it("installs when either version is unknown, as every earlier release did", () => {
     expect(macosMeetsMinimum(null, "13.0")).toBe(true);
     expect(macosMeetsMinimum("12.7", null)).toBe(true);
+  });
+});
+
+// A forced run reinstalls a current app only when the caller meant a fresh
+// copy. The web's below-floor gate broadcasts one forced command to every
+// daemon of the user, so a Mac that is already current must be left alone.
+describe("wantsReinstall", () => {
+  it("cast desktop-update --force reinstalls", () => {
+    expect(wantsReinstall({ force: true })).toBe(true);
+  });
+
+  it("the daemon command from the web never reinstalls a current app", () => {
+    expect(wantsReinstall({ force: true, reinstall: false })).toBe(false);
+  });
+
+  it("a routine run never reinstalls", () => {
+    expect(wantsReinstall({})).toBe(false);
+    expect(wantsReinstall({ reinstall: true })).toBe(false);
   });
 });
