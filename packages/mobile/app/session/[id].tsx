@@ -36,7 +36,7 @@ import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice } from '@codecast/shared/contracts';
+import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
@@ -5076,6 +5076,19 @@ export default function SessionDetailScreen() {
               if (isAgentSwitchNotice(item.content) || item.subtype === 'agent_switch') {
                 const parsed = parseAgentSwitchNotice(item.content);
                 const label = parsed ? `now using ${parsed.toLabel}` : 'agent switched';
+                return (
+                  <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
+                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                    <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
+                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                  </RNView>
+                );
+              }
+              if (isMachineSwitchNotice(item.content) || item.subtype === 'machine_switch') {
+                const parsed = parseMachineSwitchNotice(item.content);
+                const label = parsed?.machineChanged === false
+                  ? 'moved to another directory'
+                  : parsed ? `now running on ${parsed.toLabel}` : 'machine switched';
                 return (
                   <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
                     <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
