@@ -97,7 +97,9 @@ describe("CharterBlock", () => {
     // The owner chip names the role; the menu carries the link to /org/or-N.
     const owner = document.querySelector<HTMLElement>(`[data-owner="${role.short_id}"]`);
     assert.ok(owner, "owner chip");
-    assert.match(owner.textContent!, new RegExp(`@${role.handle}`));
+    // The chip reads the role's NAME; the handle rides its accessible label.
+    assert.match(owner.textContent!, new RegExp(role.name));
+    assert.match(owner.getAttribute("aria-label") ?? owner.getAttribute("title") ?? "", new RegExp(`@?${role.handle}|${role.name}`));
     await t.click(owner);
     const link = [...document.querySelectorAll<HTMLAnchorElement>("a")].find((a) => a.getAttribute("href") === `/org/${role.short_id}`);
     assert.ok(link, "owner link to /org/or-N");

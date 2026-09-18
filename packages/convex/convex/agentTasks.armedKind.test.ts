@@ -238,6 +238,20 @@ describe("every agent_tasks writer restamps the home (exhaustive)", () => {
   });
 });
 
+/** The local names that hold an agent_tasks row in one file: the collection
+ *  a query binds, the element a for-of pulls out of it, and the row a find or
+ *  a first read returns. Everything else a file patches came from some other
+ *  table, so it is not this guard's business. */
+function agentTaskRowNames(src: string): string[] {
+  const names = new Set<string>();
+  for (const m of src.matchAll(/(?:const|let)\s+(\w+)[^=\n]*=\s*(?:\(?\s*await\s+)?ctx\.db\.query\(\s*"agent_tasks"/g)) names.add(m[1]);
+  for (const holder of [...names]) {
+    for (const m of src.matchAll(new RegExp(`for\\s*\\(\\s*(?:const|let)\\s+(\\w+)\\s+of\\s+${holder}\\b`, "g"))) names.add(m[1]);
+    for (const m of src.matchAll(new RegExp(`(?:const|let)\\s+(\\w+)[^=\\n]*=\\s*${holder}\\.(?:find|at|\\[)`, "g"))) names.add(m[1]);
+  }
+  return [...names];
+}
+
 describe("agent_tasks has ONE writer module (repo-wide)", () => {
   // The chokepoint guard above reads agentTasks.ts alone. This closes it: no
   // other convex module inserts an agent_tasks row or patches a row it read
@@ -249,10 +263,13 @@ describe("agent_tasks has ONE writer module (repo-wide)", () => {
       if (!name.endsWith(".ts") || name.endsWith(".test.ts") || name === "agentTasks.ts") continue;
       const src = readFileSync(join(import.meta.dir, name), "utf8");
       if (/\.insert\(\s*"agent_tasks"/.test(src)) offenders.push(`${name}: insert`);
-      // A patch of a row obtained from the agent_tasks table: the query and a
-      // db.patch in one function body is the shape; approximate it as both
-      // tokens present in one file, then confirm by hand on a hit.
-      if (/query\(\s*"agent_tasks"/.test(src) && /ctx\.db\.patch\(\s*(task|t|row|trigger)\b/.test(src)) offenders.push(`${name}: patch`);
+      // A patch of a row obtained from the agent_tasks table. A file that only
+      // QUERIES the table is a reader and fine, so track the names that hold
+      // an agent_tasks row — the collection a query binds, and the element a
+      // loop pulls out of it — and flag a patch only on one of those.
+      for (const holder of agentTaskRowNames(src)) {
+        if (new RegExp(`ctx\\.db\\.patch\\(\\s*${holder}\\b`).test(src)) { offenders.push(`${name}: patch`); break; }
+      }
     }
     expect(offenders).toEqual([]);
   });
