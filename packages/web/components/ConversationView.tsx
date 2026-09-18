@@ -157,7 +157,8 @@ import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
-import { AgentDefinitionPill, HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { AgentDefinitionPill, LaunchModelPill } from "./ModelEffortPicker";
+import { HeaderModelControl } from "./SessionControlMenu";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import {
   DropdownMenu,
@@ -268,7 +269,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionSuggestion } from "./editor/MentionSuggestion";
 import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft, Cpu } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -605,7 +606,7 @@ const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
 // Simple view reads calmer by default: tool activity as one-line receipts.
 // An explicit per-conversation choice (the map above) still wins.
 function defaultDensity(): ConversationDensity {
-  return useInboxStore.getState().clientState.ui?.simple_view ? "condensed" : "full";
+  return useInboxStore.getState().clientState.ui?.simple_view !== false ? "condensed" : "full";
 }
 const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
   { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
@@ -786,6 +787,13 @@ export type ConversationData = {
   fork_status?: "copying" | "complete" | "failed";
   fork_copied?: number;
   fork_copy_total?: number;
+  // The handoff pair (`cast handoff --to`, handoff.start): a child carries
+  // where it came from, a source where it continued. Details mirror
+  // forked_from_details' access rules; the bare ids ride the list payload.
+  handed_off_from_conversation_id?: string | null;
+  handed_off_to_conversation_id?: string | null;
+  handed_off_from_details?: HandoffLinkDetails | null;
+  handed_off_to_details?: HandoffLinkDetails | null;
   forked_from_details?: {
     conversation_id: string;
     title?: string;
@@ -3427,6 +3435,46 @@ function assistantLabel(agentType?: string): string {
 }
 
 
+/** One side of a handoff link on the conversation payload. */
+type HandoffLinkDetails = {
+  conversation_id: string;
+  short_id: string;
+  title?: string | null;
+  agent_type?: string | null;
+  model?: string | null;
+};
+
+/**
+ * Header chip for the handoff pair: "From <id>" on the child, "Continued in
+ * <id>" on the source. Same treatment as the Parent chip — plain left-click is
+ * an instant store-driven switch, modified clicks fall through to the Link.
+ */
+function HandoffLinkChip({ details, direction, convLink, navigateToSession }: {
+  details: HandoffLinkDetails;
+  direction: "from" | "to";
+  convLink: (id: string) => string;
+  navigateToSession: (id: string) => void;
+}) {
+  const title = details.title ? `: ${details.title}` : "";
+  return (
+    <Link
+      href={convLink(details.conversation_id)}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        navigateToSession(details.conversation_id);
+      }}
+      data-handoff-chip={direction}
+      className="cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+      title={direction === "from" ? `Handed off from ${details.short_id}${title}` : `Continued in ${details.short_id}${title}`}
+    >
+      <ArrowRightLeft className={`w-3 h-3 ${direction === "from" ? "-scale-x-100" : ""}`} />
+      <span className="cq-sq2">{direction === "from" ? "From" : "Continued in"}</span>
+      <span className="font-mono">{details.short_id}</span>
+    </Link>
+  );
+}
+
 function ConversationMetadata({
   agentType,
   model,
@@ -3436,6 +3484,8 @@ function ConversationMetadata({
   shortId,
   conversationId,
   canEditModel,
+  controlOpen,
+  onControlOpenChange,
 }: {
   agentType?: string;
   model?: string;
@@ -3445,6 +3495,9 @@ function ConversationMetadata({
   shortId?: string;
   conversationId?: string;
   canEditModel?: boolean;
+  /** The session control panel's open state, shared with the overflow menu. */
+  controlOpen?: boolean;
+  onControlOpenChange?: (open: boolean) => void;
 }) {
   const live = useLiveSessionMeta(conversationId);
   const resolvedAgent = live?.agentType ?? agentType;
@@ -3470,6 +3523,8 @@ function ConversationMetadata({
         effort={live ? (live.effort ?? undefined) : effort}
         messageCount={messageCount}
         canEdit={!!canEditModel}
+        open={controlOpen}
+        onOpenChange={onControlOpenChange}
       />
       {startedAt && (
         <div className="flex items-center gap-1.5 flex-shrink-0 cq-sq2">
@@ -13096,7 +13151,7 @@ const ConversationViewInner = (
   }, [conversation?._id]);
   // Toggling Simple view retunes the open conversation immediately — but only
   // when the user hasn't explicitly picked a density for it (that choice wins).
-  const simpleViewPref = useInboxStore((st) => st.clientState.ui?.simple_view === true);
+  const simpleViewPref = useInboxStore((st) => st.clientState.ui?.simple_view !== false);
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
     setDensityState(resolveDefaultDensity());
@@ -13267,6 +13322,12 @@ const ConversationViewInner = (
   // teammates, spawns) carry spawned_by_conversation_id. The header chip and
   // the overflow menu row both link here, so folding the chip loses nothing.
   const parentLinkId = conversation?.parent_conversation_id || (conversation as any)?.spawned_by_conversation_id;
+  // The unified session control panel behind the header badge (model, effort,
+  // switch, fork, hand off). Controlled here so the overflow menu's one row
+  // opens the same panel instead of duplicating it.
+  const [sessionControlOpen, setSessionControlOpen] = useState(false);
+  const handedOffFrom = conversation?.handed_off_from_details ?? null;
+  const handedOffTo = conversation?.handed_off_to_details ?? null;
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
@@ -17326,6 +17387,8 @@ const ConversationViewInner = (
                   shortId={conversation.short_id}
                   conversationId={conversation._id}
                   canEditModel={effectiveIsOwner}
+                  controlOpen={sessionControlOpen}
+                  onControlOpenChange={setSessionControlOpen}
                 />
               </span>
             )}
@@ -17383,6 +17446,13 @@ const ConversationViewInner = (
                     </svg>
                     <span className="cq-sq2">Parent</span>
                   </Link>
+                )}
+
+                {handedOffFrom && (
+                  <HandoffLinkChip details={handedOffFrom} direction="from" convLink={convLink} navigateToSession={navigateToSession} />
+                )}
+                {handedOffTo && (
+                  <HandoffLinkChip details={handedOffTo} direction="to" convLink={convLink} navigateToSession={navigateToSession} />
                 )}
 
                 {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
@@ -17727,6 +17797,22 @@ const ConversationViewInner = (
                         </Link>
                       </DropdownMenuItem>
                     )}
+                    {handedOffFrom && (
+                      <DropdownMenuItem asChild>
+                        <Link href={convLink(handedOffFrom.conversation_id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return; e.preventDefault(); navigateToSession(handedOffFrom.conversation_id); }}>
+                          <ArrowRightLeft className="w-3 h-3 mr-1.5 text-sol-cyan" />
+                          Handed off from {handedOffFrom.short_id}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {handedOffTo && (
+                      <DropdownMenuItem asChild>
+                        <Link href={convLink(handedOffTo.conversation_id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return; e.preventDefault(); navigateToSession(handedOffTo.conversation_id); }}>
+                          <ArrowRightLeft className="w-3 h-3 mr-1.5 text-sol-cyan" />
+                          Continued in {handedOffTo.short_id}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
                     {conversation.forked_from_details && (
                       <DropdownMenuItem asChild>
                         <Link href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : convLink(conversation.forked_from_details.conversation_id)}>
@@ -17740,54 +17826,19 @@ const ConversationViewInner = (
                     {isOwner && (
                       <>
                         <DropdownMenuSeparator />
-                        <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>
-                            <svg className="w-3 h-3 mr-1.5 text-sol-violet" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 5H4m0 0l4 4m-4-4l4-4" />
-                            </svg>
-                            Switch agent
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {AGENT_LAUNCH_OPTIONS
-                              .map((a) => a.convexType)
-                              .filter((t) => t !== conversation.agent_type && canSessionBecomeAgent(t, conversation.message_count))
-                              .map((t) => (
-                                <DropdownMenuItem
-                                  key={`switch-${t}`}
-                                  onClick={() => {
-                                    void switchSessionAgent(conversation as any, t).catch((error) => toast.error(error instanceof Error ? error.message : "Failed to switch agent"));
-                                  }}
-                                >
-                                  <AgentTypeIcon agentType={t} />
-                                  <span className="ml-1.5">{formatAgentType(t)}</span>
-                                </DropdownMenuItem>
-                              ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
-                        <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>
-                            <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
-                            Fork as
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {AGENT_LAUNCH_OPTIONS
-                              .map((a) => a.convexType)
-                              .filter((t) => t !== conversation.agent_type)
-                              .map((t) => (
-                                <DropdownMenuItem
-                                  key={`fork-${t}`}
-                                  onClick={() => {
-                                    const fork = forkSessionAsAgent(conversation as any, t);
-                                    useInboxStore.getState().requestNavigate(fork.sessionId);
-                                    void fork.ready.catch((error) => toast.error(error instanceof Error ? error.message : "Failed to fork session"));
-                                  }}
-                                >
-                                  <AgentTypeIcon agentType={t} />
-                                  <span className="ml-1.5">{formatAgentType(t)}</span>
-                                </DropdownMenuItem>
-                              ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
+                        {/* One row for the whole session control panel (model,
+                            effort, switch agent, fork as, hand off) — the
+                            header badge opens the same panel, so the menu
+                            never grows a second copy of its rails. The menu
+                            closes first; the panel opens on the next tick so
+                            the two Radix layers don't fight over focus. */}
+                        <DropdownMenuItem
+                          className="hidden sm:flex"
+                          onSelect={() => { setTimeout(() => setSessionControlOpen(true), 0); }}
+                        >
+                          <Cpu className="w-3 h-3 mr-1.5 text-sol-violet" />
+                          Model, agent, fork, hand off…
+                        </DropdownMenuItem>
                       </>
                     )}
                     {((conversation.fork_children && conversation.fork_children.length > 0) || conversation.forked_from) && (

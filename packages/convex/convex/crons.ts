@@ -186,6 +186,16 @@ crons.interval(
 );
 
 crons.interval(
+  // Who is in each mirrored Slack workspace. Without this the people table
+  // only learns somebody when they speak, and a codecast mention of a quiet
+  // teammate or an agent posts to Slack as plain text instead of paging them.
+  "refresh slack workspace people",
+  { hours: 24 },
+  internal.slackSync.refreshAllWorkspacePeople,
+  {}
+);
+
+crons.interval(
   // Capability rows for machines silent 90+ days: the daemon cannot clean up a
   // laptop that was wiped, so the server notices the silence instead.
   "sweep dead-device capability state",

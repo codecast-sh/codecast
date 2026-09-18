@@ -5,9 +5,9 @@ import { applyProposalChanges, extractOrgProposal, orgProposalBlock, ORG_PROPOSA
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
-import { atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, substitute, templateSlug, type TemplateArtifact } from "./orgTemplateArtifact.js";
+import { atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, inputToken, inputTokens, intervalMs, noSymlink, readArtifact, releaseRoot, substitute, templateSlug, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
 
-export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; apply?: boolean; dryRun?: boolean };
+export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; apply?: boolean; dryRun?: boolean };
 export type TemplateReceipt = {
   schemaVersion: 1;
   instance: string;
@@ -21,6 +21,8 @@ export type TemplateReceipt = {
   upgrade?: TemplateUpgrade;
   stack: { title: string; attempted?: boolean; id?: string; decisionAttempted?: boolean; decisionId?: string };
   proposal: OrgRoleProposal;
+  /** Hire-time answers to the manifest's inputs (org-hire.md H2, H3); secrets are bound on the host, never answered here. */
+  config?: Record<string, string>;
   role?: { id: string; handle: string; sessionId?: string };
   routines: Record<string, { triggerId?: string; attempted?: boolean; external?: boolean; paused?: boolean; retired?: boolean; actualIntervalMs?: number; every: string }>;
 };
@@ -52,9 +54,45 @@ function verifiedArtifact(receipt: TemplateReceipt): TemplateArtifact {
   if (artifact.hash !== receipt.template.hash || artifact.manifest.id !== receipt.template.id || artifact.manifest.version !== receipt.template.version) throw new Error("Pinned template artifact failed verification");
   return artifact;
 }
-function values(receipt: TemplateReceipt): Record<string, string> {
-  return { instance: receipt.instance, "project.ref": receipt.project.ref, "project.name": receipt.project.name, "project.dir": receipt.project.dir, "template.root": receipt.template.root, "instance.file": receiptPath(receipt.project.dir, receipt.instance) };
+function values(receipt: TemplateReceipt, manifest?: Pick<OrgTemplate, "inputs">): Record<string, string> {
+  const base: Record<string, string> = { instance: receipt.instance, "project.ref": receipt.project.ref, "project.name": receipt.project.name, "project.dir": receipt.project.dir, "template.root": receipt.template.root, "instance.file": receiptPath(receipt.project.dir, receipt.instance) };
+  // Every declared input substitutes: the answer, or the empty string for an
+  // unanswered optional one (a required one never reaches here unanswered).
+  for (const input of manifest?.inputs ?? []) base[inputToken(input.key)] = receipt.config?.[input.key] ?? "";
+  return base;
 }
+/**
+ * Parse `--input key=value` answers against the manifest (org-hire.md H2):
+ * unknown keys refused; secrets refused (bound on the host, never typed);
+ * numbers and money numeric; booleans true/false; choices from the list;
+ * every required non-secret input answered. Returns the answers keyed by input.
+ */
+export function parseInputs(manifest: OrgTemplate, raw: string[] = []): Record<string, string> {
+  const declared = new Map((manifest.inputs ?? []).map((input) => [input.key, input]));
+  const config: Record<string, string> = {};
+  for (const entry of raw) {
+    const at = entry.indexOf("=");
+    if (at <= 0) throw new Error(`Input must be key=value: ${entry}`);
+    const key = entry.slice(0, at);
+    const value = entry.slice(at + 1);
+    const input = declared.get(key);
+    if (!input) throw new Error(`Unknown input: ${key}`);
+    if (input.kind === "secret") throw new Error(`Secret input ${key} is bound on the host with --secret, never answered as text`);
+    if (key in config) throw new Error(`Input answered twice: ${key}`);
+    if (value.includes("\0") || value.includes("{{") || value.includes("}}")) throw new Error(`Invalid value for ${key}`);
+    if ((input.kind === "number" || input.kind === "money") && (!/^-?\d+(\.\d+)?$/.test(value) || (input.kind === "money" && Number(value) < 0))) throw new Error(`${key} must be a number`);
+    if (input.kind === "boolean" && value !== "true" && value !== "false") throw new Error(`${key} must be true or false`);
+    if (input.kind === "choice" && !input.choices!.includes(value)) throw new Error(`${key} must be one of: ${input.choices!.join(", ")}`);
+    config[key] = value;
+  }
+  for (const input of declared.values()) {
+    if (input.kind === "secret" || key_in(config, input.key)) continue;
+    if (input.default !== undefined) config[input.key] = String(input.default);
+    else if (input.required) throw new Error(`Required input not answered: ${input.key}`);
+  }
+  return config;
+}
+const key_in = (row: Record<string, string>, key: string) => Object.prototype.hasOwnProperty.call(row, key);
 export function loaderPrompt(receipt: TemplateReceipt, routine: string): string {
   return `Read the pinned instance receipt ${receiptPath(receipt.project.dir, receipt.instance)}. Run this command before doing any work:\n\ncast org template instructions ${quoteTemplateArg(receipt.instance)} ${quoteTemplateArg(routine)} --dir ${quoteTemplateArg(receipt.project.dir)}\n\nUse only the verified instructions it returns. If verification fails, stop and report the error. The role's human charter, trust, grants and project scope still apply. This loader grants no spending, publishing, credentials or filesystem isolation.`;
 }
@@ -139,7 +177,7 @@ async function recoverStack(deps: OrgInitDeps, receipt: TemplateReceipt): Promis
     receipt.stack.decisionAttempted = true;
     save(receipt);
     const artifact = verifiedArtifact(receipt);
-    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; channel routines are not extra managers. Starts at understand. Routines are created gated and paused only after your answer.\n\nProposed shared charter:\n${substitute(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), values(receipt))}`;
+    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; channel routines are not extra managers. Starts at understand. Routines are created gated and paused only after your answer.\n\nProposed shared charter:\n${substitute(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), values(receipt, artifact.manifest), inputTokens(artifact.manifest))}`;
     const created = await request(deps, "/cli/decide", { session_id: receipt.sourceSession, stack: receipt.stack.id, question: `Create ${receipt.proposal.name} for ${receipt.project.name}? (${receipt.instance})`, kind: "single", category: "access", blocking: true, options: ORG_PROPOSAL_OPTIONS.role.map((label) => ({ label })), context_md: context });
     receipt.stack.decisionId = created.short_id || created.id;
     if (!receipt.stack.decisionId) throw new Error("Decision creation returned no id");
@@ -187,11 +225,11 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
   if (!sourceSession && !options.dryRun) throw new Error("Install needs the proposing session (--session)");
   const root = releaseRoot(dir, { ...artifact.manifest, hash: artifact.hash });
   const key = randomUUID();
-  const receipt: TemplateReceipt = { schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: sourceSession || "not-set", phase: "proposal", template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root }, stack: { title: `Org template ${instance} for ${project.ref} [${key}]` }, proposal: { kind: "role", name: "", handle: "" }, routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every }])) };
-  const handle = substitute(artifact.manifest.role.handle, values(receipt));
+  const receipt: TemplateReceipt = { schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: sourceSession || "not-set", phase: "proposal", template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root }, stack: { title: `Org template ${instance} for ${project.ref} [${key}]` }, proposal: { kind: "role", name: "", handle: "" }, config: parseInputs(artifact.manifest, options.input), routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every }])) };
+  const handle = substitute(artifact.manifest.role.handle, values(receipt, artifact.manifest), inputTokens(artifact.manifest));
   if (!/^[a-z0-9-]{2,32}$/.test(handle)) throw new Error("Expanded role handle is invalid");
   if ((tree.roles ?? []).some((r: any) => r.handle === handle)) throw new Error(`Role @${handle} already exists; refusing to create or silently adopt another seat`);
-  receipt.proposal = { kind: "role", name: substitute(artifact.manifest.role.name, values(receipt)), handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: "understand", caps: artifact.manifest.role.caps, charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
+  receipt.proposal = { kind: "role", name: substitute(artifact.manifest.role.name, values(receipt, artifact.manifest), inputTokens(artifact.manifest)), handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: "understand", caps: artifact.manifest.role.caps, charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
   checkReleaseVersion(dir, artifact);
   return receipt;
 }
@@ -253,7 +291,7 @@ async function ensureRoutines(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
       if (state.attempted) throw new Error(`Routine ${routine.id} creation outcome unknown; refusing a duplicate request`);
       state.attempted = true;
       save(receipt);
-      const created = await request(deps, "/cli/tasks/create", { title: substitute(routine.title, values(receipt)), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), run_at: Date.now() + 365 * 86400000, precheck: "exit 1", mode: "propose" });
+      const created = await request(deps, "/cli/tasks/create", { title: substitute(routine.title, values(receipt, artifact.manifest), inputTokens(artifact.manifest)), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), run_at: Date.now() + 365 * 86400000, precheck: "exit 1", mode: "propose" });
       state.triggerId = created.task_id;
       if (!state.triggerId) throw new Error("Trigger creation returned no id");
       save(receipt);
@@ -354,7 +392,7 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     if (!["scheduled", "running"].includes(row.status) || row.precheck === "exit 1") throw new Error("Routine remains paused or gated for review");
     file = entry.prompt;
   }
-  return `Template ${receipt.template.id}@${receipt.template.version}\nSHA-256 ${receipt.template.hash}\nInstance ${instance}; project ${receipt.project.ref}\nHuman charter, trust and grants remain authoritative.\n\n${substitute(artifact.files.get(file)!.toString("utf8"), values(receipt))}`;
+  return `Template ${receipt.template.id}@${receipt.template.version}\nSHA-256 ${receipt.template.hash}\nInstance ${instance}; project ${receipt.project.ref}\nHuman charter, trust and grants remain authoritative.\n\n${substitute(artifact.files.get(file)!.toString("utf8"), values(receipt, artifact.manifest), inputTokens(artifact.manifest))}`;
 }
 export function activationInstructions(receipt: TemplateReceipt, row: { short_id?: string; _id: string; interval_ms: number; precheck?: string }): { note: string; commands: string[] } {
   if (row.precheck && row.precheck !== "exit 1") return { note: "This routine has a custom precheck. Keep it paused and review that gate explicitly; the template activation procedure must not remove a human override.", commands: [] };

@@ -110,12 +110,15 @@ export function getPermissionFlags(agentType: AgentClientId, config?: Config | n
     if (existing.includes("--permission-mode") || existing.includes("--always-approve")) return null;
     return "--permission-mode bypassPermissions";
   } else if (agentType === "muse") {
-    // muse's no-prompt flag is `--disable-approval` ("disable tool approval
-    // prompts for this run"); `--approval-mode never` and `--yolo` also pin
-    // a mode, so any of the three in configured args suppresses the default.
+    // Muse runs YOLO by default: `--yolo` disables approval prompts AND the
+    // sandbox and trusts the workspace, so a managed session never parks on
+    // a TUI prompt nobody can answer. An explicit "default" mode opts back
+    // into the standard on-request model (no flags); any approval flag
+    // already in agent_args.muse also suppresses the default.
     const existing = getAgentArgs(config, "muse") || "";
     if (existing.includes("--disable-approval") || existing.includes("--approval-mode") || existing.includes("--yolo")) return null;
-    return "--disable-approval";
+    if (modes?.muse === "default") return null;
+    return "--yolo";
   } else if (agentType === "gemini") {
     // gemini flags TBD for TUI launch; print mode adds --yolo separately.
   }
@@ -163,7 +166,9 @@ export function permissionFlagsForMode(
   }
   if (agentType === "muse") {
     if (configuredArgs.includes("--disable-approval") || configuredArgs.includes("--approval-mode") || configuredArgs.includes("--yolo")) return null;
-    if (m === "bypass") return "--disable-approval";
+    // "bypass" is muse's own `--yolo` (no approvals, no sandbox, workspace
+    // trusted) — the mode the daemon also defaults to when nothing is stored.
+    if (m === "bypass") return "--yolo";
     if (m === "default") return null;
     return `--approval-mode ${m}`;
   }

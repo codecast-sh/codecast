@@ -389,6 +389,36 @@ describe("upgrades and adoption", () => {
 });
 function saveReceipt(dir: string, receipt: any) { atomicJson(receiptPath(dir, receipt.instance), receipt); }
 
+describe("manifest v2 hires", () => {
+  test("answers substitute into the handle, charter, routine titles and instructions; secrets never enter the receipt", async () => {
+    const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0", inputs: [
+      { key: "product.slug", label: "Short name", kind: "string", required: true },
+      { key: "budget.monthly_envelope_usd", label: "Envelope", kind: "money", required: true },
+      { key: "accounts.ads", label: "Ads credentials", kind: "secret" },
+      { key: "voice", label: "Voice", kind: "choice", choices: ["plain", "playful"], default: "plain" },
+    ], authority: [{ id: "ads-spend", kind: "spend", label: "Paid search", limit: { usd_per_month: "{{input.budget.monthly_envelope_usd}}" }, requires: ["accounts.ads"] }] };
+    m.role.handle = "{{input.product.slug}}-cmo";
+    m.routines[1].title = "Ads for {{input.product.slug}}";
+    m.routines[1].requires = { authority: ["ads-spend"] };
+    const source = folder(m);
+    fs.writeFileSync(path.join(source, "org/charter.md"), "Own {{project.name}} as {{input.product.slug}} within {{input.budget.monthly_envelope_usd}} a month, voice {{input.voice}}.");
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1", input: ["product.slug=acme", "budget.monthly_envelope_usd=300"] };
+    await expect(installTemplate(server.deps, source, "acme-growth", { ...options, input: ["product.slug=acme"] })).rejects.toThrow(/Required input not answered/);
+    await installTemplate(server.deps, source, "acme-growth", options);
+    const receipt = readReceipt(server.dir, "acme-growth");
+    expect(receipt.config).toEqual({ "product.slug": "acme", "budget.monthly_envelope_usd": "300", voice: "plain" });
+    expect(receipt.proposal.handle).toBe("acme-cmo");
+    expect(JSON.stringify(receipt)).not.toContain("accounts.ads");
+    expect(server.decisions[0].context_md).toContain("Own Product as acme within 300 a month, voice plain.");
+    server.approve();
+    await reconcileTemplate(server.deps, "acme-growth", options);
+    expect(server.triggers.map((t: any) => t.title)).toContain("Ads for acme");
+    const text = await templateInstructions(server.deps, "acme-growth", "charter", options);
+    expect(text).toContain("as acme within 300 a month, voice plain");
+  });
+});
+
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");

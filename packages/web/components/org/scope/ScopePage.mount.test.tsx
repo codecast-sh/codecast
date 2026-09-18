@@ -9,6 +9,10 @@
 // Sessions tab groups hands by who acts next with the inbox's order, a state
 // line, an age and live subtask counts.
 // Run: bun components/org/scope/ScopePage.mount.test.tsx
+import { test } from "bun:test";
+import { realInboxStore, restoreInboxStoreAfterAll } from "../../__tests__/mockInboxStore";
+
+restoreInboxStoreAfterAll();
 import assert from "node:assert/strict";
 import type { OrgSession, OrgTree } from "../orgTypes";
 
@@ -42,7 +46,7 @@ async function verifyScopePage() {
   const collections: Record<string, any[]> = { projects: [], plans: [], tasks: [], docs: [] };
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
 
-  mock.module("../../../store/inboxStore", () => ({ useInboxStore, useTrackedStore: () => state }));
+  mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
   mock.module("../../../hooks/useSyncOrgTree", () => ({ useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }) }));
   for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) mock.module(`../../../hooks/${h}`, () => ({ [h]: () => {} }));
   mock.module("../../../hooks/useSyncDocs", () => ({ useSyncDocs: () => {}, useSyncDocDetail: () => {} }));
@@ -316,4 +320,4 @@ async function verifyScopePage() {
   console.log("scope page as a conversation: ok");
 }
 
-verifyScopePage().catch((e) => { console.error(e); process.exit(1); });
+test("the scope page mounts as a conversation in its three widths", verifyScopePage, 120_000);

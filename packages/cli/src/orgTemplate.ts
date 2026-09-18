@@ -18,6 +18,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
     .requiredOption("--project <id>", "Exact existing project id")
     .option("--session <id>", "Proposing session UUID (default: current session)")
     .option("--adopt <routine=tr-N>", "Record an existing external trigger without changing it", (value: string, all: string[]) => [...all, value], [])
+    .option("--input <key=value>", "Answer one of the template's inputs (repeatable); secrets are bound on the host, never answered here", (value: string, all: string[]) => [...all, value], [])
     .action(async (folder: string, options: any) => {
       const { installTemplate, quoteTemplateArg } = await import("./orgTemplateRun.js");
       const receipt = await installTemplate(deps, folder, options.instance, options);

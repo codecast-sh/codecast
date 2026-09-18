@@ -4556,6 +4556,9 @@ cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.
 // codegen on deploy; cast to any so the committed _generated typecheck stays green
 // until then.
 cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
+// `cast handoff --to <agent>`: brief + compose + spawn + link, one action
+// (handoff.start), the same one the web calls signed in.
+cliRoute("/cli/handoff", async (ctx, body) => ctx.runAction((api as any).handoff.start, body));
 
 // Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
 // session into a human's inbox). A session has a SET of owners — it can sit in

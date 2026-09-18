@@ -39,9 +39,9 @@ import {
   tombstoneChatMessage,
   wakeMentionedParties,
 } from "./chat";
-import { resolveChatMentions, teamRoster } from "./lib/mentionResolve";
+import { resolveChatMentions, slackPersonForHandle, teamRoster } from "./lib/mentionResolve";
 import { isValidEmoji, MAX_CHAT_CONTENT, normalizeChannelName, oneLine } from "./chatText";
-import { botHandle, dmKeyFor, memberHandle } from "@codecast/shared/chat";
+import { botHandle, dmKeyFor, extractMentionHandles, memberHandle } from "@codecast/shared/chat";
 import {
   emojiToShortcode,
   markdownToSlack,
@@ -483,6 +483,10 @@ export const commitLink = internalMutation({
       created_at: now,
       updated_at: now,
     });
+    // Learn who is in the workspace now, rather than one profile at a time as
+    // people speak: a mention written in codecast can only page a Slack person
+    // this table already knows.
+    await ctx.scheduler.runAfter(0, internal.slackSync.syncWorkspacePeople, { installation_id: install._id });
     const chatName = await adoptSlackName(ctx, channel, args.slack_channel_name);
     // One notice in chat so the room knows where the new faces come from.
     const actor = await ctx.db.get(userId);
@@ -1388,6 +1392,68 @@ export const upsertSlackUser = internalMutation({
   },
 });
 
+// The workspace's people, fetched from Slack rather than waited for.
+//
+// slack_users used to fill only as people SPOKE in a mirrored channel, so a
+// mention of somebody who had not posted yet resolved to nobody and went to
+// Slack as plain text. This walks users.list once (the `users:read` scope the
+// app already holds) and upserts every member, humans and bots alike, so a
+// handle written in codecast can be resolved the first time anybody uses it.
+// One page per run, the next scheduled after it, so no run exceeds its budget.
+export const syncWorkspacePeople = internalAction({
+  args: {
+    installation_id: v.id("slack_installations"),
+    cursor: v.optional(v.string()),
+    page: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<{ status: string; seen?: number }> => {
+    const install = await ctx.runQuery(internal.slackSync.installationById, { id: args.installation_id });
+    if (!install) return { status: "no_install" };
+    const page = args.page ?? 0;
+    if (page >= MAX_PEOPLE_PAGES) return { status: "capped" };
+    const resp = await slackApi(install.bot_token, "users.list", { limit: 200, cursor: args.cursor });
+    if (!resp.ok) return { status: `error:${resp.error ?? "unknown"}` };
+    const members: any[] = Array.isArray((resp as any).members) ? (resp as any).members : [];
+    for (const member of members) {
+      if (!member?.id) continue;
+      await ctx.runMutation(internal.slackSync.upsertSlackUser, {
+        workspace_id: install.workspace_id,
+        slack_user_id: String(member.id),
+        team_id: install.team_id ?? undefined,
+        profile: member,
+      });
+    }
+    const next = (resp as any).response_metadata?.next_cursor;
+    if (next) {
+      await ctx.scheduler.runAfter(0, internal.slackSync.syncWorkspacePeople, {
+        installation_id: args.installation_id, cursor: String(next), page: page + 1,
+      });
+    }
+    return { status: "ok", seen: members.length };
+  },
+});
+
+/** Pages of users.list one sync may walk: 200 people each, so 20 covers any
+ *  workspace this product meets and bounds a runaway cursor. */
+const MAX_PEOPLE_PAGES = 20;
+
+// Every workspace the product mirrors, for the nightly roster refresh.
+export const listInstallations = internalQuery({
+  args: {},
+  handler: async (ctx) => (await ctx.db.query("slack_installations").take(500)).map((i) => i._id),
+});
+
+// The cron's entry point: refresh every workspace's people.
+export const refreshAllWorkspacePeople = internalAction({
+  args: {},
+  handler: async (ctx): Promise<void> => {
+    const ids: Array<Id<"slack_installations">> = await ctx.runQuery(internal.slackSync.listInstallations, {});
+    for (const id of ids) {
+      await ctx.scheduler.runAfter(0, internal.slackSync.syncWorkspacePeople, { installation_id: id });
+    }
+  },
+});
+
 export const getSlackUser = internalQuery({
   args: { workspace_id: v.string(), slack_user_id: v.string() },
   handler: async (ctx, args) => await slackUserRow(ctx, args.workspace_id, args.slack_user_id),
@@ -1703,7 +1769,7 @@ function inboundAuthorFields(person: ResolvedPerson | null, link: Link): {
   };
 }
 
-async function buildInboundResolver(
+export async function buildInboundResolver(
   ctx: ActionCtx,
   install: Install,
   link: Link,
@@ -2465,6 +2531,16 @@ export const pushContext = internalQuery({
         .collect();
       const inWorkspace = rows.find((r) => r.workspace_id === link.workspace_id);
       if (inWorkspace) handleToSlack[handle] = inWorkspace.slack_user_id;
+    }
+    // A handle the stored refs did not answer is looked up in the workspace
+    // roster now: the line may have been written before that person was known
+    // here, and a mention of a Slack agent or bot carries no codecast ref at
+    // all. Whatever still misses stays as the `@name` the author typed, which
+    // reads as a name in Slack instead of a broken token.
+    for (const written of extractMentionHandles(message.content)) {
+      if (handleToSlack[written]) continue;
+      const person = await slackPersonForHandle(ctx, link.workspace_id, written);
+      if (person) handleToSlack[written] = person.slack_user_id;
     }
     let via: string | null = null;
     let name = author?.name || author?.github_username || author?.email || "Someone";
