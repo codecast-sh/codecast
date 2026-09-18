@@ -84,6 +84,88 @@ describe("initAnalytics (web)", () => {
     expect(options.initialScope.tags).toEqual({ platform: "web", app: "codecast" });
   });
 
+  it("gives Sentry an ignoreErrors list that drops unactionable noise and keeps real bugs", () => {
+    web.initAnalytics({ ...base, extraIgnoreErrors: [/Could not find data for Group with id/] });
+    const [options] = last(sentryCalls, "init") as [Record<string, any>];
+    const patterns = options.ignoreErrors as RegExp[];
+    // Sentry's own filter tests an event's message and its exception rendered
+    // as `Type: value`, so that is the string these patterns must match.
+    const dropped = (message: string) => patterns.some((p) => p.test(message));
+
+    // The three production issue classes this list exists for.
+    expect(dropped("Error: Unable to preload CSS for /assets/decisions-DAwruZUT.css")).toBe(true);
+    expect(
+      dropped(
+        "DatabaseClosedError: QuotaExceededError Encountered full disk while opening backing store for indexedDB.open.",
+      ),
+    ).toBe(true);
+    expect(dropped("AbortError: UnknownError Connection is closing.")).toBe(true);
+    // An app's own list is appended, never replaced.
+    expect(dropped("Error: Could not find data for Group with id abc")).toBe(true);
+
+    // Real defects still reach Sentry. Nothing here suppresses a whole error
+    // class, so the ordinary crash shapes stay reportable.
+    for (const real of [
+      "TypeError: Cannot read properties of undefined (reading 'map')",
+      "TypeError: x is not a function",
+      "Error: Failed to fetch dynamically imported module: https://x/assets/page-abc.js",
+      "QuotaExceededError: The quota has been exceeded.",
+      "AbortError: The operation was aborted.",
+      "ConvexError: Could not find public function",
+    ]) {
+      expect(dropped(real)).toBe(false);
+    }
+  });
+
+  it("drops a DOM reconciler crash only while the page is translated", () => {
+    web.initAnalytics(base);
+    const [options] = last(sentryCalls, "init") as [Record<string, any>];
+    const beforeSend = options.beforeSend as (e: any) => any;
+    const domCrash = {
+      exception: {
+        values: [
+          {
+            type: "NotFoundError",
+            value:
+              "Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.",
+          },
+        ],
+      },
+    };
+
+    const classes = new Set<string>();
+    let msFontWrapper: unknown = null;
+    (globalThis as any).document = {
+      documentElement: { classList: { contains: (c: string) => classes.has(c) } },
+      querySelector: (sel: string) => (sel === "font[_msttexthash]" ? msFontWrapper : null),
+    };
+
+    try {
+      // Untranslated: this is a REAL reconciler bug and must be reported. This
+      // is the assertion that proves the filter is not a blanket insertBefore
+      // suppression.
+      expect(beforeSend(domCrash)).toBe(domCrash);
+
+      // Translated by Google: the same message is damage done by the translator
+      // wrapping our text nodes, and no engineer can act on it.
+      classes.add("translated-ltr");
+      expect(beforeSend(domCrash)).toBeNull();
+
+      // An unrelated error is kept even on a translated page.
+      expect(
+        beforeSend({ exception: { values: [{ type: "TypeError", value: "x is not a function" }] } }),
+      ).not.toBeNull();
+
+      // Microsoft Translator leaves no root class, only its font wrappers.
+      classes.clear();
+      expect(beforeSend(domCrash)).toBe(domCrash);
+      msFontWrapper = {};
+      expect(beforeSend(domCrash)).toBeNull();
+    } finally {
+      delete (globalThis as any).document;
+    }
+  });
+
   it("disables Sentry in development", () => {
     web.initAnalytics({ ...base, environment: "development" });
     const [options] = last(sentryCalls, "init") as [Record<string, any>];

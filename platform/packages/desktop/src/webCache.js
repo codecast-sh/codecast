@@ -318,7 +318,7 @@ function createWebCache({ dir, origin, manifestPath = "/release.json", fetchImpl
 // paths the app reserves for its server (`passthrough`) always go out; a
 // navigation that misses the copy gets its index.html (the SPA fallback,
 // same as the site's own server); anything else goes to the network.
-function planRequest({ method, url, appHosts, cache, passthrough = [], headers = {} }) {
+function planRequest({ method, url, appHosts, cache, passthrough = [], headers = {}, preferNetwork = false }) {
   let u;
   try {
     u = new URL(url);
@@ -329,10 +329,18 @@ function planRequest({ method, url, appHosts, cache, passthrough = [], headers =
   if (!get || !appHosts.has(u.host)) return { kind: "network", fallback: null };
   if (passthrough.some((p) => u.pathname.startsWith(p))) return { kind: "network", fallback: null };
   const file = cache.resolve(u.pathname);
-  if (file) return { kind: "file", file };
   const dest = String(headers["sec-fetch-dest"] || "").toLowerCase();
   const accept = String(headers["accept"] || "");
   const navigation = dest === "document" || dest === "iframe" || (!dest && accept.includes("text/html"));
+  // Live HTML when online: a web deploy is the document the window should
+  // paint, and the copy is what we fall back to when the network is gone.
+  // Hashed assets still come from the copy — they are immutable, and a miss
+  // goes out below.
+  if (preferNetwork && navigation) {
+    const cached = file || cache.indexFile();
+    return { kind: "network", fallback: cached ? "cache-file" : "offline-page", file: cached || null };
+  }
+  if (file) return { kind: "file", file };
   if (navigation && cache.indexFile()) return { kind: "file", file: cache.indexFile() };
   return { kind: "network", fallback: navigation ? "offline-page" : null };
 }
@@ -346,22 +354,24 @@ function offlinePage(productName) {
 // The Electron protocol handler: a Request in, a Response out. `net` is
 // Electron's net (net.fetch with bypassCustomProtocolHandlers passes the
 // request through unchanged); injected so the test can fake it.
-function createProtocolHandler({ cache, appHosts, passthrough, net, productName = "This app", onNetworkError = () => {} }) {
+function createProtocolHandler({ cache, appHosts, passthrough, net, productName = "This app", preferNetwork = false, onNetworkError = () => {} }) {
   return async function handle(request) {
     const headers = {};
     for (const [k, v] of request.headers) headers[k.toLowerCase()] = v;
-    const plan = planRequest({ method: request.method, url: request.url, appHosts: appHosts(), cache, passthrough, headers });
-    if (plan.kind === "file") {
-      const body = request.method === "HEAD" ? null : fs.readFileSync(plan.file);
+    const plan = planRequest({ method: request.method, url: request.url, appHosts: appHosts(), cache, passthrough, headers, preferNetwork });
+    const fromCache = (file) => {
+      const body = request.method === "HEAD" ? null : fs.readFileSync(file);
       return new Response(body, {
         status: 200,
-        headers: { "content-type": mimeFor(plan.file), "cache-control": "no-cache" },
+        headers: { "content-type": mimeFor(file), "cache-control": "no-cache" },
       });
-    }
+    };
+    if (plan.kind === "file") return fromCache(plan.file);
     try {
       return await net.fetch(request, { bypassCustomProtocolHandlers: true });
     } catch (err) {
       onNetworkError(err, request.url);
+      if (plan.fallback === "cache-file" && plan.file) return fromCache(plan.file);
       if (plan.fallback === "offline-page") {
         return new Response(offlinePage(productName), { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
       }

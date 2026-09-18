@@ -170,6 +170,45 @@ test("buildManifest is deterministic over content and changes with any byte", ()
   expect(buildManifest(a, { commit: "c" }).release).toBe(buildManifest(a, { commit: "c" }).release);
 });
 
+test("preferNetwork: documents go out and fall back to the copy; assets still come from the copy", async () => {
+  const site = fakeSite(SITE_V1);
+  const cache = createWebCache({ dir: tmp(), origin: ORIGIN, fetchImpl: site.fetch });
+  cache.init();
+  await cache.refresh();
+  const hosts = new Set(["whisk.email"]);
+  const plan = (o) => planRequest({ appHosts: hosts, cache, preferNetwork: true, method: "GET", headers: {}, ...o });
+  expect(plan({ url: "https://whisk.email/", headers: { "sec-fetch-dest": "document" } })).toMatchObject({
+    kind: "network",
+    fallback: "cache-file",
+    file: cache.indexFile(),
+  });
+  expect(plan({ url: "https://whisk.email/assets/app-1.js" }).kind).toBe("file");
+  const passed = [];
+  const net = {
+    fetch: async (req) => {
+      passed.push(req.url);
+      if (net.offline) throw new TypeError("offline");
+      return new Response("live html", { status: 200, headers: { "content-type": "text/html" } });
+    },
+    offline: false,
+  };
+  const handle = createProtocolHandler({
+    cache,
+    appHosts: () => hosts,
+    passthrough: [],
+    preferNetwork: true,
+    net,
+    productName: "Whisk",
+  });
+  const live = await handle(new Request("https://whisk.email/", { headers: { "sec-fetch-dest": "document" } }));
+  expect(await live.text()).toBe("live html");
+  net.offline = true;
+  const cached = await handle(new Request("https://whisk.email/", { headers: { "sec-fetch-dest": "document" } }));
+  expect(await cached.text()).toBe("<html>v1</html>");
+  const js = await handle(new Request("https://whisk.email/assets/app-1.js"));
+  expect(await js.text()).toBe("console.log(1)");
+});
+
 test("planRequest: app host GETs come from the copy, navigations fall back to index, the rest goes out", async () => {
   const site = fakeSite(SITE_V1);
   const cache = createWebCache({ dir: tmp(), origin: ORIGIN, fetchImpl: site.fetch });

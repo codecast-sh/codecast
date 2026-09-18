@@ -335,6 +335,24 @@ test("the offline copy gates the launch on a manifest check, serves the app host
   expect(el.opened).toEqual(["https://example.com/page"]);
 });
 
+test("reloadOnUpdate reloads the window instead of sending web-update", async () => {
+  const el = fakeElectron();
+  let site = fakeSite({ "index.html": "<html>v1</html>", "assets/a.js": "1" });
+  el.netFetch = (...a) => site.fetch(...a);
+  let reloads = 0;
+  createDesktopApp({ ...WHISK, web: { ...WHISK.web, reloadOnUpdate: true } }, el);
+  el.app._fireReady();
+  await new Promise((r) => setTimeout(r, 30));
+  const main = el.windows[0];
+  main.webContents.reloadIgnoringCache = () => { reloads++; };
+  main.webContents.listeners.get("did-finish-load")();
+  site = fakeSite({ "index.html": "<html>v2</html>", "assets/b.js": "2" });
+  const r = await el.handlers.get("refresh-web")();
+  expect(r.status).toBe("updated");
+  expect(reloads).toBe(1);
+  expect(main.webContents.sent.filter((x) => x[0] === "web-update")).toEqual([]);
+});
+
 test("an offline first launch still opens: the load waits only startupTimeoutMs", async () => {
   const el = fakeElectron();
   const t0 = Date.now();

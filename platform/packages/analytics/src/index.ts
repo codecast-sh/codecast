@@ -43,6 +43,14 @@ export interface AnalyticsConfig {
    * this is for an app's own preference toggle.
    */
   optedOut?: boolean;
+  /**
+   * App-specific error noise, added to the runtime's own unactionable list and
+   * handed to Sentry as `ignoreErrors`. An app that already keeps a list of
+   * known-benign messages (third-party internals, expected lifecycle throws)
+   * passes it here so the filter applies to EVERY capture path, not only the
+   * window listeners it wired itself.
+   */
+  extraIgnoreErrors?: (string | RegExp)[];
 }
 
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
