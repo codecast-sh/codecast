@@ -743,6 +743,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const kinds = Array.isArray(opts?.kinds) && opts!.kinds!.length > 0 ? opts!.kinds : undefined;
     return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId, ...(kinds ? { kinds } : {}) });
   },
+  // One ask of a proposal, accepted or skipped whole (org-staffing.md S19):
+  // `ask` is the index into the asks the server resolves, the same function
+  // the web ran to flip the rows.
+  decideOrgProposalAsk: async (ctx, _userId, [proposalId, ask, verdict]: [string, number, "accept" | "skip"]) => {
+    return await ctx.runMutation!((api as any).orgProposals.decideAsk, { proposal: proposalId, ask, verdict });
+  },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
   // no error, so a generic patch to capability_bindings would silently not
@@ -1121,9 +1127,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // A person's message from the staffing pane into the thread bound to a
   // proposal (org-staffing.md S18). orgProposals.say wraps it with the row it
   // is about and enqueues it on the message rail under the pane's client id.
-  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId]: [string, string, number | null, string, string]) => {
+  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId, askIndex]: [string, string, number | null, string, string, (number | null)?]) => {
     return await ctx.runMutation!((api as any).orgProposals.say, {
-      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}),
+      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}), ...(askIndex != null ? { ask: askIndex } : {}),
     });
   },
 

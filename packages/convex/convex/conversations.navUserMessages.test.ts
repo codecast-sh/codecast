@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   collectNavigableUserMessages,
+  NAV_USER_MESSAGES_BYTE_BUDGET,
   NAV_USER_MESSAGES_OLDEST_LIMIT,
   NAV_USER_MESSAGES_SCAN_LIMIT,
 } from "./conversations";
@@ -67,5 +68,56 @@ describe("collectNavigableUserMessages", () => {
 
     const out = await collectNavigableUserMessages(db, CONV);
     expect(out.map((m) => m.content)).toEqual(["ancient prompt", "recent prompt"]);
+  });
+
+  // The document ceiling alone never bounded the COST. A tool result carries
+  // the whole command output, so 2000 of them is tens of megabytes — past what
+  // the 1s user-JS cap (bytes deserialized and serialized) and the
+  // system-operation budget allow. The scan now stops on bytes too.
+  test("stops scanning once the byte budget is spent", async () => {
+    const fat = "x".repeat(100_000);
+    const rows: any[] = [
+      { _id: "messages_recent", conversation_id: CONV, role: "user", content: "recent prompt", timestamp: 1_000_000 },
+    ];
+    // 200 fat tool results = ~20MB, ten times the budget.
+    for (let i = 0; i < 200; i++) {
+      rows.push({
+        _id: `messages_fat_${i}`, conversation_id: CONV, role: "user", content: "",
+        tool_results: [{ tool_use_id: `toolu_${i}`, content: fat }],
+        timestamp: 999_000 - i,
+      });
+    }
+    const db = makeFakeDb({ messages: rows });
+    let docsRead = 0;
+    const counting = {
+      query: (table: string) => {
+        const q = (db as any).query(table);
+        const iter = q[Symbol.asyncIterator].bind(q);
+        q[Symbol.asyncIterator] = async function* () {
+          for await (const r of iter()) { docsRead++; yield r; }
+        };
+        return q;
+      },
+    } as any;
+
+    const out = await collectNavigableUserMessages(counting, CONV);
+    // The newest prompt still arrives — it is the first row the desc walk sees.
+    expect(out.map((m) => m.content)).toEqual(["recent prompt"]);
+    // ...and the walk stopped near the budget instead of reading all 201 rows.
+    const budgetDocs = Math.ceil(NAV_USER_MESSAGES_BYTE_BUDGET / 100_000) + 2;
+    expect(docsRead).toBeLessThanOrEqual(budgetDocs * 2);
+    expect(docsRead).toBeLessThan(201);
+  });
+
+  test("a normal conversation is unaffected by the budget", async () => {
+    const rows: any[] = [];
+    for (let i = 0; i < 40; i++) {
+      rows.push({ _id: `messages_p${i}`, conversation_id: CONV, role: "user", content: `prompt ${i}`, timestamp: 1000 + i });
+    }
+    const db = makeFakeDb({ messages: rows });
+    const out = await collectNavigableUserMessages(db, CONV);
+    expect(out).toHaveLength(40);
+    expect(out[0].content).toBe("prompt 0");
+    expect(out[39].content).toBe("prompt 39");
   });
 });

@@ -9200,7 +9200,7 @@ async function walkSpawnerCandidates(
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
   const tmuxPanes = spawnRegistry.hasEntries()
-    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid} #{session_created}"]).catch(() => ({ stdout: "" }))).stdout
     : "";
   const startedAt = transcriptStartedAt(filePath);
   const candidates: SpawnerCandidate[] = [];
@@ -13560,10 +13560,36 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // prompt IS our message sitting in the input box: the submit-verify loop must
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
-export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
+export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
   const recent = paneContent.split("\n").slice(-80).join("\n");
   const composer = tmuxComposerRegion(recent);
-  return composer !== null && /\[[^\]\n]*pasted[^\]\n]*\]/i.test(composer);
+  if (composer === null) return false;
+  const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
+  return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
+}
+
+// The "+N lines" a collapsed chip prints for this payload. Claude Code counts
+// the line BREAKS, not the lines, so a four-line paste with no trailing newline
+// reads "+3 lines" (measured on 2.1.275; wrapping a 400-column line in a
+// 200-column pane does not change the number). Null when the payload is one
+// line, which is the case whose chip prints no count at all.
+export function pasteChipLines(payload: string): number | null {
+  const breaks = (payload.match(/\n/g) ?? []).length;
+  return breaks > 0 ? breaks : null;
+}
+
+// Does this chip belong to someone else? A collapsed chip hides its text, so
+// the count it prints is the only thing on screen that says whose paste it is.
+// Reading ANY single chip as our own payload is how a human's unsent paste got
+// submitted as our message — and acked as delivered while the agent received
+// the bare "[Pasted text #1 +20 lines]" placeholder (ct-51354). A chip that
+// prints no count says nothing either way and keeps the benefit of the doubt:
+// not every client's chip carries one, and a single-line paste never does.
+export function pasteChipContradicts(chip: string, expectedLines: number | null | undefined): boolean {
+  if (expectedLines === undefined) return false;
+  const shown = /\+\s*(\d+)\s+lines?/i.exec(chip);
+  if (!shown) return false;
+  return Number(shown[1]) !== expectedLines;
 }
 
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
@@ -15821,6 +15847,8 @@ export type TmuxSubmitVerifyOpts = {
   pasteConfirmed: boolean;
   contentPrefix: string;
   bracketedPaste?: boolean;
+  /** The "+N lines" our own payload's chip would print — see pasteChipLines. */
+  chipLines?: number | null;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15933,7 +15961,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again, opts.chipLines));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15970,7 +15998,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane, opts.chipLines));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -16263,7 +16291,9 @@ export async function awaitTmuxComposerPayload(
     const composer = tmuxComposerRegion(pane) ?? "";
     const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+      ? chips.length === 1
+        && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+        && !pasteChipContradicts(chips[0], pasteChipLines(payload))
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -16610,6 +16640,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
       bracketedPaste: bracketed,
+      chipLines: pasteChipLines(sanitized),
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,

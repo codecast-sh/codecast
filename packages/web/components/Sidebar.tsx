@@ -314,11 +314,17 @@ function NavSection({
       </div>
       {/* Nested rows — a slide-open list aligned under this row's icon. */}
       {hasChildren && (
-        <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
-          <div className="ml-[17px] my-0.5 border-l border-sol-border/50 overflow-y-auto max-h-96">
-            {items!.map((child) => (
-              <SectionRow key={child.id} row={child} />
-            ))}
+        // A grid whose single row animates 0fr → 1fr opens to the list's own
+        // height, so a section with twenty channels shows twenty. The old
+        // max-height capped it at 384px and hid the rest behind a second
+        // scrollbar inside a sidebar that already scrolls.
+        <div className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+          <div className="overflow-hidden">
+            <div className="ml-[17px] my-0.5 border-l border-sol-border/50">
+              {items!.map((child) => (
+                <SectionRow key={child.id} row={child} />
+              ))}
+            </div>
           </div>
         </div>
       )}

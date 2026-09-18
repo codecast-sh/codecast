@@ -10,6 +10,7 @@
 // Deliberately logo-less: a kind icon in an accent tile plus the name in strong
 // type, never a third-party logo asset.
 
+import { openExternalUrl } from "./desktop";
 import { useState, type ComponentType, type CSSProperties } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -110,7 +111,7 @@ export function useAppConnection(
     fallback: string,
   ) => {
     const res = await mint();
-    if (res?.ok && res.url) window.open(res.url, "_blank", "noopener");
+    if (res?.ok && res.url) openExternalUrl(res.url);
     else setError(res?.error ?? fallback);
   };
 
@@ -125,7 +126,7 @@ export function useAppConnection(
         setError("Join or create a team first, or install the GitHub App for yourself");
         return;
       }
-      window.open(url, "_blank", "noopener");
+      openExternalUrl(url);
       return;
     }
     if (descriptor.connectKind !== "oauth-popup") return;

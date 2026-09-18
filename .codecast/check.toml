@@ -1,0 +1,8 @@
+# .codecast/check.toml: the TypeScript programs `cast check` verifies in this
+# tree, by the name a caller uses. Tracked, so every worktree inherits it. One
+# shared tsc watcher per project answers every session on the tree; never run
+# `tsc --noEmit` by hand. `cast check <name>` checks one, `cast check` all.
+[projects]
+cli = "packages/cli/tsconfig.json"
+web = "packages/web/tsconfig.json"
+convex = "packages/convex/convex/tsconfig.json"

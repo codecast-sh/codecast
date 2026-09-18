@@ -1303,6 +1303,11 @@ export default defineSchema({
       was: v.optional(v.string()),
       note: v.optional(v.string()),
     }))),
+    // The asks (org-staffing.md S19): what the proposal asks of the person,
+    // each with the changes folded inside it, by seq. Written by the author
+    // at create and checked as a partition of the changes; a row without
+    // them derives them on read (resolveOrgAsks).
+    asks: v.optional(v.array(v.object({ title: v.string(), why: v.string(), effect: v.string(), seqs: v.array(v.number()) }))),
     created_at: v.number(),
     updated_at: v.number(),
     resolved_at: v.optional(v.number()),

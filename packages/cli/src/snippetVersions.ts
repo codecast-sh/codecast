@@ -12,7 +12,7 @@
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
 const TASK_VERSION = "8"; // bumped: how to choose fresh versus inline runs; fresh runs stay out of the inbox, a once run posts its result back
-const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
+const WORK_VERSION = "10"; // bumped: small quick work needs no task; bind only when the work warrants a task or plan
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "10";

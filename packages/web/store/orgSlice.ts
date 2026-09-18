@@ -29,7 +29,7 @@ import {
   type OrgTree,
 } from "../components/org/orgTypes";
 import { CHIEF_OF_STAFF_HANDLE, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
-import { describeOrgChange, isOrgChangeDecidable, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { describeOrgChange, isOrgChangeDecidable, resolveOrgAsks, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { isConvexId } from "../lib/entityLinks";
 
 /** An optimistic edit awaiting the server's echo (see the header). The tree
@@ -49,7 +49,7 @@ export type OrgIntent =
   /** The role's line (the-line.md L2): the workflow slug its scope runs on.
    *  `from` is the slug the tree row held before, for a refusal to restore. */
   | { kind: "line"; id: string; role_id: string; slug: string; from?: string; at: number }
-  | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; edits?: Record<string, unknown>; at: number }
+  | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; edits?: Record<string, unknown>; /** The ask this verdict came from (decideOrgProposalAsk): a refusal of that call reverts these rows and no others. */ ask?: number; at: number }
   /** Withdraw a proposal from the pane (S4 supersession): the list row flips
    *  to withdrawn; the server's resolved_at stamp is the echo. */
   | { kind: "withdraw"; id: string; proposal_id: string; short_id: string; at: number }
@@ -253,6 +253,12 @@ export type OrgSliceActions = {
    *  `kinds`, only changes of those kinds ("Accept group" on the records
    *  card, S9); the server takes the same filter. */
   acceptAllOrgProposal: (proposalId: string, opts?: { kinds?: string[] }) => void;
+  /** Accept or skip one ask (S19): every row in it that still waits flips
+   *  on the draft, and one dispatch runs orgProposals.decideAsk, which
+   *  applies them in order through the accept all core (or skips them) and
+   *  echoes per change. `askIndex` is the index into the asks both sides
+   *  resolve with the same function (resolveOrgAsks). */
+  decideOrgProposalAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip") => void;
   /** Accept or skip one change (S5). Accept is optimistic: the row flips to
    *  accepted and dispatch runs orgProposals.decide, which applies it and
    *  echoes applied or failed. Edits ride along as the patch decide takes. */
@@ -599,6 +605,20 @@ function applyRoleFields(role: OrgRole, fields: OrgUpdateRoleInput, keys: (keyof
  *  draft and for the replay onto a push that still carries the old status.
  *  The edits ride the intent, so a stale push that replaced the row with the
  *  server's copy (no edits yet) gets them back too. */
+/** Flip every change of a proposal that still waits on a verdict and passes
+ *  `match`, one intent each, so a refusal of the whole call puts every row
+ *  back and a partial echo settles row by row. Accept all and an ask's
+ *  verdict are the same gesture over a different set of rows. */
+function decideWaitingChanges(draft: OrgDraft, proposalId: string, to: "accepted" | "skipped", match: (c: OrgProposalChange) => boolean, ask?: number): void {
+  const now = Date.now();
+  for (const c of Object.values(draft.orgProposalChanges)) {
+    if (c.proposal_id !== proposalId || !isOrgChangeDecidable(c.status) || !match(c)) continue;
+    const intent: OrgIntent = { kind: "decideChange", id: intentId(), change_id: c._id, proposal_id: proposalId, from: c.status, to, line: describeOrgChange(c.change), ...(ask !== undefined ? { ask } : {}), at: now };
+    applyOrgChangeIntent(draft.orgProposalChanges, intent);
+    pushIntent(draft, intent);
+  }
+}
+
 export function applyOrgChangeIntent(changes: Record<string, OrgProposalChange>, intent: Extract<OrgIntent, { kind: "decideChange" }>): void {
   const c = changes[intent.change_id];
   if (!c || c.decided_by !== undefined || c.status === intent.to) return;
@@ -773,6 +793,7 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "decideOrgProposalChange" && i.kind === "decideChange" && i.change_id === args[0]) ||
     (action === "withdrawOrgProposal" && i.kind === "withdraw" && i.proposal_id === args[0]) ||
     (action === "acceptAllOrgProposal" && i.kind === "decideChange" && i.proposal_id === args[0]) ||
+    (action === "decideOrgProposalAsk" && i.kind === "decideChange" && i.proposal_id === args[0] && i.ask === args[1]) ||
     (action === "staffChiefOfStaff" && i.kind === "staff" && i.stub.client_id === (args[0] as OrgStaffInput | undefined)?.client_id) ||
     (action === "createOrgRole" && i.kind === "createRole" && i.stub.client_id === (args[0] as OrgCreateRoleInput | undefined)?.client_id) ||
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
@@ -1037,15 +1058,16 @@ export function createOrgSlice(): OrgSliceImpl {
     // accepted, one intent each, so a refusal of the whole call puts every
     // row back and a partial echo settles row by row.
     acceptAllOrgProposal: action(function (this: OrgDraft, proposalId: string, opts?: { kinds?: string[] }) {
-      const now = Date.now();
       const kinds = opts?.kinds?.length ? new Set(opts.kinds) : null;
-      for (const c of Object.values(this.orgProposalChanges)) {
-        if (c.proposal_id !== proposalId || !isOrgChangeDecidable(c.status)) continue;
-        if (kinds && !kinds.has(c.change.kind)) continue;
-        const intent: OrgIntent = { kind: "decideChange", id: intentId(), change_id: c._id, proposal_id: proposalId, from: c.status, to: "accepted", line: describeOrgChange(c.change), at: now };
-        applyOrgChangeIntent(this.orgProposalChanges, intent);
-        pushIntent(this, intent);
-      }
+      decideWaitingChanges(this, proposalId, "accepted", (c) => !kinds || kinds.has(c.change.kind));
+    }),
+
+    decideOrgProposalAsk: action(function (this: OrgDraft, proposalId: string, askIndex: number, verdict: "accept" | "skip") {
+      const rows = Object.values(this.orgProposalChanges).filter((c) => c.proposal_id === proposalId);
+      const ask = resolveOrgAsks(this.orgProposals[proposalId]?.asks, rows)[askIndex];
+      if (!ask) return;
+      const seqs = new Set(ask.seqs);
+      decideWaitingChanges(this, proposalId, verdict === "accept" ? "accepted" : "skipped", (c) => seqs.has(c.seq), askIndex);
     }),
 
     decideOrgProposalChange: action(function (this: OrgDraft, changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) {

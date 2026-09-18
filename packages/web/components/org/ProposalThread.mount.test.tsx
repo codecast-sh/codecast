@@ -1,12 +1,13 @@
-// Mounts the proposal's conversation (org-staffing.md S18) and the pane's
-// revise rows in jsdom against the revised fixture proposal. The thread
-// embed is the same conversation view a session uses; here it is a stub that
-// captures what the pane hands it (the send override, the about line), so
-// the test can prove: the next message names the selected change and its
-// number, clearing it talks about the whole proposal, a removed change reads
-// struck with the author's note, an amended one shows what moved, an added
-// one is marked new, and the strip counts what landed since the reader last
-// looked. Run: bun components/org/ProposalThread.mount.test.tsx
+// Mounts the proposal's conversation (org-staffing.md S19) in jsdom against
+// the revised fixture proposal. The thread embed is the same conversation view
+// a session uses; here it is a stub that captures what the thread hands it
+// (the window start, the letter, the reading density, the send override, the
+// composer line), so the test can prove: the letter is the author's first
+// bubble with one line of introduction the first time, the embed starts at
+// the proposal and reads condensed, the next message names the ask or the
+// change it is about, clearing it talks about the whole proposal, and on the
+// phone the bar at the foot counts the asks and opens them.
+// Run: bun components/org/ProposalThread.mount.test.tsx
 import assert from "node:assert/strict";
 
 async function verifyProposalThread() {
@@ -18,153 +19,142 @@ async function verifyProposalThread() {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const { mock } = await import("bun:test");
   const React = await import("react");
-  const embed: { onSendOverride?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; composerNode?: React.ReactNode; conversationId?: string } = {};
+  const embed: { onSendOverride?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; props?: any } = {};
   mock.module("../anchor/AnchorConversation", () => ({
     AnchorConversation: (props: any) => {
-      embed.onSendOverride = props.onSendOverride; embed.composerNode = props.composerNode; embed.conversationId = props.conversationId;
-      return React.createElement("div", { "data-thread": props.conversationId }, props.composerNode, React.createElement("textarea", null));
+      embed.onSendOverride = props.onSendOverride; embed.props = props;
+      return React.createElement("div", { "data-thread": props.conversationId }, props.leadNode, React.createElement("div", { "data-live": true }, "live messages"), props.composerNode, React.createElement("textarea", null));
     },
   }));
   const toasts: string[] = [];
   mock.module("sonner", () => ({ toast: { error: (m: string) => toasts.push(`error:${m}`), warning: (m: string) => toasts.push(`warning:${m}`), success: (m: string) => toasts.push(`success:${m}`) } }));
   mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => React.createElement("div", { "data-md": true }, content) }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-  mock.module("./ProposalAuthorPill", () => ({ ProposalAuthorPill: ({ author }: any) => React.createElement("span", { "data-proposal-author": author.kind }, author.name) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
-  const { ProposalThread } = await import("./ProposalThread");
-  const { StaffingPane } = await import("./StaffingPane");
+  const { ProposalThread, AsksSheet } = await import("./ProposalThread");
   const { ORG_FIXTURE } = await import("./orgFixture");
-  const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } = await import("./orgStaffingFixture");
-  const { findChiefOfStaff } = await import("./staffingModel");
-  const { proposalThread, revisedSince } = await import("./staffingRevise");
-  const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
+  const { ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } = await import("./orgStaffingFixture");
+  const { proposalThread } = await import("./staffingRevise");
+  const { proposalAsks } = await import("./staffingAsks");
+  const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", avatar: "owl", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
   const proposal = ORG_STAFFING_FIXTURE_REVISED_PROPOSAL;
   const thread = proposalThread(proposal, chiefTree)!;
+  const asks = proposalAsks(proposal);
   const root = createRoot(document.getElementById("root")!);
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
   const text = () => document.body.textContent ?? "";
   const click = async (el: Element | null) => { assert.ok(el, "missing element"); await act(async () => { (el as HTMLElement).click(); }); };
 
-  // ── the thread: the next message names the selected change ──
   const said: string[] = [];
   const calls: string[] = [];
   const budget = proposal.changes.find((c) => c._id === "fixture-change-93")!;
-  const renderThread = (about: typeof budget | null, layout: "side" | "stack" | "phone" = "side") => act(async () => root.render(React.createElement(ProposalThread, {
-    proposal, thread, layout, about,
+  const renderThread = (extra: Record<string, unknown>) => act(async () => root.render(React.createElement(ProposalThread, {
+    proposal, thread, layout: "lead", about: null, firstTime: true, now: Date.now(),
     onClearAbout: () => calls.push("clear"),
-    onSay: (conv: string, shortId: string, seq: number | null, body: string) => said.push(`${conv}|${shortId}|${seq}|${body}`),
+    onSay: (conv: string, shortId: string, on: { changeSeq: number | null; askIndex: number | null }, body: string) => said.push(`${conv}|${shortId}|${on.changeSeq}|${on.askIndex}|${body}`),
     onOpenSession: (id: string) => calls.push(`open:${id}`),
-    revisedRows: revisedSince(proposal.changes, 0),
-    onBackToList: () => calls.push("back"),
-  })));
-  await renderThread(budget);
-  assert.equal(q("[data-proposal-thread]")!.getAttribute("data-proposal-thread"), "fixture-chief-conv");
-  assert.equal(embed.conversationId, "fixture-chief-conv");
-  assert.match(text(), /Talk to Chief of Staff, who wrote this/);
-  assert.equal(q("[data-about-line]")!.getAttribute("data-about-change"), "fixture-change-93");
-  assert.match(q("[data-about-line]")!.textContent!, /about this change.*800,?000|about this change/);
-  await embed.onSendOverride!("  that is too much  ");
-  assert.deepEqual(said, ["fixture-chief-conv|op-9|3|that is too much"]);
-  await embed.onSendOverride!("   ");
-  assert.equal(said.length, 1, "a blank line sends nothing");
-  // A picture alone is refused out loud; words with a picture send the words and say so.
-  await embed.onSendOverride!("", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
-  assert.equal(said.length, 1, "a picture alone sends nothing");
-  assert.deepEqual(toasts.splice(0), ["error:This conversation takes text for now; the picture was not sent."]);
-  await embed.onSendOverride!("see this", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
-  assert.equal(said[1], "fixture-chief-conv|op-9|3|see this");
-  assert.deepEqual(toasts.splice(0), ["warning:Sent your words; the picture was not, this conversation takes text for now."]);
-  await click(q("[data-about-clear]"));
-  assert.deepEqual(calls, ["clear"]);
-  // Nothing selected: the whole proposal, and the send carries no row.
-  await renderThread(null);
-  assert.equal(q("[data-about-line]")!.getAttribute("data-about-change"), "");
-  assert.match(q("[data-about-line]")!.textContent!, /the whole proposal/);
-  await embed.onSendOverride!("why is growth in there");
-  assert.equal(said[2], "fixture-chief-conv|op-9|null|why is growth in there");
-  assert.equal(q("[data-thread-back]"), null, "no back control off the phone");
-  // A session author is not a name: the header says "the agent that wrote this" and nothing after it.
-  await act(async () => root.render(React.createElement(ProposalThread, {
-    proposal, thread: { ...thread, name: "the agent that wrote this", named: false, role: null }, layout: "side", about: null,
-    onClearAbout: () => {}, onSay: () => {}, onOpenSession: () => {},
-  })));
-  assert.match(text(), /Talk to the agent that wrote this/);
-  assert.doesNotMatch(text(), /who wrote this/);
-  // Phone: the way back to the list, and the revise notice with it.
-  await renderThread(null, "phone");
-  assert.ok(q("[data-thread-back]"));
-  assert.match(q("[data-thread-revised]")!.textContent!, /Chief of Staff removed 1, changed 1 and added 1 since you last looked/);
-  await click(q("[data-thread-revised]"));
-  assert.equal(calls.at(-1), "back");
-
-  // ── the pane: revise rows under the reader ──
-  const paneCalls: string[] = [];
-  const renderPane = (extra: Record<string, unknown>) => act(async () => root.render(React.createElement(StaffingPane, {
-    tree: chiefTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, selectedChangeId: null,
-    chief: findChiefOfStaff(chiefTree), reviewing: false, now: Date.now(), introSeen: true,
-    onSelectChange: (id: string | null) => paneCalls.push(`select:${id}`),
-    onDecide: (id: string, v: string) => paneCalls.push(`decide:${id}:${v}`),
-    onAcceptAll: () => paneCalls.push("acceptAll"),
-    onEditRole: () => {}, onSelectNode: () => {}, onOpenSession: () => {}, onPickProposal: () => {}, onHireChief: () => {}, onProposeNow: () => {},
-    onAskAbout: (c: any) => paneCalls.push(`ask:${c._id}`),
-    revised: { rows: revisedSince(proposal.changes, 0), who: "Chief of Staff", onSeen: () => paneCalls.push("seen") },
-    threadNode: React.createElement("div", { "data-thread-slot": true }, "thread here"),
     ...extra,
   })));
-  await renderPane({});
-  // The strip names what landed; the removed row leaves the count.
-  assert.match(q("[data-revised-strip]")!.textContent!, /Chief of Staff removed 1, changed 1 and added 1 since you last looked/);
-  assert.equal(q("[data-progress]")!.textContent, "1 of 4 decided");
-  assert.equal(qa("[data-change-row]").length, 5, "the removed row stays in the list, struck");
-  const removed = q('[data-change-row="fixture-change-92"]')!;
-  assert.equal(removed.getAttribute("data-change-status"), "removed");
-  assert.equal(removed.getAttribute("data-revised"), "removed");
-  assert.equal(removed.getAttribute("data-revised-new"), "true");
-  assert.match(removed.querySelector("[data-revision]")!.textContent!, /Removed.*You said the SEO plan is winding down/);
-  assert.equal(removed.querySelectorAll('button[aria-label="Accept"]').length, 0, "a removed change is nobody's to decide");
-  assert.equal(removed.querySelector("[data-status]")!.getAttribute("data-status"), "removed");
-  // An amended row shows what moved; the reader's verdicts stay.
-  const amended = q('[data-change-row="fixture-change-93"]')!;
-  assert.match(amended.querySelector("[data-revision]")!.textContent!, /Changed.*Raised to what four afternoons/);
-  assert.match(amended.querySelector("[data-revision-moves]")!.textContent!, /tokens a day: was 600,000, now 800,000/);
-  assert.ok(amended.querySelector('button[aria-label="Accept"]'));
-  // An added row is marked new.
-  const added = q('[data-change-row="fixture-change-95"]')!;
-  assert.equal(added.querySelector("[data-revised-tag]")!.textContent, "new");
-  assert.match(added.querySelector("[data-revision]")!.textContent!, /New.*You asked who watches the releases/);
-  // The applied row was decided by the person: untouched by the revise.
-  assert.equal(q('[data-change-row="fixture-change-94"]')!.getAttribute("data-revised"), null);
-  // The progress strip drops the removed row.
-  assert.equal(qa('[role="group"][aria-label="Changes, one block each"] button').length, 4);
-  // Got it clears the strip; the thread sits under the list when the page hands it over.
-  await click(q("[data-revised-seen]"));
-  assert.equal(paneCalls.at(-1), "seen");
-  assert.ok(q("[data-thread-slot]"));
-  assert.equal(q("[data-composer]"), null, "the chief's composer yields to the proposal's thread");
-  // Selecting a row: "Ask about this" sits with the verdicts.
-  await renderPane({ selectedChangeId: "fixture-change-93" });
-  await click(q('[data-change-row="fixture-change-93"] [data-ask-about]'));
-  assert.equal(paneCalls.at(-1), "ask:fixture-change-93");
-  // The applied row still takes a question; the removed one does not.
-  await renderPane({ selectedChangeId: "fixture-change-94" });
-  assert.ok(q('[data-change-row="fixture-change-94"] [data-ask-about]'));
-  await renderPane({ selectedChangeId: "fixture-change-92" });
-  assert.equal(q('[data-change-row="fixture-change-92"] [data-ask-about]'), null);
-  // Phone: the list leads, the bar at its foot opens the conversation and counts the revises.
-  await renderPane({ threadNode: null, discuss: { name: "Chief of Staff", named: true, updated: 3, onOpen: () => paneCalls.push("discuss") } });
-  assert.equal(q("[data-thread-slot]"), null);
-  assert.match(q("[data-discuss-bar]")!.textContent!, /Talk to Chief of Staff about this3 revised/);
-  await click(q("[data-discuss-bar] button"));
-  assert.equal(paneCalls.at(-1), "discuss");
-  // A session author is not a name: the bar and the header say "the agent that wrote this".
-  await renderPane({ threadNode: null, discuss: { name: "the agent that wrote this", named: false, updated: 0, onOpen: () => {} } });
-  assert.match(q("[data-discuss-bar]")!.textContent!, /Talk to the agent that wrote this/);
-  assert.doesNotMatch(q("[data-discuss-bar]")!.textContent!, /about this/);
-  // A proposal nobody agent wrote: the chief's composer, as before.
-  await renderPane({ threadNode: undefined, discuss: null, revised: undefined });
-  assert.ok(q("[data-composer]"));
+
+  // ── the letter is the author's first bubble, above the live messages ──
+  await renderThread({});
+  assert.equal(q("[data-proposal-thread]")!.getAttribute("data-proposal-thread"), "fixture-chief-conv");
+  assert.equal(embed.props.since, proposal.created_at, "the embed starts at the proposal");
+  assert.equal(embed.props.initialDensity, "condensed", "the author's working turns fold away");
+  assert.equal(embed.props.hideDiff, true);
+  assert.equal(embed.props.hideHeader, true);
+  const letter = q("[data-proposal-letter]")!;
+  assert.ok(letter, "the letter renders as the lead node");
+  assert.equal(letter.compareDocumentPosition(q("[data-live]")!) & Node.DOCUMENT_POSITION_FOLLOWING, Node.DOCUMENT_POSITION_FOLLOWING, "the letter sits above the live messages");
+  assert.equal(q("[data-letter-author]")!.textContent, "Chief of Staff");
+  assert.equal(q("[data-proposal-letter] [data-avatar]")!.getAttribute("data-avatar"), "owl");
+  assert.match(letter.textContent!, /\d+[smhd] ago/);
+  // The first time: one line of introduction, in the author's voice.
+  assert.match(q("[data-letter-intro]")!.textContent!, /^I am your Chief of Staff, an agent that looks at how the work here is organized/);
+  assert.match(q("[data-letter-lead]")!.textContent!, /The platform project has no owner/);
+  assert.equal(q("[data-letter-toggle]"), null, "a short letter has no fold");
+  // No header line of the thread's own: the bubble says who and when; the
+  // full session is the icon on the name's line.
+  assert.doesNotMatch(text(), /Talk to|who wrote this/);
+  await click(q("[data-thread-open]"));
+  assert.equal(calls.pop(), "open:fixture-chief-conv");
+  // Nothing is about anything yet: no line above the box.
+  assert.equal(q("[data-about-line]"), null);
+  await embed.onSendOverride!("why is growth in there");
+  assert.equal(said.pop(), "fixture-chief-conv|op-9|null|null|why is growth in there");
+  // Not the first time: no introduction.
+  await renderThread({ firstTime: false });
+  assert.equal(q("[data-letter-intro]"), null);
+  assert.ok(q("[data-letter-lead]"));
+
+  // ── a long letter leads with its opening; the rest and the evidence fold ──
+  const long = { ...proposal, summary_md: `${"Growth is past its limit and the platform project has no owner. ".repeat(16)}\n\nWhat I looked at: every plan and task under Growth.\n\nEvidence, what could not be verified, findings and escalations: https://codecast.sh/a/fixture` };
+  await renderThread({ proposal: long });
+  assert.doesNotMatch(q("[data-letter-lead]")!.textContent!, /What I looked at/);
+  assert.equal(q("[data-letter-rest]"), null);
+  assert.equal(q("[data-letter-evidence]"), null, "the evidence link waits with the rest");
+  await click(q("[data-letter-toggle]"));
+  assert.match(q("[data-letter-rest]")!.textContent!, /What I looked at: every plan and task under Growth/);
+  assert.doesNotMatch(q("[data-letter-rest]")!.textContent!, /codecast\.sh/);
+  assert.equal(q<HTMLAnchorElement>("[data-letter-evidence]")!.getAttribute("href"), "https://codecast.sh/a/fixture");
+
+  // ── the next message names the ask, or the change, it is about ──
+  await renderThread({ about: { kind: "ask", ask: asks[0] } });
+  assert.equal(q("[data-about-line]")!.getAttribute("data-about-ask"), "0");
+  assert.match(q("[data-about-line]")!.textContent!, new RegExp(`Asking about${asks[0].title}`));
+  await embed.onSendOverride!("  that seems like a lot  ");
+  assert.equal(said.pop(), "fixture-chief-conv|op-9|null|0|that seems like a lot");
+  await click(q("[data-about-clear]"));
+  assert.equal(calls.pop(), "clear");
+  await renderThread({ about: { kind: "change", change: budget } });
+  assert.equal(q("[data-about-line]")!.getAttribute("data-about-change"), "fixture-change-93");
+  assert.match(q("[data-about-line]")!.textContent!, /Asking about.*800,?000/);
+  await embed.onSendOverride!("that is too much");
+  assert.equal(said.pop(), "fixture-chief-conv|op-9|3|null|that is too much");
+  await embed.onSendOverride!("   ");
+  assert.equal(said.length, 0, "a blank line sends nothing");
+  // A picture alone is refused out loud; words with a picture send the words and say so.
+  await embed.onSendOverride!("", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
+  assert.equal(said.length, 0, "a picture alone sends nothing");
+  assert.deepEqual(toasts.splice(0), ["error:This conversation takes text for now; the picture was not sent."]);
+  await embed.onSendOverride!("see this", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
+  assert.equal(said.pop(), "fixture-chief-conv|op-9|3|null|see this");
+  assert.deepEqual(toasts.splice(0), ["warning:Sent your words; the picture was not, this conversation takes text for now."]);
+
+  // ── a session author is not a name ──
+  await renderThread({ thread: { ...thread, name: "the agent that wrote this", named: false, role: null } });
+  assert.equal(q("[data-letter-author]")!.textContent, "The agent that wrote this");
+  assert.equal(q("[data-proposal-letter] [data-avatar]"), null);
+  assert.match(q("[data-letter-intro]")!.textContent!, /^I am an agent that looked at how the work here is organized/);
+
+  // ── a paused author is said above the thread, with Resume ──
+  await renderThread({ thread: { ...thread, role: { ...thread.role!, status: "paused" } }, onResume: (id: string) => calls.push(`resume:${id}`) });
+  assert.match(q("[data-chief-paused]")!.textContent!, /Chief of Staff is paused/);
+  await click(qa("[data-chief-paused] button")[0]);
+  assert.equal(calls.pop(), "resume:fixture-role-chief");
+
+  // ── the phone: the conversation is the page, the bar at its foot opens the asks ──
+  await renderThread({ layout: "phone", asksBar: { toDecide: 3, total: 3, updated: 2, onOpen: () => calls.push("asks") } });
+  assert.equal(q("[data-proposal-thread]")!.getAttribute("data-thread-layout"), "phone");
+  assert.match(q("[data-asks-bar]")!.textContent!, /^3 to decide2 updated$/);
+  await click(q("[data-asks-bar]"));
+  assert.equal(calls.pop(), "asks");
+  await renderThread({ layout: "phone", asksBar: { toDecide: 0, total: 3, updated: 0, onOpen: () => {} } });
+  assert.equal(q("[data-asks-bar]")!.textContent, "All 3 decided");
+  assert.equal(q("[data-thread-back]"), null, "no list to go back to: the asks come to the conversation");
+  // The sheet over it: the scrim and the handle both close it.
+  await act(async () => root.render(React.createElement(AsksSheet, { onClose: () => calls.push("close") }, React.createElement("div", { "data-asks-inside": true }, "cards"))));
+  assert.ok(q("[data-asks-sheet] [data-asks-inside]"));
+  await click(q("[data-asks-scrim]"));
+  assert.equal(calls.pop(), "close");
+
+  // ── the DEV preview: the letter and a frame, no live session ──
+  await renderThread({ preview: true });
+  assert.ok(q("[data-thread-preview]"));
+  assert.ok(q("[data-thread-preview] [data-proposal-letter]"));
+  assert.equal(q("[data-thread]"), null);
 
   await act(async () => root.unmount());
   dom.window.close();
