@@ -682,6 +682,13 @@ export type InboxSession = {
   // click-through. agent_team_name/agent_name identify the teammate so a
   // name in a transcript can resolve to the sibling session carrying it.
   spawned_by_conversation_id?: string | null;
+  // The handoff pair (`cast handoff --to`, handoff.start): where a child came
+  // from and where a source continued. Links only; neither marks the row a
+  // subagent.
+  handed_off_from_conversation_id?: string | null;
+  handed_off_to_conversation_id?: string | null;
+  handed_off_from_details?: { conversation_id: string; short_id: string; title?: string | null; agent_type?: string | null; model?: string | null } | null;
+  handed_off_to_details?: { conversation_id: string; short_id: string; title?: string | null; agent_type?: string | null; model?: string | null } | null;
   agent_team_name?: string | null;
   agent_name?: string | null;
   active_plan?: PlanRef;
