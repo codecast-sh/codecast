@@ -15,6 +15,29 @@ export function buildTaskStartBody(shortId: string, sessionId: string | null): R
   return body;
 }
 
+// `cast task start` from a session that works for a role hands the task to that
+// role (org-roles-run-work.md R5). The server decides, because it holds the
+// session's role pointer; the CLI only says what happened.
+export function startedForRoleLine(result: { assigned_role?: { handle: string; name: string } | null } | null | undefined): string | null {
+  const role = result?.assigned_role;
+  return role ? `Assigned to @${role.handle} (${role.name}), the role this session works for` : null;
+}
+
+// `cast task ls --chain`: one group per assignee, the person first and then
+// each role under them by handle, so a reader sees whose work each row is
+// without reading a column. Rows keep the order the server gave them.
+export function groupTasksByAssignee<T extends { assignee?: string; assignee_name?: string }>(tasks: T[]): Array<{ label: string; tasks: T[] }> {
+  const groups = new Map<string, { label: string; tasks: T[] }>();
+  for (const t of tasks) {
+    const key = t.assignee ?? "";
+    const group = groups.get(key) ?? { label: t.assignee_name || t.assignee || "Nobody", tasks: [] };
+    group.tasks.push(t);
+    groups.set(key, group);
+  }
+  const isRole = (g: { label: string }) => g.label.startsWith("@");
+  return [...groups.values()].sort((a, b) => Number(isRole(a)) - Number(isRole(b)) || a.label.localeCompare(b.label));
+}
+
 // ─── Structured handoff and review verdict (docs/architecture/the-line.md L2, L3)
 
 export const HANDOFF_STATUSES = ["done", "blocked", "needs_context"] as const;

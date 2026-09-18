@@ -41,6 +41,9 @@ export interface SyncRecord {
     birthtimeMs: number;
     unit: "bytes" | "count" | "signatures";
     watermark: number | string;
+    /** Signature clients only: `watermark` one entry short, so a restart can
+     *  still prove the prefix when the last synced message kept streaming. */
+    settledWatermark?: string;
     prefixProven: boolean;
   };
 }

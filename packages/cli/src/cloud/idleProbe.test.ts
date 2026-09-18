@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { cloudIdleProbeScript } from "./idleProbe";
-import { baseProvisionScript } from "../browser/provisionLinux";
+import { idleWatchdogScript } from "../browser/provisionLinux";
 
 setDefaultTimeout(30_000);
 
@@ -115,7 +115,7 @@ test("the generated watchdog protects live work with a stale stamp, but still st
   executable("systemctl", `printf '%s' "$*" > '${f.root}/poweroff'`);
   fs.writeFileSync(path.join(f.root, "minutes"), "1");
   fs.writeFileSync(path.join(f.root, "stamp"), "old");
-  const original = baseProvisionScript(1).split("<<'IDLE'\n")[1]!.split("\nIDLE")[0]!;
+  const original = idleWatchdogScript();
   const script = original.replaceAll("/etc/cast-idle-minutes", `${f.root}/minutes`)
     .replaceAll("/run/cast-last-active", `${f.root}/state`)
     .replaceAll("/home/ubuntu/.codecast/host-active", `${f.root}/stamp`)

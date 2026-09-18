@@ -45,6 +45,7 @@ describe("isCodecastHookCommand", () => {
     "/home/u/.codecast/hooks/stable-feed-codex.sh",
     "~/.codecast/orchestration/scripts/agent-complete.sh",
     "/home/u/.claude/hooks/codecast-status.sh --quiet",
+    "/Users/x/.claude/hooks/codecast-prompt.sh",
   ])("%s is codecast's", (cmd) => {
     expect(isCodecastHookCommand(cmd, "/home/u")).toBe(true);
   });
@@ -78,6 +79,7 @@ describe("isCodecastOwnedHomePath", () => {
     expect(isCodecastOwnedHomePath(".claude/skills/codecast-orchestrate/SKILL.md")).toBe(true);
     expect(isCodecastOwnedHomePath(".claude/agents/reviewer.md")).toBe(true);
     expect(isCodecastOwnedHomePath(".claude/hooks/task-pulse.sh")).toBe(true);
+    expect(isCodecastOwnedHomePath(".claude/hooks/codecast-prompt.sh")).toBe(true);
     expect(isCodecastOwnedHomePath(".codecast/hooks/stable-feed-codex.sh")).toBe(true);
     expect(isCodecastOwnedHomePath(".claude/skills/my-skill/SKILL.md")).toBe(false);
     expect(isCodecastOwnedHomePath(".claude/agents/mine.md")).toBe(false);
@@ -85,9 +87,9 @@ describe("isCodecastOwnedHomePath", () => {
     expect(isCodecastOwnedHomePath(".claude/skills/codecast-orchestrate-fork/SKILL.md")).toBe(false);
   });
 
-  test("the table covers the five hooks, the skill, the three agents and .codecast", () => {
+  test("the table covers the six hooks, the skill, the three agents and .codecast", () => {
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".codecast");
-    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(5);
+    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(6);
     expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/agents/"))).toHaveLength(3);
   });
 });

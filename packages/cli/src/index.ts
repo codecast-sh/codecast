@@ -15,10 +15,11 @@ import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } f
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { buildTaskStartBody } from "./taskClaim.js";
+import { buildTaskStartBody, groupTasksByAssignee, startedForRoleLine } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import open from "open";
 import * as fs from "fs";
+import { selfExecInfo } from "./selfExec.js";
 import * as path from "path";
 import * as os from "os";
 import { spawn, spawnSync, execSync } from "./proc.js";
@@ -87,12 +88,15 @@ import type { RecoveryMode } from "@codecast/shared/contracts";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
+import { SESSION_REGISTER_HOOK } from "./sessionRegisterHook.js";
+import { TASK_PULSE_HOOK } from "./taskPulseHook.js";
+import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getSkillsVersion, getPrVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
@@ -118,7 +122,7 @@ import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import { runDoctor, type DoctorDeps } from "./doctor.js";
-import { CHECK_PROJECTS, checkProject, listWatchers, repoRoot, runWatcher } from "./check.js";
+import { CHECK_CONFIG_REL_PATH, checkProject, listWatchers, repoRoot, resolveProjects, runWatcher } from "./check.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
@@ -903,75 +907,6 @@ function readTaskPulse(): { task?: string; plan?: string } | null {
   return readTaskPulseFor(detectCurrentSessionId());
 }
 
-const TASK_PULSE_HOOK = `#!/bin/bash
-# Periodic task/plan reminder — emits a short nudge every N user messages
-set -uo pipefail
-
-INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
-[ -z "$SESSION_ID" ] && exit 0
-
-PULSE_FILE="$HOME/.codecast/task-pulse/$SESSION_ID.json"
-[ -f "$PULSE_FILE" ] || exit 0
-
-COUNTER_DIR="$HOME/.codecast/task-pulse/counters"
-mkdir -p "$COUNTER_DIR"
-COUNTER_FILE="$COUNTER_DIR/$SESSION_ID"
-COUNT=0
-[ -f "$COUNTER_FILE" ] && COUNT=$(cat "$COUNTER_FILE")
-COUNT=$((COUNT + 1))
-echo "$COUNT" > "$COUNTER_FILE"
-
-# Emit every 8 turns
-[ $((COUNT % 8)) -ne 0 ] && exit 0
-
-TASK=$(python3 -c "import sys,json; d=json.load(open('$PULSE_FILE')); parts=[]; t=d.get('task',''); p=d.get('plan','');
-[t and parts.append('task '+t), p and parts.append('plan '+p)]; print(', '.join(parts))" 2>/dev/null)
-[ -z "$TASK" ] && exit 0
-
-echo "<task-reminder>You are working on $TASK. Check progress against acceptance criteria.</task-reminder>"
-`;
-
-const SESSION_REGISTER_HOOK = `#!/bin/bash
-# Registers session-to-PID/TTY mapping for codecast daemon process discovery
-set -uo pipefail
-
-INPUT=$(cat)
-# Claude sends snake_case (session_id); grok runs these same hooks (it imports
-# ~/.claude/settings.json) with a camelCase envelope (sessionId) and also exports
-# GROK_SESSION_ID — accept all three so the claim is written for either client.
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id') or d.get('sessionId') or '')" 2>/dev/null)
-[ -z "$SESSION_ID" ] && SESSION_ID="\${GROK_SESSION_ID:-}"
-[ -z "$SESSION_ID" ] && exit 0
-
-# Walk up to find the agent process PID (claude, or grok running claude hooks)
-CLAUDE_PID=""
-CHECK_PID=$PPID
-for _ in 1 2 3 4; do
-  [ -z "$CHECK_PID" ] || [ "$CHECK_PID" = "1" ] && break
-  CMD=$(ps -o comm= -p "$CHECK_PID" 2>/dev/null)
-  if echo "$CMD" | grep -qiE 'claude|grok|2\\.1\\.' 2>/dev/null; then
-    CLAUDE_PID=$CHECK_PID
-    break
-  fi
-  CHECK_PID=$(ps -o ppid= -p "$CHECK_PID" 2>/dev/null | tr -d ' ')
-done
-
-[ -z "$CLAUDE_PID" ] && exit 0
-
-TTY=$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')
-[ -z "$TTY" ] || [ "$TTY" = "??" ] && exit 0
-
-REGISTRY_DIR="$HOME/.codecast/session-registry"
-mkdir -p "$REGISTRY_DIR"
-# launch_token: which LAUNCH wrote this claim. The daemon stamps it into the
-# pane env at every spawn and resume, so a claim carrying a superseded token
-# names a process the pane has already replaced (ct-49532). Empty for a session
-# codecast did not launch, which stays as unfenced as it was before.
-echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\",\\"launch_token\\":\\"$\{CODECAST_LAUNCH_TOKEN:-}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
-exit 0
-`;
-
 // One installer for every codecast agent hook: write the script, then register
 // it under each event in ~/.claude/settings.json without disturbing hooks the
 // user (or another tool) put there. Idempotent — a hook already registered for
@@ -1031,24 +966,58 @@ function installHookScript(fileName: string, script: string, events: readonly st
   }
 }
 
+function removeHookFromEvent(fileName: string, event: string): void {
+  const home = process.env.HOME || "";
+  const settingsFile = path.join(home, ".claude", "settings.json");
+  try {
+    if (!fs.existsSync(settingsFile)) return;
+    const settings: any = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+    const hookArray = settings.hooks?.[event];
+    if (!Array.isArray(hookArray)) return;
+    let modified = false;
+    for (const matcher of hookArray) {
+      if (!Array.isArray(matcher.hooks)) continue;
+      const before = matcher.hooks.length;
+      matcher.hooks = matcher.hooks.filter((h: { command?: string }) => !h.command?.includes(fileName));
+      if (matcher.hooks.length !== before) modified = true;
+    }
+    settings.hooks[event] = hookArray.filter((m: { hooks?: unknown[] }) => !Array.isArray(m.hooks) || m.hooks.length > 0);
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+    if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+    if (modified) fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+  } catch {
+    // Ignore errors - hook is optional enhancement
+  }
+}
+
 function installStatusHook(): void {
   installHookScript("codecast-status.sh", CODECAST_STATUS_HOOK, [
     // PostCompact is the only clearing signal a manual /compact emits: it ends
     // at an idle prompt and no Stop follows (ct-49533).
-    "UserPromptSubmit", "PreToolUse", "PreCompact", "PostCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
+    // UserPromptSubmit is codecast-prompt.sh (one process for all four jobs).
+    "PreToolUse", "PreCompact", "PostCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
   ]);
 }
 
 function installSessionRegisterHook(): void {
-  installHookScript("session-register.sh", SESSION_REGISTER_HOOK, ["SessionStart", "UserPromptSubmit"]);
+  installHookScript("session-register.sh", SESSION_REGISTER_HOOK, ["SessionStart"]);
 }
 
 function installThreadStateHook(): void {
-  installHookScript("thread-state.sh", THREAD_STATE_HOOK, ["UserPromptSubmit", "Stop"]);
+  installHookScript("thread-state.sh", THREAD_STATE_HOOK, ["Stop"]);
 }
 
 function installTaskPulseHook(): void {
-  installHookScript("task-pulse.sh", TASK_PULSE_HOOK, ["UserPromptSubmit"]);
+  // Script stays on disk so a stale settings entry is not a missing file.
+  // UserPromptSubmit runs it inside codecast-prompt.sh.
+  installHookScript("task-pulse.sh", TASK_PULSE_HOOK, []);
+}
+
+function installUserPromptHook(): void {
+  installHookScript("codecast-prompt.sh", USER_PROMPT_HOOK, ["UserPromptSubmit"]);
+  for (const name of ["codecast-status.sh", "session-register.sh", "thread-state.sh", "task-pulse.sh"] as const) {
+    removeHookFromEvent(name, "UserPromptSubmit");
+  }
 }
 
 // Not a hook: `statusLine` is a single command Claude Code runs to draw the bar
@@ -1270,6 +1239,7 @@ function getAgentLabel(agentType?: string): string | null {
   if (agentType === "grok") return "Grok";
   if (agentType === "gemini") return "Gemini";
   if (agentType === "opencode") return "OpenCode";
+  if (agentType === "muse") return "Muse Spark";
   return agentType;
 }
 
@@ -1775,6 +1745,7 @@ async function runOnboarding(config: Config): Promise<void> {
   await installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
+  installUserPromptHook();
 
   showWelcome();
 
@@ -2259,6 +2230,7 @@ const SNIPPET_SECTIONS = {
   calls: snippetSection("calls"),
   limits: snippetSection("limits"),
   computer: snippetSection("computer"),
+  check: snippetSection("check"),
   pr: snippetSection("pr"),
 } satisfies Record<string, SnippetSection>;
 
@@ -2438,6 +2410,7 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   if (ensureLimitsGuidanceForMultiAccount(config)) writeConfig(config);
   if (config.limits_enabled) installSnippetSection("limits", true);
   if (config.computer_enabled) installSnippetSection("computer", true);
+  if (config.check_enabled) installSnippetSection("check", true);
   if (config.pr_enabled) installSnippetSection("pr", true);
   // Messaging is on by default for memory installs — backfill/refresh + persist.
   const msgPatch = ensureMessagingForMemory(config);
@@ -2450,6 +2423,7 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   await installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
+  installUserPromptHook();
 }
 
 function uninstallOrchestration(): void {
@@ -2663,6 +2637,18 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
   } else if (config.computer_enabled && config.computer_version !== getComputerVersion()) {
     stampSnippet(config, "computer", getComputerVersion()); // shadow only, no file write
+    writeConfig(config);
+  }
+  if (config.check_enabled && snippetStale(config, "check")) {
+    const result = installSnippetSection("check", true);
+    stampSnippet(config, "check", getCheckVersion());
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Typecheck snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.check_enabled && config.check_version !== getCheckVersion()) {
+    stampSnippet(config, "check", getCheckVersion()); // shadow only, no file write
     writeConfig(config);
   }
 
@@ -3168,6 +3154,39 @@ program
     } else {
       console.log(`${c.dim}${result.short_id} was already visible in the inbox${c.reset}`);
     }
+  });
+
+program
+  .command("escalate")
+  .description(
+    "Put one of a role's sessions in front of the person, or take it back\n\n" +
+    "A session that reports to a role stays out of its owner's needs input: the\n" +
+    "role reads it first. Escalating makes it a card in the person's needs input\n" +
+    "with the role's face and your one line, which says what the person will\n" +
+    "decide. --clear takes it back under the role. A role uses this on its own\n" +
+    "sessions; a person can use it on a session they own. A session cannot\n" +
+    "escalate itself: it tells its role why, and the role decides.\n\n" +
+    "Examples:\n" +
+    "  cast escalate jx7c6zk \"the pricing copy is ready and needs your eye\"\n" +
+    "  cast escalate --clear jx7c6zk   # it no longer needs the person"
+  )
+  .argument("<session>", "Session short ID (e.g. jx7c6zk), UUID, or full ID")
+  .argument("[line]", "One line saying what the person will decide (required from a role)")
+  .option("--clear", "Take the session back under its role")
+  .action(async (session: string, line: string | undefined, opts: { clear?: boolean }) => {
+    const result = await cliPost("/cli/sessions/escalate", {
+      session_id: session,
+      ...(opts.clear ? { clear: true } : { line }),
+      from_session: callingSession(),
+    });
+    const role = `${c.cyan}@${result.role.handle}${c.reset}`;
+    if (opts.clear) {
+      console.log(result.changed
+        ? `${c.green}ok${c.reset} ${c.cyan}${result.short_id}${c.reset} is back under ${role} ${c.dim}— out of the person's needs input${c.reset}`
+        : `${c.dim}${result.short_id} was not escalated; it is already under @${result.role.handle}${c.reset}`);
+      return;
+    }
+    console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${c.dim}— in the person's needs input as${c.reset} ${role}${c.dim}: ${result.escalated_by_role.line} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
   });
 
 program
@@ -4240,6 +4259,11 @@ program
     "bot on a shared machine) can park a session on a human reviewer; it then\n" +
     "surfaces in the OWNER's inbox (web NEEDS INPUT + cast sessions/feed) marked\n" +
     "with who runs it. Owners reply with cast send or the web composer.\n\n" +
+    "Ownership decides whose inbox it is in. A session you run but own no part\n" +
+    "of leaves your inbox and stops notifying you, whatever state it is in; name\n" +
+    "its id to read it anyway. An owned session stays in the owner's inbox with\n" +
+    "no recency limit, and a handoff clears a dismiss, stash or snooze so it\n" +
+    "lands where they can see it.\n\n" +
     "You can own any session you can see in the feed (your own, or one shared\n" +
     "with a team you're in). Scripts should pass an exact email.\n\n" +
     "Examples:\n" +
@@ -5622,20 +5646,29 @@ program
 program
   .command("check [projects...]")
   .description(
-    "Typecheck this tree through one shared tsc watcher per project (cli, web, convex; default all).\n" +
-    "One watcher serves every session on the tree and re-checks only what changed, so an ask takes\n" +
-    "seconds instead of a full tsc run per session. Use this instead of `tsc --noEmit`."
+    "Typecheck this tree through one shared tsc watcher per project. One watcher serves every\n" +
+    "session on the tree and re-checks only what changed, so an ask takes seconds instead of a\n" +
+    `full tsc run per session. Use this instead of \`tsc --noEmit\`. Projects come from the tree's\n` +
+    `${CHECK_CONFIG_REL_PATH} ([projects] name = "path/tsconfig.json"; default: all of them), or,\n` +
+    "without one, the tsconfig nearest your directory. A project is also any directory or tsconfig path."
   )
   .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
   .action(async (projects: string[], o: { fresh?: boolean; json?: boolean }) => {
     const root = repoRoot();
-    const wanted = projects.length ? projects : Object.keys(CHECK_PROJECTS).filter((p) => fs.existsSync(path.join(root, CHECK_PROJECTS[p])));
+    let wanted;
+    try {
+      wanted = resolveProjects(root, projects);
+    } catch (err) {
+      console.error(`${fmt.error("✗")} ${(err as Error).message}`);
+      process.exit(2);
+    }
     let failed = 0;
     const results = [];
-    for (const project of wanted) {
+    for (const target of wanted) {
+      const project = target.name;
       try {
-        const r = await checkProject(project, root, { fresh: o.fresh, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
+        const r = await checkProject(target, root, { fresh: o.fresh, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
         results.push(r);
         if (r.errors > 0) failed++;
         if (!o.json) {
@@ -5654,10 +5687,10 @@ program
   });
 
 program
-  .command("check-watch <project> <root>", { hidden: true })
+  .command("check-watch <root> <project> <tsconfig>", { hidden: true })
   .description("Run one typecheck watcher in the foreground (internal; `cast check` starts these detached)")
-  .action(async (project: string, root: string) => {
-    await runWatcher(project, root);
+  .action(async (root: string, project: string, tsconfig: string) => {
+    await runWatcher(root, project, tsconfig);
   });
 
 program
@@ -5904,7 +5937,7 @@ program
         return;
       }
 
-  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi", "grok"];
+  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi", "grok", "muse"];
       if (!validAgents.includes(agentArg)) {
         console.error(`Unknown agent: ${agentArg}`);
         console.log(`Valid agents: ${validAgents.join(", ")}`);
@@ -8958,22 +8991,7 @@ program
   });
 
 function getExecutableInfo(command = "_daemon"): { executablePath: string; args: string[] } {
-  const execPath = process.execPath;
-  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
-
-  if (isBinary) {
-    return { executablePath: execPath, args: ["--", command] };
-  } else {
-    const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
-    const ext = isBundle ? ".js" : ".ts";
-    // _daemon is the daemon module; _watchdog has always been served by the CLI
-    // module. Anything else is a plain verb, so run the process entry, which
-    // claims the cheap fast-path verbs before the CLI graph loads.
-    let file = command === "_daemon" ? "daemon" : command === "_watchdog" ? "index" : "main";
-    if (file === "main" && !fs.existsSync(path.resolve(__dirname, file + ext))) file = "index";
-    const script = path.resolve(__dirname, file + ext);
-    return { executablePath: execPath, args: [script, command] };
-  }
+  return selfExecInfo(command);
 }
 
 function installWatchdogScript(): void {
@@ -9384,7 +9402,9 @@ program
     const { removeOwnedStatusLine } = await import("./capabilities/hooks.js");
     const hookFiles = [
       "codecast-status.sh",
+      USER_PROMPT_HOOK_FILE,
       "session-register.sh",
+      "thread-state.sh",
       "stable-feed.sh",
       "task-pulse.sh",
       STATUSLINE_HOOK_FILE,
@@ -10194,6 +10214,7 @@ program
       calls: { getVersion: getCallsVersion, install: (update = false) => installSnippetSection("calls", update), reEnable: "cast install calls" },
       limits: { getVersion: getLimitsVersion, install: (update = false) => installSnippetSection("limits", update), reEnable: "cast install limits" },
       computer: { getVersion: getComputerVersion, install: (update = false) => installSnippetSection("computer", update), reEnable: "cast install computer" },
+      check: { getVersion: getCheckVersion, install: (update = false) => installSnippetSection("check", update), reEnable: "cast install check" },
       pr: { getVersion: getPrVersion, install: (update = false) => installSnippetSection("pr", update), reEnable: "cast install pr" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
@@ -14302,6 +14323,33 @@ chatSlack
     console.log(`${c.green}✓${c.reset} ${person.name} ${c.dim}is now${c.reset} ${out.codecast_user_id ? `a teammate (${teammateRef})` : "shown under their Slack name"}${c.dim}; their past lines are being re-authored${c.reset}`);
   });
 
+// The other addresses this person uses. One person, several addresses: the
+// Slack match, task assignees and thread membership all read them.
+chatSlack
+  .command("me")
+  .description("Your other email addresses, so a Slack person under one of them is you")
+  .option("--add <email>", "Claim another address as yours")
+  .option("--remove <email>", "Drop one")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    if (options.add && options.remove) {
+      console.error("Give --add or --remove, not both");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/me/emails", {
+      ...(options.add ? { add: options.add } : {}),
+      ...(options.remove ? { remove: options.remove } : {}),
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`  ${c.bold}${result.email}${c.reset} ${c.dim}(primary)${c.reset}`);
+    for (const e of result.alternate_emails ?? []) console.log(`  ${e}`);
+    if (options.add) console.log(`${c.green}✓${c.reset} ${options.add} is yours${c.dim}; anyone already seen under it becomes you${c.reset}`);
+    if (options.remove) console.log(`${c.green}✓${c.reset} ${options.remove} removed`);
+  });
+
 // A person's own direct messages, on or off. Needs their connected Slack
 // account with the DM scopes (the web's Connect step grants them).
 chatSlack
@@ -15795,7 +15843,8 @@ work
   .option("-d, --derived", "Include derived/mined tasks (hidden by default)")
   .option("-n, --limit <n>", "Max results", "50")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
-  .option("--assignee <name>", "Filter by assignee (username, 'me', or user ID)")
+  .option("--assignee <name>", "Filter by assignee: a person (username, 'me', or user ID) or a role (@handle)")
+  .option("--chain <person>", "Everything in a person's reporting chain: their tasks and the tasks of every role under them ('me', a name, or a handle)")
   .option("--label <label>", "Filter by label (case-insensitive)")
   .option("--plan <plan_id>", "Filter by plan")
   .option("-v, --verbose", "Show descriptions")
@@ -15810,6 +15859,7 @@ work
     if (options.derived || options.all) body.include_derived = true;
     if (options.query) body.query = options.query;
     if (options.assignee) body.assignee = options.assignee;
+    if (options.chain) body.chain = options.chain;
     if (options.label) body.label = options.label;
     if (options.plan) body.plan_id = options.plan;
     body.project_path = getRealCwd();
@@ -15826,8 +15876,15 @@ work
     // Nest subtasks under their parents (shared with the web list so the two
     // read the same). A subtask whose parent isn't in this response — filtered
     // out by status, or past the limit — renders as a root, never dropped.
-    for (const row of buildTaskTree(tasks)) {
-      console.log(formatWorkItem(row.task, options.verbose, row.indent));
+    // --chain reads as the reporting line: one group per assignee.
+    const groups = options.chain
+      ? groupTasksByAssignee(tasks as Array<{ assignee?: string; assignee_name?: string }>)
+      : [{ label: "", tasks }];
+    for (const group of groups) {
+      if (group.label) console.log(`\n  ${c.bold}${group.label}${c.reset} ${fmt.muted(String(group.tasks.length))}`);
+      for (const row of buildTaskTree(group.tasks)) {
+        console.log(formatWorkItem(row.task, options.verbose, row.indent));
+      }
     }
     const suffix = options.all || options.status ? "" : fmt.muted(" (active only, use --all to see all)");
     console.log(fmt.muted(`\n  ${tasks.length} items`) + suffix);
@@ -15973,6 +16030,8 @@ work
     const sessionId = detectCurrentSessionId();
     const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
+    const roleLine = startedForRoleLine(result);
+    if (roleLine) console.log(`${c.dim}${roleLine}${c.reset}`);
 
     if (sessionId) writeTaskPulse(sessionId, shortId, result.plan_id);
 
@@ -20009,6 +20068,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     await installStatusLineHook();
     installTaskPulseHook();
     installThreadStateHook();
+    installUserPromptHook();
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
       console.log(`Updated to v${available} and restarted daemon.\n`);

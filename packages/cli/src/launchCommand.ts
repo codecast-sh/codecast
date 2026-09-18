@@ -13,6 +13,7 @@ import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS,
+  MUSE_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
   findModelOption,
   type AgentClientId,
@@ -108,6 +109,13 @@ export function getPermissionFlags(agentType: AgentClientId, config?: Config | n
     const existing = getAgentArgs(config, "grok") || "";
     if (existing.includes("--permission-mode") || existing.includes("--always-approve")) return null;
     return "--permission-mode bypassPermissions";
+  } else if (agentType === "muse") {
+    // muse's no-prompt flag is `--disable-approval` ("disable tool approval
+    // prompts for this run"); `--approval-mode never` and `--yolo` also pin
+    // a mode, so any of the three in configured args suppresses the default.
+    const existing = getAgentArgs(config, "muse") || "";
+    if (existing.includes("--disable-approval") || existing.includes("--approval-mode") || existing.includes("--yolo")) return null;
+    return "--disable-approval";
   } else if (agentType === "gemini") {
     // gemini flags TBD for TUI launch; print mode adds --yolo separately.
   }
@@ -152,6 +160,12 @@ export function permissionFlagsForMode(
     if (m === "bypass") return "--permission-mode bypassPermissions";
     if (m === "default") return null;
     return `--permission-mode ${m}`;
+  }
+  if (agentType === "muse") {
+    if (configuredArgs.includes("--disable-approval") || configuredArgs.includes("--approval-mode") || configuredArgs.includes("--yolo")) return null;
+    if (m === "bypass") return "--disable-approval";
+    if (m === "default") return null;
+    return `--approval-mode ${m}`;
   }
   return null;
 }
@@ -240,6 +254,11 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // pins a permission mode, so concatenating can't double up (codex shape).
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
+  } else if (agentType === "muse") {
+    // Same grok/codex shape: configured args + `--disable-approval`, with
+    // getPermissionFlags yielding null when agent_args.muse pins a mode.
+    if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
+    if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
   }
   // cursor / gemini: no configured args or permission flags today.
 
@@ -286,6 +305,14 @@ export function appendModelEffortFlags(
     // effort menu is interactive-only, like codex's).
     if (input.modelAlias) args.push("-m", input.modelAlias);
     if (input.requestedEffort && (GROK_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
+      args.push("--reasoning-effort", input.requestedEffort);
+    }
+  } else if (agentType === "muse") {
+    // muse selects a model with `--model <model-id>` (bare id, e.g.
+    // muse-spark-1.3-contributor) and takes reasoning effort as
+    // `--reasoning-effort` (none|minimal|low|medium|high|xhigh|max|ultra).
+    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (input.requestedEffort && (MUSE_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--reasoning-effort", input.requestedEffort);
     }
   }
@@ -368,6 +395,12 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
   } else if (agentType === "pi") {
     if (input.resumeId) args.push("--session", input.resumeId);
     else if (input.continueLast) args.push("--continue");
+  } else if (agentType === "muse") {
+    // `muse exec --session-id <uuid>` CONTINUES the session: verified live
+    // (scratch HOME, echo provider) — the follow-up prompt appends a second
+    // `started` run event to the SAME session.jsonl. No --last/--continue
+    // analog on exec, so continueLast is dropped.
+    if (input.resumeId) args.push("--session-id", input.resumeId);
   } else if (agentType === "gemini") {
     if (input.resumeId) args.push("-r", input.resumeId);
     else if (input.continueLast) args.push("-r", "latest");
@@ -486,6 +519,13 @@ function pushOutputFormat(
   }
   if (agentType === "pi") {
     args.push("--mode", "json");
+    return;
+  }
+  if (agentType === "muse") {
+    // muse's `--json` emits machine-readable JSONL events on stdout (a
+    // stream by construction), so both json and stream-json map onto it.
+    if (format === "json" || format === "stream-json") args.push("--json");
+    else ignored.push("--output-format");
     return;
   }
   ignored.push("--output-format");
