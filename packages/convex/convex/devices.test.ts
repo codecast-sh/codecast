@@ -367,8 +367,8 @@ describe("moves onto an occupied shared checkout are refused (ct-49428)", () => 
   const db = (rows: any[]) => makeFakeDb({
     users: [{ _id: USER }],
     devices: [
-      { _id: "dev_host", user_id: USER, device_id: "box", platform: "linux", is_remote: true, last_seen: Date.now() },
-      { _id: "dev_laptop", user_id: USER, device_id: "laptop", platform: "darwin", is_remote: false, last_seen: Date.now() },
+      { _id: "dev_host", user_id: USER, device_id: "box", label: "Linux - ip-1-2-3-4", platform: "linux", is_remote: true, last_seen: Date.now() },
+      { _id: "dev_laptop", user_id: USER, device_id: "laptop", label: "macOS - MacBook-Pro", platform: "darwin", is_remote: false, last_seen: Date.now() },
     ],
     conversations: rows,
     daemon_commands: [],
