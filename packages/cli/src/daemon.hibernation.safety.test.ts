@@ -29,7 +29,7 @@ function fixture() {
     lifecycle: async () => life(),
     canReapPidTree: () => true,
     deliveryActive: () => false,
-    inspectTarget: async () => ({ session: "$1", pane: "%1", pid: 99, start: "start", stamp: id, conversationStamp: conv }),
+    inspectTarget: async () => ({ session: "$1", pane: "%1", pid: 99, agentPid: 99, start: "start", stamp: id, conversationStamp: conv }),
     park: async (id) => { parked.push(id); return true; },
     now: () => Date.now(),
   };
@@ -74,7 +74,7 @@ for (const mode of ["pass", "command"] as const) {
       ["pin appears on recheck", f => { let calls = 0; f.io.lifecycle = async () => ({ ...life(), inboxPinnedAt: ++calls > 1 ? 123 : null }); }],
       ["pending message appears on recheck", f => { let calls = 0; f.io.lifecycle = async () => ({ ...life(), hasPendingMessages: ++calls > 1 }); }],
       ["attachment appears on recheck", f => { let calls = 0; f.io.tmuxSessions = async () => new Map([[f.tmux, ++calls > 1 ? 1 : 0]]); }],
-      ["pane recreated during awaits", f => { let calls = 0; f.io.inspectTarget = async () => ({ session: "$1", pane: `%${++calls}`, pid: 99, start: "start", stamp: f.id, conversationStamp: f.conv }); }],
+      ["pane recreated during awaits", f => { let calls = 0; f.io.inspectTarget = async () => ({ session: "$1", pane: `%${++calls}`, pid: 99, agentPid: 99, start: "start", stamp: f.id, conversationStamp: f.conv }); }],
       ["park fails", f => { f.io.park = async () => false; }],
       ["park throws", f => { f.io.park = async () => { throw new Error("tmux failed"); }; }],
     ];

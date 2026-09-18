@@ -155,7 +155,7 @@ describe("parking fallback executes production bodies without daemon initializat
 // Turning hibernation on means reading what it would do to a real fleet before
 // it does anything. The preview must run the gates and reach no kill.
 describe("dry run reports without parking", () => {
-  const target = { session: "$1", pane: "%1", pid: 4242, start: "Thu Sep 18 00:00:00 2026", stamp: "session", conversationStamp: "conversation" };
+  const target = { session: "$1", pane: "%1", pid: 4242, agentPid: 4242, start: "Thu Sep 18 00:00:00 2026", stamp: "session", conversationStamp: "conversation" };
   const logs = (h: ReturnType<typeof createHibernationHarness>) =>
     h.effects.filter((e) => e.kind === "log").map((e) => String(e.args[0] ?? "")).join("\n");
 

@@ -93,7 +93,7 @@ function fixture(opts: FixtureOpts): Fixture {
     lifecycle: async (_conv, id) => (opts.lifecycle ? opts.lifecycle(id) : lifecycleOf({})),
     canReapPidTree: (id) => (opts.canReapPidTree ? opts.canReapPidTree(id) : true),
     deliveryActive: (id) => (opts.deliveryActive ? opts.deliveryActive(id) : false),
-    inspectTarget: async (id) => ({ session: "$1", pane: "%1", pid: 100, start: "start", stamp: id, conversationStamp: "" }),
+    inspectTarget: async (id) => ({ session: "$1", pane: "%1", pid: 100, agentPid: 100, start: "start", stamp: id, conversationStamp: "" }),
     park: async (id) => { parked.push(id); return true; },
     now: () => NOW,
   };
