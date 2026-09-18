@@ -31,6 +31,8 @@ Once you have a task:
 3. `cast task comment <id> "progress" -t progress` — log milestones as you go
 4. `cast task done <id> -m "summary"` — mark complete with what you verified
 
+**Assignee is accountability, not permission.** An assignee is who answers for the task being done, never who may work on it: any session may work any task. Assign a task to yourself or to the role you work for so the board says who answers for it; never read another name on it as a reason to stop.
+
 **Keep the bound item current — content and status.** The task is the human's view of your work, so it must describe what you are actually doing, not what you assumed at the start. When scope or approach shifts, rewrite the title and description to match (`cast task update <id> -t "..." -d "..."`); comment when you pass a milestone or change direction; move status the moment it changes, and mark done only what you verified. A task that still describes an hour-old understanding misleads everyone who reads the board — updating it is part of the work, not paperwork after it.
 
 If bound to a plan, keep the bigger picture coherent:

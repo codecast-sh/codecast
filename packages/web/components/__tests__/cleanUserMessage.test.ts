@@ -25,6 +25,14 @@ describe("cleanUserMessage", () => {
     expect(cleanUserMessage("fix the login bug")).toBe("fix the login bug");
   });
 
+  // The prompt that seated a standing agent read as the person's own words on
+  // the inbox card ("You are **Gate test**, the standing agent for…"). The
+  // shared recogniser the scope page cuts the thread on hides it here too.
+  it("hides the seat's provisioning prompt from the preview", () => {
+    expect(cleanUserMessage("You are **Gate test**, the standing agent for the **Gate test** role (@gate-test) in the Union workspace. You report to Ashot.")).toBeNull();
+    expect(cleanUserMessage("You are **Anchor**, the **team** anchor for Union — every member can reach you")).toBeNull();
+  });
+
   // The server truncates the preview slice, so a <task-notification> often
   // arrives with no closing tag; the inner text ("bnvc12ng6 Monitor event…")
   // was leaking into the card as if the human said it.

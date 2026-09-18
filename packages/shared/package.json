@@ -22,6 +22,7 @@
     "./contracts/sessionCharacter": "./contracts/sessionCharacter.ts",
     "./contracts/browserPaneOffer": "./contracts/browserPaneOffer.ts",
     "./contracts/follow": "./contracts/follow.ts",
+    "./contracts/roleGoals": "./contracts/roleGoals.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
     "./tasks": "./tasks/index.ts",

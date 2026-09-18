@@ -249,13 +249,29 @@ export function isUnwrappedSessionReport(rawContent: string | null | undefined):
   return parseUnwrappedSessionReport(rawContent) !== null;
 }
 
+// The prompt that seats a standing agent (convex anchors.ts bootstrapMessage):
+// "You are **<name>**, the standing agent for the **<role>** role (@handle) in
+// the <team> workspace" for a role, or "..., the **team** anchor for <team>" /
+// "the **personal** anchor". The host sends it as an ordinary user message, so
+// its own first line is the mark. ONE recogniser: the scope page cuts the
+// thread after it (web lib/anchorWindow), and the inbox card's preview, the
+// sticky prompt header and the navigator skip it through
+// isMachineDeliveredMessage, so no surface can show it as the person's words.
+export const BOOTSTRAP_PROMPT_RE = /^\s*You are \*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* anchor)/;
+
+export function isBootstrapPrompt(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  return BOOTSTRAP_PROMPT_RE.test(stripInjectionNoise(rawContent));
+}
+
 // Any user-role message delivered by machinery rather than typed by the human:
 // a cross-session `cast send` message, a subagent's report to its parent, an
 // inter-agent teammate broadcast, a scheduled-task injection, a harness task
-// notification, a team-chat mention waking the anchor, or a `cast send --raw`
-// report that lost its session wrapper.
+// notification, a team-chat mention waking the anchor, a `cast send --raw`
+// report that lost its session wrapper, or the prompt that seated a standing
+// agent.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isRoleWakeFrame(rawContent) || isUnwrappedSessionReport(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isRoleWakeFrame(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

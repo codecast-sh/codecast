@@ -23,7 +23,8 @@ import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentio
 import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
-import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
+import { TaskDecisions, useTaskIsBlocked } from "../../../components/decisions/TaskDecisions";
+import { CollapsibleBody } from "../../../components/CollapsibleBody";
 import { StationStrip } from "../../../components/tasks/StationStrip";
 import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
 import { DocEditor } from "../../../components/editor/DocEditor";
@@ -485,6 +486,35 @@ function SubtasksSection({ task, requestClose, onNavigate }: {
   );
 }
 
+// Folds its child behind a toggle only while `folded` is true, and renders it
+// plainly otherwise. The child mounts once either way: a description holds an
+// editor with its own document state, and remounting it on every fold would
+// drop the caret and the undo history with it.
+function MaybeFolded({
+  folded,
+  expandLabel,
+  collapseLabel,
+  children,
+}: {
+  folded: boolean;
+  expandLabel: string;
+  collapseLabel: string;
+  children: React.ReactNode;
+}) {
+  if (!folded) return <>{children}</>;
+  return (
+    <CollapsibleBody
+      collapsedHeight={116}
+      toggleClassName="mt-1"
+      expandLabel={expandLabel}
+      collapseLabel={collapseLabel}
+      openOnFocus
+    >
+      {children}
+    </CollapsibleBody>
+  );
+}
+
 export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }: { taskId?: string; variant?: "page" | "inline"; onClose?: () => void; onOpen?: () => void } = {}) {
   const params = useParams();
   const router = useRouter();
@@ -499,6 +529,10 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const allTasks = useInboxStore((s) => s.tasks);
   const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
   const taskTeamId = data?.team_id as string | undefined;
+  // A blocking question outranks the description: nothing in the body can be
+  // acted on until it is answered, so the body folds and the card comes up
+  // the page to meet the reader.
+  const blockedOnDecision = useTaskIsBlocked(data?._id ?? "");
   // The task's team status vocabulary (per-team custom statuses).
   const taskStatuses = useTeamTaskStatusList(taskTeamId);
   const statusOptions = useMemo(() => statusEntityOptions(taskStatuses), [taskStatuses]);
@@ -1012,26 +1046,38 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </div>
           </div>
 
-          {/* Description */}
+          {/* Decisions bound to this task (D3): open cards, settled ones
+              folded. A blocking one renders ABOVE the description — the
+              reader's next move is the answer, not the body. */}
+          {blockedOnDecision && <TaskDecisions taskId={data._id} />}
+
+          {/* Description. Folded to a few lines while a decision blocks the
+              task, so the card above stays in view; it opens on the toggle,
+              and on its own the moment the reader puts a caret in it. */}
           <div className="mb-6">
-            <DocEditor
-              key={`desc-${data._id}`}
-              content={data.description || ""}
-              onUpdate={(md) => {
-                if (md.trim() !== (data.description || "").trim()) {
-                  handleUpdate({ description: md });
-                }
-              }}
-              onMentionQuery={handleMentionQuery}
-              onImageUpload={handleImageUpload}
-              editable={true}
-              placeholder="Add a description..."
-              className="doc-editor-compact"
-            />
+            <MaybeFolded
+              folded={blockedOnDecision}
+              expandLabel="Read the description"
+              collapseLabel="Fold the description"
+            >
+              <DocEditor
+                key={`desc-${data._id}`}
+                content={data.description || ""}
+                onUpdate={(md) => {
+                  if (md.trim() !== (data.description || "").trim()) {
+                    handleUpdate({ description: md });
+                  }
+                }}
+                onMentionQuery={handleMentionQuery}
+                onImageUpload={handleImageUpload}
+                editable={true}
+                placeholder="Add a description..."
+                className="doc-editor-compact"
+              />
+            </MaybeFolded>
           </div>
 
-          {/* Decisions bound to this task (D3): open cards, settled ones folded */}
-          <TaskDecisions taskId={data._id} />
+          {!blockedOnDecision && <TaskDecisions taskId={data._id} />}
 
           {/* The run (L10): its gate renders the decision card */}
           {data.workflow_run_id && (

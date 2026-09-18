@@ -685,8 +685,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.caps !== undefined) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
     }
+    // Who reports to the role (org-roles-run-work.md R6): the list the tab
+    // wrote becomes an add and a remove against the row the server holds.
+    if (fields.reports_user_ids !== undefined) {
+      const row = await ctx.runQuery!((api as any).orgRoles.get, { role_id: roleId }).catch(() => null);
+      const before = new Set<string>((row?.reports_user_ids ?? []).map(String));
+      const after = new Set<string>(fields.reports_user_ids.map(String));
+      const add = [...after].filter((id) => !before.has(id));
+      const remove = [...before].filter((id) => !after.has(id));
+      if (add.length || remove.length) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, add, remove });
+    }
     const rest: Record<string, any> = { ...fields };
-    delete rest.trust; delete rest.caps;
+    delete rest.trust; delete rest.caps; delete rest.reports_user_ids;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
     // tenure (S10) and avatar (S13) go through the plain update.
     if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;

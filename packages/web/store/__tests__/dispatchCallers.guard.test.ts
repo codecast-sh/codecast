@@ -50,8 +50,10 @@ describe("durable dispatch call-site guards", () => {
   });
 
   test("in-place agent switch is the default; forks stay an explicit opt-in", async () => {
-    const conversation = await Bun.file(
-      new URL("../../components/ConversationView.tsx", import.meta.url),
+    // The header's session control panel (SessionControlMenu) owns both rows;
+    // the overflow menu opens that panel rather than carrying its own copy.
+    const panel = await Bun.file(
+      new URL("../../components/SessionControlMenu.tsx", import.meta.url),
     ).text();
     const palette = await Bun.file(
       new URL("../../components/CommandPalette.tsx", import.meta.url),
@@ -60,10 +62,10 @@ describe("durable dispatch call-site guards", () => {
       new URL("../../lib/sessionAgentActions.ts", import.meta.url),
     ).text();
 
-    expect(conversation).toContain("Switch agent");
-    expect(conversation).toContain("Fork as");
-    expect(conversation).toContain("switchSessionAgent(conversation");
-    expect(conversation).toContain("forkSessionAsAgent(conversation");
+    expect(panel).toContain("Switch agent");
+    expect(panel).toContain("Fork as");
+    expect(panel).toContain("switchSessionAgent(sessionRowFor(");
+    expect(panel).toContain("forkSessionAsAgent(sessionRowFor(");
     expect(palette).toContain("switchSessionAgent(target");
     expect(palette).toContain("forkSessionAsAgent(target");
     expect(actions).toContain('convCommand(id, "switchSessionAgent"');

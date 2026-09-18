@@ -100,4 +100,40 @@ describe("createByteCache prefetch", () => {
     expect(cachesByName.get("t5")!.store.size).toBe(0);
     expect(fetchCalls).toEqual(["https://x.test/a"]);
   });
+
+  // An <img> renders a CDN that sends no access-control-allow-origin; a
+  // fetch() cannot. Byte-caching such an origin only spends a blocked request
+  // and a console error, so the engine declines to try.
+  it("never fetches a seeded origin that refuses cross-origin reads", async () => {
+    const cache = createByteCache({ cacheName: "t6", whileResolving: "remote", onFailed: "none" });
+    cache.prefetch(["https://avatars.slack-edge.com/2026-08-25/1_a.png"]);
+    await settle();
+    expect(fetchCalls).toEqual([]);
+  });
+
+  it("learns a refusing origin from one rejection and spares the rest of it", async () => {
+    (globalThis as any).fetch = async (url: string) => {
+      fetchCalls.push(url);
+      throw new TypeError("Failed to fetch");
+    };
+    const cache = createByteCache({ cacheName: "t7", whileResolving: "remote", onFailed: "none" });
+    cache.prefetch(["https://refuses.test/a.png"]);
+    await settle();
+    cache.prefetch(["https://refuses.test/b.png", "https://refuses.test/c.png"]);
+    await settle();
+    expect(fetchCalls).toEqual(["https://refuses.test/a.png"]);
+  });
+
+  it("reads a status code as this URL being dead, not the origin refusing", async () => {
+    (globalThis as any).fetch = async (url: string) => {
+      fetchCalls.push(url);
+      return new Response("gone", { status: 404 });
+    };
+    const cache = createByteCache({ cacheName: "t8", whileResolving: "wait", onFailed: "remote" });
+    cache.prefetch(["https://answers.test/a.png"]);
+    await settle();
+    cache.prefetch(["https://answers.test/b.png"]);
+    await settle();
+    expect(fetchCalls).toEqual(["https://answers.test/a.png", "https://answers.test/b.png"]);
+  });
 });

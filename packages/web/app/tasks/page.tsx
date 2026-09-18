@@ -1109,7 +1109,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // reader, never the whole tree (a message under any node would repaint it),
   // and mounts the feeder because nothing guarantees the org page came first.
   useSyncOrgTreeFeeder();
-  const { roles: orgRoles } = useOrgRoles();
+  const { roles: orgRoles, roleBotUserIds } = useOrgRoles();
   // The assignee filter lists people, then roles, each under its own heading
   // and drawn with its face. People come first so the list a person already
   // knows keeps its order. "My reporting chain" is the filter form of the
@@ -1119,7 +1119,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
       .filter((r) => r.status !== "retired")
       .map((r) => ({ key: r._id, label: r.name, section: "Roles", face: <AssigneeFace info={roleAssigneeInfo(r)} size={14} hover={false} /> }))
       .sort((a, b) => a.label.localeCompare(b.label));
-    const people = teamMembers.map((m) => {
+    // A role's own bot user is not a person to pick: the role is.
+    const people = teamMembers.filter((m) => !roleBotUserIds.has(m._id)).map((m) => {
       const name = memberDisplayName(m, m._id);
       return { key: m._id, label: name, section: roles.length ? "People" : undefined, face: <AssigneeFace info={{ name, image: memberAvatarUrl(m) }} size={14} /> };
     });
@@ -1130,7 +1131,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
       ...people,
       ...roles,
     ];
-  }, [orgRoles, teamMembers]);
+  }, [orgRoles, roleBotUserIds, teamMembers]);
   const myChain = useMemo(
     () => (assigneeFilter === "_chain" && currentUser ? new Set(chainAssignees(currentUser._id, orgRoles)) : null),
     [assigneeFilter, currentUser, orgRoles]

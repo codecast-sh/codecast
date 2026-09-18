@@ -13,7 +13,7 @@ import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
 import { useTheme } from "./ThemeProvider";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useRouter, usePathname } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -33,6 +33,9 @@ import { RecentVisitGlyph } from "./RecentVisitRow";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
+import { sessionMatchesQuery, mergeSearchRows } from "../lib/instantSessionSearch";
+import { agentAccent } from "../lib/agentColors";
+import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
@@ -156,7 +159,7 @@ const api = _api as any;
 
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 
-type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -189,14 +192,10 @@ const AGENT_OPTIONS = AGENT_LAUNCH_OPTIONS.map((agent) => ({
   label: agent.label,
 }));
 
-const AGENT_COLORS: Record<string, string> = {
-  "agent:codex": "text-blue-400",
-  "agent:cursor": "text-purple-400",
-  "agent:gemini": "text-amber-400",
-  "agent:opencode": "text-orange-400",
-  "agent:pi": "text-teal-400",
-  "agent:grok": "text-sol-text",
-};
+// One accent per agent (lib/agentColors), keyed the way the rows are.
+const AGENT_COLORS: Record<string, string> = Object.fromEntries(
+  AGENT_OPTIONS.map((o) => [o.key, agentAccent(o.agentType).text]),
+);
 
 // Ranked by expected use. `secondary` pages are reachable only by typing —
 // they'd otherwise pad the empty-palette view that lives or dies by scan speed.
@@ -443,7 +442,7 @@ export function ActionSubmenu({
   const listRef = useRef<HTMLDivElement>(null);
   // The workspace's roles, for the assign list: read from the store through a
   // wake signature, so every caller of this menu offers them with no prop.
-  const { roles: orgRoles } = useOrgRoles();
+  const { roles: orgRoles, roleBotUserIds } = useOrgRoles();
 
   // Two-step state for the "Start agent run" mode: pick an agent, then compose
   // the initial message before launching a run per selected task.
@@ -463,6 +462,8 @@ export function ActionSubmenu({
 
   const updatePlan = useInboxStore((s) => s.updatePlan);
   const assignToAgent = useMutation(api.tasks.assignToAgent);
+  // The hand-off action runs through the client directly (an action, not a mutation).
+  const convex = useConvex();
   const updateTask = useInboxStore((s) => s.updateTask);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const buckets = useInboxStore((s) => s.buckets);
@@ -502,14 +503,14 @@ export function ActionSubmenu({
     setHighlightIndex(0);
     setAgentStep("pick");
     setSelectedAgentKey(null);
-    setAgentMessage(DEFAULT_AGENT_RUN_MESSAGE);
+    setAgentMessage(mode === "agent_handoff" ? "" : DEFAULT_AGENT_RUN_MESSAGE);
     setRenameId(null);
     const timer = setTimeout(() => { inputRef.current?.focus(); if (mode === "rename") inputRef.current?.select(); }, 0);
     return () => clearTimeout(timer);
   }, [mode, initialSearch]);
 
   useWatchEffect(() => {
-    if (mode === "agent_run" && agentStep === "message") {
+    if ((mode === "agent_run" || mode === "agent_handoff") && agentStep === "message") {
       setTimeout(() => messageRef.current?.focus(), 0);
     }
   }, [mode, agentStep]);
@@ -677,7 +678,8 @@ export function ActionSubmenu({
       return matched;
     }
     if (mode === "assign") {
-      const members = (teamMembers || []).filter(Boolean).map((m: any) => {
+      // A role's own bot user is not a person to pick: the role is (below).
+      const members = (teamMembers || []).filter((m: any) => m && !roleBotUserIds.has(m._id)).map((m: any) => {
         const name = memberDisplayName(m);
         return {
           key: m._id,
@@ -696,13 +698,15 @@ export function ActionSubmenu({
       return [{ key: "", label: "Unassign", type: "user" as const, image: undefined }, ...people, ...roles]
         .filter((o: { label: string; hint?: string }) => `${o.label} ${o.hint ?? ""}`.toLowerCase().includes(q));
     }
-    if (mode === "agent_run" || mode === "agent_switch" || mode === "agent_fork") {
+    if (mode === "agent_run" || mode === "agent_switch" || mode === "agent_fork" || mode === "agent_handoff") {
       const currentAgentType = (target as InboxSession | undefined)?.agent_type;
       const messageCount = (target as InboxSession | undefined)?.message_count;
       return AGENT_OPTIONS
         .filter((o) => mode !== "agent_switch" || o.agentType !== (currentAgentType || "claude_code"))
         // A session with history can only become an agent that can rebuild it.
-        .filter((o) => mode === "agent_run" || canSessionBecomeAgent(o.agentType, messageCount))
+        // A hand-off starts fresh, so every agent (the current one included)
+        // is a valid destination.
+        .filter((o) => mode === "agent_run" || mode === "agent_handoff" || canSessionBecomeAgent(o.agentType, messageCount))
         .filter((o) => o.label.toLowerCase().includes(q))
         .map((a) => ({ ...a, type: "agent" as const, image: undefined }));
     }
@@ -813,7 +817,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, roleBotUserIds]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -916,8 +920,9 @@ export function ActionSubmenu({
       return;
     }
 
-    // Agent-run picks an agent, then advances to the message step (not a fire).
-    if (mode === "agent_run") {
+    // Agent-run and hand-off pick an agent, then advance to the message step
+    // (not a fire).
+    if (mode === "agent_run" || mode === "agent_handoff") {
       setSelectedAgentKey(item.key);
       setAgentStep("message");
       return;
@@ -1113,6 +1118,24 @@ export function ActionSubmenu({
     onClose();
   }, [selectedAgentKey, agentMessage, targets, assignToAgent, onClose]);
 
+  // Hand the target session to a fresh session on the chosen agent (its
+  // default model) with the typed direction — the same action the header
+  // panel and `cast handoff --to` run.
+  const launchHandoff = useCallback(() => {
+    if (!selectedAgentKey || !target) return;
+    const agentType = selectedAgentKey.replace("agent:", "");
+    const agentLabel = AGENT_OPTIONS.find((a) => a.key === selectedAgentKey)?.label || "agent";
+    const store = useInboxStore.getState();
+    const real = store.getConvexId(target._id) ?? target._id;
+    void startHandoff(convex, { conversation_id: real, agent_type: agentType, direction: agentMessage })
+      .then((res) => {
+        toast.success(`Handed off to ${res.short_id} on ${agentLabel}`);
+        useInboxStore.getState().requestNavigate(res.conversation_id);
+      })
+      .catch((error) => { captureException(error); toast.error(error instanceof Error ? error.message : "Failed to hand off"); });
+    onClose();
+  }, [selectedAgentKey, agentMessage, target, convex, onClose]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
     if (mode === "snooze" && search === "" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -1185,6 +1208,7 @@ export function ActionSubmenu({
     mode === "agent_run" ? "Start agent run — pick an agent..." :
     mode === "agent_switch" ? "Switch agent..." :
     mode === "agent_fork" ? "Fork session as…" :
+    mode === "agent_handoff" ? "Hand off to — pick an agent…" :
     mode === "bucket" ? "Label session — type to filter or create..." :
     mode === "device" ? "Move to machine — pick where these sessions run…" :
     mode === "model" ? "Change model & effort..." :
@@ -1203,11 +1227,16 @@ export function ActionSubmenu({
         : "text-sol-text-muted hover:bg-sol-bg-alt/50"
     }`;
 
-  // Second step of "Start agent run": compose the initial message, then launch.
-  if (mode === "agent_run" && agentStep === "message") {
+  // Second step of "Start agent run" and "Hand off to": compose the initial
+  // message (a hand-off's direction), then launch.
+  if ((mode === "agent_run" || mode === "agent_handoff") && agentStep === "message") {
+    const handoff = mode === "agent_handoff";
     const agentLabel = AGENT_OPTIONS.find((a) => a.key === selectedAgentKey)?.label || "Agent";
     const count = targets.length;
-    const targetSummary = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
+    const targetSummary = handoff
+      ? ((target as { short_id?: string } | undefined)?.short_id ?? "session")
+      : count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
+    const launch = handoff ? launchHandoff : launchAgentRun;
     return (
       <>
         <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30">
@@ -1223,7 +1252,7 @@ export function ActionSubmenu({
         </div>
         <div className="p-4">
           <label className="block text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70 mb-2">
-            Initial message
+            {handoff ? "Direction" : "Initial message"}
           </label>
           <textarea
             ref={messageRef}
@@ -1232,22 +1261,25 @@ export function ActionSubmenu({
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                launchAgentRun();
+                launch();
               } else if (e.key === "Escape") {
                 e.preventDefault();
                 setAgentStep("pick");
               }
             }}
             rows={4}
-            placeholder="Message the agent starts with..."
+            placeholder={handoff ? "What should the next session do first?" : "Message the agent starts with..."}
             className="w-full resize-none rounded-lg bg-sol-bg-alt/40 border border-sol-border/40 px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 transition-colors"
           />
+          {handoff && (
+            <p className="mt-2 text-[10px] leading-snug text-sol-text-dim">{HANDOFF_EXPLAINER}</p>
+          )}
           <button
-            onClick={launchAgentRun}
+            onClick={launch}
             className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sol-cyan/15 hover:bg-sol-cyan/25 border border-sol-cyan/30 text-sol-cyan text-sm font-medium transition-colors"
           >
             <Bot className="w-4 h-4" />
-            {count === 1 ? `Launch ${agentLabel}` : `Launch ${count} ${agentLabel} runs`}
+            {handoff ? `Hand off to ${agentLabel}` : count === 1 ? `Launch ${agentLabel}` : `Launch ${count} ${agentLabel} runs`}
           </button>
         </div>
         <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
@@ -1685,11 +1717,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const out: any[] = [];
     for (let i = 0; i < scan.length && out.length < RECENT_RENDER_CAP; i++) {
       const conv = scan[i];
-      // Summaries are part of the haystack: subtitle (multi-line generated
-      // summary) and idle_summary (one-line blurb) match sessions the user
-      // remembers by what they did, not what they're titled.
-      const hay = `${cleanTitle(conv.title || "")} ${conv.subtitle || ""} ${conv.idle_summary || ""} ${conv.project_path || ""} ${conv.authorName || ""}`.toLowerCase();
-      if (hay.includes(q)) out.push(conv);
+      // One haystack for every session search (lib/instantSessionSearch):
+      // summaries count, so a session is findable by what it did rather than
+      // only by what it is titled.
+      if (sessionMatchesQuery(conv, q)) out.push(conv);
     }
     return out;
   }, [recentSessions, query]);
@@ -1737,13 +1768,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
   );
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
-  const searchRows = useMemo(() => {
-    const msgRows = searchData?.results ?? [];
-    const titleRows = titleData?.results ?? [];
-    if (!titleRows.length) return msgRows;
-    const seen = new Set(msgRows.map((r: any) => r.conversationId));
-    return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
-  }, [searchData, titleData]);
+  const searchRows = useMemo(
+    () => mergeSearchRows(searchData?.results as any, titleData?.results as any),
+    [searchData, titleData]
+  );
   // cmdk keeps the first row it selected. Full-search / new-session / new-note
   // always match, so if they mount before conversation search answers, Enter
   // never opens a hit. Hold them until there is a hit, or both title and
@@ -2075,7 +2103,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
+    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
@@ -2216,7 +2244,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const rootTaskStatuses = useTeamTaskStatusList(target?.team_id);
   const nestedMatches = query.trim().length < 2 ? [] : actions.flatMap(action => {
-    const options = action.key === "agent_switch" || action.key === "agent_fork" || action.key === "agent_run" ? AGENT_OPTIONS
+    const options = action.key === "agent_switch" || action.key === "agent_fork" || action.key === "agent_run" || action.key === "agent_handoff" ? AGENT_OPTIONS
       : action.key === "status" ? statusEntityOptions(rootTaskStatuses)
       : action.key === "priority" ? PRIORITY_OPTIONS
       : action.key === "type" ? DOC_TYPE_OPTIONS

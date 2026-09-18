@@ -15,7 +15,8 @@ import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } f
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { buildTaskStartBody, groupTasksByAssignee, startedForRoleLine } from "./taskClaim.js";
+import { buildTaskStartBody, groupTasksByAssignee, startedLines } from "./taskClaim.js";
+import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import open from "open";
 import * as fs from "fs";
@@ -9855,14 +9856,38 @@ program
 program
   .command("handoff")
   .description(
-    "Generate a context transfer document for the next session/agent\n\n" +
+    "Hand this session's work to a new session on another agent or model, or\n" +
+    "generate a context transfer document\n\n" +
+    "With --to (or --model), the server writes a brief of the source session\n" +
+    "(goal, decisions, what is verified, open questions, ordered next steps),\n" +
+    "composes the new session's first prompt from it, starts the session in the\n" +
+    "same directory as a first-class inbox card, links both rows, binds it to\n" +
+    "the source's task or plan, and pins the source's state as done. The source\n" +
+    "agent ends its turn after this command.\n\n" +
+    "Without --to the old shape stays: a context transfer document from the\n" +
+    "transcript, to stdout or -o.\n\n" +
     "Examples:\n" +
-    "  cast handoff                        # from current/recent session\n" +
-    "  cast handoff --session abc123       # from specific session\n" +
-    "  cast handoff --to-file /tmp/h.md    # save to file"
+    "  cast handoff --to codex                   # continue on codex\n" +
+    "  cast handoff --to claude --model opus     # continue on claude, opus\n" +
+    "  cast handoff --model sonnet               # same agent, another model\n" +
+    "  cast handoff --to gemini -m \"finish the tests first\"   # with direction\n" +
+    "  cast handoff --to codex -m - <<'EOF'      # multi-line direction from stdin\n" +
+    "  ...\n" +
+    "  EOF\n" +
+    "  cast handoff --to codex --dry-run         # print the composed prompt, start nothing\n" +
+    "  cast handoff                              # context transfer document\n" +
+    "  cast handoff --session abc123 -o /tmp/h.md"
   )
-  .option("-s, --session <id>", "Specific session ID (default: most recent)")
-  .option("-o, --to-file <path>", "Save output to file instead of stdout")
+  .option("-s, --session <id>", "Source session (default: the session running this command, else the project's most recent)")
+  .option("--to <agent>", "Agent for the new session: claude, codex, cursor, gemini, opencode, pi, grok, or same (the source's own)")
+  .option("--model <model>", "Model for the new session (e.g. opus, sonnet); --model alone keeps the source's agent")
+  .option("--effort <level>", "Reasoning effort for the new session (claude: low|medium|high|max; varies by agent)")
+  .option("--account <name>", "Claude account profile the new session runs on (cast accounts token <name>)")
+  .option("--device <name>", "Machine to start the new session on (label or device id)")
+  .option("-m, --message <text>", stdinText("Direction for the new session, appended to the composed prompt"))
+  .option("--dry-run", "Compose and print the new session's prompt without starting anything")
+  .option("-o, --to-file <path>", "Save output (the document, or the --dry-run prompt) to a file instead of stdout")
+  .option("--json", "Machine-readable output (--to path)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -9871,7 +9896,14 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    let sessionId = options.session;
+    const { handoffMode, buildHandoffRequest, formatHandoffRoster } = await import("./handoffCommand.js");
+    const mode = handoffMode(options);
+
+    // The source: an explicit -s wins; then the session running this command
+    // (the common `cast handoff --to codex` from inside an agent); then the
+    // project's most recent session, the document path's historic fallback.
+    let sessionId: string | undefined = options.session;
+    if (!sessionId && mode === "spawn") sessionId = ownSessionId(getRealCwd()) || undefined;
 
     if (!sessionId) {
       let projectRoot = process.cwd();
@@ -9904,6 +9936,33 @@ program
         console.error("No synced sessions found for current project. Use -s to specify a session ID.");
         process.exit(1);
       }
+    }
+
+    if (mode === "spawn") {
+      let body: Record<string, unknown>;
+      try {
+        body = buildHandoffRequest(options, sessionId);
+      } catch (err) {
+        console.error(`Error: ${(err as Error).message}`);
+        process.exit(1);
+      }
+      const result = await cliPost("/cli/handoff", body);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (options.dryRun) {
+        if (options.toFile) {
+          fs.writeFileSync(options.toFile, result.prompt);
+          console.log(`Composed prompt saved to: ${options.toFile} (dry run; nothing started)`);
+        } else {
+          process.stdout.write(result.prompt);
+          console.error(`${c.dim}dry run: nothing started; brief ${result.brief_source === "model" ? "model-written" : "fallback"}${c.reset}`);
+        }
+        return;
+      }
+      console.log(formatHandoffRoster(result, c));
+      return;
     }
 
     try {
@@ -13324,6 +13383,36 @@ roleGroup
     console.log(`${c.green}✓${c.reset} @${result.handle} caps: ${result.caps.hands_per_day} hands · ${result.caps.wakes_per_day} wakes · ${result.caps.tokens_per_day} tokens per day`);
   });
 
+// Who reports to a role (org-roles-run-work.md R6): a person who wants the
+// role to keep their goals. `me` or a person's name; an admin may name anyone.
+roleGroup
+  .command("reports")
+  .description("Who reports to a role: add or remove people (the role keeps their goals in its brief)")
+  .argument("<handle>", "@handle, or-N, or id")
+  .option("--add <person...>", "People to add: me, or a name or email in the workspace")
+  .option("--remove <person...>", "People to remove")
+  .option("--team <name|id>", "Team workspace")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, options: any) => {
+    const ws = await readWorkspace(options.team);
+    const role_id = await resolveRoleId(handle, options.team);
+    const people = async (refs: string[] | undefined): Promise<string[]> => {
+      const out: string[] = [];
+      for (const ref of refs ?? []) {
+        const target = await resolveOrgTarget(ref, ws);
+        if (target.kind !== "user") { console.error(`"${ref}" is a role, not a person.`); process.exit(1); }
+        out.push(target.user_id);
+      }
+      return out;
+    };
+    const add = await people(options.add);
+    const remove = await people(options.remove);
+    const result = await cliPost("/cli/role/reports", { role_id, add, remove, from_session: callingSession() });
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    const n = result.reports_user_ids?.length ?? 0;
+    console.log(`${c.green}✓${c.reset} ${n} ${n === 1 ? "person reports" : "people report"} to @${result.handle}${add.length ? `; it will ask ${add.length === 1 ? "the new person" : "each new person"} for their goals` : ""}`);
+  });
+
 roleGroup
   .command("update")
   .description("Edit a role's name, handle, charter text, review backend, tenure or avatar")
@@ -13396,6 +13485,11 @@ const briefCmd = program
       console.log(`  hands:`);
       const { briefHandLine } = await import("./briefLines.js");
       for (const h of f.hands) console.log(briefHandLine(h));
+    }
+    if (f.people?.length) {
+      console.log(`  people who report to it:`);
+      const { briefPeopleLines } = await import("./briefLines.js");
+      for (const line of briefPeopleLines(f.people, Date.now())) console.log(line);
     }
     const { briefCharterLines } = await import("./briefLines.js");
     for (const line of briefCharterLines(String(brief.charter ?? ""))) console.log(line);
@@ -16030,8 +16124,7 @@ work
     const sessionId = detectCurrentSessionId();
     const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
-    const roleLine = startedForRoleLine(result);
-    if (roleLine) console.log(`${c.dim}${roleLine}${c.reset}`);
+    for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
 
     if (sessionId) writeTaskPulse(sessionId, shortId, result.plan_id);
 
@@ -16301,7 +16394,7 @@ work
     const t = result.task;
     console.log(`\n# ${t.title}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
-    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}`);
+    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}. ${ASSIGNEE_MEANS}`);
     if (t.labels?.length) console.log(`Labels: ${t.labels.join(", ")}`);
     if (result.parent) {
       console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);

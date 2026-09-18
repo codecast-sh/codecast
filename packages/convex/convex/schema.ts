@@ -231,12 +231,14 @@ export default defineSchema({
       claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
       gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+      muse: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
     })),
     agent_default_params: v.optional(v.object({
       claude: v.optional(v.record(v.string(), v.string())),
       codex: v.optional(v.record(v.string(), v.string())),
       gemini: v.optional(v.record(v.string(), v.string())),
       cursor: v.optional(v.record(v.string(), v.string())),
+      muse: v.optional(v.record(v.string(), v.string())),
     })),
     available_agents: v.optional(v.array(v.object({
       name: v.string(),
@@ -532,6 +534,15 @@ export default defineSchema({
     // the child stays a first-class inbox card with a click-through to its
     // parent. Set by conversations.linkSpawnedBy (daemon-resolved).
     spawned_by_conversation_id: v.optional(v.id("conversations")),
+    // Handoff link (`cast handoff --to <agent>`, handoff.start): the session
+    // this one continues, and the session that continues this one. Both are
+    // labels and click-throughs only: the child stays a first-class inbox
+    // card and usually also carries spawned_by. Written together in one
+    // mutation (spawn.createSessionFromCli with handoff_from_session) so the
+    // pair never disagrees. by_handed_off_from is the reverse lookup for a
+    // source whose forward pointer is missing (an older row, a failed patch).
+    handed_off_from_conversation_id: v.optional(v.id("conversations")),
+    handed_off_to_conversation_id: v.optional(v.id("conversations")),
     // Agent-team identity, from the teamName/agentName stamps Claude Code
     // writes on every teammate JSONL line (the lead's transcript is never
     // stamped; linkSpawnedBy stamps the lead as "team-lead" when it links a
@@ -961,6 +972,7 @@ export default defineSchema({
     // teammates (spawned_by + agent_team_name), which by_parent_conversation_id
     // can't see. See cascadeHideToNestedChildren (cleanup.ts).
     .index("by_spawned_by", ["spawned_by_conversation_id"])
+    .index("by_handed_off_from", ["handed_off_from_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
@@ -1234,6 +1246,15 @@ export default defineSchema({
     // The fact horizon the last delivered frame covered (a change_log seq,
     // i.e. a timestamp); the next frame diffs against it.
     last_frame_seq: v.optional(v.number()),
+    // People who report to the role (org-roles-run-work.md R6): the role keeps
+    // their goals in its brief, reads their sessions against those goals at
+    // every wake, and tells them once a day at most when a high goal stalls.
+    // Edited from the role's Settings tab or `cast role reports`; a person may
+    // add or remove themself, an admin of the role anyone in its boundary.
+    reports_user_ids: v.optional(v.array(v.id("users"))),
+    // The UTC day a stalled goal notice last went to each reporting person
+    // (keyed by user id), so a person hears about a stall once a day at most.
+    goal_notices: v.optional(v.record(v.string(), v.string())),
     // Standing or program (org-staffing.md S10). A program ends with a plan,
     // a project or a date; when the end comes org.health raises program_ended
     // and the next review proposes what `then` says. Absent = undeclared.
@@ -3277,7 +3298,10 @@ export default defineSchema({
       // One machine's daemon event loop froze past the budget in the last hour
       // (daemonLogs.checkDeviceLoopFreeze). Entity is the device, not a session:
       // the whole machine is late, not one conversation.
-      v.literal("daemon_overloaded")
+      v.literal("daemon_overloaded"),
+      // A role telling a person who reports to it that a high priority goal
+      // has stalled (org-roles-run-work.md R6); one a day at most.
+      v.literal("goal_stall")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -3296,7 +3320,10 @@ export default defineSchema({
       v.literal("device"),
       // A place in a repository (`owner/repo@sha` or `owner/repo#12`): a code
       // comment named the recipient.
-      v.literal("code")
+      v.literal("code"),
+      // A role (its short id): the goal stall notice opens the role's page,
+      // where the person reads their goals with what moved and what stalled.
+      v.literal("org_role")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -6192,6 +6219,16 @@ export default defineSchema({
     samples: v.optional(v.number()),
     recent: v.optional(v.array(v.number())),
     updated_at: v.number(),
+    // Why the last run kept or dropped each user, so a rate that never moves can
+    // be diagnosed from the row instead of by instrumenting the job again.
+    last_run: v.optional(v.object({
+      users: v.number(),
+      added: v.number(),
+      unpaired: v.number(),
+      below_floor: v.number(),
+      no_tokens: v.number(),
+      best_rise: v.number(),
+    })),
     // The previous reading, which the next run diffs against: when it was taken
     // and, per user, the utilization of every window their devices reported.
     last_sample: v.optional(v.object({
@@ -6203,6 +6240,9 @@ export default defineSchema({
           key: v.string(),
           percent: v.number(),
           resets_at: v.optional(v.number()),
+          // When that account was last polled: a window nobody re-read between
+          // two runs cannot testify about the traffic between them.
+          fetched_at: v.optional(v.number()),
         })),
       })),
     })),
