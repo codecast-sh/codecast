@@ -1423,8 +1423,12 @@ export function selectChatRail(
    *  accumulates across team switches. Ignored in community scope. */
   teamId?: string | null,
   scope: ChatRailScope = "team",
+  /** The server has answered listChannels in this page load, so its rail is
+   *  the complete set of rooms and absence from it means the room is gone.
+   *  False while only the cached rail is known, where absence means nothing. */
+  railLive = false,
 ): ChatRailChannel[] {
-  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, state.chatSlackLinks, viewer, teamId, scope];
+  const key = [state.chatChannels, state.chatMessages, state.chatReads, state.chatRail, state.chatSlackLinks, viewer, teamId, scope, railLive];
   if (key.length === railCacheKey.length && key.every((v, i) => v === railCacheKey[i])) {
     return railCacheValue;
   }
@@ -1464,6 +1468,12 @@ export function selectChatRail(
   for (const id in state.chatChannels) {
     const channel = state.chatChannels[id];
     if (channel.archived_at) continue;
+    // The channel cache only ever grows, so it keeps rooms the server has
+    // stopped listing: two direct message rooms that merged when one Slack
+    // person turned out to be a teammate, or a room access was removed from.
+    // The live rail is the complete set, so it decides. A stub whose server
+    // row has not arrived yet is not in the rail and must survive.
+    if (railLive && isConvexId(id) && !railByChannel.has(id)) continue;
     if (scope === "community") {
       if (channel.kind !== "community") continue;
     } else if (!inActiveWorkspace({ team_id: channel.team_id ? String(channel.team_id) : undefined }, teamId ? String(teamId) : undefined)) continue;

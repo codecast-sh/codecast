@@ -11,17 +11,39 @@ import { ConversationData } from "../ConversationView";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore } from "../../store/inboxStore";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AnchorGlyph } from "./AnchorIdentity";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput }: {
+import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
+export { windowConversationSince } from "../../lib/anchorWindow";
+export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
   conversationId: string;
   hideHeader?: boolean;
   /** The staffing pane owns the send into a proposal's thread (S18). */
   onSendOverride?: ConversationDiffLayoutProps["onSendOverride"];
   composerNode?: React.ReactNode;
   autoFocusInput?: boolean;
+  /** A proposal's thread (org-staffing.md S19) is a standing session with a
+   *  history from before the proposal: the embed shows what was said from
+   *  `since` on, under the host's `leadNode` (the letter), and stops paging
+   *  older once the loaded window reaches back past it. */
+  since?: number;
+  /** A standing session opens on its provisioning prompt: the seat's own
+   *  system text, sent by the host as the first message. The scope page
+   *  (scopes-and-feed.md F4.1) folds it away so the page opens on the agent
+   *  talking to the person; the cut is the first message after it. */
+  foldBootstrap?: boolean;
+  /** The conversation as the agent talking to the person (ConversationView
+   *  foldWorkingTurns): working turns and machine prompts fold away. */
+  foldWorkingTurns?: boolean;
+  openAtTop?: ConversationDiffLayoutProps["openAtTop"];
+  composerPlaceholder?: ConversationDiffLayoutProps["composerPlaceholder"];
+  leadNode?: ConversationDiffLayoutProps["leadNode"];
+  leadPinned?: ConversationDiffLayoutProps["leadPinned"];
+  stickyPrompt?: ConversationDiffLayoutProps["stickyPrompt"];
+  initialDensity?: ConversationDiffLayoutProps["initialDensity"];
+  hideDiff?: boolean;
   /** The anchor page owns its anchor by construction, so it seeds `is_own`
    *  before the row lands and the owner UI paints at once. A thread embedded
    *  elsewhere (the staffing pane's chief of staff, hosted by whoever hired
@@ -46,14 +68,20 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
     jumpToTimestamp,
   } = useConversationMessages(conversationId);
 
-  if (!conversation) return <CenteredNote>Loading conversation…</CenteredNote>;
+  const windowed = useMemo(() => {
+    const c = conversation as WindowedConversation | null;
+    const cut = foldBootstrap ? bootstrapCut(c) : undefined;
+    return windowConversationSince(c, cut !== undefined && (since === undefined || cut > since) ? cut : since);
+  }, [conversation, since, foldBootstrap]);
+
+  if (!conversation || !windowed) return <CenteredNote>Loading conversation…</CenteredNote>;
 
   return (
     <div className="h-full">
       <ConversationDiffLayout
-        conversation={conversation as ConversationData}
+        conversation={windowed.conversation as unknown as ConversationData}
         embedded
-        hasMoreAbove={hasMoreAbove}
+        hasMoreAbove={hasMoreAbove && !windowed.reachedStart}
         hasMoreBelow={hasMoreBelow}
         isLoadingOlder={isLoadingOlder}
         isLoadingNewer={isLoadingNewer}
@@ -68,6 +96,14 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
         onSendOverride={onSendOverride}
         composerNode={composerNode}
         autoFocusInput={autoFocusInput}
+        leadNode={leadNode}
+        leadPinned={leadPinned}
+        stickyPrompt={stickyPrompt}
+        initialDensity={initialDensity}
+        foldWorkingTurns={foldWorkingTurns}
+        openAtTop={openAtTop}
+        composerPlaceholder={composerPlaceholder}
+        hideDiff={hideDiff}
       />
     </div>
   );

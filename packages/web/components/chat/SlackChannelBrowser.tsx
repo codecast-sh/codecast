@@ -24,6 +24,7 @@ import {
   type SlackDirection,
 } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackLogo } from "../SlackLogo";
+import { openExternalUrl } from "../../lib/desktop";
 import { useTrackedStore } from "../../store/inboxStore";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
 import { slackLinksSig } from "../../hooks/useChatSync";
@@ -158,10 +159,10 @@ export function SlackChannelBrowser({
       const res: any = await getInstallUrl({
         scope_type: "self",
         team_id: teamId,
-        return_to: `${window.location.pathname}?slack=connected`,
+        return_to: "/settings/integrations?slack=connected",
         origin: window.location.origin,
       } as any);
-      if (res?.ok && res.url) window.location.href = res.url;
+      if (res?.ok && res.url) openExternalUrl(res.url);
       else setLoadErr(res?.error ?? "Couldn't start the Slack connection");
     } catch (e: any) {
       setLoadErr(e?.message ?? "Couldn't start the Slack connection");

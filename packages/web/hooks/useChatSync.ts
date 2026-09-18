@@ -16,7 +16,7 @@
 // subscribes to a SIGNATURE of the fields it renders (store/wakeSig.ts) and
 // reads the raw collection in the body.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useIsSyncHost } from "./useSyncRole";
 import { useConvex } from "convex/react";
 import { useRouter } from "next/navigation";
@@ -44,7 +44,7 @@ import { memberListSig } from "./useTeamRoster";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useTeamFeature } from "../lib/teamFeatures";
-import { markChatRailLive } from "../lib/chatLive";
+import { isChatRailLive, markChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { navigateFromHere } from "../lib/desktop";
 import { isConvexId } from "../lib/entityLinks";
 import {
@@ -603,6 +603,8 @@ export function useOpenChatPath(): (path: string) => void {
 
 /** The channel rail, already sorted and counted. */
 export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
+  // Once a server payload has landed, a room missing from the rail is gone.
+  const railLive = useSyncExternalStore(subscribeChatRailLive, isChatRailLive, () => false);
   const s = useTrackedStore([
     (s: any) => channelsSig(s.chatChannels),
     (s: any) => readsSig(s.chatReads),
@@ -616,7 +618,7 @@ export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
   // No currentUser fallback: undefined MEANS the personal workspace, and
   // falling back to a team would resurrect team rooms the user left.
   const teamId = s.clientState?.ui?.active_team_id;
-  return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined, scope);
+  return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined, scope, railLive);
 }
 
 export function useMessageViews(
@@ -754,7 +756,10 @@ export function supersededChannelId(
   channels: Record<string, ChatChannelRow>,
   channelId: string | undefined,
 ): string | undefined {
-  if (!channelId || isConvexId(channelId) || channels[channelId]) return undefined;
+  // A stub id that the server row superseded, OR a real room that merged into
+  // another one (two Slack people turning out to be the same person). Either
+  // way the surviving row carries the old id as its client_id.
+  if (!channelId || channels[channelId]) return undefined;
   for (const id in channels) {
     if (channels[id]?.client_id === channelId) return id;
   }
