@@ -1,4 +1,3 @@
-import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useMutation } from "convex/react";
@@ -25,15 +24,16 @@ import { useInboxStore } from "../store/inboxStore";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import { useAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
 import { toConvexAgentType } from "@codecast/shared/contracts";
-import { formatModel } from "../lib/conversationProcessor";
-import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel } from "../lib/modelSwitch";
+import { modelOptionKey, modelFitsAgent, effortGlyph } from "../lib/modelSwitch";
 import { commitModelChange, notifyModelToast as notifyToast } from "../lib/modelSwitchWeb";
 
 // First-class model/effort control for the web. The commit rails live in
 // lib/modelSwitch.ts (shared with the mobile switcher); this module owns the
-// web surfaces: the conversation-header badge (HeaderModelControl, live
-// sessions), the new-session launch pill (LaunchModelPill, blank sessions),
-// and the shared dropdown menu the Cmd+K palette also drives.
+// model/effort rows (ModelEffortRows) every picker composes, the new-session
+// launch pill (LaunchModelPill, blank sessions) and the agent-definition pill.
+// The conversation-header badge lives in SessionControlMenu.tsx: it wraps the
+// same rows in the unified session control panel (model, effort, switch,
+// fork, hand off).
 
 /**
  * The user's codecast-wide default model for one agent client, with a
@@ -66,14 +66,7 @@ function useDefaultModelPin(agentType: string | undefined) {
   return { defaultKey, setDefault };
 }
 
-export function ModelEffortMenu({
-  agentType,
-  modelKey,
-  effort,
-  midSession,
-  onSelect,
-  ownerDeviceId,
-}: {
+export interface ModelEffortRowsProps {
   agentType: string | undefined;
   modelKey: string;
   effort: string | undefined | null;
@@ -82,7 +75,26 @@ export function ModelEffortMenu({
   onSelect: (opts: { model?: string; effort?: string }) => void;
   /** Dynamic clients: scope the live inventory to the session's device. */
   ownerDeviceId?: string | null;
-}) {
+  /** Keep the surrounding menu open after a model pick (a multi-step panel
+   *  that collects the choice instead of committing it). */
+  keepOpen?: boolean;
+}
+
+/**
+ * The model list (static rail or a dynamic client's live inventory with
+ * search), the default pin, and the effort chips — the rows themselves, with
+ * no menu chrome, so one definition serves the launch pill, the header
+ * session control panel, and its hand-off step.
+ */
+export function ModelEffortRows({
+  agentType,
+  modelKey,
+  effort,
+  midSession,
+  onSelect,
+  ownerDeviceId,
+  keepOpen = false,
+}: ModelEffortRowsProps) {
   const { dynamic, featured, all } = useDynamicModels(agentType, ownerDeviceId);
   const [search, setSearch] = useState("");
   const { defaultKey, setDefault } = useDefaultModelPin(agentType);
@@ -113,7 +125,7 @@ export function ModelEffortMenu({
     return (
       <DropdownMenuItem
         key={m.key}
-        onSelect={() => { if (!isCurrent(m.key)) onSelect({ model: m.key }); }}
+        onSelect={(e) => { if (keepOpen) e.preventDefault(); if (!isCurrent(m.key)) onSelect({ model: m.key }); }}
         className="group flex items-start gap-2"
       >
         <span className={`mt-0.5 w-3 text-center text-xs ${isCurrent(m.key) ? "text-sol-cyan" : "text-transparent"}`}>●</span>
@@ -142,7 +154,7 @@ export function ModelEffortMenu({
     );
   };
   return (
-    <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-1rem)]">
+    <>
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
       {models.map(modelRow)}
       {dynamic && all.length > 0 && (
@@ -192,121 +204,19 @@ export function ModelEffortMenu({
           })}
         </div>
       </>}
+    </>
+  );
+}
+
+/** ModelEffortRows inside their own dropdown content — the launch pill's menu. */
+export function ModelEffortMenu(props: ModelEffortRowsProps) {
+  return (
+    <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-1rem)]">
+      <ModelEffortRows {...props} />
     </DropdownMenuContent>
   );
 }
 
-
-function modelStampForPick(agentType: string | undefined, key: string): string | undefined {
-  if (key === "default") return undefined;
-  return modelAgentKey(agentType) === "claude" ? `claude-${key}` : key;
-}
-
-/**
- * Conversation-header badge. Reads the live store row so an agent or model
- * switch updates the chip immediately. Leftover models from the previous
- * agent are hidden. A local pick overlay holds until the transcript rollup
- * lands the full id (claude-opus → claude-opus-4-8).
- */
-export function HeaderModelControl({
-  conversationId,
-  agentType: agentTypeProp,
-  model: modelProp,
-  effort: effortProp,
-  messageCount,
-  canEdit,
-}: {
-  conversationId: string | undefined;
-  agentType: string | undefined;
-  model: string | undefined;
-  effort: string | undefined | null;
-  messageCount: number | undefined;
-  canEdit: boolean;
-}) {
-  const live = useLiveSessionMeta(conversationId);
-  const agentType = live?.agentType ?? agentTypeProp;
-  const storeModel = (live ? live.model : modelProp) ?? undefined;
-  const storeEffort = (live ? live.effort : effortProp) ?? undefined;
-  const ownerDeviceId = live?.ownerDeviceId;
-  const [picked, setPicked] = useState<{ model?: string; effort?: string } | null>(null);
-
-  useWatchEffect(() => {
-    if (!picked) return;
-    const modelAck = picked.model === undefined
-      || modelOptionKey(storeModel, agentType) === (picked.model === "default" ? "default" : picked.model);
-    const effortAck = picked.effort === undefined
-      || (picked.effort === "default" ? !storeEffort : storeEffort === picked.effort);
-    if (modelAck && effortAck) setPicked(null);
-  }, [picked, storeModel, storeEffort, agentType]);
-
-  // Agent switch: drop a pick aimed at the previous agent's catalog.
-  useWatchEffect(() => { setPicked(null); }, [agentType]);
-
-  const blank = (messageCount ?? 0) === 0;
-  const overlayModel = picked?.model !== undefined
-    ? modelStampForPick(agentType, picked.model)
-    : (modelFitsAgent(storeModel, agentType) ? storeModel : undefined);
-  const overlayEffort = picked?.effort !== undefined
-    ? (picked.effort === "default" ? undefined : picked.effort)
-    : storeEffort;
-
-  const interactive = !!(
-    canEdit &&
-    !blank &&
-    conversationId &&
-    canControlModel(agentType, blank)
-  );
-
-  const glyph = effortGlyph(overlayEffort);
-
-  if (!interactive) {
-    if (!overlayModel) return null;
-    return (
-      <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-        <span className="text-sol-text-dim">&middot;</span>
-        <span className="font-mono truncate max-w-none" title={overlayModel}>{formatModel(overlayModel)}</span>
-        {glyph && <span className="text-sol-text-dim/80" title={`${overlayEffort} effort`}>{glyph}</span>}
-      </div>
-    );
-  }
-
-  return (
-    <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-      <span className="text-sol-text-dim">&middot;</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
-            title={`Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} — click to change`}
-          >
-            <span className="truncate max-w-none">{overlayModel ? formatModel(overlayModel) : "model"}</span>
-            {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
-            <svg className="w-2.5 h-2.5 opacity-50 group-hover:opacity-80 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </DropdownMenuTrigger>
-        <ModelEffortMenu
-          agentType={agentType}
-          modelKey={modelOptionKey(overlayModel, agentType)}
-          effort={overlayEffort}
-          ownerDeviceId={ownerDeviceId}
-          midSession
-          onSelect={(sel) => {
-            setPicked((prev) => ({ ...prev, ...sel }));
-            void commitModelChange({
-              conversationId: conversationId!,
-              agentType,
-              current: { model: storeModel, effort: storeEffort },
-              sel,
-              blank: false,
-            });
-          }}
-        />
-      </DropdownMenu>
-    </div>
-  );
-}
 
 /**
  * Launch model/effort pill for the new-session surface — sits in the agent
