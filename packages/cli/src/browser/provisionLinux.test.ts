@@ -3,11 +3,12 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport } from "./provisionLinux.js";
+import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, DAEMON_CGROUP_TMUX_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, idleWatchdogScript } from "./provisionLinux.js";
 import * as remote from "./remote.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
 import { listCloudRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
 import { remoteHome, type RemoteHost } from "../remote/session-move.js";
+import { needsMacHelper } from "../../scripts/build-with-native.js";
 
 describe("baseProvisionScript", () => {
   const script = baseProvisionScript(20);
@@ -100,7 +101,13 @@ describe("Linux split bundle transfer", () => {
     return dist;
   }
 
-  function localRemote() {
+  /**
+   * `version` is what the host's `cast --version` answers: the launcher really
+   * running is covered by the transfer test above (sync child output is not
+   * reliable under bun test in this package), so here the answer is given and
+   * the backup, upload and restore commands around it run for real.
+   */
+  function localRemote(version?: string | Error) {
     const install = path.join(dir, "installed");
     const launcher = path.join(dir, "cast");
     fs.mkdirSync(install);
@@ -109,6 +116,10 @@ describe("Linux split bundle transfer", () => {
     const stages: string[] = [];
     const uploads: string[] = [];
     const commands = spyOn(remote, "remoteExec").mockImplementation((_host, command) => {
+      if (version !== undefined && command === "/usr/local/bin/cast --version") {
+        if (version instanceof Error) throw version;
+        return version;
+      }
       if (command.startsWith("mktemp -d ")) {
         const stage = fs.mkdtempSync(path.join(dir, "remote-stage-"));
         stages.push(stage);
@@ -181,6 +192,7 @@ describe("Linux split bundle transfer", () => {
     const build = spyOn(childProcess, "execFileSync").mockImplementation(((command, args, options) => {
       expect(command).toBe("bun");
       expect(args?.slice(0, 3)).toEqual(["run", "build", "--outdir"]);
+      expect((options as childProcess.ExecFileSyncOptions).env?.CODECAST_BUNDLE_PLATFORM).toBe("linux");
       buildDirs.push(String(args?.[3]));
       return execFileSync(process.execPath, args, { ...options, cwd: dir, timeout: 20_000 });
     }) as typeof childProcess.execFileSync);
@@ -208,10 +220,106 @@ describe("Linux split bundle transfer", () => {
     expect(() => buildLinuxCast(() => {})).toThrow(failure === "failed" ? "build failed" : "daemon.js");
     expect(fs.existsSync(buildDirs.at(-1)!)).toBe(false);
   });
+
+  // The version the real build would report: installLinuxCast reads it from the
+  // same package.json, so the fixture bundle prints it back when it is healthy.
+  const sourceVersion = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf-8")).version as string;
+
+  /** A split build the way `bun run build` emits one: a tiny entry that imports its chunk. */
+  function fakeBuild() {
+    return spyOn(childProcess, "execFileSync").mockImplementation(((command: string, args: readonly string[], options: childProcess.ExecFileSyncOptions) => {
+      if (command !== "bun" || args?.[0] !== "run") return execFileSync(command, args, options);
+      const out = String(args[3]);
+      buildDirs.push(out);
+      fs.writeFileSync(path.join(out, "main.js"), 'import { v } from "./main-chunk.js"; console.log(v);');
+      fs.writeFileSync(path.join(out, "daemon.js"), 'import { v } from "./main-chunk.js"; console.log(v);');
+      fs.writeFileSync(path.join(out, "main-chunk.js"), `export const v = ${JSON.stringify(sourceVersion)};`);
+      return Buffer.alloc(0);
+    }) as typeof childProcess.execFileSync);
+  }
+
+  test("installs a bundle only after it runs on the host, keeping the previous one for rollback", () => {
+    const target = localRemote(sourceVersion);
+    fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
+    fakeBuild();
+    expect(installLinuxCast(host)).toEqual({ version: sourceVersion });
+    expect(fs.readFileSync(path.join(target.install, "main-chunk.js"), "utf8")).toContain(sourceVersion);
+    expect(fs.readFileSync(path.join(`${target.install}.previous`, "index.js"), "utf8")).toBe("existing entry");
+    expect(fs.readFileSync(path.join(target.install, "idle-probe.py"), "utf8")).toBe("preserve probe");
+    expect(fs.existsSync(buildDirs.at(-1)!)).toBe(false);
+  }, 60_000);
+
+  test.each([
+    ["a missing chunk", new Error("error: Cannot find module './main-chunk.js' from '/usr/local/lib/codecast/index.js'")],
+    ["a different version", "0.0.0"],
+  ] as const)("puts the previous bundle back when the new one fails its check (%s)", (_label, answer) => {
+    const target = localRemote(answer);
+    fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
+    fakeBuild();
+    expect(() => installLinuxCast(host)).toThrow("previous bundle is back in place");
+    // The host is exactly as it was: the old entry, the adjacent files, and no
+    // leftover copy, so nothing about the failed attempt survives it.
+    expect(fs.readFileSync(path.join(target.install, "index.js"), "utf8")).toBe("existing entry");
+    expect(fs.readFileSync(path.join(target.install, "unrelated.txt"), "utf8")).toBe("preserve unrelated");
+    expect(fs.existsSync(path.join(target.install, "main-chunk.js"))).toBe(false);
+    expect(fs.existsSync(`${target.install}.previous`)).toBe(false);
+  }, 60_000);
+
+  test("puts the previous bundle back when the upload itself fails", () => {
+    const target = localRemote(sourceVersion);
+    fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
+    target.copy.mockImplementation(() => { throw new Error("upload interrupted"); });
+    fakeBuild();
+    expect(() => installLinuxCast(host)).toThrow("upload interrupted");
+    expect(fs.readFileSync(path.join(target.install, "index.js"), "utf8")).toBe("existing entry");
+  }, 60_000);
+
+  test("the daemon's control group check names tmux servers and nothing else", async () => {
+    // The real script, against a fake cgroup listing and /proc.
+    fs.mkdirSync(path.join(dir, "proc", "10"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "proc", "11"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "proc", "10", "comm"), "bun\n");
+    fs.writeFileSync(path.join(dir, "proc", "11", "comm"), "tmux: server\n");
+    fs.writeFileSync(path.join(dir, "procs"), "10\n11\n");
+    const script = DAEMON_CGROUP_TMUX_SCRIPT
+      .replace("/sys/fs/cgroup/system.slice/codecast-daemon.service/cgroup.procs", path.join(dir, "procs"))
+      .replace("/proc/$p/comm", `${dir}/proc/$p/comm`);
+    expect(await runLocal("bash", ["-c", script])).toEqual({ stdout: "11\n", stderr: "" });
+  }, 30_000);
+});
+
+describe("restartHostDaemon", () => {
+  const host: RemoteHost = { address: "unused", user: "ubuntu", keyPath: "/unused", remoteBaseDir: "/home/ubuntu/work" };
+  afterEach(() => mock.restore());
+
+  function scripted(tmuxPids: string) {
+    const seen: string[] = [];
+    spyOn(remote, "remoteExec").mockImplementation((_host, command) => {
+      seen.push(command);
+      return command === DAEMON_CGROUP_TMUX_SCRIPT ? tmuxPids : "active\n4242";
+    });
+    return seen;
+  }
+
+  test("refuses when a tmux server lives in the daemon's control group, and restarts nothing", () => {
+    const seen = scripted("91\n");
+    expect(() => restartHostDaemon(host)).toThrow("tmux server 91");
+    expect(seen.some((c) => c.includes("systemctl restart"))).toBe(false);
+  });
+
+  test("restarts when no tmux server would die with it, or when forced", () => {
+    const seen = scripted("");
+    expect(restartHostDaemon(host)).toEqual({ pid: "4242" });
+    expect(seen.some((c) => c.includes("systemctl restart"))).toBe(true);
+    mock.restore();
+    scripted("91");
+    expect(restartHostDaemon(host, { force: true })).toEqual({ pid: "4242" });
+  });
+
 });
 
 describe("idle watchdog and the daemon's activity stamp", () => {
-  const script = baseProvisionScript(20).split("<<'IDLE'\n")[1]!.split("\nIDLE")[0]!;
+  const script = idleWatchdogScript();
   test("a fresh stamp keeps the box awake; a stale one lets it sleep", () => {
     expect(script).toContain("STAMP=/home/ubuntu/.codecast/host-active");
     expect(script).toContain('[ -f "$STAMP" ]');
@@ -296,5 +404,19 @@ describe("ProvisionReport", () => {
       tools: "5 ok, 1 installed, 0 missing, 0 unsupported",
     };
     expect(Object.keys(report).sort()).toEqual(["agents", "cast", "chrome", "claude", "device", "git", "mirror", "services", "tools"]);
+  });
+});
+
+describe("which builds embed the macOS helpers", () => {
+  test("a compiled binary follows its target, whatever machine builds it", () => {
+    expect(needsMacHelper("bun-darwin-arm64", "linux")).toBe(true);
+    expect(needsMacHelper("bun-linux-x64", "darwin")).toBe(false);
+    expect(needsMacHelper("bun-windows-x64", "darwin")).toBe(false);
+  });
+  test("a node dist follows where it will run: this machine unless the caller says otherwise", () => {
+    expect(needsMacHelper("node", "darwin", undefined)).toBe(true);
+    expect(needsMacHelper("node", "linux", undefined)).toBe(false);
+    // Provisioning on a Mac for a Linux host.
+    expect(needsMacHelper("node", "darwin", "linux")).toBe(false);
   });
 });
