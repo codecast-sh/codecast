@@ -31,6 +31,35 @@ describe("ghostsFor", () => {
     expect(JSON.stringify(ORG_FIXTURE)).toBe(before);
   });
 
+  it("role: scope chips name the project, never its internal id", () => {
+    const internal = "sd72cbsfka4tq16cgpg2gftek58c8ghc";
+    const c = change({ kind: "role", name: "Agent Quality lead", handle: "agent-quality", reports_to: "me", scope: { projects: [internal, "fixture-project-growth", "pr-9"], plans: ["pl-619", "fixture-plan-seo"] } });
+    // The store knows the first project; the live growth role's scope names the second; the third is a short id nobody has loaded.
+    const { ghosts } = lay([c], { projects: [{ id: internal, title: "Cold outreach", short_id: "pr-7" }] });
+    const ghost = ghosts.merged.roles.find((r) => r._id === c._id)!;
+    expect(ghost.scope_names.projects.map((p) => p.title)).toEqual(["Cold outreach", "Growth", "pr-9"]);
+    expect(ghost.scope_names.plans.map((p) => p.short_id)).toEqual(["pl-619", "pl-88"]);
+    // An internal id the store does not hold yet is said in words, not shown.
+    const cold = change({ kind: "role", name: "X", handle: "x", reports_to: "me", scope: { projects: ["k17abcdefghijklmnopqrstuvwxyz012"], plans: ["k17abcdefghijklmnopqrstuvwxyz013"] } });
+    const g2 = lay([cold]).ghosts.merged.roles.find((r) => r._id === cold._id)!;
+    expect(g2.scope_names.projects[0].title).toBe("a project not loaded yet");
+    expect(g2.scope_names.plans[0].short_id).toBe("a plan not loaded yet");
+    for (const title of [...g2.scope_names.projects, ...g2.scope_names.plans].map((r) => r.title)) expect(title).not.toMatch(/^[a-z0-9]{32}$/);
+  });
+
+  it("a file chip on a ghost names the project, never its internal id", () => {
+    const internal = "sd72cbsfka4tq16cgpg2gftek58c8ghc";
+    const role = change({ kind: "role", name: "Agent Quality lead", handle: "agent-quality", reports_to: "me", scope: { projects: [internal] } });
+    const file = change({ kind: "file", plan: "pl-619", project: internal });
+    const { ghosts } = lay([role, file], { projects: [{ id: internal, title: "Agent Quality", short_id: "pr-12" }] });
+    const chips = ghosts.chips[roleNodeId(role._id)] ?? [];
+    expect(chips.map((c) => c.chip)).toEqual(["pl-619 under Agent Quality"]);
+    expect(chips[0].line).toBe("Put plan pl-619 under the project Agent Quality");
+    // Nothing in the store yet: the id is said in words, not shown.
+    const cold = lay([role, file]).ghosts.chips[roleNodeId(role._id)] ?? [];
+    expect(cold.map((c) => c.chip)).toEqual(["pl-619 under a project not loaded yet"]);
+  });
+
   it("role: a ghost node under its proposed parent, keyed by the change id, with scope chips and a proposed tag", () => {
     const c = change({ kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me", scope: { projects: ["Platform"] } });
     const { nodes, edges, ghosts } = lay([c]);

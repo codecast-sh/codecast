@@ -4,6 +4,7 @@
 // inbox's: needs input amber (THREAD_STATE_STATUS_META.blocked), working green,
 // done cyan, dormant blue, idle dim.
 import { memo, type ReactNode } from "react";
+import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
 import { ChevronDown, ChevronRight, GitFork, Layers, Anchor as AnchorGlyph, Shield, Crown, Check, Pencil, X, Clock, Sparkles, AlertTriangle } from "lucide-react";
@@ -19,6 +20,8 @@ import { RoleFace } from "./RoleFace";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
+import { ORG_SIZES, seatRowHeight } from "./orgLayout";
+import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
@@ -436,8 +439,8 @@ export type RoleNodeData = CardData & {
 export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<RoleNodeData>>) {
   const { role: r, collapsed, hidden, overflow } = data;
   const chips = [
-    ...r.scope_names.projects.map((p) => ({ key: `p:${p.id}`, label: p.title, kind: "project" as const })),
-    ...r.scope_names.plans.map((p) => ({ key: `l:${p.id}`, label: p.short_id || p.title, kind: "plan" as const })),
+    ...r.scope_names.projects.map((p) => ({ key: `p:${p.id}`, id: p.id, label: p.title, kind: "project" as const })),
+    ...r.scope_names.plans.map((p) => ({ key: `l:${p.id}`, id: p.id, label: p.short_id || p.title, kind: "plan" as const })),
   ];
   const wholeWorkspace = r.scope.project_ids.length === 0 && r.scope.plan_ids.length === 0;
   const paused = r.status === "paused";
@@ -511,10 +514,18 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
             {paused && <span className="px-1 rounded-sm" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             {ghost && <GhostTag label={ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} />}
             {data.retire && <GhostTag label="retire" status={data.retire.status} tone="color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" />}
+            {/* The seat is the role (S16): the line says whether its standing
+                agent is online, and counts only the hands under it. */}
             {!ghost && (
               <>
                 <span aria-hidden>·</span>
-                <span className="tabular-nums">{r.total} session{r.total === 1 ? "" : "s"}</span>
+                <span data-role-seat={r.standing ? "online" : "none"}>{r.standing ? "online" : "no agent"}</span>
+                {r.total > 0 && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="tabular-nums">{r.total} session{r.total === 1 ? "" : "s"}</span>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -530,6 +541,14 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           <span className="truncate text-[10px]" style={{ color: "var(--sol-violet)" }} title={tenure.full} data-tenure="">{tenure.short}</span>
         </div>
       )}
+      {/* A ghost that names a session which already works as this role (R2)
+          says what naming changes. It stays at full strength: it is the one
+          thing on the card a person must read before they accept. */}
+      {ghost?.seat && (
+        <p className="mt-1.5 text-[10px] overflow-hidden" style={{ height: seatRowHeight(ghost.seat) - 6, lineHeight: `${ORG_SIZES.seatLine}px`, color: "var(--sol-text-muted)" }} title={seatSentence(ghost.seat)} data-ghost-seat={ghost.seat.existing}>
+          {seatSentence(ghost.seat)}
+        </p>
+      )}
       <div style={{ opacity: dim ? GHOST.opacity : 1 }}><StandingLine standing={r.standing} className="mt-1.5" /></div>
       <div className="mt-2 flex items-center gap-1 min-w-0 overflow-hidden">
         {wholeWorkspace ? (
@@ -541,15 +560,18 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
             {chips.slice(0, 3).map((c) => (
               <span
                 key={c.key}
-                className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md truncate max-w-[96px]"
+                className="text-[10px] px-1.5 h-[18px] inline-flex items-center gap-1 rounded-md min-w-0 max-w-[120px]"
                 style={{
                   background: c.kind === "project" ? "color-mix(in srgb, var(--sol-blue) 12%, transparent)" : "color-mix(in srgb, var(--sol-magenta) 12%, transparent)",
                   color: c.kind === "project" ? "var(--sol-blue)" : "var(--sol-magenta)",
                   fontFamily: c.kind === "plan" ? "var(--font-mono)" : undefined,
                 }}
-                title={c.label}
               >
-                {c.label}
+                <span className="truncate" title={c.label}>{c.label}</span>
+                {/* Who leads the project (org-roles-run-work.md R4): "lead" when
+                    it is this role, the face of the role that does otherwise. A
+                    ghost is not a role yet, so it leads nothing. */}
+                {c.kind === "project" && !ghost && <ProjectLeadMark projectId={c.id} roleId={r._id} />}
               </span>
             ))}
             {chips.length > 3 && <span className="text-[10px]" style={{ color: "var(--sol-text-dim)" }}>+{chips.length - 3}</span>}
