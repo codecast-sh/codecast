@@ -10,15 +10,14 @@
  */
 
 import { useRef, useState, type ReactNode } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { X, UserCheck, ArrowRightLeft, Network, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type HandoffInfo } from "../hooks/useOwners";
-import { useOrgRoles } from "../hooks/useOrgRoles";
+import { useStoreOwnersEnv, useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
-import { reparentToastLine } from "../store/orgSlice";
 import { RoleFace } from "./org/RoleFace";
+import { RoleHoverCard } from "./identity/RoleHoverCard";
 import { sessionFitsARole } from "./org/MakeRoleDialog";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
@@ -62,41 +61,11 @@ export function OwnerAvatar({ name, image, size = "w-4 h-4" }: { name: string; i
 export function useOwnersFromStore(conversationId: string): OwnersApi {
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const currentUser = useInboxStore((s) => s.currentUser) as any;
-  const starterIds = useInboxStore(useShallow((s) => {
-    const live = typeof (s as any).resolveLiveSessionId === "function"
-      ? (s as any).resolveLiveSessionId(conversationId)
-      : conversationId;
-    const row = (s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId];
-    return [row?.author_user_id ?? null, row?.user_id ?? null] as const;
-  }));
-  const implicitOwnerId = (() => {
-    const isBot = (id: string) => {
-      if (currentUser?._id === id) return !!currentUser.is_bot;
-      const m = teamMembers?.find((x: any) => x._id === id);
-      return m ? !!m.is_bot : false;
-    };
-    for (const id of starterIds) {
-      if (id && !isBot(id)) return id as string;
-    }
-    return undefined;
-  })();
-  return useOwners(conversationId, {
+  return useOwners(conversationId, useStoreOwnersEnv(conversationId, {
     teamMembers,
     currentUser,
-    implicitOwnerId,
     notify: (msg, kind) => (kind === "success" ? toast.success(msg) : toast.error(msg)),
-    reparent: async (target, opts) => {
-      const r = await useInboxStore.getState().reparentOrgSession(conversationId, target, { note: opts.note });
-      // Always a SESSION reparent here, whether the new parent is a person or a
-      // role: the session is what is told. A stale session is DEFERRED rather
-      // than woken, which still deserves the line — it says when it will read.
-      if (r && (r.told?.sessions || r.told?.deferred)) {
-        toast.success(reparentToastLine(r.short_id ?? "The session", r.reports_to?.name ?? opts.parentName ?? "its new parent", "session", r.told));
-      } else if (opts.toastFallback) {
-        toast.success(opts.toastFallback);
-      }
-    },
-  });
+  }));
 }
 
 /**
@@ -124,21 +93,7 @@ export function OwnerMenuItems({
   // role names it and "Move to a role" can list the workspace's roles even off
   // the org page (org-staffing.md S11). Bounded to the menu's lifetime.
   useSyncOrgTreeFeeder();
-  const { roles } = useOrgRoles();
-  const liveRoles = roles.filter((r) => r.status !== "retired");
-  const orgRoleId = useInboxStore((s) => {
-    const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
-    return ((s.sessions as any)?.[live]?.org_role_id ?? (s.conversations as any)?.[conversationId]?.org_role_id) as string | undefined;
-  });
-  const currentRole = orgRoleId ? liveRoles.find((r) => r._id === orgRoleId) : undefined;
-  // A standing agent's own thread is a seat, not a hand: the server refuses to
-  // file it under a role (sessionOwnership.performReparentSession), so the
-  // menu does not offer it.
-  const isStandingThread = useInboxStore((s) => {
-    const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
-    const row = (s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId];
-    return !!(row?.is_anchor || row?.anchor_id || row?.standing_role_id);
-  });
+  const { liveRoles, orgRoleId, currentRole, isStandingThread } = useSessionRoleFacts(conversationId);
   // A session older than a week may already be a role nobody has named
   // (org-roles-run-work.md R2); the analyzer proposes those it finds, and this
   // is the way to name one it left out. Read once: the menu is short lived.
@@ -163,10 +118,13 @@ export function OwnerMenuItems({
           <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
             Reports to a role
           </DropdownMenuLabel>
-          <div className="px-2 pb-1 flex items-center gap-2 text-xs text-sol-text">
-            <RoleFace role={currentRole} size={18} />
-            <span className="truncate">{currentRole.name}</span>
-            <span className="text-sol-text-dim font-mono text-[10px]">@{currentRole.handle}</span>
+          <div className="px-2 pb-1 text-xs text-sol-text">
+            {/* What the role looks after is one hover away (org-roles-run-work.md R3). */}
+            <RoleHoverCard role={currentRole} side="left" triggerClassName="inline-flex min-w-0 items-center gap-2">
+              <RoleFace role={currentRole} size={18} />
+              <span className="truncate">{currentRole.name}</span>
+              <span className="text-sol-text-dim font-mono text-[10px]">@{currentRole.handle}</span>
+            </RoleHoverCard>
           </div>
         </>
       )}
@@ -184,9 +142,12 @@ export function OwnerMenuItems({
                   onSelect={(e) => { e.preventDefault(); void moveToRole(r._id, r.name); }}
                   className="text-xs gap-2"
                 >
-                  <RoleFace role={r} size={18} />
-                  <span className="flex-1 truncate">{r.name}</span>
-                  <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
+                  {/* Before a person files a session under a role, its scope is a hover away. */}
+                  <RoleHoverCard role={r} side="right" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
+                    <RoleFace role={r} size={18} />
+                    <span className="flex-1 truncate">{r.name}</span>
+                    <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
+                  </RoleHoverCard>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuSubContent>

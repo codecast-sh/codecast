@@ -1,5 +1,9 @@
 // What a role looks after, at two sizes (docs/architecture/org-roles-run-work.md
-// R3): `card` is the scope section of the role hover card, `page` is the role
+// R3; initiatives-projects-role-page.md I2). Projects come first and are the
+// unit: one card each, with the project's lead, the initiative it belongs to,
+// its open and done tasks, the plans inside it and the sessions at work in it.
+// A plan never sits beside its project; plans in no project share one last
+// card that offers the gesture that files them. `card` is the scope section of the role hover card, `page` is the role
 // page's first tab. One component, so the hover and the page can never say
 // different things about the same role. It paints a RoleScopeModel
 // (lib/roleScope) and reads nothing itself; useRoleScope builds the model from
@@ -7,13 +11,18 @@
 //
 // The card is one link (a click anywhere opens the role), so nothing inside it
 // is a link or opens a card of its own. The page's rows are links, its roles
-// carry their own hover, and the page hands in the two pieces only it can
-// afford: the project lead chip and the sessions grouped by who acts next.
+// carry their own hover, and the page hands in the pieces only it can afford:
+// the project lead chip, the initiative pill, the sessions grouped by who acts
+// next, and the write that files a plan under a project.
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, FolderInput } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { planStateLine, projectStateLine, sessionsLine, type RoleScopeModel, type RoleScopeParty, type ScopePlan, type ScopeProject } from "../../lib/roleScope";
+import { groupsLine, planStateLine, projectStateLine, sessionsLine, type RoleScopeModel, type RoleScopeParty, type ScopePlan, type ScopeProject } from "../../lib/roleScope";
+import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
+import type { RoleInitiative } from "../../lib/roleInitiatives";
+import { HEALTH_COLOR } from "../initiatives/InitiativeAtoms";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import type { EscalatedSession } from "../../hooks/useRoleScope";
 import type { OrgSession } from "../org/orgTypes";
 import { RoleFace } from "../org/RoleFace";
@@ -24,8 +33,8 @@ export type RoleScopeDensity = "card" | "page";
 export type RoleScopeTab = "sessions" | "charter" | "tasks" | "plans";
 
 /** How many rows the card shows before it says how many more there are. */
-const CARD_PROJECTS = 4;
-const CARD_PLANS = 3;
+const CARD_PROJECTS = 3;
+const CARD_PLANS = 2;
 
 export type RoleScopeViewProps = {
   model: RoleScopeModel;
@@ -34,30 +43,48 @@ export type RoleScopeViewProps = {
   escalated?: EscalatedSession[];
   /** Page only: a project's lead, drawn by the one chip that knows the rule. */
   renderLead?: (projectId: string) => ReactNode;
+  /** Page only: the initiatives a project belongs to (I1), as their pills. */
+  renderInitiative?: (projectId: string) => ReactNode;
+  /** Page only: file a plan that sits in no project under one (the last card's one gesture). */
+  onFilePlan?: (planRef: string, projectId: string) => void;
   /** Page only: the role's sessions grouped by who acts next. */
   sessions?: ReactNode;
+  /** Page only: sessions waiting on a person anywhere in the role's area (the
+   *  ones bound to its tasks and plans too), when that is more than the
+   *  sessions that report to it. The page header says this number; the
+   *  section must never say less. */
+  waitingInArea?: number;
   onTab?: (tab: RoleScopeTab) => void;
   onOpenSession?: (s: OrgSession) => void;
   className?: string;
 };
 
-export function RoleScopeView({ model, density, escalated = [], renderLead, sessions, onTab, onOpenSession, className }: RoleScopeViewProps) {
+export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
+  const moreWaiting = !(density === "card") && waitingInArea > (model.sessions?.waiting ?? 0);
   const card = density === "card";
   const projects = card ? model.projects.slice(0, CARD_PROJECTS) : model.projects;
-  const plans = card ? model.plans.slice(0, CARD_PLANS) : model.plans;
-  const hidden = model.projects.length - projects.length + (model.plans.length - plans.length);
-  const nothing = model.projects.length === 0 && model.plans.length === 0;
+  const hidden = model.projects.length - projects.length;
+  const nothing = model.projects.length === 0 && model.loosePlans.length === 0;
+  const fileTargets = model.projects.filter((p) => !p.partial);
 
   return (
     <div className={cn(card ? "grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2.5 gap-y-2 text-[11px] leading-snug" : "space-y-5", className)} data-role-scope={density}>
-      <Section density={density} label="Looks after" name="looks-after">
+      {model.initiatives.length > 0 && (
+        <Section density={density} label="Initiatives" name="initiatives">
+          <ul className={card ? "space-y-0.5" : "space-y-0.5"}>
+            {model.initiatives.map((i) => <li key={i.id}><InitiativeRowView i={i} density={density} /></li>)}
+          </ul>
+        </Section>
+      )}
+
+      <Section density={density} label="Projects" name="projects">
         {model.whole && <p className={card ? "text-sol-text-secondary" : "px-2.5 pb-1 text-[12px] text-sol-text-muted"} data-scope-whole>The whole workspace{model.projects.length > 0 ? `: ${model.projects.length} ${model.projects.length === 1 ? "project" : "projects"}` : ""}.</p>}
-        {nothing && !model.whole && <p className={card ? "text-sol-text-dim" : "px-2.5 text-[12px] text-sol-text-dim"}>Nothing yet. Add a project or a plan in Settings.</p>}
-        <ul className={card ? "space-y-0.5" : "space-y-0.5"}>
-          {projects.map((p) => <li key={p.id}>{card ? <ProjectLine p={p} /> : <ProjectRow p={p} lead={renderLead?.(p.id)} />}</li>)}
-          {plans.map((p) => <li key={p.id}>{card ? <PlanLine p={p} /> : <PlanRow p={p} />}</li>)}
+        {nothing && !model.whole && <p className={card ? "text-sol-text-dim" : "px-2.5 text-[12px] text-sol-text-dim"}>No project yet. Add one in Settings.</p>}
+        <ul className={card ? "space-y-1.5" : "space-y-2"}>
+          {projects.map((p) => <li key={p.id}>{card ? <ProjectBlock p={p} /> : <ProjectCard p={p} lead={renderLead?.(p.id)} initiative={renderInitiative?.(p.id)} />}</li>)}
+          {model.loosePlans.length > 0 && <li>{card ? <LooseBlock plans={model.loosePlans} /> : <LooseCard plans={model.loosePlans} targets={fileTargets} onFile={onFilePlan} />}</li>}
         </ul>
-        {hidden > 0 && <p className="text-sol-text-dim" data-scope-more={hidden}>and {hidden} more</p>}
+        {hidden > 0 && <p className="text-sol-text-dim" data-scope-more={hidden}>and {hidden} more {hidden === 1 ? "project" : "projects"}</p>}
       </Section>
 
       {(model.sessions || escalated.length > 0) && (
@@ -79,9 +106,10 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, sess
               ))}
             </ul>
           ))}
-          {model.sessions && <p className={card ? "text-sol-text-secondary" : "px-2.5 pb-1.5 text-[12px] text-sol-text-muted"} data-scope-sessions-line>{sessionsLine(model.sessions)}</p>}
+          {moreWaiting && <p className="px-2.5 pb-1 text-[12px] text-sol-yellow" data-scope-waiting-in-area={waitingInArea}>{waitingInArea} {waitingInArea === 1 ? "session is" : "sessions are"} waiting on a person in this area.</p>}
+          {model.sessions && !(moreWaiting && model.sessions.total === 0) && <p className={card ? "text-sol-text-secondary" : "px-2.5 pb-1.5 text-[12px] text-sol-text-muted"} data-scope-sessions-line>{model.sessions.total === 0 ? "No session reports to this role yet." : card ? sessionsLine(model.sessions) : `Reporting to it: ${sessionsLine(model.sessions)}`}</p>}
           {!card && sessions}
-          {!card && model.sessions && model.sessions.total > 0 && <More onClick={() => onTab?.("sessions")}>All {model.sessions.total} {model.sessions.total === 1 ? "session" : "sessions"}</More>}
+          {!card && model.sessions && (model.sessions.total > 0 || moreWaiting) && <More onClick={() => onTab?.("sessions")}>{model.sessions.total > 0 ? `All ${model.sessions.total} ${model.sessions.total === 1 ? "session" : "sessions"}` : "See the sessions in this area"}</More>}
         </Section>
       )}
 
@@ -157,63 +185,166 @@ function More({ onClick, children }: { onClick: () => void; children: ReactNode 
   );
 }
 
-// ------------------------------------------------------------------ the card's lines
+/** A goal the role's work serves: whether the role drives it or its projects
+ *  contribute, and what its owner last said about how it is going. */
+function InitiativeRowView({ i, density }: { i: RoleInitiative; density: RoleScopeDensity }) {
+  const part = i.owned ? "drives it" : `through ${i.projects} ${i.projects === 1 ? "project" : "projects"}`;
+  const health = i.health !== "none" ? <span style={{ color: HEALTH_COLOR[i.health] }}>{INITIATIVE_HEALTH_LABEL[i.health].toLowerCase()}</span> : null;
+  if (density === "card") {
+    return (
+      <p className="truncate" data-scope-initiative={i.ref}>
+        <span className="text-sol-text font-medium">{i.title}</span>
+        {health && <span className="text-sol-text-dim"> · {health}</span>}
+        <span className="text-sol-text-dim"> · {i.owned ? <span className="text-sol-violet font-medium">{part}</span> : part}</span>
+      </p>
+    );
+  }
+  return (
+    <Link href={`/initiatives/${i.ref}`} className="group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg no-underline transition-colors hover:bg-sol-bg-highlight/70" data-scope-initiative={i.ref}>
+      <span className="w-[3px] self-stretch rounded-full shrink-0 bg-sol-magenta/70" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium text-sol-text group-hover:underline underline-offset-2">{i.title}</span>
+        <span className="block truncate text-[11px] text-sol-text-dim"><span className="font-mono">{i.ref}</span>{health && <> · {health}</>} · {i.owned ? <span className="text-sol-violet font-medium">{part}</span> : part}</span>
+      </span>
+    </Link>
+  );
+}
+
+// ------------------------------------------------------------------ the card's blocks
 
 const leadWord = <span className="text-sol-violet font-medium">lead</span>;
 
-function ProjectLine({ p }: { p: ScopeProject }) {
-  const state = projectStateLine({ ...p, leads: false });
+/** A project on the hover card: its name, its state, and its plans under it. */
+function ProjectBlock({ p }: { p: ScopeProject }) {
+  const plans = p.plans.slice(0, CARD_PLANS);
+  const more = p.plans.length - plans.length;
   return (
-    <p className="truncate" data-scope-project={p.ref} data-scope-leads={p.leads ? "" : undefined}>
-      <span className="text-sol-text font-medium">{p.title}</span>
-      <span className="text-sol-text-dim"> · {state}</span>
-      {p.leads && <span className="text-sol-text-dim"> · {leadWord}</span>}
-    </p>
+    <div data-scope-project={p.ref} data-scope-leads={p.leads ? "" : undefined}>
+      <p className="truncate" data-scope-project-line>
+        <span className="text-sol-text font-medium">{p.title}</span>
+        <span className="text-sol-text-dim"> · {projectStateLine(p)}</span>
+        {p.leads && <span className="text-sol-text-dim"> · {leadWord}</span>}
+      </p>
+      {p.sessions.length > 0 && <p className="truncate text-sol-text-muted" data-scope-project-sessions>{groupsLine(p.sessions)}</p>}
+      {plans.length > 0 && (
+        <ul className="mt-0.5 pl-2 border-l border-sol-border/40">
+          {plans.map((pl) => <li key={pl.id}><PlanLine p={pl} /></li>)}
+          {more > 0 && <li className="text-sol-text-dim">and {more} more {more === 1 ? "plan" : "plans"}</li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function LooseBlock({ plans }: { plans: ScopePlan[] }) {
+  const shown = plans.slice(0, CARD_PLANS);
+  return (
+    <div data-scope-loose={plans.length}>
+      <p className="text-sol-text-dim">Not in a project</p>
+      <ul className="mt-0.5 pl-2 border-l border-sol-border/40">
+        {shown.map((pl) => <li key={pl.id}><PlanLine p={pl} /></li>)}
+        {plans.length > shown.length && <li className="text-sol-text-dim">and {plans.length - shown.length} more</li>}
+      </ul>
+    </div>
   );
 }
 
 function PlanLine({ p }: { p: ScopePlan }) {
   return (
     <p className="truncate" data-scope-plan={p.ref}>
-      <span className="text-sol-text">{p.title}</span>
+      <span className="text-sol-text-secondary">{p.title}</span>
       <span className="text-sol-text-dim"> · {planStateLine(p)}</span>
     </p>
   );
 }
 
-// ------------------------------------------------------------------ the page's rows
+// ------------------------------------------------------------------ the page's cards
 
-const ROW = "group flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors hover:bg-sol-bg-highlight/70";
+const CARD = "rounded-xl border border-sol-border/40 bg-sol-card overflow-hidden";
+const STATUS_TONE: Record<string, string> = { active: "var(--sol-green)", paused: "var(--sol-yellow)", done: "var(--sol-cyan)", archived: "var(--sol-text-dim)" };
 
-function ProjectRow({ p, lead }: { p: ScopeProject; lead?: ReactNode }) {
+function Bar({ done, total, className }: { done: number; total: number; className?: string }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   return (
-    <div className={ROW} data-scope-project={p.ref} data-scope-leads={p.leads ? "" : undefined}>
-      <span className={cn("w-[3px] self-stretch rounded-full shrink-0", p.leads ? "bg-sol-violet" : "bg-sol-border/60")} />
-      <Link href={`/projects/${p.ref}`} className="min-w-0 flex-1 no-underline">
-        <span className="block truncate text-[13px] font-medium text-sol-text group-hover:underline underline-offset-2">{p.title}</span>
-        <span className="block truncate text-[11px] mt-[1px] text-sol-text-dim">{projectStateLine({ ...p, leads: false })}</span>
+    <span className={cn("h-1 rounded-full overflow-hidden shrink-0 bg-sol-border/30", className)} aria-hidden>
+      <span className="block h-full bg-sol-green" style={{ width: `${pct}%` }} />
+    </span>
+  );
+}
+
+/** A project as a card: its lead, the initiatives it belongs to, its open and
+ *  done tasks, the plans inside it and the sessions at work in it. The role
+ *  page draws one for each project in a scope, and the initiative page one for
+ *  each project of an initiative, from the same rows (lib/roleScope). */
+export function ProjectCard({ p, lead, initiative }: { p: ScopeProject; lead?: ReactNode; initiative?: ReactNode }) {
+  const tone = STATUS_TONE[p.status ?? ""] ?? "var(--sol-text-dim)";
+  return (
+    <article className={CARD} data-scope-project={p.ref} data-scope-leads={p.leads ? "" : undefined} data-scope-partial={p.partial ? "" : undefined}>
+      <header className="flex items-center gap-2 pl-3 pr-2.5 pt-2.5">
+        <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: tone }} title={p.status ?? undefined} />
+        <Link href={`/projects/${p.ref}`} className="min-w-0 flex-1 truncate text-[13.5px] font-semibold tracking-tight text-sol-text no-underline hover:underline underline-offset-2">{p.title}</Link>
+        {p.status && p.status !== "active" && <span className="shrink-0 text-[10.5px]" style={{ color: tone }} data-scope-project-status>{p.status}</span>}
+        {/* The chip names whoever leads, this role or another; the word stands in until it has the rows. */}
+        {lead ?? (p.leads ? <span className="shrink-0 text-[11px]">{leadWord}</span> : null)}
+      </header>
+      {/* The pill component renders nothing for a project in no initiative, so the row folds away with it. */}
+      {initiative && <div className="pl-3 pr-2.5 pt-1.5 flex flex-wrap gap-1 empty:hidden" data-scope-project-initiative>{initiative}</div>}
+      <div className="pl-3 pr-2.5 pt-1.5 pb-2.5 flex items-center gap-2.5 text-[11.5px] text-sol-text-muted">
+        <span data-scope-project-line>{projectStateLine({ ...p, status: null })}</span>
+        {p.open + p.done > 0 && <Bar done={p.done} total={p.open + p.done} className="w-16" />}
+        {p.sessions.length > 0 && <span className="min-w-0 truncate text-sol-text-dim" data-scope-project-sessions>{groupsLine(p.sessions)}</span>}
+      </div>
+      {p.partial && <p className="px-3 pb-2 -mt-1 text-[11px] text-sol-text-dim">Only the plans below are in this role's scope.</p>}
+      {p.plans.length > 0 && (
+        <ul className="border-t border-sol-border/30 py-1">
+          {p.plans.map((pl) => <li key={pl.id}><PlanRow p={pl} /></li>)}
+        </ul>
+      )}
+    </article>
+  );
+}
+
+function PlanRow({ p, after }: { p: ScopePlan; after?: ReactNode }) {
+  return (
+    <div className="group flex items-center gap-2.5 pl-3 pr-2.5 py-1.5 transition-colors hover:bg-sol-bg-highlight/60" data-scope-plan={p.ref}>
+      <Link href={`/plans/${p.ref}`} className="min-w-0 flex-1 no-underline">
+        <span className="block truncate text-[12.5px] text-sol-text group-hover:underline underline-offset-2">{p.title}</span>
+        <span className="block truncate text-[10.5px] text-sol-text-dim"><span className="font-mono">{p.ref}</span> · {planStateLine(p)}</span>
       </Link>
-      {/* The chip names whoever leads, this role or another; the word stands in until it has the rows. */}
-      {lead ?? (p.leads ? <span className="shrink-0 text-[11px]">{leadWord}</span> : null)}
+      {p.total > 0 && <Bar done={p.done} total={p.total} className="w-12" />}
+      {after}
     </div>
   );
 }
 
-function PlanRow({ p }: { p: ScopePlan }) {
-  const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+/** Plans the scope names that sit in no project, and the one gesture that files each. */
+function LooseCard({ plans, targets, onFile }: { plans: ScopePlan[]; targets: ScopeProject[]; onFile?: (planRef: string, projectId: string) => void }) {
   return (
-    <Link href={`/plans/${p.ref}`} className={cn(ROW, "no-underline")} data-scope-plan={p.ref}>
-      <span className="w-[3px] self-stretch rounded-full shrink-0 bg-sol-magenta/70" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-sol-text group-hover:underline underline-offset-2">{p.title}</span>
-        <span className="block truncate text-[11px] mt-[1px] text-sol-text-dim"><span className="font-mono">{p.ref}</span> · {planStateLine(p)}</span>
-      </span>
-      {p.total > 0 && (
-        <span className="w-16 h-1 rounded-full overflow-hidden shrink-0 bg-sol-border/30" aria-hidden>
-          <span className="block h-full bg-sol-green" style={{ width: `${pct}%` }} />
-        </span>
-      )}
-    </Link>
+    <article className={cn(CARD, "border-dashed")} data-scope-loose={plans.length}>
+      <header className="pl-3 pr-2.5 pt-2.5 pb-1.5">
+        <h4 className="text-[13px] font-semibold text-sol-text-muted">Not in a project</h4>
+        <p className="text-[11px] text-sol-text-dim">{plans.length === 1 ? "This plan belongs" : "These plans belong"} to no project yet, so no project counts {plans.length === 1 ? "its" : "their"} work.</p>
+      </header>
+      <ul className="border-t border-sol-border/30 py-1">
+        {plans.map((pl) => (
+          <li key={pl.id}>
+            <PlanRow p={pl} after={onFile && targets.length > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" className="shrink-0 inline-flex items-center gap-1 h-[22px] px-1.5 rounded-md border border-sol-border/40 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight/70" data-scope-file-plan={pl.ref}>
+                    <FolderInput className="w-3 h-3" /> File under a project
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[12rem]">
+                  <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">File {pl.ref} under</DropdownMenuLabel>
+                  {targets.map((t) => <DropdownMenuItem key={t.id} className="text-xs" onSelect={() => onFile(pl.ref, t.id)} data-scope-file-target={t.ref}>{t.title}</DropdownMenuItem>)}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null} />
+          </li>
+        ))}
+      </ul>
+    </article>
   );
 }
 

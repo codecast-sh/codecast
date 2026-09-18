@@ -18,7 +18,7 @@ import { Hourglass, TimerReset, Zap } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { exhaustionBannerCopy, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, formatAgo, formatCountdown, isUsageExhausted, rankByHeadroom, standingLabel } from "@codecast/shared/contracts";
+import { describeDecision, pendingProposal, formatAgo, formatCountdown, isUsageExhausted, rankByHeadroom, standingLabel } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
@@ -62,8 +62,7 @@ export function LimitParkCard({
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   // A switch the machine recommended and is waiting on. Only while this park
   // is still live — a settled session's old proposal is history, not an ask.
-  const decision = device?.auto_switch_state?.last_decision;
-  const proposal = live && decision?.kind === "propose" ? decision : null;
+  const proposal = live && device ? pendingProposal([device]) : null;
   // The freshest OTHER saved account with room left — the one manual recovery
   // worth a button. Expired logins and pegged accounts are not offers. When the
   // machine has PROPOSED a target, the button is that proposal's approval, so

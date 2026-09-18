@@ -427,6 +427,10 @@ export function findEntityInStore(
       return lookup(state.docs, rawId) ?? lookup(mention?.docs, rawId);
     case "project":
       return lookup(state.projects, rawId);
+    case "initiative":
+      // The workspace's initiatives are one snapshot, so `in-N` names a row
+      // the client already holds.
+      return lookup(state.initiatives, rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

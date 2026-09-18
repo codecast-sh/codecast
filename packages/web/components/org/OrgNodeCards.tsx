@@ -17,6 +17,7 @@ import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentR
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
+import { RoleHoverCard, SessionGlyph } from "../identity";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
@@ -504,10 +505,15 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           the scope chips say WHAT is proposed and stay readable. */}
       <div>
       <div className="flex items-start gap-2">
-        <RoleFace role={r} size={30} className="mt-[1px]" />
+        {/* What the role looks after is one hover away (org-roles-run-work.md
+            R3). A proposed role has no row to describe yet, and a card must
+            not open under a node that is being dragged. */}
+        <RoleHoverCard role={r} side="right" disabled={!!ghost || !!data.dragging} triggerClassName="inline-flex shrink-0">
+          <RoleFace role={r} size={30} className="mt-[1px]" />
+        </RoleHoverCard>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>
-            {r.name}
+            <RoleHoverCard role={r} side="right" disabled={!!ghost || !!data.dragging} triggerClassName="inline">{r.name}</RoleHoverCard>
           </div>
           <div className="mt-[3px] text-[10.5px] flex items-center gap-1.5 whitespace-nowrap overflow-hidden" style={{ color: "var(--sol-text-dim)" }}>
             <span style={{ opacity: dim ? GHOST.opacity : 1 }}>role</span>
@@ -674,7 +680,15 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
       {s.state === "working" && (
         <span className="absolute left-0 top-0 bottom-0 w-[3px] animate-pulse" style={{ background: st.color, opacity: 0.5 }} aria-hidden />
       )}
-      <AgentIcon agentType={s.agent_type} className="w-4 h-4" />
+      {/* Who the session is (session-characters.md S3), the agent brand on
+          its corner; a session nobody personified keeps the brand alone. */}
+      <SessionGlyph
+        row={{ _id: s._id, title: s.title, character_avatar: s.character_avatar ?? null, character_name: s.character_name ?? null }}
+        size={20}
+        className="shrink-0"
+        badge={<AgentIcon agentType={s.agent_type} className="w-full h-full" />}
+        fallback={<AgentIcon agentType={s.agent_type} className="w-4 h-4" />}
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] leading-[1.25] font-medium" style={{ color: "var(--sol-text)" }} title={s.title}>
           {s.title || "Untitled"}

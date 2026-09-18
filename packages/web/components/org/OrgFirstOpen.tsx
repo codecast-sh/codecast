@@ -29,37 +29,49 @@ export type OrgGuideStep = {
   action?: { id: "open_proposal"; label: string };
 };
 
-/** Where the steps point (S14). The third step names the two start buttons
- *  when the canvas is empty; on a workspace with roles (the guide reopened
- *  from the toolbar) it names the Staffing pane, which holds them. When a
- *  proposal is already open, the story of "start one" would walk a first
- *  time reader past the real thing waiting for them, so the last step points
- *  at that proposal and its button opens it. */
-export function orgGuideSteps(meNodeId: string | null, hasRoles: boolean, openProposal?: { short_id: string; remaining: number } | null): OrgGuideStep[] {
-  return [
+/** The quick tour of the page's parts (S14, reshaped under S20): one
+ *  sentence and one highlight each, in this order: the chart, a role card,
+ *  the Proposal or Health button, Add a role, Words. Runs straight after the
+ *  first visit and again from "How this page works". The role step is
+ *  skipped when the workspace has no role card to point at; the third step
+ *  says what the button opens, so with a proposal waiting it names it and
+ *  its own button opens it. */
+export function orgGuideSteps({ meNodeId, roleNodeId, openProposal }: { meNodeId: string | null; roleNodeId?: string | null; openProposal?: { short_id: string; remaining: number } | null }): OrgGuideStep[] {
+  const steps: OrgGuideStep[] = [
     {
-      id: "you",
+      id: "chart",
       target: meNodeId ? `.react-flow__node[data-id="${meNodeId}"]` : null,
-      sentence: "This is you: every session you run sits under your card, so the chart already shows who reports to whom today.",
-    },
-    {
-      id: "role",
-      target: '[data-org-guide="hire"]',
-      sentence: "A role is an agent that keeps watching a scope of projects and plans; Add a role hires one, and its sessions then report to it instead of to you.",
-    },
-    openProposal ? {
-      id: "proposals",
-      target: '[data-org-guide="staffing"]',
-      sentence: `A proposal is already waiting: ${openProposal.short_id} drew the dashed ghosts on this canvas, and ${staffingPaneWord(true)} opens it as a conversation over each of its ${openProposal.remaining === 1 ? "one change" : `${openProposal.remaining} changes`}.`,
-      action: { id: "open_proposal", label: `Open ${openProposal.short_id}` },
-    } : {
-      id: "proposals",
-      target: hasRoles ? '[data-org-guide="staffing"]' : '[data-org-guide="start"]',
-      sentence: hasRoles
-        ? `Proposals arrive as dashed ghosts on this canvas for you to accept, edit or skip; ${staffingPaneWord(false)} shows how the company is doing and starts the next one.`
-        : "Proposals arrive as dashed ghosts on this canvas for you to accept, edit or skip; these two buttons start the first one.",
+      sentence: "The chart is who reports to whom: you, the roles you hired, every session. Drag a card to move it.",
     },
   ];
+  if (roleNodeId) {
+    steps.push({
+      id: "role",
+      target: `.react-flow__node[data-id="${roleNodeId}"]`,
+      sentence: "A role card: hover it to see what the role looks after, double click to open it.",
+    });
+  }
+  steps.push(openProposal ? {
+    id: "proposals",
+    target: '[data-org-guide="staffing"]',
+    sentence: `${staffingPaneWord(true)} opens the one waiting for you, ${openProposal.short_id}, as a conversation with ${openProposal.remaining === 1 ? "one change" : `${openProposal.remaining} changes`} to decide.`,
+    action: { id: "open_proposal", label: `Open ${openProposal.short_id}` },
+  } : {
+    id: "proposals",
+    target: '[data-org-guide="staffing"]',
+    sentence: `${staffingPaneWord(false)} shows how the company is doing and starts the next proposal.`,
+  });
+  steps.push({
+    id: "hire",
+    target: '[data-org-guide="hire"]',
+    sentence: "Add a role hires one by hand; its sessions then report to it instead of to you.",
+  });
+  steps.push({
+    id: "words",
+    target: "[data-org-glossary-open]",
+    sentence: "Words defines the eight words this page uses, one sentence each.",
+  });
+  return steps;
 }
 
 // ---------------------------------------------------------------- the empty canvas
@@ -202,13 +214,14 @@ export function OrgGuide({ steps, step, onStep, onDone, onAction }: {
         </div>
         <p className="mt-2.5 text-[14px] leading-relaxed" style={{ color: "var(--sol-text)", fontFamily: "var(--font-serif)" }} data-org-guide-sentence>{cur.sentence}</p>
         <div className="mt-3 flex items-center justify-between gap-2">
-          <button type="button" onClick={onDone} className="h-7 px-2 rounded-md text-[12px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }}>{last ? "Close" : "Skip"}</button>
+          {/* Every step has Next and Done; Escape is Done. */}
+          {!last && <button type="button" onClick={onDone} className="h-7 px-2 rounded-md text-[12px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }} data-org-guide-done>Done</button>}
+          {last && <span />}
           <div className="flex items-center gap-1.5">
             {step > 0 && <OrgButton size="sm" onClick={() => onStep(step - 1)}>Back</OrgButton>}
             {!last && <OrgButton primary size="sm" onClick={() => onStep(step + 1)}>Next</OrgButton>}
-            {last && cur.action && onAction
-              ? <OrgButton primary size="sm" onClick={() => { onDone(); onAction(cur.action!.id); }} data-org-guide-action={cur.action.id}>{cur.action.label}</OrgButton>
-              : last && <OrgButton primary size="sm" onClick={onDone}>Done</OrgButton>}
+            {cur.action && onAction && <OrgButton size="sm" onClick={() => { onDone(); onAction(cur.action!.id); }} data-org-guide-action={cur.action.id}>{cur.action.label}</OrgButton>}
+            {last && <OrgButton primary size="sm" onClick={onDone} data-org-guide-done>Done</OrgButton>}
           </div>
         </div>
       </div>

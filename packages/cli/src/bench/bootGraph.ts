@@ -32,6 +32,20 @@ export interface BootGraph {
 
 const SOURCE_EXTS = [".ts", ".tsx", ".mts", ".js", ".mjs", ".jsx"];
 
+/**
+ * How a walk differs from the CLI's own: a bundler (Metro) ships `import()` and
+ * `require()` targets too, applies its own path aliases to every file it
+ * reads, and prefers platform files (`x.native.ts` over `x.ts`).
+ */
+export interface GraphOptions {
+  /** Follow `import("…")` and `require("…")` calls as edges, not only import statements. */
+  calls?: boolean;
+  /** Base path for a specifier the built-in resolver treats as a package; null leaves it external. */
+  alias?: (spec: string, fromFile: string, root: string) => string | null;
+  /** Platform infixes tried before the plain file, in order: ["native", "ios"]. */
+  platforms?: string[];
+}
+
 /** Repo root, found by walking up from a source file to the workspace root. */
 export function repoRootFrom(start: string): string {
   let dir = path.dirname(start);
@@ -82,8 +96,16 @@ function isAllTypeSpecifiers(clause: string): boolean {
   return names.length > 0 && names.every((n) => /^type\s/.test(n));
 }
 
+/** Call-expression edges: `import("x")` and `require("x")` with a literal specifier. */
+export function callImportSpecifiers(source: string): string[] {
+  const out: string[] = [];
+  const call = /\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
+  for (let m = call.exec(source); m; m = call.exec(source)) out.push(m[1]);
+  return out;
+}
+
 /** Resolves an import specifier to a repo source file, or null when it is a package. */
-export function resolveSpecifier(spec: string, fromFile: string, root: string): string | null {
+export function resolveSpecifier(spec: string, fromFile: string, root: string, opts: GraphOptions = {}): string | null {
   let base: string;
   if (spec.startsWith(".")) {
     base = path.resolve(path.dirname(fromFile), spec);
@@ -95,34 +117,44 @@ export function resolveSpecifier(spec: string, fromFile: string, root: string): 
     const pkg = slash === -1 ? rest : rest.slice(0, slash);
     base = path.join(root, "platform/packages", pkg, "src", slash === -1 ? "index" : rest.slice(slash + 1));
   } else {
-    return null;
+    const aliased = opts.alias?.(spec, fromFile, root);
+    if (!aliased) return null;
+    base = aliased;
   }
   // "./x.js" in TypeScript ESM means "./x.ts" on disk.
   const stripped = base.replace(/\.(js|mjs|jsx)$/, "");
-  for (const candidate of [base, ...SOURCE_EXTS.map((e) => stripped + e), ...SOURCE_EXTS.map((e) => path.join(stripped, "index" + e))]) {
+  const exts = [...(opts.platforms ?? []).flatMap((p) => SOURCE_EXTS.map((e) => `.${p}${e}`)), ...SOURCE_EXTS];
+  for (const candidate of [base, ...exts.map((e) => stripped + e), ...exts.map((e) => path.join(stripped, "index" + e))]) {
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
   }
   return null;
 }
 
 /** Walks every static import edge from `entry`, breadth first. */
-export function buildBootGraph(entry: string, rootArg?: string): BootGraph {
+export function buildBootGraph(entry: string | string[], rootArg?: string, opts: GraphOptions = {}): BootGraph {
   // Resolve before finding the root: repoRootFrom walks parent directories, and
   // a relative entry walks a relative path that never reaches the workspace
   // root, which silently turns every @codecast/shared file into an "external"
   // and hides a third of the graph.
-  const entryAbs = path.resolve(entry);
-  const root = rootArg ?? repoRootFrom(entryAbs);
+  const entries = (Array.isArray(entry) ? entry : [entry]).map((e) => path.resolve(e));
+  const root = rootArg ?? repoRootFrom(entries[0]);
   const nodes = new Map<string, GraphNode>();
   const externals = new Set<string>();
-  const queue = [entryAbs];
+  // Several entries (a router that requires a whole directory) hang off one
+  // virtual root, so importChain still reports a chain from a real entry.
+  const entryAbs = Array.isArray(entry) ? path.join(root, "<entries>") : entries[0];
+  if (Array.isArray(entry)) nodes.set(entryAbs, { file: entryAbs, imports: entries, bytes: 0 });
+  const queue = [...entries];
   while (queue.length) {
     const file = queue.shift()!;
     if (nodes.has(file)) continue;
     const source = fs.readFileSync(file, "utf8");
     const imports: string[] = [];
-    for (const spec of staticImportSpecifiers(source)) {
-      const resolved = resolveSpecifier(spec, file, root);
+    const specs = opts.calls
+      ? [...staticImportSpecifiers(source), ...callImportSpecifiers(source)]
+      : staticImportSpecifiers(source);
+    for (const spec of specs) {
+      const resolved = resolveSpecifier(spec, file, root, opts);
       if (!resolved) {
         externals.add(spec);
         continue;
@@ -134,7 +166,7 @@ export function buildBootGraph(entry: string, rootArg?: string): BootGraph {
   }
   let totalBytes = 0;
   for (const n of nodes.values()) totalBytes += n.bytes;
-  return { entry: path.resolve(entry), nodes, externals, totalBytes };
+  return { entry: entryAbs, nodes, externals, totalBytes };
 }
 
 /** The shortest static import chain from the entry to `target`, or null. */

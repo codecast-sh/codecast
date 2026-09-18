@@ -55,6 +55,7 @@ import {
 import { DocDates } from "../../../components/DocDates";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { ProjectLeadChip, useProjectLead } from "../../../components/charter/ProjectLeadChip";
+import { ProjectInitiatives } from "../../../components/initiatives/ProjectInitiatives";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 
@@ -434,6 +435,10 @@ function ProjectDetailContent() {
           <RepositoryLinks projectId={project._id} />
           <ProjectLeadChip projectId={project._id} editable />
         </div>
+
+        {/* The goals this project carries (initiatives-projects-role-page.md
+            I1), under its lead. Nothing renders when it is in none. */}
+        <ProjectInitiatives projectId={project._id} label="Part of" />
 
         <div className="flex items-center gap-4 ml-5">
           {/* Status dropdown */}

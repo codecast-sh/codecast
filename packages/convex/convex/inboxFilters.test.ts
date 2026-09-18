@@ -484,6 +484,22 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("Rate limited · here is why\nand more prose")).toBe(null);
   });
 
+  test("the short /model-switch form is a limit park, never a throttle", () => {
+    // "You've reached your Fable limit. /model to switch models." carries the
+    // same transient-looking 429 as a burst (rate_limit_error, no
+    // exceeded_limit payload — real JSONL 2026-09-15/18), so the words alone
+    // decide: the remedy names a model switch, and the park is kind "limit".
+    const short = "You've reached your Fable limit. /model to switch models.";
+    expect(classifyApiErrorBanner(short)).toBe("limit");
+    expect(isApiErrorBanner(short)).toBe(true);
+    // A marked throttle quoting the short form (rewritten before the parser
+    // learned to leave it alone) re-reads as a limit park, so the reclassify
+    // pass heals those rows. The burst form still reads as a throttle.
+    expect(classifyApiErrorBanner(throttleBannerContent(short))).toBe("limit");
+    const burst = throttleBannerContent("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.");
+    expect(classifyApiErrorBanner(burst)).toBe("throttle");
+  });
+
   test("does not flag prose that merely opens like a limit banner", () => {
     // Real assistant sentences seen in transcripts — same prefix, but they
     // continue as prose instead of the single-line `· detail` banner shape.

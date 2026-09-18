@@ -31,6 +31,7 @@ import {
 import { startAsrCapture, type AsrCapture } from './asrCapture';
 import { getCallSnapshot } from './calls/callManager';
 import { uploadUriToStorage } from './uploadToStorage';
+import { optionalNative } from './optionalNative';
 
 // expo-audio is a NATIVE dependency, lazily required and probed exactly the
 // way lib/calls/ringtone.ts does it: a JS bundle (OTA or dev server) newer
@@ -40,13 +41,8 @@ import { uploadUriToStorage } from './uploadToStorage';
 let audio: typeof import('expo-audio') | null | undefined;
 function getAudio() {
   if (audio !== undefined) return audio;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { requireOptionalNativeModule } = require('expo');
-    audio = requireOptionalNativeModule('ExpoAudio') ? require('expo-audio') : null;
-  } catch {
-    audio = null;
-  }
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  audio = optionalNative('ExpoAudio', () => require('expo-audio'));
   return audio;
 }
 

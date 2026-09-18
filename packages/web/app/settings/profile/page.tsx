@@ -1,5 +1,5 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
-import { useState, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useQuery, useMutation } from "convex/react";
 import { toast } from "sonner";
@@ -13,7 +13,8 @@ import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { SelectBox } from "../../../components/ui/select-box";
-import { useInboxStore, type ClientUI } from "../../../store/inboxStore";
+import { useInboxStore, resolveSimpleView, resolveInboxCompact, type ClientUI } from "../../../store/inboxStore";
+import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
 import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
 import {
   SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
@@ -140,7 +141,66 @@ function AppearanceSection() {
           className="visual-style-options w-full"
         />
       </SettingsField>
+      {visualStyle === "minimal" && <BubbleColorField />}
     </SettingsSection>
+  );
+}
+
+/** The color of your own messages in Minimal: a row of swatches, the last one
+ *  a native color well for anything else. The sample bubble beside the label is
+ *  painted by the same stylesheet variable the conversation uses, so what you
+ *  pick here is what you read there. */
+function BubbleColorField() {
+  const stored = useInboxStore((s) => s.clientState?.ui?.user_bubble_color);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  const custom = isCustomBubbleColor(stored);
+  const activePreset = custom ? null : (BUBBLE_PRESETS.find((p) => p.id === stored)?.id ?? DEFAULT_BUBBLE_PRESET);
+  return (
+    <SettingsField label="Your message color" hint="The bubble behind the messages you send. It follows you to every device.">
+      <div className="cc-bubble-scope flex flex-wrap items-center gap-x-5 gap-y-3">
+        <div role="radiogroup" aria-label="Your message color" className="flex items-center gap-2">
+          {BUBBLE_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              role="radio"
+              aria-checked={activePreset === p.id}
+              aria-label={p.label}
+              title={p.label}
+              onClick={() => updateUI({ user_bubble_color: p.id })}
+              className="cc-bubble-swatch"
+              style={{ "--swatch": p.hue } as CSSProperties}
+            />
+          ))}
+          <label className="cc-bubble-swatch cc-bubble-swatch--custom" data-checked={custom ? "" : undefined} title="Custom color" style={custom ? ({ "--swatch": resolveBubbleHue(stored) } as CSSProperties) : undefined}>
+            <span className="sr-only">Custom color</span>
+            {/* A color well fires `input` for every pixel of a drag and `change`
+                once when it closes. The drag previews on this field alone
+                (.cc-bubble-scope mixes its own fill), so a pick that is
+                cancelled leaves the app untouched; only `change` is a
+                preference write, and it clears the preview. */}
+            <input
+              type="color"
+              defaultValue={resolveBubbleHue(stored)}
+              key={resolveBubbleHue(stored)}
+              onInput={(e) => e.currentTarget.closest<HTMLElement>(".cc-bubble-scope")?.style.setProperty(BUBBLE_HUE_VAR, e.currentTarget.value)}
+              onBlur={(e) => e.currentTarget.closest<HTMLElement>(".cc-bubble-scope")?.style.removeProperty(BUBBLE_HUE_VAR)}
+              ref={(el) => {
+                if (!el) return;
+                const commit = () => {
+                  el.closest<HTMLElement>(".cc-bubble-scope")?.style.removeProperty(BUBBLE_HUE_VAR);
+                  updateUI({ user_bubble_color: el.value });
+                };
+                el.addEventListener("change", commit);
+                return () => el.removeEventListener("change", commit);
+              }}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            />
+          </label>
+        </div>
+        <span aria-hidden className="cc-bubble-sample">Sounds good, ship it</span>
+      </div>
+    </SettingsField>
   );
 }
 
@@ -163,8 +223,15 @@ const INTERFACE_TOGGLES: Array<{
   desc: string;
   /** Keys that default ON read `!== false`; default-OFF keys read `=== true`. */
   defaultOn?: boolean;
+  /** The preference is decided elsewhere right now: the row shows ON, cannot be
+   *  switched, and says why. The stored value is kept for when that ends. */
+  lockedOn?: (ui: ClientUI | undefined) => string | undefined;
+  /** The value when it is not a plain stored boolean (a default that depends
+   *  on the style). Overrides `defaultOn`. */
+  resolve?: (ui: ClientUI | undefined) => boolean;
 }> = [
-  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away" },
+  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, lockedOn: (ui) => (ui?.visual_style === "minimal" && resolveSimpleView(ui) ? "Always on in the Minimal style" : undefined) },
+  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
   { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images" },
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },
   { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false },
@@ -187,13 +254,15 @@ function InterfaceSection() {
 
 function PrefToggleRow(t: (typeof INTERFACE_TOGGLES)[number]) {
   const enabled = useInboxStore((s) => {
+    if (t.resolve) return t.resolve(s.clientState?.ui);
     const v = s.clientState?.ui?.[t.prefKey];
     return t.defaultOn ? v !== false : v === true;
   });
+  const locked = useInboxStore((s) => t.lockedOn?.(s.clientState?.ui));
   const updateUI = useInboxStore((s) => s.updateClientUI);
   return (
-    <SettingsRow label={t.label} description={t.desc}>
-      <Switch checked={enabled} onCheckedChange={(v) => updateUI({ [t.prefKey]: v } as Partial<ClientUI>)} aria-label={t.label} />
+    <SettingsRow label={t.label} description={locked ? `${t.desc}. ${locked}.` : t.desc} disabled={!!locked}>
+      <Switch checked={enabled || !!locked} disabled={!!locked} onCheckedChange={(v) => updateUI({ [t.prefKey]: v } as Partial<ClientUI>)} aria-label={t.label} />
     </SettingsRow>
   );
 }

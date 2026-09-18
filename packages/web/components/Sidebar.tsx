@@ -38,7 +38,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { toast } from "sonner";
-import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
 import { WorkbenchSection } from "./WorkbenchSection";
@@ -326,10 +326,14 @@ function NavSection({
           style={{ gridTemplateRows: expanded ? '1fr' : '0fr', opacity: expanded ? 1 : 0 }}
         >
           <div className="overflow-hidden">
-            <div className="ml-[17px] my-0.5 border-l border-sol-border/50">
-              {items!.map((child) => (
-                <SectionRow key={child.id} row={child} />
-              ))}
+            {/* The panel spans the full rail; the guide line inside it still
+                hangs under this row's icon. */}
+            <div className="nav-subsection my-0.5">
+              <div className="ml-[17px] border-l border-sol-border/50">
+                {items!.map((child) => (
+                  <SectionRow key={child.id} row={child} />
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -881,6 +885,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
+  const isInitiatives = pathname === "/initiatives" || pathname?.startsWith("/initiatives/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
@@ -1315,6 +1320,16 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             its tasks → the docs and files around them. */}
         <RailHeading label="Work" isNarrow={isNarrow} />
         <div className="text-sm">
+          {/* The goals above the projects (initiatives-projects-role-page.md I1). */}
+          <NavSection
+            label="Initiatives"
+            href="/initiatives"
+            isActive={!!isInitiatives}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            title="Initiatives: what the company is trying to reach"
+            icon={<Flag className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
           <NavSection
             label="Projects"
             href="/projects"

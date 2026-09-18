@@ -79,8 +79,8 @@ export function pendingMessageReachedSession(messageId: string, pending?: { mess
     && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);
 }
 
-// - "queued": session still booting/resuming/connecting → brief "starting up"
-//             reassurance (the agent has no input box yet). NOT used while the agent
+// - "queued": the session is booting/resuming/connecting, parked, or idle and simply
+//             hasn't taken the message yet → calm reassurance. NOT used while the agent
 //             is actively processing — that case shows nothing (see below).
 // - "stuck":  agent idle/gone past a grace and still hasn't taken the message, or a
 //             booting session still not processing past a generous boot budget, OR a
@@ -114,7 +114,12 @@ export function pendingBannerState(
   // Alive-but-parked (dormant/waiting/done): the pane heartbeats, delivery is a
   // normal daemon pass away. Reassure, and only alarm past the boot budget.
   if (isAliveIdleStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
-  return opts.idleGraceElapsed ? "stuck" : "none";
+  // Idle, or no live status at all (disconnected session, non-"active" conversation,
+  // older CLI). This is the only branch with real evidence of a problem, but the
+  // evidence is weak — an idle pane is also the ordinary state a message is delivered
+  // into. So it reassures first, exactly like the booting and parked branches, and
+  // alarms only once the grace has passed with the message still unclaimed.
+  return opts.idleGraceElapsed ? "stuck" : "queued";
 }
 
 // Layered on top of pendingBannerState by the bubble. pendingBannerState judges

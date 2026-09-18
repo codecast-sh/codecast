@@ -116,9 +116,11 @@ describe("pendingBannerState", () => {
     expect(pendingBannerState(undefined, opts({ retryEligible: false }))).toBe("none");
   });
 
-  test("agent idle but still within the busy→idle grace → nothing (daemon inject imminent)", () => {
-    expect(pendingBannerState("idle", opts({ idleGraceElapsed: false }))).toBe("none");
-    expect(pendingBannerState(undefined, opts({ idleGraceElapsed: false }))).toBe("none");
+  test("agent idle but still within the busy→idle grace → calm 'queued', never the alarm", () => {
+    // An idle pane is the ordinary state a message is delivered into, so the grace
+    // reassures instead of alarming. The alarm at ~20s after send read as aggressive.
+    expect(pendingBannerState("idle", opts({ idleGraceElapsed: false }))).toBe("queued");
+    expect(pendingBannerState(undefined, opts({ idleGraceElapsed: false }))).toBe("queued");
   });
 
   test("agent genuinely idle/gone past the grace and still hasn't taken it → escalate to stuck", () => {

@@ -30,6 +30,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
 import { parseCallRingPush } from "@codecast/shared/contracts";
 import { captureError } from "../analytics";
+import { nativeModulePresent } from "../optionalNative";
 import {
   acceptInvite,
   declineInvite,
@@ -53,8 +54,7 @@ function getCallKit(): CallKitApi | null {
     // fires on the first property access — outside this try — and a binary
     // without the pod redboxes at boot ("Cannot find native module").
     // requireOptionalNativeModule is Expo's throw-free probe for exactly this.
-    const { requireOptionalNativeModule } = require("expo");
-    if (!requireOptionalNativeModule("ExpoCallKitTelecom")) {
+    if (!nativeModulePresent("ExpoCallKitTelecom")) {
       ckLoadError = "ExpoCallKitTelecom native module absent (binary predates the pod)";
       ck = null;
       return null;

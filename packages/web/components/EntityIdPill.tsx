@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
 import Link from "next/link";
 import { RoleFace } from "./org/RoleFace";
+import { RoleHoverCard, SessionFace } from "./identity";
+import { sessionIdentity } from "../lib/sessionIdentity";
+import { usePersonifyAll } from "../hooks/usePersonifyAll";
 import {
   Target,
   ArrowUpRight,
@@ -8,6 +11,7 @@ import {
   FolderOpen,
   FileText,
   Folder,
+  Flag,
   Zap,
   GitPullRequest,
   GitCommitHorizontal,
@@ -15,6 +19,7 @@ import {
   PanelBottomOpen,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
+import { InitiativeHoverContent } from "./initiatives/InitiativeHoverContent";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { useHoverCard } from "./ui/HoverCard";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
@@ -779,17 +784,19 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//") && typeof (props as any).className === "string" && (props as any).className.includes("mention-role")) {
     const roleText = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
     const roleHandle = roleText.replace(/^@/, "").trim();
-    return (
-      <Link href={href} {...props}>
+    const pill = (
+      <Link href={href} {...props} title={roleShortIdOf(href) ? undefined : (props as any).title}>
         {roleHandle && <RoleFace role={{ handle: roleHandle }} size={13} className="align-middle mr-0.5 -mt-[1px]" />}
         {children}
       </Link>
     );
+    return withRoleHover(href, roleHandle, pill);
   }
   // A relative href names one of our own routes (a role pill's /org/<or-N>):
-  // it navigates in this window, never a new tab.
+  // it navigates in this window, never a new tab. A link to a role opens the
+  // role's card on hover, the way its mention does.
   if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//")) {
-    return <Link href={href} {...props}>{children}</Link>;
+    return withRoleHover(href, "", <Link href={href} {...props}>{children}</Link>);
   }
   // A dev server an agent printed: the one external link people want to LOOK
   // at rather than leave for, so it opens as a pane (lib/browserPaneLinks).
@@ -798,6 +805,20 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
     return <LoopbackUrlPill url={loopback} label={text && text !== href ? text : undefined} />;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+}
+
+/** The role a relative link names (`/org/or-7`), if it names one. */
+function roleShortIdOf(href: string): string | null {
+  return /^\/org\/(or-\d+)(?:[/?#]|$)/.exec(href)?.[1] ?? null;
+}
+
+/** Wherever prose names a role, what it looks after is one hover away
+ *  (org-roles-run-work.md R3). The link knows only the id and perhaps the
+ *  handle; the card fills in the rest from the store or `org.roleCard`. */
+function withRoleHover(href: string, handle: string, node: React.ReactElement): React.ReactElement {
+  const shortId = roleShortIdOf(href);
+  if (!shortId) return node;
+  return <RoleHoverCard role={{ short_id: shortId, name: handle ? `@${handle}` : shortId, handle }} triggerClassName="inline">{node}</RoleHoverCard>;
 }
 
 function genericTitle(entity: any): string {
@@ -920,7 +941,7 @@ export function EntityIdPill({
   const establishedByShortId = useIsEstablishedRef(entity?.short_id);
   const established = establishedByRaw || establishedByShortId;
   const compact = compactProp ?? (!mention?.named && ((mention?.nth ?? 1) > 1 || established));
-  const pillLabel = compact ? shortLabel : fullLabel;
+  const refLabel = compact ? shortLabel : fullLabel;
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
@@ -945,6 +966,16 @@ export function EntityIdPill({
   // `!type` guard further down, but the guard sits below the hooks and so runs
   // after this — every value it protects has to stand on its own until then.
   const taskV = taskVisual(status);
+
+  // Who a session IS (session-characters.md S3): once a session wears a
+  // character or a role, the reference reads as that person — the face in
+  // place of the generic session glyph, the character's name in place of the
+  // title. The title is still one hover away, and on the link's tooltip, so
+  // nothing is lost from a sentence that names four sessions.
+  const personifyAll = usePersonifyAll();
+  const identity = isSession && entity ? sessionIdentity(entity, personifyAll) : null;
+  const persona = identity && identity.kind !== "plain" ? identity : null;
+  const pillLabel = persona ? persona.name : refLabel;
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -955,6 +986,8 @@ export function EntityIdPill({
           ? FileText
           : type === "project"
             ? Folder
+            : type === "initiative"
+              ? Flag
             : isPr
               ? GitPullRequest
               : isCommit
@@ -971,6 +1004,9 @@ export function EntityIdPill({
           ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
           : type === "project"
             ? "bg-sol-text-dim/[0.08] text-sol-text-muted hover:bg-sol-text-dim/[0.16]"
+            // Health owns green, yellow and red, so an initiative is magenta.
+            : type === "initiative"
+              ? "bg-sol-magenta/[0.08] text-sol-magenta hover:bg-sol-magenta/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
@@ -1056,10 +1092,12 @@ export function EntityIdPill({
           onMouseLeave={closeSoon}
           aria-pressed={revealHost ? revealOpen : undefined}
           className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
-          title={compact && fullLabel !== pillLabel ? fullLabel : undefined}
+          title={fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
-            {isSession && (entity?.author_name || entity?.author_avatar) ? (
+            {persona && entity ? (
+              <SessionFace row={entity} size="1em" />
+            ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
               <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : ""}`} />
@@ -1102,6 +1140,7 @@ export function EntityIdPill({
             : isSession ? <SessionHoverContent session={entity} />
             : isTrigger ? <TriggerHoverContent trigger={entity} />
             : type === "doc" ? <DocHoverContent doc={entity} />
+            : type === "initiative" ? <InitiativeHoverContent initiative={entity} />
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />

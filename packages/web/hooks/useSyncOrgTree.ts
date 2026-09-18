@@ -20,8 +20,12 @@ export function isMissingFunctionError(error: Error | undefined): boolean {
  *  subscribing the caller to the tree. A page that only names roles (an
  *  owner chip, the chief of staff link) mounts this and reads useOrgRoles,
  *  so a message under any node does not re-render it. */
-export function useSyncOrgTreeFeeder(): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+export function useSyncOrgTreeFeeder(canonicalTeamId?: string | null): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
+  // Web reads the mirrored pointer. Mobile switches teams through
+  // users.active_team_id alone and never writes the mirror, so it hands over
+  // the canonical pointer instead (null = the personal workspace).
+  const mirroredTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const activeTeamId = canonicalTeamId === undefined ? mirroredTeamId : canonicalTeamId;
   // A team stub id (createTeam in flight) is not a Convex id. Skip until it
   // resolves: falling back to `{}` would load the PERSONAL tree into the slot
   // and show the user's own org under the team they just created.

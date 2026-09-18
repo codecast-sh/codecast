@@ -41,7 +41,7 @@ import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorke
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
-import { rankByHeadroom, isStashHidden, USER_RESTS, type UserRest } from "@codecast/shared/contracts";
+import { rankByHeadroom, isStashHidden, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -606,8 +606,9 @@ function BlockedSessionsBanner({
   const [expanded, setExpanded] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
   // Which account the continue runs on: "" = the account the machine is signed
-  // into now (the default — no switch, no restart unless a session needs one).
-  const [onAccount, setOnAccount] = useState("");
+  // into now, null = not chosen yet — the default, which is the account the
+  // machine PROPOSED when it is asking, else the current one.
+  const [onAccount, setOnAccount] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   // Which sessions the continue restarts. null = the default pick: parks inside
   // the auto-continue window, since an older park already sat through a reset
@@ -621,7 +622,9 @@ function BlockedSessionsBanner({
   const clientStateInitialized = useInboxStore((st) => st.clientStateInitialized);
   const snoozedTs = useInboxStore((st) => st.clientState.dismissed?.blocked_sessions_banner ?? 0);
   const updateDismissed = useInboxStore((st) => st.updateClientDismissed);
-  const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length >= (forced ? 1 : 2) ? {} : "skip");
+  // Read for any blocked session, not just fleets of two: a single parked
+  // session can be the one the machine is asking about.
+  const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length > 0 ? {} : "skip");
   // How many tokens one percent of a usage window is worth, fitted across the
   // fleet (convex/usageCalibration.ts). Enrichment, so it goes through
   // useQueryNoThrow: without it the banner still names the tokens, it just
@@ -632,8 +635,13 @@ function BlockedSessionsBanner({
   const now = useCoarseNow(30_000);
 
   const snoozed = snoozedTs > 0 && Date.now() - snoozedTs < 24 * 60 * 60 * 1000;
+  // A switch the machine recommended and is waiting on. Asking is the whole
+  // point of that mode, so the ask shows the banner even for one parked
+  // session, and a proposal raised after the last snooze breaks through it.
+  const proposal = pendingProposal(accountData?.devices);
+  const askPending = !!proposal && proposal.at > snoozedTs;
   if (!clientStateInitialized || blocked.length === 0) return null;
-  if (!forced && (blocked.length < 2 || snoozed)) return null;
+  if (!forced && !askPending && (blocked.length < 2 || snoozed)) return null;
 
   // Subagent workers default OUT of the acted set: their parent has usually
   // moved on, so reviving them spends the fresh account on work nobody is
@@ -728,7 +736,12 @@ function BlockedSessionsBanner({
     .flatMap((d) => d.profiles.filter((p) => p.email && p.email === d.active_email))
     .map((p) => p.usage)
     .find((u) => !!u);
-  const selectedAccount = rankedAccounts.find((t) => t.key === onAccount);
+  // The proposed account is the default pick, so the primary button approves
+  // exactly what the machine asked for — the same account the sentence names.
+  const proposalKey = proposal?.target_email ? `email:${proposal.target_email}` : null;
+  const proposedOption = proposalKey ? rankedAccounts.find((t) => t.key === proposalKey) : undefined;
+  const accountKey = onAccount ?? proposedOption?.key ?? "";
+  const selectedAccount = rankedAccounts.find((t) => t.key === accountKey);
   // The meters that matter are the ones the continue will run against: the
   // picked account when the picker moved, else the account the machines are on.
   const targetUsage = selectedAccount?.usage ?? activeUsage;
@@ -1041,6 +1054,42 @@ function BlockedSessionsBanner({
           mixed fleet (limits + a few signed out) the remedy the banner leads
           with is continue/switch; a loud sign-in button under a "usage
           limits" headline reads as the wrong fix. */}
+      {/* The ask renders whenever one is open, even when the recommended
+          account is not saved on the machine that would run the switch: the
+          question is still the reason these sessions are parked, and silence
+          there is how an ask goes unanswered. */}
+      {proposal && (
+        <div className="mt-2 flex items-start gap-2 rounded border border-sol-yellow/40 bg-sol-yellow/10 px-2.5 py-2 text-[12px] leading-snug text-sol-text">
+          <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-yellow" />
+          <div className="min-w-0">
+            <span className="font-semibold">Switch accounts?</span> {describeDecision(proposal)}
+            {!proposedOption ? (
+              <span className="ml-1.5 text-[11px] text-sol-text-dim">
+                {proposal.target_name ?? proposal.target_email} is not saved on{" "}
+                {executors.length === 1 ? executors[0].label : "the machines owning these sessions"} — pick another
+                account below, or save it there once.
+              </span>
+            ) : accountKey === proposedOption.key ? (
+              <button
+                onClick={() => setOnAccount("")}
+                disabled={busy !== null}
+                className="ml-1.5 text-[11px] text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
+                title="Continue the sessions on the account this machine is signed into now, without switching"
+              >
+                stay on {activeEmail ?? "this account"}
+              </button>
+            ) : (
+              <button
+                onClick={() => setOnAccount(proposedOption.key)}
+                disabled={busy !== null}
+                className="ml-1.5 text-[11px] text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
+              >
+                use {proposedOption.email ?? proposedOption.name}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && safetyCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
@@ -1142,7 +1191,7 @@ function BlockedSessionsBanner({
           >
             on
             <select
-              value={onAccount}
+              value={accountKey}
               onChange={(e) => setOnAccount(e.target.value)}
               disabled={busy !== null}
               className="max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-[11px] text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
@@ -3057,8 +3106,10 @@ export const SessionCard = memo(function SessionCard({
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
       <div className="flex items-center gap-2.5">
-      <div className="min-w-0 flex-1">
-        <div className={`flex items-center gap-1.5 leading-tight ${
+      {/* data-sv-body / -titlerow / -status / -ping: the compact list
+          (clientState.ui.inbox_compact) lays these out as one grid row. */}
+      <div data-sv-body className="min-w-0 flex-1">
+        <div data-sv-titlerow className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
           {/* Who is speaking (docs/architecture/session-characters.md S3).
@@ -3167,7 +3218,7 @@ export const SessionCard = memo(function SessionCard({
           /* mr-5 keeps the strip — and its "Got it" button — clear of the
              hover toolbar's column on the right, whose gradient would
              otherwise wash over the button. */
-          <div className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/15 border border-sol-violet/30">
+          <div data-sv-ping className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/15 border border-sol-violet/30">
             <UserCheck className="w-3 h-3 text-sol-violet flex-shrink-0 mt-0.5" />
             {/* The note is the REASON for the handoff — clamped for the list,
                 tap the body to read all of it without opening the session. */}
@@ -3250,7 +3301,7 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
         {session._hasDraft && (
-          <div className="mt-0.5 flex items-start gap-1.5">
+          <div data-sv-draft className="mt-0.5 flex items-start gap-1.5">
             <span className="shrink-0 mt-[1px] px-1 py-[1px] rounded text-[9px] font-medium uppercase tracking-wide bg-sol-yellow/15 text-sol-yellow border border-sol-yellow/30">
               Draft
             </span>
@@ -3259,7 +3310,7 @@ export const SessionCard = memo(function SessionCard({
             )}
           </div>
         )}
-        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && (() => {
+        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && <div data-sv-startup className="contents">{(() => {
           // Mirror the composer's "Starting… → Ready" lifecycle (see sessionLifecycle).
           // A blank session often has no daemon heartbeat until its first message, so
           // we trust elapsed time as the fallback rather than spin forever.
@@ -3291,7 +3342,7 @@ export const SessionCard = memo(function SessionCard({
               Waiting for connection
             </div>
           );
-        })()}
+        })()}</div>}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
@@ -3334,7 +3385,7 @@ export const SessionCard = memo(function SessionCard({
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
             </span>
           )}
-          <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+          <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />
             <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
@@ -3452,6 +3503,7 @@ export const SessionCard = memo(function SessionCard({
           // Click-through to the session that spawned this one (its agent-team
           // lead) — same affordance shape as the implementation-session row.
           <div
+            data-sv-spawned
             className="mt-1 flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
             onClick={(e) => {
               e.stopPropagation();
@@ -3511,7 +3563,7 @@ export const SessionCard = memo(function SessionCard({
           omits its own pin button for pinned rows — so the pin never duplicates or
           cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
-        <div data-sv-fade className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+        <div data-sv-fade data-sv-pin className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
           <ShortcutTooltip label="Unpin" action="session.pin" side="left">
             <button
               onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
@@ -5241,13 +5293,14 @@ function SessionListPanelImpl({
             Ctrl+, still cycles view modes. In favorites view the view controls
             hide (favorites is always project-grouped) and the pill collapses
             to just the amber star, which stays put. */}
-        <div className="flex items-center flex-shrink-0 ml-auto gap-1.5">
+        <div data-sv-head-tools className="flex items-center flex-shrink-0 ml-auto gap-1.5">
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
               banner itself was snoozed. Panel chrome, so it never scrolls away. */}
           {blockedSessions.length > 0 && blockedHasNonSub && (
             <button
               key={blockedIncidentTs}
+              data-cc-keep
               onClick={openBlockedBanner}
               title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, or safety review — view blockers`}
               className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}

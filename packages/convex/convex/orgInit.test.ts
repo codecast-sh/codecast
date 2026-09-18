@@ -38,6 +38,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
     org_role_history: [],
     role_wakes: [],
     anchors: [],
+    initiatives: [],
     inbox_buckets: [{ _id: "inbox_buckets_1", user_id: ME, name: "growth", sort_order: 0 }],
     bucket_assignments: [{ _id: "ba1", user_id: ME, conversation_id: S1, bucket_id: "inbox_buckets_1" }],
     projects: [
@@ -115,6 +116,31 @@ describe("org.analysisInputs", () => {
     expect(r.caps).toBe(ANALYSIS_CAPS);
   });
 
+  // initiatives-projects-role-page.md I1, I2: who answers for the work, from the top of the tree down.
+  test("coverage reads the initiatives, each project's lead and the work outside any project, inside the workspace", async () => {
+    const db = fixtures({
+      initiatives: [
+        { _id: "initiatives_a", user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-1", title: "Reach 1000 users", status: "active", health: "at_risk", health_at: NOW - D, project_ids: [P, Q], created_at: 1, updated_at: NOW },
+        { _id: "initiatives_b", user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-2", title: "Hire", status: "planned", health: "none", owner: { kind: "user", user_id: ME }, project_ids: [], created_at: 1, updated_at: NOW },
+        // Another workspace's goal: never in the answer.
+        { _id: "initiatives_x", user_id: OUTSIDER, workspace: `user:${OUTSIDER}`, short_id: "in-9", title: "Secret goal", status: "active", health: "none", project_ids: [], created_at: 1, updated_at: NOW },
+      ],
+      org_roles: [
+        { _id: "org_roles_g", user_id: ME, team_id: TEAM, short_id: "or-1", name: "Growth lead", handle: "growth", status: "active", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
+        // A whole workspace role leads nothing, so it hides no gap.
+        { _id: "org_roles_c", user_id: ME, team_id: TEAM, short_id: "or-2", name: "Chief of Staff", handle: "chief-of-staff", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
+      ],
+    });
+    const { coverage } = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(coverage).toMatchObject({ active_initiatives: 1, active_without_owner: 1, with_work: 1, with_lead: 1 });
+    expect(coverage!.initiatives.map((i) => i.short_id)).toEqual(["in-1", "in-2"]);
+    expect(coverage!.initiatives[0]).toMatchObject({ health: "at_risk", projects_without_lead: 0, projects: [{ title: "Growth", lead: "@growth", has_work: true }, { title: "Billing", has_work: false }] });
+    expect(coverage!.initiatives[1].owner).toEqual({ kind: "user", name: "Me" });
+    expect(coverage!.projects).toEqual([expect.objectContaining({ title: "Growth", lead: "@growth", lead_by: "scope", open_tasks: 1, open_plans: 1, initiatives: ["in-1"] })]);
+    // The one loose task; the plan is filed, so no plan is outside.
+    expect(coverage!.outside).toMatchObject({ plans: [], open_tasks: 1 });
+  });
+
   // org-roles-run-work.md R2: the facts a person would use to say "this session is already a role".
   test("a session older than a week is listed with its age, helpers, routines, pinned state, first message and projects; a young one and a standing one are not", async () => {
     const D = 24 * H;
@@ -158,7 +184,7 @@ describe("org.analysisInputs", () => {
     const signals = await computeAnalysisSignals(ctx, ME as any, TEAM, NOW);
     const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
     const activity = await computeAnalysisActivity(ctx, ME as any, TEAM, NOW);
-    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, activity.activity)).toEqual(whole);
+    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, activity.activity, activity.coverage)).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
     expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks"]);
     // The activity block is its own slice (S9): areas, people and stale lists.

@@ -106,6 +106,14 @@ describe("a role is an assignee", () => {
     expect(tables.tasks[1].assignee).toBe(ADS);
   });
 
+  test("a handle nobody answers to is refused, never stored as a bare string", async () => {
+    const { ctx, tables } = await makeCtx([task(1)]);
+    await expect(cliUpdate(ctx, { short_id: "ct-1", assignee: "@nobody-here" })).rejects.toThrow(/Nobody answers to @nobody-here/);
+    // A role in another workspace does not answer here either.
+    await expect(cliUpdate(ctx, { short_id: "ct-1", assignee: "@elsewhere" })).rejects.toThrow(/Nobody answers to @elsewhere/);
+    expect(tables.tasks[0].assignee).toBeUndefined();
+  });
+
   test("a retired role and a role from another workspace are refused in plain words", async () => {
     const { ctx, tables } = await makeCtx([task(1)]);
     await expect(cliUpdate(ctx, { short_id: "ct-1", assignee: RETIRED })).rejects.toThrow(/@old is retired/);
@@ -150,6 +158,38 @@ describe("a session that takes a task assigns it to its role", () => {
     const { ctx, tables } = await makeCtx([task(1, { assignee: GROWTH })]);
     await start(ctx, "ct-1", "hand-ads");
     expect(tables.tasks[0].assignee).toBe(ADS);
+  });
+
+  // Taking over, not creating: a task with an assignee shows on the person's
+  // default board, so a session's own bookkeeping must not gain one.
+  test("takes over a task a person filed with no assignee: assigned to the role", async () => {
+    const { ctx, tables } = await makeCtx([task(1, { source: "human" })]);
+    await start(ctx, "ct-1", "hand-growth");
+    expect(tables.tasks[0].assignee).toBe(GROWTH);
+  });
+
+  test("starts a task it filed itself: stays unassigned and internal", async () => {
+    const { ctx, tables } = await makeCtx([task(1, { source: "agent", created_from_conversation: "conversations_hand" })]);
+    const result = await start(ctx, "ct-1", "hand-growth");
+    expect(tables.tasks[0]).toMatchObject({ status: "in_progress" });
+    expect(tables.tasks[0].assignee).toBeUndefined();
+    expect(result.assigned_role).toBeUndefined();
+    // Another hand of the same role taking that task over does assign it.
+    await start(ctx, "ct-1", "standing-growth");
+    expect(tables.tasks[0].assignee).toBe(GROWTH);
+  });
+
+  test("starts a subtask: stays nested with no assignee of its own", async () => {
+    const { ctx, tables } = await makeCtx([task(1), task(2, { parent_id: "tasks_1" })]);
+    await start(ctx, "ct-2", "hand-growth");
+    expect(tables.tasks[1]).toMatchObject({ status: "in_progress" });
+    expect(tables.tasks[1].assignee).toBeUndefined();
+  });
+
+  test("the role's standing session follows the same rule", async () => {
+    const { ctx, tables } = await makeCtx([task(1, { created_from_conversation: "conversations_standing" })]);
+    await start(ctx, "ct-1", "standing-growth");
+    expect(tables.tasks[0].assignee).toBeUndefined();
   });
 
   test("a session under no role leaves the assignee alone", async () => {

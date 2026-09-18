@@ -290,7 +290,7 @@ export function TriggerContextPanel({
     "px-2 py-1 rounded-md border text-[11px] font-medium transition-[color,background-color,transform] duration-100 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100";
 
   return (
-    <div className="border-b border-sol-border/30 bg-sol-bg-alt/20">
+    <div data-cc-context-panel className="border-b border-sol-border/30 bg-sol-bg-alt/20">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"
@@ -375,6 +375,7 @@ export function TriggerContextPanel({
           there). Hidden when the only run is the one being viewed (a one-node
           rail says nothing the inline turn doesn't). */}
       {runs && (runs.length > 1 || (runs.length === 1 && runs[0]._id !== conversationId)) && (
+        <div data-cc-context-rail className="contents">
         <TriggerRunRail
           runs={runs}
           now={now}
@@ -382,6 +383,7 @@ export function TriggerContextPanel({
           nextRunAt={primary.status === "scheduled" ? primary.run_at : undefined}
           className="px-4 pb-1.5 -mt-0.5"
         />
+        </div>
       )}
 
       {expanded && (

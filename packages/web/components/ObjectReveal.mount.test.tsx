@@ -28,7 +28,6 @@ beforeAll(async () => {
   mock.module("./KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => h("kbd", null, children) }));
   mock.module("./ErrorBoundary", () => ({ ErrorBoundary: ({ children }: any) => h(React.Fragment, null, children) }));
   mock.module("../shortcuts", () => ({ hasOpenModal: () => false, isEditableTarget: () => false }));
-  mock.module("../store/inboxStore", () => ({ useInboxStore: { getState: () => ({ sessions: {} }) } }));
   mock.module("../hooks/useOpenLinkedSession", () => ({ useOpenLinkedSession: () => () => {} }));
   mock.module("../lib/stage", () => ({
     canOpenBeside: () => true,
@@ -37,7 +36,11 @@ beforeAll(async () => {
       return m ? m[1] : null;
     },
   }));
-  mock.module("../lib/openIntent", () => ({ openIn() {} }));
+  // Spread the real module: a substitution is process-global, so dropping its
+  // other exports breaks every file that loads openIntent afterwards — and the
+  // store itself imports divertSessionOpen from it.
+  const realOpenIntent = { ...(await import("../lib/openIntent")) };
+  mock.module("../lib/openIntent", () => ({ ...realOpenIntent, openIn() {} }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
   mock.module("next/navigation", () => ({ useRouter: () => ({ push() {}, replace() {} }) }));
   ({ createRoot } = await import("react-dom/client"));
@@ -135,4 +138,38 @@ test("wheel on the hatch lane scrolls the conversation; wheel in the frame scrol
   open.className = "object-reveal__open";
   band.appendChild(open);
   expect(revealWheelGoesToParent(open, band)).toBe(true);
+});
+
+// The fold a host wears while a band is open must not outlive the band. One
+// conversation view serves every session the inbox selects, so the check has
+// to run again when the surface swaps what it shows — otherwise the next
+// session paints with the folded chrome and no band to explain it.
+test("a surface stops hosting the band when it swaps to another subject", () => {
+  const { RevealHost, RevealButton } = mod;
+  const h = React.createElement;
+  const seen: boolean[] = [];
+  function Surface({ subject }: { subject: string }) {
+    const ref = React.useRef<HTMLSpanElement>(null);
+    const hosting = store.useHostsReveal(ref, "[data-surface]", subject);
+    seen.push(hosting);
+    // Keyed: swapping the subject tears out the old transcript, and the band's
+    // slot (plain DOM, placed under the reference) goes with it.
+    return h("div", { key: subject, "data-surface": subject },
+      h("span", { ref }),
+      h(RevealHost, { persistKey: subject },
+        h("p", null, h(RevealButton, { target: { href: "/tasks/a", title: "Task: a" } })),
+      ),
+    );
+  }
+  mount(h(Surface, { subject: "conv-a" }));
+  expect(seen.at(-1)).toBe(false);
+  click(document.querySelector("[data-surface] button")!);
+  expect(seen.at(-1)).toBe(true);
+  expect(document.querySelector(".object-reveal")).not.toBeNull();
+  // The reveal stays open page-wide — nothing closed it — but this surface is
+  // showing another conversation now, so it hosts nothing.
+  React.act(() => root!.render(h(Surface, { subject: "conv-b" })));
+  expect(store.currentReveal()).not.toBeNull();
+  expect(seen.at(-1)).toBe(false);
+  React.act(() => root!.render(null));
 });

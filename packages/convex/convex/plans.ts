@@ -1263,6 +1263,11 @@ export const webUpdate = mutation({
       label: v.string(),
       path_or_url: v.string(),
     }))),
+    // File the plan under a project (initiatives-projects-role-page.md I2:
+    // plans live inside projects). The plan's tasks that name no project
+    // follow it, so the project's counts include the work; a task that
+    // already names a project keeps it.
+    project_id: v.optional(v.string()),
     ...planCharterArgs,
   },
   handler: async (ctx, args) => {
@@ -1297,6 +1302,17 @@ export const webUpdate = mutation({
       }
       updates.task_ids = taskDocIds;
       updates.progress = await recalcProgress(ctx, taskDocIds);
+    }
+
+    if (args.project_id) {
+      const projectId = ctx.db.normalizeId("projects", args.project_id);
+      if (!projectId) notFound("Project not found");
+      const project = await requireAccessibleProject(ctx, userId, projectId);
+      requireSameWorkspace(project, workspaceForResource(plan), "project");
+      updates.project_id = projectId;
+      const now = Date.now();
+      const planTasks = await ctx.db.query("tasks").withIndex("by_plan_id", (q) => q.eq("plan_id", plan._id)).collect();
+      for (const task of planTasks) if (!task.project_id) await ctx.db.patch(task._id, { project_id: projectId, updated_at: now });
     }
 
     if (args.title && plan.doc_id) {

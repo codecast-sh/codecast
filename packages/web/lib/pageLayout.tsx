@@ -42,6 +42,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // A browser pane is all content: its own 32px address strip, then the page.
   /^\/browser$/,
   /^\/org(\/|$)/,
+  /^\/initiatives(\/|$)/,
   // /vault = pre-rename alias for /files; both stay full-width.
   /^\/files(\/|$)/,
   /^\/vault(\/|$)/,

@@ -26,7 +26,7 @@
 import { useCallback, useRef } from "react";
 import type { FunctionArgs, FunctionReference } from "convex/server";
 import { getFunctionName } from "convex/server";
-import { captureError } from "@/lib/analytics";
+import { captureError } from "../lib/analytics";
 import { useInboxStore } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";

@@ -11,9 +11,8 @@ import {
   collectionRowHydrator,
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
-import { diffCollection } from "./idbCollectionDiff";
+import { diffCollection, durableDeletes } from "./idbCollectionDiff";
 import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
-import { isConvexId } from "../lib/entityLinks";
 
 export type OutboxEntry = {
   id: string;
@@ -44,9 +43,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 39;
+export const CACHE_SCHEMA_VERSION = 40;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|decisionDetails:_id|decisionStacks:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|handledDecisions:_id|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|orgProposalChanges:_id, proposal_id|orgProposals:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|taskEvidence:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|decisionDetails:_id|decisionStacks:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|handledDecisions:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|orgProposalChanges:_id, proposal_id|orgProposals:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|taskEvidence:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -247,27 +246,11 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
       if (data && typeof data === "object") {
         const prevShadow = lastPersisted.get(key);
         const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
-        // NEVER wipe the cache from a store-shrink. A row leaves IDB ONLY when it
-        // was explicitly removed — kill/archive plant a `${key}:${id}` exclude in
-        // `pending`. A diff-delete with NO exclude means the in-memory store is
-        // merely MISSING the row (a paused hydration, a windowed live payload, a
-        // bug), so keep it on disk AND in the shadow. Read-time filters hide stale
-        // rows; the durable cache is never destroyed. This makes a whole-collection
-        // wipe structurally impossible — only intentional per-row removals delete.
-        const pending = (state.pending || {}) as Record<string, { type?: string }>;
-        const deletes: string[] = [];
-        for (const id of rawDeletes) {
-          if (pending[`${key}:${id}`]?.type === "exclude") deletes.push(id);
-          // A stub (non-Convex id) is client-minted: no server window or paused
-          // hydration can explain its absence, so a stub leaving the store is
-          // always an intentional local removal — the altKey supersede or a
-          // create rollback. Protecting stubs here is what kept every sent
-          // message's stub on disk forever; boot hydration then resurrected it
-          // NEXT TO its server twin, and the transcript rendered each of your
-          // own messages twice until the next live delivery collapsed them.
-          else if (!isConvexId(String(id))) deletes.push(id);
-          else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
-        }
+        // NEVER wipe the cache from a store-shrink: durableDeletes keeps every
+        // delete that nothing authorized (an exclude, a stub id, a snapshot
+        // prune) on disk AND in the shadow, so a whole-collection wipe is
+        // structurally impossible. The rule and its reasons live there.
+        const deletes = durableDeletes(key, rawDeletes, state.pending || {}, prevShadow, next);
         lastPersisted.set(key, next);
         if (puts.length || deletes.length) {
           // One transaction so a row is never momentarily absent: removed rows

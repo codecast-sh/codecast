@@ -1,5 +1,8 @@
 // What a role looks after, as one model (docs/architecture/org-roles-run-work.md
-// R3). The hover card and the role page's Scope tab are the same rendering at
+// R3; initiatives-projects-role-page.md I2). Projects are the unit of a scope:
+// each is one card that holds its plans, its open and done tasks and the
+// sessions active in it, and a plan is never listed beside its project. Plans
+// that sit in no project go in one last group. The hover card and the role page's Scope tab are the same rendering at
 // two sizes (components/identity/RoleScopeView), and both paint from this.
 //
 // Two sources feed it, normalized to one shape: the org tree slice when the
@@ -11,7 +14,9 @@
 // fields). Pure: no React, no store.
 import type { WorkState } from "@codecast/shared/contracts";
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
+import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { computePlanProgress } from "./liveEntities";
+import { roleInitiatives, type RoleInitiative } from "./roleInitiatives";
 import { HAND_GROUPS } from "./scopePage";
 import { parentName } from "../components/org/orgMeta";
 import type { OrgRole, OrgTree, StateCounts } from "../components/org/orgTypes";
@@ -93,17 +98,32 @@ type ProjectRow = { _id: string; title: string; short_id?: string; status?: stri
 type PlanRow = { _id: string; title: string; short_id?: string; status: string; project_id?: string | null };
 type TaskRow = { _id: string; status?: string; project_id?: string | null; plan_id?: string | null; assignee?: string | null };
 
-export type RoleScopeRows = { projects: ProjectRow[]; plans: PlanRow[]; tasks: TaskRow[]; roles: LeadRole[] };
+/** A session that reports to the role, and the task it is bound to, if any. */
+type SessionRow = { state: WorkState; task_id: string | null };
 
-export type ScopeProject = { id: string; ref: string; title: string; status: string | null; open: number; leads: boolean };
+export type RoleScopeRows = { projects: ProjectRow[]; plans: PlanRow[]; tasks: TaskRow[]; roles: LeadRole[]; sessions?: SessionRow[]; initiatives?: readonly InitiativeRow[] };
+
 export type ScopePlan = { id: string; ref: string; title: string; status: string | null; done: number; total: number };
 export type ScopeSessionGroup = { state: WorkState; label: string; count: number };
+export type ScopeProject = {
+  id: string; ref: string; title: string; status: string | null;
+  open: number; done: number; leads: boolean;
+  /** The scope names plans of this project, not the project itself. */
+  partial: boolean;
+  plans: ScopePlan[];
+  /** The role's sessions bound to a task in this project, by who acts next. */
+  sessions: ScopeSessionGroup[];
+};
 export type ScopeOwned = { status: string; label: string; count: number };
 
 export type RoleScopeModel = {
   whole: boolean;
+  /** The goals this work serves (initiatives-projects-role-page.md I1): the
+   *  ones the role drives first, then the ones its projects contribute to. */
+  initiatives: RoleInitiative[];
   projects: ScopeProject[];
-  plans: ScopePlan[];
+  /** Plans in scope that sit in no project: the last card, with the gesture that files them. */
+  loosePlans: ScopePlan[];
   sessions: { groups: ScopeSessionGroup[]; total: number; waiting: number } | null;
   charter: { sentence: string; paragraph: string; more: boolean };
   reportsTo: RoleScopeParty | null;
@@ -120,6 +140,12 @@ const OWNED_ORDER: [string, string][] = [["in_progress", "in progress"], ["in_re
 
 /** Who acts next, in a person's words rather than the state's name. */
 const SESSION_WORDS: Partial<Record<WorkState, string>> = { needs_input: "waiting on a person", working: "working", done: "finished", dormant: "parked", idle: "idle" };
+
+/** Counts by state as the groups a person reads, in the inbox's order. */
+function groupWords(counts: Map<WorkState, number> | undefined): ScopeSessionGroup[] {
+  if (!counts) return [];
+  return HAND_GROUPS.map((g) => ({ state: g.state, label: SESSION_WORDS[g.state] ?? g.label.toLowerCase(), count: counts.get(g.state) ?? 0 })).filter((g) => g.count > 0);
+}
 
 /** The first paragraph, minus a leading heading, and its first sentence. */
 export function charterLead(text: string): RoleScopeModel["charter"] {
@@ -138,54 +164,88 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 export function dailyLimitLine(caps: RoleLimits | null, counters: RoleUse | null, today: string): string | null {
   if (!caps) return null;
   const used = counters && counters.day === today ? counters : { wakes: 0, hands: 0 };
-  return `woke ${used.wakes} of ${plural(caps.wakes_per_day, "time")} today · started ${used.hands} of ${plural(caps.hands_per_day, "session")}`;
+  // A limit of zero is a rule, not a count: "0 of 0" says nothing to a person.
+  const starts = caps.hands_per_day > 0 ? `started ${used.hands} of ${plural(caps.hands_per_day, "session")}` : "may not start sessions";
+  return `woke ${used.wakes} of ${plural(caps.wakes_per_day, "time")} today · ${starts}`;
 }
 
 export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, today: string): RoleScopeModel {
   const projectById = new Map(rows.projects.map((p) => [p._id, p]));
   const planById = new Map(rows.plans.map((p) => [p._id, p]));
   // An empty scope is the whole workspace (scopes-and-feed.md F1): every
-  // project the store holds for it, active ones first in the list below.
+  // project the store holds for it.
   const projectRefs = source.whole ? rows.projects.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id })) : source.projects;
-  const projectIds = new Set(projectRefs.map((p) => p.id));
+  const inScope = new Set(projectRefs.map((p) => p.id));
 
-  const openByProject = new Map<string, number>();
+  // A task with no project of its own counts under its plan's project, so a
+  // plan filed under a project brings its work with it in the same tick.
+  const projectOfTask = (t: TaskRow): string | null => t.project_id ?? (t.plan_id ? planById.get(t.plan_id)?.project_id ?? null : null);
+  const openBy = new Map<string, number>();
+  const doneBy = new Map<string, number>();
   const byPlan = new Map<string, TaskRow[]>();
   const ownedCounts = new Map<string, number>();
+  const taskProject = new Map<string, string>();
   for (const t of rows.tasks) {
-    if (t.project_id && isOpenTask(t)) openByProject.set(t.project_id, (openByProject.get(t.project_id) ?? 0) + 1);
+    const pid = projectOfTask(t);
+    if (pid) {
+      taskProject.set(t._id, pid);
+      if (isOpenTask(t)) openBy.set(pid, (openBy.get(pid) ?? 0) + 1);
+      else if (t.status === "done") doneBy.set(pid, (doneBy.get(pid) ?? 0) + 1);
+    }
     if (t.plan_id) { const list = byPlan.get(t.plan_id); if (list) list.push(t); else byPlan.set(t.plan_id, [t]); }
     if (source.role_id && t.assignee === source.role_id) ownedCounts.set(t.status ?? "open", (ownedCounts.get(t.status ?? "open") ?? 0) + 1);
   }
 
-  const projects: ScopeProject[] = projectRefs.map((ref) => {
+  // The plans in scope: the ones named, and the open plans of a project in scope (F1).
+  const planRefs = new Map(source.plans.map((p) => [p.id, p]));
+  for (const p of rows.plans) if (!planRefs.has(p._id) && p.project_id && inScope.has(p.project_id) && (p.status === "active" || p.status === "draft")) planRefs.set(p._id, { id: p._id, title: p.title, short_id: p.short_id ?? p._id });
+  const plansBy = new Map<string, ScopePlan[]>();
+  const loosePlans: ScopePlan[] = [];
+  for (const ref of planRefs.values()) {
+    const row = planById.get(ref.id);
+    const pr = computePlanProgress(byPlan.get(ref.id));
+    const plan: ScopePlan = { id: ref.id, ref: row?.short_id ?? ref.short_id, title: row?.title ?? ref.title, status: row?.status ?? null, done: pr.done, total: pr.total };
+    const home = row?.project_id && (inScope.has(row.project_id) || projectById.has(row.project_id)) ? row.project_id : null;
+    if (!home) loosePlans.push(plan);
+    else { const list = plansBy.get(home); if (list) list.push(plan); else plansBy.set(home, [plan]); }
+  }
+  const planOrder = (a: ScopePlan, b: ScopePlan) => Number(b.status === "active") - Number(a.status === "active") || a.title.localeCompare(b.title);
+
+  const sessionsBy = new Map<string, Map<WorkState, number>>();
+  for (const s of rows.sessions ?? []) {
+    const pid = s.task_id ? taskProject.get(s.task_id) : undefined;
+    if (!pid) continue;
+    const counts = sessionsBy.get(pid) ?? new Map<WorkState, number>();
+    counts.set(s.state, (counts.get(s.state) ?? 0) + 1);
+    sessionsBy.set(pid, counts);
+  }
+
+  // A project in scope, then a project that is only here through a plan the scope names.
+  const partialRefs = Array.from(plansBy.keys()).filter((id) => !inScope.has(id)).map((id) => ({ id, title: projectById.get(id)!.title, short_id: projectById.get(id)!.short_id }));
+  const projects: ScopeProject[] = [...projectRefs, ...partialRefs].map((ref) => {
     const row = projectById.get(ref.id);
     const lead = projectLeadOf(row ?? { _id: ref.id }, rows.roles);
     return {
       id: ref.id, ref: row?.short_id ?? ref.short_id ?? ref.id, title: row?.title ?? ref.title,
-      status: row?.status ?? null, open: openByProject.get(ref.id) ?? 0,
+      status: row?.status ?? null, open: openBy.get(ref.id) ?? 0, done: doneBy.get(ref.id) ?? 0,
       leads: !!source.role_id && lead.kind === "lead" && String(lead.role._id) === source.role_id,
+      partial: !inScope.has(ref.id),
+      plans: (plansBy.get(ref.id) ?? []).sort(planOrder),
+      sessions: groupWords(sessionsBy.get(ref.id)),
     };
-  }).sort((a, b) => Number(b.leads) - Number(a.leads) || b.open - a.open || a.title.localeCompare(b.title));
-
-  // A plan of a project in scope is in scope (F1), beside the plans named.
-  const planRefs = new Map(source.plans.map((p) => [p.id, p]));
-  for (const p of rows.plans) if (!planRefs.has(p._id) && p.project_id && projectIds.has(p.project_id) && (p.status === "active" || p.status === "draft")) planRefs.set(p._id, { id: p._id, title: p.title, short_id: p.short_id ?? p._id });
-  const plans: ScopePlan[] = Array.from(planRefs.values()).map((ref) => {
-    const row = planById.get(ref.id);
-    const pr = computePlanProgress(byPlan.get(ref.id));
-    return { id: ref.id, ref: row?.short_id ?? ref.short_id, title: row?.title ?? ref.title, status: row?.status ?? null, done: pr.done, total: pr.total };
-  }).sort((a, b) => Number(b.status === "active") - Number(a.status === "active") || a.title.localeCompare(b.title));
+  }).sort((a, b) => Number(a.partial) - Number(b.partial) || Number(b.leads) - Number(a.leads) || b.open - a.open || a.title.localeCompare(b.title));
+  loosePlans.sort(planOrder);
 
   const sessions = source.counts ? {
-    groups: HAND_GROUPS.map((g) => ({ state: g.state, label: SESSION_WORDS[g.state] ?? g.label.toLowerCase(), count: source.counts![g.state] ?? 0 })).filter((g) => g.count > 0),
+    groups: groupWords(new Map(Object.entries(source.counts) as [WorkState, number][])),
     total: source.total,
     waiting: source.counts.needs_input ?? 0,
   } : null;
 
   const byStatus = OWNED_ORDER.map(([status, label]) => ({ status, label, count: ownedCounts.get(status) ?? 0 })).filter((s) => s.count > 0);
   return {
-    whole: source.whole, projects, plans, sessions,
+    whole: source.whole, projects, loosePlans, sessions,
+    initiatives: source.role_id ? roleInitiatives(source.role_id, Array.from(inScope), rows.initiatives ?? []) : [],
     charter: charterLead(source.charter),
     reportsTo: source.reportsTo, reports: source.reports,
     owned: { open: byStatus.filter((s) => !CLOSED.has(s.status)).reduce((n, s) => n + s.count, 0), byStatus },
@@ -193,13 +253,18 @@ export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, tod
   };
 }
 
-/** A project's one line state: "14 open tasks · lead", "paused · nothing open". */
-export function projectStateLine(p: ScopeProject): string {
+/** A project's one line state: "14 open tasks · 3 done", "paused · nothing open". */
+export function projectStateLine(p: Pick<ScopeProject, "status" | "open" | "done">): string {
   const parts: string[] = [];
   if (p.status && p.status !== "active") parts.push(p.status);
   parts.push(p.open > 0 ? plural(p.open, "open task") : "nothing open");
-  if (p.leads) parts.push("lead");
+  if (p.done > 0) parts.push(`${p.done.toLocaleString("en-US")} done`);
   return parts.join(" · ");
+}
+
+/** The sessions in a project: "1 waiting on a person · 2 working". */
+export function groupsLine(groups: ScopeSessionGroup[]): string {
+  return groups.map((g) => `${g.count} ${g.label}`).join(" · ");
 }
 
 /** A plan's one line state: "3 of 8 done", "draft · no tasks yet". */
@@ -212,5 +277,5 @@ export function planStateLine(p: ScopePlan): string {
 
 /** The sessions in one line: "2 waiting on a person · 3 working". */
 export function sessionsLine(s: NonNullable<RoleScopeModel["sessions"]>): string {
-  return s.groups.length === 0 ? "no sessions yet" : s.groups.map((g) => `${g.count} ${g.label}`).join(" · ");
+  return s.groups.length === 0 ? "no sessions yet" : groupsLine(s.groups);
 }

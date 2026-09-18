@@ -4,19 +4,21 @@
 // at every size; a character has no ring. Sizing and the art live in
 // org/avatars; this is the one place a SESSION ROW turns into a face.
 import type { CSSProperties, ReactNode } from "react";
-import { RoleAvatar } from "../org/avatars";
-import { characterFor, sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
+import { RoleAvatar, avatarLength } from "../org/avatars";
+import { faceBadgeSize, faceIdentity, type IdentityRow } from "../../lib/sessionIdentity";
 
-export function roleRingStyle(size: number): CSSProperties {
+export function roleRingStyle(size: number | string): CSSProperties {
   // A 1 px ring under 20 px, a gapped 1.5 px ring above, both in the role violet.
-  return size < 20
+  return (typeof size === "number" ? size : 14) < 20
     ? { boxShadow: "0 0 0 1px var(--sol-violet)" }
     : { boxShadow: "0 0 0 1px var(--sol-card), 0 0 0 2.5px var(--sol-violet)" };
 }
 
 export function SessionFace({ row, size = 18, className, title, badge }: {
   row: IdentityRow;
-  size?: number;
+  /** Pixels, or any CSS length: a face in a sentence draws at "1em" so it
+   *  rides the prose it sits in. */
+  size?: number | string;
   className?: string;
   title?: string;
   /** A small mark on the face's lower right — the agent brand, where the
@@ -27,15 +29,15 @@ export function SessionFace({ row, size = 18, className, title, badge }: {
   // Always draws a face, even for a row nobody personified: the picker and the
   // hover cards preview the face a session WOULD wear. IdentityFace is the one
   // that decides whether a face appears on a card at all.
-  const resolved = sessionIdentity(row, true);
-  const id = resolved.kind === "plain" ? { kind: "character" as const, avatar: characterFor(row).avatar } : resolved;
-  const showBadge = badge && size >= 16;
-  const badgeSize = Math.round(size * 0.46);
+  const id = faceIdentity(row);
+  const badgeSize = typeof size === "number" ? faceBadgeSize(size) : 0;
+  const showBadge = badge && badgeSize > 0;
+  const box = avatarLength(size);
   return (
-    <span className={`relative inline-block flex-shrink-0 ${className ?? ""}`} style={{ width: size, height: size, lineHeight: 0 }}>
+    <span className={`relative inline-block flex-shrink-0 ${className ?? ""}`} style={{ width: box, height: box, lineHeight: 0 }}>
       <span
         className="block rounded-full"
-        style={{ width: size, height: size, lineHeight: 0, ...(id.kind === "role" ? roleRingStyle(size) : null) }}
+        style={{ width: box, height: box, lineHeight: 0, ...(id.kind === "role" ? roleRingStyle(size) : null) }}
         data-identity={id.kind}
       >
         <RoleAvatar avatar={id.avatar} size={size} title={title ?? ("name" in id ? id.name : undefined)} />

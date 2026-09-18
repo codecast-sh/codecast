@@ -74,6 +74,7 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
   exec: { icon: "cog", color: "cyan" },
   commandExecution: { icon: "terminal", color: "green" },
   run_terminal_command: { icon: "terminal", color: "green" },
+  bash_input: { icon: "terminal", color: "green" },
 
   Read: { icon: "file-code-o", color: "blue" },
   file_read: { icon: "file-code-o", color: "blue" },
@@ -86,6 +87,7 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
   Grep: { icon: "search", color: "violet" },
   glob: { icon: "search", color: "violet" },
   grep: { icon: "search", color: "violet" },
+  search: { icon: "search", color: "violet" },
 
   Edit: { icon: "pencil", color: "orange" },
   Write: { icon: "pencil", color: "orange" },
@@ -96,6 +98,8 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
   patch: { icon: "pencil", color: "orange" },
   apply_patch: { icon: "pencil", color: "orange" },
   search_replace: { icon: "pencil", color: "orange" },
+  edit_file: { icon: "pencil", color: "orange" },
+  write_file: { icon: "pencil", color: "orange" },
   fileChange: { icon: "pencil", color: "orange" },
 
   WebSearch: { icon: "globe", color: "violet" },
@@ -120,6 +124,7 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
   spawn_subagent: { icon: "code-fork", color: "cyan" },
   todowrite: { icon: "check-square-o", color: "magenta" },
   todo_write: { icon: "check-square-o", color: "magenta" },
+  write_todos: { icon: "check-square-o", color: "magenta" },
   get_command_or_subagent_output: { icon: "cog", color: "cyan" },
   kill_command_or_subagent: { icon: "bolt", color: "red" },
   image_gen: { icon: "desktop", color: "magenta" },

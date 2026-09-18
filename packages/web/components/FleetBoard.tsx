@@ -13,6 +13,8 @@ import {
 } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivenessDot } from "./LivenessDot";
+import { SessionGlyph } from "./identity";
+import { identityRowOf } from "../lib/sessionIdentity";
 import { sessionLivenessState } from "../lib/liveness";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -138,6 +140,8 @@ const FleetTile = memo(function FleetTile({
 
       {/* 1. Title — the anchor. */}
       <span className="flex items-start gap-1.5 min-w-0">
+        {/* Who the session is (session-characters.md S3), then its liveness. */}
+        <SessionGlyph row={identityRowOf(session as any)} size={18} className="mt-[1px] flex-shrink-0" />
         <LivenessDot state={sessionLivenessState(session)} size="xs" className="mt-[5px] flex-shrink-0" />
         <span className={`line-clamp-2 text-[13px] leading-[1.2] tracking-tight ${finished ? "font-medium text-sol-text-muted" : "font-bold text-sol-text"}`}>
           {title}

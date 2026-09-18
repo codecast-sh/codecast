@@ -18,7 +18,10 @@ export const ENTITY_TYPE = v.union(
   // A place in a repository (`owner/repo@sha` or `owner/repo#12`), for a code
   // comment that names someone. Direct recipients only, like a device: nobody
   // subscribes to a commit.
-  v.literal("code")
+  v.literal("code"),
+  // A role, by short id: a goal stall notice to a person who reports to it
+  // (org-roles-run-work.md R6). Direct recipients only.
+  v.literal("org_role")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -51,7 +54,10 @@ export const NOTIFICATION_TYPE = v.union(
   // unread state with no row and no push.
   v.literal("chat_post"),
   // The daemon on one machine spent more than its budget frozen in the last hour.
-  v.literal("daemon_overloaded")
+  v.literal("daemon_overloaded"),
+  // A role tells a person who reports to it that a high priority goal has
+  // stalled (org-roles-run-work.md R6): one line, once a day at most.
+  v.literal("goal_stall")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -87,6 +93,9 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // already means to a reader. Riding that key keeps the alert under a mute
   // switch that exists rather than inventing one with no settings row.
   daemon_overloaded: "session_error",
+  // The role is addressing the person by name about their own goals: the
+  // same class as a mention, under the switch a person already has.
+  goal_stall: "mention",
 };
 
 function isNotificationEnabled(

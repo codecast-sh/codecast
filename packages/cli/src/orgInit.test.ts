@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
-import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
+import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { ORG_CHANGE_KINDS, orgProposalBlock, parseOrgProposalSpec } from "@codecast/shared/contracts/orgProposal";
 
@@ -82,6 +82,43 @@ describe("buildOrgAnalyzerPrompt", () => {
     expect(p).not.toContain("cast decide ");
     expect(p).toContain("2 projects, 1 plans, 5 open tasks, 3 members, 40 sessions in 30 days, 0 existing roles, no chief of staff");
   });
+  // initiatives-projects-role-page.md I1, I2: the tree is read from the top,
+  // the letter says how the goals are going before it asks, and every project
+  // with work ends with a lead.
+  test("reads initiatives as the top of the tree and carries the coverage rule, in both modes", () => {
+    const coverage = { initiatives_active: 2, initiatives_without_owner: 1, with_work: 12, with_lead: 9, outside_plans: 3, outside_areas: 4, outside_repositories: 2 };
+    for (const mode of ["init", "review"] as const) {
+      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary: { ...summary, coverage } });
+      expect(p).toContain(ORG_INITIATIVES_RULE);
+      expect(p).toContain(ORG_COVERAGE_RULE);
+      // Read from the top: coverage before activity, and the section before any sizing.
+      expect(p.indexOf("Its `coverage` block first")).toBeGreaterThan(-1);
+      expect(p.indexOf("Its `coverage` block first")).toBeLessThan(p.indexOf("Then its `activity` block"));
+      expect(p.indexOf("## Initiatives, and a lead for every piece of work")).toBeLessThan(p.indexOf("## The capacity model"));
+      // The glance states the before count the coverage line starts from.
+      expect(p).toContain("Coverage today: 2 active initiatives, 1 with no owner; 9 of 12 projects with work have a lead; outside any project: 3 plans and 4 areas of commits and sessions in 2 repositories.");
+      expect(p).toContain("An initiative is a goal the company is trying to reach");
+    }
+    // The letter's shape and its lead both make room for the goals paragraph, at their own sites.
+    expect(ORG_LETTER_RULE).toContain("then one short paragraph on how the company's goals are going, which the initiatives rule shapes; then one short paragraph per ask");
+    expect(ORG_ASK_RULES.decision_first).toStartWith("Once the letter has said how the goals are going, lead with the decision");
+    expect(ORG_INITIATIVES_RULE).toContain("An active initiative with no owner is the first finding of the review");
+    expect(ORG_INITIATIVES_RULE).toContain("You never create an initiative");
+    expect(ORG_COVERAGE_RULE).toContain("Wrap the project that exists");
+    expect(ORG_COVERAGE_RULE).toContain("Work outside any project gets a project first");
+    expect(ORG_COVERAGE_RULE).toContain("Aim at about one role per project, and depart from that only with a reason the change states");
+    expect(ORG_COVERAGE_RULE).toContain("says before and after in counts");
+    // The old advice argued against a complete chart; it now says what complete means.
+    expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).not.toContain("beat a complete chart");
+    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("are gaps the review closes whether or not a flag names them");
+  });
+  test("the coverage glance reads the inputs' coverage block, and says nothing for a server without one", () => {
+    expect(summarizeInputs({}).coverage).toBeUndefined();
+    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).not.toContain("Coverage today");
+    const s = summarizeInputs({ coverage: { active_initiatives: 0, active_without_owner: 0, with_work: 1, with_lead: 1, outside: { plans: [], areas: [] } } });
+    expect(s.coverage).toEqual({ initiatives_active: 0, initiatives_without_owner: 0, with_work: 1, with_lead: 1, outside_plans: 0, outside_areas: 0, outside_repositories: 0 });
+    expect(coverageLine(s.coverage)).toBe("no active initiatives; 1 of 1 project with work has a lead");
+  });
   test("the spec example parses with the reader cast org propose uses, and every change kind is described", () => {
     const p = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
     const json = p.split("```json\n")[1].split("\n```")[0];
@@ -93,7 +130,7 @@ describe("buildOrgAnalyzerPrompt", () => {
   test("init designs from business lines; review reads flags and respects stability; the offer names the session or says it cannot", () => {
     const init = buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary, session: "abc-123" });
     expect(init).toContain("## How to design from scratch");
-    expect(init).toContain("Start from the business lines");
+    expect(init).toContain("Start from the initiatives, then the business lines");
     expect(init).not.toContain("## How to review");
     expect(init).toContain("This session is `abc-123`");
     const review = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary: { ...summary, roles: 3, chief_of_staff: true } });
@@ -117,7 +154,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("A role does not do its scope's tasks; hands and people do.");
       expect(p).toContain("`company.caps_total`");
       expect(p).toContain("never write it as unchanged when a seat is added");
-      expect(p).toContain("Lead with the decision you are asking for");
+      expect(p).toContain("lead with the decision you are asking for");
       expect(p).toContain("The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here");
       expect(p).not.toContain("allocated from the person's total");
     }
@@ -146,10 +183,11 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("never staff around a stale record");
       expect(p).toContain("is a sync change, not a bottleneck");
       expect(p).toContain("A project whose path nobody touches is not a seat");
-      // The activity block is read before anything else, and the section
+      // The activity block is read before every record (coverage, the top of
+      // the tree, comes just ahead of it; I1), and the section
       // sits after the reading list and before the capacity model.
       const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
-      expect(at("its `activity` block first")).toBeLessThan(at("cast org health --json"));
+      expect(at("Then its `activity` block")).toBeLessThan(at("cast org health --json"));
       expect(at("## What to read")).toBeLessThan(at("## Ground in what is happening"));
       expect(at("## Ground in what is happening")).toBeLessThan(at("## The capacity model"));
       expect(p).toContain("`stale_plan`, `stale_task`, `stale_project`");
@@ -254,7 +292,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       // opened with one 1,088 character paragraph; the shape is an opening,
       // one short paragraph per ask, then the rest behind a heading.
       expect(p).toContain(ORG_LETTER_RULE);
-      expect(p).toContain("one short paragraph that says what you are, what you looked at and that they decide; then one short paragraph per ask, in the asks' order, each ending in what accepting changes for the reader; then nothing");
+      expect(p).toContain("one short paragraph that says what you are, what you looked at and that they decide; then one short paragraph on how the company's goals are going, which the initiatives rule shapes; then one short paragraph per ask, in the asks' order, each ending in what accepting changes for the reader; then nothing");
       expect(p).toContain("a person reads them in ten seconds and can say what is asked of them");
       expect(p).toContain("An ask's why is one sentence and its effect is one sentence");
       // The live cards said "standing agents", "business line", "daily

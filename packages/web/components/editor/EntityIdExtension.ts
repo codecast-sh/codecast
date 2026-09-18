@@ -3,7 +3,7 @@ import { ReactNodeViewRenderer } from "@tiptap/react";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { EditorState, Transaction } from "@tiptap/pm/state";
 import type { NodeType } from "@tiptap/pm/model";
-import { SHORT_ID_PREFIX } from "../../lib/entityLinks";
+import { shortIdSource } from "../../lib/entityLinks";
 import { EntityIdNodeView } from "./EntityIdNodeView";
 
 // The same bare-id vocabulary read mode pills (shared/entities BARE_ID_SOURCE),
@@ -11,8 +11,7 @@ import { EntityIdNodeView } from "./EntityIdNodeView";
 // is typing into an atom is too aggressive for an editor, and those ids only
 // resolve through a server round-trip anyway. Prefixed short ids derive from
 // the shared registry so a new object type lights up here automatically.
-const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
-const ENTITY_SOURCE = `(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}`;
+const ENTITY_SOURCE = `${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}`;
 const ENTITY_PATTERN = new RegExp(`\\b(?:${ENTITY_SOURCE})\\b`, "gi");
 const INPUT_RULE_RE = new RegExp(`(?:^|\\s)(${ENTITY_SOURCE})\\s$`, "i");
 

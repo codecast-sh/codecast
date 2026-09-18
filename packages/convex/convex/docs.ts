@@ -35,6 +35,7 @@ import {
 import { notFound } from "./lib/auth";
 import { packSnapshotContent } from "./lib/docSnapshot";
 import { docTitleFromContent, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
+import { identityFieldsOf } from "./conversations";
 export { canAccessDoc };
 
 function generatePlanShortId(): string {
@@ -1671,6 +1672,10 @@ export const mentionSearch = query({
       agentType?: string;
       updatedAt?: number;
       idleSummary?: string;
+      /** A session's identity row (session-characters.md S1): the character
+       *  and role fields the dropdown hands to `sessionIdentity` so the row
+       *  wears the same face and name the inbox card does. */
+      identity?: any;
     }> = [];
 
     const perType = Math.max(10, Math.ceil(limit / types.length));
@@ -1930,6 +1935,7 @@ export const mentionSearch = query({
           agentType: sess.agent_type,
           updatedAt: sess.updated_at,
           idleSummary: (sess as any).idle_summary,
+          identity: { _id: String(sess._id), title: sess.title, ...(await identityFieldsOf(sess, (id: any) => ctx.db.get(id))) },
         });
       }
     }
