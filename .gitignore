@@ -45,6 +45,7 @@ test-results/
 .conductor/
 .codecast/*
 !.codecast/workspace.toml
+!.codecast/check.toml
 
 # Daemon files
 daemon.pid
