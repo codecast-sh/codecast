@@ -61,7 +61,7 @@ import {
 } from "./lib/slackOutbound";
 import {
   type BackfillWindow, DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions } from "./lib/slackMirror";
-import { tokenHasDmScopes, webBaseUrl } from "./slack";
+import { tokenCanPost, tokenHasDmScopes, webBaseUrl } from "./slack";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 type Link = Doc<"slack_channel_links">;
@@ -1268,6 +1268,9 @@ export const retargetPersonRooms = internalMutation({
         const lines = await ctx.db.query("chat_messages").withIndex("by_channel_external_ts", (q: any) => q.eq("channel_id", room._id)).collect();
         for (const m of lines) await ctx.db.patch(m._id, { channel_id: target._id });
         await ctx.db.patch(link._id, { chat_channel_id: target._id, updated_at: now });
+        // The same forwarding address an optimistic create uses: whoever holds
+        // the room id that just went away is sent to the room that absorbed it.
+        await patchChat(ctx, target._id, { client_id: room._id.toString() });
         for (const mem of members) await ctx.db.delete(mem._id);
         await ctx.db.delete(room._id);
       } else {
@@ -1563,6 +1566,39 @@ async function assignSlackPerson(
     team_id: opts.teamId, slack_user_id: opts.row.slack_user_id, link_index: 0,
   });
 }
+
+// A person added another address to their account (users.addAlternateEmail):
+// every Slack person seen under it, in a team they belong to, becomes them —
+// unless a teammate had already mapped that person by hand, which outranks any
+// address. assignSlackPerson carries the rest: past lines are re-authored and
+// DM rooms follow the identity.
+export const claimSlackPeopleByEmail = internalMutation({
+  args: { user_id: v.id("users"), email: v.string() },
+  handler: async (ctx, args): Promise<{ claimed: number }> => {
+    const email = args.email.trim().toLowerCase();
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .collect();
+    let claimed = 0;
+    for (const m of memberships) {
+      const install = await installationForTeam(ctx, m.team_id);
+      if (!install) continue;
+      const rows = await ctx.db
+        .query("slack_users")
+        .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", install.workspace_id))
+        .collect();
+      for (const row of rows) {
+        if ((row.email ?? "").toLowerCase() !== email) continue;
+        if (row.mapped_by === "manual") continue;
+        if (row.codecast_user_id?.toString() === args.user_id.toString()) continue;
+        await assignSlackPerson(ctx, { teamId: m.team_id, row, codecastUserId: args.user_id });
+        claimed++;
+      }
+    }
+    return { claimed };
+  },
+});
 
 // A teammate signed in to Slack from codecast (slack.ts storeUserToken): Slack
 // itself just said which Slack user they are, which beats any email rule. The
@@ -2363,10 +2399,12 @@ export const linkContext = internalQuery({
 type PushContext = {
   message: Doc<"chat_messages">;
   link: Link;
-  // For a DM this carries the AUTHOR's own token in the app's place, and the
-  // post goes out as them, plain (no borrowed name or face).
+  // When the author connected their Slack account this carries THEIR token in
+  // the app's place and the post goes out as them, plain (no borrowed name or
+  // face). `app_token` is the app's own, kept for the fallback.
   install: Install;
   as_person?: boolean;
+  app_token?: string;
   channel: Doc<"chat_channels">;
   root_ts: string | null;
   author: { name: string; image: string | null; isAgent: boolean; via: string | null };
@@ -2385,15 +2423,28 @@ export const pushContext = internalQuery({
     const channel = await ctx.db.get(message.channel_id);
     if (!install || !channel) return null;
     const author = await ctx.db.get(message.user_id);
+    // Speak as the author when they have connected their own Slack account:
+    // the line lands in Slack under their real name and face, not the app's
+    // wearing their name. A DM has no other way to be said at all, so there the
+    // missing token keeps the line home; in a channel the app says it for them.
+    //
+    // Never for an agent's line. A session or the anchor writing in somebody's
+    // room must not appear in Slack as that person typing; those keep going as
+    // the app, named "… (agent)", which is the whole point of that naming.
     let asPerson = false;
-    if (link.kind === "dm") {
-      // Only the author can speak in their own DM; without their token the
-      // line stays home (the row shows "not in Slack").
-      const token = await userTokenFor(ctx, install._id, message.user_id);
-      if (!token) return null;
+    const byHand = !isAgentLine(message);
+    const token = byHand ? await userTokenFor(ctx, install._id, message.user_id) : null;
+    if (token && tokenCanPost(token.scopes)) {
       install = { ...install, bot_token: token.token };
       asPerson = true;
+    } else if (link.kind === "dm" && byHand) {
+      return null;
+    } else if (link.kind === "dm") {
+      // An agent line in a mirrored DM: the app is not in that conversation and
+      // must not borrow the person's account, so it stays here.
+      return null;
     }
+    const appToken = (await ctx.db.get(link.installation_id))!.bot_token;
     const root = message.thread_root_id ? await ctx.db.get(message.thread_root_id) : null;
     // Mentions written in the line, mapped to Slack people where we know them.
     const handleToSlack: Record<string, string> = {};
@@ -2431,6 +2482,7 @@ export const pushContext = internalQuery({
       link,
       install,
       as_person: asPerson || undefined,
+      app_token: asPerson ? appToken : undefined,
       channel,
       root_ts: root?.external?.ts ?? null,
       author: {
@@ -2527,6 +2579,16 @@ export const pushMessage = internalAction({
       unfurl_media: true,
     };
     let resp = await slackApi(c.install.bot_token, "chat.postMessage", params);
+    // Posting as the author needs THEM in the Slack channel. When they are not
+    // (they read it here, never joined there), the app says it in their name
+    // instead of dropping the line.
+    if (!resp.ok && c.as_person && c.app_token && (resp.error === "not_in_channel" || resp.error === "channel_not_found")) {
+      const named = { ...params, username: slackDisplayName(c.author), icon_url: c.author.image ?? undefined };
+      resp = await slackApi(c.app_token, "chat.postMessage", named);
+      if (!resp.ok && (await recoverNotInChannel({ ...c.install, bot_token: c.app_token }, c.link, resp.error))) {
+        resp = await slackApi(c.app_token, "chat.postMessage", named);
+      }
+    }
     if (!resp.ok && (await recoverNotInChannel(c.install, c.link, resp.error))) {
       resp = await slackApi(c.install.bot_token, "chat.postMessage", params);
     }
