@@ -23,6 +23,8 @@ import { DateMentionExtension } from "./DateMentionExtension";
 import { TabIndentExtension } from "./TabIndentExtension";
 import { ImageUploadPlaceholder } from "./ImageUploadPlugin";
 import { DocTitleExtension, TitleFirstDocument } from "./DocTitleExtension";
+import { identityLine } from "../../lib/sessionIdentity";
+import { useInboxStore } from "../../store/inboxStore";
 
 const lowlight = createLowlight(common);
 
@@ -45,6 +47,14 @@ export const MENTION_COLOR_MAP: Record<string, string> = {
   plan: "mention-plan",
   label: "mention-label",
 };
+
+/** What a picked mention reads as: a session that wears a character or a role
+ *  is named as that person, everything else keeps its own label. */
+function mentionLabel(item: MentionItem): string {
+  if (item.type !== "session" || !item.identity) return item.label;
+  const personify = !!useInboxStore.getState().clientState?.ui?.personify_sessions;
+  return identityLine(item.identity, item.label, personify).name ?? item.label;
+}
 
 export function createMentionSuggestion(queryFn: MentionQueryFn) {
   return {
@@ -224,7 +234,10 @@ export function createMentionExtension(onMentionQuery: MentionQueryFn) {
               type: "mention",
               attrs: {
                 id: item.id,
-                label: item.label,
+                // A personified session is named as its character, the same
+                // words the composer's own dropdown writes (S3). The node view
+                // draws the live pill either way; this is the fallback text.
+                label: mentionLabel(item),
                 type: item.type,
                 shortId: item.shortId || null,
                 status: item.status || null,

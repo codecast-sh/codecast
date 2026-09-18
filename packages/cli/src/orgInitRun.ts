@@ -563,7 +563,7 @@ export async function health(deps: OrgInitDeps, options: any): Promise<void> {
   const noGoal: any[] = company.plans_without_goal ?? [];
   const noCharter: any[] = company.projects_without_charter ?? [];
   const unfiledPlans: any[] = company.unfiled_plans ?? [];
-  console.log(`  ${fmt.accent("company")} ${fmt.muted(`· ${unowned.length} unowned project${unowned.length === 1 ? "" : "s"}${unowned.length ? ` (${unowned.map((x) => x.title ?? x.id).join(", ")})` : ""} · ${company.unfiled_tasks ?? 0} unfiled tasks · ${unfiledPlans.length} unfiled plan${unfiledPlans.length === 1 ? "" : "s"} with open work · ${noCharter.length} without a charter · ${noGoal.length} plan${noGoal.length === 1 ? "" : "s"} without a goal`)}`);
+  console.log(`  ${fmt.accent("company")} ${fmt.muted(`· ${unowned.length} unowned project${unowned.length === 1 ? "" : "s"}${unowned.length ? ` (${unowned.map((x) => x.title ?? x.id).join(", ")})` : ""}${watched.length ? ` · ${watched.length} watched by two roles with no lead (${watched.map((x) => `${x.title ?? x.id}: ${(x.roles ?? []).map((h: string) => `@${h}`).join(", ")}`).join("; ")})` : ""} · ${company.unfiled_tasks ?? 0} unfiled tasks · ${unfiledPlans.length} unfiled plan${unfiledPlans.length === 1 ? "" : "s"} with open work · ${noCharter.length} without a charter · ${noGoal.length} plan${noGoal.length === 1 ? "" : "s"} without a goal`)}`);
   // Warnings and blockers print one per line; info flags (a charter missing on
   // each of forty plans) collapse to one line per code with a few examples,
   // and --json keeps every row.

@@ -9,6 +9,7 @@ import { capsFor, countersFor, utcDay } from "./orgEvents";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
 import { projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
+import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import { computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
 import { isActiveTask } from "@codecast/shared/tasks";
@@ -522,13 +523,19 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       const since = raw && !raw.escalated_by_role ? waitingSinceOf(h.state, raw) : null;
       return since !== null && now - since > waitMs;
     }).length;
+    // A goal of a person who reports to the role that stalled or has had
+    // nothing matched to it for the unmatched window (org-roles-run-work.md
+    // R6) is a stall the role chases, counted with the rest.
+    const briefDoc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
+    const people = await computeReportingPeople(ctx, userId, role, briefDoc ? { content: briefDoc.content ?? "", updated_at: briefDoc.updated_at ?? briefDoc._creationTime ?? 0 } : null, null, now, now);
+    const goalStalls = people.reduce((n, p) => n + p.goals.filter((g) => g.stalled || g.unmatched).length, 0);
     const load: RoleLoad = {
       items_per_day: reached.items / 7,
       decisions_per_day: decisions7 / 7,
       live_hands: hands.filter((s) => s.state === "working" || s.state === "needs_input" || s.state === "dormant").length,
       hands_cap: caps.hands_per_day,
       direct_reports: reportsOf.get(rid) ?? 0,
-      open_stalls: stalls + stuckHands + unseenWaits,
+      open_stalls: stalls + stuckHands + unseenWaits + goalStalls,
       cap_hit_days: activity.wakes_7d.cap_hit_days,
     };
     const counters = countersFor(role, now);

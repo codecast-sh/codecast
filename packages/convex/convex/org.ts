@@ -16,6 +16,7 @@ import { pendingOnLadder } from "./sessionDecisions";
 import { isWholeWorkspace, type Scope } from "./lib/orgScope";
 import { capsFor, countersFor } from "./orgEvents";
 import { extractPlanTitleForWeb } from "./docs";
+import { computeReportingPeople, type BriefPerson } from "./orgGoals";
 
 // The org page's read side (docs/architecture/org-roles.md S3, S4): one query
 // returns the workspace's reporting tree — people, roles, anchors, and every
@@ -1050,6 +1051,10 @@ export type BriefFacts = {
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   plans: ScopeSummary["plans"];
   hands: BriefHand[];
+  // The people who report to the role (org-roles-run-work.md R6): their goals
+  // from the brief read against the live rows, and their sessions that changed
+  // since the last frame. Empty when nobody reports to it.
+  people: BriefPerson[];
   changed: BriefChange[];
   decisions: { open: number; answered_today: number };
   usage: { day: string; wakes: number; hands: number; tokens: number; caps: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number }; uncounted_sessions: number };
@@ -1132,11 +1137,21 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
   const uncounted = [standing, ...hands.map((h) => scan.sessions.get(h._id.toString())?.raw)].filter((c) => c && c.agent_type !== "claude_code").length;
 
+  // The people who report to the role, read with the same grants and the same
+  // scan as the hands; "changed" is since the last frame the role read.
+  const briefDoc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
+  const people = await computeReportingPeople(
+    ctx, viewerId, role,
+    briefDoc ? { content: briefDoc.content ?? "", updated_at: briefDoc.updated_at ?? briefDoc._creationTime ?? 0 } : null,
+    scan, role.last_frame_seq ?? now - 24 * 3600_000, now,
+  );
+
   return {
     scope: { projects: summary.projects, plans: resolved.plans.map((p) => ({ id: p._id.toString(), short_id: p.short_id, title: p.title })), whole_workspace: whole },
     tasks: summary.tasks,
     plans: summary.plans,
     hands,
+    people,
     changed,
     decisions,
     usage: { ...counters, caps: capsFor(role), uncounted_sessions: uncounted },

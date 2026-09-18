@@ -8,6 +8,9 @@ import { visitTimeAgo } from "../../lib/recentVisits";
 import { statusesForTeam, taskStatusOf } from "../../lib/taskStatuses";
 import { agentDisplayName, deriveLiveAt, modelDisplayLabel } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../../lib/liveness";
+import { SessionFace } from "../identity";
+import { identityLine, identityRowOf, sessionIdentity } from "../../lib/sessionIdentity";
+import { usePersonifyAll } from "../../hooks/usePersonifyAll";
 
 const TYPES = {
   session: { icon: MessageSquare, label: "Session", color: "text-sol-blue" },
@@ -40,6 +43,7 @@ export function MentionSuggestion({ item }: { item: Omit<MentionItem, "id"> & { 
       const status = !verdict.idle ? "working" : verdict.waiting ? verdict.rest : "idle";
       return JSON.stringify({
         label: row.title || "Untitled Session", status, messageCount: row.message_count,
+        identity: identityRowOf(row as never),
         projectPath: row.git_root || row.project_path, agentType: row.agent_type,
         model: row.model ?? undefined, idleSummary: row.idle_summary, updatedAt: row.updated_at,
       });
@@ -61,8 +65,18 @@ export function MentionSuggestion({ item }: { item: Omit<MentionItem, "id"> & { 
   const current = { ...item, ...JSON.parse(liveJson) } as typeof item;
   const config = TYPES[current.type as keyof typeof TYPES] ?? TYPES.doc;
   const Icon = current.isBot ? Bot : config.icon;
+  // A session that wears a character or a role is offered as that person: its
+  // face in place of the session glyph, its name on the first line, and the
+  // title demoted to the detail line (session-characters.md S3). A session
+  // nobody personified reads exactly as it did before.
+  const personifyAll = usePersonifyAll();
+  const identityRow = current.type === "session" ? current.identity ?? null : null;
+  const persona = identityRow && sessionIdentity(identityRow, personifyAll).kind !== "plain"
+    ? identityLine({ ...identityRow, title: current.label }, current.label, personifyAll)
+    : null;
   const status = current.type === "person" || (current.type === "session" && liveJson === "{}") ? undefined : current.status;
-  const parts = [config.label];
+  const parts = persona?.title ? [persona.title] : [config.label];
+  if (persona?.handle) parts.push(`@${persona.handle}`);
   if (current.type === "session") {
     if (current.agentType) parts.push(agentDisplayName(current.agentType));
     const model = modelDisplayLabel(current.agentType, current.model);
@@ -85,13 +99,15 @@ export function MentionSuggestion({ item }: { item: Omit<MentionItem, "id"> & { 
 
   return (
     <>
-      {current.image
-        ? <AvatarImg src={current.image} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
-        : <Icon aria-hidden className={`w-4 h-4 shrink-0 ${config.color}`} />}
+      {persona && identityRow
+        ? <SessionFace row={identityRow} size={20} className="shrink-0" />
+        : current.image
+          ? <AvatarImg src={current.image} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+          : <Icon aria-hidden className={`w-4 h-4 shrink-0 ${config.color}`} />}
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className="text-[13px] truncate" title={current.label}>
-            {current.type === "file" ? current.label.split("/").pop() : current.type === "skill" ? `/${current.label}` : current.label}
+            {persona?.name ?? (current.type === "file" ? current.label.split("/").pop() : current.type === "skill" ? `/${current.label}` : current.label)}
           </span>
           {current.slack && <SlackLogo className="w-3 h-3 shrink-0" title="In Slack only — paged there" />}
           {time ? <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums" title={`${timeLabel} ${new Date(time).toLocaleString()}`}>{timeLabel.toLowerCase()} {visitTimeAgo(time)}</span> : null}

@@ -8,6 +8,7 @@ import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
+import { identityRowOf } from "../lib/sessionIdentity";
 
 // score/matchScore moved to lib/mentionRanking, which owns ranking and must not
 // import this module back. Re-exported so every existing caller is unchanged.
@@ -199,6 +200,7 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       messageCount: sess.message_count, projectPath: sess.git_root || sess.project_path,
       status: sess.agent_status ?? undefined, agentType: sess.agent_type,
       model: sess.model ?? undefined, updatedAt: sess.updated_at, idleSummary: sess.idle_summary,
+      identity: identityRowOf(sess as never),
     })),
   ];
   return mergeMentionSuggestions(items, [], mentionViewTimes(s));

@@ -326,10 +326,14 @@ function NavSection({
           style={{ gridTemplateRows: expanded ? '1fr' : '0fr', opacity: expanded ? 1 : 0 }}
         >
           <div className="overflow-hidden">
-            <div className="ml-[17px] my-0.5 border-l border-sol-border/50">
-              {items!.map((child) => (
-                <SectionRow key={child.id} row={child} />
-              ))}
+            {/* The panel spans the full rail; the guide line inside it still
+                hangs under this row's icon. */}
+            <div className="nav-subsection my-0.5">
+              <div className="ml-[17px] border-l border-sol-border/50">
+                {items!.map((child) => (
+                  <SectionRow key={child.id} row={child} />
+                ))}
+              </div>
             </div>
           </div>
         </div>

@@ -90,3 +90,19 @@ export function escalationOf(row: IdentityRow): { role: SessionRoleSnapshot | nu
   if (!e) return null;
   return { role: row.role && row.role._id === e.role_id ? row.role : null, line: e.line, at: e.at };
 }
+
+/** The identity fields alone, lifted off a bigger row. Surfaces that carry a
+ *  session into another shape — a mention item, a dropdown's live snapshot —
+ *  pass this instead of the whole row, so they neither copy a session's churn
+ *  nor read the character fields themselves. */
+export function identityRowOf(row: IdentityRow & Record<string, unknown>): IdentityRow {
+  return {
+    _id: row._id,
+    title: row.title ?? null,
+    character_avatar: row.character_avatar ?? null,
+    character_name: row.character_name ?? null,
+    standing_role_id: row.standing_role_id ?? null,
+    org_role_id: row.org_role_id ?? null,
+    role: row.role ?? null,
+  };
+}

@@ -18,6 +18,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
     .requiredOption("--project <id>", "Exact existing project id")
     .option("--session <id>", "Proposing session UUID (default: current session)")
     .option("--adopt <routine=tr-N>", "Record an existing external trigger without changing it", (value: string, all: string[]) => [...all, value], [])
+    .option("--input <key=value>", "Answer one of the template's inputs (repeatable); secrets are bound on the host, never answered here", (value: string, all: string[]) => [...all, value], [])
     .action(async (folder: string, options: any) => {
       const { installTemplate, quoteTemplateArg } = await import("./orgTemplateRun.js");
       const receipt = await installTemplate(deps, folder, options.instance, options);
@@ -33,6 +34,12 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
       const runtime = await import("./orgTemplateRun.js");
       await runtime.reconcileTemplate(deps, instance, options);
       output(await runtime.templateStatus(deps, instance, options));
+    });
+  context(template.command("bind <instance>").description("Host step after approval: write the instance file from the answers, bind secret inputs to files on this machine, find or create the ledger tasks"))
+    .option("--secret <key=path>", "Bind a secret input to a file on this host (repeatable); the path is recorded by hash, its contents never leave the machine", (value: string, all: string[]) => [...all, value], [])
+    .action(async (instance: string, options: any) => {
+      const { bindTemplate } = await import("./orgTemplateRun.js");
+      console.log(JSON.stringify(await bindTemplate(deps, instance, options), null, 2));
     });
   context(template.command("upgrade <instance> <folder>").description("Preview a release change; --apply advances this instance only"))
     .option("--apply", "Apply the reviewed release change, preserving role and external trigger state")

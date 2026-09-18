@@ -28,7 +28,6 @@ beforeAll(async () => {
   mock.module("./KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => h("kbd", null, children) }));
   mock.module("./ErrorBoundary", () => ({ ErrorBoundary: ({ children }: any) => h(React.Fragment, null, children) }));
   mock.module("../shortcuts", () => ({ hasOpenModal: () => false, isEditableTarget: () => false }));
-  mock.module("../store/inboxStore", () => ({ useInboxStore: { getState: () => ({ sessions: {} }) } }));
   mock.module("../hooks/useOpenLinkedSession", () => ({ useOpenLinkedSession: () => () => {} }));
   mock.module("../lib/stage", () => ({
     canOpenBeside: () => true,
@@ -37,7 +36,11 @@ beforeAll(async () => {
       return m ? m[1] : null;
     },
   }));
-  mock.module("../lib/openIntent", () => ({ openIn() {} }));
+  // Spread the real module: a substitution is process-global, so dropping its
+  // other exports breaks every file that loads openIntent afterwards — and the
+  // store itself imports divertSessionOpen from it.
+  const realOpenIntent = { ...(await import("../lib/openIntent")) };
+  mock.module("../lib/openIntent", () => ({ ...realOpenIntent, openIn() {} }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
   mock.module("next/navigation", () => ({ useRouter: () => ({ push() {}, replace() {} }) }));
   ({ createRoot } = await import("react-dom/client"));
