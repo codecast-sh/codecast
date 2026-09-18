@@ -1213,7 +1213,7 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // and a clone-only verb asked for the real Chrome dies in ctxFor before a
   // tab is pinned in a browser it will then refuse.
   // `pane` offers a page to the reader over the backend and never opens a tab.
-  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tab", "tabs", "start", "stop", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane"]);
+  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane"]);
   br.hook("preAction", async (_thisCommand, actionCommand) => {
     const verb = actionCommand.name();
     if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br || actionCommand.args.some((arg) => arg === "--help" || arg === "-h")) return;
@@ -1650,6 +1650,18 @@ sessions' tabs).`,
       if (others.length) {
         console.log(fmt.muted(`  ${others.length} other session${others.length === 1 ? " is" : "s are"} browsing here too — abandoned tabs close on the next start`));
       }
+    });
+
+  // The daemon runs this on its maintenance tick, in a child process so the
+  // tmux and ps reads never block its loop. Without it, engines outlived their
+  // agents until some session happened to start a browser: 12 orphans, the
+  // oldest 42 hours, on 2026-09-17. Throttled inside reapEngineOrphans, and no
+  // session is kept: the daemon drives no tab of its own.
+  br.command("reap", { hidden: true })
+    .description("Close engine browsers whose agent is gone")
+    .action(async () => {
+      const swept = describeReap(await reapEngineOrphans({ keep: null }));
+      if (swept) console.log(swept);
     });
 
   targetFlags(br.command("stop"))
