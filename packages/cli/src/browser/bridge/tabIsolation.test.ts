@@ -196,4 +196,5 @@ await program.parseAsync(["node", "fixture", "browser", ...args]);
     expect(extension.tabs).toHaveLength(2);
     expect((await listTargets(endpoint(`env-${recipient}-real`))).map(t => t.targetId)).toEqual([targetId]);
   }
-}, 30_000);
+  // Two child processes each import the whole CLI; on a loaded machine one import alone took 18 s.
+}, 120_000);

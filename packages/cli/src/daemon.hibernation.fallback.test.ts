@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { AgentStatus } from "@codecast/shared/contracts";
 import type { HibernationPassIo } from "./daemon.js";
 import { createHibernationHarness } from "./test-helpers/hibernationHarness.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { functionBlock } from "./test-helpers/sourceRegion.js";
+import { resolveAgentPid } from "./daemon.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -145,5 +149,93 @@ describe("parking fallback executes production bodies without daemon initializat
     h.trackSessionPaneForTests("session", "pane", { parked: true, status: "hibernated" });
     expect(await h.hibernateSessionNow("session", undefined, io)).toEqual({ result: "already_parked" });
     expect(nonLogEffects(h)).toEqual([]);
+  });
+});
+
+// Turning hibernation on means reading what it would do to a real fleet before
+// it does anything. The preview must run the gates and reach no kill.
+describe("dry run reports without parking", () => {
+  const target = { session: "$1", pane: "%1", pid: 4242, start: "Thu Sep 18 00:00:00 2026", stamp: "session", conversationStamp: "conversation" };
+  const logs = (h: ReturnType<typeof createHibernationHarness>) =>
+    h.effects.filter((e) => e.kind === "log").map((e) => String(e.args[0] ?? "")).join("\n");
+
+  test("a session that passes every gate is named, and nothing is killed", async () => {
+    const { h, io, calls } = fixture();
+    io.policy = () => ({ maxLive: 1, idleMs: 1, maxPerPass: 5, dryRun: true });
+    io.inspectTarget = async () => target;
+    expect(await h.runHibernationPass(io)).toBe(0);
+    expect(calls).not.toContain("park");
+    expect(nonLogEffects(h)).toEqual([]);
+    expect(logs(h)).toContain("hibernation DRY RUN");
+    expect(logs(h)).toContain("would park 1");
+    expect(logs(h)).toContain("session@");
+  });
+
+  test("a refusal is reported as the skip it would be, and still parks nothing", async () => {
+    const { h, io, calls } = fixture();
+    io.policy = () => ({ maxLive: 1, idleMs: 1, maxPerPass: 5, dryRun: true });
+    io.inspectTarget = async () => target;
+    io.lifecycle = async () => ({ status: "active", hideStateKnown: true, source: "lifecycle", inboxPinnedAt: null, hasPendingMessages: true, inboxKilledAt: null, inboxDismissedAt: null, inboxStashedAt: null });
+    expect(await h.runHibernationPass(io)).toBe(0);
+    expect(calls).not.toContain("park");
+    expect(logs(h)).toContain("would park 0");
+    expect(logs(h)).toContain("pending-messages");
+  });
+
+  test("a target it cannot verify is not counted as parkable", async () => {
+    const { h, io } = fixture();
+    io.policy = () => ({ maxLive: 1, idleMs: 1, maxPerPass: 5, dryRun: true });
+    io.inspectTarget = async () => null;
+    expect(await h.runHibernationPass(io)).toBe(0);
+    expect(logs(h)).toContain("would park 0");
+    expect(logs(h)).toContain("target-unverified");
+  });
+});
+
+// refuseTarget records a reason and returns null so a refusal reads as one
+// expression. In a function that answers a BOOLEAN, `return !refuseTarget(...)`
+// is `return true` — it turns every refusal into an approval. Nothing in the
+// type system catches it, so the shape is banned outright.
+test("a recorded refusal never reads as an approval", () => {
+  const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "daemon.ts"), "utf8");
+  expect(src).not.toContain("!refuseTarget(");
+  const clear = functionBlock(src, "hibernationChildHistoryIsClear").text;
+  expect(clear).toContain("refuseTarget(");
+  // Every refusal inside the boolean gate says false in the same statement.
+  for (const line of clear.split("\n").filter((l) => l.includes("refuseTarget("))) {
+    expect(line, line.trim()).toContain("return false;");
+  }
+});
+
+// The pane process is not always the agent: the daemon starts an agent inside a
+// login shell, so tmux's pane_pid is that shell. On 2026-09-18 all 69 agent
+// panes on this machine had that shape, and reading the pane process alone
+// refused every one as "argv-session-mismatch", so nothing could ever park.
+describe("finding the agent inside its pane", () => {
+  const SID = "f4147e5a-bebc-41cc-b6fa-6f8fa6435b09";
+  const row = (pid: number, ppid: number, command: string) => ({ pid, ppid, command, uid: 501 } as any);
+  const shell = row(75564, 1, "-bash");
+  const agent = row(75706, 75564, `/Users/ashot/.codecast/bin/claude --permission-mode bypassPermissions --session-id ${SID} --model fable`);
+
+  test("the agent under a shell is found", () => {
+    expect(resolveAgentPid([shell, agent], 75564, "-bash", SID)).toBe(75706);
+  });
+
+  test("a pane that exec'd the agent still answers itself", () => {
+    expect(resolveAgentPid([agent], 75706, agent.command, SID)).toBe(75706);
+  });
+
+  test("a pane running anything besides the agent refuses", () => {
+    const extra = row(80000, 75564, "vim notes.md");
+    expect(resolveAgentPid([shell, agent, extra], 75564, "-bash", SID)).toBeNull();
+    // A lone child that is not an agent is not one either.
+    expect(resolveAgentPid([shell, extra], 75564, "-bash", SID)).toBeNull();
+    // An empty shell has nothing to park.
+    expect(resolveAgentPid([shell], 75564, "-bash", SID)).toBeNull();
+  });
+
+  test("another session's agent in the pane is never adopted", () => {
+    const other = row(75706, 75564, "/Users/ashot/.codecast/bin/claude --session-id 11111111-2222-3333-4444-555555555555");
+    expect(resolveAgentPid([shell, other], 75564, "-bash", SID)).toBeNull();
   });
 });

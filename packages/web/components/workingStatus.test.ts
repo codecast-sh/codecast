@@ -4,7 +4,11 @@ import {
   shouldShowElapsed,
   deriveRunningTool,
   deriveRunningPhrase,
+  shouldShowIdleGap,
+  workingSinceForClock,
+  isProducingAgentStatus,
   WORKING_ELAPSED_GRACE_MS,
+  IDLE_GAP_MS,
 } from "./workingStatus";
 
 describe("formatElapsedClock", () => {
@@ -107,5 +111,62 @@ describe("deriveRunningPhrase", () => {
   test("tool result already landed, or nothing loaded: nothing in flight", () => {
     expect(deriveRunningPhrase([asst({ name: "Bash", input: { command: "ls" } }), user])).toBeUndefined();
     expect(deriveRunningPhrase([])).toBeUndefined();
+  });
+});
+
+describe("isProducingAgentStatus", () => {
+  test("working / thinking / compacting are producing; idle and absent are not", () => {
+    expect(isProducingAgentStatus("working")).toBe(true);
+    expect(isProducingAgentStatus("thinking")).toBe(true);
+    expect(isProducingAgentStatus("compacting")).toBe(true);
+    expect(isProducingAgentStatus("idle")).toBe(false);
+    expect(isProducingAgentStatus("connected")).toBe(false);
+    expect(isProducingAgentStatus(undefined)).toBe(false);
+    expect(isProducingAgentStatus(null)).toBe(false);
+  });
+});
+
+describe("shouldShowIdleGap", () => {
+  const now = 10_000_000;
+  const recent = now - 60_000;
+  const stale = now - 3 * 86_400_000;
+
+  test("hidden while the last activity is still inside the gap", () => {
+    expect(shouldShowIdleGap({ lastActivityAt: recent, now, hasMoreBelow: false })).toBe(false);
+  });
+
+  test("shown when the loaded tail has been quiet past the gap", () => {
+    expect(shouldShowIdleGap({ lastActivityAt: stale, now, hasMoreBelow: false })).toBe(true);
+    expect(shouldShowIdleGap({ lastActivityAt: now - IDLE_GAP_MS, now, hasMoreBelow: false })).toBe(false);
+    expect(shouldShowIdleGap({ lastActivityAt: now - IDLE_GAP_MS - 1, now, hasMoreBelow: false })).toBe(true);
+  });
+
+  test("hidden while more transcript sits below (deep-link window)", () => {
+    expect(shouldShowIdleGap({ lastActivityAt: stale, now, hasMoreBelow: true })).toBe(false);
+  });
+
+  test("hidden while the agent is mid-turn even if the last loaded row is days old", () => {
+    expect(shouldShowIdleGap({ lastActivityAt: stale, now, hasMoreBelow: false, agentStatus: "working" })).toBe(false);
+    expect(shouldShowIdleGap({ lastActivityAt: stale, now, hasMoreBelow: false, agentStatus: "thinking" })).toBe(false);
+    expect(shouldShowIdleGap({ lastActivityAt: stale, now, hasMoreBelow: false, agentStatus: "compacting" })).toBe(false);
+    expect(shouldShowIdleGap({ lastActivityAt: stale, now, hasMoreBelow: false, agentStatus: "idle" })).toBe(true);
+  });
+});
+
+describe("workingSinceForClock", () => {
+  const now = 10_000_000;
+
+  test("passes through a recent last-activity stamp", () => {
+    expect(workingSinceForClock(now - 30_000, now)).toBe(now - 30_000);
+  });
+
+  test("drops a days-old stamp so Working does not clock from three days ago", () => {
+    expect(workingSinceForClock(now - 3 * 86_400_000, now)).toBeUndefined();
+    expect(workingSinceForClock(now - IDLE_GAP_MS - 1, now)).toBeUndefined();
+  });
+
+  test("undefined / zero have no clock", () => {
+    expect(workingSinceForClock(undefined, now)).toBeUndefined();
+    expect(workingSinceForClock(0, now)).toBeUndefined();
   });
 });

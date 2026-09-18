@@ -145,6 +145,25 @@ describe("transcriptDirWatcherConfig: dirFilter per client", () => {
     expect(cfg.dirFilter).toBeUndefined();
     expect(cfg.maxDepth).toBe(2);
   });
+  test("muse enters dated YYYY/MM/DD dirs and a session uuid dir only, never dot dirs", () => {
+    const cfg = transcriptDirWatcherConfig("muse");
+    const f = cfg.dirFilter!;
+    const uuid = "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5";
+    expect(f("2026")).toBe(true);
+    expect(f(j("2026", "09"))).toBe(true);
+    expect(f(j("2026", "09", "18"))).toBe(true);
+    expect(f(j("2026", "09", "18", uuid))).toBe(true);
+    expect(f(".msp-view-v1")).toBe(false);
+    expect(f(j("2026", "09", "18", ".msp-view-v1"))).toBe(false);
+    expect(f(j("2026", "09", "18", uuid, "sub"))).toBe(false);
+    expect(f("watcher-test-1772041030215")).toBe(false);
+    expect(cfg.maxDepth).toBe(5);
+    // session id is the containing uuid dir; anything else is refused
+    const file = (...parts: string[]) => parts.join(path.sep);
+    expect(cfg.extractSessionId(file("r", "2026", "09", "18", uuid, "session.jsonl"))).toBe(uuid);
+    expect(cfg.extractSessionId(file("r", "2026", "09", "18", "not-a-uuid", "session.jsonl"))).toBeNull();
+    expect(cfg.extractSessionId(file("r", ".msp-view-v1", uuid, "session.jsonl"))).toBeNull();
+  });
 });
 
 function waitForSessionEvent(

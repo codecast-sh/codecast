@@ -25,18 +25,20 @@ import {
   OPENCODE_MODEL_OPTIONS,
   PI_MODEL_OPTIONS,
   GROK_MODEL_OPTIONS,
+  MUSE_MODEL_OPTIONS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   OPENCODE_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS,
+  MUSE_EFFORT_LEVELS,
   isDynamicModelKey,
   dynamicModelOption,
 } from "./modelOptions";
 
 /** The single named union for a supported agent CLI client — the daemon's
  *  agent-type spelling and the registry key. */
-export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok";
+export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
 
 /** Runtime transports that may create/deliver for a fenced execution binding. */
 export type AgentExecutionTransport = "tmux" | "app-server" | "external";
@@ -69,7 +71,8 @@ export type ConvexAgentType =
   | "cowork"
   | "opencode"
   | "pi"
-  | "grok";
+  | "grok"
+  | "muse";
 
 const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   claude: "claude_code",
@@ -79,6 +82,7 @@ const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   opencode: "opencode",
   pi: "pi",
   grok: "grok",
+  muse: "muse",
 };
 
 /** Client id → Convex spelling (`claude` → `claude_code`). */
@@ -92,9 +96,9 @@ export function toConvexAgentType(id: AgentClientId): ConvexAgentType {
  * normalize to `claude` — matching the historic `modelAgentKey` fallback so the
  * model helpers can route through this one function without a behavior change.
  *
- * `opencode` (phase 1) and `pi` (phase 2) are first-class clients with their own
- * descriptors and map to themselves; everything unrecognized falls through the
- * `default` case to `claude`.
+ * `opencode` (phase 1), `pi` (phase 2), `grok`, and `muse` are first-class
+ * clients with their own descriptors and map to themselves; everything
+ * unrecognized falls through the `default` case to `claude`.
  */
 export function fromConvexAgentType(agentType: string | null | undefined): AgentClientId {
   switch (agentType) {
@@ -110,6 +114,8 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
       return "pi";
     case "grok":
       return "grok";
+    case "muse":
+      return "muse";
     default:
       return "claude";
   }
@@ -157,6 +163,7 @@ export function parseExecutionAgentClientId(agentType: unknown): AgentClientId {
     case "opencode":
     case "pi":
     case "grok":
+    case "muse":
       return agentType;
     default:
       throw new InvalidExecutionAgentTypeError(agentType);
@@ -536,9 +543,21 @@ const GROK_MODEL: AgentModelConfig = {
   // settings could extend it post-login — revisit only with evidence.
   dynamic: false,
 };
+const MUSE_MODEL: AgentModelConfig = {
+  models: MUSE_MODEL_OPTIONS,
+  efforts: MUSE_EFFORT_LEVELS,
+  // Model and effort are launch-time flags (--model, --reasoning-effort),
+  // tracked from the transcript after (run_model records carry the model_id
+  // per run). No scriptable mid-session switch verified.
+  midSession: false,
+  // Keys are bare model ids (muse-spark-1.3-contributor), not
+  // provider/model — dynamic would be wrong by construction
+  // (isDynamicModelKey requires a slash). Same shape as grok.
+  dynamic: false,
+};
 
 /**
- * The four supported clients, populated from the facts currently hardcoded across
+ * The eight supported clients, populated from the facts currently hardcoded across
  * the daemon (binaries, resume commands, transcript roots, watcher kinds, tmux
  * prefixes, prompt-ready glyphs). Nothing consumes the registry at runtime yet —
  * ct-39077 folds the daemon's branch sites into lookups against these entries.
@@ -939,6 +958,59 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
       // can't back), sessionOverlay (no --add-dir analog verified).
     },
   },
+  muse: {
+    id: "muse",
+    // Picker label; the product is "Muse Code", the binary "muse", the model
+    // family "Muse Spark" (muse --version 1.3.0; powered by Meta Muse Spark).
+    displayName: "Muse Spark",
+    convexId: "muse",
+    // tmux TUI only. `muse exec` is the headless entry (printMode below), not
+    // a persistent transport — same split as every other client here.
+    executionTransports: ["tmux"],
+    binary: "muse",
+    launchArgs: [],
+    // `muse exec [OPTIONS] [PROMPT]` — the prompt is positional after the
+    // subcommand (`muse exec --help`; verified against the shipped help text).
+    printMode: { kind: "subcommand", token: "exec" },
+    // `muse resume <session-ref>` takes an exact session UUID or Session Name.
+    // Always resume by UUID: like grok, a non-UUID argument can match a
+    // session NAME, so title resume is banned (see isValidResumeSessionId).
+    resumeCmd: (sessionId) => `muse resume ${sessionId}`,
+    // Session store: ~/.local/share/muse/sessions/YYYY/MM/DD/<uuid>/
+    // holds session.jsonl (the event-sourced transcript), tool-outputs/,
+    // approval-review/, and sqlite sidecars. The sibling .msp-view-v1/ tree
+    // holds view indexes, never transcripts — the watcher excludes dot dirs.
+    transcriptRoots: ["~/.local/share/muse/sessions"],
+    watcherKind: "jsonl-dir",
+    // PROVISIONAL: no dedicated readiness capture exists yet — tmux socket
+    // creation is blocked in the sandbox this was written in, so no live pane
+    // could be measured. Recorded as the common ❯ composer glyph until a
+    // cold-launch capture confirms muse's real prompt (cursor shipped the
+    // same way: claude's pattern plus a note to confirm the real glyph).
+    promptReadyPattern: /❯/,
+    // `ms-` — free: cc/cx/cu/gm/oc/pi/gk taken.
+    tmuxPrefix: "ms",
+    modelConfig: MUSE_MODEL,
+    capabilities: {
+      // No pane-prompt matcher exists for muse's permission/questions UI —
+      // off until one is built and verified against a live pane.
+      panePromptMonitoring: false,
+      // No fork verb verified (`muse resume` re-enters; no --fork-session
+      // analog in the shipped help), and no transcript writer exists yet that
+      // muse will load — so fork/switch-into/reconstitute all stay honestly
+      // absent: the fork UI hides and cross-agent moves into muse refuse
+      // up front rather than minting a context-less session.
+      //
+      // bracketedPaste — unverified (no DECSET ?2004 evidence either way),
+      // so muse receives flattened text like every other unverified client.
+    },
+    // OMITTED, honestly: agentFileTargets (instruction/skills/mcp/hooks paths
+    // unverified — `muse skills list` points at ~/.config/muse/skills for user
+    // skills but the shape was never confirmable here, and project-level
+    // instruction/skill dirs are unresearched; writing guessed bytes is worse
+    // than absence), typedComposerInput (no newline-key evidence),
+    // forkCmd (no native fork), liveEvents (no event bus researched).
+  },
 };
 
 // ── Model helpers ─────────────────────────────────────────────────────────────
@@ -1145,6 +1217,20 @@ export function modelOptionKey(model: string | undefined | null, agentType: stri
     cfg.models.find((m) => m.key !== "default" && bare === m.key) ??
     cfg.models.find((m) => m.key !== "default" && bare.startsWith(`${m.key}-`));
   return hit?.key ?? "default";
+}
+
+/**
+ * How many tokens the session's model holds — the denominator behind "487k, half
+ * of what it can hold". Takes the STORED model stamp ("claude-fable-5-1"), so it
+ * routes through the same id → option key normalization the pickers use and one
+ * catalog entry covers every point release. Null when the catalog has no honest
+ * figure for that model, which every caller must render as "no share" rather
+ * than falling back to a number nobody measured.
+ */
+export function contextWindowTokens(model: string | undefined | null, agentType: string | undefined): number | null {
+  if (!model) return null;
+  const option = findModelOption(agentType, modelOptionKey(model, agentType));
+  return option?.contextWindow ?? null;
 }
 
 /**

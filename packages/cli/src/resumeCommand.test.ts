@@ -268,6 +268,34 @@ describe("buildNonClaudeResumeCommand", () => {
     expect(cmd).not.toContain("--full-auto");
   });
 
+  test("muse resumes by UUID via the registry resumeCmd (never claude, never a name)", () => {
+    const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    const cmd = buildNonClaudeResumeCommand("muse", id, {
+      // codex/grok-only options must be ignored for muse.
+      codexArgs: "--full-auto",
+      grokPermFlags: "--permission-mode bypassPermissions",
+    });
+    expect(cmd).toBe(`muse resume ${id}`);
+    expect(cmd).not.toContain("claude");
+    expect(cmd).not.toContain("--full-auto");
+  });
+
+  test("muse resume appends muse args + approval flags (mode is a launch flag, not session state)", () => {
+    // A bare `muse resume <id>` re-enters on-request mode; a managed muse
+    // can't answer TUI approval prompts, so auto-resume must carry the same
+    // flags the launch paths apply.
+    const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    expect(
+      buildNonClaudeResumeCommand("muse", id, {
+        museArgs: "--reasoning-effort high",
+        musePermFlags: "--disable-approval",
+      }),
+    ).toBe(`muse resume ${id} --reasoning-effort high --disable-approval`);
+    expect(
+      buildNonClaudeResumeCommand("muse", id, { musePermFlags: "--disable-approval" }),
+    ).toBe(`muse resume ${id} --disable-approval`);
+  });
+
   test("grok resume appends grok args + permission flags (mode is a launch flag, not session state)", () => {
     // A bare `grok --resume <id>` restarts in grok's default Ask mode; a
     // managed grok can't answer TUI permission prompts, so auto-resume must
@@ -316,6 +344,7 @@ describe("resumeTmuxPrefix", () => {
     expect(resumeTmuxPrefix("gemini")).toBe("gm");
     expect(resumeTmuxPrefix("cursor")).toBe("cu");
     expect(resumeTmuxPrefix("claude")).toBe("cc");
+    expect(resumeTmuxPrefix("muse")).toBe("ms");
   });
 });
 
@@ -325,7 +354,7 @@ describe("resumeTmuxPrefix", () => {
 // keeps a 7th client covered automatically.
 describe("MANAGED_TMUX_PREFIXES / isManagedTmuxName", () => {
   test("covers every client prefix plus the non-client task prefix ct-", () => {
-    for (const p of ["cc-", "cx-", "cu-", "gm-", "oc-", "pi-", "gk-", "ct-"]) {
+    for (const p of ["cc-", "cx-", "cu-", "gm-", "oc-", "pi-", "gk-", "ms-", "ct-"]) {
       expect(MANAGED_TMUX_PREFIXES).toContain(p);
     }
   });
@@ -373,6 +402,14 @@ describe("resolveResumeAgentType (dispatch trusts the cursor/pi hint over the fi
     // claude reconstitution — trust the hint so it routes to pi's own resume.
     expect(resolveResumeAgentType("pi", "claude")).toBe("pi");
     expect(resolveResumeAgentType("pi", undefined)).toBe("pi");
+  });
+
+  test("an explicit muse hint wins even when the local file is missing (cross-device)", () => {
+    // Same shape as pi/grok: a muse session whose date-sharded session.jsonl
+    // isn't on this machine must never fall to `claude --resume` + repair.
+    expect(resolveResumeAgentType("muse", "claude")).toBe("muse");
+    expect(resolveResumeAgentType("muse", undefined)).toBe("muse");
+    expect(resolveResumeAgentType(undefined, "muse")).toBe("muse");
   });
 
   test("an explicit grok hint wins even when the local file is missing (cross-device)", () => {
@@ -434,12 +471,20 @@ describe("isValidResumeSessionId — shell-injection ids are refused before comm
     "id with spaces",
   ];
 
-  test("claude / codex / cursor / pi / grok refuse every injection payload (id is interpolated)", () => {
-    for (const agent of ["claude", "codex", "cursor", "pi", "grok"] as const) {
+  test("claude / codex / cursor / pi / grok / muse refuse every injection payload (id is interpolated)", () => {
+    for (const agent of ["claude", "codex", "cursor", "pi", "grok", "muse"] as const) {
       for (const bad of INJECTION_IDS) {
         expect(isValidResumeSessionId(agent, bad)).toBe(false);
       }
     }
+  });
+
+  test("muse requires an exact UUID — names could resume a different session", () => {
+    // `muse resume <session-ref>` matches Session Names, so only the one real
+    // shape may reach the command (same rule as grok).
+    expect(isValidResumeSessionId("muse", "01a04000-4d49-70f3-88b4-316e8f48a5fb")).toBe(true);
+    expect(isValidResumeSessionId("muse", "my session name")).toBe(false);
+    expect(isValidResumeSessionId("muse", "--last")).toBe(false);
   });
 
   test("opencode requires its exact ses_<base62> shape, not just a ses_ prefix", () => {

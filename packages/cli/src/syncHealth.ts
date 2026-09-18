@@ -41,6 +41,15 @@ function isGrokUpdatesPath(filePath: string): boolean {
   return path.basename(filePath) === "updates.jsonl" && filePath.split(path.sep).includes(".grok");
 }
 
+function isMuseSessionPath(filePath: string): boolean {
+  // session.jsonl is a common basename — require the muse sessions root on
+  // the path (…/.local/share/muse/sessions/YYYY/MM/DD/<uuid>/session.jsonl).
+  const segs = filePath.split(path.sep);
+  return path.basename(filePath) === "session.jsonl"
+    && segs.includes("sessions")
+    && segs.includes("muse");
+}
+
 function sessionIdentity(filePath: string, record: SyncRecord): {
   sessionId: string;
   agentType?: string;
@@ -52,11 +61,71 @@ function sessionIdentity(filePath: string, record: SyncRecord): {
     ?? (path.basename(filePath, path.extname(filePath)).match(UUID_IN_NAME_RE)?.[0]
       ?? path.basename(filePath, path.extname(filePath)));
   const agentType = record.sourceGeneration?.client ?? fromPath?.agentType
-    ?? (isGrokUpdatesPath(filePath) ? "grok" : undefined);
+    ?? (isGrokUpdatesPath(filePath) ? "grok" : undefined)
+    ?? (isMuseSessionPath(filePath) ? "muse" : undefined);
   const projectPath = agentType === "grok"
     ? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined
+    // muse's date-sharded dirs carry no cwd — the parser's route_facts cwd
+    // (ingest metadata) is authoritative, so no path fallback here.
     : undefined;
   return { sessionId, agentType, projectPath };
+}
+
+/** Run event kinds that produce a synced message (mirrors parseMuseSessionFile). */
+const MUSE_MESSAGE_EVENT_KINDS = new Set([
+  "started",
+  "assistant_message_committed",
+  "reasoning_summary_committed",
+  "assistant_tool_calls_committed",
+  "tool_result_batch_committed",
+]);
+
+function museLineMeta(line: string): { tsMs: number | null; messageBearing: boolean } {
+  try {
+    const parsed = JSON.parse(line);
+    const ts = parsed?.recorded_at;
+    // recorded_at is unix MICROSECONDS (16 digits); tolerate seconds/millis.
+    const tsMs = typeof ts === "number"
+      ? ts > 1e14 ? Math.floor(ts / 1000) : ts > 1e11 ? Math.floor(ts) : Math.floor(ts * 1000)
+      : null;
+    const payload = parsed?.payload;
+    const messageBearing = payload?.kind === "run"
+      && typeof payload?.event?.kind === "string"
+      && MUSE_MESSAGE_EVENT_KINDS.has(payload.event.kind);
+    return { tsMs, messageBearing };
+  } catch {
+    return { tsMs: null, messageBearing: false };
+  }
+}
+
+// Muse appends usage/housekeeping records (goal_usage_attribution,
+// model_input_trace_recorded, reminders, terminal markers) AFTER the last
+// message commit. Those bump mtime without producing messages — same stuck
+// forever shape as grok's hook_execution lines under signature sync.
+function museGrowthIsHousekeeping(filePath: string, lastSyncedAt: number): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const size = fs.fstatSync(fd).size;
+    if (size <= 0) return false;
+    const windowBytes = 64 * 1024;
+    const buf = Buffer.alloc(Math.min(windowBytes, size));
+    fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
+    let newerContent = 0;
+    for (const line of buf.toString("utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      const { tsMs, messageBearing } = museLineMeta(line);
+      if (tsMs == null || tsMs <= lastSyncedAt) continue;
+      if (messageBearing) newerContent++;
+    }
+    return newerContent === 0;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
 }
 
 function grokLineMeta(line: string): { tsMs: number | null; kind: string | null } {
@@ -133,6 +202,7 @@ export async function getStuckSyncs(options: {
 
     if (signature) {
       if (isGrokUpdatesPath(filePath) && grokGrowthIsHousekeeping(filePath, record.lastSyncedAt)) continue;
+      if (isMuseSessionPath(filePath) && museGrowthIsHousekeeping(filePath, record.lastSyncedAt)) continue;
       const pendingSince = record.lastSyncedAt;
       if (now - pendingSince < STUCK_SYNC_THRESHOLD_MS) continue;
       out.push({

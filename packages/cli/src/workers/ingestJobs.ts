@@ -7,8 +7,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readCompleteLines, cursorPassBoundary, readCodexSessionMetaHeadAsync } from '../transcriptWindow.js';
 import { readCodexModelBeforeOffset } from '../codexTranscriptModel.js';
-import { isCursorRoleHeaderLine, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession } from '../parser.js';
-import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail } from './ingestMetadata.js';
+import { isCursorRoleHeaderLine, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
+import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail } from './ingestMetadata.js';
 import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
 import { MetadataWindowExhausted, readCompleteMetadataHead, readCompleteMetadataTail } from './ingestMetadataWindow.js';
@@ -18,6 +18,18 @@ export function ingestIdentity(s: fs.Stats): IngestIdentity {
 }
 export function sameIngestFile(a: IngestIdentity, b: IngestIdentity): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
+}
+/**
+ * The same file as an identity recorded in an EARLIER boot. The sync ledger
+ * persists identities, and macOS renumbers APFS volumes across reboots: on
+ * 2026-09-17 st_dev went 16777233 -> 16777232 with every inode unchanged, and
+ * comparing dev made 456 transcripts look replaced, so each replayed from its
+ * first byte. The ledger is keyed by path, so inode and birth time already
+ * decide whether the file at that path is the one recorded. Within one boot,
+ * sameIngestFile stays the stricter check.
+ */
+export function samePersistedFile(a: {ino: number; birthtimeMs: number}, b: {ino: number; birthtimeMs: number}): boolean {
+  return a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 }
 export function sameIngestSnapshot(a: IngestIdentity, b: IngestIdentity): boolean {
   return sameIngestFile(a,b) && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
@@ -242,6 +254,7 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       if (!meta.summaryTitle) meta.summaryTitle = await readMetadataTitle(job,before,checkpoint,meta.warnings);
     }
     if (job.client === 'pi') { meta.cwd = extractPiCwd(content); meta.turn = classifyPiTranscriptTail(content); }
+    if (job.client === 'muse') { meta.cwd = extractMuseCwd(content); meta.turn = classifyMuseTranscriptTail(content); }
     if (job.client === 'grok') {
       const summary = await optional(() => whole(path.join(path.dirname(job.file),'summary.json')),meta.warnings,'grok summary');
       if (summary !== undefined) { meta.cwd = extractGrokCwd(summary); meta.internal = isGrokInternalSession(summary); }

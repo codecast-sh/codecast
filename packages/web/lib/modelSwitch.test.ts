@@ -100,7 +100,7 @@ describe("model changes for other agents", () => {
   const original = useInboxStore.getState().convCommand;
   afterEach(() => useInboxStore.setState({ convCommand: original }));
 
-  it.each(["codex", "opencode", "pi", "grok"])("uses the session switch command for live %s", async agentType => {
+  it.each(["codex", "opencode", "pi", "grok", "muse"])("uses the session switch command for live %s", async agentType => {
     const commands: unknown[] = [];
     useInboxStore.setState({
       sessions: { [convId]: { _id: convId, model: "old", effort: "high", message_count: 4 } } as any,

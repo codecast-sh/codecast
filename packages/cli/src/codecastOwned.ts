@@ -18,6 +18,7 @@ import * as path from "node:path";
 /** The hook scripts codecast writes into ~/.claude/hooks/. */
 export const CODECAST_HOOK_SCRIPTS = [
   "codecast-status.sh",
+  "codecast-prompt.sh",
   "session-register.sh",
   "thread-state.sh",
   "task-pulse.sh",
@@ -78,7 +79,7 @@ export const CODECAST_OWNED_HOME_PATHS: readonly string[] = [
 ];
 
 /**
- * Is this hook command one codecast installed? True for the five hook
+ * Is this hook command one codecast installed? True for the six hook
  * scripts (by basename, any home), for anything under a `.codecast/hooks/`
  * directory (the codex/cursor/opencode stable-feed wrappers) and for the
  * orchestration scripts (`/.codecast/orchestration/`). A user's own hook that

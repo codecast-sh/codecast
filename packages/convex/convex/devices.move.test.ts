@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performMoveSessionToDevice } from "./devices";
+import { performMoveSessionToDevice, moveToRemote } from "./devices";
+import { MACHINE_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
 
 // The CLI transfer flip (`cast remote move` / `back`). The files are already on
 // the destination; this re-homes ownership, resumes there, and — the part that
@@ -14,8 +15,8 @@ function fixtures(convOverrides: Record<string, any> = {}) {
   return makeFakeDb({
     users: [{ _id: ME, name: "Me", email: "me@x.ai" }],
     devices: [
-      { _id: "d1", user_id: ME, device_id: LAPTOP, label: "My-MacBook" },
-      { _id: "d2", user_id: ME, device_id: BOX, label: "Linux - ip-172-31-40-243", is_remote: true },
+      { _id: "d1", user_id: ME, device_id: LAPTOP, label: "My-MacBook", platform: "darwin", last_seen: Date.now() },
+      { _id: "d2", user_id: ME, device_id: BOX, label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, last_seen: Date.now() },
     ],
     conversations: [
       {
@@ -95,6 +96,41 @@ describe("performMoveSessionToDevice", () => {
       resume: false,
     });
     expect(commands(db).map((c: any) => [c.command, c.target_device_id])).toEqual([["release_session", LAPTOP]]);
+  });
+
+  test("a box switch inserts a now-running-on notice", async () => {
+    const db = fixtures();
+    await performMoveSessionToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      owner_device_id: BOX,
+      project_path: "/home/ubuntu/work/repo",
+    });
+    const notices = (db._tables.messages ?? []).filter((m: any) => m.subtype === "machine_switch");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].content.startsWith(MACHINE_SWITCH_NOTICE_PREFIX)).toBe(true);
+    expect(notices[0].content).toContain("Cloud Linux");
+    expect(notices[0].content).toContain("My-MacBook");
+  });
+
+  test("Move to Cloud Linux inserts the divider as soon as the picker fires", async () => {
+    const db = fixtures();
+    const ctx: any = { db, auth: { getUserIdentity: async () => ({ subject: `${ME}|sess`, tokenIdentifier: "x" }) } };
+    const handler = (moveToRemote as any)._handler ?? (moveToRemote as any).handler;
+    await handler(ctx, { conversation_id: "conv1", to_device_id: BOX });
+    const notices = (db._tables.messages ?? []).filter((m: any) => m.subtype === "machine_switch");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].content).toContain("Cloud Linux");
+    expect(notices[0].content).toContain("My-MacBook");
+  });
+
+  test("re-homing onto the same box inserts nothing", async () => {
+    const db = fixtures();
+    await performMoveSessionToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      owner_device_id: LAPTOP,
+      project_path: "/Users/me/src/repo",
+    });
+    expect((db._tables.messages ?? []).filter((m: any) => m.subtype === "machine_switch")).toHaveLength(0);
   });
 
   test("someone else's conversation is refused", async () => {

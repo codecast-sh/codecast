@@ -329,6 +329,24 @@ describe("org.health stalls and the bypassed seat", () => {
     expect(growth.load.open_stalls).toBe(2);
   });
 
+  test("a session of the role that waited on a person for more than a day with no escalation is a stall; an escalated or a young wait is not (R1)", async () => {
+    const blocked = (id: string, at: number, over: Record<string, any> = {}) =>
+      conv(id, { org_role_id: GROWTH, thread_state: "Which price?", thread_state_status: "blocked", thread_state_at: at, ...over });
+    const db = fixtures({
+      tasks: [],
+      conversations: [
+        conv(S_GROWTH, { standing_role_id: GROWTH, anchor_id: "anchors_growth", persistent: true }),
+        conv(S_BILLING, { standing_role_id: BILLING, anchor_id: "anchors_billing", persistent: true, project_path: "/repo/elsewhere" }),
+        blocked("conversations_unseen", NOW - 2 * D),
+        blocked("conversations_shown", NOW - 2 * D, { escalated_by_role: { role_id: GROWTH, line: "the price needs your eye", at: NOW - D } }),
+        blocked("conversations_young", NOW - 3 * H),
+      ],
+      session_decisions: [], decision_inbox: [],
+    });
+    const growth = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "growth")!;
+    expect(growth.load.open_stalls).toBe(1);
+  });
+
   test("a scope that closes work with no hand under the seat and no decision routed to it raises bypassed", async () => {
     const db = fixtures({
       tasks: Array.from({ length: 12 }, (_, i) => task(`ct-b${i}`, { status: "done", updated_at: NOW - D })),
@@ -372,5 +390,26 @@ describe("org.health company flags read work, not rows", () => {
     expect(r.company.unowned_projects).toEqual([{ id: R, title: "Orphan" }]);
     expect(r.company.projects_without_charter.map((p) => p.title).sort()).toEqual(["Billing", "Linear import", "Orphan"]);
     expect(r.company.unfiled_plans).toEqual([]);
+  });
+});
+
+describe("company.watched_without_lead (org-roles-run-work.md R4)", () => {
+  const growthRow = (scope: string[]) => ({ _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: scope, plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: NOW - 40 * D, updated_at: 1 });
+  const billingRow = (extra: Record<string, any> = {}) => ({ _id: BILLING, short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q, P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: NOW - 40 * D, updated_at: 1, ...extra });
+
+  test("two roles on separate lines list a project that names no owner: the project and both handles", async () => {
+    const r = await computeOrgHealth(ctxOf(fixtures({ org_roles: [growthRow([P]), billingRow()] })), ME as any, TEAM, NOW);
+    expect(r.company.watched_without_lead).toEqual([{ id: P, title: expect.any(String), roles: ["growth", "billing"] }]);
+  });
+
+  test("a role under the other is the closer one and leads, so nothing is flagged", async () => {
+    const r = await computeOrgHealth(ctxOf(fixtures({ org_roles: [growthRow([P]), billingRow({ reports_to: { kind: "role", role_id: GROWTH } })] })), ME as any, TEAM, NOW);
+    // Billing reports to Growth and both list P: Billing leads it.
+    expect(r.company.watched_without_lead).toEqual([]);
+  });
+
+  test("the stock fixture, one role per project, flags nothing", async () => {
+    const r = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW);
+    expect(r.company.watched_without_lead).toEqual([]);
   });
 });

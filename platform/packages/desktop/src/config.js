@@ -237,6 +237,13 @@ function resolveDesktopConfig(input) {
       seedDir: web.seedDir || null,
       verify: web.verify || "all",
       passthrough,
+      // Documents from the live site when online; the copy is the offline
+      // fallback. Default off: Codecast paints from the copy.
+      preferNetwork: web.preferNetwork === true,
+      // Reload the window when a new release lands, instead of telling the
+      // page to ask for Cmd-R. Default off so an in-progress Codecast
+      // session is not yanked out from under someone.
+      reloadOnUpdate: web.reloadOnUpdate === true,
       checkIntervalMs: web.checkIntervalMs ?? 15 * 60 * 1000,
       // How long a launch waits for the manifest check before painting
       // whatever copy it has. Offline fails fast; a slow link paints stale

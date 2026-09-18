@@ -397,13 +397,51 @@ function sameHex(a, b) {
   return diff === 0;
 }
 
+// --------------------------------------------------------------------------
+// The keeper: an offscreen document in this extension's process
+// --------------------------------------------------------------------------
+
+/**
+ * One hidden page (offscreen.html) that messages this worker every 20 s.
+ * It is what makes the worker dependable rather than disposable: see
+ * offscreen.js for the measurements. Created at every boot and checked on
+ * every alarm, because Chrome drops it with the extension on a reload and
+ * nothing else brings it back. A Chrome without the offscreen API (before
+ * 109) runs as before, on the alarm and the worker's own timers.
+ */
+let keeperPending = null;
+function ensureKeeper() {
+  if (!chrome.offscreen || keeperPending) return keeperPending || Promise.resolve();
+  keeperPending = (async () => {
+    try {
+      if (await chrome.offscreen.hasDocument()) return;
+      await chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        // WORKERS carries no lifetime limit; an AUDIO_PLAYBACK page is closed after 30 s of silence.
+        reasons: [chrome.offscreen.Reason.WORKERS],
+        justification: "Keeps the local bridge connection's service worker running so agent commands are answered promptly.",
+      });
+      note("keeper page created");
+    } catch (err) {
+      // "Only a single offscreen document may be created" is a race with ourselves: fine.
+      if (!/single offscreen/i.test(String(err && err.message))) note(`keeper page: ${String((err && err.message) || err)}`);
+    }
+  })().finally(() => {
+    keeperPending = null;
+  });
+  return keeperPending;
+}
+ensureKeeper();
+
 // Reconnect backstop: fires even after the service worker was torn down.
 // It asks in every state, a token rejection included: the answer is one
 // small HMAC every 30 s, and it is what heals a pairing the moment the
 // right host is back on the port.
 chrome.alarms.create("cast-bridge-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "cast-bridge-reconnect") connect("alarm");
+  if (a.name !== "cast-bridge-reconnect") return;
+  ensureKeeper();
+  connect("alarm");
 });
 chrome.runtime.onStartup.addListener(() => connect("startup"));
 chrome.runtime.onInstalled.addListener(() => connect("installed"));
@@ -411,6 +449,13 @@ connect("boot");
 
 // The options page asks for status and pokes reconnects through here.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // The keeper page's heartbeat: receiving it is the point (it is an event,
+  // so the idle clock restarts). It also finds a socket that dropped while
+  // the worker was starved, without waiting for the 30 s alarm.
+  if (msg && msg.op === "keeper-beat") {
+    if (!ws) connect("keeper");
+    return false;
+  }
   if (msg && msg.op === "status") {
     sendResponse({ ...status, attached: [...attached] });
     return false;

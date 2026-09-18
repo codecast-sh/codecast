@@ -226,10 +226,54 @@ export function decodeGrokCwdSlug(slug: string): string | null {
  * sessionWatcher and cursor a SQLite watcher (different watcherKinds).
  */
 export function transcriptDirWatcherConfig(
-  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi" | "grok">,
+  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi" | "grok" | "muse">,
   basePathOverride?: string,
 ): TranscriptDirWatcherConfig {
   const basePath = basePathOverride ?? expandTranscriptRoot(AGENT_CLIENTS[clientId].transcriptRoots[0]);
+
+  if (clientId === "muse") {
+    // muse sessions sit four directories deep:
+    // sessions/YYYY/MM/DD/<session-uuid>/session.jsonl. Watch ONE file per
+    // session dir: the dir holds siblings that churn during a turn
+    // (tool-outputs/, approval-review/, cron.db*, peer-history.sqlite3*,
+    // cli-*.log) — matching more than session.jsonl would double-fire per
+    // session, and the sqlite stores are rewriteable caches we deliberately
+    // never watch. The session id is the CONTAINING DIRECTORY's uuid name.
+    // The sibling .msp-view-v1/ tree (view indexes) and any other dot dir
+    // never hold a session: the dirFilter refuses dot segments.
+    return {
+      basePath,
+      scanPolicy: { dirs: "museWatch", files: "museWatch" },
+      watchFilter: (rel) => rel.endsWith(`${path.sep}session.jsonl`) || rel === "session.jsonl",
+      scanMatch: (_dir, name) => name === "session.jsonl",
+      extractSessionId: (filePath) => {
+        // A real muse session is sessions/YYYY/MM/DD/<uuid>/session.jsonl.
+        // The full date-sharded shape is validated here (not just the parent
+        // dir name), because agentSessionFromTranscriptPath consults
+        // watchFilter + extractSessionId WITHOUT the walk's dirFilter — a
+        // uuid-named dir anywhere else (the .msp-view-v1 view-index tree, a
+        // crafted path) must be refused rather than tracked under text that
+        // becomes the session_id and, unescaped, a resume-command injection
+        // vector (the same guard as pi's filename rule and grok's dir rule).
+        const dir = path.dirname(filePath);
+        const segs = dir.split(path.sep).slice(-4);
+        if (segs.length !== 4) return null;
+        const [yyyy, mm, dd, uuid] = segs;
+        if (!/^\d{4}$/.test(yyyy) || !/^\d{2}$/.test(mm) || !/^\d{2}$/.test(dd)) return null;
+        return CLAUDE_UUID_RE.test(uuid) ? uuid : null;
+      },
+      // Date dirs then the session uuid dir only; dot segments (the
+      // .msp-view-v1/ view-index tree) are refused at every depth.
+      dirFilter: dirFilterByDepth(
+        (seg) => /^\d{4}$/.test(seg) && !seg.startsWith("."),
+        (seg) => /^\d{2}$/.test(seg) && !seg.startsWith("."),
+        (seg) => /^\d{2}$/.test(seg) && !seg.startsWith("."),
+        (seg) => CLAUDE_UUID_RE.test(seg),
+      ),
+      maxDepth: 5,
+      debounceMs: 100,
+    };
+  }
 
   if (clientId === "grok") {
     // grok transcripts sit exactly two directories deep:
@@ -331,12 +375,12 @@ export function transcriptDirWatcherConfig(
  *  handle on that store says "an agent", never "which session". For grok the
  *  per-session identity is the uuid DIRECTORY holding updates.jsonl, which its
  *  extractSessionId already returns from the file path. */
-const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi", "grok"] as const;
+const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi", "grok", "muse"] as const;
 
 /**
  * Which agent session (if any) a transcript path belongs to — the registry-driven
  * inverse of the watchers' session-id extraction, used to identify a spawner
- * process by the file it holds open. Adding client #7 with its own file-per-session
+ * process by the file it holds open. Adding client #8 with its own file-per-session
  * layout teaches this for free: list it above, and its watcher config supplies the
  * extraction.
  *

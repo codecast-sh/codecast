@@ -92,6 +92,10 @@ export interface DesktopConfigInput {
     checkIntervalMs?: number;
     /** How long a launch waits for the manifest check before painting the copy it has. Default 6000. */
     startupTimeoutMs?: number;
+    /** Documents come from the live site when online; the copy is the offline fallback. Default false. */
+    preferNetwork?: boolean;
+    /** Reload the window when a new release lands, instead of sending `web-update`. Default false. */
+    reloadOnUpdate?: boolean;
   };
   /** URL schemes beyond `protocol` (a mail app: mailto). Listed in the bundle; claimable as the OS default. */
   extraProtocols?: Array<{ scheme: string; name?: string; claimOnFirstRun?: boolean; menuLabel?: string }>;
@@ -115,7 +119,7 @@ export interface DesktopConfig {
   events: { navigate: string; newSession: string; htmlClass: string };
   assets: { icon: string | null; tray: string | null };
   window: Required<NonNullable<DesktopConfigInput["window"]>> & { rememberBounds: boolean };
-  web: { cache: boolean; manifestPath: string; seedDir: string | null; passthrough: string[]; verify: "all" | "assets"; checkIntervalMs: number; startupTimeoutMs: number };
+  web: { cache: boolean; manifestPath: string; seedDir: string | null; passthrough: string[]; verify: "all" | "assets"; preferNetwork: boolean; reloadOnUpdate: boolean; checkIntervalMs: number; startupTimeoutMs: number };
   extraProtocols: Array<{ scheme: string; name: string; claimOnFirstRun: boolean; menuLabel: string | null }>;
   hooks: { onReady: ((api: DesktopAppApi, info: { firstRun: boolean }) => void) | null };
   downloadUrls: ((url: string) => boolean) | null;
@@ -321,7 +325,7 @@ export function createWebCache(opts: {
 export const webCache: {
   createWebCache: typeof createWebCache;
   parseManifest(text: string): { release: string; commit: string | null; files: Record<string, string | null> };
-  planRequest(o: { method: string; url: string; appHosts: Set<string>; cache: WebCache; passthrough?: string[]; headers?: Record<string, string> }):
+  planRequest(o: { method: string; url: string; appHosts: Set<string>; cache: WebCache; passthrough?: string[]; headers?: Record<string, string>; preferNetwork?: boolean }):
     { kind: "file"; file: string } | { kind: "network"; fallback: "offline-page" | null };
   releaseIdFor(files: Record<string, string | null>): string;
 };

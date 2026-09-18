@@ -26,6 +26,7 @@ import {
   prPath,
   shortSha,
   type ExternalEvent,
+  type ExternalEventAccent,
   type ExternalEventRef,
 } from "../../lib/externalEvents";
 
@@ -42,7 +43,7 @@ export type ExternalEventRowProps = {
 };
 
 // A pill: same chrome for every ref kind, so a row of them reads as one row.
-function Pill({
+export function Pill({
   children,
   href,
   external,
@@ -79,7 +80,7 @@ function Pill({
   );
 }
 
-function ActorFace({ actor, size }: { actor: ExternalEvent["actor"]; size: number }) {
+export function ActorFace({ actor, size }: { actor: ExternalEvent["actor"]; size: number }) {
   const name = actor?.name || actor?.login || "";
   const px = { width: size, height: size };
   const fallback = (
@@ -102,6 +103,18 @@ function ActorFace({ actor, size }: { actor: ExternalEvent["actor"]; size: numbe
   );
 }
 
+/** A word in its own color: a check conclusion, a review state, a count of failures. */
+export function AccentWord({ accent, children }: { accent: ExternalEventAccent; children: React.ReactNode }) {
+  return (
+    <span
+      className="px-1 rounded text-[10px] font-medium flex-shrink-0"
+      style={{ color: accentVar(accent), background: accentSoft(accent, 12) }}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** The one word a check or a review adds, in its own color. */
 function OutcomeWord({ event }: { event: ExternalEvent }) {
   const meta = event.meta ?? {};
@@ -111,15 +124,7 @@ function OutcomeWord({ event }: { event: ExternalEvent }) {
     (typeof meta.status === "string" && meta.status) ||
     "";
   if (!word) return null;
-  const accent = eventAccent(event);
-  return (
-    <span
-      className="px-1 rounded text-[10px] font-medium flex-shrink-0"
-      style={{ color: accentVar(accent), background: accentSoft(accent, 12) }}
-    >
-      {word.replace(/_/g, " ")}
-    </span>
-  );
+  return <AccentWord accent={eventAccent(event)}>{word.replace(/_/g, " ")}</AccentWord>;
 }
 
 export function ExternalEventRow({

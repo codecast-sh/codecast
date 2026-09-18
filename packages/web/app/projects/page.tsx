@@ -36,8 +36,8 @@ import {
 } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
-import { useOrgRoles } from "../../hooks/useOrgRoles";
-import { OwnerRoleChip, PriorityPill } from "../../components/charter/CharterChips";
+import { PriorityPill } from "../../components/charter/CharterChips";
+import { ProjectLeadChip } from "../../components/charter/ProjectLeadChip";
 
 type ProjectStatus = "active" | "planning" | "paused" | "done";
 
@@ -100,15 +100,18 @@ function ProjectCard({
   const status = STATUS_CONFIG[project.status as ProjectStatus] || STATUS_CONFIG.active;
   const StatusIcon = status.icon;
   const totalItems = project.task_counts.total + project.plan_count + project.doc_count;
-  // The roles only, never the tree: a card must not re-render on every
-  // message under a node to name its owner.
-  const { roles: orgRoles, workspace: orgWorkspace } = useOrgRoles();
 
   return (
-    <button
+    // A div with the button role, not a <button>: the lead chip inside it
+    // carries its own link and its own Add a lead button, and a button may
+    // not hold either.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onClick(); } }}
       onContextMenu={onContextMenu}
-      className="group w-full text-left bg-sol-bg rounded-lg border border-sol-border/30 hover:border-sol-border/60 transition-all duration-200 overflow-hidden"
+      className="group w-full text-left bg-sol-bg rounded-lg border border-sol-border/30 hover:border-sol-border/60 transition-all duration-200 overflow-hidden cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
     >
       {/* Color accent bar */}
       <div className={`h-0.5 ${getColorClass(project.color)} opacity-60 group-hover:opacity-100 transition-opacity`} />
@@ -127,14 +130,15 @@ function ProjectCard({
           )}
         </div>
 
-        {/* The charter's pill and owner (org-staffing.md S7); nothing when the
-            project has neither, so uncharted rows stay as quiet as before. */}
-        {(project.priority || project.owner_role_id) && (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <PriorityPill priority={project.priority} size="xs" />
-            <OwnerRoleChip roles={orgWorkspace ? orgRoles : null} ownerRoleId={project.owner_role_id} size="xs" />
-          </div>
-        )}
+        {/* The charter's pill (org-staffing.md S7) and who leads the project
+            (org-roles-run-work.md R4). Every row says who leads it, or that
+            nobody does, with the way to add one. The chip reads the roles
+            only, never the tree, so a card does not re-render on every
+            message under a node. */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <PriorityPill priority={project.priority} size="xs" />
+          <ProjectLeadChip projectId={project._id} size="xs" />
+        </div>
 
         {/* Description */}
         {project.description && (
@@ -182,7 +186,7 @@ function ProjectCard({
           </div>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 

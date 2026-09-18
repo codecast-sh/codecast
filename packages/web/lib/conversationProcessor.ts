@@ -13,7 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
-import { isAgentContextMessage } from "@codecast/shared/contracts";
+import { isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice } from "@codecast/shared/contracts";
 import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt } from "../components/sessionMessage";
 
 const COMMAND_PATTERNS = [
@@ -322,6 +322,7 @@ export function isNoiseUserMessage(content: string | null | undefined): boolean 
   if (!content) return true;
   const raw = content.trim();
   if (!raw) return true;
+  if (isAgentSwitchNotice(raw) || isMachineSwitchNotice(raw)) return true;
   if (isContextOnlyUserMessage(raw)) return true;
   if (isTaskNotification(raw)) return true;
   if (/^<scheduled-task[\s>]/.test(raw)) return true;

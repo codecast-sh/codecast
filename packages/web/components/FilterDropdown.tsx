@@ -1,8 +1,21 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, Fragment, type ReactNode } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ChevronDown, Check, X } from "lucide-react";
 
-type FilterOption = { key: string; label: string; icon?: any; color?: string };
+export type FilterOption = {
+  key: string;
+  label: string;
+  icon?: any;
+  color?: string;
+  /** A drawn face in the icon slot (a person's photo, a role's avatar). */
+  face?: ReactNode;
+  /** A heading drawn above the first option of each run that names it, so a
+   *  long list reads in parts ("Roles", then "People"). */
+  section?: string;
+  /** How many rows this option would keep. Drawn right-aligned, like the count
+   *  on a status pill, so a list of statuses reads the same in either place. */
+  count?: number;
+};
 
 /** The option-button list, shared by the inline FilterDropdown popover and the
  *  "+ Filter" add-menu in GenericListView. Single-select picks-and-closes via
@@ -68,22 +81,30 @@ export function FilterOptionList({
           />
         </div>
       )}
-      {shown.map((opt) => {
+      {shown.map((opt, i) => {
         const OptIcon = opt.icon;
         const sel = isSelected(opt.key);
+        const heading = opt.section && opt.section !== shown[i - 1]?.section ? opt.section : null;
         return (
+          <Fragment key={opt.key}>
+          {heading && (
+            <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
+          )}
           <button
-            key={opt.key}
             onClick={() => handleClick(opt.key)}
             title={opt.label}
             className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
               sel ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
             }`}
           >
-            {OptIcon && <OptIcon className={`w-3.5 h-3.5 flex-shrink-0 ${opt.color || ""}`} />}
+            {opt.face ?? (OptIcon && <OptIcon className={`w-3.5 h-3.5 flex-shrink-0 ${opt.color || ""}`} />)}
             <span className="flex-1 text-left truncate">{opt.label}</span>
+            {opt.count != null && opt.count > 0 && (
+              <span className="text-[10px] tabular-nums text-sol-text-dim flex-shrink-0">{opt.count}</span>
+            )}
             {sel && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
           </button>
+          </Fragment>
         );
       })}
       {shown.length === 0 && (
@@ -130,8 +151,18 @@ export function FilterDropdown({
   // Chip mode shows only once a value is set; empty filters live in the add-menu.
   if (chip && !hasValue) return null;
 
+  // A chip says WHAT is filtered, not how many: "In Progress, In Review" reads
+  // at a glance where "Status (2)" makes you open the popover to find out. Past
+  // two picks the names stop fitting, so the rest becomes a count.
+  const pickedLabels = multi
+    ? options.filter((o) => o.key && selected!.has(o.key)).map((o) => o.label)
+    : [];
   const buttonLabel = multi && selected!.size > 0
-    ? `${label} (${selected!.size})`
+    ? pickedLabels.length === 0
+      ? `${label} (${selected!.size})`
+      : pickedLabels.length <= 2
+        ? pickedLabels.join(", ")
+        : `${pickedLabels.slice(0, 2).join(", ")} +${pickedLabels.length - 2}`
     : active && value ? active.label : label;
 
   const optionsPopover = open && (

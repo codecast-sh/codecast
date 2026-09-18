@@ -336,7 +336,7 @@ describe("bringing Chrome and its extension back for a verb", () => {
       (ext as FakeExtension | null)?.ws.close();
       await host.close();
     }
-  });
+  }, 30_000);
 
   test("Chrome running, worker silent: its alarm gets its window, then it is woken from the options page", async () => {
     const host = await testBridgeHost();
@@ -373,7 +373,7 @@ describe("bringing Chrome and its extension back for a verb", () => {
       (ext as FakeExtension | null)?.ws.close();
       await host.close();
     }
-  });
+  }, 30_000);
 
   test("a status call (repair: false) reports and never launches or wakes", async () => {
     const host = await testBridgeHost();
@@ -393,7 +393,7 @@ describe("bringing Chrome and its extension back for a verb", () => {
     } finally {
       await host.close();
     }
-  });
+  }, 30_000);
 
   test("a wake this outage already had is waited on, not repeated", async () => {
     const host = await testBridgeHost();
@@ -421,7 +421,7 @@ describe("bringing Chrome and its extension back for a verb", () => {
       (ext as FakeExtension | null)?.ws.close();
       await host.close();
     }
-  });
+  }, 30_000);
 
   test("never paired: nothing is launched or woken; the setup steps are the answer", async () => {
     const host = await testBridgeHost();
@@ -441,7 +441,7 @@ describe("bringing Chrome and its extension back for a verb", () => {
     } finally {
       await host.close();
     }
-  });
+  }, 30_000);
 });
 
 describe("real session keys", () => {

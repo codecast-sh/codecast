@@ -6,7 +6,8 @@ import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
 import { formatShortcutLabel, useShortcutAction } from "../shortcuts";
-import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
+import { FilterDropdown, FilterOptionList, type FilterOption } from "./FilterDropdown";
+import { groupsWithItems, visibleGroups } from "../lib/listGroups";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
@@ -41,60 +42,43 @@ export interface ListTab {
   /** Optional leading icon (lucide component). When present, the compact
    *  dropdown can shed its text label and collapse to icon-only at tight widths. */
   icon?: any;
-  /** A member of a multi-select set (needs `onTabToggle`). A plain click still
-   *  selects it alone; shift/meta-click on its pill, or its checkbox in the
-   *  compact dropdown, adds it to / removes it from the current set. */
-  toggle?: boolean;
-  /** Preset: the toggle keys this tab stands for. While it is active those tabs
-   *  render as included (checked), so a reader can see what the preset means
-   *  instead of guessing from its name. */
-  implies?: string[];
   /** Tooltip. */
   title?: string;
 }
 
-/** `activeTab` may name several tabs at once ("open,in_progress"). `active` is
- *  what was picked; `included` adds every key an active preset stands for. */
-function tabSelection(tabs: ListTab[], activeTab: string) {
-  const active = new Set(activeTab.split(","));
-  const included = new Set(active);
-  for (const t of tabs) if (active.has(t.key)) t.implies?.forEach((k) => included.add(k));
-  return { active, included };
+/** The tab a value stands on, or none. A tab is a PRESET — a whole state of the
+ *  list, not a member of a set — so it lights up only when the value is exactly
+ *  its key. Anything finer is a filter, and says so as a chip in the filter bar. */
+function activeTabOf(tabs: ListTab[], activeTab: string): ListTab | null {
+  return tabs.find((t) => t.key === activeTab) ?? null;
 }
 
-/** The pill/row label for the current selection: the single active tab, or the
- *  active toggles joined ("Open, In Progress") once several are on. */
+/** The pill/row label for the current selection. */
 function tabSelectionSummary(tabs: ListTab[], activeTab: string): { label: string; count?: number; icons: any[] } {
-  const { active } = tabSelection(tabs, activeTab);
-  const picked = tabs.filter((t) => active.has(t.key));
-  if (picked.length <= 1) {
-    const t = picked[0] ?? tabs[0];
-    return { label: t?.label ?? "", count: t?.count, icons: t?.icon ? [t.icon] : [] };
-  }
-  const count = picked.reduce((n, t) => n + (t.count ?? 0), 0);
-  return { label: picked.map((t) => t.label).join(", "), count, icons: picked.map((t) => t.icon).filter(Boolean) };
+  const t = activeTabOf(tabs, activeTab);
+  // A value no tab stands for (tasks: a hand-picked set of statuses, which
+  // renders as a chip in the filter bar). Naming the first tab there would be a
+  // lie — the list is filtered, just not to a preset.
+  if (!t) return { label: activeTab ? "Filtered" : tabs[0]?.label ?? "", icons: [] };
+  return { label: t.label, count: t.count, icons: t.icon ? [t.icon] : [] };
 }
 
-/** Compact stand-in for the status pill row, shown when the header is too narrow
- *  to fit every pill (see .cq-tabs-compact). Surfaces the active tab + count and
- *  drops the full list into a popover so no status is ever scrolled out of reach.
- *  Toggle tabs get a checkbox: the box adds/removes, the label picks it alone. */
+/** Compact stand-in for the preset pill row, shown when the header is too narrow
+ *  to fit every pill (see .cq-tabs-compact). Surfaces the active preset + count
+ *  and drops the list into a popover so no preset is ever out of reach. */
 function TabDropdown({
   tabs,
   activeTab,
   onChange,
-  onToggle,
 }: {
   tabs: ListTab[];
   activeTab: string;
   onChange: (key: string) => void;
-  onToggle?: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { active: activeKeys, included } = tabSelection(tabs, activeTab);
+  const active = activeTabOf(tabs, activeTab);
   const summary = tabSelectionSummary(tabs, activeTab);
-  const firstToggleIdx = tabs.findIndex((t) => t.toggle);
 
   useWatchEffect(() => {
     if (!open) return;
@@ -106,8 +90,7 @@ function TabDropdown({
   }, [open]);
 
   // The label/count only collapse when there's an icon to stand in for them, so
-  // icon-less consumers (e.g. Docs) keep their text at every width. With several
-  // toggles on, their icons stand in together — the button still says which.
+  // icon-less consumers (e.g. Docs) keep their text at every width.
   const labelCollapse = summary.icons.length ? "cq-tab-label" : "";
 
   return (
@@ -130,45 +113,25 @@ function TabDropdown({
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1 w-52 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
-          {tabs.map((t, i) => {
+          {tabs.map((t) => {
             const TIcon = t.icon;
-            const isActive = activeKeys.has(t.key);
-            const isIncluded = included.has(t.key);
-            const canToggle = !!(t.toggle && onToggle);
+            const isActive = active?.key === t.key;
             return (
-              <div key={t.key}>
-                {/* Presets above, the set they compose from below. */}
-                {canToggle && i === firstToggleIdx && i > 0 && <div className="my-1 border-t border-sol-border/40" />}
-                <div
-                  className={`w-full flex items-center gap-2 pr-3 text-xs transition-colors ${
-                    isActive ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                  } ${canToggle ? "pl-2" : "pl-3"}`}
-                >
-                  {canToggle && (
-                    <button
-                      onClick={() => onToggle!(t.key)}
-                      title={isIncluded ? `Remove ${t.label}` : `Add ${t.label}`}
-                      className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
-                        isIncluded ? "bg-sol-cyan border-sol-cyan" : "border-sol-border/60 hover:border-sol-text-dim"
-                      }`}
-                    >
-                      {isIncluded && <Check className="w-2.5 h-2.5 text-sol-bg" />}
-                    </button>
-                  )}
-                  <button
-                    onClick={() => { onChange(t.key); setOpen(false); }}
-                    title={t.title ?? (canToggle ? `Only ${t.label}` : t.label)}
-                    className="flex-1 min-w-0 flex items-center gap-2 py-1.5"
-                  >
-                    {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
-                    <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
-                    {t.count != null && t.count > 0 && (
-                      <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
-                    )}
-                    {isActive && !canToggle && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
-                  </button>
-                </div>
-              </div>
+              <button
+                key={t.key}
+                onClick={() => { onChange(t.key); setOpen(false); }}
+                title={t.title ?? t.label}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                  isActive ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
+                <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
+                {t.count != null && t.count > 0 && (
+                  <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
+                )}
+                {isActive && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+              </button>
             );
           })}
         </div>
@@ -356,7 +319,7 @@ export interface ListFilterDef {
   label: string;
   icon: ReactNode;
   value: string;
-  options: { key: string; label: string; icon?: any; color?: string }[];
+  options: FilterOption[];
   onChange: (v: string) => void;
   multi?: boolean;
   /** Show the empty-key option in the add-menu too. For most filters "" means
@@ -364,6 +327,17 @@ export interface ListFilterDef {
    *  tasks Source filter's board), hiding it leaves the menu with no current
    *  state — the reader can't tell the options are departures from a default. */
   showEmptyOption?: boolean;
+  /** Values a prominent control elsewhere in the header already states (the
+   *  tasks status pills: All / Not done / Done). The popover still shows the
+   *  real selection ticked, but no chip repeats what the pill row is saying. */
+  presetValues?: string[];
+}
+
+/** Does this filter narrow the list BEYOND what the header already shows? Drives
+ *  the chip, the add-menu's remaining categories and whether the filter bar
+ *  exists at all — one rule, so the three can never disagree. */
+export function filterIsSet(d: ListFilterDef): boolean {
+  return !!d.value && !(d.presetValues ?? []).includes(d.value);
 }
 
 /** Add-filter menu: a two-level popover (category → that category's options) for
@@ -393,7 +367,7 @@ function AddFilterMenu({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const available = defs.filter((d) => !d.value);
+  const available = defs.filter((d) => !filterIsSet(d));
   const cat = defs.find((d) => d.key === catKey) || null;
   const toggle = () => { setOpen((o) => !o); setCatKey(null); };
 
@@ -471,7 +445,17 @@ export interface ListGroup<T> {
   badge?: ReactNode;
   extra?: ReactNode;
   items: T[];
+  /** Nesting under the nearest earlier group with a smaller depth (the task
+   *  board's Chain grouping). The list stays one flat stream: depth only
+   *  indents the header and lets a collapsed parent take its nested groups
+   *  with it. Absent = a top level group. */
+  depth?: number;
 }
+
+/** How far each level of a nested group steps in, and where it stops: deeper
+ *  levels keep their order but stop eating the row's width. */
+const GROUP_INDENT_PX = 20;
+const MAX_GROUP_INDENT = 4;
 
 export interface ItemRowState {
   isFocused: boolean;
@@ -488,14 +472,11 @@ export interface ItemRowState {
 export interface GenericListViewProps<T> {
   title: string;
   tabs: ListTab[];
-  /** The active tab key, or several joined by commas when the consumer
-   *  supports multi-select through onTabToggle. */
+  /** The list's current preset. A value no tab carries is a finer selection the
+   *  consumer states elsewhere (tasks: a status chip in the filter bar), and no
+   *  pill lights up for it. */
   activeTab: string;
   onTabChange: (tab: string) => void;
-  /** Add/remove one `toggle` tab from the current selection (shift/meta-click on
-   *  a pill, or the checkbox in the compact dropdown). The consumer owns the set
-   *  arithmetic — it knows its own presets and normalisation. */
-  onTabToggle?: (tab: string) => void;
 
   /** Grouping axis — independent of sort. Omit all three to render a sort-only
    *  Display popover (no Grouping section). Convention: a `"none"` option value
@@ -614,7 +595,6 @@ export function GenericListView<T>({
   tabs,
   activeTab,
   onTabChange,
-  onTabToggle,
   groupBy,
   groupOptions,
   onGroupChange,
@@ -713,9 +693,9 @@ export function GenericListView<T>({
     if (!searching) return groups;
     if (crossScopeSearch) return null; // flat results from searchAllItems instead
     const q = searchQuery.toLowerCase();
-    return groups
-      .map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
-      .filter(g => g.items.length > 0);
+    return groupsWithItems(
+      groups.map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
+    );
   }, [groups, searching, crossScopeSearch, searchQuery, getSearchText]);
 
   const displayFlatItems = useMemo(() => {
@@ -728,8 +708,8 @@ export function GenericListView<T>({
 
   const visibleItems = useMemo(() => {
     if (displayGroups) {
-      return displayGroups.flatMap((g) =>
-        collapsedGroups.has(g.key) ? [] : g.items
+      return visibleGroups(displayGroups, collapsedGroups).flatMap(({ group, collapsed }) =>
+        collapsed ? [] : group.items
       );
     }
     return displayFlatItems;
@@ -744,25 +724,25 @@ export function GenericListView<T>({
   // workspace was a live DOM node and re-rendered on every j/k press — O(N) per
   // keystroke. Now only the visible window (~window height) is mounted.
   type RowEntry =
-    | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean }
-    | { kind: "item"; key: string; item: T; focusIndex: number; groupKey: string | null };
+    | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean; depth: number }
+    | { kind: "item"; key: string; item: T; focusIndex: number; groupKey: string | null; depth: number };
   const rowModel = useMemo<RowEntry[]>(() => {
     const rows: RowEntry[] = [];
     if (displayGroups) {
       let fi = 0;
-      for (const g of displayGroups) {
-        const collapsed = collapsedGroups.has(g.key);
-        rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed });
+      for (const { group: g, collapsed } of visibleGroups(displayGroups, collapsedGroups)) {
+        const depth = g.depth ?? 0;
+        rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed, depth });
         if (!collapsed) {
           for (const item of g.items) {
-            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi, groupKey: g.key });
+            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi, groupKey: g.key, depth });
             fi++;
           }
         }
       }
     } else {
       displayFlatItems.forEach((item, i) => {
-        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i, groupKey: null });
+        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i, groupKey: null, depth: 0 });
       });
     }
     return rows;
@@ -1208,9 +1188,8 @@ export function GenericListView<T>({
   // The bar also has to appear for a MODIFIED view even with no chips showing:
   // clearing a view's only filter is a change you must be able to save or undo,
   // and hiding the bar would take both actions away at exactly that moment.
-  const filterBarShown = !!filters && (filters.defs.some((d) => d.value) || !!filters.dirtyView);
-  const tabSel = useMemo(() => tabSelection(tabs, activeTab), [tabs, activeTab]);
-  const firstToggleTab = tabs.findIndex((t) => t.toggle);
+  const filterBarShown = !!filters && (filters.defs.some(filterIsSet) || !!filters.dirtyView);
+  const activeTabKey = activeTabOf(tabs, activeTab)?.key ?? null;
 
   return (
     <div className="h-full flex flex-col">
@@ -1225,28 +1204,18 @@ export function GenericListView<T>({
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
           <div className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
-            {tabs.map((tab, i) => {
-              const isActive = tabSel.active.has(tab.key);
-              // Included but not picked: a preset stands for this tab. Same
-              // fill as active, quieter text — "on", but not what you clicked.
-              const isIncluded = tabSel.included.has(tab.key);
-              const canToggle = !!(tab.toggle && onTabToggle);
+            {tabs.map((tab) => {
+              const isActive = activeTabKey === tab.key;
               return (
               <button
                 key={tab.key}
-                onClick={(e) => {
-                  if (canToggle && (e.shiftKey || e.metaKey || e.ctrlKey)) onTabToggle!(tab.key);
-                  else onTabChange(tab.key);
-                  setFocusIndex(0);
-                }}
-                title={tab.title ?? (canToggle ? `${tab.label} — shift-click to add or remove` : undefined)}
+                onClick={() => { onTabChange(tab.key); setFocusIndex(0); }}
+                title={tab.title}
                 className={`text-xs px-2.5 h-6 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
                   isActive
                     ? "bg-sol-bg-highlight text-sol-text shadow-sm"
-                    : isIncluded
-                      ? "bg-[color-mix(in_srgb,var(--sol-bg-highlight)_60%,transparent)] text-sol-text-muted"
-                      : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
-                } ${canToggle && i === firstToggleTab && i > 0 ? "ml-1.5 pl-2.5 border-l border-sol-border/40 rounded-l-none" : ""}`}
+                    : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
+                }`}
               >
                 {tab.label}
                 {tab.count != null && tab.count > 0 && <span className="text-[10px] tabular-nums opacity-60">{tab.count}</span>}
@@ -1259,7 +1228,6 @@ export function GenericListView<T>({
               tabs={tabs}
               activeTab={activeTab}
               onChange={(key) => { onTabChange(key); setFocusIndex(0); }}
-              onToggle={onTabToggle ? (key) => { onTabToggle(key); setFocusIndex(0); } : undefined}
             />
           </div>
         </div>
@@ -1296,7 +1264,7 @@ export function GenericListView<T>({
               <Search className="w-3.5 h-3.5" />
             </button>
           )}
-          {filters && <AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some((d) => d.value)} />}
+          {filters && <AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some(filterIsSet)} />}
           <DisplayMenu
             groupBy={groupBy}
             groupOptions={groupOptions}
@@ -1338,7 +1306,7 @@ export function GenericListView<T>({
         {filterBarShown && (
           <div className="cq-header-pad cq-filter-bar flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-t border-sol-border/30 bg-sol-bg-alt/20">
           {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
-          {filters.defs.filter((f) => f.value).map((f) => (
+          {filters.defs.filter(filterIsSet).map((f) => (
             <FilterDropdown
               key={f.key}
               chip
@@ -1498,7 +1466,9 @@ export function GenericListView<T>({
                       key={vi.key}
                       data-index={vi.index}
                       ref={rowVirtualizer.measureElement}
-                      style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+                      // A nested group (ListGroup.depth) steps in as one block,
+                      // header and rows together, so the nesting reads at a glance.
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)`, paddingLeft: row.depth ? Math.min(row.depth, MAX_GROUP_INDENT) * GROUP_INDENT_PX : undefined }}
                     >
                       {row.kind === "header"
                         ? renderGroupHeader(row.group, row.collapsed)

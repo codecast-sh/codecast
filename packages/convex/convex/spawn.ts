@@ -103,7 +103,7 @@ export async function spawnSessionCore(
   ctx: any,
   userId: Id<"users">,
   opts: {
-    agentType?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok";
+    agentType?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
     projectPath?: string;
     gitRoot?: string;
     model?: string;
@@ -281,6 +281,7 @@ export const createSessionFromCli = mutation({
         v.literal("opencode"),
         v.literal("pi"),
         v.literal("grok"),
+        v.literal("muse"),
       ),
     ),
     project_path: v.optional(v.string()),
