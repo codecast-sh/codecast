@@ -1096,8 +1096,13 @@ div.ch-reaction-tip {
   display: none;
 }
 
+/* The frame owns the inset. MessageInput's own box is full-bleed, which is right
+ * when it floats over a conversation and wrong here: it sat flush against this
+ * card's border while every control in the foot row was inset 8px. Padding the
+ * wrapper lines the text field up with them and gives it room to breathe at the
+ * top. */
 .ch-composer [data-sv-composer] > .pointer-events-auto {
-  padding-bottom: 0;
+  padding: 6px 8px 0;
   background: transparent;
 }
 
