@@ -18,6 +18,15 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "the-pull-request-that-knows-its-sessions",
+    title: "The pull request that knows its sessions",
+    dek: "When agents write most of the code, a pull request is the end of a conversation you were not in. Codecast keeps the two attached: every PR carries its checks, its reviews, and the sessions that made it, and a review can wake the agent that owns it.",
+    author: "the codecast team",
+    date: "2026-09-17",
+    dateLabel: "September 17, 2026",
+    readingMinutes: 6,
+  },
+  {
     slug: "agents-that-talk-to-each-other",
     title: "Agents that talk to each other",
     dek: "A Claude Code agent shipped a change that silently stalled 27 transcripts. A Codex agent in the same checkout found it, fixed it, and told the first one. No human relayed a word.",
