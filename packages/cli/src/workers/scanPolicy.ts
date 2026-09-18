@@ -12,6 +12,14 @@ export function scanPredicates(root: string, policy: ScanPolicy) {
       case 'gemini': return d.length === 1 || d.length === 2 && d[1] === 'chats';
       case 'codexWatch': return d.length <= 3 && d.every((s,i) => (i ? /^\d{2}$/ : /^\d{4}$/).test(s));
       case 'grokWatch': return d.length === 1 || d.length === 2 && CLAUDE_UUID_RE.test(d[1]);
+      // muse sessions live at sessions/YYYY/MM/DD/<uuid>/session.jsonl; the
+      // sibling .msp-view-v1/ view-index tree (and any other dot dir) is
+      // refused at every depth.
+      case 'museWatch': return !d.some((s) => s.startsWith('.'))
+        && ((d.length === 1 && /^\d{4}$/.test(d[0]))
+          || (d.length === 2 && /^\d{4}$/.test(d[0]) && /^\d{2}$/.test(d[1]))
+          || (d.length === 3 && /^\d{4}$/.test(d[0]) && /^\d{2}$/.test(d[1]) && /^\d{2}$/.test(d[2]))
+          || (d.length === 4 && /^\d{4}$/.test(d[0]) && /^\d{2}$/.test(d[1]) && /^\d{2}$/.test(d[2]) && CLAUDE_UUID_RE.test(d[3])));
       case 'cursor': return d.length === 1 || d.length <= 3 && d[1] === 'agent-transcripts';
       case 'vault': return vault(rel);
       default: return true;
@@ -28,6 +36,7 @@ export function scanPredicates(root: string, policy: ScanPolicy) {
       case 'claudeWatch': return watchFilter(rel);
       case 'geminiWatch': return rel.endsWith('.json') && rel.split(/[\\/]/).includes('chats');
       case 'grokWatch': return /[\\/]updates\.jsonl$/.test(rel);
+      case 'museWatch': return d.length === 5 && base === 'session.jsonl';
       case 'cursor': return rel.endsWith('.txt') && (rel.includes(`agent-transcripts${path.sep}`) || rel.includes('agent-transcripts/'));
       case 'cursorStale': return rel.endsWith('.txt') && rel.includes(`${path.sep}agent-transcripts${path.sep}`);
       case 'cursorDb': return /state\.vscdb(-wal)?$/.test(rel);

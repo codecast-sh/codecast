@@ -89,6 +89,11 @@ export async function recentScan(job: Extract<ScanJob,{name:'recent'}>): Promise
   for (const dir of await freshDirs(path.join(job.home,'.grok','sessions'),job.since)) {
     const p=path.join(dir,job.sessionId,'updates.jsonl'); if(await exists(p)) return found(p,'grok');
   }
+  if (!job.codexOnly) for (const yyyy of await freshDirs(path.join(job.home,'.local','share','muse','sessions'),job.since))
+    for (const mm of await freshDirs(yyyy,job.since))
+      for (const dd of await freshDirs(mm,job.since)) {
+        const p=path.join(dd,job.sessionId,'session.jsonl'); if(await exists(p)) return found(p,'muse');
+      }
   return [];
 }
 export async function* scanJobRows(job: ScanJob): AsyncGenerator<ScanRow> {

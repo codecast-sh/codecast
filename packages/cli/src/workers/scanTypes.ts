@@ -1,7 +1,7 @@
 export const SCAN_PAGE_ROWS = 128;
 export const SCAN_PAGE_BYTES = 256 * 1024;
-export const SCAN_DIR_POLICIES = ['all', 'claudeIndex', 'claudeWatch', 'gemini', 'codexWatch', 'grokWatch', 'cursor', 'vault'] as const;
-export const SCAN_FILE_POLICIES = ['all', 'jsonl', 'claudeIndex', 'geminiIndex', 'piIndex', 'grokIndex', 'claudeWatch', 'geminiWatch', 'grokWatch', 'cursor', 'cursorStale', 'cursorDb', 'reconciliation', 'plan', 'vault'] as const;
+export const SCAN_DIR_POLICIES = ['all', 'claudeIndex', 'claudeWatch', 'gemini', 'codexWatch', 'grokWatch', 'museWatch', 'cursor', 'vault'] as const;
+export const SCAN_FILE_POLICIES = ['all', 'jsonl', 'claudeIndex', 'geminiIndex', 'piIndex', 'grokIndex', 'museWatch', 'claudeWatch', 'geminiWatch', 'grokWatch', 'cursor', 'cursorStale', 'cursorDb', 'reconciliation', 'plan', 'vault'] as const;
 export type ScanPolicy = { dirs?: typeof SCAN_DIR_POLICIES[number]; files?: typeof SCAN_FILE_POLICIES[number] };
 export type ScanJob =
   | { name: 'walk'; root: string; policy: ScanPolicy; maxDepth?: number; stats: boolean; excludeCodexAppServer?: boolean; observeCwd?: boolean; requireComplete?: boolean }
@@ -46,7 +46,7 @@ export function validScanPage(v: unknown): v is ScanPage {
     if (r.type === 'cursorError') return keys(r,['type','path','message','code']) && text(r.path) && text(r.message) && text(r.code);
     if (r.type === 'cursorDb') return keys(r,['type','path','maxRowId','workspacePath']) && text(r.path) && (r.maxRowId === null || Number.isSafeInteger(r.maxRowId) && r.maxRowId >= 0) && (r.workspacePath === null || text(r.workspacePath));
     if (r.type === 'root') return keys(r,['type','path']) && text(r.path);
-    if (r.type === 'recent') return keys(r,['type','path','agentType']) && text(r.path) && ['claude','codex','gemini','pi','grok'].includes(r.agentType);
+    if (r.type === 'recent') return keys(r,['type','path','agentType']) && text(r.path) && ['claude','codex','gemini','pi','grok','muse'].includes(r.agentType);
     return ['item','marketplace','unreadable','manifest'].includes(r.type) && keys(r,['type','value']) && object(r.value);
   });
 }

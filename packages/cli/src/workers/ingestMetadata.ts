@@ -204,6 +204,66 @@ export function classifyGrokTranscriptTail(tailContent: string): TranscriptTurnS
 }
 
 
+// Muse's session.jsonl marks turn boundaries with the run `terminal` event —
+// the durable signal that a turn reached its outcome — instead of a
+// per-message stop reason. We read the tail back to front and decide on the
+// first meaningful record:
+//   - run/terminal                                            -> idle
+//   - approval_wait.effect/started with no later terminal    -> active
+//     (parked on an approval nobody can answer in a managed pane — same
+//     convention as pending interactions elsewhere: never idle)
+//   - run/started, assistant_message_committed,
+//     reasoning_summary_committed, assistant_tool_calls_committed,
+//     tool_result_batch_committed, model_completed,
+//     model_response_created                                -> active
+//   - streaming deltas / task / reminder / housekeeping        -> scan past
+// An unparsable line is the expected torn tail — skip it, never fail.
+export function classifyMuseTranscriptTail(tailContent: string): TranscriptTurnState {
+  const lines = tailContent.split("\n");
+  let approvalResolved = false;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { payload_type?: string; payload?: { kind?: string; event?: { kind?: string } } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // torn/partial line (mid-write tail) -> skip
+    }
+    // payload_type carries the effect phase as a suffix
+    // (approval_wait.effect.started / .terminal).
+    if (d.payload_type === "approval_wait.effect.terminal") {
+      approvalResolved = true;
+      continue;
+    }
+    if (d.payload_type === "approval_wait.effect.started") {
+      if (!approvalResolved) return "active";
+      continue;
+    }
+    const payload = d.payload;
+    if (!payload || typeof payload !== "object") continue;
+    if (payload.kind !== "run") continue;
+    const kind = payload.event?.kind;
+    if (typeof kind !== "string") continue;
+    switch (kind) {
+      case "terminal":
+        return "idle";
+      case "started":
+      case "assistant_message_committed":
+      case "reasoning_summary_committed":
+      case "reasoning_committed":
+      case "assistant_tool_calls_committed":
+      case "tool_result_batch_committed":
+      case "model_completed":
+      case "model_response_created":
+        return "active";
+      default:
+        break; // task/reminder/streaming/housekeeping -> keep scanning
+    }
+  }
+  return "unknown";
+}
+
 export function generateTitleFromMessage(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) {

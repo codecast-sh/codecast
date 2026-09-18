@@ -12,10 +12,10 @@ const temp=()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'f2-index-'));dirs.
 const write=(home:string,rel:string,text='{}\n')=>{const p=path.join(home,rel);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,text);return p;};
 const start=(enabled:boolean)=>configureDaemonWorkers(enabled,{}, {invocation:{command:process.execPath,args:[path.resolve(import.meta.dir,'../main.ts'),'_worker','scan']}});
 afterEach(()=>{resetSessionFileIndexForTests();resetSkillsScanMemoForTests();invalidateLocalProjectRoots();closeDaemonWorkers();process.env.HOME=originalHome;setSlowSyncSink(null);setSlowSyncFsThresholdForTests(null);for(const d of dirs.splice(0))fs.rmSync(d,{recursive:true,force:true});});
-const ids=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555'];
+const ids=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555','10101010-1010-4101-8101-101010101010'];
 for(const enabled of [false,true])test(`production index, recent lookup, stale and scope decisions agree with worker=${enabled}`,async()=>{
  const home=temp();process.env.HOME=home;resetSessionFileIndexForTests();await start(enabled);
- const paths=[write(home,`.claude/projects/p/${ids[0]}.jsonl`),write(home,`.codex/sessions/2026/09/05/rollout-${ids[1]}.jsonl`),write(home,`.gemini/tmp/hash/chats/${ids[2]}.json`),write(home,`.pi/agent/sessions/slug/time_${ids[3]}.jsonl`),write(home,`.grok/sessions/slug/${ids[4]}/updates.jsonl`)];
+ const paths=[write(home,`.claude/projects/p/${ids[0]}.jsonl`),write(home,`.codex/sessions/2026/09/05/rollout-${ids[1]}.jsonl`),write(home,`.gemini/tmp/hash/chats/${ids[2]}.json`),write(home,`.pi/agent/sessions/slug/time_${ids[3]}.jsonl`),write(home,`.grok/sessions/slug/${ids[4]}/updates.jsonl`),write(home,`.local/share/muse/sessions/2026/09/18/${ids[5]}/session.jsonl`)];
  const reports:string[]=[];setSlowSyncFsThresholdForTests(0);setSlowSyncSink(s=>reports.push(s));
  if(enabled)expect(findSessionFile(ids[0],{staleOk:true})).toBeNull();
  await ensureSessionFileIndex();expect(ids.map(id=>findSessionFile(id,{staleOk:true})?.path)).toEqual(paths);
@@ -24,6 +24,10 @@ for(const enabled of [false,true])test(`production index, recent lookup, stale a
  expect(findSessionFile(newId,{staleOk:true})).toBeNull();await refreshRecentSessionFileForTests(newId);
  expect(findSessionFile(newId)?.path).toBe(newFile);
  fs.unlinkSync(newFile);expect(findSessionFile(newId,{staleOk:true})).toBeNull();
+ const museId='20202020-2020-4202-8202-202020202020';const museFile=write(home,`.local/share/muse/sessions/2026/09/18/${museId}/session.jsonl`);
+ expect(findSessionFile(museId,{staleOk:true})).toBeNull();await refreshRecentSessionFileForTests(museId);
+ expect(findSessionFile(museId)?.path).toBe(museFile);
+ expect(findSessionFile(museId)?.agentType).toBe('muse');
  const managed=write(home,'.codex/sessions/2026/09/05/managed.jsonl',JSON.stringify({type:'session_meta',payload:{originator:'codecast',source:{custom:'codecast'}}})+'\n');
  write(home,'.cursor/projects/p/agent-transcripts/a.txt','text');
  expect((await findStaleSessionFiles()).sort()).toEqual([paths[0]]);

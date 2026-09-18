@@ -18,10 +18,10 @@ afterEach(()=> {closeDaemonWorkers();for(const d of dirs.splice(0)) fs.rmSync(d,
 const id='12345678-1234-1234-1234-123456789abc';
 test('named production policies match local traversal on actual layouts, pruning every ancestor and skipping symlinks',async()=> {
  const root=temp();
- for(const rel of ['top.jsonl',`slug/${id}.jsonl`,`slug/${id}/subagents/agent-a.jsonl`,`slug/${id}/subagents/workflows/wf_one/agent-b.jsonl`,`slug/${id}/tool-results/ignored.jsonl`,`slug/bad/subagents/agent-c.jsonl`,'hash/chats/session.json','hash/checkpoints/bad.json','2026/09/05/rollout-x.jsonl','scratch/09/05/bad.jsonl',`slug/${id}/updates.jsonl`,'p/agent-transcripts/a/a.txt','p/mcps/bad.txt','p/state.vscdb','p/state.vscdb-wal','node_modules/pkg/x.jsonl']) write(root,rel);
+ for(const rel of ['top.jsonl',`slug/${id}.jsonl`,`slug/${id}/subagents/agent-a.jsonl`,`slug/${id}/subagents/workflows/wf_one/agent-b.jsonl`,`slug/${id}/tool-results/ignored.jsonl`,`slug/bad/subagents/agent-c.jsonl`,'hash/chats/session.json','hash/checkpoints/bad.json','2026/09/05/rollout-x.jsonl','scratch/09/05/bad.jsonl',`slug/${id}/updates.jsonl`,`2026/09/18/${id}/session.jsonl`,`2026/09/18/${id}/chat_history.jsonl`,`2026/09/18/notauuid/session.jsonl`,'.msp-view-v1/session.jsonl','p/agent-transcripts/a/a.txt','p/mcps/bad.txt','p/state.vscdb','p/state.vscdb-wal','node_modules/pkg/x.jsonl']) write(root,rel);
  fs.symlinkSync(path.join(root,'slug'),path.join(root,'linked-dir'));
  fs.symlinkSync(path.join(root,'top.jsonl'),path.join(root,'linked-file.jsonl'));
- const cases: Array<[ScanPolicy,number]>=[ [{dirs:'claudeWatch',files:'claudeWatch'},6],[{dirs:'claudeIndex',files:'claudeIndex'},6],[{files:'all'},4],[{dirs:'codexWatch',files:'jsonl'},4],[{dirs:'gemini',files:'geminiIndex'},3],[{dirs:'gemini',files:'geminiWatch'},3],[{files:'piIndex'},2],[{files:'grokIndex'},3],[{dirs:'grokWatch',files:'grokWatch'},3],[{dirs:'cursor',files:'cursor'},5],[{files:'cursorStale'},5],[{files:'cursorDb'},2],[{dirs:'claudeWatch',files:'reconciliation'},6],[{files:'plan'},2],[{dirs:'vault',files:'vault'},8] ];
+ const cases: Array<[ScanPolicy,number]>=[ [{dirs:'claudeWatch',files:'claudeWatch'},6],[{dirs:'claudeIndex',files:'claudeIndex'},6],[{files:'all'},4],[{dirs:'codexWatch',files:'jsonl'},4],[{dirs:'gemini',files:'geminiIndex'},3],[{dirs:'gemini',files:'geminiWatch'},3],[{files:'piIndex'},2],[{files:'grokIndex'},3],[{dirs:'grokWatch',files:'grokWatch'},3],[{dirs:'museWatch',files:'museWatch'},5],[{dirs:'cursor',files:'cursor'},5],[{files:'cursorStale'},5],[{files:'cursorDb'},2],[{dirs:'claudeWatch',files:'reconciliation'},6],[{files:'plan'},2],[{dirs:'vault',files:'vault'},8] ];
  for(const [policy,maxDepth] of cases) {
    closeDaemonWorkers(); const opts={...scanPredicates(root,policy),policy,maxDepth};
    const local:WalkFile[]=[];await walkFiles(root,opts,f=>local.push(f));
@@ -31,6 +31,15 @@ test('named production policies match local traversal on actual layouts, pruning
    expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);
  }
  const missing:WalkFile[]=[];await walkFiles(path.join(root,'absent'),{policy:{}},f=>missing.push(f));expect(missing).toEqual([]);
+});
+test('museWatch walks date dirs into the session uuid dir only',async()=>{
+ const root=temp();const mid='12345678-1234-1234-1234-123456789abc';
+ // Every muse run spawns subagent/<uuid>/session.jsonl nests under the session
+ // dir (verified live) — below the depth cap, never synced as conversations.
+ for(const rel of [`2026/09/18/${mid}/session.jsonl`,`2026/09/18/${mid}/chat_history.jsonl`,`2026/09/18/notauuid/session.jsonl`,'.msp-view-v1/session.jsonl','2026/09/session.jsonl',`2026/09/18/${mid}/subagent/58bf7376-ac7b-4111-a24e-fc616c860cd0/session.jsonl`]) write(root,rel);
+ const found:string[]=[];
+ await walkFiles(root,{...scanPredicates(root,{dirs:'museWatch',files:'museWatch'}),policy:{dirs:'museWatch',files:'museWatch'},maxDepth:5},f=>found.push(f.rel));
+ expect(found).toEqual([`2026/09/18/${mid}/session.jsonl`]);
 });
 test('large trees use bounded pages, apply batches with yielding, and parents precede descendants',async()=> {
  const root=temp();
