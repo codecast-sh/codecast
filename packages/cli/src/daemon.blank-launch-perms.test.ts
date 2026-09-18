@@ -75,4 +75,20 @@ describe("buildBlankLaunchArgs", () => {
     const cfg = { agent_args: { grok: "--verbose" } } as unknown as Config;
     expect(buildBlankLaunchArgs("grok", cfg)).toEqual(["--verbose", "--permission-mode", "bypassPermissions"]);
   });
+
+  test("muse defaults to --disable-approval (managed muse can't answer TUI prompts)", () => {
+    expect(buildBlankLaunchArgs("muse", null)).toEqual(["--disable-approval"]);
+  });
+
+  test("muse: a user-pinned approval mode in agent_args.muse is not double-stacked", () => {
+    const cfg = { agent_args: { muse: "--approval-mode never" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("muse", cfg)).toEqual(["--approval-mode", "never"]);
+    const yoloCfg = { agent_args: { muse: "--yolo" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("muse", yoloCfg)).toEqual(["--yolo"]);
+  });
+
+  test("muse: configured args without an approval flag still get --disable-approval appended", () => {
+    const cfg = { agent_args: { muse: "--verbose" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("muse", cfg)).toEqual(["--verbose", "--disable-approval"]);
+  });
 });

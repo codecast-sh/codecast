@@ -1,7 +1,7 @@
 export const SCAN_PAGE_ROWS = 128;
 export const SCAN_PAGE_BYTES = 256 * 1024;
-export const SCAN_DIR_POLICIES = ['all', 'claudeIndex', 'claudeWatch', 'gemini', 'codexWatch', 'grokWatch', 'cursor', 'vault'] as const;
-export const SCAN_FILE_POLICIES = ['all', 'jsonl', 'claudeIndex', 'geminiIndex', 'piIndex', 'grokIndex', 'claudeWatch', 'geminiWatch', 'grokWatch', 'cursor', 'cursorStale', 'cursorDb', 'reconciliation', 'plan', 'vault'] as const;
+export const SCAN_DIR_POLICIES = ['all', 'claudeIndex', 'claudeWatch', 'gemini', 'codexWatch', 'grokWatch', 'museWatch', 'cursor', 'vault'] as const;
+export const SCAN_FILE_POLICIES = ['all', 'jsonl', 'claudeIndex', 'geminiIndex', 'piIndex', 'grokIndex', 'museWatch', 'claudeWatch', 'geminiWatch', 'grokWatch', 'cursor', 'cursorStale', 'cursorDb', 'reconciliation', 'plan', 'vault'] as const;
 export type ScanPolicy = { dirs?: typeof SCAN_DIR_POLICIES[number]; files?: typeof SCAN_FILE_POLICIES[number] };
 export type ScanJob =
   | { name: 'walk'; root: string; policy: ScanPolicy; maxDepth?: number; stats: boolean; excludeCodexAppServer?: boolean; observeCwd?: boolean; requireComplete?: boolean }

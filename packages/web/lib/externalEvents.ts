@@ -306,6 +306,149 @@ export function externalEventRowToExternalEvent(row: ExternalEventRecord): Exter
   };
 }
 
+// ─── Quiet kinds and grouping ────────────────────────────────────────────────
+// A feed of raw events is a firehose: one push produces a check row per job,
+// a rebase produces a checkout and a rebase, and the shepherd narrates every
+// merge-state flip. Two rules keep the feed and the transcript readable; the
+// PR page still shows every row, because there the detail is the point.
+
+/**
+ * Kinds that carry no news for a reader. "Fell behind" is a state the
+ * shepherd acts on by itself and the PR chip already shows; the row that
+ * announces it is noise on every other surface.
+ */
+export const QUIET_EXTERNAL_EVENT_KINDS: ReadonlySet<string> = new Set(["pr_behind"]);
+
+export function isQuietExternalEvent(row: { kind?: string }): boolean {
+  return QUIET_EXTERNAL_EVENT_KINDS.has(row.kind ?? "");
+}
+
+/** Events on one thread of work: a pull request, else a branch, else a repo. */
+export type ExternalEventGroup = {
+  /** Stable across renders while the members are the same. */
+  key: string;
+  /** Newest first. */
+  events: ExternalEventRecord[];
+  /** The newest member's time; the group sits in the feed at this point. */
+  at: number;
+  /** One phrase per kind, most significant first. */
+  phrases: ExternalEventPhrase[];
+};
+
+export type ExternalEventPhrase = {
+  kind: string;
+  text: string;
+  count: number;
+  /** Set when the phrase carries an outcome that deserves its own color. */
+  accent?: ExternalEventAccent;
+};
+
+export function externalEventThreadKey(row: ExternalEventRecord): string {
+  const repo = row.repository ?? "";
+  if (row.pr_number !== undefined) return `${repo}#${row.pr_number}`;
+  return `${repo}@${row.branch ?? ""}`;
+}
+
+function isFailedCheck(row: ExternalEventRecord): boolean {
+  return row.kind === "pr_check" && outcomeAccent(String(row.meta?.conclusion ?? "")) === "red";
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// The order phrases read in: the outcome a reader acts on first, then the
+// movement of code, then the housekeeping around it.
+const PHRASE_ORDER = [
+  "pr_check_failed", "pr_conflict", "pr_review", "pr_review_comment", "pr_opened", "pr_merged", "pr_closed",
+  "pr_ready", "pr_check", "commit", "push", "pr_synchronize", "amend", "rebase", "merge", "pull",
+  "cherry_pick", "revert", "reset", "checkout",
+];
+
+/** The phrases a group reads as, one per kind, e.g. "3 checks failed". */
+export function summarizeExternalEvents(events: ExternalEventRecord[]): ExternalEventPhrase[] {
+  const byKind = new Map<string, ExternalEventRecord[]>();
+  for (const e of events) {
+    const kind = isFailedCheck(e) ? "pr_check_failed" : e.kind ?? "commit";
+    const list = byKind.get(kind);
+    if (list) list.push(e);
+    else byKind.set(kind, [e]);
+  }
+  const rank = (kind: string) => {
+    const i = PHRASE_ORDER.indexOf(kind);
+    return i === -1 ? PHRASE_ORDER.length : i;
+  };
+  return [...byKind.entries()]
+    .sort((a, b) => rank(a[0]) - rank(b[0]))
+    .map(([kind, rows]): ExternalEventPhrase => {
+      const n = rows.length;
+      switch (kind) {
+        case "pr_check_failed":
+          return { kind, count: n, text: `${plural(n, "check")} failed`, accent: "red" };
+        case "pr_check":
+          return { kind, count: n, text: "checks passed", accent: "green" };
+        case "pr_conflict":
+          return { kind, count: n, text: "conflicts", accent: "red" };
+        case "pr_ready":
+          return { kind, count: n, text: "merges cleanly", accent: "green" };
+        case "commit":
+          return { kind, count: n, text: plural(n, "commit") };
+        case "push": {
+          const moved = rows.reduce((sum, r) => sum + (Number(r.meta?.commits_count) || 0), 0);
+          return { kind, count: n, text: moved > 0 ? `pushed ${plural(moved, "commit")}` : n === 1 ? "pushed" : `pushed ×${n}` };
+        }
+        case "pr_synchronize":
+          return { kind, count: n, text: "PR updated" };
+        case "pr_review_comment":
+          return { kind, count: n, text: plural(n, "review comment"), accent: "violet" };
+        case "checkout": {
+          // The last switch is where the checkout ended up.
+          const to = rows.map((r) => r.meta?.to_ref).find((v) => typeof v === "string" && v);
+          return { kind, count: n, text: to ? `switched to ${to}` : "switched" };
+        }
+        default: {
+          const verb = externalEventStyle(kind).verb;
+          return { kind, count: n, text: n === 1 ? verb : `${verb} ×${n}` };
+        }
+      }
+    });
+}
+
+/**
+ * Fold events that belong to one thread of work into groups. The input is any
+ * order; each group's members and the groups themselves come back newest
+ * first. Quiet kinds are dropped before grouping, and an announcement repeated
+ * word for word on the same thread (a PR that flips between behind and
+ * conflicting re-announces the conflict; a re-run check fails again) is kept
+ * once, at its newest time.
+ */
+export function groupExternalEvents(rows: ExternalEventRecord[]): ExternalEventGroup[] {
+  const byKey = new Map<string, ExternalEventRecord[]>();
+  for (const row of rows) {
+    if (isQuietExternalEvent(row)) continue;
+    const key = externalEventThreadKey(row);
+    const list = byKey.get(key);
+    if (list) list.push(row);
+    else byKey.set(key, [row]);
+  }
+  const groups: ExternalEventGroup[] = [];
+  for (const [thread, all] of byKey) {
+    all.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+    const said = new Set<string>();
+    const events = all.filter((e) => {
+      const line = `${e.kind}|${e.title}|${e.meta?.conclusion ?? ""}`;
+      if (said.has(line)) return false;
+      said.add(line);
+      return true;
+    });
+    groups.push({
+      key: `${thread}:${events[0]._id}:${events.length}`,
+      events,
+      at: events[0].created_at ?? 0,
+      phrases: summarizeExternalEvents(events),
+    });
+  }
+  return groups.sort((a, b) => b.at - a.at);
+}
+
 /** The shepherd states a pull request moves through, and how they read. */
 export const SHEPHERD_STATE_STYLE: Record<string, { label: string; accent: ExternalEventAccent }> = {
   review_pending: { label: "review", accent: "yellow" },

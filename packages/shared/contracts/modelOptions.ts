@@ -16,14 +16,27 @@ export interface ModelOption {
   hint?: string;
   /** Launch-flag / `/model` argument. Undefined = omit the flag ("default"). */
   cliAlias?: string;
+  /**
+   * How many tokens the model holds before it must compact — the denominator
+   * for "this session carries 487k, which is half of what it can hold".
+   * Undefined where we have no honest figure, and a surface that cannot name
+   * the window renders the raw token count alone rather than a made-up share.
+   */
+  contextWindow?: number;
 }
 
+// Context windows below are read off real sessions, not off a datasheet: the
+// largest context any conversation on this fleet reported per model on
+// 2026-09-18 was 952k (fable-5-1), 890k (opus-5), 214k (sonnet-5) and 465k
+// (opus-4-8), so the Claude 5 family and Opus 4.8 all hold a million. Haiku 4.5
+// is the documented 200k. A figure that is wrong shows up as a share over 100%,
+// which is why measuring beats guessing here.
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your saved default model" },
-  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", cliAlias: "fable" },
-  { key: "opus", label: "Opus", hint: "Best for everyday, complex tasks", cliAlias: "opus" },
-  { key: "sonnet", label: "Sonnet", hint: "Efficient for routine tasks", cliAlias: "sonnet" },
-  { key: "haiku", label: "Haiku", hint: "Fastest for quick answers", cliAlias: "haiku" },
+  { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", cliAlias: "fable", contextWindow: 1_000_000 },
+  { key: "opus", label: "Opus", hint: "Best for everyday, complex tasks", cliAlias: "opus", contextWindow: 1_000_000 },
+  { key: "sonnet", label: "Sonnet", hint: "Efficient for routine tasks", cliAlias: "sonnet", contextWindow: 1_000_000 },
+  { key: "haiku", label: "Haiku", hint: "Fastest for quick answers", cliAlias: "haiku", contextWindow: 200_000 },
 ];
 
 // The stops Claude Code's `/effort <x>` one-shot accepts (session-only:
@@ -85,7 +98,7 @@ export type PiEffortLevel = (typeof PI_EFFORT_LEVELS)[number];
 // a slash-command parse test upstream) — deliberately absent.
 export const GROK_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your grok configured model" },
-  { key: "grok-4.6", label: "Grok 4.6", hint: "Default frontier model, 500k context", cliAlias: "grok-4.6" },
+  { key: "grok-4.6", label: "Grok 4.6", hint: "Default frontier model, 500k context", cliAlias: "grok-4.6", contextWindow: 500_000 },
   { key: "grok-4.5", label: "Grok 4.5", hint: "Previous generation", cliAlias: "grok-4.5" },
 ];
 
@@ -99,6 +112,24 @@ export const GROK_MODEL_OPTIONS: ModelOption[] = [
 // cannot hard-error at launch.
 export const GROK_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 export type GrokEffortLevel = (typeof GROK_EFFORT_LEVELS)[number];
+
+// Muse's `--model` takes a Meta model id for non-echo providers. The only id
+// observed live is the session log's own `run_model` record
+// (`muse-spark-1.3-contributor` on CLI 1.3.0); there is no `muse models`
+// listing to curate from, so the static list is Default plus that one id.
+// Keys are bare model ids, not `provider/model`, so muse is a STATIC client
+// (isDynamicModelKey can never accept its keys) — same shape as grok.
+export const MUSE_MODEL_OPTIONS: ModelOption[] = [
+  { key: "default", label: "Default", hint: "Your muse configured model" },
+  { key: "muse-spark-1.3-contributor", label: "Muse Spark 1.3", hint: "Meta frontier model", cliAlias: "muse-spark-1.3-contributor" },
+];
+
+// `--reasoning-effort` accepts none|minimal|low|medium|high|xhigh|max|ultra
+// (`muse --help`, default high). "default" (= omit the flag) comes from
+// launchRailOptions. The TUI's model/effort menus are interactive-only, so
+// both are launch-time flags tracked from the transcript after (run_model).
+export const MUSE_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type MuseEffortLevel = (typeof MUSE_EFFORT_LEVELS)[number];
 
 // ---------------------------------------------------------------------------
 // Dynamic model inventory (opencode / pi)

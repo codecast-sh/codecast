@@ -35,11 +35,27 @@ function skippedTargets(skipped: string[] | undefined): Set<string> {
   return out;
 }
 
+// A role that did not wake because of its own state, and what the sender can
+// do about it. The words for a paused role are RolePausedNote's. Every other
+// skip reason (a relay, a loop rule) is the system working and stays silent.
+const HOLD_LINES: Record<string, (handle: string) => string> = {
+  role_paused: (h) => `@${h} is paused: your line waits until someone resumes it`,
+  role_has_no_session: (h) => `@${h} has no agent yet: bring it online from its page`,
+};
+
+function holdLines(skipped: string[] | undefined): string[] {
+  return (skipped ?? []).flatMap((s) => {
+    const i = s.indexOf(":");
+    const line = i > 0 ? HOLD_LINES[s.slice(0, i)] : undefined;
+    return line ? [line(s.slice(i + 1))] : [];
+  });
+}
+
 function list(items: string[]): string {
   return items.join(", ");
 }
 
-/** The toast line, or null when nothing was woken and nothing folded. */
+/** The toast line, or null when nothing was woken, folded or held. */
 export function mentionWakeLine(
   content: string,
   wakes: MentionWakes | undefined,
@@ -47,7 +63,8 @@ export function mentionWakeLine(
 ): string | null {
   if (!wakes) return null;
   const { roles = 0, sessions = 0, folded = 0 } = wakes;
-  if (roles <= 0 && sessions <= 0 && folded <= 0) return null;
+  const holds = holdLines(wakes.skipped);
+  if (roles <= 0 && sessions <= 0 && folded <= 0 && !holds.length) return null;
   const skipped = skippedTargets(wakes.skipped);
   const typed = typedHandles(content);
   const wokeRoles = typed.filter((h) => roleHandles.has(h) && !skipped.has(h));
@@ -68,5 +85,5 @@ export function mentionWakeLine(
     );
   }
   if (folded > 0) parts.push(`${folded} folded (over the hourly cap)`);
-  return parts.join(" · ");
+  return [...parts, ...holds].join(" · ");
 }

@@ -1,4 +1,4 @@
-import { formatIdle, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
+import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
@@ -893,7 +893,13 @@ export async function performSessionSend(
 }
 
 export function staleSendMessage(shortId: string, cost: ReturnType<typeof wakeCost>): string {
-  const size = cost.contextTokens ? ` (about ${formatTokens(cost.contextTokens)} tokens)` : "";
+  // The share says how heavy that context is without the reader having to know
+  // which model the session runs: 480k means one thing on a 200k model and
+  // another on a million.
+  const share = formatShare(cost.contextShare);
+  const size = cost.contextTokens
+    ? ` (about ${formatTokens(cost.contextTokens)} tokens${share ? `, ${share} of its context window` : ""})`
+    : "";
   const why = cost.killed
     ? `${shortId} was killed. Sending would restart it and load its whole context${size} before it reads your message.`
     : `${shortId} has not run for ${formatIdle(cost.idleMs)}, so its prompt cache has expired. Your message would make it rebuild its whole context${size} before it reads a word, and sessions idle this long rarely have anything to add.`;

@@ -26,6 +26,9 @@ const AWS_AUTO_HOSTNAME = /^ip-\d{1,3}(?:-\d{1,3}){3}(?:\.|$)/i;
 /** Grok cloud workers stamp the instance id into the hostname. Same class: not a name a person chose. */
 const GROK_BOT_VM_HOSTNAME = /^grok-bot-vm[-_]/i;
 
+/** A third-party agent-runtime host stamps this hostname; also not a name a person chose. */
+const HTCH_RUNTIME_HOSTNAME = /^htch-runtime(?:[-_]|$)/i;
+
 function hostnameFromLabel(label: string): string {
   return label.replace(OS_PREFIX, "");
 }
@@ -37,7 +40,7 @@ function hostnameFromLabel(label: string): string {
  */
 export function isCloudAssignedHostname(label: string): boolean {
   const host = hostnameFromLabel(label);
-  return AWS_AUTO_HOSTNAME.test(host) || GROK_BOT_VM_HOSTNAME.test(host);
+  return AWS_AUTO_HOSTNAME.test(host) || GROK_BOT_VM_HOSTNAME.test(host) || HTCH_RUNTIME_HOSTNAME.test(host);
 }
 
 /**

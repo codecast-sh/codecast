@@ -25,20 +25,21 @@ import { useIsPhone, useMinWidth } from "../../../hooks/useIsPhone";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
-import { canEditRole, handsWaiting, queryProblem, roleStanding, scopeQueryRef, tokensUncounted } from "../../../lib/scopePage";
+import { canEditRole, handsWaiting, queryProblem, roleStanding, scopeQueryRef } from "../../../lib/scopePage";
 import { AnchorConversation, AnchorOnboarding } from "../../anchor/AnchorConversation";
 import { RoleFace } from "../RoleFace";
 import { RolePausedNote } from "../RolePausedNote";
 import { parentName } from "../orgMeta";
 import type { OrgAnchor, OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
+import type { WorkState } from "@codecast/shared/contracts";
 import { useScopeIds } from "../../../hooks/useScopeIds";
-import { SCOPE_PANEL_W, ScopePanel, scopeTabFromParam, type ScopePanelLayout, type ScopeTabKey } from "./ScopePanel";
-import { DEFAULT_CAPS, TRUST_META, briefFirstLine, type TrustStage } from "./scopeTypes";
+import { SCOPE_PANEL_W, ScopePanel, scopeDefaultTab, scopeTabFromParam, type ScopePanelLayout, type ScopeTabKey } from "./ScopePanel";
+import { briefFirstLine } from "./scopeTypes";
 import { retireToastText } from "../RetireRoleConfirm";
+import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
 
 const api = _api as any;
 
@@ -67,7 +68,12 @@ export function ScopePageInner({ id }: { id: string }) {
   const anchor: OrgAnchor | null = useMemo(() => {
     if (!tree) return null;
     if (role) return role.anchor_id ? tree.anchors.find((a) => a.anchor_id === role.anchor_id) ?? null : null;
-    return tree.anchors.find((a) => !roleAnchorIds.has(a.anchor_id)) ?? null;
+    // The root's standing agent: the workspace anchor no role holds, else the
+    // Chief of Staff's seat (org-staffing.md S16: the workspace's one root
+    // agent is the chief once seated), so the root never offers to create a
+    // second anchor beside the one it has.
+    const chief = tree.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired" && r.anchor_id);
+    return tree.anchors.find((a) => !roleAnchorIds.has(a.anchor_id)) ?? (chief ? tree.anchors.find((a) => a.anchor_id === chief.anchor_id) ?? null : null);
   }, [tree, role, roleAnchorIds]);
 
   const projects = useWorkspaceCollection<ProjectItem>("projects");
@@ -90,10 +96,11 @@ export function ScopePageInner({ id }: { id: string }) {
   const tab: ScopeTabKey = scopeTabFromParam(tabParam, !!role);
   const setTab = useCallback((next: ScopeTabKey) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (next === "feed") params.delete("tab"); else params.set("tab", next);
+    // The tab a scope opens on is its bare URL: a role's Scope, the root's feed.
+    if (next === scopeDefaultTab(!!role)) params.delete("tab"); else params.set("tab", next);
     const qs = params.toString();
     router.replace(qs ? `/org/${id}?${qs}` : `/org/${id}`);
-  }, [searchParams, router, id]);
+  }, [searchParams, router, id, role]);
   // The panel: open by default beside the conversation; on the phone the
   // conversation leads and the panel is a sheet one tap away. A link straight
   // to a tab opens the panel on it, whatever the width.
@@ -160,20 +167,25 @@ export function ScopePageInner({ id }: { id: string }) {
   const model = (standing as any)?.model ?? null;
   const hostName = role ? tree?.people.find((p) => p.user_id === role.host_user_id)?.name ?? "the host" : tree?.workspace.name ?? "";
   const stateMeta = roleStanding(standingState);
-  const trust: TrustStage = role?.trust ?? "understand";
-  const caps = role?.caps ?? DEFAULT_CAPS;
   const counters = role?.counters && role.counters.day === todayUtc() ? role.counters : null;
-  // Tokens come from Claude transcripts only: a role on another backend, or
-  // whose hands all are, reads "uncounted", never 0k.
-  const uncountedTokens = tokensUncounted({
-    tokens: counters?.tokens ?? 0,
-    uncounted: brief?.facts?.usage?.uncounted_sessions ?? 0,
-    sessions: (brief?.facts?.hands?.length ?? 0) + (standingId ? 1 : 0),
-  });
   const boardLine = briefFirstLine(brief?.narrative);
   const standingStateLine = (standing as any)?.thread_state ? String((standing as any).thread_state).split("\n")[0] : null;
-  const stripeLine = boardLine || standingStateLine;
+  // The tree's own pinned line stands in when the store has no row for the
+  // seat yet (the same line the org card paints).
+  const treeStateLine = (role ? role.standing?.state_line : anchor?.state_line)?.trim() || null;
+  // The seat's own pinned line first (it is what the org card paints and
+  // moves with the session), then the brief's first line, which a seat that
+  // never wrote a brief still carries from the provisioning template.
+  const stripeLine = standingStateLine || treeStateLine || boardLine;
   const waiting = handsWaiting(role, tree, summary);
+  // The first thing on the page is the agent saying what this area is, what it
+  // is watching and what waits on the person, from the rows themselves; the
+  // seat's provisioning prompt and its working turns fold away under it.
+  const lead = useMemo(() => (
+    tree && (role || anchor)
+      ? <ScopeLead role={role} anchorName={anchor?.name ?? null} tree={tree} waiting={waiting} standingState={standingState} />
+      : null
+  ), [tree, role, anchor?.name, waiting, standingState]);
 
   // -------- not found / loading
   if (!tree) {
@@ -261,50 +273,24 @@ export function ScopePageInner({ id }: { id: string }) {
               )}
               {paused && <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             </div>
-            {/* the state line: the brief's first line, else the standing session's own */}
-            {stripeLine ? (
-              <p className={cn("mt-1 min-w-0 truncate", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-secondary)" }} title={stripeLine} data-scope-stripe>{stripeLine}</p>
-            ) : (
-              <p className={cn("mt-1 min-w-0 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "No brief line yet.") : "Everything in the workspace, as one scope."}</p>
-            )}
-            {!phone && (
-              <div className="mt-1.5 flex items-center gap-x-3 gap-y-1 flex-wrap text-[11.5px]" style={{ color: "var(--sol-text-muted)" }}>
-                {role && (
-                  <ShortcutTooltip label={TRUST_META[trust].sentence} side="bottom">
-                    <span className="inline-flex items-center gap-1.5 h-[20px] px-2 rounded-full border text-[10.5px] font-medium cursor-help" style={{ borderColor: `color-mix(in srgb, ${TRUST_META[trust].color} 50%, transparent)`, color: TRUST_META[trust].color, background: `color-mix(in srgb, ${TRUST_META[trust].color} 8%, transparent)` }}>
-                      trust · {TRUST_META[trust].label}
-                    </span>
-                  </ShortcutTooltip>
-                )}
-                {role && (
-                  <span className="inline-flex items-center gap-1.5" data-scope-reports-to>
-                    <span style={{ color: "var(--sol-text-dim)" }}>reports to</span>
-                    {role.reports_to.kind === "role"
-                      ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</Link>
-                      : <Link href="/org" className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
-                  </span>
-                )}
-                <span className="inline-flex items-center gap-1.5">
-                  <span style={{ color: "var(--sol-text-dim)" }}>host</span>
-                  <span style={{ color: "var(--sol-text)" }}>{hostName}</span>
+            {/* Line two: the state line (the brief's first line, else the standing
+                session's own) and who the role reports to. Trust, host, model and
+                the day's counters live in the panel's Settings and Brief tabs. */}
+            <div className={cn("mt-1 flex items-center gap-x-3 min-w-0", phone ? "text-[12px]" : "text-[12.5px]")}>
+              {stripeLine ? (
+                <p className="min-w-0 flex-1 truncate" style={{ color: "var(--sol-text-secondary)" }} title={stripeLine} data-scope-stripe>{stripeLine}</p>
+              ) : (
+                <p className="min-w-0 flex-1 truncate italic" style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "No brief line yet.") : "Everything in the workspace, as one scope."}</p>
+              )}
+              {role && !phone && (
+                <span className="shrink-0 inline-flex items-center gap-1.5" style={{ color: "var(--sol-text-muted)" }} data-scope-reports-to>
+                  <span style={{ color: "var(--sol-text-dim)" }}>reports to</span>
+                  {role.reports_to.kind === "role"
+                    ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</Link>
+                    : <Link href="/org" className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
                 </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span style={{ color: "var(--sol-text-dim)" }}>model</span>
-                  <span style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{model ?? (noStanding ? "none" : "…")}</span>
-                </span>
-                {role && (
-                  <span className="inline-flex items-center gap-1.5 tabular-nums" title="today's wakes, hands and tokens against the daily caps">
-                    <span style={{ color: "var(--sol-text-dim)" }}>today</span>
-                    <span style={{ color: "var(--sol-text)" }}>{counters?.wakes ?? 0}<span style={{ color: "var(--sol-text-dim)" }}>/{caps.wakes_per_day} wakes</span></span>
-                    <span style={{ color: "var(--sol-text)" }}>{counters?.hands ?? 0}<span style={{ color: "var(--sol-text-dim)" }}>/{caps.hands_per_day} hands</span></span>
-                    {uncountedTokens
-                      ? <span style={{ color: "var(--sol-text-dim)" }} title="Tokens are counted from Claude transcripts only; this role's sessions run on another backend">tokens uncounted</span>
-                      : <span style={{ color: "var(--sol-text)" }}>{Math.round((counters?.tokens ?? 0) / 1000)}k<span style={{ color: "var(--sol-text-dim)" }}>/{Math.round(caps.tokens_per_day / 1000)}k tokens</span></span>}
-                  </span>
-                )}
-                {standingId && standing && <span style={{ color: "var(--sol-text-dim)" }}>{(() => { const a = compactAge(now - ((standing as any).updated_at ?? now)); return a === "just now" ? "active just now" : `active ${a} ago`; })()}</span>}
-              </div>
-            )}
+              )}
+            </div>
           </div>
           <div className="shrink-0 flex items-center gap-1.5">
             {!phone && role && canEdit && (
@@ -322,7 +308,24 @@ export function ScopePageInner({ id }: { id: string }) {
           {paused && role && <RolePausedNote name={role.name} className={cn("mx-3 mt-2")} onResume={canEdit ? () => update({ status: "active" }) : undefined} />}
           {standingId ? (
             <div className="flex-1 min-h-0">
-              <AnchorConversation conversationId={standingId} hideHeader seedOwnership={false} autoFocusInput={!phone} />
+              <AnchorConversation
+                conversationId={standingId}
+                hideHeader
+                hideDiff
+                // The composer is Talk (F4.1): the host, the person the role reports
+                // to and an admin send; anyone else reads and asks to send. The
+                // row itself belongs to the agent's bot user, so ownership is
+                // seeded the way the anchor page seeds it.
+                seedOwnership={canEditBrief}
+                foldBootstrap
+                foldWorkingTurns
+                initialDensity="condensed"
+                composerPlaceholder={`Ask ${role ? role.name : anchor?.name ?? "the workspace agent"} for anything…`}
+                leadNode={lead}
+                leadPinned
+                stickyPrompt={false}
+                autoFocusInput={!phone}
+              />
             </div>
           ) : role ? (
             <ScopeUnseated role={role} tree={tree} canEdit={canEdit} hostName={hostName} busy={provisioning} onProvision={provision} onOpenBoard={() => setPanelOpen(true)} />
@@ -356,11 +359,37 @@ export function ScopePageInner({ id }: { id: string }) {
   );
 }
 
+/** The agent's opening bubble (F4.1): what this area is and what waits on
+ *  the person, said from the rows (the role, its scope, the hands' states),
+ *  not from the transcript; the header's stripe says what it is watching.
+ *  Same frame as the proposal letter, so a lead reads the same everywhere. */
+export function ScopeLead({ role, anchorName, tree, waiting, standingState }: { role: OrgRole | null; anchorName: string | null; tree: OrgTree; waiting: number; standingState: WorkState | undefined }) {
+  const name = role ? role.name : anchorName ?? "The workspace agent";
+  const owns = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
+  const area = !role ? "the whole workspace" : owns.length > 0 ? owns.join(", ") : "the whole workspace";
+  const parent = role ? parentName(tree, role.reports_to) : null;
+  const ask = waiting > 0
+    ? `${waiting} ${waiting === 1 ? "session is" : "sessions are"} waiting on a person: the Sessions tab on the board says which.`
+    : standingState === "needs_input" ? "I am waiting on you, below." : "Nothing is waiting on you.";
+  return (
+    <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-4 pb-2" data-scope-lead>
+      <div className="flex items-center gap-2 mb-2">
+        {role ? <RoleFace role={role} size={24} /> : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><AnchorGlyph className="w-3.5 h-3.5" /></span>}
+        <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }}>{name}</span>
+      </div>
+      <div className="pl-8 text-[13.5px] leading-relaxed" style={{ color: "var(--sol-text)" }}>
+        <p>I look after {area}{parent ? ` and report to ${parent}` : ""}. Ask me for anything here: I answer, or start a session for the work and tell you which.</p>
+        <p className="mt-1.5" style={{ color: waiting > 0 || standingState === "needs_input" ? "var(--sol-yellow)" : "var(--sol-text-muted)" }} data-scope-lead-ask>{ask}</p>
+      </div>
+    </div>
+  );
+}
+
 /** The header's control for the board (F4.1). Closed, it still tells you
  *  the one thing that matters: a hand under this scope is waiting on a person. */
 function PanelToggle({ open, waiting, compact, onClick }: { open: boolean; waiting: number; compact: boolean; onClick: () => void }) {
   const Icon = open ? PanelRightClose : PanelRightOpen;
-  const tip = open ? "Close the board" : waiting > 0 ? `Open the board: ${waiting} hand${waiting === 1 ? "" : "s"} waiting on a person` : "Open the board: feed, tasks, plans, pages, sessions, decisions";
+  const tip = open ? "Close the board" : waiting > 0 ? `Open the board: ${waiting} session${waiting === 1 ? "" : "s"} waiting on a person` : "Open the board: feed, tasks, plans, pages, sessions, decisions";
   return (
     <ShortcutTooltip label={tip} side="bottom">
       <button
@@ -401,7 +430,7 @@ function ScopeUnseated({ role, tree, canEdit, hostName, busy, onProvision, onOpe
           <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This seat is retired. Its board is still here.</p>
         ) : canEdit ? (
           <>
-            <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Bring it online and this page becomes a conversation with it: ask for something here and it answers or starts a hand.</p>
+            <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Bring it online and this page becomes a conversation with it: ask for something here and it answers or starts a session for the work.</p>
             <button type="button" onClick={onProvision} disabled={busy} className="mt-4 h-9 px-4 rounded-lg text-[13px] font-semibold disabled:opacity-60 hover:brightness-110 transition-colors" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-scope-provision>
               {busy ? "Bringing it online…" : `Bring @${role.handle} online`}
             </button>

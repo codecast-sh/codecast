@@ -9,7 +9,7 @@
 // card ("+N more") when the parent has more sessions than are loaded.
 import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
 import type { OrgChange, OrgChangeKind, OrgChangeStatus, OrgProposalChange } from "./orgStaffingTypes";
-import { editedOrgChange } from "@codecast/shared/contracts/orgProposal";
+import { editedOrgChange, seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
 import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
 
 export type OrgNodeKind = "person" | "role" | "anchor" | "session" | "cluster";
@@ -32,7 +32,7 @@ export type OrgGhostMeta = { change_id: string; status: OrgChangeStatus; line: s
 export type OrgGhostChip = OrgGhostMeta & { kind: OrgChangeKind; chip: string; unresolved?: boolean };
 /** A stub node standing for a proposed role or an offered session. `solid`
  *  once accepted: it renders as a real card until org.tree echoes the row. */
-export type OrgGhostStub = OrgGhostMeta & { kind: "role" | "adopt"; solid: boolean; this_session?: boolean; /** An adopt stub: the handle of the role the session joins. */ role_handle?: string };
+export type OrgGhostStub = OrgGhostMeta & { kind: "role" | "adopt"; solid: boolean; this_session?: boolean; /** An adopt stub: the handle of the role the session joins. */ role_handle?: string; /** A role stub that names a session which already works as the role (org-roles-run-work.md R2). */ seat?: OrgRoleSeat };
 export type OrgGhostMove = OrgGhostMeta & { nodeId: string; from: OrgParentRef; to: OrgParentRef };
 
 export type OrgGhostPlan = {
@@ -88,6 +88,10 @@ export const ORG_SIZES = {
   tenureRow: 18,
   /** Extra height of an adopt stub: a second line naming the role it joins. */
   adoptRow: 18,
+  /** A ghost role that names a session says what naming changes (R2): the
+   *  sentence wraps, so its row is sized from its length (seatRowHeight). */
+  seatLine: 14,
+  seatChars: 36,
   siblingGap: 40,
   levelGap: 56,
   stackGap: 8,
@@ -173,6 +177,13 @@ function stackFor(parent: OrgParentRef, bucket: { sessions: OrgSession[]; total:
 
 type Stubs = Readonly<Record<string, OrgGhostStub>> | undefined;
 
+/** The height of a ghost role's seat sentence: a 6px margin and one line per
+ *  `seatChars` characters. The layout books it and the card draws the sentence
+ *  in a box of this height, so the two cannot disagree. */
+export function seatRowHeight(seat: OrgRoleSeat | undefined): number {
+  return seat ? 6 + Math.ceil(seatSentence(seat).length / ORG_SIZES.seatChars) * ORG_SIZES.seatLine : 0;
+}
+
 /** A session row's height: an adopt stub carries a second line. */
 function sessionHeight(conversationId: string, stubs: Stubs): number {
   return stubs?.[sessionNodeId(conversationId)]?.kind === "adopt" ? ORG_SIZES.session.h + ORG_SIZES.adoptRow : ORG_SIZES.session.h;
@@ -217,10 +228,14 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       orphanRoles.push(r);
     }
   }
+  // A role's seat is the role (org-staffing.md S16): its state paints on the
+  // role card and its hands stack under it, so the seat's anchor row is never
+  // drawn as a second node under the host. Only the workspace anchor is.
+  const seatAnchorIds = new Set(tree.roles.map((r) => r.anchor_id).filter(Boolean));
   const anchorsUnderUser = new Map<string, OrgAnchor[]>();
   const orphanAnchors: OrgAnchor[] = [];
   for (const a of tree.anchors) {
-    if (a.status === "decommissioned") continue;
+    if (a.status === "decommissioned" || a.org_role_id || seatAnchorIds.has(a.anchor_id)) continue;
     if (personIds.has(a.host_user_id)) anchorsUnderUser.set(a.host_user_id, [...(anchorsUnderUser.get(a.host_user_id) ?? []), a]);
     else orphanAnchors.push(a);
   }
@@ -239,7 +254,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
     const tenure = roleTenureChip(r.tenure, tree);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
       ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
@@ -419,7 +434,60 @@ export type OrgGhostOptions = {
   /** The session the viewer is looking from (id or short id): an adopt
    *  change offering it reads "this session". */
   viewerSession?: { id?: string | null; short_id?: string | null } | null;
+  /** The workspace's projects and plans as the store holds them, so a ghost
+   *  role's scope chips name the project the way the real card does. A
+   *  proposal writes a scope as ids, short ids or titles. */
+  projects?: readonly { id: string; title: string; short_id?: string }[];
+  plans?: readonly { id: string; title: string; short_id?: string }[];
 };
+
+/** A Convex document id: what a proposal's scope carries when the analyzer
+ *  wrote ids. Never shown to a person. */
+const isInternalId = (ref: string) => /^[a-z0-9]{32}$/.test(ref.trim());
+
+/** The scope names a ghost role draws (org-staffing.md S5), resolved against
+ *  every row in hand: the store's projects and plans, then what the live
+ *  roles' scope names carry. An unresolved short id or title is shown as
+ *  written; an unresolved internal id is never shown, it reads as a project
+ *  or plan not loaded yet. */
+/** A change with every project and plan ref it carries named the way the
+ *  chart names them (ghostScopeNames): the chip and the line a ghost draws
+ *  say "pl-619 under Agent Quality", never the project's internal id. Kinds
+ *  that carry no ref come back as they are. */
+export function withScopeNames(change: OrgChange, tree: OrgTree, opts: OrgGhostOptions): OrgChange {
+  const nameOf = (ref: string, kind: "projects" | "plans") => {
+    const row = ghostScopeNames(kind === "projects" ? { projects: [ref] } : { plans: [ref] }, tree, opts)[kind][0];
+    return kind === "plans" ? (row.short_id ?? row.title) : row.title;
+  };
+  const project = (ref: string) => nameOf(ref, "projects");
+  const plan = (ref: string) => nameOf(ref, "plans");
+  const either = (ref: string) => (/^pl-\d+$/i.test(ref) ? plan(ref) : project(ref));
+  switch (change.kind) {
+    case "file": return { ...change, plan: plan(change.plan), project: project(change.project) };
+    case "project_meta": return { ...change, project: project(change.project) };
+    case "scope": return { ...change, ...(change.add ? { add: change.add.map(either) } : {}), ...(change.remove ? { remove: change.remove.map(either) } : {}) };
+    case "move": return { ...change, ...(change.scope_add ? { scope_add: change.scope_add.map(either) } : {}), ...(change.scope_remove ? { scope_remove: change.scope_remove.map(either) } : {}) };
+    default: return change;
+  }
+}
+
+export function ghostScopeNames(scope: { projects?: readonly string[]; plans?: readonly string[] } | undefined, tree: OrgTree, opts: OrgGhostOptions): OrgRole["scope_names"] {
+  const known = <T extends { id: string; title: string; short_id?: string }>(rows: readonly T[] | undefined, fromRoles: (r: OrgRole) => readonly T[]) => [
+    ...(rows ?? []),
+    ...tree.roles.flatMap(fromRoles),
+  ];
+  const projects = known(opts.projects, (r) => r.scope_names.projects);
+  const plans = known(opts.plans, (r) => r.scope_names.plans);
+  const name = (ref: string, rows: readonly { id: string; title: string; short_id?: string }[], word: "project" | "plan") => {
+    const row = refResolves(ref, rows);
+    if (row) return { id: row.id, title: row.title, short_id: row.short_id };
+    return isInternalId(ref) ? { id: ref, title: `a ${word} not loaded yet` } : { id: ref, title: ref, short_id: ref };
+  };
+  return {
+    projects: (scope?.projects ?? []).map((ref) => name(ref, projects, "project")),
+    plans: (scope?.plans ?? []).map((ref) => { const n = name(ref, plans, "plan"); return { id: n.id, title: n.title, short_id: n.short_id ?? n.title }; }),
+  };
+}
 
 const strip = (h: string) => h.replace(/^@/, "").trim().toLowerCase();
 const same = (a: string | undefined, b: string) => !!a && a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -466,8 +534,8 @@ export function resolveOrgParentRef(tree: OrgTree, ref: string | undefined, me: 
 /** The chip a change draws (its delta, with the full line as the title), as
  *  the person will accept it: their edits laid over the proposal. The scope
  *  panel's project rows draw project charters through this too. */
-export function ghostChipOf(c: OrgProposalChange, unresolved = false): OrgGhostChip {
-  const change = editedOrgChange(c.change, c.edits);
+export function ghostChipOf(c: OrgProposalChange, unresolved = false, name: (change: OrgChange) => OrgChange = (x) => x): OrgGhostChip {
+  const change = name(editedOrgChange(c.change, c.edits));
   return { change_id: c._id, status: c.status, line: changeLine(change), kind: change.kind, chip: chipLine(change), ...(unresolved ? { unresolved: true } : {}) };
 }
 
@@ -506,8 +574,8 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
   const roleByHandle = (h: string) => live().find((r) => strip(r.handle) === strip(h));
   const decided = (c: OrgProposalChange) => c.status === "accepted" || c.status === "applied";
   const eff = (c: OrgProposalChange): OrgChange => editedOrgChange(c.change, c.edits);
-  const meta = (c: OrgProposalChange): OrgGhostMeta => ({ change_id: c._id, status: c.status, line: changeLine(eff(c)) });
-  const chip = (c: OrgProposalChange, unresolved = false): OrgGhostChip => ghostChipOf(c, unresolved);
+  const meta = (c: OrgProposalChange): OrgGhostMeta => ({ change_id: c._id, status: c.status, line: changeLine(withScopeNames(eff(c), tree, opts)) });
+  const chip = (c: OrgProposalChange, unresolved = false): OrgGhostChip => ghostChipOf(c, unresolved, (ch) => withScopeNames(ch, tree, opts));
   const chipOn = (nodeId: string | null, x: OrgGhostChip) => { if (nodeId) (plan.chips[nodeId] ??= []).push(x); };
   const orphan = (c: OrgProposalChange) => { if (c.status !== "applied") chipOn(meNode, chip(c, true)); };
   const now = Date.now();
@@ -544,12 +612,9 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
       counts: { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0 },
       sessions: [],
       total: 0,
-      scope_names: {
-        projects: (ch.scope?.projects ?? []).map((ref) => ({ id: ref, title: ref })),
-        plans: (ch.scope?.plans ?? []).map((ref) => ({ id: ref, title: ref, short_id: ref })),
-      },
+      scope_names: ghostScopeNames(ch.scope, tree, opts),
     });
-    plan.stubs[roleNodeId(c._id)] = { ...meta(c), kind: "role", solid: decided(c) };
+    plan.stubs[roleNodeId(c._id)] = { ...meta(c), kind: "role", solid: decided(c), ...(ch.seat ? { seat: ch.seat } : {}) };
   }
   // Parents resolve once every stub exists.
   for (const c of roleChanges) {

@@ -23,6 +23,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -286,6 +287,32 @@ sudo systemctl restart codecast-daemon.service
 echo DAEMON-UNIT-OK`;
 }
 
+/** The CLI package this cast runs from: .../packages/cli */
+function cliSourceRoot(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+/** The version the bundle built from this source will report. */
+function cliSourceVersion(): string {
+  return JSON.parse(fs.readFileSync(path.join(cliSourceRoot(), "package.json"), "utf-8")).version;
+}
+
+/**
+ * The commit a build comes from, and how many uncommitted files ride along.
+ * The build takes the working tree as it is, so in a checkout shared with other
+ * sessions their unfinished edits reach the host; saying so is the least a
+ * command that ships code to another machine owes its operator.
+ */
+function describeSourceTree(dir: string): string {
+  try {
+    const sha = execFileSync("git", ["-C", dir, "rev-parse", "--short", "HEAD"], { encoding: "utf-8" }).trim();
+    const dirty = execFileSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf-8" }).split("\n").filter(Boolean).length;
+    return dirty ? `${sha} with ${dirty} uncommitted file${dirty === 1 ? "" : "s"}` : sha;
+  } catch {
+    return "a tree that is not a git checkout";
+  }
+}
+
 /**
  * Build the cast bundles the box runs.
  *
@@ -299,8 +326,7 @@ echo DAEMON-UNIT-OK`;
  * Only possible when this cast runs from a source checkout.
  */
 export function buildLinuxCast(onProgress: (m: string) => void): { distDir: string; indexJs: string; daemonJs: string } {
-  const here = path.dirname(fileURLToPath(import.meta.url)); // .../packages/cli/src/browser
-  const cliRoot = path.resolve(here, "..", "..");
+  const cliRoot = cliSourceRoot();
   const entry = path.join(cliRoot, "src", "index.ts");
   if (!fs.existsSync(entry)) {
     throw new Error(
@@ -308,12 +334,15 @@ export function buildLinuxCast(onProgress: (m: string) => void): { distDir: stri
         "  Run provisioning from the dev checkout (bun src/index.ts).",
     );
   }
-  onProgress("building cast bundles (dist)…");
+  onProgress(`building cast ${cliSourceVersion()} bundles (dist) from ${describeSourceTree(cliRoot)}…`);
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-linux-dist-"));
   let built = false;
   try {
     execFileSync("bun", ["run", "build", "--outdir", distDir], {
       cwd: cliRoot,
+      // The host is Linux whatever this machine is, so the build skips the
+      // macOS helpers it could never run (scripts/build-with-native.ts).
+      env: { ...process.env, CODECAST_BUNDLE_PLATFORM: "linux" },
       stdio: ["ignore", "ignore", "pipe"],
       timeout: 300_000,
     });
@@ -358,6 +387,112 @@ export function uploadLinuxCast(host: RemoteHost, distDir: string): void {
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }
+}
+
+export const REMOTE_BUNDLE_DIR = "/usr/local/lib/codecast";
+const REMOTE_BUNDLE_PREVIOUS = `${REMOTE_BUNDLE_DIR}.previous`;
+
+/**
+ * Put the CLI built from this checkout on a host, and prove it runs there
+ * before anything restarts onto it.
+ *
+ * The build is split, so a bundle that is missing one chunk still installs
+ * cleanly and only fails when something loads it; on 2026-09-14 that something
+ * was the daemon, which then crash-looped. Running `cast --version` on the host
+ * while the old daemon is still serving turns that into a failed command with
+ * nothing broken. Any failure after the current bundle is copied aside puts it
+ * back, so a host is never left on a mixed or unproven tree.
+ *
+ * The idle watchdog and probe are not part of the bundle: provisioning writes
+ * them, so this leaves them as they are.
+ */
+export function installLinuxCast(host: RemoteHost, onProgress: (m: string) => void = () => {}): { version: string } {
+  const want = cliSourceVersion();
+  const bundles = buildLinuxCast(onProgress);
+  const restore = () =>
+    remoteExec(host, `if [ -d ${REMOTE_BUNDLE_PREVIOUS} ]; then sudo rm -rf ${REMOTE_BUNDLE_DIR} && sudo mv ${REMOTE_BUNDLE_PREVIOUS} ${REMOTE_BUNDLE_DIR}; fi`, 120_000);
+  try {
+    onProgress("keeping the current bundle for rollback…");
+    remoteExec(host, `sudo rm -rf ${REMOTE_BUNDLE_PREVIOUS}; if [ -d ${REMOTE_BUNDLE_DIR} ]; then sudo cp -a ${REMOTE_BUNDLE_DIR} ${REMOTE_BUNDLE_PREVIOUS}; fi`, 120_000);
+    let got: string;
+    try {
+      onProgress("uploading cast bundles…");
+      uploadLinuxCast(host, bundles.distDir);
+      onProgress("checking the new bundle runs on the host…");
+      got = remoteExec(host, "/usr/local/bin/cast --version", 60_000);
+    } catch (err) {
+      restore();
+      throw new Error(`installing cast ${want} failed, and the previous bundle is back in place: ${(err as Error).message}`);
+    }
+    if (!got.split(/\s+/).includes(want)) {
+      restore();
+      throw new Error(`the new bundle does not run on the host (expected ${want}, it printed ${JSON.stringify(got.slice(0, 200))}); the previous bundle is back in place`);
+    }
+    return { version: want };
+  } finally {
+    fs.rmSync(bundles.distDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The idle watchdog exactly as a host stores it, taken from the provisioning
+ * script that writes it. The threshold lives in `/etc/cast-idle-minutes`, not
+ * in the script, so every rendering produces the same bytes, and the trailing
+ * newline is the one the heredoc adds. Comparing a host's copy against this is
+ * how to tell whether its watchdog is this build's.
+ */
+export function idleWatchdogScript(): string {
+  const body = baseProvisionScript(20).split("<<'IDLE'\n")[1]?.split("\nIDLE")[0];
+  if (!body) throw new Error("the provisioning script no longer writes an idle watchdog heredoc");
+  return `${body}\n`;
+}
+
+/**
+ * Whether the host's idle watchdog is the one this build installs, or null
+ * when it cannot be read. A bundle update does not touch it: provisioning
+ * writes it, so it stays at whatever version the host was last provisioned
+ * with, which the caller should say out loud rather than let a reader assume.
+ */
+export function hostIdleWatchdogCurrent(host: RemoteHost): boolean | null {
+  const want = createHash("sha256").update(idleWatchdogScript()).digest("hex");
+  try {
+    return remoteExec(host, "sha256sum /usr/local/bin/cast-idle-check", 30_000).trim().split(/\s+/)[0] === want;
+  } catch {
+    return null;
+  }
+}
+
+/** Pids of tmux servers inside the daemon's control group, one per line. */
+export const DAEMON_CGROUP_TMUX_SCRIPT =
+  "cat /sys/fs/cgroup/system.slice/codecast-daemon.service/cgroup.procs 2>/dev/null | " +
+  "while read p; do case \"$(cat /proc/$p/comm 2>/dev/null)\" in tmux*) echo $p;; esac; done";
+
+/**
+ * Restart the host's daemon onto the bundle `installLinuxCast` just proved.
+ *
+ * With the unit's default KillMode=control-group, a restart kills everything in
+ * the daemon's control group. A tmux server the daemon itself started lives
+ * there, and with it every agent session on the box; a server started any other
+ * way (an SSH shell, a keepalive loop) sits in its own scope under the user
+ * slice and survives. So the restart looks first, and refuses rather than
+ * silently taking sessions down, unless the caller forces it.
+ */
+export function restartHostDaemon(host: RemoteHost, opts: { force?: boolean } = {}): { pid: string } {
+  const tmux = remoteExec(host, DAEMON_CGROUP_TMUX_SCRIPT, 30_000).split(/\s+/).filter(Boolean);
+  if (tmux.length && !opts.force) {
+    throw new Error(
+      `the daemon's control group holds tmux server ${tmux.join(", ")}, so restarting it would kill every session in that server. ` +
+        "The new bundle is installed and the running daemon is untouched; restart when those sessions can stop, or pass --force.",
+    );
+  }
+  const out = remoteExec(
+    host,
+    "sudo systemctl restart codecast-daemon.service && sleep 5 && systemctl is-active codecast-daemon.service && " +
+      "systemctl show -p MainPID --value codecast-daemon.service",
+    90_000,
+  ).split("\n").map((l) => l.trim()).filter(Boolean);
+  if (out[0] !== "active") throw new Error(`the daemon did not come back after the restart: ${out.join(" ")}`);
+  return { pid: out[1] ?? "?" };
 }
 
 /**
@@ -433,13 +568,7 @@ export async function provisionLinuxHost(
     300_000,
   );
 
-  const bundles = buildLinuxCast(onProgress);
-  try {
-    onProgress("uploading cast bundles…");
-    uploadLinuxCast(host, bundles.distDir);
-  } finally {
-    fs.rmSync(bundles.distDir, { recursive: true, force: true });
-  }
+  installLinuxCast(host, onProgress);
 
   // The agent CLIs at the laptop's versions when missing (claude, codex,
   // gemini, grok) and a user-local Node ≥ 20 that shadows apt's node 18 via

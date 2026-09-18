@@ -36,6 +36,12 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
     );
   } else if (agentType === "grok") {
     return <GrokIcon className={`${className} text-sol-text`} />;
+  } else if (agentType === "muse") {
+    return (
+      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold text-emerald-400 leading-none`}>
+        M
+      </span>
+    );
   }
   return null;
 }
@@ -49,6 +55,7 @@ export function formatAgentType(agentType?: string): string {
   if (agentType === "opencode") return "OpenCode";
   if (agentType === "pi") return "pi";
   if (agentType === "grok") return "Grok";
+  if (agentType === "muse") return "Muse Spark";
 
   return agentType;
 }

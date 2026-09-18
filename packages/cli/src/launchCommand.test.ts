@@ -22,6 +22,7 @@ const CLAUDE_EFFORTS = AGENT_CLIENTS.claude.modelConfig!.efforts;
 const CODEX_EFFORTS = AGENT_CLIENTS.codex.modelConfig!.efforts;
 const PI_EFFORTS = AGENT_CLIENTS.pi.modelConfig!.efforts;
 const GROK_EFFORTS = AGENT_CLIENTS.grok.modelConfig!.efforts;
+const MUSE_EFFORTS = AGENT_CLIENTS.muse.modelConfig!.efforts;
 
 function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypass: boolean } {
   const { agentType, configuredArgs, permFlags, defaultFlags } = input;
@@ -51,6 +52,11 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
+  } else if (agentType === "muse") {
+    // muse: same grok/codex shape.
+    const extraArgs = configuredArgs;
+    if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
+    if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
   } else {
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
@@ -76,6 +82,9 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
   } else if (agentType === "grok") {
     if (input.modelAlias) args.push("-m", input.modelAlias);
     if (input.requestedEffort && (GROK_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--reasoning-effort", input.requestedEffort);
+  } else if (agentType === "muse") {
+    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (input.requestedEffort && (MUSE_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--reasoning-effort", input.requestedEffort);
   }
   return { binaryArgs: args, notifyCodexBypass };
 }
@@ -106,7 +115,7 @@ describe("getConfiguredAgentArgs reads the legacy per-client named fields", () =
 });
 
 describe("buildLaunchArgs matches the oracle across a matrix", () => {
-  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode", "pi", "grok"];
+  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"];
   const configuredArgsCases = ["", "--chrome", "--permission-mode acceptEdits", "--dangerously-skip-permissions", "--session-id fixed"];
   const permFlagsCases = [null, "--permission-mode bypassPermissions", "--dangerously-bypass-approvals-and-sandbox"];
   const defaultFlagsCases = [null, "--verbose", "--foo bar"];
@@ -230,6 +239,17 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
     expect(buildLaunchArgs({ agentType: "grok", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "grok-4.5", requestedEffort: "bogus" }).binaryArgs)
       .toEqual(["-m", "grok-4.5"]);
   });
+
+  test("muse: configured args + --disable-approval, --model id, --reasoning-effort gated on muse's levels", () => {
+    expect(buildLaunchArgs({ agentType: "muse", configuredArgs: "--verbose", permFlags: "--disable-approval", defaultFlags: null }).binaryArgs)
+      .toEqual(["--verbose", "--disable-approval"]);
+    // Model is the bare id (--model muse-spark-1.3-contributor); effort is a launch flag.
+    expect(buildLaunchArgs({ agentType: "muse", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "muse-spark-1.3-contributor", requestedEffort: "high" }).binaryArgs)
+      .toEqual(["--model", "muse-spark-1.3-contributor", "--reasoning-effort", "high"]);
+    // An effort outside MUSE_EFFORT_LEVELS is dropped, never passed through.
+    expect(buildLaunchArgs({ agentType: "muse", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "muse-spark-1.3-contributor", requestedEffort: "bogus" }).binaryArgs)
+      .toEqual(["--model", "muse-spark-1.3-contributor"]);
+  });
 });
 
 const printBase = {
@@ -310,6 +330,27 @@ describe("buildPrintArgs maps unified flags onto each client's native print mode
       "--format", "json",
       "do the thing",
     ]);
+  });
+
+  test("muse: exec subcommand, --session-id resume, --model/--reasoning-effort, --json", () => {
+    const { binaryArgs, ignored } = buildPrintArgs({
+      ...printBase,
+      agentType: "muse",
+      permFlags: "--disable-approval",
+      modelAlias: "muse-spark-1.3-contributor",
+      requestedEffort: "high",
+      outputFormat: "json",
+      resumeId: "01a04000-4d49-70f3-88b4-316e8f48a5fb",
+    });
+    expect(binaryArgs).toEqual([
+      "exec", "--session-id", "01a04000-4d49-70f3-88b4-316e8f48a5fb",
+      "--disable-approval",
+      "--model", "muse-spark-1.3-contributor",
+      "--reasoning-effort", "high",
+      "--json",
+      "do the thing",
+    ]);
+    expect(ignored).toEqual([]);
   });
 
   test("cursor print mode auto-approves with --force --trust", () => {
@@ -413,6 +454,13 @@ describe("print helpers", () => {
     expect(getPermissionFlags("claude", null)).toBe("--permission-mode bypassPermissions");
     expect(getPermissionFlags("grok", null)).toBe("--permission-mode bypassPermissions");
     expect(getPermissionFlags("codex", null)).toBe("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  test("getPermissionFlags defaults muse to --disable-approval unless pinned", () => {
+    expect(getPermissionFlags("muse", null)).toBe("--disable-approval");
+    for (const pinned of ["--disable-approval", "--approval-mode never", "--yolo"]) {
+      expect(getPermissionFlags("muse", { agent_args: { muse: pinned } } as never)).toBeNull();
+    }
   });
 
   test("formatPrintCommand quotes args that need it", () => {

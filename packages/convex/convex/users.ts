@@ -1,3 +1,4 @@
+import { getAuthenticatedUserId } from "./pendingMessages";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
@@ -183,6 +184,77 @@ export const updateProfile = mutation({
 // fields, and with a fleet of live sessions the concurrent invocations serialized
 // on one hot document and OCC-storm'd the backend. Kept only so invocations
 // already in the scheduler queue at deploy time don't fail; delete once drained.
+// ── Other addresses ──────────────────────────────────────────────────────────
+//
+// One person, several email addresses: a work address in Slack, a personal one
+// here, an old one on past commits. `users.alternate_emails` is the list of the
+// others, and every place that resolves a person BY email reads it beside the
+// primary: the Slack person match, task assignee resolution, thread membership,
+// issue sync. Adding one is how you say "that is also me" once, instead of
+// mapping the same person by hand in each place.
+
+const MAX_ALTERNATE_EMAILS = 10;
+
+function normalizeEmail(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+function looksLikeEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+/** Add another address to your own account. Refused when it is somebody else's
+ *  primary address or already claimed by another account, because these
+ *  addresses decide who a line or a task belongs to. */
+export const addAlternateEmail = mutation({
+  args: { api_token: v.optional(v.string()), email: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const email = normalizeEmail(args.email);
+    if (!looksLikeEmail(email)) throw new Error("That does not look like an email address");
+    const me = await ctx.db.get(userId);
+    if (!me) throw new Error("Not authenticated");
+    if (normalizeEmail(me.email ?? "") === email) throw new Error("That is already your primary address");
+    const mine = (me.alternate_emails ?? []).map(normalizeEmail);
+    if (mine.includes(email)) return { ok: true as const, email, added: false };
+    if (mine.length >= MAX_ALTERNATE_EMAILS) throw new Error(`At most ${MAX_ALTERNATE_EMAILS} other addresses`);
+    const primaryOwner = await ctx.db.query("users").withIndex("email", (q: any) => q.eq("email", email)).first();
+    if (primaryOwner && primaryOwner._id.toString() !== userId.toString()) {
+      throw new Error("Another account already signs in with that address");
+    }
+    await ctx.db.patch(userId, { alternate_emails: [...mine, email] });
+    // Anyone already seen under this address becomes you, wherever we match
+    // people by email.
+    await ctx.scheduler.runAfter(0, internal.slackSync.claimSlackPeopleByEmail, { user_id: userId, email });
+    return { ok: true as const, email, added: true };
+  },
+});
+
+export const myEmails = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const me = await ctx.db.get(userId);
+    return me ? { email: me.email ?? null, alternate_emails: me.alternate_emails ?? [] } : null;
+  },
+});
+
+export const removeAlternateEmail = mutation({
+  args: { api_token: v.optional(v.string()), email: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const me = await ctx.db.get(userId);
+    if (!me) throw new Error("Not authenticated");
+    const email = normalizeEmail(args.email);
+    const left = (me.alternate_emails ?? []).filter((e) => normalizeEmail(e) !== email);
+    await ctx.db.patch(userId, { alternate_emails: left });
+    return { ok: true as const, email, remaining: left };
+  },
+});
+
 export const updateUserActivity = internalMutation({
   args: {
     userId: v.id("users"),
@@ -3575,7 +3647,8 @@ export const startSession = mutation({
       v.literal("gemini"),
       v.literal("opencode"),
       v.literal("pi"),
-      v.literal("grok")
+      v.literal("grok"),
+      v.literal("muse")
     ),
     project_path: v.optional(v.string()),
     prompt: v.optional(v.string()),

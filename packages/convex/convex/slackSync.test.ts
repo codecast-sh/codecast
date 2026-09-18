@@ -7,6 +7,7 @@ import {
   applyInboundMessage,
   applyInboundReaction,
   commitLink,
+  pushContext,
   setDmSync,
   commitDmLink,
   retargetPersonRooms,
@@ -480,6 +481,19 @@ describe("direct messages", () => {
     const donna2 = ctx.db._tables.slack_users.find((r: any) => r.slack_user_id === "UDONNA");
     await call(retargetPersonRooms, ctx, { team_id: TEAM, from_user_id: BOB, to_user_id: donna2.shadow_user_id });
     expect((await ctx.db.get(made.chat_channel_id)).dm_key.split(":").slice(1)).toContain(String(donna2.shadow_user_id));
+  });
+  test("an agent's line never goes out under the person's own Slack account", async () => {
+    const ctx = context(ALICE, {
+      slack_user_tokens: [{ _id: "slack_user_tokens_9" as any, installation_id: INSTALL, workspace_id: WS, user_id: ALICE, slack_user_id: "UALICE", token: "xoxp-test", scopes: "chat:write,im:read,im:history,mpim:read,mpim:write", created_at: 1, updated_at: 1 }],
+    });
+    const typed = await ctx.db.insert("chat_messages", {
+      channel_id: CHANNEL, user_id: ALICE, content: "typed by a person", created_at: 6_000, updated_at: 6_000,
+    } as any);
+    const byAgent = await ctx.db.insert("chat_messages", {
+      channel_id: CHANNEL, user_id: ALICE, content: "written by a session", created_at: 6_001, updated_at: 6_001, origin: "agent",
+    } as any);
+    expect((await call(pushContext, ctx, { message_id: typed }))?.as_person).toBe(true);
+    expect((await call(pushContext, ctx, { message_id: byAgent }))?.as_person).toBeUndefined();
   });
   test("a line codecast posted into a DM as the person is not imported twice when Slack hands it back", async () => {
     const ctx = context(ALICE);

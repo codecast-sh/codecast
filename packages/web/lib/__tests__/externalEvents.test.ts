@@ -7,10 +7,14 @@ import {
   externalEventStyle,
   filePath,
   externalEventRowToExternalEvent,
+  groupExternalEvents,
+  isQuietExternalEvent,
   prPath,
   registerExternalEventStyles,
   shepherdStyle,
   shortSha,
+  summarizeExternalEvents,
+  type ExternalEventRecord,
 } from "../externalEvents";
 
 describe("externalEventRowToExternalEvent", () => {
@@ -195,5 +199,73 @@ describe("shepherd states", () => {
   it("reads an unknown state as plain open", () => {
     expect(shepherdStyle(undefined).label).toBe("open");
     expect(shepherdStyle("something_new").label).toBe("something_new");
+  });
+});
+
+describe("groupExternalEvents", () => {
+  const pr = (over: Partial<ExternalEventRecord>): ExternalEventRecord => ({
+    _id: String(Math.random()),
+    repository: "codecast-sh/codecast",
+    pr_number: 47,
+    branch: "remote-mac-credential-absorb",
+    actor_user_id: "u1",
+    ...over,
+  });
+
+  it("drops fell-behind rows before grouping", () => {
+    const groups = groupExternalEvents([
+      pr({ _id: "b", kind: "pr_behind", title: "PR #47 is behind main", created_at: 10 }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(isQuietExternalEvent({ kind: "pr_behind" })).toBe(true);
+    expect(isQuietExternalEvent({ kind: "pr_check" })).toBe(false);
+  });
+
+  it("folds one PR's day into one group, newest first, failures counted once", () => {
+    const groups = groupExternalEvents([
+      pr({ _id: "c1", kind: "pr_check", title: "CI failed: verify", meta: { conclusion: "failure" }, created_at: 5 }),
+      pr({ _id: "r", kind: "rebase", title: "rebased remote-mac-credential-absorb onto e7a0305", created_at: 1 }),
+      pr({ _id: "c2", kind: "pr_check", title: "CI failed: test-cli", meta: { conclusion: "failure" }, created_at: 6 }),
+      pr({ _id: "s", kind: "pr_synchronize", title: "PR #47 updated to e7a0305", created_at: 3 }),
+      pr({ _id: "ready", kind: "pr_ready", title: "PR #47 merges cleanly again", created_at: 4 }),
+      pr({ _id: "c3", kind: "pr_check", title: "CI failed: GitGuardian", meta: { conclusion: "failure" }, created_at: 7 }),
+    ]);
+    expect(groups).toHaveLength(1);
+    const [g] = groups;
+    expect(g.at).toBe(7);
+    expect(g.events.map((e) => e._id)).toEqual(["c3", "c2", "c1", "ready", "s", "r"]);
+    expect(g.phrases.map((p) => p.text)).toEqual(["3 checks failed", "merges cleanly", "PR updated", "rebased"]);
+    expect(g.phrases[0].accent).toBe("red");
+  });
+
+  it("keeps a checkout on another branch in its own group and names where it went", () => {
+    const groups = groupExternalEvents([
+      pr({ _id: "co", kind: "checkout", pr_number: undefined, branch: "main", title: "switched to main", meta: { to_ref: "main", from_ref: "x" }, created_at: 9 }),
+      pr({ _id: "c1", kind: "pr_check", meta: { conclusion: "failure" }, created_at: 5 }),
+    ]);
+    expect(groups.map((g) => g.events.length)).toEqual([1, 1]);
+    expect(groups[0].phrases[0].text).toBe("switched to main");
+    expect(groups[1].phrases[0].text).toBe("1 check failed");
+  });
+
+  it("keeps a repeated announcement once, at its newest time", () => {
+    const groups = groupExternalEvents([
+      pr({ _id: "x1", kind: "pr_conflict", title: "PR #47 has conflicts", created_at: 1 }),
+      pr({ _id: "x2", kind: "pr_conflict", title: "PR #47 has conflicts", created_at: 3 }),
+      pr({ _id: "v1", kind: "pr_check", title: "CI failed: verify", meta: { conclusion: "failure" }, created_at: 2 }),
+      pr({ _id: "v2", kind: "pr_check", title: "CI failed: verify", meta: { conclusion: "failure" }, created_at: 4 }),
+    ]);
+    expect(groups[0].events.map((e) => e._id)).toEqual(["v2", "x2"]);
+    expect(groups[0].phrases.map((p) => p.text)).toEqual(["1 check failed", "conflicts"]);
+  });
+
+  it("sums the commits a push moved and pluralises commits", () => {
+    const phrases = summarizeExternalEvents([
+      pr({ _id: "p1", kind: "push", meta: { commits_count: 2 } }),
+      pr({ _id: "p2", kind: "push", meta: { commits_count: 1 } }),
+      pr({ _id: "k1", kind: "commit" }),
+      pr({ _id: "k2", kind: "commit" }),
+    ]);
+    expect(phrases.map((p) => p.text)).toEqual(["2 commits", "pushed 3 commits"]);
   });
 });

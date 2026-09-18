@@ -180,7 +180,7 @@ describe("orgWakes.buildFrame", () => {
     scope: { projects: [{ id: "p1", title: "Infrastructure" }], plans: [], whole_workspace: false },
     tasks: { total: 4, open: 3, by_status: { open: 2, in_progress: 1, done: 1 }, by_priority: { high: 1, medium: 3 } },
     plans: [{ id: "pl1", short_id: "pl-9", title: "Move to Postgres", status: "active", updated_at: NOW, progress: { total: 3, done: 1, in_progress: 1, open: 1 } }],
-    hands: [{ _id: "hand1" as any, short_id: "jxhand1", title: "Fix the deploy", state: "working", state_line: "checking CI", state_status: "working", state_at: NOW, updated_at: NOW, task: { short_id: "ct-5", title: "Deploy", status: "in_review", execution_status: "done", review_verdict: "changes" } }],
+    hands: [{ _id: "hand1" as any, short_id: "jxhand1", title: "Fix the deploy", state: "working", state_line: "checking CI", state_status: "working", state_at: NOW, updated_at: NOW, waiting_since: null, escalated: null, task: { short_id: "ct-5", title: "Deploy", status: "in_review", execution_status: "done", review_verdict: "changes" } }],
     changed: [{ kind: "task", short_id: "ct-5", title: "Deploy", status: "in_review", updated_at: NOW }],
     decisions: { open: 1, answered_today: 2 },
     usage: { day: "2027-01-01", wakes: 3, hands: 1, tokens: 1200, caps: { ...DEFAULT_CAPS }, uncounted_sessions: 0 },
@@ -192,12 +192,30 @@ describe("orgWakes.buildFrame", () => {
     channelLines: [], parentName: "Me", restart: false, now: NOW, ...extra,
   });
 
+  test("Your sessions leads with the ones waiting on a person: the wait, longest first, and whether the role escalated it (R1)", () => {
+    const H = 60 * 60 * 1000;
+    const hand = (short: string, over: Record<string, any>) => ({ ...facts.hands[0], _id: short as any, short_id: short, title: `Work ${short}`, task: null, ...over });
+    const f = buildFrame(base([{ kind: "fold", cause: "x" }], { facts: { ...facts, hands: [
+      hand("jxwork1", {}),
+      hand("jxwait1", { state: "needs_input", state_line: "which price?", waiting_since: NOW - 5 * H }),
+      hand("jxwait2", { state: "needs_input", state_line: "copy is ready", waiting_since: NOW - 72 * H, escalated: { line: "the pricing copy needs your eye", at: NOW - H } }),
+    ] } }));
+    const section = f.text.slice(f.text.indexOf("## Your sessions"), f.text.indexOf("## Charter"));
+    expect(section).toContain("Waiting on a person:");
+    expect(section).toContain("- jxwait1 Work jxwait1: needs_input · waited 5h · not escalated — which price?");
+    expect(section).toContain("- jxwait2 Work jxwait2: needs_input · waited 3d · escalated: the pricing copy needs your eye — copy is ready");
+    // Longest wait first, then the rest.
+    expect(section.indexOf("jxwait2")).toBeLessThan(section.indexOf("jxwait1"));
+    expect(section.indexOf("The rest:")).toBeLessThan(section.indexOf("jxwork1"));
+    expect(section.indexOf("jxwait1")).toBeLessThan(section.indexOf("The rest:"));
+  });
+
   test("carries every section, marks passive rows, shows hand handoff status and verdict", () => {
     const f = buildFrame(base([
       { kind: "immediate", cause: "a person wrote: go" },
       { kind: "passive", cause: "decision sd-1 answered" },
     ]));
-    for (const h of ["## You", "## Why you are awake", "## Your scope now", "## Hands say", "## Charter"]) expect(f.text).toContain(h);
+    for (const h of ["## You", "## Why you are awake", "## Your scope now", "## Your sessions", "## Charter"]) expect(f.text).toContain(h);
     expect(f.text).toContain("- a person wrote: go");
     expect(f.text).toContain("- (passive) decision sd-1 answered");
     expect(f.text).toContain("trust direct · reports to Me");
@@ -571,9 +589,24 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
 
   test("the charter template carries the routing rule so a restart frame re-reads it", () => {
     const charter = charterTemplate({ name: "Infra lead", handle: "infra-lead" }, ["project Infrastructure"], "Me");
-    expect(ROLE_RULES).toHaveLength(5);
+    expect(ROLE_RULES).toHaveLength(6);
     expect(charter).toContain("5. A person's message is answered here or handed on to a hand, and the reply says which");
     expect(charter).toContain("a request to remember or forget is a brief write in the same turn");
+    // The triage rule (org-roles-run-work.md R1) rides the same template.
+    expect(charter).toContain("6. Your sessions stay out of a person's inbox");
+  });
+
+  test("the role bootstrap carries the triage principle: why, the two commands, and no scripted line (R1)", () => {
+    const text = bootstrapMessage({ name: "Growth", scopeType: "team", scopeLabel: "Acme", teamName: "Acme", role: { handle: "growth", parentName: "Me", scopeNames: ["project Growth"], trust: "decide" } as any });
+    expect(text).toContain("Your sessions are yours to triage");
+    expect(text).toContain("a wait nobody can see");
+    expect(text).toContain('cast escalate <session> "<one line>"');
+    expect(text).toContain("cast escalate --clear <session>");
+    expect(text).toContain("says what they will decide");
+    // The frame section the rule points at is named as the frame names it.
+    expect(text).toContain("your scope\n  now, your sessions");
+    // The workspace anchor has no sessions to triage.
+    expect(bootstrapMessage({ name: "Anchor", scopeType: "team", scopeLabel: "x", teamName: "Acme" })).not.toContain("cast escalate");
   });
 });
 

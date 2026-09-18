@@ -23,6 +23,9 @@ const restoreGlobals = replaceGlobals({
   document: dom.window.document,
   navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement,
+  // Prism (in the panel's import graph) reads Element.prototype on import.
+  Element: dom.window.Element,
+  Node: dom.window.Node,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {

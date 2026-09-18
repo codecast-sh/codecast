@@ -47,6 +47,12 @@ export const GUIDES: Guide[] = [
     installSlug: "memory",
   },
   {
+    slug: "which-session-wrote-this-line",
+    title: "How to find which AI agent session wrote a line of code",
+    dek: "git blame names whoever committed a line. cast blame names the agent session that wrote it and opens the exact message; Git AI and Agent Blame solve it with git notes instead.",
+    category: "Recall",
+  },
+  {
     slug: "messaging",
     title: "Messaging between sessions",
     dek: "cast send turns sessions into teammates: any session can message any other, including a teammate's, and manage what the human sees in the inbox.",

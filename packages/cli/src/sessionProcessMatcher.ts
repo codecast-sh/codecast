@@ -395,6 +395,11 @@ const ARGV_SESSION_FLAG_RES = [
   new RegExp(`(?:^|\\s)--session-id[\\s=]+${ARGV_ID}`),
   new RegExp(`(?:^|\\s)(?:--resume|-r)[\\s=]+${ARGV_ID}`),
   new RegExp(`(?:^|\\s|/)codex\\s+resume\\s+${ARGV_ID}`),
+  // `muse resume <uuid>` — the subcommand form, so a bare `resume` word
+  // inside a muse prompt argument can't match (same reason codex anchors on
+  // its binary). `muse exec --session-id <id>` is covered by the generic
+  // --session-id pattern above.
+  new RegExp(`(?:^|\\s|/)muse\\s+resume\\s+${ARGV_ID}`),
 ];
 
 /** The session id an agent process names on its own command line, or null. */
