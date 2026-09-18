@@ -31,6 +31,8 @@ async function verifyScopePage() {
   const calls: string[] = [];
   const state: any = {
     currentUser: { _id: "fixture-user-me" },
+    // The Scope tab paints from the store's tree slice, the one the page feeds.
+    get orgTree() { return env.tree; },
     sessions: {} as Record<string, any>,
     conversations: {},
     docs: {}, docDetails: {}, sessionDecisions: {},
@@ -67,7 +69,7 @@ async function verifyScopePage() {
   mock.module("convex/react", () => ({ useMutation: () => async (args: any) => { calls.push(`mutation:${JSON.stringify(args)}`); return {}; }, useQuery: () => undefined }));
   mock.module("sonner", () => ({ toast: { error: (m: string) => calls.push(`toast:${m}`), success: (m: string) => calls.push(`toast:${m}`), warning: () => {} } }));
   mock.module("../../anchor/AnchorConversation", () => ({
-    AnchorConversation: (props: any) => React.createElement("div", { "data-thread": props.conversationId, "data-thread-autofocus": props.autoFocusInput ? "1" : "0", "data-thread-owner": props.seedOwnership ? "1" : "0" }, React.createElement("textarea", { "data-composer": true })),
+    AnchorConversation: (props: any) => React.createElement("div", { "data-thread": props.conversationId, "data-thread-autofocus": props.autoFocusInput ? "1" : "0", "data-thread-owner": props.seedOwnership ? "1" : "0", "data-thread-fold": props.foldBootstrap ? "1" : "0", "data-thread-fold-working": props.foldWorkingTurns ? "1" : "0", "data-thread-density": props.initialDensity ?? "" }, props.leadNode, React.createElement("textarea", { "data-composer": true })),
     AnchorOnboarding: (props: any) => React.createElement("div", { "data-anchor-onboarding": props.scope }, "Meet the Anchor"),
   }));
   mock.module("./ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope) }, "feed") }));
@@ -78,6 +80,7 @@ async function verifyScopePage() {
   mock.module("../../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
   mock.module("../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }) }));
   mock.module("../RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
+  mock.module("../../charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }), ProjectLeadMark: () => null, HireLeadDialog: () => null, useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
   mock.module("../RetireRoleConfirm", () => ({ retireToastText: () => "retired" }));
   mock.module("../OrgScopePanel", () => ({ DocRow: () => null, InlineEdit: () => null }));
   mock.module("../../ConversationList", () => ({ AgentIcon: ({ agentType }: any) => React.createElement("i", { "data-agent": agentType }) }));
@@ -112,16 +115,33 @@ async function verifyScopePage() {
   await mount("or-1");
   assert.equal(q("[data-scope-layout]")!.getAttribute("data-scope-layout"), "side");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread"), "fixture-growth-conv", "the role's standing conversation is mounted inline");
-  assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "0", "ownership comes from the row, not seeded");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "1", "the host talks to the seat: the composer sends");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold"), "1", "the seat's provisioning prompt folds away");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "working turns and machine prompts fold away (F4.1)");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
+  assert.match(q("[data-scope-lead]")!.textContent!, /I look after Growth, SEO and AI citations and report to Ashot Petrosian/, "the agent opens by saying what this area is");
+  assert.match(q("[data-scope-stripe]")!.textContent!, /Rewriting the weekly growth review/, "the header says what it is watching");
+  assert.match(q("[data-scope-lead-ask]")!.textContent!, /2 sessions are waiting on a person/, "and what waits on the person");
+  for (const word of ["trust", "model", "today", "wakes", "tokens", "host"]) assert.ok(!qa("header *").some((el) => el.children.length === 0 && el.textContent?.trim().toLowerCase() === word), `the header no longer says ${word}`);
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-autofocus"), "1", "the composer comes to hand on a desktop");
   assert.ok(q("[data-composer]"), "the composer is Talk");
   assert.equal(qa("button").filter((b) => /^(Talk|Wake)$/.test(b.textContent?.trim() ?? "")).length, 0, "Talk and Wake left the header");
   assert.ok(q("[data-scope-reports-to]"), "the header keeps the reports to line");
   assert.equal(q("[data-scope-state]")!.getAttribute("data-scope-state"), "awake");
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side", "the panel is open by default");
-  assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "feed");
-  assert.ok(q("[data-scope-feed]"));
-  assert.equal(qa("[data-scope-tab]").length, 11, "every tab survives");
+  // A role's page opens on Scope (org-roles-run-work.md R3): what it looks
+  // after, at full size, before any feed.
+  assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "scope", "a role's page opens on Scope");
+  assert.equal(qa("[data-scope-tab]")[0].getAttribute("data-scope-tab"), "scope", "and Scope is the first tab");
+  assert.ok(q('[data-role-scope="page"]'), "the Scope tab is the scope view at full size");
+  assert.equal(q("[data-scope-feed]"), null, "the feed waits behind its tab");
+  assert.deepEqual(qa('[data-role-scope="page"] [data-scope-label]').map((el) => el.textContent), ["Looks after", "Sessions", "Its job", "Reports to"], "the sections a person reads, in order");
+  assert.match(q('[data-role-scope="page"] [data-scope-section="looks-after"]')!.textContent!, /Growth/, "the projects it looks after, by name");
+  assert.ok(q('[data-role-scope="page"] [data-scope-project] [data-project-lead-chip="fixture-project-growth"]'), "each project row carries its lead, drawn by the one chip that knows the rule");
+  assert.match(q('[data-role-scope="page"] [data-scope-sessions-line]')!.textContent!, /2 waiting on a person/, "the sessions by who acts next");
+  assert.ok(q('[data-role-scope="page"] [data-hand-groups]'), "and the same grouped rows the Sessions tab shows");
+  assert.match(q('[data-role-scope="page"] [data-scope-section="reports-to"]')!.textContent!, /Ashot Petrosian/);
+  assert.equal(qa("[data-scope-tab]").length, 12, "every tab survives");
   // The dot: two hands under this role wait on a person.
   assert.equal(q("[data-scope-panel-toggle]")!.getAttribute("data-scope-waiting"), "2");
   assert.ok(q("[data-scope-panel-dot]"), "the toggle carries the dot");
@@ -142,6 +162,9 @@ async function verifyScopePage() {
   await click(q('[data-scope-tab="sessions"]'));
   assert.equal(calls.pop(), "replace:/org/or-1?tab=sessions");
   await click(q('[data-scope-tab="feed"]'));
+  assert.equal(calls.pop(), "replace:/org/or-1?tab=feed");
+  // The tab the page opens on is its bare URL.
+  await click(q('[data-scope-tab="scope"]'));
   assert.equal(calls.pop(), "replace:/org/or-1");
 
   // No dot when nothing waits.
@@ -191,6 +214,14 @@ async function verifyScopePage() {
   await mount("workspace");
   assert.equal(q("[data-thread]"), null);
   assert.equal(q("[data-anchor-onboarding]")!.getAttribute("data-anchor-onboarding"), "team");
+  env.tree = withStanding;
+
+  // ── a plain member reads the seat's conversation; only the host, the parent or an admin sends ──
+  env.tree = { ...withStanding, people: withStanding.people.map((p) => ({ ...p, is_me: false, role: "member" as const })) };
+  state.currentUser = { _id: "fixture-user-sam" };
+  await mount("or-1");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "0", "a member who is neither host nor parent asks to send");
+  state.currentUser = { _id: "fixture-user-me" };
   env.tree = withStanding;
 
   // ── a seat never provisioned: say what it is, offer to bring it online ──

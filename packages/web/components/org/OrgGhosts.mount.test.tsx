@@ -26,7 +26,7 @@ async function verifyGhostCards() {
   const { createRoot } = await import("react-dom/client");
   const { ReactFlowProvider } = await import("@xyflow/react");
   const { PersonCard, RoleCard, SessionCard } = await import("./OrgNodeCards");
-  const { ghostsFor, layoutOrgTree, personNodeId, roleNodeId, sessionNodeId } = await import("./orgLayout");
+  const { ghostsFor, layoutOrgTree, personNodeId, roleNodeId, sessionNodeId, ORG_SIZES } = await import("./orgLayout");
   const { ORG_FIXTURE } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH } = await import("./orgStaffingFixture");
   const { healthFlagsByNode } = await import("./orgMeta");
@@ -34,6 +34,7 @@ async function verifyGhostCards() {
   const change = (id: string, c: any, status: any = "proposed") => ({ _id: id, proposal_id: "p", seq: 1, change: c, rationale: "r", evidence: [], status });
   const changes = [
     change("c-role", { kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me", scope: { projects: ["Platform"] } }),
+    change("c-role-seat", { kind: "role", name: "Market growth mandate", handle: "market-growth", reports_to: "me", seat: { existing: "jx7b88a", title: "Market growth mandate", started_at: Date.now() - 34 * 86_400_000 - 3_600_000, helpers: 391 } }),
     change("c-role-acc", { kind: "role", name: "Content Lead", handle: "content", reports_to: "@growth" }, "accepted"),
     change("c-retire", { kind: "retire", handle: "growth" }),
     change("c-budget", { kind: "budget", handle: "growth", caps: { tokens_per_day: 800_000 } }),
@@ -63,6 +64,7 @@ async function verifyGhostCards() {
   await act(async () => {
     root.render(React.createElement(ReactFlowProvider, null,
       React.createElement("div", { "data-card": "ghost-role" }, card(RoleCard, node(roleNodeId("c-role")), { dropTarget: true })),
+      React.createElement("div", { "data-card": "seat-role" }, card(RoleCard, node(roleNodeId("c-role-seat")))),
       React.createElement("div", { "data-card": "solid-role" }, card(RoleCard, node(roleNodeId("c-role-acc")))),
       React.createElement("div", { "data-card": "growth" }, card(RoleCard, node(roleNodeId("fixture-role-growth")))),
       React.createElement("div", { "data-card": "me" }, card(PersonCard, node(personNodeId("fixture-user-me")), { flags: [{ code: "unowned", severity: "blocker", detail: "Platform has no owner role" }, { code: "chatter", severity: "info", detail: "quiet" }] })),
@@ -83,6 +85,15 @@ async function verifyGhostCards() {
   assert.ok(ghostRole.textContent?.includes("@platform") && ghostRole.textContent?.includes("Head of Platform"));
   assert.ok(ghostRole.textContent?.includes("Platform"), "scope chip");
   assert.equal(ghostRole.querySelector("a[href^='/org/']"), null, "a ghost has no scope page to open");
+  // A ghost that names a session which already works as the role (R2) says
+  // what naming changes, whole, in a row the layout booked; a plain ghost has none.
+  const seatRole = q("[data-card='seat-role']")!;
+  const sentence = "This is Market growth mandate, which has run for 34 days with 391 helper sessions. Naming it changes nothing about how it works and gives it a place on the chart.";
+  assert.equal(seatRole.querySelector("[data-ghost-seat='jx7b88a']")?.textContent?.trim(), sentence);
+  assert.equal(ghostRole.querySelector("[data-ghost-seat]"), null, "a role with a fresh session says nothing about naming");
+  const rows = Math.ceil(sentence.length / ORG_SIZES.seatChars);
+  assert.equal(node(roleNodeId("c-role-seat")).h - node(roleNodeId("c-role")).h, 6 + rows * ORG_SIZES.seatLine, "the layout books the sentence's height");
+  assert.equal((seatRole.querySelector("[data-ghost-seat]") as HTMLElement).style.height, `${rows * ORG_SIZES.seatLine}px`);
   // An accepted stub is solid: its word instead of buttons.
   const solid = q("[data-card='solid-role']")!;
   assert.ok(solid.querySelector("[data-ghost-actions='c-role-acc']")?.textContent?.includes("accepted"));

@@ -37,6 +37,11 @@ describe("what a revise did", () => {
     const budget = rows.find((c) => c._id === "fixture-change-93")!;
     expect(amendedMoves(budget)).toEqual([{ key: "caps.tokens_per_day", label: "tokens a day", from: "600,000", to: "800,000" }]);
     expect(amendedMoves(rows.find((c) => c._id === "fixture-change-92")!)).toEqual([]);
+    // A scope amend speaks the row's words, not the raw key.
+    expect(amendedMoves({
+      change: { kind: "scope", handle: "product", add: ["Codecast: Agents & Clients"] },
+      revision: { kind: "amended", note: "x", at: 1, before: { kind: "scope", handle: "product", add: ["Codecast: Agents & Clients", "Codecast: Calls & Presence"] } },
+    })).toEqual([{ key: "add", label: "also looks after", from: "Codecast: Agents & Clients, Codecast: Calls & Presence", to: "Codecast: Agents & Clients" }]);
     expect(revisionWord(budget.revision!)).toBe("Changed");
   });
   test("a removed change leaves the count", () => {

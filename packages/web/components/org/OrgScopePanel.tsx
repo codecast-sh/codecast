@@ -16,7 +16,7 @@ import { Avatar } from "../tasks/TaskCommentStream";
 import { SelectBox } from "../ui/select-box";
 import { cn } from "../../lib/utils";
 import { GhostChips, StateBar, StateTally, StandingLine } from "./OrgNodeCards";
-import { ORG_STATE_META, parentName } from "./orgMeta";
+import { ORG_STATE_META, parentName, staffingPaneWord } from "./orgMeta";
 import { OrgButton } from "./OrgButton";
 import { RetireRoleConfirm, type UnseatChoice } from "./RetireRoleConfirm";
 import type { OrgGhostChip, OrgLayoutNode } from "./orgLayout";
@@ -25,7 +25,8 @@ import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./org
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useOrgRoles } from "../../hooks/useOrgRoles";
-import { OwnerRoleChip, PriorityPill } from "../charter/CharterChips";
+import { PriorityPill } from "../charter/CharterChips";
+import { ProjectLeadChip } from "../charter/ProjectLeadChip";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 
@@ -57,9 +58,10 @@ export type OrgScopePanelProps = {
   onMode: (mode: OrgPanelMode) => void;
   /** The staffing pane, rendered in the body when mode is "staffing". */
   staffing: React.ReactNode;
-  /** The proposal's conversation in its own column beside the body, on a
-   *  desktop wide enough for both (org-staffing.md S18). */
-  staffingAside?: React.ReactNode;
+  /** The proposal's conversation, leading: the wider column to the left of
+   *  the body on a desktop (org-staffing.md S19), `staffingLeadWidth` wide. */
+  staffingLead?: React.ReactNode;
+  staffingLeadWidth?: number;
   /** The body is one full height view with its own scroll (the phone
    *  sheet's conversation view), not the padded scroll of the pane. */
   staffingFill?: boolean;
@@ -183,9 +185,6 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
   const plans = useWorkspaceCollection<PlanItem>("plans");
   const projectById = useMemo(() => new Map(projects.map((p) => [p._id, p])), [projects]);
   const planById = useMemo(() => new Map(plans.map((p) => [p._id, p])), [plans]);
-  // Only the roles: the owner chip names one, and the whole tree would wake
-  // this editor on every message in the workspace.
-  const { roles, workspace } = useOrgRoles();
   // A proposal's chips on the rows they name (S5): a project charter on its
   // project's row; a filing on its plan's row when the scope has the plan,
   // else on its project's row. Decided ones are gone from here.
@@ -225,9 +224,9 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
         {role.scope.project_ids.map((id) => (
           <span key={`p:${id}`} className="inline-flex items-center gap-1" data-scope-project={id}>
             <Chip tone="blue" href={`/projects/${id}`} onRemove={canEdit ? () => remove("project", id) : undefined}>{nameOfProject(id)}</Chip>
-            {/* The project's charter at a glance (org-staffing.md S7): its priority and which role owns it. */}
+            {/* The project's charter at a glance (org-staffing.md S7): its priority and who leads it (org-roles-run-work.md R4). */}
             <PriorityPill priority={projectById.get(id)?.priority} size="xs" />
-            <OwnerRoleChip roles={workspace ? roles : null} ownerRoleId={projectById.get(id)?.owner_role_id} size="xs" />
+            <ProjectLeadChip projectId={id} size="xs" />
             <GhostChips chips={chipsOnProject(id)} focusChangeId={focusChangeId} onFocusChange={onSelectChange} />
           </span>
         ))}
@@ -563,23 +562,32 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
   // With nothing selected the node tab has no subject; the sheet is the
   // staffing pane alone.
   const mode: OrgPanelMode = node ? props.mode : "staffing";
+  // A proposal with nothing else selected is the page (org-staffing.md S19):
+  // no tab strip, the conversation starts on the first line, and the asks
+  // header carries the close. With a node selected too, the two tabs stay.
+  const stripless = mode === "staffing" && !node && !!(props.staffingLead || props.staffingFill);
   return (
-    <div className="h-full flex flex-col min-h-0">
-      <div className="flex items-center justify-between h-10 px-4 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }}>
+    <div className="h-full flex flex-col min-h-0" data-panel-strip={stripless ? "none" : "tabs"}>
+      {!stripless && <div className="flex items-center justify-between h-10 px-4 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }}>
         <div className="flex items-center gap-4" role="tablist">
           {node && (
             <PanelTab active={mode === "node"} onClick={() => props.onMode("node")}>
               {node.kind === "cluster" ? "sessions" : node.kind}
             </PanelTab>
           )}
-          <PanelTab active={mode === "staffing"} onClick={() => props.onMode("staffing")} count={props.staffingCount}>Staffing</PanelTab>
+          <PanelTab active={mode === "staffing"} onClick={() => props.onMode("staffing")} count={props.staffingCount}>{staffingPaneWord((props.staffingCount ?? 0) > 0)}</PanelTab>
         </div>
         <button type="button" onClick={onClose} className="w-7 h-7 -mr-2 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" aria-label="Close panel" style={{ color: "var(--sol-text-dim)" }}>
           <X className="w-4 h-4" />
         </button>
-      </div>
+      </div>}
       <div className="flex-1 min-h-0 flex">
-      <div className={cn("flex-1 min-w-0 min-h-0", mode === "staffing" && props.staffingFill ? "flex flex-col overflow-hidden" : "overflow-y-auto px-4 pt-4 pb-8")} data-main-scroll data-panel-mode={mode}>
+      {mode === "staffing" && props.staffingLead && (
+        <div className="min-w-0 min-h-0 border-r flex flex-col" style={{ width: props.staffingLeadWidth ?? STAFFING_LEAD_W.tight, flex: "1 1 auto", borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }} data-staffing-lead>
+          {props.staffingLead}
+        </div>
+      )}
+      <div className={cn("min-w-0 min-h-0", mode === "staffing" && props.staffingLead ? "shrink-0" : "flex-1", mode === "staffing" && props.staffingFill ? "flex flex-col overflow-hidden" : "overflow-y-auto px-4 pt-4 pb-8")} style={mode === "staffing" && props.staffingLead ? { width: STAFFING_ASKS_W } : undefined} data-main-scroll data-panel-mode={mode}>
         {mode === "staffing" ? props.staffing : node && (
           <>
             {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} changes={props.changes} focusChangeId={props.focusChangeId} onSelectChange={props.onSelectChange} />}
@@ -590,17 +598,16 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
           </>
         )}
       </div>
-      {mode === "staffing" && props.staffingAside && (
-        <div className="shrink-0 min-h-0 border-l flex flex-col" style={{ width: STAFFING_THREAD_W, borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }} data-staffing-aside>
-          {props.staffingAside}
-        </div>
-      )}
       </div>
     </div>
   );
 }
 
-/** The conversation column's width beside the 380px pane (S18). */
-export const STAFFING_THREAD_W = 400;
+/** The asks column (S19): the panel's own 380px. */
+export const STAFFING_ASKS_W = 380;
+/** The conversation's column to its left: wider, as the eye should land
+ *  there; `roomy` when the window leaves a strip of chart beside both,
+ *  `tight` when it does not. */
+export const STAFFING_LEAD_W = { roomy: 600, tight: 420 } as const;
 
 

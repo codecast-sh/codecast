@@ -5,6 +5,8 @@
 // upward as an intent (select, toggle, expand, reparent request, context menu).
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import type { PlanItem, ProjectItem } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
 import {
   ReactFlow,
@@ -156,9 +158,17 @@ function OrgGraphInner(props: OrgGraphProps) {
 
   // Ghosts merge into the tree before layout (org-staffing.md S5), so a
   // proposed role takes a real slot under its proposed parent.
+  // A ghost role's scope chips name projects and plans the way the real
+  // card does: from the store's rows, which the page keeps fed.
+  const projects = useWorkspaceCollection<ProjectItem>("projects");
+  const plans = useWorkspaceCollection<PlanItem>("plans");
+  const scopeRows = useMemo(() => ({
+    projects: projects.map((p) => ({ id: p._id, title: p.title, short_id: (p as any).short_id ?? undefined })),
+    plans: plans.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id })),
+  }), [projects, plans]);
   const ghosts = useMemo<OrgGhostPlan | undefined>(
-    () => (changes?.length ? ghostsFor(tree, changes, { viewerSession }) : undefined),
-    [tree, changes, viewerSession?.id, viewerSession?.short_id], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (changes?.length ? ghostsFor(tree, changes, { viewerSession, ...scopeRows }) : undefined),
+    [tree, changes, viewerSession?.id, viewerSession?.short_id, scopeRows], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const layout = useMemo(() => layoutOrgTree(tree, view, ghosts), [tree, view, ghosts]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);

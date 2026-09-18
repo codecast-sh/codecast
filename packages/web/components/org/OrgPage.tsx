@@ -9,7 +9,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { create as mutate } from "mutative";
-import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Trash2, Pencil } from "lucide-react";
+import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Trash2, Pencil } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { createOrgSlice, orgRoleReparentMakesCycle, reparentToastLine, type OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
@@ -31,18 +31,20 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { cn } from "../../lib/utils";
 import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
-import { OrgScopePanel, STAFFING_THREAD_W, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
-import { ProposalThread, type ProposalThreadLayout } from "./ProposalThread";
+import { OrgScopePanel, STAFFING_LEAD_W, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
+import { AsksSheet, ProposalThread, type ProposalAbout, type ProposalThreadLayout } from "./ProposalThread";
+import { askNames, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
 import { latestRevisionAt, proposalThread, revisedSince } from "./staffingRevise";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
 import { OrgEmptyCanvas, OrgGuide, orgGuideSteps } from "./OrgFirstOpen";
 import { OrgGlossary, type GlossaryPage } from "./OrgGlossary";
+import { staffingPaneWord } from "./orgMeta";
 import { orgTreeReadState } from "./orgReadState";
 import { retireToastText, type UnseatChoice } from "./RetireRoleConfirm";
 import { reviewRunState, type OrgReviewRun } from "./staffingModel";
-import { changeNodeId, composeParam, findChiefOfStaff, orgPreviewEnabled, pickProposal, proposalParam, proposalProgress, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
+import { changeNodeId, composeParam, findChiefOfStaff, hasAcceptedBefore, isDecidable, orgPreviewEnabled, pickProposal, proposalParam, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
 import { StateTally } from "./OrgNodeCards";
@@ -323,7 +325,7 @@ export function OrgPageInner() {
   }, [preview, nuxSeen]);
   // With a proposal open, the last step points at it (the remaining count is
   // read where staffingCount is, below; the steps only need the two facts).
-  const guideProposal = proposal?.status === "open" ? { short_id: proposal.short_id, remaining: proposalProgress(proposal).remaining } : null;
+  const guideProposal = proposal?.status === "open" ? { short_id: proposal.short_id, remaining: asksProgress(proposalAsks(proposal)).remaining } : null;
   const guideSteps = useMemo(() => orgGuideSteps(meNodeId, liveRoles > 0, guideProposal), [meNodeId, liveRoles, guideProposal?.short_id, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Which cards may be picked up at all: no drag that would only snap back. */
   const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
@@ -486,8 +488,8 @@ export function OrgPageInner() {
   // -------- staffing actions
   /** The preview decides on its local copy; live, the store action flips the
    *  row and rides dispatch to orgProposals.decide. */
-  // The pane's cold read intro (S17) goes for good once a person dismisses
-  // it or accepts a change; the pref follows them to every device.
+  // The letter's line of introduction (S19) goes for good once a person
+  // accepts a change; the pref follows them to every device.
   const introSeen = s.clientState.ui?.org_intro_seen === true;
   const markIntroSeen = useCallback(() => {
     if (!preview && !useInboxStore.getState().clientState.ui?.org_intro_seen) useInboxStore.getState().updateClientUI({ org_intro_seen: true });
@@ -511,14 +513,19 @@ export function OrgPageInner() {
     useInboxStore.getState().withdrawOrgProposal(proposalId);
     toast.success("Withdrawn; the newer proposal stays open");
   }, [preview]);
-  const acceptAll = useCallback((proposalId: string, opts?: { kinds?: string[] }) => {
-    const kinds = opts?.kinds?.length ? new Set(opts.kinds) : null;
-    markIntroSeen();
+  /** One ask, accepted or skipped whole (S19): one store action flips every
+   *  row in it that still waits and rides one dispatch to orgProposals.decideAsk. */
+  const decideAsk = useCallback((proposalId: string, askIndex: number, verdict: "accept" | "skip") => {
+    if (verdict === "accept") markIntroSeen();
     if (preview) {
-      setPreviewProposals((rows) => rows.map((p) => p._id !== proposalId ? p : { ...p, changes: p.changes.map((c) => c.status === "proposed" && (!kinds || kinds.has(c.change.kind)) ? { ...c, status: "applied" as const, decided_at: Date.now() } : c) }));
+      setPreviewProposals((rows) => rows.map((p) => {
+        if (p._id !== proposalId) return p;
+        const seqs = new Set(proposalAsks(p)[askIndex]?.changes.map((c) => c.seq) ?? []);
+        return { ...p, changes: p.changes.map((c) => seqs.has(c.seq) && isDecidable(c.status) ? { ...c, status: verdict === "accept" ? "applied" as const : "skipped" as const, decided_at: Date.now() } : c) };
+      }));
       return;
     }
-    useInboxStore.getState().acceptAllOrgProposal(proposalId, opts);
+    useInboxStore.getState().decideOrgProposalAsk(proposalId, askIndex, verdict);
   }, [preview, markIntroSeen]);
   /** Click on a change: focus its ghost (the scalar) and, when its subject
    *  already exists on the chart, highlight that node. */
@@ -650,67 +657,82 @@ export function OrgPageInner() {
   // to 90% while the composer has focus so the thread and the keyboard fit,
   // and the graph centres a focused ghost in what stays free above it.
   const [composerFocused, setComposerFocused] = useState(false);
-  // -------- the proposal's conversation (org-staffing.md S18)
+  // -------- the proposal's conversation leads (org-staffing.md S19)
   // The author's thread renders with the same conversation view a session
-  // uses. Where: its own column beside the list when the window fits both
-  // and a strip of chart; under the list when it does not; on the phone the
-  // list leads and the conversation is the sheet's second view, one tap
-  // away, because the two cannot share a phone screen and the person came
-  // here to decide the list.
+  // uses. On a desktop it is the panel's wider left column and the asks sit
+  // to its right; on the phone the conversation is the sheet, and a bar at
+  // its foot opens the asks as a sheet over it.
   const threadRef = useMemo(() => proposal && proposal.status === "open" ? proposalThread(proposal, tree) : null, [proposal, tree]);
-  const wideForThread = useMinWidth(PANEL_W + STAFFING_THREAD_W + 480);
-  const threadLayout: ProposalThreadLayout = phone ? "phone" : wideForThread ? "side" : "stack";
-  const [phoneView, setPhoneView] = useState<"changes" | "discuss">("changes");
-  useWatchEffect(() => { setPhoneView("changes"); }, [proposal?._id, panelOpen]);
+  const roomyForThread = useMinWidth(PANEL_W + STAFFING_LEAD_W.roomy + 360);
+  const threadLayout: ProposalThreadLayout = phone ? "phone" : "lead";
+  const [asksOpen, setAsksOpen] = useState(false);
+  useWatchEffect(() => { setAsksOpen(false); }, [proposal?._id, panelOpen]);
+  const asks = useMemo(() => proposal ? proposalAsks(proposal, askNames(tree)) : [], [proposal, tree]);
+  const asksLeft = asksProgress(asks);
   // What the author revised since the reader last looked: a watermark set
   // when the proposal opens (so a reload announces nothing old), moved to now
-  // by "Got it" or by opening the list on the phone.
+  // by "Got it".
   const [revisedSeen, setRevisedSeen] = useState<{ proposalId: string; at: number } | null>(null);
   useWatchEffect(() => {
     if (proposal && revisedSeen?.proposalId !== proposal._id) setRevisedSeen({ proposalId: proposal._id, at: latestRevisionAt(proposal.changes) });
   }, [proposal?._id]);
   const revisedRows = useMemo(() => proposal && revisedSeen?.proposalId === proposal._id ? revisedSince(proposal.changes, revisedSeen.at) : [], [proposal, revisedSeen]);
   const seenRevisions = useCallback(() => { if (proposal) setRevisedSeen({ proposalId: proposal._id, at: Date.now() }); }, [proposal]);
-  const aboutChange = useMemo(() => focusChangeId ? proposal?.changes.find((c) => c._id === focusChangeId) ?? null : null, [focusChangeId, proposal]);
-  /** The person's words into the thread, with the change they were looking
-   *  at: the bubble paints at once, dispatch runs orgProposals.say. */
-  const say = useCallback((threadConvId: string, shortId: string, seq: number | null, body: string) => {
+  // What the next message is about: the change the person is looking at, or
+  // the ask whose card said "Ask about this". A focused change wins, because
+  // it is the narrower subject.
+  const [aboutAskIndex, setAboutAskIndex] = useState<number | null>(null);
+  useWatchEffect(() => { setAboutAskIndex(null); }, [proposal?._id]);
+  const about = useMemo<ProposalAbout>(() => {
+    const change = focusChangeId ? proposal?.changes.find((c) => c._id === focusChangeId) : null;
+    if (change) return { kind: "change", change };
+    const ask = aboutAskIndex !== null ? asks[aboutAskIndex] : null;
+    return ask ? { kind: "ask", ask } : null;
+  }, [focusChangeId, proposal, aboutAskIndex, asks]);
+  /** The person's words into the thread, with what they were about: the
+   *  bubble paints at once, dispatch runs orgProposals.say. */
+  const say = useCallback((threadConvId: string, shortId: string, on: { changeSeq: number | null; askIndex: number | null }, body: string) => {
     if (preview) { toast.success("Preview: nothing is sent"); return; }
-    useInboxStore.getState().sayOnOrgProposal(threadConvId, shortId, seq, body, `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    useInboxStore.getState().sayOnOrgProposal(threadConvId, shortId, on.changeSeq, body, `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`, on.askIndex);
   }, [preview]);
-  /** A row's "Ask about this": the row is what the next message is about,
-   *  and the composer comes to hand (the phone flips to the conversation). */
-  const askAbout = useCallback((c: OrgProposalChange) => {
-    selectChange(c._id);
-    if (phone) setPhoneView("discuss");
-    else requestAnimationFrame(() => (document.querySelector("[data-proposal-thread] textarea") as HTMLTextAreaElement | null)?.focus());
-  }, [selectChange, phone]);
-  const clearAbout = useCallback(() => selectChange(null), [selectChange]);
-  const backToList = useCallback(() => { setPhoneView("changes"); seenRevisions(); }, [seenRevisions]);
-  const openDiscuss = useCallback(() => setPhoneView("discuss"), []);
+  /** "Ask about this": the next message names the subject, the phone's asks
+   *  sheet closes, and the composer comes to hand. */
+  const bringComposer = useCallback(() => {
+    setAsksOpen(false);
+    requestAnimationFrame(() => (document.querySelector("[data-proposal-thread] textarea") as HTMLTextAreaElement | null)?.focus());
+  }, []);
+  const askAbout = useCallback((c: OrgProposalChange) => { setAboutAskIndex(null); selectChange(c._id); bringComposer(); }, [selectChange, bringComposer]);
+  const askAboutAsk = useCallback((ask: AskView) => { selectChange(null); setAboutAskIndex(ask.index); bringComposer(); }, [selectChange, bringComposer]);
+  const clearAbout = useCallback(() => { setAboutAskIndex(null); selectChange(null); }, [selectChange]);
+  const openAsks = useCallback(() => setAsksOpen(true), []);
+  const closeAsks = useCallback(() => setAsksOpen(false), []);
+  const firstTime = !introSeen && !hasAcceptedBefore(workspaceProposals, meId);
+  const asksBar = useMemo(() => phone ? { toDecide: asksLeft.remaining, total: asksLeft.total, updated: revisedRows.length, onOpen: openAsks } : undefined, [phone, asksLeft.remaining, asksLeft.total, revisedRows.length, openAsks]);
   const threadNode = threadRef && proposal ? (
     <ProposalThread
       proposal={proposal}
       thread={threadRef}
       layout={threadLayout}
-      about={aboutChange}
+      about={about}
       onClearAbout={clearAbout}
       onSay={say}
       onOpenSession={openSession}
       onResume={resumeChief}
-      revisedRows={revisedRows}
-      onBackToList={backToList}
+      firstTime={firstTime}
+      now={now}
+      asksBar={asksBar}
       preview={preview}
-      autoFocus={phone && phoneView === "discuss"}
     />
   ) : null;
-  const phoneDiscuss = phone && phoneView === "discuss" && !!threadNode;
-  const sheetFraction = panelOpen && phone ? (composerFocused || phoneDiscuss ? 0.9 : 0.62) : 0;
   const effectivePanelMode: OrgPanelMode = nodeSelected ? panelMode : "staffing";
-  const threadBeside = !phone && threadLayout === "side" && effectivePanelMode === "staffing" && !!threadNode;
-  const panelW = threadBeside ? PANEL_W + STAFFING_THREAD_W : PANEL_W;
+  // The pane is the page only while it is open (S19): closed, the chart's
+  // own header comes back, with its guide and its counters.
+  const threadLeads = panelOpen && effectivePanelMode === "staffing" && !!threadNode;
+  const sheetFraction = panelOpen && phone ? (composerFocused || threadLeads ? 0.9 : 0.62) : 0;
+  const leadW = roomyForThread ? STAFFING_LEAD_W.roomy : STAFFING_LEAD_W.tight;
+  const panelW = threadLeads && !phone ? PANEL_W + leadW : PANEL_W;
   const panelWidth = panelOpen && !phone ? panelW : 0;
-  const staffingCount = proposal ? proposalProgress(proposal).remaining : 0;
+  const staffingCount = asksLeft.remaining;
   const staffingPane = tree ? (
     <StaffingPane
       tree={tree}
@@ -728,7 +750,7 @@ export function OrgPageInner() {
       now={now}
       onSelectChange={selectChange}
       onDecide={decideChange}
-      onAcceptAll={acceptAll}
+      onDecideAsk={decideAsk}
       onEditRole={setEditRoleChange}
       onSelectNode={focusNode}
       onOpenSession={openSession}
@@ -737,16 +759,20 @@ export function OrgPageInner() {
       onHireChief={hireChief}
       onProposeNow={proposeNow}
       onResumeChief={resumeChief}
-      threadNode={threadRef ? (threadLayout === "stack" ? threadNode : null) : undefined}
-      discuss={phone && threadRef ? { name: threadRef.name, named: threadRef.named, updated: revisedRows.length, onOpen: openDiscuss } : null}
+      hasThread={!!threadRef}
+      onClose={threadLeads && !phone && !nodeSelected ? closePanel : undefined}
       onAskAbout={threadRef ? askAbout : undefined}
+      onAskAboutAsk={threadRef ? askAboutAsk : undefined}
       revised={threadRef ? { rows: revisedRows, who: threadRef.name, onSeen: seenRevisions } : undefined}
       link={link}
-      meId={meId}
-      introSeen={introSeen}
-      onIntroSeen={markIntroSeen}
-      onOpenGlossary={setGlossary}
     />
+  ) : null;
+  // Phone (S19): the conversation is the sheet; the asks open over it.
+  const phoneProposal = phone && threadLeads ? (
+    <div className="relative h-full" data-phone-proposal>
+      {threadNode}
+      {asksOpen && <AsksSheet onClose={closeAsks}>{staffingPane}</AsksSheet>}
+    </div>
   ) : null;
   const panelProps = tree ? {
     tree,
@@ -761,9 +787,10 @@ export function OrgPageInner() {
     onSelectNode: setSelectedId,
     mode: panelMode,
     onMode: setPanelMode,
-    staffing: phoneDiscuss ? threadNode : staffingPane,
-    staffingAside: threadBeside ? threadNode : undefined,
-    staffingFill: phoneDiscuss,
+    staffing: phoneProposal ?? staffingPane,
+    staffingLead: threadLeads && !phone ? threadNode : undefined,
+    staffingLeadWidth: leadW,
+    staffingFill: !!phoneProposal,
     staffingCount,
     changes: proposal?.status === "open" ? proposal.changes : undefined,
     focusChangeId,
@@ -772,8 +799,25 @@ export function OrgPageInner() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }}>
-      {/* header */}
-      <div className="shrink-0 px-4 sm:px-6 pt-4 pb-3 border-b flex items-end justify-between gap-3 flex-wrap" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>
+      {/* header. While a proposal is open the pane is the page (org-staffing.md
+          S19): the header folds to one line with the way back to the chart,
+          and the glossary stays reachable from here and nowhere else. */}
+      {threadLeads ? (
+        <div className="shrink-0 h-10 px-4 sm:px-6 border-b flex items-center gap-3 text-[12.5px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-org-header="proposal">
+          <button type="button" onClick={closePanel} className="shrink-0 inline-flex items-center gap-1.5 font-medium hover:underline underline-offset-2" style={{ color: "var(--sol-violet)" }} data-org-back>
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to the chart
+          </button>
+          <span className="min-w-0 truncate inline-flex items-center gap-1.5" style={{ color: "var(--sol-text-dim)" }}>
+            <Network className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-violet)" }} strokeWidth={1.75} />
+            <span className="truncate" style={{ fontFamily: "var(--font-mono)" }}>Org / {tree?.workspace.name || (tree?.workspace.kind === "user" ? "personal" : "team")}</span>
+          </span>
+          {preview && <span className="hidden sm:inline shrink-0 text-[11.5px]" style={{ color: "var(--sol-yellow)" }}>preview data, edits stay on this page</span>}
+          {tree && (
+            <button type="button" onClick={() => setGlossary("words")} className="ml-auto shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }} title="The eight words this page uses, each in one sentence" data-org-glossary-open>Words</button>
+          )}
+        </div>
+      ) : (
+      <div className="shrink-0 px-4 sm:px-6 pt-4 pb-3 border-b flex items-end justify-between gap-3 flex-wrap" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-org-header="chart">
         <div className="min-w-0">
           <h1 className="text-[26px] leading-none font-semibold tracking-tight flex items-center gap-2.5" style={{ fontFamily: "var(--font-serif)" }}>
             <Network className="w-6 h-6" style={{ color: "var(--sol-violet)" }} strokeWidth={1.75} />
@@ -781,7 +825,7 @@ export function OrgPageInner() {
             {tree && <span className="text-[13px] font-normal mt-1 truncate" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>/ {tree.workspace.name || (tree.workspace.kind === "user" ? "personal" : "team")}</span>}
           </h1>
           <p className="mt-1.5 text-[12.5px] truncate flex items-center gap-2" style={{ color: "var(--sol-text-muted)" }}>
-            <span className="hidden sm:inline truncate">Who reports to whom: people, the standing agents they hired, every session. Drag a card to move it.</span>
+            <span className="hidden sm:inline truncate">Who reports to whom: people, the roles they hired, every session. Drag a card to move it.</span>
             <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
             {tree && (
               <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
@@ -813,11 +857,11 @@ export function OrgPageInner() {
             onClick={() => setPanelMode("staffing")}
             className={cn("h-[34px] inline-flex items-center gap-1.5 px-3 rounded-lg border text-[12.5px] font-medium transition-colors", staffingOpen && panelMode === "staffing" ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
             style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}
-            title={proposal ? `${proposal.short_id}: ${staffingCount} to decide` : "Company health and the chief of staff"}
+            title={proposal ? `The open proposal: ${staffingCount} to decide` : "How the company is doing, and where a proposal starts"}
             aria-pressed={staffingOpen && panelMode === "staffing"}
             data-org-guide="staffing"
           >
-            Staffing
+            {staffingPaneWord(!!proposal)}
             {staffingCount > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{staffingCount}</span>}
           </button>
           <button
@@ -837,8 +881,9 @@ export function OrgPageInner() {
           )}
         </div>
       </div>
+      )}
 
-      {preview && (
+      {preview && !threadLeads && (
         <div className="shrink-0 px-4 sm:px-6 py-1.5 text-[11.5px] flex items-center gap-2 border-b" style={{ background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)", borderColor: "color-mix(in srgb, var(--sol-yellow) 25%, transparent)", color: "var(--sol-text-muted)" }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--sol-yellow)" }} />
           Preview data (dev only, ?preview=1). Edits here stay on this page.
@@ -932,7 +977,7 @@ export function OrgPageInner() {
 
         {/* panel: right on desktop, bottom sheet on phone */}
         {panelOpen && panelProps && !phone && (
-          <aside className="absolute right-0 top-0 bottom-0 z-20 border-l min-h-0 org-panel-in shadow-[-16px_0_40px_-24px_rgba(0,0,0,0.45)] transition-[width] duration-200" style={{ width: panelW, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }}>
+          <aside className="absolute right-0 top-0 bottom-0 z-20 border-l min-h-0 org-panel-in shadow-[-16px_0_40px_-24px_rgba(0,0,0,0.45)] transition-[width] duration-200" style={{ width: panelW, maxWidth: "100%", borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }}>
             <OrgScopePanel {...panelProps} />
           </aside>
         )}

@@ -248,7 +248,7 @@ export function ScopeSessionsTab({ tree, role, scope, hands }: { tree: OrgTree; 
       <StateBar counts={counts} className="mx-2.5 mb-3" />
       {role && requested.map((c) => <RoleSessionsPage key={c} roleId={role._id} teamId={teamId} cursor={c} onPage={onPage} />)}
       {rows.length === 0 ? (
-        <Empty title={role ? "No hands under this role yet." : "No sessions in the last 30 days."} hint={role ? "Ask the role for something in the conversation: the session it starts for the work shows here, grouped by who acts next." : undefined} />
+        <Empty title={role ? "No sessions under this role yet." : "No sessions in the last 30 days."} hint={role ? "Ask the role for something in the conversation: the session it starts for the work shows here, grouped by who acts next." : undefined} />
       ) : (
         <HandGroups rows={rows} hands={hands} now={now} onOpen={(s) => openLinked({ _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type })} />
       )}
@@ -407,11 +407,11 @@ export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
         <Fact label="Open tasks" value={facts.tasks.open} sub={`${facts.tasks.total} total · ${facts.tasks.by_status.in_progress ?? 0} in progress`} />
         <Fact label="Plans" value={facts.plans.length} sub={facts.plans.filter((p) => p.status === "active").length + " active"} />
         <Fact label="Decisions" value={facts.decisions.open} sub={`${facts.decisions.answered_today} answered today`} tone={facts.decisions.open > 0 ? "var(--sol-yellow)" : undefined} />
-        <Fact label="Today" value={`${u.wakes}/${u.caps.wakes_per_day}`} sub={`wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${fmtTokens(u.tokens)}/${fmtTokens(u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` · ${u.uncounted_sessions} uncounted` : ""}`} />
+        <Fact label="Today" value={`${u.wakes}/${u.caps.wakes_per_day}`} sub={`wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${fmtTokens(u.tokens)}/${fmtTokens(u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` · ${u.uncounted_sessions} uncounted` : ""}`} />
       </div>
       {facts.hands.length > 0 && (
         <section>
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Hands say</h3>
+          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Sessions say</h3>
           <ul className="space-y-1">
             {facts.hands.map((h) => (
               <li key={h._id}>

@@ -128,6 +128,13 @@ describe("the roles signature covers what those surfaces draw", () => {
     expect(orgRolesSig(withRole({ avatar: "owl" }))).not.toBe(orgRolesSig(withRole({ avatar: "fox" })));
   });
 
+  // The task board's Chain grouping nests a role under whoever it reports to
+  // (lib/taskChain), a person as much as a role.
+  it("changes when a role moves from one person to another", () => {
+    const under = (user_id: string) => orgRolesSig(withRole({ reports_to: { kind: "user", user_id } }));
+    expect(under("u_ashot")).not.toBe(under("u_samvit"));
+  });
+
   it("is stable when something it does not draw changes", () => {
     expect(orgRolesSig(withRole({ avatar: "owl", total: 1 }))).toBe(orgRolesSig(withRole({ avatar: "owl", total: 99 })));
   });

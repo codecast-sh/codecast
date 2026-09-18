@@ -5,8 +5,12 @@
 // its own column on a wide window, an overlay over the conversation on a
 // narrow one, and a bottom sheet on the phone that the conversation hands to
 // and takes back. The tab is in the URL (?tab=) so a tab stays linkable.
+//
+// A role's panel opens on Scope (org-roles-run-work.md R3): what the role
+// looks after, as the same rendering its hover card uses, at full size. The
+// workspace root has no role to describe, so it still opens on the feed.
 import { useEffect, useRef } from "react";
-import { BellRing, CheckSquare, ChevronDown, FileText, Layers, ListChecks, MessageCircleQuestionMark, Rss, ScrollText, Settings2, Terminal, Workflow, X } from "lucide-react";
+import { BellRing, CheckSquare, ChevronDown, Compass, FileText, Layers, ListChecks, MessageCircleQuestionMark, Rss, ScrollText, Settings2, Terminal, Workflow, X } from "lucide-react";
 import { cn } from "../../../lib/utils";
 import { TaskListContent } from "../../../app/tasks/page";
 import type { ScopeRef } from "../../../hooks/useScopeQueries";
@@ -14,14 +18,19 @@ import type { ScopeIds } from "../../../hooks/useScopeIds";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import type { OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { ScopeFeed } from "./ScopeFeed";
-import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
+import { Empty, HandGroups, ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
+import { RoleScopeView } from "../../identity/RoleScopeView";
+import { ProjectLeadChip } from "../../charter/ProjectLeadChip";
+import { useRoleScope } from "../../../hooks/useRoleScope";
+import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeWakesTab } from "./ScopeWakesTab";
 import type { RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
 
-export type ScopeTabKey = "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
+export type ScopeTabKey = "scope" | "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
 export const SCOPE_TABS: { key: ScopeTabKey; label: string; icon: any; roleOnly?: boolean }[] = [
+  { key: "scope", label: "Scope", icon: Compass, roleOnly: true },
   { key: "feed", label: "Feed", icon: Rss },
   { key: "tasks", label: "Tasks", icon: ListChecks },
   // The line (the-line.md L10): the scope's tasks by station.
@@ -36,10 +45,16 @@ export const SCOPE_TABS: { key: ScopeTabKey; label: string; icon: any; roleOnly?
   { key: "settings", label: "Settings", icon: Settings2, roleOnly: true },
 ];
 
+/** The tab a scope opens on, and the one its bare URL means: a role's Scope,
+ *  the workspace root's feed. */
+export function scopeDefaultTab(hasRole: boolean): ScopeTabKey {
+  return hasRole ? "scope" : "feed";
+}
+
 /** The tab a URL names, when it is one this scope shows; else the default. */
 export function scopeTabFromParam(param: string | null, hasRole: boolean): ScopeTabKey {
   const hit = SCOPE_TABS.find((t) => t.key === param && (!t.roleOnly || hasRole));
-  return hit ? hit.key : "feed";
+  return hit ? hit.key : scopeDefaultTab(hasRole);
 }
 
 export type ScopePanelLayout = "side" | "overlay" | "sheet";
@@ -139,6 +154,7 @@ export function ScopePanel(p: ScopePanelProps) {
       {tab !== "feed" && tab !== "tasks" && (
         <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
           {!p.summary && p.summaryProblem && <p className="px-2.5 pb-2 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{p.summaryProblem}</p>}
+          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} onTab={p.onTab} />}
           {tab === "line" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
           {tab === "plans" && <ScopePlansTab ids={p.scopeIds} />}
           {tab === "docs" && <ScopeDocsTab ids={p.scopeIds} />}
@@ -153,5 +169,28 @@ export function ScopePanel(p: ScopePanelProps) {
         </div>
       )}
     </div>
+  );
+}
+
+/** The Scope tab: RoleScopeView at full size, with the two pieces only the
+ *  page can afford, a project's lead chip and the role's sessions grouped by
+ *  who acts next (the tree's top rows; the Sessions tab pages the rest). */
+function ScopeOverviewTab({ role, now, onTab }: { role: OrgRole; now: number; onTab: (next: ScopeTabKey) => void }) {
+  const { model, escalated } = useRoleScope(role.short_id);
+  const openLinked = useOpenLinkedSession();
+  const open = (s: { _id: string; short_id: string; title: string; agent_type: string }) => openLinked({ _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type });
+  if (!model) return <Empty title="Nothing to show for this role yet." />;
+  const escalatedIds = new Set(escalated.map((e) => e.session._id));
+  const rest = role.sessions.filter((s) => !escalatedIds.has(s._id));
+  return (
+    <RoleScopeView
+      model={model}
+      density="page"
+      escalated={escalated}
+      renderLead={(projectId) => <ProjectLeadChip projectId={projectId} size="xs" />}
+      sessions={rest.length > 0 ? <HandGroups rows={rest} now={now} onOpen={open} /> : null}
+      onTab={onTab}
+      onOpenSession={open}
+    />
   );
 }

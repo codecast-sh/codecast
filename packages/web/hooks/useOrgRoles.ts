@@ -24,7 +24,13 @@ export function orgRolesSig(tree: OrgTree | null | undefined): string {
   // `avatar` is in the signature because these surfaces DRAW the face (the
   // ownership menu's role list, the role pill): without it a face change lands
   // in the tree and nothing repaints.
-  for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}|${r.avatar ?? ""}`;
+  // The scope's projects and the parent role are in it because the project
+  // lead is read from them (shared/contracts/orgLead): a role that gains a
+  // project, or moves under another role, can change who leads. Both change
+  // on a person's edit, never on a heartbeat. The parent is there for a person
+  // too: the task board's Chain axis nests a role under whoever it reports to
+  // (lib/taskChain), so a role moved from one person to another must repaint.
+  for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}|${r.avatar ?? ""}|${r.scope.project_ids.join(",")}|${r.reports_to.kind}:${r.reports_to.kind === "role" ? r.reports_to.role_id : r.reports_to.user_id}`;
   return sig;
 }
 
