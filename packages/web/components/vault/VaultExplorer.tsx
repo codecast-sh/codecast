@@ -159,7 +159,7 @@ export const VaultExplorer = memo(function VaultExplorer({
 
   const [focusIndex, setFocusIndex] = useState(-1);
   // Payload `null` is the vault root — the menu you get right-clicking empty space.
-  const { menu, open: openMenu, close: closeMenuState } = useContextMenu<TreeNode | null>();
+  const { menu, open: openMenu, openAt: openMenuAt, close: closeMenuState } = useContextMenu<TreeNode | null>();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // Reveal only makes sense for files physically on this machine; a mirrored
   // vault has nothing local to point Finder at.
@@ -225,8 +225,8 @@ export const VaultExplorer = memo(function VaultExplorer({
   }, [closeMenuState]);
 
   const menuState = useMemo(
-    () => ({ menu, open: openMenu, close: closeMenu }),
-    [menu, openMenu, closeMenu],
+    () => ({ menu, open: openMenu, openAt: openMenuAt, close: closeMenu }),
+    [menu, openMenu, openMenuAt, closeMenu],
   );
 
   const activate = useCallback(

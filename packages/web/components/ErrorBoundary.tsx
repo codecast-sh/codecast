@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { captureError } from "@/lib/analytics";
 import { describeError, errorSummary, rootError } from "@/lib/errorCause";
 import { showErrorToast } from "@/lib/errorToast";
-import { RELOAD_COUNT_KEY, MAX_AUTO_RELOADS, isChunkLoadError } from "../lib/chunkReloadGuard";
+import { isChunkLoadError, tryReloadForStaleChunk } from "../lib/chunkReloadGuard";
 import { isCallPanelWindow } from "@/lib/desktop";
 import { scheduleVoiceHostReload } from "../lib/voiceHostRecovery";
 
@@ -58,18 +58,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return;
     }
 
-    if (isChunkLoadError(summary)) {
-      try {
-        const count = Number(sessionStorage.getItem(RELOAD_COUNT_KEY) ?? "0");
-        if (count < MAX_AUTO_RELOADS) {
-          sessionStorage.setItem(RELOAD_COUNT_KEY, String(count + 1));
-          window.location.reload();
-        }
-      } catch {
-        // sessionStorage unavailable (private mode quota etc.) — fall through
-        // to showing the error UI rather than risking an unbounded loop.
-      }
-    }
+    // A stale tab reloads itself onto the current build; if the budget is
+    // already spent the error UI stays up so the user can see what happened.
+    if (isChunkLoadError(summary)) tryReloadForStaleChunk();
   }
 
   reset = () => {

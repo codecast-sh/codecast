@@ -130,6 +130,7 @@ export const agentNames: Record<string, string> = {
   opencode: "opencode",
   pi: "pi",
   grok: "grok",
+  muse: "muse",
 };
 
 /** Display label for the session a notification belongs to: title, else project basename. */

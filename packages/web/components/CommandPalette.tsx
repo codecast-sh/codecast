@@ -36,6 +36,7 @@ import { score, matchScore } from "../hooks/useMentionQuery";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
+import { useOrgRoles } from "../hooks/useOrgRoles";
 import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "./presence/memberPresence";
 import { MemberFace } from "./presence/MemberFace";
 import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
@@ -440,6 +441,9 @@ export function ActionSubmenu({
   const [highlightIndex, setHighlightIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // The workspace's roles, for the assign list: read from the store through a
+  // wake signature, so every caller of this menu offers them with no prop.
+  const { roles: orgRoles } = useOrgRoles();
 
   // Two-step state for the "Start agent run" mode: pick an agent, then compose
   // the initial message before launching a run per selected task.
@@ -682,7 +686,15 @@ export function ActionSubmenu({
           image: memberAvatarUrl(m),
         };
       });
-      return [{ key: "", label: "Unassign", type: "user" as const, image: undefined }, ...members].filter((o) => o.label.toLowerCase().includes(q));
+      // A role owns tasks the way a person does (org-roles-run-work.md R5).
+      // People stay first so the number keys people already know do not move.
+      const roles = orgRoles
+        .filter((r) => r.status !== "retired")
+        .map((r) => ({ key: r._id, label: r.name, hint: `@${r.handle}`, type: "user" as const, image: undefined, face: r.avatar ?? r.handle, section: "Roles" }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      const people = members.map((m) => ({ ...m, section: roles.length ? "People" : undefined }));
+      return [{ key: "", label: "Unassign", type: "user" as const, image: undefined }, ...people, ...roles]
+        .filter((o: { label: string; hint?: string }) => `${o.label} ${o.hint ?? ""}`.toLowerCase().includes(q));
     }
     if (mode === "agent_run" || mode === "agent_switch" || mode === "agent_fork") {
       const currentAgentType = (target as InboxSession | undefined)?.agent_type;
@@ -801,7 +813,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -1045,7 +1057,7 @@ export function ActionSubmenu({
       } else if (mode === "assign") {
         applyTaskUpdate({ assignee: item.key });
         const member = (teamMembers || []).find((m: any) => m._id === item.key);
-        toast.success(item.key ? `Assigned to ${memberDisplayName(member, "user")}` : "Unassigned");
+        toast.success(item.key ? `Assigned to ${item.face ? item.label : memberDisplayName(member, "user")}` : "Unassigned");
       } else if (mode === "parent") {
         let failed = 0;
         for (const t of targets as TaskItem[]) {
@@ -1168,7 +1180,7 @@ export function ActionSubmenu({
     mode === "status" ? "Change status..." :
     mode === "priority" ? "Set priority..." :
     mode === "labels" ? "Toggle label..." :
-    mode === "assign" ? "Assign to person..." :
+    mode === "assign" ? "Assign to a person or a role" :
     mode === "type" ? "Change document type..." :
     mode === "agent_run" ? "Start agent run — pick an agent..." :
     mode === "agent_switch" ? "Switch agent..." :
@@ -1289,7 +1301,11 @@ export function ActionSubmenu({
         )}
         {items.map((item: any, i: number) => {
           const Icon = item.icon;
-          return (
+          // A heading rides inside its first item's own child, so the list
+          // keeps one child per item and the highlight scroll (children[i])
+          // still lands on the right row.
+          const heading = item.section && item.section !== items[i - 1]?.section ? item.section : null;
+          const row = (
             <button
               key={item.key}
               onClick={() => selectItem(i)}
@@ -1298,7 +1314,7 @@ export function ActionSubmenu({
             >
               {item.type === "agent" ? (
                 <AgentTypeIcon agentType={item.agentType} className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
-              ) : mode === "assign" ? (
+              ) : mode === "assign" && !item.face ? (
                 <AvatarImg
                   src={item.image}
                   alt={item.label}
@@ -1324,7 +1340,10 @@ export function ActionSubmenu({
               ) : Icon ? (
                 <Icon className={`w-4 h-4 flex-shrink-0 ${item.color || ""}`} />
               ) : null}
-              <span className="flex-1 text-left">{item.label}</span>
+              <span className="flex-1 text-left">
+                {item.label}
+                {item.hint && <span className="ml-1.5 text-sol-text-dim">{item.hint}</span>}
+              </span>
               {mode === "view" && item.kind === "project" && (
                 <span className="text-[10px] text-sol-text-dim/60 flex-shrink-0">project</span>
               )}
@@ -1337,6 +1356,13 @@ export function ActionSubmenu({
                 <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
               )}
             </button>
+          );
+          if (!heading) return row;
+          return (
+            <div key={item.key}>
+              <div className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
+              {row}
+            </div>
           );
         })}
       </div>

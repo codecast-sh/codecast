@@ -1,3 +1,4 @@
+import { OtherAddresses } from "../../../components/settings/OtherAddresses";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, Suspense } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -165,6 +166,8 @@ function AccountsContent() {
         >
           {hasEmail ? "Primary" : "Not set"}
         </SettingsRow>
+
+        <OtherAddresses />
 
         {hasGitHub && !hasEmail && (
           <div className="px-4 py-3 text-sm text-sol-orange sm:px-5">

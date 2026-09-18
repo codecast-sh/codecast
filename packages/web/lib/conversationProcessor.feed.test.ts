@@ -21,6 +21,9 @@ describe("classifyFeedMessage — structured/noise messages are hidden", () => {
     "codex turn aborted": "<turn_aborted>user aborted</turn_aborted>",
     "tool-output pointer": "Read the output file to retrieve the result: /tmp/x.output",
     "import notice": "[Codecast import] earlier messages were truncated for context.",
+    "agent switch divider": "[codecast] Now using Codex (was Claude).\n\nThis session continues here.",
+    "machine switch divider": "[codecast] Now running on Cloud Linux (was MacBook-Pro-168).\n\nThis session continues here.",
+    "machine move notice": "[codecast] This session just moved to a different machine. It now runs on Cloud Linux in /home/ubuntu/work.",
     "system-reminder only": "<system-reminder>be concise</system-reminder>",
     "empty": "   ",
   };

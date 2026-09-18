@@ -24,7 +24,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo } from "@codecast/shared/contracts";
+import { formatAgo, headroomScore } from "@codecast/shared/contracts";
 import { resolveAccountChip } from "../lib/accountUsageChip";
 import { machineSwitchBlock, machineSwitchPendingCopy } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
@@ -224,13 +224,23 @@ export function AccountUsageChip() {
     })),
     ...codexProfiles.map((p) => ({ provider: "codex" as const, p, isActive: p === activeCodex })),
   ];
+  // Most room left first, inside a group and between groups: the top of the
+  // "Available" list is then the account a switch would land on. A group's
+  // rank is its roomiest account, since that is what switching to that email
+  // buys. Rolled-window accounts score behind every measured one (headroomScore).
   const buildGroups = (entries: AccountEntry[]) => {
     const byEmail = new Map<string, AccountEntry[]>();
     for (const e of entries) {
       const key = e.p.email ?? e.p.name;
       byEmail.set(key, [...(byEmail.get(key) ?? []), e]);
     }
-    return [...byEmail.entries()].map(([email, list]) => ({ email, entries: list }));
+    const rank = (e: AccountEntry) => headroomScore(e.p.usage, now);
+    return [...byEmail.entries()]
+      .map(([email, list]) => {
+        const sorted = [...list].sort((a, b) => rank(a) - rank(b));
+        return { email, entries: sorted, score: rank(sorted[0]) };
+      })
+      .sort((a, b) => a.score - b.score);
   };
   const activeGroups = buildGroups(allEntries.filter((e) => e.isActive));
   const otherGroups = buildGroups(allEntries.filter((e) => !e.isActive));
@@ -455,7 +465,7 @@ export function AccountUsageChip() {
           </div>
         )}
 
-        <div className="max-h-[min(45rem,calc(100dvh-16rem))] space-y-2 overflow-y-auto px-3 py-2">
+        <div className="max-h-[min(60rem,calc(100dvh-13rem))] space-y-2 overflow-y-auto px-3 py-2">
           {activeGroups.length > 0 && (
             <>
               <div className="px-0.5 text-[9px] font-semibold uppercase tracking-wider text-sol-green">

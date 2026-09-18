@@ -62,6 +62,16 @@ export interface ConversationDiffLayoutProps {
   /** See ConversationViewProps: a host that owns the send (the staffing pane). */
   onSendOverride?: ConversationViewProps["onSendOverride"];
   composerNode?: React.ReactNode;
+  leadNode?: ConversationViewProps["leadNode"];
+  leadPinned?: ConversationViewProps["leadPinned"];
+  stickyPrompt?: ConversationViewProps["stickyPrompt"];
+  initialDensity?: ConversationViewProps["initialDensity"];
+  foldWorkingTurns?: ConversationViewProps["foldWorkingTurns"];
+  openAtTop?: ConversationViewProps["openAtTop"];
+  composerPlaceholder?: ConversationViewProps["composerPlaceholder"];
+  /** A host with no room for the diff (a proposal's thread in the org page's
+   *  column): the conversation alone, at every width. */
+  hideDiff?: boolean;
 }
 
 const EMPTY_LIST: any[] = [];
@@ -101,6 +111,14 @@ export function ConversationDiffLayout({
   hideHeader,
   onSendOverride,
   composerNode,
+  leadNode,
+  leadPinned,
+  stickyPrompt,
+  initialDensity,
+  foldWorkingTurns,
+  openAtTop,
+  composerPlaceholder,
+  hideDiff,
 }: ConversationDiffLayoutProps) {
   devRenderCount("ConversationDiffLayout");
   const heightClass = "h-full";
@@ -232,10 +250,17 @@ export function ConversationDiffLayout({
     hideHeader,
     onSendOverride,
     composerNode,
+    leadNode,
+    leadPinned,
+    stickyPrompt,
+    initialDensity,
+    foldWorkingTurns,
+    openAtTop,
+    composerPlaceholder,
   };
 
   // Mobile: tabs layout
-  if (isMobile) {
+  if (isMobile && !hideDiff) {
     return (
       <div className={`${heightClass} w-full`}>
         <Tabs defaultValue="conversation" className="h-full flex flex-col">
@@ -258,7 +283,7 @@ export function ConversationDiffLayout({
   }
 
   // Desktop: diff panel closed - simple layout
-  if (!diffPanelOpen) {
+  if (!diffPanelOpen || hideDiff) {
     return (
       <div className={`${heightClass} w-full overflow-y-auto relative`}>
         <ConversationView {...conversationViewProps} />

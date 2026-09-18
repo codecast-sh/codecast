@@ -19,6 +19,7 @@ import {
   DropdownMenuContent,
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
+import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
@@ -35,6 +36,7 @@ import {
   RunOnDeviceItems,
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
+import { MakeRoleDialog } from "./org/MakeRoleDialog";
 import { cloudSeedTitle } from "@codecast/shared/contracts";
 
 type Runner = { id?: string; name: string; image?: string | null };
@@ -114,6 +116,7 @@ export function AssignmentBadge({
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
+  const [makingRole, setMakingRole] = useState(false);
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
   // account) — resolve it via the conversation so the lobe shows its hostname
@@ -181,6 +184,8 @@ export function AssignmentBadge({
   }
 
   return (
+    <>
+    {makingRole && <MakeRoleDialog conversationId={conversationId} onClose={() => setMakingRole(false)} />}
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -252,8 +257,9 @@ export function AssignmentBadge({
         {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
         <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
         <DropdownMenuSeparator />
-        <OwnerMenuItems owners={owners} conversationId={conversationId} />
+        <OwnerMenuItems owners={owners} conversationId={conversationId} onMakeRole={() => setMakingRole(true)} />
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   );
 }

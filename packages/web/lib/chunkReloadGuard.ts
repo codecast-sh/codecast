@@ -49,6 +49,12 @@ const CHUNK_LOAD_ERROR_PATTERNS = [
   "ChunkLoadError",
   "Loading chunk",
   "Loading CSS chunk",
+  // Vite's preload helper when a <link rel=stylesheet> for a hashed CSS chunk
+  // 404s — the same post-deploy staleness as a missing JS chunk, reached
+  // through the stylesheet rather than the module. It arrived as an
+  // unactionable production Sentry issue precisely because it was missing
+  // here: nothing reloaded the stale tab, so the error was all we ever got.
+  "Unable to preload CSS for",
   // Chrome / Firefox / Safari wordings of a missing named export at link time.
   "does not provide an export named",
   "doesn't provide an export named",
@@ -57,4 +63,48 @@ const CHUNK_LOAD_ERROR_PATTERNS = [
 
 export function isChunkLoadError(msg: string): boolean {
   return !!msg && CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
+}
+
+// The one place that spends the auto-reload budget. Both callers — the React
+// error boundary and the window-level `vite:preloadError` listener — share one
+// counter, so a stale tab reloads once per incident however the failure
+// surfaced, and a build that re-crashes immediately after the reload falls
+// through to the error UI instead of looping.
+//
+// Returns whether the reload was started, so a caller can decide what to show.
+export function tryReloadForStaleChunk(): boolean {
+  try {
+    const count = Number(sessionStorage.getItem(RELOAD_COUNT_KEY) ?? "0");
+    if (count >= MAX_AUTO_RELOADS) return false;
+    sessionStorage.setItem(RELOAD_COUNT_KEY, String(count + 1));
+    window.location.reload();
+    return true;
+  } catch {
+    // sessionStorage unavailable (private mode quota etc.) — decline to reload
+    // rather than risk an unbounded loop with no counter to stop it.
+    return false;
+  }
+}
+
+// Vite dispatches `vite:preloadError` when a dynamic import's JS or CSS
+// preload fails, and rethrows unless the event is cancelled. A preload that
+// fails OUTSIDE a React boundary (a route warmup, an idle prefetch, a lazy
+// import awaited in an event handler) therefore reaches Sentry as an unhandled
+// rejection and nothing recovers the tab. Reload on it instead, under the same
+// budget as the boundary path.
+export function installStaleChunkReload(): void {
+  window.addEventListener("vite:preloadError", (event) => {
+    const message = (event as Event & { payload?: unknown }).payload;
+    const summary = message instanceof Error ? message.message : String(message ?? "");
+    // Only staleness. A preload that failed because the user is offline, or
+    // for any other reason, must not spend the budget or hide its own report.
+    if (!isChunkLoadError(summary)) return;
+    // Order matters. Cancelling the event makes Vite RESOLVE the failed
+    // dynamic import instead of rejecting it, so a React.lazy waiting on it
+    // receives undefined and throws something far less legible. Only cancel
+    // once a reload is actually under way (the page is leaving, and the
+    // rejection would add a report nobody reads). If the budget is spent, let
+    // Vite rethrow so the error boundary still renders its reload UI.
+    if (tryReloadForStaleChunk()) event.preventDefault();
+  });
 }

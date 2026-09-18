@@ -15,8 +15,43 @@ import { activityLine, formatToolName } from "@codecast/shared/render";
 // genuinely long-quiet turn — the case that otherwise looks stuck.
 export const WORKING_ELAPSED_GRACE_MS = 10_000;
 
+/** Quiet this long and the tail draws the idle-gap stamp. Same window as
+ *  `isSessionConnected` in ConversationView — a session producing now is not
+ *  "3d ago" just because the last loaded row is old. */
+export const IDLE_GAP_MS = 5 * 60 * 1000;
+
 export function shouldShowElapsed(startedAt: number | undefined, now: number): boolean {
   return !!startedAt && now - startedAt >= WORKING_ELAPSED_GRACE_MS;
+}
+
+/** Mid-turn statuses: the agent is producing. The idle-gap stamp and a
+ *  days-old Working clock must not fire while these are set. */
+export function isProducingAgentStatus(status?: string | null): boolean {
+  return status === "working" || status === "thinking" || status === "compacting";
+}
+
+/** The faint relative-time rule under the last row. Hidden while more of the
+ *  transcript sits below (a deep-link window), while the agent is mid-turn,
+ *  or while the last activity is still inside the idle gap. */
+export function shouldShowIdleGap(opts: {
+  lastActivityAt: number;
+  now: number;
+  hasMoreBelow: boolean;
+  agentStatus?: string | null;
+}): boolean {
+  if (opts.hasMoreBelow) return false;
+  if (isProducingAgentStatus(opts.agentStatus)) return false;
+  return opts.now - opts.lastActivityAt > IDLE_GAP_MS;
+}
+
+/** Elapsed-clock anchor for the composer Working line. A last-message
+ *  timestamp older than the idle gap is not when this turn started (the
+ *  loaded tail is behind) — returning undefined hides the clock rather than
+ *  counting from three days ago. */
+export function workingSinceForClock(lastActivityAt: number | undefined, now: number): number | undefined {
+  if (lastActivityAt == null || lastActivityAt <= 0) return undefined;
+  if (now - lastActivityAt > IDLE_GAP_MS) return undefined;
+  return lastActivityAt;
 }
 
 // Live m:ss / h:mm:ss clock. Distinct from the coarse "2m" / "1h 5m" historical

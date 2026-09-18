@@ -25,9 +25,10 @@
 
 import { parseRepoObjectId } from "@codecast/shared/entities";
 import { docRelatesToTask } from "@codecast/shared/tasks";
+import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
-type AssigneeInfo = { name: string; image?: string; github_username?: string } | null;
+type AssigneeInfo = ResolvedAssignee | null;
 
 /**
  * What we call a person. ONE rule, so a teammate with a GitHub handle and no
@@ -54,10 +55,16 @@ export function resolveAssigneeInfo(
   fallback: any,
   teamMembers: Member[] | null | undefined,
   currentUser: Member | null | undefined,
+  roles?: readonly AssigneeRole[] | null,
 ): AssigneeInfo {
   if (!assignee) return null;
   const m = teamMembers?.find((x) => x && x._id === assignee);
   if (m) return { name: memberDisplayName(m), image: memberAvatarUrl(m), github_username: m.github_username };
+  // A role owns the task (org-roles-run-work.md R5): its face, name and handle
+  // come from the org tree slice, so a rename or a new face shows on every task
+  // at once, and a task just handed to a role shows it before the server echo.
+  const role = roles?.find((r) => r && String(r._id) === assignee);
+  if (role) return roleAssigneeInfo(role);
   if (currentUser && (assignee === currentUser._id || assignee === "me")) {
     return { name: memberDisplayName(currentUser), image: memberAvatarUrl(currentUser), github_username: currentUser.github_username };
   }
@@ -195,12 +202,13 @@ export function mergeLiveTasks(
   storeTasks: Record<string, any>,
   teamMembers?: Member[] | null,
   currentUser?: Member | null,
+  roles?: readonly AssigneeRole[] | null,
 ): any[] {
   if (!Array.isArray(snapshotTasks)) return snapshotTasks as any;
   return snapshotTasks.map((t) => {
     const live = storeTasks[t._id];
     const assignee = live ? live.assignee : t.assignee;
-    const assignee_info = resolveAssigneeInfo(assignee, t.assignee_info, teamMembers, currentUser);
+    const assignee_info = resolveAssigneeInfo(assignee, t.assignee_info, teamMembers, currentUser, roles);
     let changed = !sameAssigneeInfo(assignee_info, t.assignee_info);
     const merged: any = { ...t };
     if (live) {
@@ -317,12 +325,6 @@ export function resolveTaskRelatedDocs(
     }
   }
   return out.sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
-}
-
-function sameAssigneeInfo(a: AssigneeInfo, b: any): boolean {
-  if (!a && !b) return true;
-  if (!a || !b) return false;
-  return a.name === b.name && a.image === b.image && a.github_username === b.github_username;
 }
 
 /**

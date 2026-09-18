@@ -21,6 +21,8 @@ function agentFromModel(model?: string): string | undefined {
   if (/^(gpt-|o[1-9](?:-|$)|codex(?:-|$))/.test(name)) return "codex";
   if (name.startsWith("gemini-")) return "gemini";
   if (name.startsWith("grok-")) return "grok";
+  // Muse session logs record run_model model_ids like muse-spark-1.3-contributor.
+  if (name.startsWith("muse-spark")) return "muse";
   return undefined;
 }
 

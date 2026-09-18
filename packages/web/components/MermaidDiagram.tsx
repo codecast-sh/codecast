@@ -58,9 +58,19 @@ export function MermaidDiagram({ code }: { code: string }) {
     return () => { cancelled = true; };
   }, [code]);
 
+  // Distinct keys on the two branches. Both are a bare <div> in the same
+  // position, so without them React REUSES one DOM node across the swap — and
+  // that node is the one the effect fills with `innerHTML`. The rendered
+  // diagram is invisible to React, so it survives the swap and the error text
+  // is appended below a stale diagram. Separate keys force a real
+  // unmount/mount, which is also what keeps React's children and the
+  // imperative innerHTML out of the same node.
   if (error) {
     return (
-      <div className="my-3 rounded border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-400">
+      <div
+        key="error"
+        className="my-3 rounded border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-400"
+      >
         Diagram error: {error}
       </div>
     );
@@ -68,6 +78,7 @@ export function MermaidDiagram({ code }: { code: string }) {
 
   return (
     <div
+      key="diagram"
       ref={ref}
       className="my-3 flex justify-center overflow-x-auto rounded border border-sol-border/40 bg-sol-bg-alt p-4"
     />
