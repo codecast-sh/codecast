@@ -2736,6 +2736,13 @@ export function sessionStructuralSig(s: InboxSession): string {
     // Presence of an unacked assignment flips the row's prominent treatment.
     // Changes only on assign/ack, never on heartbeats.
     s.assigned_ping ? 1 : 0,
+    // WHO OWNS IT decides whose inbox it is in (isForeignRow →
+    // isAssignedAwayFromViewer): a session I run and hand to a teammate leaves
+    // my scope entirely. Written by an ownership change alone, never by a
+    // heartbeat — and without it here the placement memo would keep serving
+    // the pre-handoff answer until some other row happened to move.
+    s.owner_user_id || "",
+    s.owned_by_me ? 1 : 0,
     // Harness loop state decides trigger-set membership and absorption
     // (partitionTriggerInbox reads it off this same subscription). Distilled to
     // the fields that change rows; stamps once per turn end/wakeup, never on
@@ -4962,7 +4969,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
    *  looking at. The bubble paints at once in that thread; dispatch runs
    *  orgProposals.say, which wraps it and enqueues it on the message rail
    *  under the same client id, so the echo retires the bubble. */
-  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string) => void;
+  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string, askIndex?: number | null) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
@@ -9017,7 +9024,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // handler: [conversation_id, content, image_storage_ids, client_id].
   retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
 
-  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string) {
+  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string, _askIndex?: number | null) {
     appendOptimisticMessage(this, threadConvId, body, undefined, clientId);
     notePendingMessageSendRequested(clientId);
     for (const target of [this.sessions[threadConvId], this.conversations[threadConvId]]) {

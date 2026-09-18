@@ -28,6 +28,7 @@ import {
   isScheduledTaskMessage,
   isChatWakePrompt,
   isMachineDeliveredMessage,
+  isPollResponsePayload,
   parseUnwrappedSessionReport,
   CHAT_WAKE_HEADER,
 } from "@codecast/shared/contracts";
@@ -430,6 +431,9 @@ export function cleanUserMessage(raw: string | null | undefined): string | null 
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
   // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
   if (isMachineDeliveredMessage(raw)) return null;
+  // A poll answer is JSON the dashboard sent for the person; the sticky header
+  // showed one raw on the scope page (2026-09-17).
+  if (isPollResponsePayload(raw)) return null;
   // A spawned schedule run's only "user prompt" is the schedule's — preview the
   // actual task text, not the wire-format header/boilerplate around it.
   const spawned = parseSpawnedTaskPrompt(raw);

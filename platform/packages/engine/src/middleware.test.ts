@@ -396,6 +396,25 @@ describe("outbox", () => {
     expect(h.dispatched.length).toBe(1);
   });
 
+  it("re-drives a row whose direct send was stranded by a binding rotation", async () => {
+    const h = makeHarness();
+    // The first binding never answers; the row is parked and marked in flight.
+    h.wireDispatch(() => new Promise<unknown>(() => {}));
+    const pending = h.wrapped.createThing("stub_2");
+    pending.catch(() => {});
+    await waitFor(() => h.dispatched.length === 1 && h.outbox.size === 1);
+    // A rotation replaces it with a binding that answers; the boot drain of
+    // the successor must deliver the stranded row, not skip it as in flight.
+    h.wrapped._setDispatch(null);
+    h.wireDispatch(async (_a, _args, _patches, result: any) => ({
+      commandId: result.commandId,
+      status: "acknowledged",
+      result: { _id: SERVER_ID },
+    }));
+    await waitFor(() => h.dispatched.length === 2);
+    await waitFor(() => h.outbox.size === 0);
+  });
+
   it("never counts an attempt on an opportunistic re-drive", async () => {
     const h = makeHarness();
     h.outbox.set("e1", {

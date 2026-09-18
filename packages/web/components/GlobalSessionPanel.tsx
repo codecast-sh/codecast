@@ -2998,7 +2998,6 @@ const SessionCard = memo(function SessionCard({
           <SessionIdentityLine
             row={session}
             title={displayTitle}
-            face={false}
             className="min-w-0 flex-1"
             nameClassName={isUnread && !isActive ? "font-semibold" : ""}
             titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}

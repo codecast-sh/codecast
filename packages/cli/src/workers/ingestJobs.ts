@@ -19,6 +19,18 @@ export function ingestIdentity(s: fs.Stats): IngestIdentity {
 export function sameIngestFile(a: IngestIdentity, b: IngestIdentity): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 }
+/**
+ * The same file as an identity recorded in an EARLIER boot. The sync ledger
+ * persists identities, and macOS renumbers APFS volumes across reboots: on
+ * 2026-09-17 st_dev went 16777233 -> 16777232 with every inode unchanged, and
+ * comparing dev made 456 transcripts look replaced, so each replayed from its
+ * first byte. The ledger is keyed by path, so inode and birth time already
+ * decide whether the file at that path is the one recorded. Within one boot,
+ * sameIngestFile stays the stricter check.
+ */
+export function samePersistedFile(a: {ino: number; birthtimeMs: number}, b: {ino: number; birthtimeMs: number}): boolean {
+  return a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
+}
 export function sameIngestSnapshot(a: IngestIdentity, b: IngestIdentity): boolean {
   return sameIngestFile(a,b) && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }

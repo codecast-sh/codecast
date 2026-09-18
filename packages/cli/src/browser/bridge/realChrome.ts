@@ -131,9 +131,22 @@ export function takeWake(outage: string, now = Date.now()): Promise<boolean> {
  * Start the human's Chrome in the background. True when a launch was
  * issued (or one was issued moments ago by another session).
  */
+/**
+ * Chrome runs the renderer of a tab that is not visible at background
+ * priority, which macOS starves on a busy machine: an agent's tab, opened in
+ * the background on purpose so it never takes the human's screen, then
+ * answers nothing for tens of seconds (measured 2026-09-17: renderer at
+ * priority 4, attach failed after 23 s at load 750, while the active tab's
+ * renderer answered at once). This switch is Chrome's own way to keep
+ * background renderers at normal priority; every browser automation tool
+ * passes it. It applies only to a Chrome this command starts: a Chrome the
+ * human opened from the Dock keeps Chrome's default.
+ */
+export const REAL_CHROME_LAUNCH_ARGS = ["--disable-renderer-backgrounding"];
+
 export async function launchRealChrome(): Promise<boolean> {
   if (!(await takeStamp("launchedAt", LAUNCH_ONCE_MS))) return true;
-  return spawnChrome([]);
+  return spawnChrome(REAL_CHROME_LAUNCH_ARGS);
 }
 
 /** The forwarding page `setup` leaves for Chrome to open; removed once pairing settles. */
@@ -181,4 +194,90 @@ export function discardPairingPage(): void {
 export async function wakeExtension(outage: string): Promise<boolean> {
   if (!(await takeWake(outage))) return false;
   return openInRealChrome(bridgeWakeUrl());
+}
+
+// ---------------------------------------------------------------------------
+// Restarting the human's Chrome with the switch, and a Dock launcher that
+// keeps it: the switch applies only at launch, and a Chrome opened from the
+// Dock gets none.
+// ---------------------------------------------------------------------------
+
+import * as os from "node:os";
+import { spawnSync } from "../../proc.js";
+
+export const CHROME_LAUNCHER_NAME = "Google Chrome for Codecast";
+
+/**
+ * Quit Chrome the way its own menu does (tabs are saved for restore), wait
+ * for the process to go, then start it again with the switch and Chrome's
+ * own "restore the last session" flag. Graceful only: a Chrome that will not
+ * quit in `quitWaitMs` is reported, never killed, because a forced end can
+ * lose what the human had open. The human runs this; nothing here runs on
+ * its own.
+ */
+export async function restartRealChrome(opts: { quitWaitMs?: number; note?: (line: string) => void } = {}): Promise<{ restarted: boolean; pid: number | null; reason?: string }> {
+  const note = opts.note ?? (() => {});
+  const was = realChromePid();
+  if (was) {
+    note(`asking Chrome (pid ${was}) to quit…`);
+    spawnSync("osascript", ["-e", 'tell application "Google Chrome" to quit'], { timeout: 15_000 });
+    const deadline = Date.now() + (opts.quitWaitMs ?? 60_000);
+    while (Date.now() < deadline && realChromePid() !== null) await sleep(500);
+    if (realChromePid() !== null) return { restarted: false, pid: was, reason: `Chrome did not quit within ${Math.round((opts.quitWaitMs ?? 60_000) / 1000)}s; quit it by hand and run this again` };
+    // Chrome's singleton lock and the DevToolsActivePort file linger a beat.
+    await sleep(1_500);
+  }
+  note("starting Chrome with --disable-renderer-backgrounding…");
+  if (!spawnChrome([...REAL_CHROME_LAUNCH_ARGS, "--restore-last-session"])) return { restarted: false, pid: null, reason: "no Chrome binary found" };
+  const deadline = Date.now() + 30_000;
+  let pid: number | null = null;
+  while (Date.now() < deadline && !(pid = realChromePid())) await sleep(500);
+  return { restarted: pid !== null, pid, reason: pid ? undefined : "Chrome did not appear within 30s" };
+}
+
+/**
+ * A minimal app bundle whose only job is to open Chrome with the switch, for
+ * the Dock. It carries Chrome's own icon, its own bundle id, and a name that
+ * says what it is; Chrome's bundle, updater, profile and default browser
+ * registration are untouched. `open --args` hands the switch to Chrome only
+ * when Chrome is not already running, which is exactly when it can apply.
+ */
+export function installChromeLauncher(dir = path.join(os.homedir(), "Applications")): { app: string; iconCopied: boolean } {
+  const app = path.join(dir, `${CHROME_LAUNCHER_NAME}.app`);
+  const contents = path.join(app, "Contents");
+  fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
+  fs.mkdirSync(path.join(contents, "Resources"), { recursive: true });
+  const script = `#!/bin/bash
+# Opens Google Chrome with the switch that keeps background tabs and the
+# Codecast extension's worker at normal priority (see codecast:
+# packages/browser-extension/README.md). Made by \`cast browser chrome launcher\`.
+exec /usr/bin/open -a "Google Chrome" --args ${REAL_CHROME_LAUNCH_ARGS.join(" ")} "$@"
+`;
+  fs.writeFileSync(path.join(contents, "MacOS", "launch"), script, { mode: 0o755 });
+  fs.writeFileSync(
+    path.join(contents, "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>${CHROME_LAUNCHER_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${CHROME_LAUNCHER_NAME}</string>
+  <key>CFBundleIdentifier</key><string>sh.codecast.chrome-launcher</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>launch</string>
+  <key>CFBundleIconFile</key><string>app</string>
+  <key>LSUIElement</key><true/>
+</dict></plist>
+`,
+  );
+  let iconCopied = false;
+  const chromeIcon = "/Applications/Google Chrome.app/Contents/Resources/app.icns";
+  if (fs.existsSync(chromeIcon)) {
+    fs.copyFileSync(chromeIcon, path.join(contents, "Resources", "app.icns"));
+    iconCopied = true;
+  }
+  // Launch Services learns the bundle when it is registered; the Dock reads the icon from it.
+  spawnSync("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", ["-f", app], { timeout: 15_000 });
+  return { app, iconCopied };
 }

@@ -47,11 +47,11 @@ function fixtures(extra: Record<string, any[]> = {}) {
     ],
     workflow_runs: [
       // Bound to a task in scope; the stored graph names its node.
-      { _id: "workflow_runs_r1", user_id: ME, workflow_id: WF, task_id: T1, status: "running", current_node_id: "review", node_statuses: [{ node_id: "review", status: "running", activity: "reading the diff" }], spawner_conversation_id: SPAWNER, created_at: 1, updated_at: NOW - 1 * H },
+      { _id: "workflow_runs_r1", user_id: ME, workspace: WS, workflow_id: WF, task_id: T1, status: "running", current_node_id: "review", node_statuses: [{ node_id: "review", status: "running", activity: "reading the diff" }], spawner_conversation_id: SPAWNER, created_at: 1, updated_at: NOW - 1 * H },
       // Bound to a plan in scope; a dynamic run carries its own node label.
-      { _id: "workflow_runs_r2", user_id: ME, plan_id: PLAN, status: "paused", current_node_id: "n2", node_statuses: [{ node_id: "n2", status: "running", label: "Ship?" }], gate_prompt: "Ship it now?", workflow_name: "Launch chain", created_at: 1, updated_at: NOW - 2 * H },
+      { _id: "workflow_runs_r2", user_id: ME, workspace: WS, plan_id: PLAN, status: "paused", current_node_id: "n2", node_statuses: [{ node_id: "n2", status: "running", label: "Ship?" }], gate_prompt: "Ship it now?", workflow_name: "Launch chain", created_at: 1, updated_at: NOW - 2 * H },
       // Bound to a task outside the scope: never shown.
-      { _id: "workflow_runs_r3", user_id: ME, task_id: "tasks_other", status: "completed", node_statuses: [], created_at: 1, updated_at: NOW },
+      { _id: "workflow_runs_r3", user_id: ME, workspace: WS, task_id: "tasks_other", status: "completed", node_statuses: [], created_at: 1, updated_at: NOW },
     ],
     session_decisions: [
       // Asked by a session in scope, no task: shown while pending.
@@ -132,5 +132,55 @@ describe("L6 scope feed pages attached to a task", () => {
     expect(rows.map((r) => r.short_id)).toEqual(["both", "bytask"]);
     expect(rows[0]).toMatchObject({ href: "/a/both", preview: "published by jx1 · v2 · ct-1 at in_review" });
     expect(rows[1]).toMatchObject({ href: "/a/bytask", state: "markdown", preview: "published by jx9 · v1 · ct-2 at open" });
+  });
+});
+
+// The read budget (org.ts computeScopeFeed): the feed's own reads must not
+// grow with the number of tasks in scope. Counted on the fake db: every row a
+// query hands back and every get, which is what the backend's per query
+// document limit counts. resolveScope reads the tasks themselves and is
+// measured apart, so the feed is judged on what it adds.
+function countingDb(db: any): { db: any; reads: () => number } {
+  let n = 0;
+  const count = (rows: any) => { n += Array.isArray(rows) ? rows.length : rows ? 1 : 0; return rows; };
+  const wrapBuilder = (b: any): any => new Proxy(b, {
+    get(target, key) {
+      const v = target[key];
+      if (typeof v !== "function") return v;
+      return (...args: any[]) => {
+        const r = v.apply(target, args);
+        if (key === "collect" || key === "take" || key === "first" || key === "unique") return r.then(count);
+        return r === target ? wrapBuilder(r) : r;
+      };
+    },
+  });
+  const counting = new Proxy(db, {
+    get(target, key) {
+      if (key === "query") return (table: string) => wrapBuilder(target.query(table));
+      if (key === "get") return (id: any) => target.get(id).then(count);
+      return target[key];
+    },
+  });
+  return { db: counting, reads: () => n };
+}
+
+describe("F2 read budget", () => {
+  test("the feed's reads do not grow with the tasks in scope", async () => {
+    const many = Array.from({ length: 1500 }, (_, i) => ({
+      _id: `tasks_bulk${i}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: `ct-${i + 10}`, title: `Task ${i}`, task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: NOW - (20 + i) * H,
+    }));
+    const small = countingDb(fixtures());
+    const large = countingDb(fixtures({ tasks: [...fixtures()._tables.tasks, ...many] }));
+    const feedReads = async (c: { db: any; reads: () => number }) => {
+      const resolved = await scoped(c.db);
+      const before = c.reads();
+      const { rows } = await computeScopeFeed(ctxOf(c.db), resolved, { now: NOW });
+      return { reads: c.reads() - before, rows };
+    };
+    const a = await feedReads(small);
+    const b = await feedReads(large);
+    expect(b.rows.length).toBe(40);
+    expect(b.reads).toBe(a.reads);
+    expect(a.reads).toBeLessThan(200);
   });
 });

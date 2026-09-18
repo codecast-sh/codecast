@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { useAction, useConvexAuth } from "convex/react";
+import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
 import { useInboxStore } from "../store/inboxStore";
@@ -48,8 +48,7 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
   const mode = useRepoTransport();
   const repository = typeof args?.repository === "string" ? args.repository : undefined;
   const access = useRepoAccess(repository, mode === "convex");
-  const { isAuthenticated } = useConvexAuth();
-  const live = mode === "convex" && access.allowed === true && isAuthenticated ? args : null;
+  const live = mode === "convex" && access.allowed === true ? args : null;
   const key = repoBrowseKey(access.scope, publicKind, args);
   const ensure = useAction(ensureRef as never) as (a: unknown) => Promise<{ requested?: boolean } | undefined>;
   // What the ensure for this key is doing: still running, answered by GitHub
@@ -372,11 +371,10 @@ export function useRepositoryTeamId(repository: string | undefined): string | un
 
 export function useRepositories(): { rows: RepositoryRow[]; ready: boolean; error: Error | undefined } {
   const scope = useRepoViewerScope();
-  const { isAuthenticated } = useConvexAuth();
   const key = repoBrowseKey(scope, "repositories", {});
   const select = useCallback((value: unknown) => !key || !scope ? [] : retainRepoBrowseRows(useInboxStore.getState().repoBrowse,
     { _id: key, scope, repository: "", kind: "repositories", value, updated_at: Date.now() }), [key, scope]);
-  const feed = useSyncCollection("repoBrowse", api.repos.listRepositories, scope && isAuthenticated ? {} : "skip",
+  const feed = useSyncCollection("repoBrowse", api.repos.listRepositories, scope ? {} : "skip",
     { select, syncOpts: REPO_SNAPSHOT });
   const row = useInboxStore((s) => key ? s.repoBrowse[key] : undefined);
   return { rows: feed.error ? [] : (row?.value as RepositoryRow[] ?? []), ready: !!row, error: feed.error };

@@ -137,6 +137,8 @@ export interface Config {
   browser_version?: string;
   computer_enabled?: boolean;
   computer_version?: string;
+  check_enabled?: boolean;
+  check_version?: string;
   // Machine-wide site allowlist for `cast browser` — origins agents may
   // navigate to, unioned with any project list in .codecast/workspace.toml
   // [browser].allow. Undefined = no policy. See browser/policy.ts.

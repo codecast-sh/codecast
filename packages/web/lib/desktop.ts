@@ -437,6 +437,21 @@ export function isDesktop(): boolean {
   return isElectron();
 }
 
+/** Open a URL OUTSIDE the app: the system browser on desktop, a new tab on the
+ *  web. Every handoff to somebody else's consent screen goes through here.
+ *  Inside the desktop app a consent screen must not be navigated to in place:
+ *  the person ends up in a page the app shell cannot finish, with no address
+ *  bar and no way back. The system browser also already holds their sign in,
+ *  which is what the OAuth return needs. */
+export function openExternalUrl(url: string): void {
+  const openExternal = bridge("openExternal");
+  if (openExternal) {
+    void openExternal(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
 // Am I inside the desktop app AT ALL — asked of the browser, not of the bridge.
 //
 // isElectron() is the right question wherever the bridge is the thing being

@@ -511,10 +511,18 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
             {paused && <span className="px-1 rounded-sm" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             {ghost && <GhostTag label={ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} />}
             {data.retire && <GhostTag label="retire" status={data.retire.status} tone="color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" />}
+            {/* The seat is the role (S16): the line says whether its standing
+                agent is online, and counts only the hands under it. */}
             {!ghost && (
               <>
                 <span aria-hidden>·</span>
-                <span className="tabular-nums">{r.total} session{r.total === 1 ? "" : "s"}</span>
+                <span data-role-seat={r.standing ? "online" : "none"}>{r.standing ? "online" : "no agent"}</span>
+                {r.total > 0 && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="tabular-nums">{r.total} session{r.total === 1 ? "" : "s"}</span>
+                  </>
+                )}
               </>
             )}
           </div>

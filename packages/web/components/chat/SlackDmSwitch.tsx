@@ -12,6 +12,7 @@ import { AlertTriangle, Loader2, MessageSquareLock } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { BACKFILL_WINDOWS, type BackfillWindow } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackLogo } from "../SlackLogo";
+import { openExternalUrl } from "../../lib/desktop";
 import { Switch } from "../ui/switch";
 import "./chat.css";
 
@@ -37,10 +38,10 @@ export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: b
       const res: any = await getInstallUrl({
         scope_type: "self",
         team_id: teamId,
-        return_to: `${location.pathname}${location.search ? `${location.search}&` : "?"}slack=connected`,
+        return_to: "/settings/integrations?slack=connected",
         origin: location.origin,
       } as any);
-      if (res?.ok && res.url) location.href = res.url;
+      if (res?.ok && res.url) openExternalUrl(res.url);
       else setErr(res?.error ?? "Couldn't start the Slack connection");
     } catch (e: any) {
       setErr(e?.message ?? "Couldn't start the Slack connection");

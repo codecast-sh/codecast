@@ -109,6 +109,10 @@ export type OrgAnchor = OrgStandingState & {
   name: string;
   bot_user_id: string;
   host_user_id: string;
+  /** A role's seat names its role (org-roles-standing.md T1); the workspace
+   *  anchor has none. The chart draws a seat inside its role's card, never as
+   *  its own node under the host (org-staffing.md S16). */
+  org_role_id?: string;
   scope_type: "team" | "user";
   team_id?: string;
   scope_user_id?: string;

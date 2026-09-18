@@ -3,9 +3,9 @@
 // shapes; the pane, the fixture, the model helpers and the store slots agree
 // on one definition here.
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
-import type { OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
+import type { OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
 
-export type { HealthFlag, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
+export type { HealthFlag, OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
 
 // ---------------------------------------------------------------- org.health
 
@@ -121,6 +121,10 @@ export type OrgProposalRow = {
    *  null = a person posted it and there is no agent to talk to. Absent on a
    *  row from before the field: the web derives it from the author. */
   thread?: OrgProposalThread | null;
+  /** What the proposal asks of the person (S19), a partition of its changes
+   *  by seq. The server fills it on list and get; a row cached from before
+   *  that derives it (staffingAsks.proposalAsks). */
+  asks?: OrgAsk[];
   /** orgProposals.list and get both stamp these. */
   link?: string;
   counts?: { total: number; decided: number; applied: number; failed: number; skipped: number };

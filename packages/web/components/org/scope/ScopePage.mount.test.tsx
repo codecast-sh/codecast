@@ -67,7 +67,7 @@ async function verifyScopePage() {
   mock.module("convex/react", () => ({ useMutation: () => async (args: any) => { calls.push(`mutation:${JSON.stringify(args)}`); return {}; }, useQuery: () => undefined }));
   mock.module("sonner", () => ({ toast: { error: (m: string) => calls.push(`toast:${m}`), success: (m: string) => calls.push(`toast:${m}`), warning: () => {} } }));
   mock.module("../../anchor/AnchorConversation", () => ({
-    AnchorConversation: (props: any) => React.createElement("div", { "data-thread": props.conversationId, "data-thread-autofocus": props.autoFocusInput ? "1" : "0", "data-thread-owner": props.seedOwnership ? "1" : "0" }, React.createElement("textarea", { "data-composer": true })),
+    AnchorConversation: (props: any) => React.createElement("div", { "data-thread": props.conversationId, "data-thread-autofocus": props.autoFocusInput ? "1" : "0", "data-thread-owner": props.seedOwnership ? "1" : "0", "data-thread-fold": props.foldBootstrap ? "1" : "0", "data-thread-fold-working": props.foldWorkingTurns ? "1" : "0", "data-thread-density": props.initialDensity ?? "" }, props.leadNode, React.createElement("textarea", { "data-composer": true })),
     AnchorOnboarding: (props: any) => React.createElement("div", { "data-anchor-onboarding": props.scope }, "Meet the Anchor"),
   }));
   mock.module("./ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope) }, "feed") }));
@@ -112,7 +112,14 @@ async function verifyScopePage() {
   await mount("or-1");
   assert.equal(q("[data-scope-layout]")!.getAttribute("data-scope-layout"), "side");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread"), "fixture-growth-conv", "the role's standing conversation is mounted inline");
-  assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "0", "ownership comes from the row, not seeded");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "1", "the host talks to the seat: the composer sends");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold"), "1", "the seat's provisioning prompt folds away");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "working turns and machine prompts fold away (F4.1)");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
+  assert.match(q("[data-scope-lead]")!.textContent!, /I look after Growth, SEO and AI citations and report to Ashot Petrosian/, "the agent opens by saying what this area is");
+  assert.match(q("[data-scope-stripe]")!.textContent!, /Rewriting the weekly growth review/, "the header says what it is watching");
+  assert.match(q("[data-scope-lead-ask]")!.textContent!, /2 sessions are waiting on a person/, "and what waits on the person");
+  for (const word of ["trust", "model", "today", "wakes", "tokens", "host"]) assert.ok(!qa("header *").some((el) => el.children.length === 0 && el.textContent?.trim().toLowerCase() === word), `the header no longer says ${word}`);
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-autofocus"), "1", "the composer comes to hand on a desktop");
   assert.ok(q("[data-composer]"), "the composer is Talk");
   assert.equal(qa("button").filter((b) => /^(Talk|Wake)$/.test(b.textContent?.trim() ?? "")).length, 0, "Talk and Wake left the header");
@@ -191,6 +198,14 @@ async function verifyScopePage() {
   await mount("workspace");
   assert.equal(q("[data-thread]"), null);
   assert.equal(q("[data-anchor-onboarding]")!.getAttribute("data-anchor-onboarding"), "team");
+  env.tree = withStanding;
+
+  // ── a plain member reads the seat's conversation; only the host, the parent or an admin sends ──
+  env.tree = { ...withStanding, people: withStanding.people.map((p) => ({ ...p, is_me: false, role: "member" as const })) };
+  state.currentUser = { _id: "fixture-user-sam" };
+  await mount("or-1");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "0", "a member who is neither host nor parent asks to send");
+  state.currentUser = { _id: "fixture-user-me" };
   env.tree = withStanding;
 
   // ── a seat never provisioned: say what it is, offer to bring it online ──

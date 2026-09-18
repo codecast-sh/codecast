@@ -478,3 +478,75 @@ export const canonicalizeRepositoryNames = internalMutation({
     return { dryRun, table, rewritten, scanned: page.page.length, done: page.isDone, cursor: page.continueCursor };
   },
 });
+
+// One-time backfill: give every legacy task→conversation link an association
+// row (entity_conversations), so the reverse lookup is exact.
+//
+// tasks.conversation_ids is an array field, and an array field cannot be
+// indexed for containment. The association rail is the reverse index, but every
+// path only started dual-writing it on 2026-08-01, so links older than that
+// exist solely in the array. tasks.webListByConversation reads the rail plus
+// two narrower indexes and is correct without this backfill for the common
+// shapes (the task a session filed, the task it is working); this closes the
+// remaining case — a task linked to a SECOND session before the rail existed.
+//
+//   packages/convex/run.sh migrations:backfillTaskConversationLinks '{"dryRun":false,"auto":true}'
+export const backfillTaskConversationLinks = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+    auto: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const numItems = args.numItems ?? 100;
+    const page = await ctx.db.query("tasks").paginate({
+      cursor: args.cursor ?? null,
+      numItems,
+    });
+
+    let linked = 0;
+    let scanned = 0;
+    for (const task of page.page) {
+      const convIds = task.conversation_ids ?? [];
+      if (convIds.length === 0) continue;
+      scanned++;
+      const entityId = String(task._id);
+      const existing = await ctx.db
+        .query("entity_conversations")
+        .withIndex("by_entity", (q) => q.eq("entity_type", "task").eq("entity_id", entityId))
+        .collect();
+      const have = new Set(existing.map((row) => String(row.conversation_id)));
+      for (const convId of convIds) {
+        if (have.has(String(convId))) continue;
+        // The conversation may be gone (a deleted session leaves the id behind
+        // in the array); a dangling rail row would only be filtered on read, so
+        // skip it here instead.
+        if (!(await ctx.db.get(convId))) continue;
+        linked++;
+        if (dryRun) continue;
+        await ctx.db.insert("entity_conversations", {
+          user_id: task.user_id,
+          team_id: task.team_id,
+          entity_type: "task" as const,
+          entity_id: entityId,
+          conversation_id: convId,
+          // The legacy array records no relationship; "work" is what every
+          // linking path (dispatch, task start) writes.
+          relationship: "work" as const,
+          created_at: task.created_at ?? Date.now(),
+        });
+        have.add(String(convId));
+      }
+    }
+
+    if (args.auto && !page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillTaskConversationLinks, {
+        ...args,
+        cursor: page.continueCursor,
+      });
+    }
+    return { dryRun, scanned_linked_tasks: scanned, rows_written: linked, isDone: page.isDone, cursor: page.continueCursor };
+  },
+});

@@ -1,6 +1,6 @@
 import { query } from "./functions";
 import { v } from "convex/values";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { checkConversationAccess, createTeamFeedFilter, isTeamMember } from "./privacy";
 import { classifyWorkStates } from "./conversations";
@@ -8,7 +8,7 @@ import { isOrphanOrSubagent, type WorkState } from "./inboxFilters";
 import { nestParentIdOf } from "./ccAccountsShared";
 import { derivePresenceState } from "./presenceState";
 import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
-import { canAccessDoc, canAccessPlan, canAccessProject, canAccessTask } from "./lib/access";
+import { canAccessDoc, canAccessPlan, canAccessProject, canAccessTask, workspaceKey } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
@@ -393,7 +393,12 @@ export const handsStartedBy = query({
     const states = await classifyWorkStates(ctx, userId, hands, new Map(), now);
     const out: HandStarted[] = [];
     for (const c of hands) {
-      const task = c.active_task_id ? await ctx.db.get(c.active_task_id as Id<"tasks">) : null;
+      // The wrapped ctx.db.get widens to a union of every table, so the id
+      // cast alone does not narrow the RESULT — assert the doc type too, or
+      // reading task.short_id fails the deploy typecheck.
+      const task = c.active_task_id
+        ? ((await ctx.db.get(c.active_task_id as Id<"tasks">)) as Doc<"tasks"> | null)
+        : null;
       out.push({
         _id: c._id,
         short_id: c.short_id ?? null,
@@ -439,7 +444,13 @@ type FeedCursor = Partial<Record<FeedKind, { ts: number; id: string }>>;
 const FEED_LIMIT_DEFAULT = 40;
 const FEED_LIMIT_MAX = 200;
 const COMMIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const ARTIFACTS_PER_MEMBER = 200;
+/** Pages per member the feed reads: artifacts.by_user is creation ordered,
+ *  so a window past the cursor is not expressible and the newest N stand in. */
+const ARTIFACTS_PER_MEMBER = 100;
+/** Runs the feed reads from the workspace's newest (by_workspace_updated). */
+const RUNS_PER_WORKSPACE = 200;
+/** The decision statuses the feed shows: an ask that waits, and one answered. */
+const DECISION_STATUSES = ["pending", "answered"] as const;
 const PREVIEW_CHARS = 200;
 
 const preview = (text: string | undefined | null): string | undefined => {
@@ -573,6 +584,13 @@ function actorCache(ctx: Ctx) {
 const storageUrl = async (ctx: any, storageId: any): Promise<string | undefined> =>
   storageId && ctx.storage?.getUrl ? (await ctx.storage.getUrl(storageId)) ?? undefined : undefined;
 
+/** Whose rows the feed windows: every member of the scope's team, or the
+ *  caller alone in a personal workspace. One read of the memberships. */
+async function scopeMemberIds(ctx: Ctx, resolved: ResolvedScope): Promise<Id<"users">[]> {
+  if (!resolved.teamId) return [resolved.userId];
+  return (await createTeamFeedFilter(ctx as any, resolved.teamId)).memberships.map((m: any) => m.user_id as Id<"users">);
+}
+
 export async function computeScopeFeed(
   ctx: Ctx,
   resolved: ResolvedScope,
@@ -590,6 +608,24 @@ export async function computeScopeFeed(
   const sessionRawById = new Map(sessions.map((s) => [s.session._id.toString(), s.raw]));
 
   const sources = new Map<FeedKind, FeedRow[]>();
+  // The read budget (F2). A query on this backend may read 4,096 documents,
+  // and the chief of staff's whole workspace feed died on it with 860 tasks
+  // in scope (2026-09-17): three sources read once per task (pages attached,
+  // decisions asked, runs bound) on top of every doc of every project. The
+  // scope's own rows (projects, plans, tasks, the sessions in scope) are the
+  // base cost. Every other source reads newest first through a time keyed
+  // index, one window of a page per member, project, repo or workspace, past
+  // the source's cursor, and keeps what the scope owns; nothing below reads
+  // once per task, so the cost no longer grows with the scope. A row outside
+  // a window (a page attached by someone outside the workspace, an older doc)
+  // stays reachable from its own tab and the item's page.
+  const take = limit + 1;
+  const members = await scopeMemberIds(ctx, resolved);
+  const taskShortIds = new Map(resolved.tasks.map((t) => [t._id.toString(), t.short_id]));
+  const planShortIds = new Map(resolved.plans.map((p) => [p._id.toString(), p.short_id]));
+  const projectIds = new Set(resolved.projects.map((p) => p._id.toString()));
+  /** The window's range on a time keyed index: everything before the cursor. */
+  const before = (q: any, field: string, kind: FeedKind) => (cursor[kind] ? q.lt(field, cursor[kind]!.ts) : q);
 
   if (want("session")) {
     sources.set("session", await Promise.all(sessions.map(async ({ session, raw }) => ({
@@ -631,12 +667,17 @@ export async function computeScopeFeed(
     }))));
   }
   if (want("doc")) {
+    // A member's docs, newest change first, kept when filed under a project
+    // or plan in scope.
     const docById = new Map<string, any>();
-    for (const project of resolved.projects) {
-      for (const d of await ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect()) docById.set(d._id.toString(), d);
-    }
-    for (const plan of resolved.plans) {
-      for (const d of await ctx.db.query("docs").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).collect()) docById.set(d._id.toString(), d);
+    for (const uid of members) {
+      const rows: any[] = await ctx.db.query("docs")
+        .withIndex("by_user_updated", (q: any) => before(q.eq("user_id", uid), "updated_at", "doc"))
+        .order("desc")
+        .take(take);
+      for (const d of rows) {
+        if ((d.project_id && projectIds.has(d.project_id.toString())) || (d.plan_id && planShortIds.has(d.plan_id.toString()))) docById.set(d._id.toString(), d);
+      }
     }
     const rows: FeedRow[] = [];
     for (const d of docById.values()) {
@@ -656,23 +697,17 @@ export async function computeScopeFeed(
     sources.set("doc", rows);
   }
   if (want("artifact")) {
-    // Published pages whose owning session is in scope. Artifacts index by
-    // publisher, so each member's recent pages are read and filtered.
-    const publishers = new Set<string>(sessions.map((s) => (s.raw.user_id ?? "").toString()).filter(Boolean));
-    // Pages attached to a task in scope (the-line.md L6) join the session
-    // sourced ones; a page both published from and attached inside the scope
-    // is one row, keyed by slug.
-    const taskShortIds = new Map(resolved.tasks.map((t) => [t._id.toString(), t.short_id]));
+    // A member's pages, newest first: kept when the owning session is in
+    // scope or the page is attached to a task in scope (the-line.md L6). A
+    // page in through both is one row, keyed by slug.
     const pageBySlug = new Map<string, any>();
-    for (const uid of publishers) {
+    for (const uid of members) {
       const pages: any[] = await ctx.db.query("artifacts").withIndex("by_user", (q: any) => q.eq("user_id", uid)).order("desc").take(ARTIFACTS_PER_MEMBER);
       for (const a of pages) {
-        if (!a.session_conversation_id || !sessionIds.has(a.session_conversation_id.toString())) continue;
-        pageBySlug.set(a.slug, a);
+        const owned = !!a.session_conversation_id && sessionIds.has(a.session_conversation_id.toString());
+        const attached = !!a.task_id && taskShortIds.has(a.task_id.toString());
+        if (owned || attached) pageBySlug.set(a.slug, a);
       }
-    }
-    for (const t of resolved.tasks) {
-      for (const a of await ctx.db.query("artifacts").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) pageBySlug.set(a.slug, a);
     }
     const rows: FeedRow[] = [];
     for (const a of pageBySlug.values()) {
@@ -695,13 +730,20 @@ export async function computeScopeFeed(
   if (want("decision")) {
     // Decisions on a task in scope, plus the open ones asked by a session in
     // scope that name no task (the-line.md L10). One row per decision.
+    // Read per member and status, newest asked first.
     const decisionById = new Map<string, any>();
-    for (const t of resolved.tasks) {
-      for (const d of await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) decisionById.set(d._id.toString(), d);
-    }
-    for (const { session } of sessions) {
-      const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", session._id).eq("status", "pending")).collect();
-      for (const d of pending) if (!d.task_id) decisionById.set(d._id.toString(), d);
+    for (const uid of members) {
+      for (const status of DECISION_STATUSES) {
+        const asked: any[] = await ctx.db.query("session_decisions")
+          .withIndex("by_user_status_created", (q: any) => before(q.eq("user_id", uid).eq("status", status), "created_at", "decision"))
+          .order("desc")
+          .take(take);
+        for (const d of asked) {
+          const onTask = !!d.task_id && taskShortIds.has(d.task_id.toString());
+          const openAsk = !d.task_id && d.status === "pending" && sessionIds.has(d.conversation_id.toString());
+          if (onTask || openAsk) decisionById.set(d._id.toString(), d);
+        }
+      }
     }
     const rows: FeedRow[] = [];
     {
@@ -726,9 +768,9 @@ export async function computeScopeFeed(
     const rows: FeedRow[] = [];
     for (const project of resolved.projects) {
       const updates: any[] = await ctx.db.query("project_updates")
-        .withIndex("by_project_created", (q: any) => q.eq("project_id", project._id))
+        .withIndex("by_project_created", (q: any) => before(q.eq("project_id", project._id), "created_at", "update"))
         .order("desc")
-        .take(limit + 1);
+        .take(take);
       for (const u of updates) {
         rows.push({
           kind: "update",
@@ -751,19 +793,25 @@ export async function computeScopeFeed(
     // actor is the session that started it.
     // Each run keeps the short id of the task or plan it was collected under,
     // so a feed row names the work the run belongs to.
+    // The workspace's newest runs (the run list's own index), kept when bound
+    // to a task or plan in scope; a personal workspace's legacy rows without
+    // a stored key ride the owner index, as the run list does.
     const runById = new Map<string, any>();
     const runShortId = new Map<string, string>();
-    for (const t of resolved.tasks) {
-      for (const r of await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) {
-        runById.set(r._id.toString(), r);
-        runShortId.set(r._id.toString(), t.short_id);
-      }
+    const key = workspaceKey(resolved.teamId ? { type: "team", teamId: resolved.teamId } : { type: "personal", userId: resolved.userId });
+    const candidates: any[] = await ctx.db.query("workflow_runs")
+      .withIndex("by_workspace_updated", (q: any) => before(q.eq("workspace", key), "updated_at", "run"))
+      .order("desc")
+      .take(RUNS_PER_WORKSPACE);
+    if (!resolved.teamId) {
+      const legacy: any[] = await ctx.db.query("workflow_runs").withIndex("by_user_id", (q: any) => q.eq("user_id", resolved.userId)).order("desc").take(RUNS_PER_WORKSPACE);
+      for (const r of legacy) if (!r.workspace) candidates.push(r);
     }
-    for (const p of resolved.plans) {
-      for (const r of await ctx.db.query("workflow_runs").withIndex("by_plan", (q: any) => q.eq("plan_id", p._id)).collect()) {
-        runById.set(r._id.toString(), r);
-        if (!runShortId.has(r._id.toString())) runShortId.set(r._id.toString(), p.short_id);
-      }
+    for (const r of candidates) {
+      const short = (r.task_id && taskShortIds.get(r.task_id.toString())) || (r.plan_id && planShortIds.get(r.plan_id.toString()));
+      if (!short) continue;
+      runById.set(r._id.toString(), r);
+      runShortId.set(r._id.toString(), short);
     }
     const workflowById = new Map<string, any>();
     const rows: FeedRow[] = [];
@@ -803,9 +851,9 @@ export async function computeScopeFeed(
     const since = now - COMMIT_WINDOW_MS;
     for (const repo of repos) {
       const commits: any[] = await ctx.db.query("commits")
-        .withIndex("by_repository_timestamp", (q: any) => q.eq("repository", repo).gte("timestamp", since))
+        .withIndex("by_repository_timestamp", (q: any) => before(q.eq("repository", repo).gte("timestamp", since), "timestamp", "commit"))
         .order("desc")
-        .take(limit + 1);
+        .take(take);
       for (const cm of commits) {
         const [subject, ...body] = (cm.message ?? "").split("\n");
         rows.push({

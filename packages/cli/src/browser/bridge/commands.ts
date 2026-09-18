@@ -21,7 +21,7 @@ import {
 } from "./host.js";
 import { BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
 import { connectRealBridge, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
-import { discardPairingPage, openInRealChrome } from "./realChrome.js";
+import { CHROME_LAUNCHER_NAME, discardPairingPage, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 
 const OK = `${fmt.success(icons.check)}`;
@@ -271,6 +271,29 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
 
   // ensureBridgeHost (host.ts) respawns `cast browser bridge-host` detached,
   // so this must exist on whichever driver is registered.
+  const chrome = br
+    .command("chrome")
+    .description("The human's Chrome as a process: restart it with the switch that keeps agent tabs and the extension at normal priority, or install a Dock launcher that always passes it");
+
+  chrome
+    .command("restart")
+    .description(`Quit Chrome gracefully (tabs restore) and start it with ${REAL_CHROME_LAUNCH_ARGS.join(" ")}; the switch lasts until Chrome next quits`)
+    .action(async () => {
+      const r = await restartRealChrome({ note: (line) => console.log(fmt.muted(`  ${line}`)) });
+      if (!r.restarted) die(r.reason ?? "Chrome did not restart");
+      console.log(`${OK} Chrome restarted (pid ${r.pid}) with ${REAL_CHROME_LAUNCH_ARGS.join(" ")}`);
+      console.log(fmt.muted("  the extension reconnects on its own; `cast browser extension status` shows it"));
+    });
+
+  chrome
+    .command("launcher")
+    .description(`Install "${CHROME_LAUNCHER_NAME}.app" in ~/Applications: opens Chrome with the switch, for the Dock`)
+    .action(() => {
+      const r = installChromeLauncher();
+      console.log(`${OK} installed ${r.app}${r.iconCopied ? "" : " (Chrome's icon was not found; the launcher has none)"}`);
+      console.log(fmt.muted("  drag it to the Dock in place of Chrome; it opens the real Chrome with the switch when Chrome is not running"));
+    });
+
   br.command("bridge-host", { hidden: true })
     .description("Run the bridge host in the foreground (internal; auto-started detached)")
     .action(async () => {

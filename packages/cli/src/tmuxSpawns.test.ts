@@ -113,3 +113,24 @@ test("launch survives restart and resolves through the child pane ancestry", () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// 2026-09-17: a harness ran `claude -p` jobs back to back for an hour inside one
+// tmux session. Runs in the first five minutes nested under the agent that made
+// the session; every later run became a first class inbox card, 25 of them.
+test("a run late in a long lived tmux session still belongs to the agent that made the session", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cast-tmux-spawns-"));
+  try {
+    const registry = new TmuxSpawnRegistry(join(dir, "spawns.json"));
+    registry.record(shell("tmux new -d -s dryrun 'bash jobs.sh'"), "parent");
+    const created = Math.floor(startedAt / 1000);
+    const lateRun = startedAt + 27 * 60_000;
+    // The live session is the recorded one: its age does not matter.
+    expect(registry.parentForPanes(`dryrun 100 ${created}`, [101, 100], lateRun)).toBe("parent");
+    // A later tmux session that reuses the name is a different session.
+    expect(registry.parentForPanes(`dryrun 100 ${created + 24 * 60 * 60}`, [101, 100], lateRun + 24 * 60 * 60_000)).toBeUndefined();
+    // A transcript older than the launch cannot be its child.
+    expect(registry.parentForPanes(`dryrun 100 ${created}`, [101, 100], startedAt - 1)).toBeUndefined();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

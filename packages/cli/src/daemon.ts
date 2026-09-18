@@ -8,8 +8,9 @@ import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
-import { computeIngestSyncDelta, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
+import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
 import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { selfExecInfo } from "./selfExec.js";
 import { cursorPassBoundary, readCodexSessionMetaHeadAsync, readCompleteLines, readCompleteLinesSync, readIngestWindow, sessionMetaHeadCut } from "./transcriptWindow.js";
 export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
 export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type PassBoundary, type ReadWindowOpts } from "./transcriptWindow.js";
@@ -8469,25 +8470,11 @@ function assertTranscriptAuthority(sessionId: string, conversationId: string | u
     throw new TranscriptIngestRetry(`Transcript ${sessionId} conversation mapping changed`);
   }
 }
-async function transcriptSignatureWatermark(signatures: ReadonlyMap<string,string>): Promise<string> {
-  const hash = createHash("sha256");
-  let chunks = 0;
-  for (const [uuid, signature] of signatures) {
-    for (const value of [uuid, signature]) {
-      hash.update(String(value.length)).update(":");
-      for (let offset = 0; offset < value.length; offset += 8192) {
-        hash.update(value.slice(offset, offset + 8192));
-        if (++chunks % 128 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); checkTranscriptDeadline(); }
-      }
-    }
-  }
-  return hash.digest("hex");
-}
 function transcriptCountReplaced(result: object, count: number): boolean {
   const source = ingestSource(result);
   if (!source) throw new Error("unknown transcript count source");
   const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
-  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && (previous.dev !== source.identity.dev || previous.ino !== source.identity.ino || previous.birthtimeMs !== source.identity.birthtimeMs));
+  return !!(previous?.client === source.client && previous.sessionId === source.sessionId && previous.unit === "count" && previous.watermark === count && ledger?.lastSyncedPosition === count && !samePersistedFile(previous, source.identity));
 }
 async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionId: string, conversationId: string | undefined, cache: ConversationCache, commit: () => void, keys: readonly string[] = [sessionId], signatureState?: ReadonlyMap<string,string>, consumedMessages: RawMessage[] = result.messages): Promise<void> {
   const source = ingestSource(result);
@@ -8497,9 +8484,10 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
   const priorSignatures = piSyncedSigs.get(source.file) ?? new Map<string,string>();
   const before = unit === "signatures" ? await transcriptSignatureWatermark(priorSignatures) : currentWatermark();
   const nextSignatures = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures) : undefined;
+  const settledWatermark = unit === "signatures" ? await transcriptSignatureWatermark(signatureState ?? priorSignatures, 1) : undefined;
   const ledger = getSyncRecord(source.file), previous = ledger?.sourceGeneration;
   const paired = previous?.client === source.client && previous.sessionId === sessionId && previous.unit === unit && previous.watermark === before && (unit === "signatures" ? ledger?.lastSyncedPosition === 0 : ledger?.lastSyncedPosition === before);
-  const same = paired && previous.dev === source.identity.dev && previous.ino === source.identity.ino && previous.birthtimeMs === source.identity.birthtimeMs;
+  const same = paired && samePersistedFile(previous, source.identity);
   const prefixProven = (unit === "signatures" ? priorSignatures.size === 0 : before === 0) || !!(same && previous.prefixProven);
   assertTranscriptAuthority(sessionId,conversationId,cache,keys);
   await validateTranscriptIngest(result);
@@ -8510,7 +8498,7 @@ async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionI
     lastSyncedAt: Date.now(),
     lastSyncedPosition: unit === "signatures" ? 0 : watermark as number,
     conversationId,
-    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,prefixProven},
+    sourceGeneration: {client:source.client,sessionId,dev:source.identity.dev,ino:source.identity.ino,birthtimeMs:source.identity.birthtimeMs,unit,watermark,settledWatermark,prefixProven},
   });
   const consumed=new Set<string>();
   for(let i=0;i<consumedMessages.length;i++){
@@ -9200,7 +9188,7 @@ async function walkSpawnerCandidates(
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
   const tmuxPanes = spawnRegistry.hasEntries()
-    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]).catch(() => ({ stdout: "" }))).stdout
+    ? (await tmuxExec(["list-panes", "-a", "-F", "#{session_name} #{pane_pid} #{session_created}"]).catch(() => ({ stdout: "" }))).stdout
     : "";
   const startedAt = transcriptStartedAt(filePath);
   const candidates: SpawnerCandidate[] = [];
@@ -9506,7 +9494,7 @@ async function ingestStat(filePath: string, lastPosition: number, client: string
     const saved = ledger?.sourceGeneration;
     const previous = saved?.client === client && saved.sessionId === sessionId && saved.unit === "bytes" && saved.watermark === lastPosition && ledger?.lastSyncedPosition === lastPosition ? saved : undefined;
     size = identity.size;
-    if (previous && (previous.dev !== identity.dev || previous.ino !== identity.ino || previous.birthtimeMs !== identity.birthtimeMs)) {
+    if (previous && !samePersistedFile(previous, identity)) {
       lastPosition = 0;
       setPosition(filePath,0);
       codexModelPositions.delete(filePath);
@@ -11512,6 +11500,26 @@ async function processOpencodeSessionPass(
 // whatever prefix the first watcher pass caught.
 const piSyncedSigs = new Map<string, Map<string, string>>();
 
+// A restarted daemon starts with piSyncedSigs empty, and an empty map re-sends
+// the whole transcript. The ledger survives the restart with the watermark of
+// what was synced; when the file is the same one (identity), for the same
+// session and still the same conversation, the prefix that hashes to that
+// watermark is exactly what the server already has. Seeds the map and returns
+// it, or null so the caller falls back to a full idempotent re-sync. Seeding
+// only ever holds messages present in the file now, so it cannot orphan any.
+async function restoreSyncedSignatures(ingest: { messages: RawMessage[]; signatures?: string[] }, sessionId: string, cache: ConversationCache): Promise<Map<string, string> | null> {
+  const source = ingestSource(ingest);
+  const record = source ? getSyncRecord(source.file) : null;
+  const g = record?.sourceGeneration;
+  if (!source || !g || !ingest.signatures || g.unit !== "signatures" || typeof g.watermark !== "string") return null;
+  if (g.client !== source.client || g.sessionId !== sessionId) return null;
+  if (!samePersistedFile(g, source.identity)) return null;
+  if (!record!.conversationId || cache[sessionId] !== record!.conversationId) return null;
+  const seeded = await provenSyncedPrefix(ingest.messages, ingest.signatures, [g.watermark, g.settledWatermark]);
+  if (seeded) piSyncedSigs.set(source.file, seeded);
+  return seeded;
+}
+
 /**
  * Write a transcript codecast REBUILT for a delta-synced client (pi) so the
  * watcher ingests only what the client appends afterwards. The delta sync has
@@ -11648,7 +11656,7 @@ async function processTranscriptDeltaSessionPass(
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
-    const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
+    const syncedSigs = piSyncedSigs.get(filePath) ?? await restoreSyncedSignatures(ingest, sessionId, conversationCache) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
     if (newMessages.length === 0 && orphanUuids.length === 0) {
       markExamined(ingestSource(ingest)?.file ?? filePath);
@@ -13560,10 +13568,36 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // prompt IS our message sitting in the input box: the submit-verify loop must
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
-export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
+export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
   const recent = paneContent.split("\n").slice(-80).join("\n");
   const composer = tmuxComposerRegion(recent);
-  return composer !== null && /\[[^\]\n]*pasted[^\]\n]*\]/i.test(composer);
+  if (composer === null) return false;
+  const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
+  return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
+}
+
+// The "+N lines" a collapsed chip prints for this payload. Claude Code counts
+// the line BREAKS, not the lines, so a four-line paste with no trailing newline
+// reads "+3 lines" (measured on 2.1.275; wrapping a 400-column line in a
+// 200-column pane does not change the number). Null when the payload is one
+// line, which is the case whose chip prints no count at all.
+export function pasteChipLines(payload: string): number | null {
+  const breaks = (payload.match(/\n/g) ?? []).length;
+  return breaks > 0 ? breaks : null;
+}
+
+// Does this chip belong to someone else? A collapsed chip hides its text, so
+// the count it prints is the only thing on screen that says whose paste it is.
+// Reading ANY single chip as our own payload is how a human's unsent paste got
+// submitted as our message — and acked as delivered while the agent received
+// the bare "[Pasted text #1 +20 lines]" placeholder (ct-51354). A chip that
+// prints no count says nothing either way and keeps the benefit of the doubt:
+// not every client's chip carries one, and a single-line paste never does.
+export function pasteChipContradicts(chip: string, expectedLines: number | null | undefined): boolean {
+  if (expectedLines === undefined) return false;
+  const shown = /\+\s*(\d+)\s+lines?/i.exec(chip);
+  if (!shown) return false;
+  return Number(shown[1]) !== expectedLines;
 }
 
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
@@ -15821,6 +15855,8 @@ export type TmuxSubmitVerifyOpts = {
   pasteConfirmed: boolean;
   contentPrefix: string;
   bracketedPaste?: boolean;
+  /** The "+N lines" our own payload's chip would print — see pasteChipLines. */
+  chipLines?: number | null;
   deadlineMs?: number;
   /** When the paste went in. A turn mark older than this belongs to someone else. */
   pasteAt?: number;
@@ -15933,7 +15969,7 @@ async function runTmuxSubmitVerify(
       }
       const stillStuck =
         tmuxPromptStillHasInput(again, opts.contentPrefix) ||
-        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again));
+        (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again, opts.chipLines));
       if (!stillStuck) return true;
       pasteSeen = true;
       io.log("message still in input box after an apparent submit, pressing Enter");
@@ -15970,7 +16006,7 @@ async function runTmuxSubmitVerify(
     if (pane === opts.prePaste) continue;
 
     const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
-      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane));
+      (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(pane, opts.chipLines));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -16263,7 +16299,9 @@ export async function awaitTmuxComposerPayload(
     const composer = tmuxComposerRegion(pane) ?? "";
     const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1 && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+      ? chips.length === 1
+        && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+        && !pasteChipContradicts(chips[0], pasteChipLines(payload))
       : holdsPayload(pane);
     if (matched) return "matched";
 
@@ -16610,6 +16648,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
       bracketedPaste: bracketed,
+      chipLines: pasteChipLines(sanitized),
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
@@ -18912,6 +18951,8 @@ async function runHeartbeatMaintenance(): Promise<void> {
     // Same cadence as the reaper, and deliberately after it: a session the
     // reaper just retired is not a live session the cap has to park.
     await runHibernationPass().catch((e) => log(`[HIBERNATE] pass error: ${(e as Error)?.message ?? e}`));
+    // And the browser engines those agents left behind (engineReap.ts).
+    await reapOrphanEngines().catch((e) => reaperLog(`engine reap failed: ${(e as Error)?.message ?? e}`, false));
   }
 
   // Keep each session's working tree recoverable from another machine. See
@@ -19484,7 +19525,17 @@ const REAP_TMUX_PREFIXES = ["cc-resume-", "cx-resume-"];
 // goes LAST because it is the only human-named field, so a stray separator in
 // it re-joins instead of shifting the stamps.
 const REAP_FIELD_SEP = "|";
-const REAP_LIST_FORMAT = `#{@codecast_session_id}${REAP_FIELD_SEP}#{@codecast_conversation_id}${REAP_FIELD_SEP}#{session_name}`;
+// Pane facts ride the same call: the foreground command and its pid, whether
+// tmux holds the pane dead, clients, layout and the time of last OUTPUT
+// (window_activity; session_activity only moves on client input and read 63
+// minutes stale on a pane printing that second).
+const REAP_LIST_FORMAT = [
+  "#{@codecast_session_id}", "#{@codecast_conversation_id}",
+  "#{session_attached}", "#{window_activity}", "#{session_windows}", "#{window_panes}",
+  "#{pane_pid}", "#{pane_dead}", "#{pane_current_command}",
+  "#{session_name}",
+].join(REAP_FIELD_SEP);
+const REAP_FIELD_COUNT = 10;
 
 function reaperLog(message: string, mirror = true): void {
   const line = `[${new Date().toISOString()}] ${message}\n`;
@@ -19511,6 +19562,19 @@ export type ReapCandidate = {
   convId: string | null;
   /** "resume" panes reap on idle alone; "stamped" panes also need a hide state. */
   kind: "resume" | "stamped";
+  /** What tmux reports about the pane itself; null when a field did not parse. */
+  pane?: ReapPaneFacts | null;
+};
+
+export type ReapPaneFacts = {
+  attached: number;
+  /** Epoch ms of the pane's last output. */
+  activityMs: number;
+  windows: number;
+  panes: number;
+  pid: number;
+  dead: boolean;
+  command: string;
 };
 
 // One `tmux list-sessions` row: the two codecast stamps + name (see
@@ -19524,9 +19588,10 @@ export function parseReapCandidateRow(row: string): ReapCandidate | null {
   // Fewer fields than the format emits means the separators never survived:
   // take the whole row as the name and treat it as unstamped.
   const [name, sessionId, convId] =
-    parts.length < 3
+    parts.length < REAP_FIELD_COUNT
       ? [row, "", ""]
-      : [parts.slice(2).join(REAP_FIELD_SEP), parts[0], parts[1]];
+      : [parts.slice(REAP_FIELD_COUNT - 1).join(REAP_FIELD_SEP), parts[0], parts[1]];
+  const pane = parts.length < REAP_FIELD_COUNT ? null : parseReapPaneFacts(parts.slice(2, REAP_FIELD_COUNT - 1));
   const tmux = (name ?? "").trim();
   if (!tmux) return null;
   const unexpanded = (v: string) => v.includes("#{");
@@ -19535,12 +19600,69 @@ export function parseReapCandidateRow(row: string): ReapCandidate | null {
   const stampedSessionId = stampedSession && !unexpanded(stampedSession) ? stampedSession : null;
   const stampedConvId = stampedConv && !unexpanded(stampedConv) ? stampedConv : null;
   if (REAP_TMUX_PREFIXES.some((p) => tmux.startsWith(p))) {
-    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "resume" };
+    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "resume", pane };
   }
   if (stampedSessionId || stampedConvId) {
-    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "stamped" };
+    return { tmux, sessionId: stampedSessionId, convId: stampedConvId, kind: "stamped", pane };
   }
   return null;
+}
+
+function parseReapPaneFacts(f: string[]): ReapPaneFacts | null {
+  const [attached, activity, windows, panes, pid, dead] = f.slice(0, 6).map((v) => (/^\d+$/.test(v.trim()) ? Number(v) : NaN));
+  const command = (f[6] ?? "").trim();
+  if ([attached, activity, windows, panes, pid, dead].some(Number.isNaN) || !command || command.includes("#{")) return null;
+  return { attached, activityMs: activity * 1000, windows, panes, pid, dead: dead === 1, command };
+}
+
+// Login shells tmux reports as the foreground command once an agent exits.
+const EXITED_AGENT_SHELLS = new Set(["bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
+// A dead pane must print nothing for this long before it goes: long enough to
+// outlast any resume the daemon starts in it, short enough that a night of
+// finished agents does not pile up (250 of them held a load average of 245 on
+// 2026-09-17).
+export const DEAD_PANE_QUIET_MS = 30 * 60 * 1000;
+// Killing a pane that runs nothing costs no agent anything, so this cap is
+// about pacing the log, not caution.
+const DEAD_PANE_MAX_PER_PASS = 20;
+
+/**
+ * Has the agent in this pane exited? Structural, from tmux alone: the pane is
+ * dead, or its foreground program is a bare login shell. Transcript age cannot
+ * answer this. A live agent idle at its prompt has an old transcript too, and
+ * reading one as the other killed a scheduled run mid delivery (2026-09-17).
+ */
+export function paneAgentExited(p: ReapPaneFacts): boolean {
+  return p.dead || EXITED_AGENT_SHELLS.has(p.command.replace(/^-/, ""));
+}
+
+/**
+ * Why a pane whose agent exited must stay, or null when it may go. The kill
+ * takes the whole tmux session, so it must be one pane nobody is attached to;
+ * the shell must run nothing (a script the human started keeps it); no resume
+ * or delivery may be headed for it; and it must have printed nothing for
+ * DEAD_PANE_QUIET_MS. `children` is null when the process table could not be
+ * read, which blocks: a failed read answers nothing.
+ */
+export function deadPaneReapBlock(p: ReapPaneFacts, facts: { now: number; children: number | null; deliveryActive: boolean }): string | null {
+  if (p.windows !== 1 || p.panes !== 1) return "multi-pane";
+  if (p.attached > 0) return "attached";
+  if (facts.children === null) return "children-unknown";
+  if (facts.children > 0) return "shell-busy";
+  if (facts.deliveryActive) return "delivery-active";
+  if (facts.now - p.activityMs < DEAD_PANE_QUIET_MS) return "dead-recent";
+  return null;
+}
+
+/** Child processes of a pane's shell, or null when `pgrep` could not answer. */
+async function paneChildCount(pid: number): Promise<number | null> {
+  try {
+    const { stdout } = await _execFileAsync("pgrep", ["-P", String(pid)], { timeout: 4000 });
+    return String(stdout).split("\n").filter((l) => l.trim()).length;
+  } catch (err) {
+    // pgrep exits 1 when it matched nothing: that is an answer, zero.
+    return (err as { code?: unknown })?.code === 1 ? 0 : null;
+  }
 }
 
 // Whether a stamped (primary-terminal) pane's conversation is hidden enough to
@@ -19810,18 +19932,28 @@ async function reapOneTerminal(
   tmux: string,
   convId: string | undefined,
   idleHours: number,
-  opts: { gcWorktree?: boolean; parkAs?: "idle" | "hibernated"; boundary?: HibernationBoundary } = {},
+  opts: {
+    gcWorktree?: boolean;
+    parkAs?: "idle" | "hibernated";
+    boundary?: HibernationBoundary;
+    /** The kill-time recheck: why the pane must now survive, or null. Defaults to "an agent still idle at its prompt". */
+    stillReapable?: () => Promise<string | null>;
+  } = {},
 ): Promise<boolean> {
   if (opts.parkAs === "hibernated") {
     return opts.boundary ? parkHibernationTerminal(sessionId, tmux, convId, idleHours, opts.boundary) : false;
   }
-  // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
-  // False here means the pane survived, so no caller may count or report a kill.
-  try {
+  // TOCTOU guard: re-confirm the pane is still reapable in the instant before the
+  // kill. False here means the pane survived, so no caller may count or report a kill.
+  const recheck = opts.stillReapable ?? (async () => {
     const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 });
     const live = classifyLivePaneFor(detectSessionAgentType(sessionId), pane);
-    if (live !== "idle") { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): pane became "${live}" at kill time`); return false; }
-  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck capture failed`); return false; }
+    return live === "idle" ? null : `pane became "${live}"`;
+  });
+  try {
+    const why = await recheck();
+    if (why) { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): ${why} at kill time`); return false; }
+  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck failed`); return false; }
 
   // Stop tracking BEFORE the kill so heartbeatHealthCheck can't see the vanished
   // tmux and reconstitute it.
@@ -19848,6 +19980,16 @@ async function reapOneTerminal(
   return true;
 }
 
+// Engine browsers outlive their agents until something reaps them, and only a
+// `cast browser` start used to. Runs as a child so its tmux and ps reads stay
+// off this loop; the verb throttles itself, so a slow tick costs nothing extra.
+async function reapOrphanEngines(): Promise<void> {
+  const { executablePath, args } = selfExecInfo("browser", "reap");
+  const { stdout } = await _execFileAsync(executablePath, args, { timeout: 60_000, env: scrubAgentEnv({ ...process.env }) });
+  const line = String(stdout ?? "").trim();
+  if (line) reaperLog(`engines: ${line}`);
+}
+
 async function reapIdleOrphanTerminals(): Promise<void> {
   const now = Date.now();
   let candidates: ReapCandidate[];
@@ -19861,8 +20003,37 @@ async function reapIdleOrphanTerminals(): Promise<void> {
 
   const convCache = readConversationCache();
   const skips: string[] = [];
-  let reaped = 0;
+  let reaped = 0, deadReaped = 0;
   for (const cand of candidates) {
+    // An exited agent's pane is judged by tmux's facts, never the transcript,
+    // and has its own pacing: it runs nothing, so no turn can be cut short.
+    if (cand.pane && paneAgentExited(cand.pane)) {
+      if (deadReaped >= DEAD_PANE_MAX_PER_PASS) { skips.push("dead:pass-cap"); continue; }
+      const sessionId = cand.sessionId ?? await resolveReapSessionId(cand.tmux);
+      if (!sessionId) { skips.push("unidentified"); continue; } // never kill what we can't name
+      const convId = cand.convId ?? convCache[sessionId];
+      const pane = cand.pane;
+      const block = async (p: ReapPaneFacts) => deadPaneReapBlock(p, {
+        now: Date.now(),
+        children: await paneChildCount(p.pid),
+        deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
+      });
+      const reason = await block(pane);
+      if (reason) { skips.push(`dead:${reason}`); continue; }
+      const idleHours = Math.round((now - pane.activityMs) / 3600000);
+      const killed = await reapOneTerminal(sessionId, cand.tmux, convId, idleHours, {
+        stillReapable: async () => {
+          const { stdout } = await tmuxExec(["display-message", "-p", "-t", `=${cand.tmux}:0.0`, REAP_LIST_FORMAT], { timeout: 4000 });
+          const fresh = parseReapCandidateRow(stdout.split("\n")[0] ?? "")?.pane;
+          if (!fresh) return "pane facts unreadable";
+          if (!paneAgentExited(fresh)) return `an agent is running again (${fresh.command})`;
+          return block(fresh);
+        },
+      });
+      if (killed) deadReaped++;
+      else skips.push("dead:changed-at-kill");
+      continue;
+    }
     if (reaped >= REAP_MAX_PER_PASS) { skips.push("pass-cap"); continue; }
     const sessionId = cand.sessionId ?? await resolveReapSessionId(cand.tmux);
     if (!sessionId) { skips.push("unidentified"); continue; } // never kill what we can't name
@@ -19894,7 +20065,7 @@ async function reapIdleOrphanTerminals(): Promise<void> {
   // Every pass leaves a line: without it the skip reasons were invisible and a
   // reaper that had quietly stopped reaping looked identical to one with nothing
   // to do. File-only (mirror=false) — this fires every ~5 min.
-  reaperLog(`pass: ${candidates.length} candidates, reaped ${reaped}, skipped: ${summarizeReapSkips(skips)}`, false);
+  reaperLog(`pass: ${candidates.length} candidates, reaped ${reaped}, exited panes reaped ${deadReaped}, skipped: ${summarizeReapSkips(skips)}`, false);
 }
 
 // ─── Hibernation ───────────────────────────────────────────────────────────
@@ -29333,13 +29504,7 @@ export async function runWatchdog(): Promise<void> {
 }
 
 function getDaemonExecInfo(): { executablePath: string; args: string[] } {
-  const execPath = process.execPath;
-  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
-  if (isBinary) {
-    return { executablePath: execPath, args: ["--", "_daemon"] };
-  }
-  const source = path.resolve(__dirname, "daemon.ts");
-  return { executablePath: execPath, args: [fs.existsSync(source) ? source : path.resolve(__dirname, "daemon.js"), "_daemon"] };
+  return selfExecInfo("_daemon");
 }
 
 // Only run directly if executed as the main module (not when imported)
