@@ -43,7 +43,7 @@ import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
-import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import { addConversationToWorkItem } from "./conversationLinks";
 
 type TableConfig =
   | {
@@ -583,35 +583,19 @@ async function linkConversationToObject(
         .first();
       if (!membership) return;
     }
-    const existing = task.conversation_ids || [];
-    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
-      await ctx.db.patch(objectId as Id<"tasks">, {
-        conversation_ids: [...existing, conversationId],
-      });
-    }
     await ctx.db.patch(conversationId, {
       active_task_id: objectId as Id<"tasks">,
     });
-    // Dual-write onto the entity-conversation association rail (best-effort;
-    // legacy fields stay authoritative — see conversationLinks.ts).
-    await linkConversationToEntityBestEffort(ctx, userId, {
-      entityType: "task", entityId: objectId, conversationId, relationship: "work",
-    });
+    // The list append and the association rail (best-effort; legacy fields
+    // stay authoritative) are one helper — see conversationLinks.ts.
+    await addConversationToWorkItem(ctx, userId, "task", task, conversationId);
     return;
   }
 
   if (objectType === "plan") {
     const plan = await ctx.db.get(objectId as Id<"plans">);
     if (!plan || plan.user_id.toString() !== userId.toString()) return;
-    const existing = plan.session_ids || [];
-    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
-      await ctx.db.patch(objectId as Id<"plans">, {
-        session_ids: [...existing, conversationId],
-      });
-    }
-    await linkConversationToEntityBestEffort(ctx, userId, {
-      entityType: "plan", entityId: objectId, conversationId, relationship: "work",
-    });
+    await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId);
     return;
   }
 }

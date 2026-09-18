@@ -15,6 +15,7 @@ import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, trustOf } from "./orgEvents";
 import { charterLine, type CharterRow } from "./lib/orgCharter";
+import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -127,6 +128,10 @@ export async function spawnSessionCore(
     targetDeviceId?: string | null;
     spawnerConversationId?: Id<"conversations">;
     subagentFields?: { parent_conversation_id: Id<"conversations">; is_subagent: true } | null;
+    // `cast handoff --to` / handoff.start: the session this one continues. The
+    // child is born linked and bound to the source's task/plan, the source is
+    // patched to point forward and its state pinned done (handoff.applyHandoffLink).
+    handoffFrom?: any;
     prompt?: string;
     // A resolved agent definition (`cast spawn --as`): the daemon applies its
     // tool policy and system prompt at launch; agent/model/effort were folded
@@ -164,6 +169,7 @@ export async function spawnSessionCore(
     ...privacy,
     ...(opts.subagentFields ?? {}),
     ...(opts.spawnerConversationId ? { spawned_by_conversation_id: opts.spawnerConversationId } : {}),
+    ...(opts.handoffFrom ? handoffChildFields(opts.handoffFrom) : {}),
     ...(opts.ccAccount ? { cc_account: opts.ccAccount } : {}),
     ...(opts.worktree
       ? {
@@ -189,6 +195,9 @@ export async function spawnSessionCore(
   const shortId = conversationId.toString().slice(0, 7);
   await ctx.db.patch(conversationId, { short_id: shortId });
   await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+  if (opts.handoffFrom) {
+    await applyHandoffLink(ctx, userId, opts.handoffFrom, { _id: conversationId, short_id: shortId, agent_type: agentType, model: opts.model });
+  }
   // A parked row starts nowhere yet: the CLI places it (cloud.placeConversation)
   // with the prompt once the host has the checkout ready.
   if (opts.cloudPark) return { conversationId, shortId };
@@ -319,12 +328,18 @@ export const createSessionFromCli = mutation({
     // session is stamped review_of_task_id, never org_role_id, and counts
     // against the caps of the role doing the task's work.
     review_for_task: v.optional(v.string()),
+    // `cast handoff --to` / handoff.start: any ref to a session the caller
+    // runs or owns. The new session continues it: born with
+    // handed_off_from_conversation_id and the source's task/plan binding, and
+    // the source is patched forward and pinned done in this same mutation.
+    handoff_from_session: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) {
       throw new Error("Authentication failed: invalid token or session");
     }
+    const handoffFrom = args.handoff_from_session ? await findHandoffSource(ctx, userId, args.handoff_from_session) : undefined;
     const asDef = await resolveSpawnDefinition(ctx, userId, args.definition, {
       agentType: args.agent_type,
       model: args.model,
@@ -388,6 +403,7 @@ export const createSessionFromCli = mutation({
       targetDeviceId,
       subagentFields,
       spawnerConversationId: spawner?._id,
+      handoffFrom,
       prompt,
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);

@@ -63,6 +63,7 @@ cast ask "how does X work"        # query across sessions
 
 # Handoff & Tracking
 cast handoff                      # generate context transfer doc
+cast handoff --to codex           # continue this session's work in a new session on another agent (or --model opus); links both, pins this one done
 cast bookmark <id> <msg> --name x # save shareable link
 cast decisions list               # view architectural decisions
 cast decisions add "title" --reason "why"

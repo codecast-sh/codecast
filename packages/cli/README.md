@@ -65,6 +65,7 @@ cast trigger add "Audit deps" --every 1d --spawn   # fresh session per run
 ### Handoff & Tracking
 ```bash
 cast handoff                      # generate context transfer doc
+cast handoff --to codex           # continue this session's work in a new session on another agent (or --model opus); links both, pins this one done
 cast bookmark <id> <msg> --name x # save shareable link
 cast decisions add "title" --reason "why"
 cast learn add "name" --description "pattern"

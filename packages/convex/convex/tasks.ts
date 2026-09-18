@@ -35,7 +35,7 @@ import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
+import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { dropThreadRead, taskThreadParticipants, touchThread } from "./threadReads";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 import { webBaseUrl } from "./slack";
@@ -3476,10 +3476,7 @@ export async function spawnSessionForTask(
   // binding active_task_id. Without this an agent-run task shows a live
   // session pill (from active_task_id) while session_count stays 0, so it
   // wrongly drops out of the "Has session" filter.
-  const existingConvIds = task.conversation_ids || [];
-  if (!existingConvIds.some((id: any) => id.toString() === conversationId.toString())) {
-    await ctx.db.patch(task._id, { conversation_ids: [...existingConvIds, conversationId] } as any);
-  }
+  await addConversationToWorkItem(ctx, userId, "task", task, conversationId);
 
   // NB: intentionally do NOT reassign the task to "agent" — the launcher stays
   // the owner. The active run is already conveyed by the task status and the

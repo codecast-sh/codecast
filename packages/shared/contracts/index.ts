@@ -99,3 +99,4 @@ export * from "./triggerLifecycle";
 
 export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "./sessionSnooze";
 export * from "./unattended";
+export * from "./handoffPrompt";
