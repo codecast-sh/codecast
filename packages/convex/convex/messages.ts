@@ -1,5 +1,7 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
 import { countersFor } from "./orgEvents";
+import { calibrationSlot } from "./usageCalibration";
+import { weightedTokens } from "@codecast/shared/contracts";
 import { linkLocalCommitToConversation } from "./gitActivity";
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -1262,12 +1264,21 @@ export async function rollUpUsage(
     if (context > 0) contextTokens = context;
   }
   if (input + output + cacheRead + cacheWrite === 0) return;
+  // The calibration's numerator: cost-weighted tokens billed inside the current
+  // slot. Carried on the row that is being patched anyway, so measuring what the
+  // fleet spends costs no extra write (usageCalibration.ts).
+  const slot = calibrationSlot(now);
+  const slotWeighted =
+    (prev.slot === slot ? prev.slot_weighted ?? 0 : 0) +
+    weightedTokens({ input, output, cache_read: cacheRead, cache_write: cacheWrite });
   convPatch.usage_totals = {
     input: prev.input + input,
     output: prev.output + output,
     cache_read: prev.cache_read + cacheRead,
     cache_write: prev.cache_write + cacheWrite,
     updated_at: now,
+    slot,
+    slot_weighted: slotWeighted,
     ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
     ...(lastId ? { last_api_message_id: lastId } : {}),
   };

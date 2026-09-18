@@ -9,7 +9,7 @@
 // be returned here. Keeping that invariant at the source means no client has to
 // re-filter by role (a guard that has been silently dropped by refactors twice).
 
-import { AGENT_SWITCH_NOTICE_PREFIX, isAgentContextMessage, isTurnInterruptionNotice } from "@codecast/shared/contracts";
+import { AGENT_SWITCH_NOTICE_PREFIX, MACHINE_SWITCH_NOTICE_PREFIX, MACHINE_MOVE_NOTICE_PREFIX, isAgentContextMessage, isPollResponsePayload, isTurnInterruptionNotice } from "@codecast/shared/contracts";
 
 export type FilterableMessage = {
   _id: string;
@@ -51,6 +51,8 @@ const USER_NOISE_PREFIXES = [
   "[Request cancelled",
   IMPORT_NOTICE_PREFIX,
   AGENT_SWITCH_NOTICE_PREFIX,
+  MACHINE_SWITCH_NOTICE_PREFIX,
+  MACHINE_MOVE_NOTICE_PREFIX,
   "This session is being continued",
   "Your task is to create a detailed summary",
   "Please continue the conversation",
@@ -75,33 +77,60 @@ export function stripContextTags(s: string): string {
     .trim();
 }
 
+// Whether one message belongs in the navigator at all. Split out from the
+// array pass so a STREAMING reader can judge each document as it arrives and
+// keep only the narrow row — one predicate, both call shapes (see
+// collectNavigableUserMessages).
+export function isNavigableUserMessage(m: FilterableMessage): boolean {
+  if (m.role !== "user") return false;
+  if (m.subtype === "compact_boundary") return false;
+  const hasImages = m.images?.some(image => !image.tool_use_id && image.storage_id);
+  const t = stripContextTags(m.content ?? "");
+  if (!t) return !!hasImages;
+  if (isAgentContextMessage(t)) return false;
+  if (isTurnInterruptionNotice(t)) return false;
+  // A poll answer the dashboard sent for the person (JSON with a __cc_poll
+  // marker) is not a prompt: it must not become the sticky header.
+  if (isPollResponsePayload(t)) return false;
+  if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
+  if (t.includes(SUMMARY_MARKER)) return false;
+  if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
+  return true;
+}
+
+// The narrow row the navigator renders — two lines, never the body.
+export function toNavigatorRow(m: FilterableMessage): FilteredUserMessage {
+  return {
+    _id: m._id,
+    message_uuid: m.message_uuid,
+    from_user_id: m.from_user_id,
+    role: "user" as const,
+    content: (stripContextTags(m.content ?? "") || (m.images?.length ? "Image attached" : "")).slice(0, NAV_ROW_SNIPPET_CHARS),
+    ...(m.images?.some(image => !image.tool_use_id && image.storage_id) ? {
+      images: m.images.filter(image => !image.tool_use_id && image.storage_id).map(image => ({ media_type: image.media_type, storage_id: image.storage_id! })),
+    } : {}),
+    timestamp: m.timestamp,
+  };
+}
+
+// Roughly how much of the 1s user-JS budget one message document costs. That
+// budget is spent on BYTES — deserializing the document and serializing the
+// answer — so the scan stops on this, not on a document count alone. Measured
+// from field lengths rather than JSON.stringify, which would itself cost the
+// serialization the number exists to avoid.
+export function approxMessageBytes(m: FilterableMessage): number {
+  let n = (m.content?.length ?? 0) + 200;
+  if (m.tool_results) for (const r of m.tool_results as Array<{ content?: string }>) n += r?.content?.length ?? 0;
+  if (m.tool_calls) for (const c of m.tool_calls as Array<{ input?: string }>) n += c?.input?.length ?? 0;
+  if (m.images) for (const i of m.images) n += i.data?.length ?? 0;
+  return n;
+}
+
 export function filterUserMessages(
   userMsgs: FilterableMessage[],
 ): FilteredUserMessage[] {
   return userMsgs
-    .filter((m) => {
-      if (m.role !== "user") return false;
-      if (m.subtype === "compact_boundary") return false;
-      const hasImages = m.images?.some(image => !image.tool_use_id && image.storage_id);
-      const t = stripContextTags(m.content ?? "");
-      if (!t) return !!hasImages;
-      if (isAgentContextMessage(t)) return false;
-      if (isTurnInterruptionNotice(t)) return false;
-      if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
-      if (t.includes(SUMMARY_MARKER)) return false;
-      if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
-      return true;
-    })
+    .filter(isNavigableUserMessage)
     .sort((a, b) => a.timestamp - b.timestamp)
-    .map((m) => ({
-      _id: m._id,
-      message_uuid: m.message_uuid,
-      from_user_id: m.from_user_id,
-      role: "user" as const,
-      content: (stripContextTags(m.content ?? "") || (m.images?.length ? "Image attached" : "")).slice(0, NAV_ROW_SNIPPET_CHARS),
-      ...(m.images?.some(image => !image.tool_use_id && image.storage_id) ? {
-        images: m.images.filter(image => !image.tool_use_id && image.storage_id).map(image => ({ media_type: image.media_type, storage_id: image.storage_id! })),
-      } : {}),
-      timestamp: m.timestamp,
-    }));
+    .map(toNavigatorRow);
 }

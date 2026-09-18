@@ -296,3 +296,28 @@ export const webListForConversation = query({
     return result;
   },
 });
+
+// Every entity of one type associated with a conversation, as raw entity ids.
+// This is the REVERSE lookup the legacy representation cannot serve: the link
+// lives in an array field (tasks.conversation_ids), and an array field cannot
+// be indexed for containment, so "which tasks belong to this conversation?"
+// used to mean reading every task the caller owns. The association rail is
+// indexed by conversation, so the same question costs one index read.
+//
+// No access check here — the caller owns that, because it holds the entity
+// documents anyway (see webListForConversation and tasks.webListByConversation).
+export async function linkedEntityIdsForConversation(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  entityType: LinkableEntityType,
+): Promise<string[]> {
+  const rows = await ctx.db
+    .query("entity_conversations")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.entity_type === entityType) ids.add(String(row.entity_id));
+  }
+  return [...ids];
+}

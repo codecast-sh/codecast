@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performReassignToDevice, performReparentSessionToDevice, reassignToDevice } from "./devices";
+import { MACHINE_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
 
 // Cross-user device reparent: an OWNER pulls a session run by a TEAMMATE onto
 // their OWN machine. Account follows device (user_id -> caller), the immutable
@@ -38,6 +39,7 @@ function fixtures(convOverrides: Record<string, any> = {}, ownerRows: any[] = [{
 
 const conv = (db: any) => db._tables.conversations.find((c: any) => c._id === "conv1");
 const commands = (db: any) => db._tables.daemon_commands ?? db._inserted.filter((i: any) => i.table === "daemon_commands").map((i: any) => i.doc);
+const switchNotices = (db: any) => (db._tables.messages ?? []).filter((m: any) => m.subtype === "machine_switch");
 
 describe("performReparentSessionToDevice", () => {
   test("owner pulls a teammate's session onto their own device — account follows device, author pinned", async () => {
@@ -260,6 +262,30 @@ describe("performReparentSessionToDevice", () => {
       expect(a.from_device).toBeUndefined();
     });
   });
+
+  describe("transcript divider", () => {
+    test("a box switch inserts a now-running-on notice", async () => {
+      const db = fixtures();
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      const notices = switchNotices(db);
+      expect(notices).toHaveLength(1);
+      expect(notices[0].content.startsWith(MACHINE_SWITCH_NOTICE_PREFIX)).toBe(true);
+      expect(notices[0].content).toContain("My-MacBook");
+      expect(notices[0].content).toContain("Jason-MacBook");
+    });
+
+    test("re-homing onto the same box inserts nothing", async () => {
+      const db = fixtures({ user_id: ME, owner_device_id: "mydev" });
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      expect(switchNotices(db)).toHaveLength(0);
+    });
+
+    test("a blank session has no divider", async () => {
+      const db = fixtures({ user_id: ME, message_count: 0 });
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      expect(switchNotices(db)).toHaveLength(0);
+    });
+  });
 });
 
 // The web/mobile "Run on this device" control calls reassignToDevice for every
@@ -282,6 +308,9 @@ describe("performReassignToDevice", () => {
     // The previous owner device still gets a release_session teardown.
     expect(cmds[1].command).toBe("release_session");
     expect(cmds[1].target_device_id).toBe("jasondev");
+    const notices = switchNotices(db);
+    expect(notices).toHaveLength(1);
+    expect(notices[0].content).toContain("My-MacBook");
   });
 
   test("owner-but-not-runner move delegates to the cross-user reparent", async () => {

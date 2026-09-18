@@ -17,6 +17,16 @@ crons.interval(
   { limit: 50 }
 );
 
+// Fit the tokens-per-percent rate against the slot that just closed. Runs on
+// the slot boundary, because a run that straddles two slots has no closed one
+// to read (usageCalibration.ts).
+crons.interval(
+  "sample usage calibration",
+  { minutes: 20 },
+  internal.usageCalibration.sample,
+  {}
+);
+
 crons.interval(
   "reclaim stale agent tasks",
   { minutes: 5 },

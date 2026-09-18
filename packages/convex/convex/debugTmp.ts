@@ -8,6 +8,7 @@ import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
 import { performWebActiveSessions } from "./tasks";
+import { filterUserMessages } from "./userMessagesFilter";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -1008,3 +1009,73 @@ export const dietConversationDocs = internalAction({
     return { ...totals, isDone, resumeCursor: isDone ? null : cursor };
   },
 });
+
+// TEMPORARY (Sentry timeout triage, 2026-09-17): the real cost of the four
+// timing-out queries, measured where they run. Safe to delete.
+//
+//   packages/convex/run.sh debugTmp:navMessageWeight '{"conversation_id":"<id>"}'
+//   packages/convex/run.sh debugTmp:taskScanWeight '{"who":"<email>"}'
+export const navMessageWeight = internalQuery({
+  args: { conversation_id: v.id("conversations"), take: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q: any) =>
+        q.eq("conversation_id", args.conversation_id).eq("role", "user"))
+      .order("desc")
+      .take(args.take ?? 2000);
+    let bytes = 0;
+    let toolResultBytes = 0;
+    let imageBytes = 0;
+    let withToolResults = 0;
+    let biggest = 0;
+    for (const m of rows) {
+      const b = JSON.stringify(m).length;
+      bytes += b;
+      if (b > biggest) biggest = b;
+      if (m.tool_results?.length) {
+        withToolResults++;
+        toolResultBytes += JSON.stringify(m.tool_results).length;
+      }
+      if (m.images?.length) imageBytes += JSON.stringify(m.images).length;
+    }
+    const kept = filterUserMessages(rows as any);
+    return {
+      user_role_docs_read: rows.length,
+      total_mb: +(bytes / 1048576).toFixed(3),
+      tool_result_mb: +(toolResultBytes / 1048576).toFixed(3),
+      image_mb: +(imageBytes / 1048576).toFixed(3),
+      docs_with_tool_results: withToolResults,
+      biggest_doc_kb: Math.round(biggest / 1024),
+      kept_after_filter: kept.length,
+      returned_mb: +(JSON.stringify(kept).length / 1048576).toFixed(3),
+    };
+  },
+});
+
+export const taskScanWeight = internalQuery({
+  args: { who: v.string() },
+  handler: async (ctx: any, args) => {
+    const user = await debugResolveUser(ctx, args.who);
+    if (!user) return { error: "no user" };
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    let bytes = 0;
+    let withConvIds = 0;
+    for (const t of tasks) {
+      bytes += JSON.stringify(t).length;
+      if (t.conversation_ids?.length) withConvIds++;
+    }
+    const rail = await ctx.db.query("entity_conversations").take(1);
+    return {
+      tasks_owned: tasks.length,
+      scan_mb: +(bytes / 1048576).toFixed(3),
+      avg_doc_bytes: tasks.length ? Math.round(bytes / tasks.length) : 0,
+      tasks_with_conversation_ids: withConvIds,
+      rail_has_rows: rail.length > 0,
+    };
+  },
+});
+

@@ -4163,6 +4163,7 @@ cliRoute("/cli/org/proposals", async (ctx, body) => ctx.runQuery((api as any).or
 cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).orgProposals.get, body));
 cliRoute("/cli/org/proposal/decide", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decide, body));
 cliRoute("/cli/org/proposal/accept-all", async (ctx, body) => ctx.runMutation((api as any).orgProposals.acceptAll, body));
+cliRoute("/cli/org/proposal/decide-ask", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decideAsk, body));
 cliRoute("/cli/org/proposal/withdraw", async (ctx, body) => ctx.runMutation((api as any).orgProposals.withdraw, body));
 cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api as any).orgProposals.revise, body));
 
@@ -4255,6 +4256,12 @@ cliRoute("/cli/chat/slack/map", async (ctx, body) => {
 });
 cliRoute("/cli/chat/slack/dms", async (ctx, body) => {
   return await ctx.runMutation(api.slackSync.setDmSync, body);
+});
+// The caller's own addresses: read, or add/remove one.
+cliRoute("/cli/me/emails", async (ctx, body) => {
+  if (body.add) await ctx.runMutation(api.users.addAlternateEmail, { api_token: body.api_token, email: body.add });
+  if (body.remove) await ctx.runMutation(api.users.removeAlternateEmail, { api_token: body.api_token, email: body.remove });
+  return await ctx.runQuery(api.users.myEmails, { api_token: body.api_token });
 });
 
 // Org roles following chat channels (agent-channels.md C1). body: { role, channel }
@@ -4704,6 +4711,9 @@ cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOw
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
 cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
+// A role puts one of its sessions in front of the person, or takes it back
+// (`cast escalate`, org-roles-run-work.md R1).
+cliRoute("/cli/sessions/escalate", async (ctx, body) => ctx.runMutation(api.sessionOwnership.escalateSession, body));
 
 // Cross-user device reparent (cast pull): pull a session you run or own — or a
 // team-visible one (see findPullableConversation) — onto the
