@@ -172,6 +172,30 @@ export async function linkConversationToEntityBestEffort(
   }
 }
 
+// The one place a session joins a task's or a plan's session list: append to
+// the legacy list field when missing, then dual-write the association rail.
+// Every path that binds a session to work (dispatch.linkConversationToObject,
+// the agent-run task session in tasks.ts, the handoff link) goes through here,
+// so the two representations cannot drift between callers. Access checks stay
+// with the caller: each has its own rule for who may bind what.
+export async function addConversationToWorkItem(
+  ctx: { db: any },
+  userId: any,
+  entityType: LinkableEntityType,
+  item: { _id: any; conversation_ids?: any[]; session_ids?: any[] },
+  conversationId: Id<"conversations">,
+  extraPatch: Record<string, unknown> = {},
+): Promise<void> {
+  const field = entityType === "task" ? "conversation_ids" : "session_ids";
+  const existing: any[] = (item as any)[field] || [];
+  const missing = !existing.some((id: any) => id.toString() === conversationId.toString());
+  const patch = { ...(missing ? { [field]: [...existing, conversationId] } : {}), ...extraPatch };
+  if (Object.keys(patch).length > 0) await ctx.db.patch(item._id, patch);
+  await linkConversationToEntityBestEffort(ctx, userId, {
+    entityType, entityId: String(item._id), conversationId, relationship: "work",
+  });
+}
+
 export const webLinkConversation = mutation({
   args: {
     entity_type: entityTypeValidator,

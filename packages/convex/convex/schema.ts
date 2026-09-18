@@ -532,6 +532,15 @@ export default defineSchema({
     // the child stays a first-class inbox card with a click-through to its
     // parent. Set by conversations.linkSpawnedBy (daemon-resolved).
     spawned_by_conversation_id: v.optional(v.id("conversations")),
+    // Handoff link (`cast handoff --to <agent>`, handoff.start): the session
+    // this one continues, and the session that continues this one. Both are
+    // labels and click-throughs only: the child stays a first-class inbox
+    // card and usually also carries spawned_by. Written together in one
+    // mutation (spawn.createSessionFromCli with handoff_from_session) so the
+    // pair never disagrees. by_handed_off_from is the reverse lookup for a
+    // source whose forward pointer is missing (an older row, a failed patch).
+    handed_off_from_conversation_id: v.optional(v.id("conversations")),
+    handed_off_to_conversation_id: v.optional(v.id("conversations")),
     // Agent-team identity, from the teamName/agentName stamps Claude Code
     // writes on every teammate JSONL line (the lead's transcript is never
     // stamped; linkSpawnedBy stamps the lead as "team-lead" when it links a
@@ -961,6 +970,7 @@ export default defineSchema({
     // teammates (spawned_by + agent_team_name), which by_parent_conversation_id
     // can't see. See cascadeHideToNestedChildren (cleanup.ts).
     .index("by_spawned_by", ["spawned_by_conversation_id"])
+    .index("by_handed_off_from", ["handed_off_from_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
