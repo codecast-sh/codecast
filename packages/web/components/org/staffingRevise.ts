@@ -45,8 +45,18 @@ export type FieldMove = { key: string; label: string; from: string | null; to: s
  *  as spaces, "per day" as "a day", the container ("caps") dropped. */
 export function moveLabel(key: string): string {
   const last = key.split(".").pop() ?? key;
-  return last.replace(/_/g, " ").replace(/\bper day\b/, "a day");
+  return MOVE_WORDS[last] ?? last.replace(/_/g, " ").replace(/\bper day\b/, "a day");
 }
+/** Keys whose raw name is not a word the reader was taught: the row's own
+ *  words for a scope or a move change, and a reporting line. */
+const MOVE_WORDS: Record<string, string> = {
+  add: "also looks after",
+  scope_add: "also looks after",
+  remove: "stops looking after",
+  scope_remove: "stops looking after",
+  reports_to: "reports to",
+  every: "runs every",
+};
 const formatMoveValue = (v: string, kind: string): string => {
   if (kind !== "number") return v;
   const n = Number(v);

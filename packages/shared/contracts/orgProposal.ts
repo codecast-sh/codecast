@@ -287,6 +287,15 @@ export function aboutChangeHeader(proposalShortId: string, seq: number, line: st
 export function withAboutChange(content: string, proposalShortId: string, seq: number, line: string): string {
   return `${aboutChangeHeader(proposalShortId, seq, line)}\n\n${content}`;
 }
+/** The same header for a reply about one ask (S19). `index` is the ask's
+ *  place in the resolved asks, from 0, the number `decideAsk` takes; the
+ *  header counts from 1, the way a person counts the cards. */
+export function aboutAskHeader(proposalShortId: string, index: number, title: string): string {
+  return `About ${proposalShortId} ask ${index + 1} ("${title.replace(/"/g, "'")}"):`;
+}
+export function withAboutAsk(content: string, proposalShortId: string, index: number, title: string): string {
+  return `${aboutAskHeader(proposalShortId, index, title)}\n\n${content}`;
+}
 const ABOUT_RE = /^About (op-\d+) change (\d+) \("([^\n]*)"\):\n\n?/;
 /** The change a message names, and the words after the header; null when it names none. */
 export function parseAboutChange(content: string): { proposal: string; seq: number; line: string; body: string } | null {
@@ -379,12 +388,120 @@ export type OrgProposalMode = "init" | "review" | "request";
 export const ORG_PROPOSAL_MODES: readonly OrgProposalMode[] = ["init", "review", "request"];
 
 /** The file `cast org propose --spec` reads and `orgProposals.create` stores. */
+/** One thing the proposal asks of the person (org-staffing.md S19): a title
+ *  they can read cold, one sentence of why, one line of what accepting
+ *  changes, and the changes folded inside it, by seq. The asks of a proposal
+ *  partition its changes: every change is in exactly one. */
+export type OrgAsk = { title: string; why: string; effect: string; seqs: number[] };
+
 export type OrgProposalSpec = {
   title: string;
   summary_md: string;
   mode: OrgProposalMode;
   changes: OrgSpecChange[];
+  /** Written by the author at propose time; a spec without them derives them (deriveAsks). */
+  asks?: OrgAsk[];
 };
+
+/** The faults of a spec's asks against its changes as written (seq 1 is the
+ *  first change). The partition is the contract: a change in no ask would
+ *  never reach the person, and a change in two would be decided twice. */
+export function orgAsksErrors(asks: unknown, changes: ReadonlyArray<{ change: OrgChange }>): string[] {
+  if (!Array.isArray(asks) || !asks.length) return ["asks is a non-empty list of { title, why, effect, seqs }"];
+  const errors: string[] = [];
+  const owner = new Map<number, number[]>();
+  // A seqs list that does not read says nothing about the partition, so the
+  // partition is reported only once every list reads.
+  let malformed = false;
+  asks.forEach((a: any, i: number) => {
+    if (!a || typeof a !== "object" || !nonEmpty(a.title) || !nonEmpty(a.why) || !nonEmpty(a.effect)) errors.push(`asks[${i}]: title, why and effect are required`);
+    if (!Array.isArray(a?.seqs) || !a.seqs.length || !a.seqs.every((n: unknown) => Number.isInteger(n) && (n as number) >= 1)) { errors.push(`asks[${i}]: seqs is a non-empty list of change numbers (1 is the first change)`); malformed = true; return; }
+    for (const n of new Set<number>(a.seqs)) {
+      if (n > changes.length) errors.push(`asks[${i}] names change ${n}, and the spec has ${changes.length}`);
+      else owner.set(n, [...(owner.get(n) ?? []), i]);
+    }
+  });
+  const partition: string[] = [];
+  if (!malformed) changes.forEach((c, i) => {
+    const in_ = owner.get(i + 1) ?? [];
+    if (in_.length === 1) return;
+    partition.push(`changes[${i}] (${describeOrgChange(c.change)}) is in ${in_.length ? in_.map((a) => `asks[${a}]`).join(" and ") : "no ask"}: every change belongs to exactly one ask`);
+  });
+  const SHOWN = 10;
+  errors.push(...partition.slice(0, SHOWN), ...(partition.length > SHOWN ? [`and ${partition.length - SHOWN} more changes outside the partition`] : []));
+  return errors;
+}
+
+/** Every role handle a change refers to, lower case and without the @: its
+ *  own subject, the parent a role or a move names, a charter's owner. "me"
+ *  and a person's name are not roles. */
+export function orgChangeHandles(c: OrgChange): string[] {
+  const h = (x: unknown) => (typeof x === "string" && x.trim().startsWith("@") ? x.trim().slice(1).toLowerCase() : null);
+  const any = c as any;
+  const own = typeof any.handle === "string" ? any.handle.trim().replace(/^@/, "").toLowerCase() : null;
+  return [own, h(any.reports_to), c.kind === "project_meta" ? h(any.owner) : null].filter((x): x is string => !!x);
+}
+
+type AskRow = { seq: number; change: OrgChange; status?: string; rationale?: string; expected_effect?: string };
+const askHandle = (c: OrgChange): string | null => ("handle" in c && typeof c.handle === "string" ? c.handle.trim().replace(/^@/, "").toLowerCase() : null);
+
+/**
+ * The asks of a proposal that carries none (S19): one written before asks
+ * existed, or one a person posted. The record changes are one ask; each role,
+ * retire, move and scope change is its own, and a change on the handle of a
+ * role this proposal creates (its adopt, its routine, its budget) rides with
+ * that role, because accepting a seat without them leaves it half made;
+ * whatever is left is one ask. Removed changes belong to no ask.
+ */
+export function deriveAsks(changes: ReadonlyArray<AskRow>): OrgAsk[] {
+  const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
+  const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
+  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "move" || c.change.kind === "scope");
+  const created = new Map<string, AskRow>(own.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  const riders = new Map<AskRow, AskRow[]>();
+  const rest: AskRow[] = [];
+  for (const c of live) {
+    if (records.includes(c) || own.includes(c)) continue;
+    const role = created.get(askHandle(c.change) ?? "");
+    if (role) riders.set(role, [...(riders.get(role) ?? []), c]);
+    else rest.push(c);
+  }
+  const seqs = (rows: AskRow[]) => rows.map((c) => c.seq).sort((a, b) => a - b);
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const out: OrgAsk[] = [];
+  if (records.length) out.push({
+    title: `Bring ${n(records.length, "record", "records")} up to date`,
+    why: "These plans, tasks and projects show as active, but the work on them is finished, was dropped, or never started.",
+    effect: `${n(records.length, "record changes", "records change")} status. No work starts or stops.`,
+    seqs: seqs(records),
+  });
+  for (const c of own) {
+    const ch = c.change as any;
+    const who = `@${askHandle(c.change)}`;
+    const title = ch.kind === "role" ? `Add an agent: ${ch.name}` : ch.kind === "retire" ? `Retire the agent ${who}` : ch.kind === "move" ? `Move the agent ${who}` : `Change what the agent ${who} looks after`;
+    out.push({ title, why: c.rationale?.trim() || describeOrgChange(c.change), effect: c.expected_effect?.trim() || describeOrgChange(c.change), seqs: seqs([c, ...(riders.get(c) ?? [])]) });
+  }
+  if (rest.length) out.push({
+    title: `${n(rest.length, "smaller change", "smaller changes")}: filing, goals and settings`,
+    why: "Plans filed under the area they belong to, written goals for an area, and settings of agents that already exist.",
+    effect: `${n(rest.length, "change", "changes")}, each listed inside. No agent is added or removed.`,
+    seqs: seqs(rest),
+  });
+  return out;
+}
+
+/** The asks a page renders: the stored ones, less the changes a revise
+ *  removed, plus derived asks for any change no stored ask names (a revise
+ *  added it). With nothing stored, all of them derive. Always a partition of
+ *  the live changes. */
+export function resolveOrgAsks(stored: ReadonlyArray<OrgAsk> | undefined | null, changes: ReadonlyArray<AskRow>): OrgAsk[] {
+  const live = changes.filter((c) => c.status !== "removed");
+  if (!stored?.length) return deriveAsks(live);
+  const liveSeqs = new Set(live.map((c) => c.seq));
+  const asks = stored.map((a) => ({ ...a, seqs: a.seqs.filter((q) => liveSeqs.has(q)) })).filter((a) => a.seqs.length);
+  const covered = new Set(asks.flatMap((a) => a.seqs));
+  return [...asks, ...deriveAsks(live.filter((c) => !covered.has(c.seq)))];
+}
 
 /** Validate a spec. Every fault is reported, each naming the change by index
  *  and kind, so a long spec is fixed in one pass. */
@@ -440,15 +557,18 @@ export function orgChangeDependencies(rows: ReadonlyArray<{ seq: number; change:
  *  lists, and a project that sits in its charter list and its owner list is
  *  the ordinary way two rows meet; folding here means the post never refuses
  *  what one row could have carried, and the note says what was folded. */
-export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: string[]; errors: string[] } {
+export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: string[]; errors: string[]; index: number[] } {
   const out: any[] = []; const notes: string[] = []; const errors: string[] = [];
+  /** Where each row as written ended up: its own place, or the row it folded into. */
+  const index: number[] = [];
   const at = new Map<string, { out: number; src: number }>();
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const prose = (a?: string, b?: string) => !a ? b : !b || a.trim() === b.trim() ? a : `${a}\n\n${b}`;
   rows.forEach((row, i) => {
     const key = orgChangeKey(row.change);
     const hit = key ? at.get(key) : undefined;
-    if (!hit) { if (key) at.set(key, { out: out.length, src: i }); out.push(row); return; }
+    if (!hit) { if (key) at.set(key, { out: out.length, src: i }); index[i] = out.length; out.push(row); return; }
+    index[i] = hit.out;
     const first = out[hit.out];
     const conflict = Object.keys(row.change).find((k) => k !== "reason" && k in first.change && !same(first.change[k], row.change[k]));
     if (conflict) { errors.push(`changes[${i}] (${describeOrgChange(row.change)}) repeats changes[${hit.src}] with a different ${conflict}: one change per subject`); return; }
@@ -463,7 +583,7 @@ export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: stri
     };
     notes.push(`changes[${i}] (${describeOrgChange(row.change)}) folded into changes[${hit.src}]: one change per subject`);
   });
-  return { changes: out, notes, errors };
+  return { changes: out, notes, errors, index };
 }
 
 export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; errors: []; notes?: string[] } | { spec: null; errors: string[] } {
@@ -480,11 +600,34 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
   });
   let changes: any[] = r.changes;
   let notes: string[] = [];
+  let asks: OrgAsk[] | undefined;
+  if (!errors.length && r.asks !== undefined) errors.push(...orgAsksErrors(r.asks, r.changes));
   if (!errors.length) {
     const folded = foldRepeatedSubjects(r.changes);
     errors.push(...folded.errors);
     changes = folded.changes;
     notes = folded.notes;
+    // The asks name changes as written; a folded row answers to the ask of
+    // the row it folded into, so the partition survives the fold.
+    if (r.asks !== undefined) {
+      // A row folded from two asks follows the agent it names: the ask that
+      // creates a role the merged change refers to (a charter's owner, a
+      // routine's handle) holds it, so accepting the other ask alone never
+      // applies a change that rests on an agent nobody accepted. With no such
+      // ask, the first one that named it keeps it.
+      const written: OrgAsk[] = r.asks;
+      const creates = written.map((a) => new Set(a.seqs.map((q) => r.changes[q - 1].change).filter((c: OrgChange) => c.kind === "role").map((c: any) => askHandle(c))));
+      const home = new Map<number, number>();
+      changes.forEach((row, out) => {
+        const named = written.map((a, i) => (a.seqs.some((q) => folded.index[q - 1] === out) ? i : -1)).filter((i) => i >= 0);
+        const refs = orgChangeHandles(row.change);
+        home.set(out + 1, named.find((i) => refs.some((h) => creates[i].has(h))) ?? named[0]);
+      });
+      asks = written.map((a, i) => ({
+        title: a.title.trim(), why: a.why.trim(), effect: a.effect.trim(),
+        seqs: [...new Set(a.seqs.map((q) => folded.index[q - 1] + 1))].filter((q) => home.get(q) === i).sort((x, y) => x - y),
+      })).filter((a) => a.seqs.length);
+    }
   }
   if (errors.length) return { spec: null, errors };
   return {
@@ -493,6 +636,7 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
       summary_md: r.summary_md,
       mode: r.mode,
       changes: changes.map(normalizeOrgSpecChange),
+      ...(asks ? { asks } : {}),
     },
     errors: [],
     ...(notes.length ? { notes } : {}),

@@ -754,7 +754,10 @@ export function supersededChannelId(
   channels: Record<string, ChatChannelRow>,
   channelId: string | undefined,
 ): string | undefined {
-  if (!channelId || isConvexId(channelId) || channels[channelId]) return undefined;
+  // A stub id that the server row superseded, OR a real room that merged into
+  // another one (two Slack people turning out to be the same person). Either
+  // way the surviving row carries the old id as its client_id.
+  if (!channelId || channels[channelId]) return undefined;
   for (const id in channels) {
     if (channels[id]?.client_id === channelId) return id;
   }

@@ -605,6 +605,24 @@ describe("unread state", () => {
     expect(rail.last_message.preview).toBe("mine, already read");
   });
 
+  test("history imported from Slack is not unread, but a live line in the same room is", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, so I have a read mark" });
+    const old = await call(sendMessage, alice, { channel_id: CHANNEL, content: "said in Slack last March" });
+    const fresh = await call(sendMessage, alice, { channel_id: CHANNEL, content: "said just now @bob" });
+    stampTimeline(ctx, 1_000);
+    // What an import looks like: the line was written long before it was
+    // synced here. A live mirrored line is synced the moment it is written.
+    const row = (r: any) => messagesIn(ctx).find((m: any) => String(m._id) === String(r.message_id));
+    row(old).external = { provider: "slack", direction: "inbound", workspace: "T1", channel: "C1", ts: "1.1", synced_at: row(old).created_at + 60 * 60_000 };
+    row(fresh).external = { provider: "slack", direction: "inbound", workspace: "T1", channel: "C1", ts: "1.2", synced_at: row(fresh).created_at + 100 };
+
+    const rail = await railFor(ctx);
+    expect(rail.unread).toBe(1);
+    expect(rail.unread_mentions).toBe(1);
+  });
+
   test("a tombstone is not unread, and reading again clears the count", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);
@@ -3259,6 +3277,17 @@ describe("agent channels: roles and sessions in chat", () => {
     const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth ping" });
     expect(sent.mention_wakes.skipped).toEqual(["role_has_no_session:growth"]);
     expect(pending(ctx).length).toBe(0);
+  });
+
+  test("a paused role keeps the line for its next wake and is reported held, never woken", async () => {
+    const seeded = seed();
+    seeded.org_roles[0] = { ...seeded.org_roles[0], status: "paused" };
+    const ctx = context(ALICE, seeded);
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth status?" });
+    expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: ["role_paused:growth"] });
+    // The outbox row waits; orgWakes gate 1 holds it until someone resumes the role.
+    const rows = ctx.db._tables.role_wake_outbox;
+    expect(rows.filter((r: any) => String(r.role_id) === String(ROLE)).length).toBe(1);
   });
 
   test("an agent may start 5 threads and post 30 lines per channel per day; a person is uncapped", async () => {

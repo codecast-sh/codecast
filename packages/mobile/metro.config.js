@@ -6,17 +6,18 @@ const workspaceRoot = path.resolve(projectRoot, '../..');
 
 const config = getDefaultConfig(projectRoot);
 
-// Escape hatch for a broken/wedged watchman binary: METRO_NO_WATCHMAN=1 forces
-// Metro's node file-watcher instead. Off by default so normal runs are unaffected.
-if (process.env.METRO_NO_WATCHMAN) {
-  config.resolver.useWatchman = false;
-}
+// Watchman on this machine wedges on the workspace crawl ("Waiting for
+// Watchman query") and never serves a bundle. Node's crawler is slower to
+// start and always finishes. METRO_NO_WATCHMAN=1 used to be the opt-in;
+// export/OTA cannot depend on a wedged daemon.
+config.resolver.useWatchman = false;
 
 config.watchFolders = [workspaceRoot];
 const defaultBlockList = config.resolver.blockList;
 config.resolver.blockList = [
   ...(Array.isArray(defaultBlockList) ? defaultBlockList : defaultBlockList ? [defaultBlockList] : []),
   /[/\\]\.claude[/\\]worktrees[/\\].*/,
+  /[/\\]\.codecast[/\\]worktrees[/\\].*/,
   /[/\\]\.conductor[/\\].*/,
   /[/\\]dist-perf[/\\].*/,
 ];

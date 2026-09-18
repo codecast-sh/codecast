@@ -238,6 +238,7 @@ import type * as threadMembershipSweep from "../threadMembershipSweep.js";
 import type * as threadReads from "../threadReads.js";
 import type * as threads from "../threads.js";
 import type * as titleGeneration from "../titleGeneration.js";
+import type * as tokenSpend from "../tokenSpend.js";
 import type * as transcripts from "../transcripts.js";
 import type * as userMessagesFilter from "../userMessagesFilter.js";
 import type * as userSends from "../userSends.js";
@@ -486,6 +487,7 @@ declare const fullApi: ApiFromModules<{
   threadReads: typeof threadReads;
   threads: typeof threads;
   titleGeneration: typeof titleGeneration;
+  tokenSpend: typeof tokenSpend;
   transcripts: typeof transcripts;
   userMessagesFilter: typeof userMessagesFilter;
   userSends: typeof userSends;

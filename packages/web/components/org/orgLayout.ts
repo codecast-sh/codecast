@@ -217,10 +217,14 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       orphanRoles.push(r);
     }
   }
+  // A role's seat is the role (org-staffing.md S16): its state paints on the
+  // role card and its hands stack under it, so the seat's anchor row is never
+  // drawn as a second node under the host. Only the workspace anchor is.
+  const seatAnchorIds = new Set(tree.roles.map((r) => r.anchor_id).filter(Boolean));
   const anchorsUnderUser = new Map<string, OrgAnchor[]>();
   const orphanAnchors: OrgAnchor[] = [];
   for (const a of tree.anchors) {
-    if (a.status === "decommissioned") continue;
+    if (a.status === "decommissioned" || a.org_role_id || seatAnchorIds.has(a.anchor_id)) continue;
     if (personIds.has(a.host_user_id)) anchorsUnderUser.set(a.host_user_id, [...(anchorsUnderUser.get(a.host_user_id) ?? []), a]);
     else orphanAnchors.push(a);
   }

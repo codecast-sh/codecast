@@ -50,6 +50,16 @@ test("updater config is validated unless disabled", () => {
   expect(off.update.baseUrl).toBeNull();
 });
 
+test("preferNetwork and reloadOnUpdate are off unless asked", () => {
+  const off = resolveDesktopConfig(base());
+  expect(off.web.preferNetwork).toBe(false);
+  expect(off.web.reloadOnUpdate).toBe(false);
+  const on = resolveDesktopConfig({ ...base(), web: { preferNetwork: true, reloadOnUpdate: true, checkIntervalMs: 120000 } });
+  expect(on.web.preferNetwork).toBe(true);
+  expect(on.web.reloadOnUpdate).toBe(true);
+  expect(on.web.checkIntervalMs).toBe(120000);
+});
+
 test("channel, kill switch source and overrides pass through", async () => {
   const minVersion = async () => "1.2.0";
   const cfg = resolveDesktopConfig({

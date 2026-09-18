@@ -32,7 +32,7 @@ import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import { linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { dropThreadRead, taskThreadParticipants, touchThread } from "./threadReads";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 import { webBaseUrl } from "./slack";
@@ -2911,18 +2911,63 @@ export const webMentionList = query({
   },
 });
 
+// The tasks linked to one conversation, read through the reverse indexes
+// instead of a scan.
+//
+// This used to `.collect()` every task the caller owned and filter in JS on
+// `conversation_ids.includes(...)`. That is O(all the caller's tasks) in both
+// documents read and bytes deserialized — an account with tens of thousands of
+// tasks moved megabytes per execution, which is what the 1s user-JS cap and the
+// system-operation budget both measure. It timed out in production on both
+// counts (Sentry JAVASCRIPT-REACT-5K and -5F).
+//
+// A conversation's tasks are a handful of rows, and two indexes already point
+// that way, so the answer costs a bounded number of reads:
+//   - entity_conversations.by_conversation — the association rail every linking
+//     path dual-writes (conversationLinks.ts), the only true reverse index;
+//   - tasks.by_created_from_conversation — the task a session filed, which
+//     predates the rail;
+//   - conversations.active_task_id — the task a session is working right now.
+// Rows written before the rail existed (2026-08-01) are reachable through the
+// last two, and migrations.backfillTaskConversationLinks fills the rest in.
+export const TASKS_PER_CONVERSATION_LIMIT = 200;
+
 export const webListByConversation = query({
   args: { conversationId: v.id("conversations") },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const tasks = await ctx.db
+
+    // Gate on the conversation first, the same way conversationLinks'
+    // webListForConversation does: the task list of a session the caller cannot
+    // open is not theirs to enumerate.
+    const conv = await ctx.db.get(args.conversationId);
+    if (!conv || !(await canAccessConversation(ctx, userId, conv))) return [];
+
+    const candidates = new Set<string>(
+      await linkedEntityIdsForConversation(ctx, args.conversationId, "task"),
+    );
+    // Bounded, like every other read here — a session that filed a hundred
+    // tasks must not turn this back into an unbounded scan.
+    const origin = await ctx.db
       .query("tasks")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    return tasks
-      .filter((t: any) => t.conversation_ids?.includes(args.conversationId))
-      .map((t: any) => ({ _id: t._id.toString(), short_id: t.short_id, title: t.title, status: t.status, external: t.external }));
+      .withIndex("by_created_from_conversation", (q) =>
+        q.eq("created_from_conversation", args.conversationId))
+      .take(TASKS_PER_CONVERSATION_LIMIT);
+    for (const t of origin) candidates.add(String(t._id));
+    if (conv.active_task_id) candidates.add(String(conv.active_task_id));
+
+    const rows = [];
+    for (const raw of [...candidates].slice(0, TASKS_PER_CONVERSATION_LIMIT)) {
+      // Rail ids are plain strings, and a stale row may name a deleted or
+      // foreign-table id; normalizeId keeps ctx.db.get from throwing on one.
+      const id = ctx.db.normalizeId("tasks", raw);
+      if (!id) continue;
+      const t = await ctx.db.get(id);
+      if (!t || !(await canAccessTask(ctx, userId, t))) continue;
+      rows.push({ _id: t._id.toString(), short_id: t.short_id, title: t.title, status: t.status, external: t.external });
+    }
+    return rows;
   },
 });
 

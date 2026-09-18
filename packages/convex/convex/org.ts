@@ -1,6 +1,6 @@
 import { query } from "./functions";
 import { v } from "convex/values";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { checkConversationAccess, createTeamFeedFilter, isTeamMember } from "./privacy";
 import { classifyWorkStates } from "./conversations";
@@ -393,7 +393,12 @@ export const handsStartedBy = query({
     const states = await classifyWorkStates(ctx, userId, hands, new Map(), now);
     const out: HandStarted[] = [];
     for (const c of hands) {
-      const task = c.active_task_id ? await ctx.db.get(c.active_task_id as Id<"tasks">) : null;
+      // The wrapped ctx.db.get widens to a union of every table, so the id
+      // cast alone does not narrow the RESULT — assert the doc type too, or
+      // reading task.short_id fails the deploy typecheck.
+      const task = c.active_task_id
+        ? ((await ctx.db.get(c.active_task_id as Id<"tasks">)) as Doc<"tasks"> | null)
+        : null;
       out.push({
         _id: c._id,
         short_id: c.short_id ?? null,

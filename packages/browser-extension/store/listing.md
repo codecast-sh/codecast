@@ -67,6 +67,11 @@ and drive their own tabs in the user's Chrome.
   session, so the user always sees which tabs an agent holds.
 - `storage`: Keep the pairing token and bridge port the user granted, so the
   extension reconnects after a restart without asking again.
+- `offscreen`: One hidden page that messages the service worker every 20
+  seconds so Chrome keeps the worker, and its process, running while the
+  bridge is connected. Without it Chrome ends the worker after 30 idle
+  seconds and starves its process on a busy machine, and agent commands
+  time out. The page holds no content and reads nothing.
 - `alarms`: Wake the service worker to reconnect to the bridge when the CLI
   restarts it.
 
