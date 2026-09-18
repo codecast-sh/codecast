@@ -217,10 +217,14 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       orphanRoles.push(r);
     }
   }
+  // A role's seat is the role (org-staffing.md S16): its state paints on the
+  // role card and its hands stack under it, so the seat's anchor row is never
+  // drawn as a second node under the host. Only the workspace anchor is.
+  const seatAnchorIds = new Set(tree.roles.map((r) => r.anchor_id).filter(Boolean));
   const anchorsUnderUser = new Map<string, OrgAnchor[]>();
   const orphanAnchors: OrgAnchor[] = [];
   for (const a of tree.anchors) {
-    if (a.status === "decommissioned") continue;
+    if (a.status === "decommissioned" || a.org_role_id || seatAnchorIds.has(a.anchor_id)) continue;
     if (personIds.has(a.host_user_id)) anchorsUnderUser.set(a.host_user_id, [...(anchorsUnderUser.get(a.host_user_id) ?? []), a]);
     else orphanAnchors.push(a);
   }
@@ -419,7 +423,60 @@ export type OrgGhostOptions = {
   /** The session the viewer is looking from (id or short id): an adopt
    *  change offering it reads "this session". */
   viewerSession?: { id?: string | null; short_id?: string | null } | null;
+  /** The workspace's projects and plans as the store holds them, so a ghost
+   *  role's scope chips name the project the way the real card does. A
+   *  proposal writes a scope as ids, short ids or titles. */
+  projects?: readonly { id: string; title: string; short_id?: string }[];
+  plans?: readonly { id: string; title: string; short_id?: string }[];
 };
+
+/** A Convex document id: what a proposal's scope carries when the analyzer
+ *  wrote ids. Never shown to a person. */
+const isInternalId = (ref: string) => /^[a-z0-9]{32}$/.test(ref.trim());
+
+/** The scope names a ghost role draws (org-staffing.md S5), resolved against
+ *  every row in hand: the store's projects and plans, then what the live
+ *  roles' scope names carry. An unresolved short id or title is shown as
+ *  written; an unresolved internal id is never shown, it reads as a project
+ *  or plan not loaded yet. */
+/** A change with every project and plan ref it carries named the way the
+ *  chart names them (ghostScopeNames): the chip and the line a ghost draws
+ *  say "pl-619 under Agent Quality", never the project's internal id. Kinds
+ *  that carry no ref come back as they are. */
+export function withScopeNames(change: OrgChange, tree: OrgTree, opts: OrgGhostOptions): OrgChange {
+  const nameOf = (ref: string, kind: "projects" | "plans") => {
+    const row = ghostScopeNames(kind === "projects" ? { projects: [ref] } : { plans: [ref] }, tree, opts)[kind][0];
+    return kind === "plans" ? (row.short_id ?? row.title) : row.title;
+  };
+  const project = (ref: string) => nameOf(ref, "projects");
+  const plan = (ref: string) => nameOf(ref, "plans");
+  const either = (ref: string) => (/^pl-\d+$/i.test(ref) ? plan(ref) : project(ref));
+  switch (change.kind) {
+    case "file": return { ...change, plan: plan(change.plan), project: project(change.project) };
+    case "project_meta": return { ...change, project: project(change.project) };
+    case "scope": return { ...change, ...(change.add ? { add: change.add.map(either) } : {}), ...(change.remove ? { remove: change.remove.map(either) } : {}) };
+    case "move": return { ...change, ...(change.scope_add ? { scope_add: change.scope_add.map(either) } : {}), ...(change.scope_remove ? { scope_remove: change.scope_remove.map(either) } : {}) };
+    default: return change;
+  }
+}
+
+export function ghostScopeNames(scope: { projects?: readonly string[]; plans?: readonly string[] } | undefined, tree: OrgTree, opts: OrgGhostOptions): OrgRole["scope_names"] {
+  const known = <T extends { id: string; title: string; short_id?: string }>(rows: readonly T[] | undefined, fromRoles: (r: OrgRole) => readonly T[]) => [
+    ...(rows ?? []),
+    ...tree.roles.flatMap(fromRoles),
+  ];
+  const projects = known(opts.projects, (r) => r.scope_names.projects);
+  const plans = known(opts.plans, (r) => r.scope_names.plans);
+  const name = (ref: string, rows: readonly { id: string; title: string; short_id?: string }[], word: "project" | "plan") => {
+    const row = refResolves(ref, rows);
+    if (row) return { id: row.id, title: row.title, short_id: row.short_id };
+    return isInternalId(ref) ? { id: ref, title: `a ${word} not loaded yet` } : { id: ref, title: ref, short_id: ref };
+  };
+  return {
+    projects: (scope?.projects ?? []).map((ref) => name(ref, projects, "project")),
+    plans: (scope?.plans ?? []).map((ref) => { const n = name(ref, plans, "plan"); return { id: n.id, title: n.title, short_id: n.short_id ?? n.title }; }),
+  };
+}
 
 const strip = (h: string) => h.replace(/^@/, "").trim().toLowerCase();
 const same = (a: string | undefined, b: string) => !!a && a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -466,8 +523,8 @@ export function resolveOrgParentRef(tree: OrgTree, ref: string | undefined, me: 
 /** The chip a change draws (its delta, with the full line as the title), as
  *  the person will accept it: their edits laid over the proposal. The scope
  *  panel's project rows draw project charters through this too. */
-export function ghostChipOf(c: OrgProposalChange, unresolved = false): OrgGhostChip {
-  const change = editedOrgChange(c.change, c.edits);
+export function ghostChipOf(c: OrgProposalChange, unresolved = false, name: (change: OrgChange) => OrgChange = (x) => x): OrgGhostChip {
+  const change = name(editedOrgChange(c.change, c.edits));
   return { change_id: c._id, status: c.status, line: changeLine(change), kind: change.kind, chip: chipLine(change), ...(unresolved ? { unresolved: true } : {}) };
 }
 
@@ -506,8 +563,8 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
   const roleByHandle = (h: string) => live().find((r) => strip(r.handle) === strip(h));
   const decided = (c: OrgProposalChange) => c.status === "accepted" || c.status === "applied";
   const eff = (c: OrgProposalChange): OrgChange => editedOrgChange(c.change, c.edits);
-  const meta = (c: OrgProposalChange): OrgGhostMeta => ({ change_id: c._id, status: c.status, line: changeLine(eff(c)) });
-  const chip = (c: OrgProposalChange, unresolved = false): OrgGhostChip => ghostChipOf(c, unresolved);
+  const meta = (c: OrgProposalChange): OrgGhostMeta => ({ change_id: c._id, status: c.status, line: changeLine(withScopeNames(eff(c), tree, opts)) });
+  const chip = (c: OrgProposalChange, unresolved = false): OrgGhostChip => ghostChipOf(c, unresolved, (ch) => withScopeNames(ch, tree, opts));
   const chipOn = (nodeId: string | null, x: OrgGhostChip) => { if (nodeId) (plan.chips[nodeId] ??= []).push(x); };
   const orphan = (c: OrgProposalChange) => { if (c.status !== "applied") chipOn(meNode, chip(c, true)); };
   const now = Date.now();
@@ -544,10 +601,7 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
       counts: { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0 },
       sessions: [],
       total: 0,
-      scope_names: {
-        projects: (ch.scope?.projects ?? []).map((ref) => ({ id: ref, title: ref })),
-        plans: (ch.scope?.plans ?? []).map((ref) => ({ id: ref, title: ref, short_id: ref })),
-      },
+      scope_names: ghostScopeNames(ch.scope, tree, opts),
     });
     plan.stubs[roleNodeId(c._id)] = { ...meta(c), kind: "role", solid: decided(c) };
   }

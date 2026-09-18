@@ -32,6 +32,7 @@ import { canAccessChannel, canReadChannelAnonymously, channelMemberIds, isChanne
 import {
   dmKeyFor,
   isAgentTurnInFlight,
+  isHistoryLine,
   isLiveVoiceRow,
   isSilentAgentRow,
   isVisibleAgentPending,
@@ -698,8 +699,14 @@ async function railFor(
     // notifications — and a mention anywhere still counts below, because
     // being named must never be invisible. A BROADCAST reply is the
     // exception: it does appear in the channel, so reading clears it.
+    // History imported from Slack is never unread. Those lines were read
+    // where they were written, often months ago; arriving here is a move, not
+    // an event. Without this a freshly mirrored room opens with a badge for
+    // every line it brought, which is the one thing that makes a new mirror
+    // feel like a mess rather than a room you already know.
     const counted = unreadRows.filter(
       (row) => !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row)
+        && !isHistoryLine(row)
         && (row.thread_root_id === undefined || row.broadcast === true),
     );
     // Two numbers, never one. A single count that includes ordinary chatter
@@ -707,7 +714,7 @@ async function railFor(
     // said your name — is invisible inside the noise. In a DM every line is
     // addressed to you, so every unread row counts as a mention.
     const unreadMentions = unreadRows.filter((row) =>
-      !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && (
+      !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && !isHistoryLine(row) && (
         channel.kind === "dm"
         || row.mention_scope === "here"
         || (!!userId && mentionUserIds(row.mentions as any).includes(userId.toString()))
@@ -4246,8 +4253,12 @@ export async function wakeMentionedParties(
       ref: { table: "chat_messages", id: String(opts.message._id) },
       actorConversationId: selfConversation?._id ?? null,
     });
-    if (rowId) out.roles++;
-    else out.skipped.push(`delivery_failed:${role.handle}`);
+    // The row is kept either way; a paused role's flush holds it (orgWakes
+    // gate 1) and it rides the wake after someone resumes the role. The sender
+    // hears that, never "woke".
+    if (!rowId) out.skipped.push(`delivery_failed:${role.handle}`);
+    else if (role.status === "paused") out.skipped.push(`role_paused:${role.handle}`);
+    else out.roles++;
   }
 
   for (const conversation of opts.sessions) {

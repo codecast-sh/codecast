@@ -153,8 +153,15 @@ export function standingLabel(usage: CcUsage | undefined | null, now: number): s
  * same standing the bars render, so the top pick is the one a person would
  * point to on the meters. */
 export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: P[], now: number): P[] {
-  const score = (p: P): number => usageStanding(p.usage, now).percent ?? 101;
-  return [...profiles].sort((a, b) => score(a) - score(b));
+  return [...profiles].sort((a, b) => headroomScore(a.usage, now) - headroomScore(b.usage, now));
+}
+
+/** The sort key behind rankByHeadroom, for callers that order something other
+ * than a flat list of profiles (a panel that groups an email's accounts, say):
+ * the worst live window's percent, and 101 when the current windows have not
+ * been measured, so an unproven account ranks behind every known number. */
+export function headroomScore(usage: CcUsage | undefined | null, now: number): number {
+  return usageStanding(usage, now).percent ?? 101;
 }
 
 /** The other accounts a limit-parked session could fall back to: every saved

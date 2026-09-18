@@ -15,7 +15,15 @@
  * `cast check-watch` process wrapping tsc's watch mode; it records each
  * pass in a state file (in progress, finished at, error count, the
  * diagnostics) that `cast check` reads. A watcher nobody has asked for in
- * a while exits on its own.
+ * a while exits on its own, and the machine keeps at most MAX_WATCHERS
+ * alive: each holds a program in memory, and a fleet of worktrees could
+ * otherwise recreate the pile this replaces.
+ *
+ * Which programs a tree carries is the tree's own business, read from
+ * `.codecast/check.toml` (a `[projects]` table of name = tsconfig path;
+ * tracked, so a worktree inherits it). A tree without one is checked from
+ * the tsconfig nearest the caller's directory, and any project can be named
+ * by the path of its directory or tsconfig.
  */
 
 import * as fs from "node:fs";
@@ -26,12 +34,90 @@ import { spawn, spawnSync } from "./proc.js";
 import { acquireFileLock } from "./lockFile.js";
 import { isPidAlive } from "./workspace/chrome.js";
 
-/** The projects a checkout carries, by the name a caller uses. */
-export const CHECK_PROJECTS: Record<string, string> = {
-  cli: "packages/cli/tsconfig.json",
-  web: "packages/web/tsconfig.json",
-  convex: "packages/convex/convex/tsconfig.json",
-};
+/** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
+export interface CheckProject {
+  name: string;
+  tsconfig: string;
+}
+
+export const CHECK_CONFIG_REL_PATH = ".codecast/check.toml";
+
+/** The `[projects]` table of `.codecast/check.toml`, or null when the tree has none. */
+export function readCheckConfig(root: string): CheckProject[] | null {
+  const file = path.join(root, CHECK_CONFIG_REL_PATH);
+  if (!fs.existsSync(file)) return null;
+  let raw: unknown;
+  try {
+    raw = Bun.TOML.parse(fs.readFileSync(file, "utf-8"));
+  } catch (err) {
+    throw new Error(`${CHECK_CONFIG_REL_PATH}: invalid TOML: ${(err as Error).message}`);
+  }
+  const projects = (raw as { projects?: unknown })?.projects;
+  if (!projects || typeof projects !== "object" || Array.isArray(projects)) {
+    throw new Error(`${CHECK_CONFIG_REL_PATH}: expected a [projects] table of name = "path/to/tsconfig.json"`);
+  }
+  const out: CheckProject[] = [];
+  for (const [name, tsconfig] of Object.entries(projects as Record<string, unknown>)) {
+    if (typeof tsconfig !== "string" || !tsconfig.trim()) throw new Error(`${CHECK_CONFIG_REL_PATH}: projects.${name} must be a tsconfig path`);
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error(`${CHECK_CONFIG_REL_PATH}: project name '${name}' may use letters, digits, dot, dash and underscore only`);
+    out.push({ name, tsconfig });
+  }
+  return out;
+}
+
+/** A project name for a tree relative directory: "packages/cli" → "packages-cli", the root → "root". */
+export function slugOf(relDir: string): string {
+  const slug = relDir.replace(/^\.?\/?/, "").replace(/[\/\\]+/g, "-").replace(/[^A-Za-z0-9._-]/g, "_");
+  return slug || "root";
+}
+
+/** The tsconfig.json nearest `from`, walking up to the tree root; null when there is none on the way. */
+export function nearestTsconfig(root: string, from: string): string | null {
+  let dir = path.resolve(from);
+  const top = path.resolve(root);
+  for (;;) {
+    const candidate = path.join(dir, "tsconfig.json");
+    if (fs.existsSync(candidate)) return path.relative(top, candidate);
+    if (dir === top || !dir.startsWith(top)) return null;
+    dir = path.dirname(dir);
+  }
+}
+
+/**
+ * The projects a call means. No names: every project the tree's config
+ * lists, or, without a config, the program nearest the caller's directory.
+ * A name is a configured project, or the path of a directory holding a
+ * tsconfig.json, or the path of a tsconfig file.
+ */
+export function resolveProjects(root: string, names: string[], cwd = process.cwd()): CheckProject[] {
+  const configured = readCheckConfig(root);
+  if (!names.length) {
+    if (configured) return configured.filter((p) => fs.existsSync(path.join(root, p.tsconfig)));
+    const nearest = nearestTsconfig(root, cwd);
+    if (!nearest) {
+      throw new Error(
+        `no tsconfig.json between ${cwd} and ${root}, and no ${CHECK_CONFIG_REL_PATH} names the tree's projects; ` +
+          `name one by path (cast check packages/foo), or add a [projects] table to ${CHECK_CONFIG_REL_PATH}`,
+      );
+    }
+    return [{ name: slugOf(path.dirname(nearest)), tsconfig: nearest }];
+  }
+  return names.map((name) => {
+    const hit = configured?.find((p) => p.name === name);
+    if (hit) return hit;
+    const abs = path.resolve(cwd, name);
+    const file = /tsconfig[^/]*\.json$/.test(abs) ? abs : path.join(abs, "tsconfig.json");
+    if (fs.existsSync(file) && path.resolve(file).startsWith(path.resolve(root))) {
+      const rel = path.relative(root, file);
+      return { name: slugOf(path.dirname(rel)), tsconfig: rel };
+    }
+    const known = configured?.map((p) => p.name).join(", ");
+    throw new Error(`unknown project '${name}': ${known ? `one of ${known}, or ` : ""}a directory with a tsconfig.json, or a tsconfig path`);
+  });
+}
+
+/** Live watchers this machine keeps at most; the least recently asked is stopped to make room. */
+export const MAX_WATCHERS = Math.max(1, parseInt(process.env.CAST_CHECK_MAX_WATCHERS ?? "", 10) || 6);
 
 export interface WatchState {
   pid: number;
@@ -49,6 +135,20 @@ export interface WatchState {
 }
 
 export const IDLE_EXIT_MS = 45 * 60_000;
+
+/**
+ * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of
+ * the last ask and the last finished pass. A pass in flight never counts as
+ * idle: on a loaded machine a first pass can outlive the idle window, and a
+ * watcher that quit then threw the whole build away (seen 2026-09-17).
+ */
+export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "finishedAt" | "startedAt">, now = Date.now()): boolean {
+  if (state.inProgress) return false;
+  const last = Math.max(state.askedAt ?? 0, state.finishedAt ?? 0, state.startedAt);
+  return now - last > IDLE_EXIT_MS;
+}
+/** A big program needs more heap than node's default; the same figure the projects' own CI uses. */
+export const TSC_NODE_OPTIONS = "--max-old-space-size=4096";
 /** After a request, how long a change may take to reach tsc's watcher before we trust the last pass. */
 export const SETTLE_MS = 750;
 
@@ -142,9 +242,8 @@ export function watchReducer(dir: string, state: WatchState) {
 }
 
 /** The foreground body of the hidden `cast check-watch` command. */
-export async function runWatcher(project: string, root: string): Promise<void> {
-  const tsconfig = CHECK_PROJECTS[project];
-  if (!tsconfig) throw new Error(`unknown project ${project}; one of ${Object.keys(CHECK_PROJECTS).join(", ")}`);
+export async function runWatcher(root: string, project: string, tsconfig: string): Promise<void> {
+  if (!fs.existsSync(path.join(root, tsconfig))) throw new Error(`no ${tsconfig} under ${root}`);
   const dir = watchDir(root, project);
   fs.mkdirSync(dir, { recursive: true });
   const state: WatchState = { pid: process.pid, project, tsconfig, root, startedAt: Date.now(), inProgress: true, askedAt: Date.now() };
@@ -153,6 +252,7 @@ export async function runWatcher(project: string, root: string): Promise<void> {
   const child = spawn(tscBinary(root, tsconfig), ["--noEmit", "--watch", "--preserveWatchOutput", "--pretty", "false", "-p", path.join(root, tsconfig)], {
     cwd: path.dirname(path.join(root, tsconfig)),
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || TSC_NODE_OPTIONS },
   });
   let rest = "";
   const onData = (chunk: Buffer | string): void => {
@@ -164,9 +264,7 @@ export async function runWatcher(project: string, root: string): Promise<void> {
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
   const idle = setInterval(() => {
-    const current = readWatchState(dir);
-    const askedAt = current?.askedAt ?? state.startedAt;
-    if (Date.now() - askedAt > IDLE_EXIT_MS) {
+    if (shouldIdleExit(readWatchState(dir) ?? state)) {
       child.kill("SIGTERM");
       clearInterval(idle);
     }
@@ -200,15 +298,15 @@ export interface CheckResult {
   started: boolean;
 }
 
-export type WatcherStarter = (project: string, root: string) => void;
+export type WatcherStarter = (root: string, project: CheckProject) => void;
 
 /** Respawn ourselves as the watcher, detached, logging to the watch dir. */
-export const startDetachedWatcher: WatcherStarter = (project, root) => {
-  const dir = watchDir(root, project);
+export const startDetachedWatcher: WatcherStarter = (root, { name, tsconfig }) => {
+  const dir = watchDir(root, name);
   fs.mkdirSync(dir, { recursive: true });
   const base = path.basename(process.execPath).toLowerCase();
   const viaRuntime = base.includes("bun") || base.includes("node");
-  const args = viaRuntime ? [process.argv[1], "check-watch", project, root] : ["check-watch", project, root];
+  const args = viaRuntime ? [process.argv[1], "check-watch", root, name, tsconfig] : ["check-watch", root, name, tsconfig];
   const log = fs.openSync(logPath(dir), "a");
   try {
     const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", log, log] });
@@ -227,27 +325,44 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * machine; a watcher that is still building past it is reported as such.
  */
 export async function checkProject(
-  project: string,
+  target: CheckProject,
   root: string,
-  opts: { start?: WatcherStarter; budgetMs?: number; fresh?: boolean; note?: (line: string) => void } = {},
+  opts: { start?: WatcherStarter; budgetMs?: number; fresh?: boolean; note?: (line: string) => void; maxWatchers?: number; kill?: (pid: number) => void } = {},
 ): Promise<CheckResult> {
-  if (!CHECK_PROJECTS[project]) throw new Error(`unknown project ${project}; one of ${Object.keys(CHECK_PROJECTS).join(", ")}`);
+  const project = target.name;
   const dir = watchDir(root, project);
   const budget = opts.budgetMs ?? 20 * 60_000;
   const note = opts.note ?? (() => {});
+  const kill = opts.kill ?? ((pid: number) => process.kill(pid, "SIGTERM"));
   let started = false;
   const release = await acquireFileLock(path.join(dir, "start.lock"), { describe: `cast check ${project}` });
   try {
     let state = readWatchState(dir);
+    // The tree's config now names a different tsconfig for this project than
+    // the running watcher was built on (an entry corrected in
+    // .codecast/check.toml). The old program would keep answering, so it is
+    // replaced rather than trusted.
+    if (state && state.tsconfig !== target.tsconfig) {
+      note(`the ${project} project now names ${target.tsconfig}, not ${state.tsconfig}; restarting its watcher`);
+      try {
+        kill(state.pid);
+      } catch {}
+      fs.rmSync(statePath(dir), { force: true });
+      state = null;
+      await sleep(300);
+    }
     if (state && opts.fresh) {
       try {
-        process.kill(state.pid, "SIGTERM");
+        kill(state.pid);
       } catch {}
       state = null;
       await sleep(300);
     }
     if (!state || !isPidAlive(state.pid)) {
-      (opts.start ?? startDetachedWatcher)(project, root);
+      for (const evicted of makeRoom(opts.maxWatchers ?? MAX_WATCHERS)) {
+        note(`stopped the ${evicted.project} watcher for ${evicted.root} (idle longest) to stay under ${opts.maxWatchers ?? MAX_WATCHERS} watchers on this machine`);
+      }
+      (opts.start ?? startDetachedWatcher)(root, target);
       started = true;
       note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
       const deadline = Date.now() + 30_000;
@@ -281,17 +396,43 @@ export async function checkProject(
   }
 }
 
-/** Every watcher on this machine, for `cast check status` and `stop`. */
+/** Every live watcher on this machine, for `cast check-status` and the cap; a state file whose pid is gone is cleared. */
 export function listWatchers(): Array<WatchState & { dir: string }> {
   const out: Array<WatchState & { dir: string }> = [];
   const home = checkHome();
   if (!fs.existsSync(home)) return out;
   for (const tree of fs.readdirSync(home)) {
-    for (const project of Object.keys(CHECK_PROJECTS)) {
-      const dir = path.join(home, tree, project);
+    const treeDir = path.join(home, tree);
+    if (!fs.statSync(treeDir).isDirectory()) continue;
+    for (const project of fs.readdirSync(treeDir)) {
+      const dir = path.join(treeDir, project);
       const s = readWatchState(dir);
-      if (s) out.push({ ...s, dir });
+      if (!s) continue;
+      if (!isPidAlive(s.pid)) {
+        fs.rmSync(statePath(dir), { force: true });
+        continue;
+      }
+      out.push({ ...s, dir });
     }
   }
   return out;
+}
+
+/**
+ * Stop the least recently asked watchers until one more fits under `max`.
+ * Returns what was stopped. A watcher's state file goes with it, so a later
+ * ask for that project starts a fresh one.
+ */
+export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM")): Array<WatchState & { dir: string }> {
+  const live = listWatchers().sort((a, b) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt));
+  const evicted: Array<WatchState & { dir: string }> = [];
+  while (live.length >= max && live.length) {
+    const victim = live.shift()!;
+    try {
+      kill(victim.pid);
+    } catch {}
+    fs.rmSync(statePath(victim.dir), { force: true });
+    evicted.push(victim);
+  }
+  return evicted;
 }

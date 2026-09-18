@@ -291,6 +291,21 @@ async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">
 
 const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
 
+// Take the previous holder's triage off a row that is being put in front of
+// someone: a handoff to a new owner, or a role's escalation. Only a stamp that
+// is set is cleared, so an untouched row takes no write. A kill is left alone:
+// that row is retired, and `cast restore` is the gesture that brings it back.
+async function unhide(ctx: { db: any }, conversation: any): Promise<void> {
+  const hidden: Record<string, undefined> = {};
+  if (conversation.inbox_dismissed_at) hidden.inbox_dismissed_at = undefined;
+  if (conversation.inbox_stashed_at) {
+    hidden.inbox_stashed_at = undefined;
+    hidden.inbox_stash_hidden = undefined;
+  }
+  if (conversation.inbox_snoozed_until) hidden.inbox_snoozed_until = undefined;
+  if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);
+}
+
 export async function performReparentSession(
   ctx: { db: any },
   authUserId: Id<"users">,
@@ -364,16 +379,7 @@ export async function performReparentSession(
     // see. Only a real addition clears them, and only a stamp that is set — an
     // untouched row takes no write. A kill is left alone: that row is retired,
     // and `cast restore` is the gesture that brings it back.
-    if (added.length > 0) {
-      const hidden: Record<string, undefined> = {};
-      if (conversation.inbox_dismissed_at) hidden.inbox_dismissed_at = undefined;
-      if (conversation.inbox_stashed_at) {
-        hidden.inbox_stashed_at = undefined;
-        hidden.inbox_stash_hidden = undefined;
-      }
-      if (conversation.inbox_snoozed_until) hidden.inbox_snoozed_until = undefined;
-      if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);
-    }
+    if (added.length > 0) await unhide(ctx, conversation);
     // The session reports to the person this act named: `add` hands it to the
     // added person (a handoff, the chart follows), `set` to the LAST listed —
     // callers put the person the act names at the end of `owners`. A remove
@@ -383,7 +389,8 @@ export async function performReparentSession(
     // A person is now the parent: the role pointer comes off (S11). A remove
     // is not a re-homing, so a session filed under a role stays there.
     if (mode !== "remove" && desired.length > 0 && roleId) {
-      await ctx.db.patch(conversation._id, { org_role_id: undefined });
+      // The escalation is the role's line (R1); with no role there is none.
+      await ctx.db.patch(conversation._id, { org_role_id: undefined, escalated_by_role: undefined });
       roleId = undefined;
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
@@ -394,7 +401,10 @@ export async function performReparentSession(
     if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
       throw new Error("That session is not in the role's team");
     }
-    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id });
+    // Another role's escalation does not carry over: the new role has not
+    // said why this is in front of a person.
+    const staleEscalation = conversation.escalated_by_role && String(conversation.escalated_by_role.role_id) !== String(targetRole._id);
+    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, ...(staleEscalation ? { escalated_by_role: undefined } : {}) });
     roleId = targetRole._id;
     owners = await listOwnerInfos(ctx, conversation._id);
   }

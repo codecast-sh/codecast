@@ -40,6 +40,7 @@ import BlogTeamMemory from "@/app/(marketing)/blog/your-agents-forget-your-team-
 import BlogTriggers from "@/app/(marketing)/blog/this-post-wrote-itself/page";
 import BlogPublish from "@/app/(marketing)/blog/a-url-for-everything-your-agent-makes/page";
 import BlogAgentsTalk from "@/app/(marketing)/blog/agents-that-talk-to-each-other/page";
+import BlogPullRequests from "@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page";
 import CompareIndex from "@/app/(marketing)/compare/page";
 import Compare from "@/app/(marketing)/compare/ComparePage";
 
@@ -92,6 +93,7 @@ export function render(path: string): string {
             <Route path="blog/this-post-wrote-itself" element={<BlogTriggers />} />
             <Route path="blog/a-url-for-everything-your-agent-makes" element={<BlogPublish />} />
             <Route path="blog/agents-that-talk-to-each-other" element={<BlogAgentsTalk />} />
+            <Route path="blog/the-pull-request-that-knows-its-sessions" element={<BlogPullRequests />} />
             <Route path="compare" element={<CompareIndex />} />
             <Route path="compare/:slug" element={<Compare />} />
           </Route>

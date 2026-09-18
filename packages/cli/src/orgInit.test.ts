@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASK_RULES, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
 import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
@@ -205,7 +205,14 @@ describe("buildOrgAnalyzerPrompt", () => {
       // wake ups nobody defined, a new agent named by its title after being
       // introduced as "one new agent", project names as bare lowercase words,
       // and "seats" leaking through the lines after the ask.
-      expect(p).toContain("A unit of spend is explained where the cost is stated, as what it lets an agent do, the first time it appears");
+      expect(p).toContain("a unit of spend is explained where the cost is stated, as what it lets an agent do, the first time it appears");
+      // S19: the page says the cost as one line ("about a quarter less");
+      // units on the first screen are the arithmetic, which goes below.
+      expect(p).toContain("on the first screen it is a comparison with today that a person can picture");
+      // The page's cost line reads the limit that costs money (costLine in
+      // web/components/org/staffingAsks.ts); a run that compared every unit
+      // wrote "a third to three quarters, depending on the unit".
+      expect(p).toContain("Read that share from the limit that costs money, how much the roles may read and write in a day");
       expect(p).toContain("introduced once with what it is and what it will do, and called by those same words after that");
       expect(p).toContain("A project's or a plan's name appears as it is filed, capitalized or quoted");
       expect(p).toContain("read the whole summary once more as that person, the lines after the ask included");
@@ -213,9 +220,9 @@ describe("buildOrgAnalyzerPrompt", () => {
       // sentence that introduces the thing, and the inputs' own names
       // ("the activity block credits", "the seat should end with it")
       // leaking into the lines below the ask.
-      expect(p).toContain("standing means the agent stays and keeps watching its area, a program means it exists for one effort and ends with it");
-      expect(p).toContain("These rules bind every line of the summary, the evidence, what could not be verified and the findings included, not the ask alone");
-      expect(p).toContain("the names of the inputs you read (an activity block, a health flag, a ledger, a frame) never reach the reader");
+      expect(p).toContain("a role that stays is said as staying, not as standing");
+      expect(p).toContain("that holds for every line of the summary, the asks, the evidence, what could not be verified and the findings, not the ask alone");
+      expect(p).toContain("The names of the inputs you read (an activity block, a health flag, a ledger, a frame) never reach the reader");
       // Run 3 wrote "may wake 120 times a day" with no word on what a wake
       // is, while it explained a token; the rule now asks for both.
       expect(p).toContain("A count of wakes never stands alone: wherever the number appears, say in your own words what one wake is");
@@ -230,6 +237,39 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(at("The summary is the ask.")).toBeLessThan(at("## What not to invent"));
       expect(at(ORG_ASK_RULES.reader)).toBeLessThan(at(ORG_ASK_RULES.decision_first));
       expect(at(ORG_ASK_RULES.decision_first)).toBeLessThan(at(ORG_ASK_RULES.invented_words));
+      // S19: the analyzer writes the asks, a partition of the changes, in
+      // the words its summary already uses; the spec example carries one and
+      // parses with it.
+      expect(p).toContain(ORG_ASKS_RULE);
+      expect(p).toContain("every change is in exactly one ask; the post refuses a spec that leaves a change out or names one twice");
+      expect(p).toContain("when the summary says one, two, three, those are the asks");
+      // The first run of the rule wrote titles of 30, 25 and 17 words, each
+      // carrying its own reason; a title is the head of a card.
+      expect(p).toContain("A title is the head of a card: a short line, about ten words, that names the act the person is agreeing to");
+      expect(p).toContain("The reason does not go in the title, it goes in why");
+      expect(at("## How to write")).toBeLessThan(at(ORG_ASKS_RULE));
+      expect(at(ORG_ASKS_RULE)).toBeLessThan(at("The summary is the ask."));
+      // S19, the letter shape: the page shows the words the propose step
+      // wrote, so the first screen is decided in the prompt. A live letter
+      // opened with one 1,088 character paragraph; the shape is an opening,
+      // one short paragraph per ask, then the rest behind a heading.
+      expect(p).toContain(ORG_LETTER_RULE);
+      expect(p).toContain("one short paragraph that says what you are, what you looked at and that they decide; then one short paragraph per ask, in the asks' order, each ending in what accepting changes for the reader; then nothing");
+      expect(p).toContain("a person reads them in ten seconds and can say what is asked of them");
+      expect(p).toContain("An ask's why is one sentence and its effect is one sentence");
+      // The live cards said "standing agents", "business line", "daily
+      // allowance" and "seat", and one effect was an inventory of 100 rows:
+      // the first screen carries the page's words, and the effect names what
+      // the person will notice.
+      expect(p).toContain("a role is the thing you add, retire or move (say once that a role is an agent that keeps watching one area of work, and call it a role from then on, in the letter and in every ask)");
+      expect(p).toContain("a daily limit is what it may spend, and a role that stays is said as staying, not as standing");
+      expect(p).toContain("The first screen carries the page's word and nothing else");
+      expect(p).toContain("the effect names what the person will notice once they accept, never what the machine will do row by row");
+      expect(at(ORG_ASKS_RULE)).toBeLessThan(at(ORG_LETTER_RULE));
+      expect(at(ORG_LETTER_RULE)).toBeLessThan(at("The summary is the ask."));
+      const example = parseOrgProposalSpec(JSON.parse(p.split("```json\n")[1].split("\n```")[0]));
+      expect(example.errors).toEqual([]);
+      expect(example.spec!.asks).toEqual([{ title: "What the person is agreeing to, readable on its own", why: "One sentence of why.", effect: "One line of what changes for them when they accept.", seqs: [1] }]);
       // What comes after the ask is written for the same reader.
       expect(p).toContain("each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word");
       // The packing instruction that produced an inventory is gone.

@@ -8,6 +8,9 @@ import {
   isConversationRetired,
   killLocalPanesForConversation,
   parseReapCandidateRow,
+  paneAgentExited,
+  deadPaneReapBlock,
+  DEAD_PANE_QUIET_MS,
   reapSkipBucket,
   registerManagedStartedSession,
   resumeOwnerVerdict,
@@ -181,11 +184,14 @@ describe("parseReapCandidateRow", () => {
   // Field order is stamps-then-name, separated by a PRINTABLE character — see
   // REAP_LIST_FORMAT. tmux rewrites control characters in format output to `_`
   // whenever the caller is not itself inside tmux, which the daemon never is.
-  const row = (name: string, session = "", conv = "") => [session, conv, name].join("|");
+  // Pane facts sit between the stamps and the name: attached, window_activity
+  // (epoch s), windows, panes, pane_pid, pane_dead, pane_current_command.
+  const PANE = ["0", "1789600000", "1", "1", "4242", "0", "claude"];
+  const row = (name: string, session = "", conv = "") => [session, conv, ...PANE, name].join("|");
 
   test("resume shells are candidates with or without stamps", () => {
     expect(parseReapCandidateRow(row("cc-resume-7206623b", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31")))
-      .toEqual({ tmux: "cc-resume-7206623b", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "resume" });
+      .toMatchObject({ tmux: "cc-resume-7206623b", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "resume" });
     expect(parseReapCandidateRow(row("cx-resume-019fc268"))?.kind).toBe("resume");
   });
 
@@ -193,7 +199,7 @@ describe("parseReapCandidateRow", () => {
     // cc-<agent>-<convSuffix> panes were invisible to the reaper, so a stashed or
     // killed session's own terminal leaked forever.
     expect(parseReapCandidateRow(row("cc-claude-6f68a98bqm7z", "2a466fef-c989-4285-b754-ece01f6cdc92", "jx78rf6911tyzst2n8ks6f68a98bqm7z")))
-      .toEqual({
+      .toMatchObject({
         tmux: "cc-claude-6f68a98bqm7z",
         sessionId: "2a466fef-c989-4285-b754-ece01f6cdc92",
         convId: "jx78rf6911tyzst2n8ks6f68a98bqm7z",
@@ -215,14 +221,14 @@ describe("parseReapCandidateRow", () => {
     // option to the empty string. Verified against live tmux:
     //   "7206623b-…||cc-resume-7206623b"   (no conversation stamp)
     expect(parseReapCandidateRow(row("cc-resume-7206623b", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", "")))
-      .toEqual({ tmux: "cc-resume-7206623b", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "resume" });
+      .toMatchObject({ tmux: "cc-resume-7206623b", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "resume" });
     // A foreign pane: both stamps empty, separators still present.
     expect(parseReapCandidateRow(row("my-editor", "", ""))).toBeNull();
   });
 
   test("a separator inside a session name is part of the name", () => {
     expect(parseReapCandidateRow(row("my|odd|pane", "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31")))
-      .toEqual({ tmux: "my|odd|pane", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "stamped" });
+      .toMatchObject({ tmux: "my|odd|pane", sessionId: "7206623b-5ba0-4e7c-b91e-f1f1ddeb9b31", convId: null, kind: "stamped" });
   });
 
   test("a tmux too old to expand #{@opt} is read as unstamped, never as a session id", () => {
@@ -642,5 +648,46 @@ describe("getConversationLifecycle routing", () => {
     const { svc, calls } = serviceWith(() => null);
     expect(await svc.getConversationLifecycle("conv-gone")).toBeNull();
     expect(calls).toEqual([{ name: LIFECYCLE, selector: "conversation_id" }]);
+  });
+});
+
+describe("reaping panes whose agent exited", () => {
+  const now = 1_789_700_000_000;
+  const facts = (over: Partial<Parameters<typeof deadPaneReapBlock>[0]> = {}) => ({
+    attached: 0, activityMs: now - 2 * 60 * 60 * 1000, windows: 1, panes: 1, pid: 4242, dead: false, command: "bash", ...over,
+  });
+  const quiet = { now, children: 0, deliveryActive: false };
+
+  test("tmux's own row carries the pane facts the verdict reads", () => {
+    const cand = parseReapCandidateRow(["sid-1", "", "0", "1789692800", "1", "1", "4242", "0", "-bash", "cc-resume-sid1"].join("|"));
+    expect(cand?.pane).toEqual({ attached: 0, activityMs: 1_789_692_800_000, windows: 1, panes: 1, pid: 4242, dead: false, command: "-bash" });
+    expect(paneAgentExited(cand!.pane!)).toBe(true);
+    // A field tmux could not expand yields no facts, so the pane falls to the
+    // ordinary live-agent path and its much stricter gates.
+    expect(parseReapCandidateRow(["sid-1", "", "#{session_attached}", "1", "1", "1", "1", "0", "bash", "cc-resume-sid1"].join("|"))?.pane).toBeNull();
+  });
+
+  test("a live agent idle at its prompt is not an exited pane, however old its transcript", () => {
+    // 2026-09-17: a scheduled run was delivered to an agent resumed after seven
+    // days, and a transcript-age rule killed it two seconds into the turn. The
+    // foreground program is the agent, so this path never touches it.
+    expect(paneAgentExited(facts({ command: "claude" }))).toBe(false);
+    expect(paneAgentExited(facts({ command: "grok-1.0.34" }))).toBe(false);
+    expect(paneAgentExited(facts({ command: "node" }))).toBe(false);
+    expect(paneAgentExited(facts({ command: "claude", dead: true }))).toBe(true);
+  });
+
+  test("a quiet, lone, unattached shell running nothing goes", () => {
+    expect(deadPaneReapBlock(facts(), quiet)).toBeNull();
+  });
+
+  test("anything that could belong to a person or a pending resume keeps it", () => {
+    expect(deadPaneReapBlock(facts({ attached: 1 }), quiet)).toBe("attached");
+    expect(deadPaneReapBlock(facts({ windows: 2 }), quiet)).toBe("multi-pane");
+    expect(deadPaneReapBlock(facts({ panes: 2 }), quiet)).toBe("multi-pane");
+    expect(deadPaneReapBlock(facts(), { ...quiet, children: 2 })).toBe("shell-busy");
+    expect(deadPaneReapBlock(facts(), { ...quiet, children: null })).toBe("children-unknown");
+    expect(deadPaneReapBlock(facts(), { ...quiet, deliveryActive: true })).toBe("delivery-active");
+    expect(deadPaneReapBlock(facts({ activityMs: now - DEAD_PANE_QUIET_MS + 1000 }), quiet)).toBe("dead-recent");
   });
 });

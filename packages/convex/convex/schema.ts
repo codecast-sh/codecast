@@ -881,6 +881,12 @@ export default defineSchema({
     // session files under its primary owner in the org tree. Owners are
     // untouched by it — the role sits between the session and the person.
     org_role_id: v.optional(v.id("org_roles")),
+    // The role put this session in front of the person (org-roles-run-work.md
+    // R1). A session under a role stays out of its host's needs input; with
+    // this set it is a first class card there, carrying the role's line.
+    // Written only by sessionOwnership.performEscalateSession; clearing
+    // removes it. A reparent to a person drops it with the role pointer.
+    escalated_by_role: v.optional(v.object({ role_id: v.id("org_roles"), line: v.string(), at: v.number() })),
     // Set when this row IS a role's standing session (org-roles-standing.md
     // T1), the way anchor_id marks the workspace anchor's. Reserved for the
     // provisioning wave; nothing writes it in the org page slice.
@@ -1303,6 +1309,11 @@ export default defineSchema({
       was: v.optional(v.string()),
       note: v.optional(v.string()),
     }))),
+    // The asks (org-staffing.md S19): what the proposal asks of the person,
+    // each with the changes folded inside it, by seq. Written by the author
+    // at create and checked as a partition of the changes; a row without
+    // them derives them on read (resolveOrgAsks).
+    asks: v.optional(v.array(v.object({ title: v.string(), why: v.string(), effect: v.string(), seqs: v.array(v.number()) }))),
     created_at: v.number(),
     updated_at: v.number(),
     resolved_at: v.optional(v.number()),

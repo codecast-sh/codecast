@@ -59,6 +59,43 @@ describe("awaitTmuxComposerPayload", () => {
     })).rejects.toThrow("INJECT_UNVERIFIED");
   });
 
+  // ct-51354: a collapsed chip hides its own text, so the "+N lines" it prints
+  // is the only thing on screen that says WHOSE paste it is. Reading any single
+  // chip as our payload submitted the human's own unsent paste as our message —
+  // and acked a delivery the agent never saw. The count is the discriminator:
+  // Claude Code prints one break per newline, so a four-line payload reads
+  // "+3 lines" and a stranger's twenty-line draft reads "+20 lines".
+  const FOUR_LINES = "first line\nsecond line\nthird line\nfourth line";
+
+  test("a chip whose line count matches the payload is ours", async () => {
+    expect(await awaitTmuxComposerPayload("t:0.0", FOUR_LINES, {
+      bracketedPaste: true,
+      allowRePaste: false,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: BOX("[Pasted text #1 +3 lines]") }) as any,
+    })).toBe("matched");
+  });
+
+  test("a chip claiming a different line count is a stranger's draft, never submitted", async () => {
+    await expect(awaitTmuxComposerPayload("t:0.0", FOUR_LINES, {
+      bracketedPaste: true,
+      allowRePaste: false,
+      budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: BOX("[Pasted text #1 +20 lines]") }) as any,
+    })).rejects.toThrow("INJECT_UNVERIFIED");
+  });
+
+  test("a counted chip over a single-line payload is a stranger's draft", async () => {
+    await expect(awaitTmuxComposerPayload("t:0.0", PAYLOAD, {
+      bracketedPaste: true,
+      allowRePaste: false,
+      budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: BOX("[Pasted text #1 +10 lines]") }) as any,
+    })).rejects.toThrow("INJECT_UNVERIFIED");
+  });
+
   test("matches when the composer shows the payload, without any keys sent", async () => {
     const sends: string[] = [];
     const exec = async (args: Args): Promise<{ stdout: string }> => {
@@ -246,12 +283,16 @@ describe("awaitTmuxComposerPayload", () => {
     expect(out).toBe("unwatchable");
   });
 
+  // A 14-line payload is the one whose chip reads "+13 lines": Claude Code
+  // counts the breaks between lines, not the lines.
+  const THIRTEEN_BREAKS = Array.from({ length: 14 }, (_, i) => `line ${i + 1}`).join("\n");
+
   test("multi-line paste rendered as a collapsed chip counts as the payload", async () => {
     const exec = async (args: Args): Promise<{ stdout: string }> => {
       if (args[0] === "capture-pane") return { stdout: BOX("[Pasted text #1 +13 lines]") };
       return { stdout: "" };
     };
-    const out = await awaitTmuxComposerPayload("t:0.0", "line one\nline two", {
+    const out = await awaitTmuxComposerPayload("t:0.0", THIRTEEN_BREAKS, {
       bracketedPaste: true,
       rePaste: async () => { throw new Error("must not re-paste on a clean chip"); },
       exec: exec as any,
@@ -267,7 +308,7 @@ describe("awaitTmuxComposerPayload", () => {
       if (args[0] === "send-keys" && args[args.length - 1] === "C-k") composer = "";
       return { stdout: "" };
     };
-    const out = await awaitTmuxComposerPayload("t:0.0", "line one\nline two", {
+    const out = await awaitTmuxComposerPayload("t:0.0", THIRTEEN_BREAKS, {
       bracketedPaste: true,
       rePaste: async () => { rePastes++; composer = "[Pasted text #1 +13 lines]"; },
       exec: exec as any,
