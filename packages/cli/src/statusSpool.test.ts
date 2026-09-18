@@ -199,7 +199,7 @@ describe("the hook's fallback write", () => {
   // uses only builtins every POSIX shell has: a case pattern and ${#var}.
   describe.each(["sh", "dash", "bash"])("its id guard under %s", (shell) => {
     const guard = CODECAST_STATUS_HOOK.slice(
-      CODECAST_STATUS_HOOK.indexOf('case "$SESSION_ID" in'),
+      CODECAST_STATUS_HOOK.lastIndexOf('case "$SESSION_ID" in'),
       CODECAST_STATUS_HOOK.indexOf('STATUS_DIR="$HOME'),
     );
 
@@ -230,7 +230,7 @@ describe("the hook's fallback write", () => {
   });
 
   test("the guard runs before either path is built", () => {
-    const guardAt = CODECAST_STATUS_HOOK.indexOf('case "$SESSION_ID" in');
+    const guardAt = CODECAST_STATUS_HOOK.lastIndexOf('case "$SESSION_ID" in');
     expect(guardAt).toBeGreaterThan(0);
     expect(guardAt).toBeLessThan(CODECAST_STATUS_HOOK.indexOf('STATUS_DIR="$HOME'));
     expect(guardAt).toBeLessThan(CODECAST_STATUS_HOOK.indexOf("$SESSION_ID.json"));

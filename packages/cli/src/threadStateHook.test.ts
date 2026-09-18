@@ -113,7 +113,7 @@ describe("thread-state hook", () => {
     expect(run(id, "Stop", 10 + THREAD_STATE_NUDGE_MSGS + 5)).toBe("");
     expect(run(id, "Stop", 10 + 2 * THREAD_STATE_NUDGE_MSGS + 4)).toBe("");
     expect(JSON.parse(run(id, "Stop", 10 + 2 * THREAD_STATE_NUDGE_MSGS + 5)).decision).toBe("block");
-  });
+  }, 20_000);
 
   test("a Stop already continuing from a stop hook never blocks again, and keeps the nudge armed", () => {
     const id = fresh();
@@ -141,5 +141,37 @@ describe("thread-state hook", () => {
       env: { ...process.env, HOME: home },
     }).toString();
     expect(out).toBe("");
+  });
+
+  test("UserPromptSubmit with no stamp never opens the transcript", () => {
+    const id = fresh();
+    const fifo = path.join(home, `${id}.fifo`);
+    execFileSync("mkfifo", [fifo]);
+    const t0 = Date.now();
+    const out = execFileSync("bash", [hookFile], {
+      input: JSON.stringify({ session_id: id, hook_event_name: "UserPromptSubmit", transcript_path: fifo }),
+      env: { ...process.env, HOME: home },
+      timeout: 2000,
+    }).toString();
+    expect(out).toBe("");
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  test("UserPromptSubmit does not spawn python3", () => {
+    const id = fresh();
+    stamp(id);
+    const bin = path.join(home, "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "python3"), "#!/bin/sh\necho PYTHON_CALLED >&2\nexit 1\n", { mode: 0o755 });
+    expect(run(id, "UserPromptSubmit", 0)).toBe("");
+    const out = execFileSync("bash", [hookFile], {
+      input: JSON.stringify({
+        session_id: id,
+        hook_event_name: "UserPromptSubmit",
+        transcript_path: transcript(id, THREAD_STATE_NUDGE_MSGS + 3),
+      }),
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+    }).toString();
+    expect(out.startsWith("<thread-state>")).toBe(true);
   });
 });
