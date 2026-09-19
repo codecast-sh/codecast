@@ -17,6 +17,9 @@ describe("defaultMachineId", () => {
     ];
     expect(defaultMachineId(devices, { projectPath: "/Users/me/src/app" })).toBe("mac");
     expect(defaultMachineId(devices, { projectPath: "/Users/me/src/app", lastPicked: "runtime" })).toBe("mac");
+    expect(defaultMachineId(devices.map((d) => ({ ...d, online: false })), {
+      projectPath: "/Users/me/src/app", ownerDeviceId: "runtime",
+    })).toBe("mac");
   });
 
   it("prefers the conversation's owner while it's online", () => {
