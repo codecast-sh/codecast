@@ -14,11 +14,6 @@
       "count": 1
     }
   },
-  "components/EntityIdPill.tsx": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
   "components/GenericListView.tsx": {
     "no-restricted-syntax": {
       "count": 1
@@ -65,11 +60,6 @@
   "hooks/useSyncTasks.ts": {
     "no-restricted-syntax": {
       "count": 3
-    }
-  },
-  "src/App.tsx": {
-    "no-restricted-syntax": {
-      "count": 1
     }
   },
   "tips/TipNudge.tsx": {
