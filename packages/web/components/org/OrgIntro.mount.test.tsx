@@ -83,6 +83,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ---------------------------------------------------------------- the first visit
 
 test("the first visit: faces, S20's five lines, the two actions, seen once", async () => {
+  // The lines render their markdown, so the emphasis markers are consumed: the
+  // words are what a reader sees, not the source spelling.
+  const plain = (text: string) => text.replace(/\*\*/g, "");
   const root = createRoot(document.getElementById("root")!);
   const calls: string[] = [];
   const mount = (hasRoles: boolean) => act(async () => root.render(React.createElement(intro.OrgIntro, { hasRoles, onStart: () => calls.push("start"), onLater: () => calls.push("later") })));
@@ -96,14 +99,15 @@ test("the first visit: faces, S20's five lines, the two actions, seen once", asy
   const lines = qa("[data-org-intro-line]");
   expect(lines.map((l) => l.getAttribute("data-org-intro-line"))).toEqual(intro.ORG_INTRO_LINES.map((l) => l.face));
   expect(lines.map((l) => l.querySelector("img")!.getAttribute("data-avatar"))).toEqual(intro.ORG_INTRO_LINES.map((l) => l.face));
-  expect(lines.map((l) => l.querySelector("p")!.textContent)).toEqual(intro.ORG_INTRO_LINES.map((l) => l.text));
+  expect(lines.map((l) => l.querySelector("p")!.textContent)).toEqual(intro.ORG_INTRO_LINES.map((l) => plain(l.text)));
   // What a person must be able to say afterwards (S20's test): a role, who
   // proposes them, who decides, what reaches them, and the way in from a session.
-  const all = intro.ORG_INTRO_LINES.map((l) => l.text).join(" ");
+  // The words a reader sees, with the emphasis markers taken off.
+  const all = intro.ORG_INTRO_LINES.map((l) => plain(l.text)).join(" ");
   // One name for one thing: the screen, the card and the lines say organization.
   expect(intro.ORG_INTRO_TITLE).toBe("Meet your organization");
   expect(all).not.toMatch(/\bcompany\b/);
-  for (const must of ["organization has roles", "chief of staff", "proposes the roles", "You decide", "nothing changes until you accept", "only what needs you", "/org"]) expect(all).toContain(must);
+  for (const must of ["organization has roles", "chief of staff", "proposes the roles", "You decide", "nothing changes until you accept", "only what needs you", "/cast-org"]) expect(all).toContain(must);
   // One title in the serif, one set of actions, nothing else to read.
   expect(q("[data-org-intro-title]")!.textContent).toBe(intro.ORG_INTRO_TITLE);
   expect(qa("[data-org-intro-actions] button").length).toBe(2);
