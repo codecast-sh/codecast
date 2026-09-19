@@ -1285,6 +1285,112 @@ export const submitComments = mutation({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Viewer drafts — unsent text a page is holding for someone
+// ---------------------------------------------------------------------------
+//
+// See the artifact_drafts comment in schema.ts for why this is server-side at
+// all: the sandbox CSP gives artifact pages an opaque origin, so localStorage
+// and every other browser store throws, and a page with an editor in it loses
+// the viewer's typing on any reload or crash.
+//
+// A draft is not a comment. It never enters the comment feed, never notifies
+// the owner, and never reaches the publishing session. It exists only so the
+// page can hand the viewer back what they had already typed.
+
+export const MAX_DRAFT_CHARS = 64_000;
+// Per-artifact row ceiling. Drafts are written by unauthenticated viewers who
+// choose both the key and the author name, so without a bound one page could
+// be made to mint rows forever. At the cap the oldest draft on that page is
+// evicted — which for a real editor means an abandoned field, since every
+// field the viewer is actually working in was touched more recently.
+export const MAX_ARTIFACT_DRAFTS = 500;
+
+function draftAuthor(raw: string | undefined): string {
+  return (raw ?? "").trim().slice(0, 80) || "anonymous";
+}
+
+/** Upsert one draft. Empty text deletes the row — that is how a page clears a
+    draft after the viewer sends it. */
+export const saveDraft = mutation({
+  args: {
+    slug: v.string(),
+    key: v.string(),
+    author: v.optional(v.string()),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact) return { error: "Not found" };
+    // Same gate as commenting: a page with discussion turned off is not
+    // collecting viewer text of any kind.
+    if (artifact.comments_disabled) return { error: "Comments are off on this page" };
+    const key = args.key.trim().slice(0, 200);
+    if (!key) return { error: "Missing key" };
+    const author = draftAuthor(args.author);
+    const text = args.text.slice(0, MAX_DRAFT_CHARS);
+    const existing = await ctx.db
+      .query("artifact_drafts")
+      .withIndex("by_artifact", (q) =>
+        q.eq("artifact_id", artifact._id).eq("author", author).eq("key", key))
+      .first();
+    if (!text.trim()) {
+      if (existing) await ctx.db.delete(existing._id);
+      return { ok: true, cleared: true, updated_at: Date.now() };
+    }
+    const updated_at = Date.now();
+    if (existing) {
+      await ctx.db.patch(existing._id, { text, updated_at });
+      return { ok: true, updated_at };
+    }
+    const all = await ctx.db
+      .query("artifact_drafts")
+      .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
+      .collect();
+    if (all.length >= MAX_ARTIFACT_DRAFTS) {
+      const doomed = all
+        .sort((a, b) => a.updated_at - b.updated_at)
+        .slice(0, all.length - MAX_ARTIFACT_DRAFTS + 1);
+      for (const row of doomed) await ctx.db.delete(row._id);
+    }
+    await ctx.db.insert("artifact_drafts", {
+      artifact_id: artifact._id,
+      key,
+      author,
+      text,
+      updated_at,
+    });
+    return { ok: true, updated_at };
+  },
+});
+
+/** Every draft this author has on this page, for the page to restore on open. */
+export const draftsFor = query({
+  args: { slug: v.string(), author: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact) return { error: "Not found" };
+    if (artifact.comments_disabled) return { error: "Comments are off on this page" };
+    const author = draftAuthor(args.author);
+    const rows = await ctx.db
+      .query("artifact_drafts")
+      .withIndex("by_artifact", (q) =>
+        q.eq("artifact_id", artifact._id).eq("author", author))
+      .collect();
+    return {
+      drafts: rows
+        .sort((a, b) => b.updated_at - a.updated_at)
+        .map((r) => ({ key: r.key, text: r.text, updated_at: r.updated_at })),
+    };
+  },
+});
+
 // "Send all": deliver every stored-but-undelivered open comment to the
 // publishing session as one batch message. Owner-only — the owner_key is the
 // gate, because this pushes viewer text into a live agent session. Works even
@@ -1442,7 +1548,7 @@ async function deleteArtifactCascade(ctx: MutationCtx, artifact: Doc<"artifacts"
     await ctx.storage.delete(asset.storage_id).catch(() => {});
     await ctx.db.delete(asset._id);
   }
-  for (const table of ["artifact_comments", "artifact_stats"] as const) {
+  for (const table of ["artifact_comments", "artifact_stats", "artifact_drafts"] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
