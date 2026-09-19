@@ -326,7 +326,7 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
+import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentDefinitionSpec, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
@@ -1025,7 +1025,7 @@ export function buildBlankLaunchArgs(
     // getPermissionFlags already returns null when codex_args pins an approval
     // flag, so concatenating can't double up.
     const flags = [getAgentArgs(config, "codex") || "", permFlags || ""].filter(Boolean).join(" ");
-    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+    return ["-c", "check_for_update_on_startup=false", ...(flags ? flags.split(/\s+/).filter(Boolean) : [])];
   }
   if (agentType === "opencode") {
     // Managed opencode runs auto-approved (the daemon can't answer TUI permission
@@ -2760,14 +2760,22 @@ export async function releaseStrandedCommandClaims(
 type ClaimAnswer = { claimed?: boolean; released?: boolean; reason?: string } | null;
 const primedClaims = new Map<string, Promise<ClaimAnswer>>();
 const pendingAgentSwitches = new Map<string, string>();
+const pendingSessionStarts = new Map<string, string>();
 
 export function agentSwitchConversationId(
   command: { command: string; args?: string },
 ): string | undefined {
-  if (command.command !== "resume_session" || !command.args) return undefined;
+  return sessionStartConversationId(command, true);
+}
+
+export function sessionStartConversationId(
+  command: { command: string; args?: string },
+  switchOnly = false,
+): string | undefined {
+  if ((command.command !== "resume_session" && (switchOnly || command.command !== "start_session")) || !command.args) return undefined;
   try {
     const parsed = JSON.parse(command.args);
-    return parsed.switch_agent === true && typeof parsed.conversation_id === "string"
+    return (!switchOnly || parsed?.switch_agent === true) && typeof parsed?.conversation_id === "string"
       ? parsed.conversation_id
       : undefined;
   } catch {
@@ -2825,6 +2833,11 @@ async function executeCommandBatch(
   for (const { conversationId, commandId } of switches) {
     pendingAgentSwitches.set(conversationId, commandId);
   }
+  const starts = fresh.flatMap((cmd) => {
+    const conversationId = sessionStartConversationId(cmd);
+    return conversationId ? [{ conversationId, commandId: cmd.id }] : [];
+  });
+  for (const { conversationId, commandId } of starts) pendingSessionStarts.set(conversationId, commandId);
   const siteUrl = config.convex_url?.replace(".cloud", ".site");
   if (siteUrl && config.auth_token) primeCommandClaims(fresh.map((c) => c.id), siteUrl, config.auth_token);
   try {
@@ -2833,6 +2846,9 @@ async function executeCommandBatch(
       await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
     }
   } finally {
+    for (const { conversationId, commandId } of starts) {
+      if (pendingSessionStarts.get(conversationId) === commandId) pendingSessionStarts.delete(conversationId);
+    }
     for (const { conversationId, commandId } of switches) {
       if (pendingAgentSwitches.get(conversationId) === commandId) {
         pendingAgentSwitches.delete(conversationId);
@@ -23341,16 +23357,40 @@ async function findLiveTmuxForConversation(
   }
 }
 
+async function recoverBlankCodexForDelivery(
+  conversationId: string,
+  data: Awaited<ReturnType<typeof fetchExport>>,
+  projectPath: string | null,
+  config: Config,
+): Promise<boolean> {
+  const server = codexAppServerInstance;
+  const unavailable = () => !server?.running || pendingSessionStarts.has(conversationId)
+    || appServerConversations.has(conversationId) || persistedAppServerThreads.has(conversationId);
+  if (unavailable()) return false;
+  const params = blankCodexRecoveryParams(data, projectPath, resolveCodexPermissionDefaults(config));
+  if (!params) return false;
+  const builtContext = await buildCodexStableContext(config, projectPath!, {});
+  if (unavailable()) return false;
+  const response = await startCodexThreadThenRecordStableContext(
+    () => server!.threadStart({ ...params, ...(builtContext ? { developerInstructions: builtContext.text } : {}) }),
+    builtContext ? () => { void recordStableContext(config, { conversation_id: conversationId, data: builtContext.data }); } : undefined,
+  );
+  const threadId = response.thread.id;
+  registerAppServerConversation(conversationId, threadId, { cwd: projectPath!, ...params, persist: true });
+  await pushSessionIdBinding(conversationId, threadId, projectPath!);
+  syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
+  syncServiceRef?.registerManagedSession(threadId, process.pid, undefined, conversationId).catch(logConvexFailure);
+  syncServiceRef?.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+  ensureManagedSessionHeartbeat(threadId);
+  logDelivery(`Recovered blank Codex session via app-server: conv=${conversationId.slice(0, 12)} thread=${threadId.slice(0, 8)}`);
+  return true;
+}
+
 async function startFreshSessionForDelivery(
   conversationId: string,
 ): Promise<StartedSessionInfo | null> {
   const existing = startedSessionTmux.get(conversationId);
   if (existing) return existing;
-
-  if (!hasTmux()) {
-    logDelivery(`Cannot start fresh session: tmux not available`);
-    return null;
-  }
 
   // Before spawning ANOTHER blank session, consult tmux for a live one already
   // tagged with this conversation. Guards against the double-start where the
@@ -23369,11 +23409,12 @@ async function startFreshSessionForDelivery(
   const config = readConfig();
   let projectPath: string | null = null;
   let declaredAgentType: AgentClientId | null = null;
+  let exportData: Awaited<ReturnType<typeof fetchExport>> | undefined;
 
   if (config?.convex_url && config?.auth_token) {
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
-      const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+      exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
       declaredAgentType = fromConvexAgentType(exportData.conversation?.agent_type);
       if (exportData.conversation?.project_path && fs.existsSync(exportData.conversation.project_path)) {
         projectPath = exportData.conversation.project_path;
@@ -23386,6 +23427,13 @@ async function startFreshSessionForDelivery(
       logDelivery(`Refusing fresh delivery fallback for conv=${conversationId.slice(0, 12)} — could not resolve declared agent: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
+  }
+
+  if (config && exportData && await recoverBlankCodexForDelivery(conversationId, exportData, projectPath, config)) return null;
+
+  if (!hasTmux()) {
+    logDelivery(`Cannot start fresh session: tmux not available`);
+    return null;
   }
 
   // This legacy escape hatch predates multiple agent clients and can only
@@ -23889,6 +23937,7 @@ async function deliverMessage(
         if (!sessionId) {
           logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
           const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
+          if (await deliveryStep(messageId, "app_server_recovered", tryAppServerDelivery)) return true;
           if (freshEntry && await tryStartedTmux(freshEntry)) return true;
           log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
@@ -23901,6 +23950,7 @@ async function deliverMessage(
       if (!sessionId) {
         logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
         const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
+        if (await deliveryStep(messageId, "app_server_recovered", tryAppServerDelivery)) return true;
         if (freshEntry && await tryStartedTmux(freshEntry)) return true;
         logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
