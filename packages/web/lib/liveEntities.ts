@@ -101,9 +101,13 @@ export function isForeignSession(
   conv: { user_id?: string; is_own?: boolean } | null | undefined,
   myId: string | null | undefined,
 ): boolean {
-  if (conv?.is_own === true) return false;
+  // A co-owner seat is mine whatever the assignment says.
   if (session.owned_by_me) return false;
-  if (myId && session.owner_user_id && session.owner_user_id === myId) return false;
+  // Assignment decides whose session this is, ahead of "I started it": a
+  // session handed to someone else leaves the runner's inbox, so the runner
+  // reads it as another person's even though they ran it.
+  if (myId && session.owner_user_id) return session.owner_user_id !== myId;
+  if (conv?.is_own === true) return false;
   if (conv?.is_own === false) return true;
   const uid = session.user_id ?? conv?.user_id;
   if (uid && myId) return uid !== myId;
