@@ -22,6 +22,7 @@ mock.module("../../tools/MarkdownRenderer", () => ({
 
 import { DecisionCompactCard } from "../DecisionCompactCard";
 
+import { closeDomWindow } from "../../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/questions" });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -34,7 +35,7 @@ const restoreGlobals = replaceGlobals({
   cancelAnimationFrame: (id: number) => clearTimeout(id),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const decision: any = {
   _id: "d1",

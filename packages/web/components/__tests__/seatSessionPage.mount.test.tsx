@@ -18,6 +18,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://app.test/inbox", pretendToBeVisual: true });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -31,7 +32,7 @@ const restoreGlobals = replaceGlobals({
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const React = await import("react");
 const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;

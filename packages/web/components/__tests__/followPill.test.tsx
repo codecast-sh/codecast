@@ -6,6 +6,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { FollowPill } from "../presence/FollowPill";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -17,7 +18,7 @@ const restoreGlobals = replaceGlobals({
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const ann = { _id: "u-ann", name: "Ann Lee", presence_state: "active" };
 

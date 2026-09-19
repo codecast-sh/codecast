@@ -10,6 +10,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { OrgRole, OrgTree } from "../org/orgTypes";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 async function verifyRoleScopeView() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -185,7 +186,7 @@ async function verifyRoleScopeView() {
   assert.ok(q("[data-role-card] img"), "the face is there");
 
   await act(async () => root.unmount());
-  dom.window.close();
+  closeDomWindow(dom);
   console.log("role scope view, both densities: ok");
 }
 

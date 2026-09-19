@@ -13,6 +13,7 @@ mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ conten
 import { DecisionAnswerControls } from "../DecisionAnswerControls";
 import { DecisionOptionList } from "../DecisionOptionList";
 
+import { closeDomWindow } from "../../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/questions" });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -25,7 +26,7 @@ const restoreGlobals = replaceGlobals({
   cancelAnimationFrame: (id: number) => clearTimeout(id),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const options = [
   { label: "Gate the runs (Recommended)", description: "a machine wide semaphore; queued runs wait" },

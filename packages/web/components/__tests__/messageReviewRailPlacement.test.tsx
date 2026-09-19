@@ -14,6 +14,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { MessageReview } from "../MessageReview";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "https://app.test/conversation/c1",
   pretendToBeVisual: true,
@@ -59,7 +60,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

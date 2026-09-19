@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 
 import { JSDOM } from "jsdom";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "https://app.test/inbox",
   pretendToBeVisual: true,
@@ -25,7 +26,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

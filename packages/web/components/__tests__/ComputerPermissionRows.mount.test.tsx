@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // A desktop shell, faked at the bridge: `getComputerPermissions` is the read
 // the app makes THROUGH THE CLI, and `openOsPermissionSettings` is the one
 // gesture, so a test that drives those two drives the whole surface.
@@ -28,7 +29,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

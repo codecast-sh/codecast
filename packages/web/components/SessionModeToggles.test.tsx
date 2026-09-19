@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { SessionModeToggles } from "./SessionModeToggles";
 import type { SessionMachine } from "../lib/sessionMachines";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -14,7 +15,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

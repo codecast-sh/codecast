@@ -9,6 +9,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../../test-helpers/globals";
 
+import { closeDomWindow } from "../../../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/org/or-1?tab=line", pretendToBeVisual: true });
 const matchMedia = (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} });
 const restoreGlobals = replaceGlobals({
@@ -22,7 +23,7 @@ const restoreGlobals = replaceGlobals({
   matchMedia,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 // The feeders are live Convex subscriptions; the tab paints from the store,
 // so the generic feeder is a no-op here and the store is seeded directly.

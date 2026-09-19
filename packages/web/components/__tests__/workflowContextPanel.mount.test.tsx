@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The conversation header workflow strip starts collapsed, same as the plan
 // strip: name, status and progress on the first paint; the node list after a
 // click. Run: bun test components/__tests__/workflowContextPanel.mount.test.tsx
@@ -32,7 +33,7 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const RUN_ID = "kw1abcdefabcdefabcdefabcdefabcde";
 const WF_ID = "kf1abcdefabcdefabcdefabcdefabcde";

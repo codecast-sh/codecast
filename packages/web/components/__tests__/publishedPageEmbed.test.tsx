@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const client = new ConvexReactClient("https://example.convex.cloud");
 
 function markup(slug = "abc") {
@@ -50,7 +51,7 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 describe("PublishedPageEmbed copy", () => {
   test("the copy button writes the public share URL", async () => {

@@ -6,6 +6,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { FrameBackend } from "../browser/backends/FrameBackend";
 import type { BrowserPaneState } from "../browser/backends/types";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
 let answer: "refuse" | "answer" = "refuse";
 const fetched: string[] = [];
@@ -30,7 +31,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

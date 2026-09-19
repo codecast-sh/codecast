@@ -5,12 +5,13 @@ import { createRoot } from "react-dom/client";
 import { createKeydownHandler, createShortcutCatalog, ShortcutDispatcher, type ShortcutContextValue } from "@platform/keys";
 import { createShortcutRuntime } from "./runtime";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><div id='root'></div>");
 const globals = Object.fromEntries(["window", "document", "IS_REACT_ACT_ENVIRONMENT"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
 
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   for (const [key, descriptor] of Object.entries(globals)) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else Reflect.deleteProperty(globalThis, key);

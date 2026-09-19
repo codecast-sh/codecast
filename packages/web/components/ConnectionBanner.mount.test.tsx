@@ -5,6 +5,7 @@
 // Run: bun test components/ConnectionBanner.mount.test.tsx
 import { afterEach, describe, expect, jest, test } from "bun:test";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 describe("ConnectionBanner", () => {
   afterEach(() => {
     jest.useRealTimers();
@@ -65,6 +66,6 @@ describe("ConnectionBanner", () => {
 
     await act(async () => root.unmount());
     useStatusNoticeStore.getState().set("connection", null);
-    dom.window.close();
+    closeDomWindow(dom);
   });
 });

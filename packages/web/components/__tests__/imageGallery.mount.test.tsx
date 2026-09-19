@@ -6,6 +6,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { ImageGalleryProvider, GalleryMessageScope, useImageGallery, useGalleryMessageId, type GalleryImage } from "../ImageGallery";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The lightbox provider outlives a conversation switch: the inbox keeps one
 // ConversationView and swaps its data under it. Its mount registry used to
 // keep every image ever registered, so an inline click in session B browsed
@@ -23,7 +24,7 @@ const restoreGlobals = replaceGlobals({
 // jsdom has no layout: the provider scrolls the active thumb into view.
 (dom.window.HTMLElement.prototype as any).scrollIntoView = () => {};
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

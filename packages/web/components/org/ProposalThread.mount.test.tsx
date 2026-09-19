@@ -10,6 +10,7 @@
 // Run: bun components/org/ProposalThread.mount.test.tsx
 import assert from "node:assert/strict";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 async function verifyProposalThread() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -158,7 +159,7 @@ async function verifyProposalThread() {
   assert.equal(q("[data-thread]"), null);
 
   await act(async () => root.unmount());
-  dom.window.close();
+  closeDomWindow(dom);
   console.log("proposal thread mount: passed");
 }
 

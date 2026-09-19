@@ -6,6 +6,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { KeyboardShortcutsPanel } from "../KeyboardShortcutsHelp";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -15,7 +16,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

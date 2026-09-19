@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 // Regression: MermaidDiagram fills its own <div> imperatively with
 // `ref.current.innerHTML = svg`, so the rendered diagram is invisible to
 // React. Its error branch used to return a bare <div> in the same position as
@@ -20,7 +21,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

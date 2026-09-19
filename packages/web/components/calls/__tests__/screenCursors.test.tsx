@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { RoomEvent } from "livekit-client";
 import { replaceGlobals } from "../../../test-helpers/globals";
 
+import { closeDomWindow } from "../../../test-helpers/domGlobals";
 // The room is replaced only for getRoom (the local identity); everything else
 // stays real, so other files that spread this module keep their exports.
 const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
@@ -38,7 +39,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
   mock.module("../../../lib/calls/callManager", () => realCallManager);
 });

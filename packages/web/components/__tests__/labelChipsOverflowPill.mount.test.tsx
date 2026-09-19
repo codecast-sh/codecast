@@ -6,6 +6,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { LabelChipsRow } from "../LabelChipsRow";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The +N pill is the ONLY way to reach a label the row clipped away, so two
 // things about it are load-bearing, and both broke in the session panel at
 // narrow widths (zooming the desktop app in squeezes the header the same way):
@@ -28,7 +29,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 
