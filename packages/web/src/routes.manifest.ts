@@ -278,8 +278,8 @@ export const ROUTES: RouteEntry[] = [
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
-  { path: "initiatives", component: cast(Initiatives), layout: "dashboardShell", tab: "/initiatives", fullWidth: true },
-  { path: "initiatives/:id", component: cast(InitiativeDetail), layout: "dashboardShell", tab: "/initiatives/:id", fullWidth: true },
+  { path: "initiatives", component: cast(Initiatives), layout: "dashboardShell", tab: "/initiatives" },
+  { path: "initiatives/:id", component: cast(InitiativeDetail), layout: "dashboardShell", tab: "/initiatives/:id" },
   // Chat is full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions and
   // /anchor), not via a DashboardLayout isOnXPage flag — so it carries no
   // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.

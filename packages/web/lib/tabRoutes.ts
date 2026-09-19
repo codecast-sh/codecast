@@ -66,7 +66,7 @@ const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/do
 const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (TabContent patterns)
   "inbox", "feed", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
-  "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
+  "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
   // Standalone shell pages (own <Route>, not in TabContent)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
   // The repository index (its history, source and commit pages are deeper paths)
