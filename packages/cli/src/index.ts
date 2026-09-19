@@ -13628,7 +13628,7 @@ org
   .description("Move a role or a session under another role or person")
   .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
   .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me)")
-  .option("--note <text>", "A line the agent reads with the move (\"You now report to X. <note>\")")
+  .option("--note <text>", stdinText("A line the agent reads with the move (\"You now report to X. <note>\")"))
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (subject: string, options: any) => {

@@ -26,6 +26,7 @@
  * by the path of its directory or tsconfig.
  */
 
+import { codecastPath } from "./codecastDir.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -161,7 +162,7 @@ export function repoRoot(cwd = process.cwd()): string {
 }
 
 export function checkHome(): string {
-  return path.join(process.env.CODECAST_DIR ?? path.join(os.homedir(), ".codecast"), "typecheck");
+  return codecastPath("typecheck");
 }
 
 /** One directory per tree and project: the state, the log, the lock. */
