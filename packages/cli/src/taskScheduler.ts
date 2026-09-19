@@ -103,8 +103,15 @@ export function buildRunLaunch(
         if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
       }
     }
-    // Only auto-assign if the operator didn't pin one via agent_args.claude.
-    if (!extraAgentArgs.includes("--session-id")) {
+    // A run parked at a usage limit resumes its own session, so the firing
+    // stays one conversation and the agent continues where it stopped.
+    // Otherwise a fresh uuid — only auto-assigned if the operator didn't pin
+    // one via agent_args.claude.
+    if (task.parked_run_session_uuid) {
+      const parked: string = task.parked_run_session_uuid;
+      runSessionUuid = parked;
+      extraAgentArgs.push("--resume", parked);
+    } else if (!extraAgentArgs.includes("--session-id")) {
       runSessionUuid = crypto.randomUUID();
       extraAgentArgs.push("--session-id", runSessionUuid);
     }

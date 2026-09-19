@@ -439,6 +439,52 @@ const SESSION_STATE_TYPES = new Set<string>([
   "session_error",
 ]);
 
+// ── The needs-input digest ───────────────────────────────────────────────────
+//
+// One alert an hour, not one per session. A fleet of sessions settling over an
+// afternoon used to raise a desktop banner and a phone push EACH, because every
+// settle writes its own notification row and the banner is driven off row
+// arrivals. The rows are worth keeping — each one is the clickable record of a
+// session waiting — so the fold-up happens to the ALERT, not to the list: rows
+// written while a window is open carry `quiet`, which the desktop banner and
+// the push both skip, and one aggregate row at the window's end carries the
+// alert for all of them.
+//
+// The first settle in a quiet hour still alerts at once and OPENS the window,
+// so a lone session waiting on you is as immediate as it ever was. Alerts are
+// therefore always at least a window apart. On by default; the switch is
+// `session_idle_digest` (absent reads as ON).
+export const IDLE_DIGEST_WINDOW_MS = 60 * 60 * 1000;
+
+export function idleDigestOn(prefs: Record<string, any> | undefined): boolean {
+  return prefs?.session_idle_digest !== false;
+}
+
+// How many sessions the aggregate NAMES before it starts counting. Two names
+// plus a count reads in a phone banner; five names do not.
+const IDLE_DIGEST_NAMED = 2;
+
+/** The aggregate's push title and body, from the waiting sessions' titles. */
+export function summarizeIdleDigest(titles: string[]): { title: string; message: string } {
+  const n = titles.length;
+  const verb = n === 1 ? "needs" : "need";
+  const named = titles.slice(0, IDLE_DIGEST_NAMED);
+  const rest = n - named.length;
+  const list =
+    rest > 0
+      ? `${named.join(", ")} and ${rest} other${rest === 1 ? "" : "s"}`
+      : named.join(" and ");
+  return {
+    title: `${n} session${n === 1 ? "" : "s"} ${verb} your attention`,
+    message: `${list} ${verb} your attention`,
+  };
+}
+
+/** Display name for a session in the aggregate line. */
+function sessionLabelOf(conv: any): string {
+  return conv?.title?.trim() || conv?.project_path?.split("/").pop() || "Session";
+}
+
 // Insert the notification row + push for ONE recipient, honoring their prefs.
 // Shared by the api-token mutation below (daemon-driven permission/error
 // notifications) and the server-side needs-input check.
@@ -449,25 +495,71 @@ export async function deliverSessionNotification(
   type: SessionNotifType,
   title: string,
   message: string,
+  // The digest's own delivery sets this: the fold-up alert must not be folded
+  // up again.
+  opts?: { bypassDigest?: boolean },
 ): Promise<boolean> {
   const user = await ctx.db.get(recipientId);
   if (!user) return false;
   if (sessionNotifOptedOut(user.notification_preferences as any, type)) return false;
+
+  // Open window → this row joins the fold-up and stays quiet. Closed window →
+  // it alerts now and opens the next one.
+  let quiet = false;
+  if (type === "session_idle" && !opts?.bypassDigest && idleDigestOn(user.notification_preferences)) {
+    const now = Date.now();
+    const state = user.idle_digest_state;
+    const windowEndsAt = (state?.last_alerted_at ?? 0) + IDLE_DIGEST_WINDOW_MS;
+    if (now >= windowEndsAt) {
+      await ctx.db.patch(user._id, { idle_digest_state: { last_alerted_at: now } });
+    } else {
+      quiet = true;
+      // One flush per window. A stamp in the past is a window whose fold-up
+      // already ran, so the next quiet row arms the next one.
+      if (!state?.flush_due_at || state.flush_due_at <= now) {
+        await ctx.db.patch(user._id, {
+          idle_digest_state: { last_alerted_at: state?.last_alerted_at ?? 0, flush_due_at: windowEndsAt },
+        });
+        await ctx.scheduler.runAfter(windowEndsAt - now, internal.notifications.idleDigestFlush, {
+          user_id: user._id,
+        });
+      }
+    }
+  }
 
   // Replace, don't stack: a new state row supersedes the conversation's old
   // one. Delete + insert (rather than patch) so the row gets a fresh _id —
   // the desktop's native-banner watcher treats an unseen _id as "new", which
   // keeps one banner per episode while the in-app list stays at one row.
   if (SESSION_STATE_TYPES.has(type)) {
-    const prior = await ctx.db
+    const prior = (await ctx.db
       .query("notifications")
       .withIndex("by_recipient_conversation", (q: any) =>
         q.eq("recipient_user_id", recipientId).eq("conversation_id", conversationId),
       )
-      .collect();
-    for (const n of prior) {
-      if (SESSION_STATE_TYPES.has(n.type)) await ctx.db.delete(n._id);
+      .collect()).filter((n: any) => SESSION_STATE_TYPES.has(n.type));
+
+    // A quiet row supersedes IN PLACE. Delete-and-insert is how an alerting
+    // row earns a fresh _id (the desktop watcher reads an unseen _id as "new"),
+    // and a quiet row wants exactly the opposite. It also must not orphan the
+    // earlier row's staged push: the outbox drops a push whose notification is
+    // gone, so a second settle minutes after the first used to silently cancel
+    // the alert the first one had already earned.
+    if (quiet && prior.length > 0) {
+      const newest = prior.reduce((a: any, b: any) => (b.created_at > a.created_at ? b : a));
+      for (const n of prior) {
+        if (n._id !== newest._id) await ctx.db.delete(n._id);
+      }
+      await ctx.db.patch(newest._id, {
+        type,
+        message,
+        read: false,
+        created_at: Date.now(),
+        quiet: true,
+      });
+      return true;
     }
+    for (const n of prior) await ctx.db.delete(n._id);
   }
 
   const notifId = await ctx.db.insert("notifications", {
@@ -477,9 +569,10 @@ export async function deliverSessionNotification(
     message,
     read: false,
     created_at: Date.now(),
+    ...(quiet ? { quiet: true } : {}),
   });
 
-  if (user.push_token && user.notifications_enabled) {
+  if (!quiet && user.push_token && user.notifications_enabled) {
     await enqueuePush(ctx, {
       user,
       notification_id: notifId,
@@ -940,6 +1033,100 @@ export function auqQuestionPreview(lastMsg: any): string | null {
     return null;
   }
 }
+
+// The fold-up. Runs at the end of an open window and delivers ONE alert for
+// every session that started waiting inside it.
+//
+// Two facts are re-read rather than trusted: a session the person already
+// answered (its message count moved past the episode the row announced) and a
+// session they stashed are dropped, so the alert never names work that is no
+// longer waiting. When nothing survives, the window closes WITHOUT stamping an
+// alert — a quiet hour must not spend the next hour's budget, so the next
+// session to settle alerts at once.
+//
+// Exported plain for the fake-db tests, same pattern as performNeedsInputCheck.
+export async function performIdleDigestFlush(
+  ctx: any,
+  userId: any,
+): Promise<{ notified: boolean; reason?: string; count?: number }> {
+  const user = await ctx.db.get(userId);
+  if (!user) return { notified: false, reason: "no_user" };
+  const state = user.idle_digest_state;
+  const now = Date.now();
+  const since = state?.last_alerted_at ?? 0;
+  const windowEndsAt = since + IDLE_DIGEST_WINDOW_MS;
+  // The window moved after this flush was armed (an alert landed inside it).
+  // Wait out the rest rather than alerting early.
+  if (now < windowEndsAt) {
+    await ctx.db.patch(user._id, {
+      idle_digest_state: { last_alerted_at: since, flush_due_at: windowEndsAt },
+    });
+    await ctx.scheduler.runAfter(windowEndsAt - now, internal.notifications.idleDigestFlush, {
+      user_id: user._id,
+    });
+    return { notified: false, reason: "early" };
+  }
+
+  const rows = await ctx.db
+    .query("notifications")
+    .withIndex("by_recipient_created", (q: any) =>
+      q.eq("recipient_user_id", user._id).gte("created_at", since),
+    )
+    .collect();
+  const waiting = rows.filter((n: any) => n.quiet && n.type === "session_idle" && !n.read);
+
+  const titles: string[] = [];
+  for (const row of waiting) {
+    const conv = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
+    if (!conv || conv.inbox_killed_at || conv.inbox_stashed_at || conv.inbox_dismissed_at) continue;
+    // The episode this row announced, still current: the dedupe key names the
+    // message count the session settled at, so a reply (which grows the count)
+    // reads as answered.
+    if (!String(conv.needs_input_notified_key ?? "").startsWith(`${conv.message_count || 0}:`)) continue;
+    titles.push(sessionLabelOf(conv));
+  }
+
+  if (titles.length === 0) {
+    // Close the window without spending an alert.
+    await ctx.db.patch(user._id, { idle_digest_state: { last_alerted_at: since } });
+    return { notified: false, reason: "nothing_waiting" };
+  }
+
+  // Replace, don't stack: the bell holds at most one fold-up, and the fresh
+  // _id is what the desktop banner watcher reads as "new".
+  for (const row of rows) {
+    if (row.type === "sessions_need_input") await ctx.db.delete(row._id);
+  }
+
+  const { title, message } = summarizeIdleDigest(titles);
+  // Stamp BEFORE delivering so a racing second flush can't double-alert.
+  await ctx.db.patch(user._id, { idle_digest_state: { last_alerted_at: now } });
+  const notifId = await ctx.db.insert("notifications", {
+    recipient_user_id: user._id,
+    type: "sessions_need_input",
+    // No conversation on purpose: the alert points at the inbox, not at one
+    // session out of several.
+    message,
+    read: false,
+    created_at: now,
+  });
+  if (user.push_token && user.notifications_enabled) {
+    await enqueuePush(ctx, {
+      user,
+      notification_id: notifId,
+      type: "sessions_need_input",
+      title,
+      body: message,
+      data: { type: "sessions_need_input", count: titles.length },
+    });
+  }
+  return { notified: true, count: titles.length };
+}
+
+export const idleDigestFlush = internalMutation({
+  args: { user_id: v.id("users") },
+  handler: (ctx, args) => performIdleDigestFlush(ctx, args.user_id),
+});
 
 export const checkNeedsInput = internalMutation({
   args: {

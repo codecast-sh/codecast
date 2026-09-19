@@ -140,7 +140,8 @@ function Summary({ scope, waitingFloor }: { scope: ScopeRef; waitingFloor: numbe
   const { data } = useScopeSummary(scope);
   const waiting = Math.max(waitingFloor, data?.sessions.needs_input ?? 0);
   const cells: Array<{ label: string; value: number | string; color?: string }> = [
-    { label: waiting === 1 ? 'session waiting' : 'sessions waiting', value: waiting, color: waiting > 0 ? Theme.accent : undefined },
+    // The tree's count is a floor known at once; a zero floor says nothing until the summary lands.
+    { label: 'waiting on you', value: data || waiting > 0 ? waiting : '·', color: waiting > 0 ? Theme.accent : undefined },
     { label: 'open tasks', value: data ? data.tasks.open : '·' },
     { label: 'open decisions', value: data ? data.decisions.open : '·', color: data && data.decisions.open > 0 ? Theme.accent : undefined },
     { label: data?.plans.length === 1 ? 'plan' : 'plans', value: data ? data.plans.length : '·' },
@@ -274,7 +275,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   thumb: { width: 56, height: 38, borderRadius: 7, backgroundColor: Theme.bgAlt },
   titleLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   rowTitle: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: Theme.text },
-  state: { fontSize: 9.5, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  state: { maxWidth: 110, fontSize: 9.5, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   age: { fontSize: 10.5, color: Theme.textDim, fontVariant: ['tabular-nums'], alignSelf: 'flex-start', marginTop: 3 },
   emptyFeed: { alignItems: 'center', gap: 4, paddingVertical: 48, paddingHorizontal: Spacing.xxl },
   emptyText: { fontSize: 13, color: Theme.textMuted, textAlign: 'center' },

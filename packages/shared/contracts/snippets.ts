@@ -188,7 +188,7 @@ The prompt is the agent's entire briefing, and humans read it in the dashboard (
 
 **Where a run happens.** Decide by what the run needs and where its result belongs. A follow-up that continues THIS work, needs what this conversation knows, and fires once or a few times belongs here: that is the default, each run arrives in this session as a new turn with the full history, and the result lands in the thread. A standing duty that repeats on a schedule (a monitor, a digest, a sweep) belongs in a fresh session per run: pass \`--spawn\`. An inline run reloads this session's whole history each time it fires, because the prompt cache has expired by then, and every firing grows the thread, so a repeating job run inline costs more each time and buries the conversation it lives in. A fresh run arrives with none of your context, so write everything it needs into the prompt; each run is handed the previous run's summary, which is the continuity most repeating jobs need.
 
-Fresh runs stay out of the human's inbox: a run that completes cleanly is read under its trigger, and a \`--spawn\` trigger that fires once posts its result into this conversation as a message, without waking it. \`--thread\` posts every run's result here; reserve it for results the human reads in this thread. \`--for <session>\` binds a specific session from any shell.
+Fresh runs stay out of the human's inbox: a run that completes cleanly is read under its trigger. A \`--spawn\` trigger that fires once is this session's worker: its run nests under this session, its result posts here as a message without waking you, and you are woken instead if the run fails, dies without reporting, or completes \`--needs-attention\`, so the outcome is yours to act on, never a card the human has to read. Add \`--wake\` when you must act on a clean report too, at the cost of a turn over this whole context. A run that hits a usage limit parks and resumes its own session at the window reset. \`--thread\` posts every run's result here; reserve it for results the human reads in this thread. \`--for <session>\` binds a specific session from any shell.
 
 \`\`\`bash
 # Set triggers (created in a session, these inject into it when they fire)
@@ -227,7 +227,8 @@ Options:
 - \`--in <duration>\`: delay before run (30m, 2h, 1d)
 - \`--every <duration>\`: recurring interval
 - \`--on <event>\`: fire on webhook (pr_comment, pr_opened, pr_merged, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented). The \`issue_*\` events cover Linear and GitHub alike: one trigger fires wherever the issue lives.
-- \`--spawn\`: fresh session per run, no history; read under the trigger, not in the inbox
+- \`--spawn\`: fresh session per run, no history; read under the trigger, not in the inbox. Fired once from a session, the run is that session's worker: nested under it, woken on failure
+- \`--wake\`: with \`--spawn\` on a once trigger, wake this session with a clean report too
 - \`--thread\`: post each run's result into this conversation as a message
 - \`--for <session>\`: bind runs to a specific session (defaults to the one you're in)
 - \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.

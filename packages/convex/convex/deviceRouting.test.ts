@@ -20,6 +20,26 @@ const remote = (id: string, over: Partial<RoutableDevice> = {}): RoutableDevice 
   ...over,
 });
 
+describe("cross-platform startup routing", () => {
+  const mac = local("mac", { platform: "darwin", last_seen: stale, local_project_roots: ["/Users/ashot/src/codecast"] });
+  const runtime = local("runtime", { platform: "linux", local_project_roots: ["/home/hatch/.codex"] });
+
+  test("queues for the checkout holder when only an incompatible runtime is online", () => {
+    expect(pickOwnerDevice([runtime, mac], { projectPath: "/Users/ashot/src/codecast" }, NOW)).toBe("mac");
+  });
+
+  test("repairs an incompatible stamped target and owner", () => {
+    expect(pickOwnerDevice([runtime, mac], {
+      projectPath: "/Users/ashot/src/codecast", targetDeviceId: "runtime", ownerDeviceId: "runtime",
+    }, NOW)).toBe("mac");
+  });
+
+  test("a reported checkout remains stronger evidence than the platform heuristic", () => {
+    const mounted = { ...runtime, local_project_roots: ["/Users/ashot/src/codecast"] };
+    expect(pickOwnerDevice([mounted, mac], { projectPath: "/Users/ashot/src/codecast", targetDeviceId: "runtime" }, NOW)).toBe("runtime");
+  });
+});
+
 describe("pickOwnerDevice — a remote without the checkout is never auto-owned over a local", () => {
   test("laptop asleep, only the remote Mac online → the OFFLINE laptop, not the remote", () => {
     // The exact bug: a blank iOS session while the laptop sleeps must queue for
