@@ -51,6 +51,7 @@ import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
+import { usePendingMessageCoverage } from "../hooks/usePendingMessageCoverage";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
@@ -312,6 +313,7 @@ function DashboardSyncEffects() {
   // without this a follower's actions would park in the outbox until the
   // window happened to be promoted.
   useEnsureDispatch();
+  usePendingMessageCoverage();
   const isSyncHost = useIsSyncHost();
   return <>
     {/* A browser pane's page shows a route; it is not a window. Toasts, the

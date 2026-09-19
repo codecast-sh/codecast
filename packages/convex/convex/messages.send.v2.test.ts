@@ -408,6 +408,26 @@ describe("messages.send/v2 durable command", () => {
 });
 
 describe("messages.byConversation/v2 command coverage", () => {
+  test("reports terminal delivery receipts separately from transcript coverage", async () => {
+    const ctx = context(OWNER, {
+      conversations: [conversation()],
+      pending_messages: [
+        pending("control", { status: "delivered", delivered_at: 2 }),
+        pending("cancelled", { status: "cancelled" }),
+        pending("failed", { status: "undeliverable" }),
+        pending("injected", { status: "injected" }),
+        pending("other", { status: "delivered", conversation_id: OTHER_CONVERSATION }),
+      ],
+    });
+    const result = await (getMessageCoverageV2 as any)._handler(ctx, {
+      conversation_id: CONVERSATION,
+      command_ids: ["control", "cancelled", "failed", "injected", "other"],
+    });
+    expect(result.coverage.commandIds).toEqual([]);
+    expect(result.delivery).toEqual({ settled: ["cancelled", "control"], failed: ["failed"] });
+    expect(JSON.stringify(result)).not.toContain("hello from durable intent");
+  });
+
   test("pending intent is not covered until the exact transcript relation carries its id", async () => {
     const ctx = context(OWNER, {
       conversations: [conversation(), conversation(OTHER_CONVERSATION)],

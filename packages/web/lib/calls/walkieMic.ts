@@ -152,6 +152,11 @@ async function micAlreadyGranted(): Promise<boolean> {
  * to raise the question.
  */
 export async function warmMic(): Promise<void> {
+  // THE PERSON'S SWITCH COMES FIRST. With it off, nothing short of a press
+  // opens the device: not a pointer resting on a button, not a face under it.
+  // A microphone a press already opened keeps its own idle clock, so this
+  // does not touch it either way.
+  if (!readJoinPrefs().micAutoOpen) return;
   if (heldMic() || micPending) {
     releaseMicLater();
     return;
@@ -186,7 +191,14 @@ export function micFailureReason(): Promise<string> {
 // `warmMic` and nothing else, so the rule that a hover can never raise a
 // permission dialog survives the change: where permission has not already been
 // granted this hands back null and the prewarm simply stays silent.
-bindPrewarmMic(async () => {
+//
+// And it respects the same switch as the warm: with `micAutoOpen` off a prewarm
+// gets no device at all, not even one a recent press left open, because a
+// muted clone keeps the capture alive for the room's idle window and the light
+// on the menu bar with it.
+export async function micForPrewarm(): Promise<MediaStreamTrack | null> {
+  if (!readJoinPrefs().micAutoOpen) return null;
   await warmMic();
   return heldMic();
-});
+}
+bindPrewarmMic(micForPrewarm);

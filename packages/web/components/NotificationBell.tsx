@@ -9,13 +9,11 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
-import { notificationRoute } from "../lib/notificationTypes";
+import { notificationHref, notificationRoute } from "../lib/notificationTypes";
 import { groupIdleNotifications } from "@codecast/shared/contracts";
-import { NotificationGroupRow, NotificationRow, notificationHref } from "./notifications/NotificationRow";
+import { NotificationGroupRow, NotificationRow } from "./notifications/NotificationRow";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
-
-export { notificationHref };
 
 export function NotificationBell() {
   const router = useRouter();

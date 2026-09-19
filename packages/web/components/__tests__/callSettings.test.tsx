@@ -3,9 +3,9 @@
 // reads the same source the joins read (absent = on), that the sheet is a
 // labelled dialog with one way out, and that nothing in it is desktop-only
 // except the meeting block, which renders nothing in a browser.
+import type { Root } from "react-dom/client";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
-import type { Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
@@ -60,21 +60,23 @@ describe("call settings", () => {
     const sw = switches(await renderToMarkup(<CallSettings />));
     expect(sw["Camera on when I join"]).toBe(true);
     expect(sw["Microphone on when I join"]).toBe(true);
+    expect(sw["Microphone opens before I press"]).toBe(true);
     expect(sw["Sound effects"]).toBe(true);
   });
 
   test("an explicit off is shown off", async () => {
-    ui = { call_camera_on: false, call_mic_on: false, sounds_enabled: false };
+    ui = { call_camera_on: false, call_mic_on: false, call_mic_auto_open: false, sounds_enabled: false };
     const sw = switches(await renderToMarkup(<CallSettings />));
     expect(sw["Camera on when I join"]).toBe(false);
     expect(sw["Microphone on when I join"]).toBe(false);
+    expect(sw["Microphone opens before I press"]).toBe(false);
     expect(sw["Sound effects"]).toBe(false);
   });
 
   test("carries every block: join, devices, walkie, sounds", async () => {
     ui = {};
     const html = await renderToMarkup(<CallSettings />);
-    for (const t of ["When I join a call", "Devices", "Walkie", "Sounds", "Let teammates talk to me"]) {
+    for (const t of ["When I join a call", "Microphone", "Open before I press", "Devices", "Walkie", "Sounds", "Let teammates talk to me"]) {
       expect(html).toContain(t);
     }
     // The meeting block is the desktop's; in a browser it renders nothing.

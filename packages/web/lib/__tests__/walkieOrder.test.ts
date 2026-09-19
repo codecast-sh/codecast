@@ -14,6 +14,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { useInboxStore } from "../../store/inboxStore";
+import { micForPrewarm } from "../calls/walkieMic";
 
 // ── the world the engine talks to ──────────────────────────────────────────
 
@@ -327,6 +328,28 @@ describe("walkie: pre-warming the microphone", () => {
     // A real press is the only thing allowed to ask.
     await walkie.startBurst("chan-1", "dm:a:b");
     expect(getUserMediaCalls).toBe(1);
+  });
+
+  test("stays shut when the person turned opening ahead of a press off; a press still opens it", async () => {
+    const s: any = useInboxStore.getState();
+    const clientState = s.clientState;
+    useInboxStore.setState({ clientState: { ...(clientState ?? {}), ui: { ...(clientState?.ui ?? {}), call_mic_auto_open: false } } } as any);
+    try {
+      // Permission is granted, so only the switch stands between a hover and
+      // the device. The warm and the prewarm's source both stay empty.
+      await walkie.warmMic();
+      expect(getUserMediaCalls).toBe(0);
+      expect(await micForPrewarm()).toBeNull();
+      // A press is the person asking, and the switch is not about that.
+      await walkie.startBurst("chan-1", "dm:a:b");
+      expect(getUserMediaCalls).toBe(1);
+      // Even with a device open under the press, a prewarm gets none of it:
+      // a muted clone would keep the capture alive past the press.
+      expect(await micForPrewarm()).toBeNull();
+      await release();
+    } finally {
+      useInboxStore.setState({ clientState } as any);
+    }
   });
 
   test("opens it ahead of the press when permission is already granted", async () => {

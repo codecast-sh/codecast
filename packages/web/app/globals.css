@@ -192,19 +192,15 @@
   .cq-addfilter-label { display: none !important; }
 }
 
-/* Top bar progressive collapse. Viewport media queries, not container queries:
-   the header always spans the window, and making it a query container would
-   turn it into the containing block for the search results panel's
-   position: fixed. The bar sheds width in stages, lowest-value pixels first:
-   1460px — labels go: the Huddle button keeps only its icon, the usage chip
-            drops the account name.
-   1360px — the usage chip drops its meter bar, leaving provider icon + %.
-   The search field's own collapse is measured, not width-gated: GlobalSearch
-   watches its flex slot and sheds the ⌘/ hint, then folds to an icon, only
-   when the slot truly runs out. When the folded field is opened (click or
-   ⌘/) it expands as this fixed overlay centered over the header. */
-@media (max-width: 1460px) { .tb-squeeze-1 { display: none !important; } }
-@media (max-width: 1360px) { .tb-squeeze-2 { display: none !important; } }
+/* Top bar collapse. The account chip used to drop its name at 1460px, which
+   left a bare dot where the switcher should be and read as a missing control;
+   it now keeps its name at every width and truncates instead. What is left is
+   the search field's own collapse, and that one is measured, not width-gated:
+   GlobalSearch watches its flex slot and sheds the ⌘/ hint, then folds to an
+   icon, only when the slot truly runs out. When the folded field is opened
+   (click or ⌘/) it expands as this fixed overlay centered over the header.
+   Viewport units, not a container query: making the header a query container
+   would turn it into the containing block for this position: fixed panel. */
 .tb-search-overlay {
   position: fixed;
   left: 50%;
