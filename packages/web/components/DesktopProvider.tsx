@@ -30,6 +30,8 @@ import {
   onCallPanelHandback,
   onVoiceMirror,
 } from "../lib/desktop";
+import { runPlaced } from "../lib/desktopApps";
+import { inboxTabSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationActor, notificationRoute } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
@@ -157,6 +159,10 @@ export function DesktopProvider() {
     for (const n of notifications) {
       if (
         !seenIdsRef.current.has(n._id) &&
+        // A quiet row belongs in the list, not on screen: the needs-input
+        // digest writes one per waiting session and carries their alert in a
+        // single fold-up row at the end of the window (convex/notifications.ts).
+        !(n as any).quiet &&
         !n.read &&
         n.created_at >= mountedAtRef.current &&
         Date.now() - n.created_at < BANNER_FRESH_MS
@@ -285,7 +291,12 @@ export function DesktopProvider() {
       // A share link never takes the in-place shortcut: its token must be
       // presented and redeemed first (shareTokenInPath), and the conversation
       // route is the one path that does that before the inbox reads by id.
-      const convId = shareTokenInPath(path) ? null : conversationIdFromPath(path);
+      // Both spellings of "this session": the universal /conversation/<id>,
+      // and the inbox carrying one as /inbox?s=<id> — what a session opened
+      // from the Chat or Work window arrives as (lib/openIntent). A mounted
+      // inbox does not adopt a new ?s= from the URL alone, so without this
+      // the path landed and the session on screen never changed.
+      const convId = shareTokenInPath(path) ? null : conversationIdFromPath(path) ?? inboxTabSessionId(path);
       if (convId) {
         useInboxStore.getState().navigateToSession(convId, "deeplink");
 
@@ -315,8 +326,12 @@ export function DesktopProvider() {
 
     const handleNavigate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail && typeof detail === "object") goTo(detail.path, detail.tabId);
-      else goTo(detail);
+      if (detail && typeof detail === "object") {
+        // The shell chose this window (lib/desktopApps): apply the path here
+        // rather than asking it again, which could hand it straight back.
+        if (detail.placed) runPlaced(() => goTo(detail.path, detail.tabId));
+        else goTo(detail.path, detail.tabId);
+      } else goTo(detail);
     };
     window.addEventListener("codecast-navigate", handleNavigate);
 

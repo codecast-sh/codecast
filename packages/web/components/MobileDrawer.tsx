@@ -35,6 +35,9 @@ export function MobileDrawer({
       <SheetContent
         side={side}
         hideClose
+        // The title names the dialog; there is no description (Radix warns
+        // unless told so explicitly).
+        aria-describedby={undefined}
         overlayClassName="cc-mobile-drawer-overlay"
         data-cc-mobile-drawer={side}
         className={cn(

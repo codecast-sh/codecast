@@ -18,13 +18,14 @@ const { join } = require("node:path");
 const HERE = __dirname;
 const pkg = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"));
 
-// `require("./x")` and `require("./x.js")` → "x.js"; a native addon keeps
-// its own extension (`require("./native/x.node")` → "native/x.node").
+// `require("./x")` and `require("./x.js")` → "x.js"; a native addon and an ES
+// module keep their own extension (`require("./native/x.node")`,
+// `require("./appWindows.mjs")`).
 function localRequires(file) {
   const src = readFileSync(join(HERE, file), "utf8");
   const out = new Set();
   for (const m of src.matchAll(/require\(["']\.\/([^"']+)["']\)/g)) {
-    out.add(/\.(js|node)$/.test(m[1]) ? m[1] : `${m[1]}.js`);
+    out.add(/\.(js|mjs|node)$/.test(m[1]) ? m[1] : `${m[1]}.js`);
   }
   return [...out].sort();
 }

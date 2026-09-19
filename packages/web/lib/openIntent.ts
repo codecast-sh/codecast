@@ -31,6 +31,7 @@
 
 import { useInboxStore } from "../store/inboxStore";
 import { bridge, isDesktop, isDetachedTabWindow } from "./desktop";
+import { routeElsewhere } from "./desktopApps";
 import { pathLabel, conversationTabPath, inboxTabSessionId } from "./pathLabel";
 import { interceptSettingsNav, isNonTabRoute, shouldUseTabRouting, tabNavigate } from "../src/compat/tabRouting";
 
@@ -93,9 +94,11 @@ export function pendingOpenTarget(): OpenTarget | null {
 
 /**
  * Called by a navigation chokepoint with the path it is about to open. Returns
- * true when the caller must NOT navigate: either this call claimed a pending
- * modified click (the path opens in a tab / window instead), or an earlier
- * call in the same click already did.
+ * true when the caller must NOT navigate: this call claimed a pending modified
+ * click (the path opens in a tab / window instead), an earlier call in the
+ * same click already did, or the path belongs to another desktop window (the
+ * Chat or Work window, or the main window from inside one — lib/desktopApps)
+ * and has been handed to the shell.
  *
  * `openable: false` marks a navigation that only canonicalizes the current URL
  * (router.replace) — it never claims the intent, but still stands down once
@@ -103,11 +106,20 @@ export function pendingOpenTarget(): OpenTarget | null {
  */
 export function divertNavigation(path: string, opts?: { openable?: boolean }): boolean {
   if (intent.kind === "consumed") return true;
-  if (intent.kind !== "pending") return false;
   if (opts?.openable === false) return false;
-  const target = intent.target;
+  if (intent.kind === "pending") {
+    const target = intent.target;
+    intent = { kind: "consumed" };
+    openIn(target, path);
+    return true;
+  }
+  if (!routeElsewhere(path)) return false;
+  // Handed to another window: sibling navigations in this same click
+  // (navigateToSession then router.push) stand down exactly as they do for a
+  // claimed modified click, so the view here never moves at all.
   intent = { kind: "consumed" };
-  openIn(target, path);
+  if (clearTimer) clearTimeout(clearTimer);
+  clearTimer = setTimeout(endClickIntent, 0);
   return true;
 }
 
@@ -115,11 +127,12 @@ export function divertNavigation(path: string, opts?: { openable?: boolean }): b
  *  session tab holds. Returns true when the caller must stand down. */
 export function divertSessionOpen(sessionId: string, opts?: { messageId?: string | null }): boolean {
   if (intent.kind === "consumed") return true;
-  if (intent.kind !== "pending") return false;
   // A detached window loads its URL for real, so a message target rides the
   // universal /conversation/<id>#msg-<id> form and lands on the message. A tab
   // pane can't (its route is the inbox), so it opens on the session's tail.
-  const path = intent.target === "window" && opts?.messageId
+  // A plain click computes the inbox form too: the rule below may still hand
+  // the session to the main window from inside the Chat or Work window.
+  const path = intent.kind === "pending" && intent.target === "window" && opts?.messageId
     ? `/conversation/${sessionId}#msg-${opts.messageId}`
     : `/inbox?s=${sessionId}`;
   return divertNavigation(path);
@@ -135,6 +148,11 @@ export function clearPrewarmTab(id: string): void { prewarmTabIds.delete(id); }
 
 /** Open `path` in a background in-app tab, beside the stage, or in a detached window. */
 export function openIn(target: OpenTarget, path: string): void {
+  // A tab or a pane is a place in THIS window; a path another window owns
+  // goes there instead (a Cmd-click on a channel while the Chat window is
+  // up raises it). A window breakout is the shell's own decision below: on a
+  // build with app windows, a chat or work path breaks out AS that window.
+  if (target !== "window" && routeElsewhere(path)) return;
   if (target === "split") {
     // Same microtask hop as the tab case (below): the intent may be claimed
     // from inside a store action's draft. When the stage can't take a pane
@@ -177,6 +195,7 @@ export function openIn(target: OpenTarget, path: string): void {
  *  when the shell can, a settings section opens its modal, anything else is a
  *  real page load. */
 export function navigateHere(path: string): void {
+  if (divertNavigation(path)) return;
   if (interceptSettingsNav(path)) return;
   if (shouldUseTabRouting(path)) tabNavigate(path, "push");
   else window.location.assign(path);

@@ -104,7 +104,7 @@ export function WorkbenchSection({
   if (isNarrow) return null;
 
   return (
-    <div className="mt-4 mb-1">
+    <div data-rail-group="layouts" className="mt-4 mb-1">
       <div className="flex items-center px-4 mb-1">
         <span className="flex-1 text-xs font-medium text-sol-text-dim uppercase tracking-wide">Layouts</span>
         {!naming && (
@@ -180,7 +180,7 @@ export function WorkbenchSection({
                   <button
                     onClick={() => {
                       if (!activeTeamId && !v.shared) {
-                        toast.error("Pick a team first — a shared layout needs a team to share with");
+                        toast.error("Pick a team first", { description: "A shared layout needs a team to share with." });
                         return;
                       }
                       updateSavedView(v._id, { shared: !v.shared, team_id: v.team_id ?? activeTeamId });

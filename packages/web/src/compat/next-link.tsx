@@ -1,6 +1,7 @@
 import { Link as RRLink, useNavigate } from "react-router";
 import { forwardRef, useCallback, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { interceptSettingsNav, shouldUseTabRouting, tabNavigate } from "./tabRouting";
+import { divertNavigation } from "@/lib/openIntent";
 
 interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {
   href: string;
@@ -19,6 +20,12 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(
       // Modified clicks (cmd/ctrl/middle…) are the browser's: let RRLink fall
       // through to default new-tab handling instead of intercepting.
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      // A path another desktop window owns (the Chat or Work window, or the
+      // main window from inside one) is handed to the shell; nothing moves here.
+      if (divertNavigation(href)) {
+        e.preventDefault();
+        return;
+      }
       // Settings sections open as a modal over the current view, not a route.
       const settings = interceptSettingsNav(href);
       if (settings) {

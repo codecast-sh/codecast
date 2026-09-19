@@ -38,9 +38,9 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { toast } from "sonner";
-import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { useSyncTeams } from "../hooks/useSyncTeams";
-import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
+import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -82,11 +82,14 @@ interface SidebarProps {
 /** Stable empty bag: a fresh {} here would rewake every reader on each render. */
 const NO_SECTION_PINS: Record<string, boolean> = Object.freeze({});
 
-function RailHeading({ label, isNarrow }: { label: string; isNarrow: boolean }) {
+function RailHeading({ label, isNarrow, action }: { label: string; isNarrow: boolean; action?: React.ReactNode }) {
   if (isNarrow) return null;
   return (
-    <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 mt-4 first:mt-0">
-      {label}
+    <div data-rail-heading={label} className="group/rail flex items-center text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 mt-4 first:mt-0">
+      <span className="flex-1">{label}</span>
+      {/* An action that belongs to the whole group, revealed on hover the
+          way a section row reveals its own. */}
+      {action}
     </div>
   );
 }
@@ -156,6 +159,7 @@ function SectionRow({ row, className }: { row: SectionRowSpec; className?: strin
           if (row.path && requestStagePlacement(row.path, row.name)) return;
           row.onSelect();
         }}
+        data-nav-subrow
         className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
         title={row.title ?? row.name}
         aria-current={row.active ? "page" : undefined}
@@ -474,7 +478,7 @@ function channelSignals(
             the Slack channel's name, so the mark says where the name is from. */}
         {channel.slack && (
           <SlackLogo
-            className="w-2.5 h-2.5 flex-shrink-0"
+            className="nav-slack-mark w-2.5 h-2.5 flex-shrink-0"
             muted={channel.slack.state !== "live"}
             title={`${MIRROR_STATE_LABEL[channel.slack.state]} · #${channel.slack.name}`}
           />
@@ -631,9 +635,7 @@ const ChatNavRow = memo(function ChatNavRow({
         }
         icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         items={[...items, ...suggestedItems]}
-        headerAction={
-          <PopOutPeopleButton className="mr-1 rounded p-1 text-sol-text-dim opacity-0 transition-opacity hover:text-sol-text focus-visible:opacity-100 group-hover/nav:opacity-100" />
-        }
+        headerAction={<AppPopOutButton app="chat" className="mr-1" />}
         expanded={expanded}
         onToggle={onToggle}
       />
@@ -889,7 +891,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
-  const isCapabilities = pathname === "/capabilities";
   const isVault = pathname === "/files" || pathname?.startsWith("/files/") ||
     pathname === "/vault" || pathname?.startsWith("/vault/"); // /vault = pre-rename alias
   const isPages = pathname === "/pages" || pathname?.startsWith("/pages/") ||
@@ -1062,7 +1063,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         icon: v.shared ? <UserMinus className="w-3 h-3" /> : <Users className="w-3 h-3" />,
         onClick: () => {
           if (!activeTeamId && !v.shared) {
-            toast.error("Pick a team first — a shared view needs a team to share with");
+            toast.error("Pick a team first", { description: "A shared view needs a team to share with." });
             return;
           }
           updateSavedView(v._id, { shared: !v.shared, team_id: v.team_id ?? activeTeamId });
@@ -1318,7 +1319,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         {/* What you are working on. Projects leads: it is the container the rest
             of this group files into, so the rail reads top-down as project →
             its tasks → the docs and files around them. */}
-        <RailHeading label="Work" isNarrow={isNarrow} />
+        <RailHeading label="Work" isNarrow={isNarrow} action={<AppPopOutButton app="work" />} />
         <div className="text-sm">
           {/* The goals above the projects (initiatives-projects-role-page.md I1). */}
           <NavSection
@@ -1372,15 +1373,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             }
           />
           <NavSection
-            label="Capabilities"
-            href="/capabilities"
-            icon={<Blocks className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-            isActive={isCapabilities}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            items={[]}
-          />
-          <NavSection
             label="Code"
             href="/repo"
             isActive={pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || "")}
@@ -1414,7 +1406,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         {/* The machinery that does the work: what is running right now, and the
             standing things that set it running. */}
         <RailHeading label="Agents" isNarrow={isNarrow} />
-        <div className="text-sm">
+        <div data-rail-group="agents" className="text-sm">
           <NavSection
             label="Sessions"
             href="/sessions"
@@ -1590,7 +1582,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
 
         {!isNarrow && computedDirectories.length > 0 && (
-          <div className="mt-4">
+          <div data-rail-group="workspaces" className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Workspaces</span>
               <button

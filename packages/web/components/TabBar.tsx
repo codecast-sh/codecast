@@ -185,6 +185,7 @@ export function TabBar() {
   return (
     <div
       ref={titlebarRef}
+      data-cc-tabbar
       onDragOver={stripDragOver}
       onDragLeave={() => setDropHot(false)}
       onDrop={stripDrop}
