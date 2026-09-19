@@ -1,3 +1,4 @@
+import { systemPathWithout } from "../test-helpers/systemPath.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -203,23 +204,6 @@ describe("parseHostToolsOutput / summary", () => {
 });
 
 /** The "host": run the script exactly as ssh would, locally, against $HOME with a stubbed PATH. */
-/** The system tool directories mirrored as symlinks, with any `gh` left out. */
-function systemPathWithoutGh(): string {
-  const mirror = path.join(dir, "sysbin");
-  fs.mkdirSync(mirror, { recursive: true });
-  for (const d of ["/usr/bin", "/bin"]) {
-    let entries: string[] = [];
-    try { entries = fs.readdirSync(d); } catch { continue; }
-    for (const name of entries) {
-      if (name === "gh") continue;
-      const link = path.join(mirror, name);
-      if (fs.existsSync(link)) continue;
-      try { fs.symlinkSync(path.join(d, name), link); } catch { /* racing or unreadable: skip */ }
-    }
-  }
-  return mirror;
-}
-
 function localRun(_host: RemoteHost, script: string) {
   const r = spawnSync("/bin/sh", ["-c", HOST_TOOLS_REMOTE_COMMAND], { input: script, encoding: "utf-8", env: process.env, timeout: 60_000 });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", ...(r.error ? { error: r.error } : {}) };
@@ -272,7 +256,7 @@ describe("the script run locally against a temp HOME (stubs on PATH, no network)
     // that has none. "/usr/bin:/bin" is not that PATH everywhere: a GitHub
     // runner ships gh at /usr/bin/gh, which counted and made the wrapper look
     // like a real install. So mirror the system directories minus gh.
-    process.env.PATH = systemPathWithoutGh();
+    process.env.PATH = systemPathWithout("gh");
     const required: RequiredHostTools = { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [{ tool: "gh", version: "2.86.0" }], unsupported: [] };
     expect(runHostTools(host, required, { install: false, run: localRun }).missing.map((m) => m.tool)).toEqual(["gh"]);
     write(home, REAL_GH_REL, "#!/bin/sh\necho gh version 2.86.0\n", 0o755);
@@ -309,7 +293,7 @@ describe("the script run locally against a temp HOME (stubs on PATH, no network)
     const tarball = path.join(src, "gh.tar.gz");
     expect(spawnSync("tar", ["-czf", tarball, "-C", src, `gh_2.86.0_linux_${arch}`]).status).toBe(0);
     stub("curl", `cat ${JSON.stringify(tarball)}`);
-    process.env.PATH = "/usr/bin:/bin";
+    process.env.PATH = systemPathWithout("gh");
     const r = runHostTools(host, { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [{ tool: "gh", version: "2.86.0" }], unsupported: [] }, { install: true, run: localRun });
     expect(r.installed.map((t) => t.tool)).toContain("gh");
     expect(fs.readFileSync(path.join(home, REAL_GH_REL), "utf-8")).toContain("echo gh version");
