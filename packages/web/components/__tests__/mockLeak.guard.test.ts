@@ -51,7 +51,10 @@ describe("a store substitution cannot leak into the next test file", () => {
       // The helper restores itself, so a file that uses it needs nothing else.
       if (src.includes("mockInboxStore(")) continue;
       const spreads = src.includes("...realInboxStore") || src.includes("...realStore");
-      const restores = src.includes("restoreInboxStoreAfterAll(") || /mock\.module\(\s*["'][^"']*\/inboxStore["']\s*,\s*\(\)\s*=>\s*realStore\s*\)/.test(src);
+      // Either the shared helper, or the file's own put-back: re-registering
+      // the real namespace it captured, whatever it named the snapshot.
+      const restores = src.includes("restoreInboxStoreAfterAll(")
+        || /mock\.module\(\s*["'][^"']*\/inboxStore["']\s*,\s*\(\)\s*=>\s*real\w*\s*\)/.test(src);
       if (!spreads) offenders.push(`${rel}: substitutes the store without spreading its real exports`);
       if (!restores) offenders.push(`${rel}: substitutes the store and never puts it back (restoreInboxStoreAfterAll)`);
     }
