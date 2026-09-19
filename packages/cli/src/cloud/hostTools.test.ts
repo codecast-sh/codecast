@@ -275,6 +275,9 @@ describe("the script run locally against a temp HOME (stubs on PATH, no network)
   linuxOnly("install mode offline: the node download fails into `missing` with the curl error and leaves no half-extracted dir; a stubbed gh install fails likewise", () => {
     stub("node", "echo v18.19.1");
     fs.unlinkSync(path.join(home, ".local", "bin", "gh"));
+    // Removing the stub is not enough where the machine has its own gh: a
+    // runner keeps one at /usr/bin/gh, which counts as installed.
+    process.env.PATH = systemPathWithout("gh");
     const r = runHostTools(host, { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [{ tool: "gh", version: "2.86.0" }], unsupported: [] }, { install: true, run: localRun });
     const node = r.missing.find((m) => m.tool === "node");
     expect(node?.error).toMatch(/Could not resolve host/);
