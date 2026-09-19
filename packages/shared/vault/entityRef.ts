@@ -94,6 +94,9 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   // Docs and projects have no short id; only a Convex id addresses them.
   doc: null,
   project: null,
+  // `in` is an English word, so initiatives take digits only (in-7, never
+  // in-app) — the same rule as inferEntityTypeFromShortId's DIGITS_ONLY_PREFIX.
+  initiative: /^in-\d+$/i,
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -297,4 +300,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   pr: "--sol-green",
   commit: "--sol-yellow",
   person: "--sol-blue",
+  initiative: "--sol-magenta",
 };

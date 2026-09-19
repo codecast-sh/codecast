@@ -435,10 +435,15 @@ export const setupTemplate = (deps: OrgInitDeps, instance: string, id: string | 
 };
 
 /** A lesson to the template's publisher (H9): a row on the template, never a task in their workspace. */
-export async function lessonTemplate(deps: OrgInitDeps, instance: string, body: string, options: TemplateOptions & { evidence?: string[] }): Promise<unknown> {
+// The lesson's evidence is repeatable (label=link), while TemplateOptions
+// carries the setup command's singular --evidence href: omitting it here keeps
+// the two from intersecting into an impossible `string & string[]`, and the
+// singular is accepted (as one entry) so a plain TemplateOptions still fits.
+export async function lessonTemplate(deps: OrgInitDeps, instance: string, body: string, options: Omit<TemplateOptions, "evidence"> & { evidence?: string | string[] }): Promise<unknown> {
   const receipt = readReceipt(options.dir, instance);
   if (!receipt.instanceId) throw new Error("Bind the instance first; a lesson is filed on the server's record of it");
-  const evidence = (options.evidence ?? []).map((entry) => { const at = entry.indexOf("="); if (at <= 0) throw new Error(`Evidence must be label=link: ${entry}`); return { label: entry.slice(0, at), href: entry.slice(at + 1) }; });
+  const entries = options.evidence === undefined ? [] : Array.isArray(options.evidence) ? options.evidence : [options.evidence];
+  const evidence = entries.map((entry) => { const at = entry.indexOf("="); if (at <= 0) throw new Error(`Evidence must be label=link: ${entry}`); return { label: entry.slice(0, at), href: entry.slice(at + 1) }; });
   return request(deps, "/cli/org/template/lesson", { instance_key: receipt.key, body, evidence });
 }
 

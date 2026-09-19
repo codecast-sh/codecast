@@ -1169,19 +1169,6 @@ pre[class*="language-"] {
   background-color: color-mix(in srgb, var(--sol-red) 25%, transparent);
 }
 
-@keyframes slideInRight {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-.animate-slide-in-right {
-  animation: slideInRight 0.2s ease-out;
-}
-
 /* --row-h is set from JS (undoActions.ts) to the row's measured height just
    before the class is applied, so the collapse spans the real content — a single
    card or a parent plus its subagent rows — instead of a hardcoded cap. */
@@ -1221,17 +1208,58 @@ pre[class*="language-"] {
   pointer-events: none;
 }
 
-@keyframes slideInLeft {
-  from {
-    transform: translateX(-100%);
+/* ---- Phone-width shell (below 768px, the useIsPhone threshold) ----
+   The side rails become slide-over drawers (MobileDrawer); the chrome keeps
+   clear of the notch and the home indicator (index.html sets
+   viewport-fit=cover, so env() carries real values); taps get 44px targets. */
+.cc-touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+@media (max-width: 767px) {
+  html, body {
+    overflow-x: hidden;
   }
-  to {
-    transform: translateX(0);
+  [data-cc-shell] {
+    padding-top: env(safe-area-inset-top);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  [data-cc-topbar-row] {
+    min-height: 44px;
+  }
+  /* Top bar controls keep their 28px frame; the hit area grows to 44px. */
+  [data-cc-topbar-row] button.h-7::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+  .cc-mobile-drawer {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .cc-mobile-drawer .cc-mobile-drawer-head {
+    min-height: 44px;
+    padding-top: env(safe-area-inset-top);
+  }
+  [data-cc-mobile-drawer="left"] {
+    padding-left: env(safe-area-inset-left);
+  }
+  [data-cc-mobile-drawer="right"] {
+    padding-right: env(safe-area-inset-right);
+  }
+  /* The rail's rows (the same selector set the simple view tightens above). */
+  .cc-mobile-drawer [data-sv-nav] button.w-full,
+  .cc-mobile-drawer [data-sv-nav] a.w-full,
+  .cc-mobile-drawer [data-sv-nav] [data-nav-row] {
+    min-height: 44px;
   }
 }
-
-.animate-slide-in-left {
-  animation: slideInLeft 0.2s ease-out;
+@media (prefers-reduced-motion: reduce) {
+  .cc-mobile-drawer,
+  .cc-mobile-drawer + *,
+  [data-cc-mobile-drawer] ~ [data-state] {
+    animation: none !important;
+  }
 }
 
 @media (max-width: 639px) {
@@ -4281,6 +4309,19 @@ pre[class*="language-"] {
 /* The "earlier messages" pill pins to the same spot the bubble floats in. */
 .minimal-style [data-cc-conversation]:has([data-sv-sticky]) [data-cc-edge="up"] {
   visibility: hidden;
+}
+
+/* A background command or monitor card is a receipt, not an event: same
+   quiet surface as the other receipts, label in sentence case. */
+.minimal-style [data-cc-conversation] [data-cc-monitor-card] {
+  border: 1px solid var(--cc-panel-rule);
+  border-radius: 10px;
+  background: var(--sol-bg-alt);
+}
+.minimal-style [data-cc-conversation] [data-cc-monitor-card] .uppercase {
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--font-ui);
 }
 
 /* Session rows: the title is the content, so it reads at text strength. */

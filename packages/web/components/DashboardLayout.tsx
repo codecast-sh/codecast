@@ -3,6 +3,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
@@ -16,6 +17,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
+import { MobileDrawer } from "./MobileDrawer";
 import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
@@ -23,7 +25,7 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
@@ -399,6 +401,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = selectNavCollapsed(s);
+  // Shell display modes, as classes on the shell root and on anything that
+  // portals out of it (the phone drawers), so the mode's scoped rules apply.
+  const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`;
   // The nav slot owns the sidebar's width (so a workbench restores it with the
   // rest of the chrome); the legacy layouts.dashboard value seeds it once for
   // users whose width predates the slot taking ownership.
@@ -408,7 +413,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     sidebar: Math.max(10, Math.min(50, navSize)),
     main: Math.max(30, Math.min(90, 100 - navSize)),
   };
-  const [isMobile, setIsMobile] = useState(false);
+  // Phone width (below 768px) as a live media query: the side rails become
+  // slide-over drawers and the resizable panels stand down.
+  const isMobile = useIsPhone();
   const pathname = usePathname();
   // The real browser URL from react-router. `pathname` (usePathname compat) can
   // report the active in-app tab's route instead — e.g. on Settings it returns a
@@ -430,7 +437,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const recalcHeight = useCallback(() => {
     if (typeof window === 'undefined') return;
     const z = zoomRef.current;
-    setZoomHeight(z === 1 ? '100vh' : `calc(100vh / ${z})`);
+    // dvh follows a phone browser's collapsing toolbars; vh is the whole
+    // screen, which parks the bottom of the shell under the toolbar on iOS.
+    const vh = typeof CSS !== 'undefined' && CSS.supports('height', '100dvh') ? '100dvh' : '100vh';
+    setZoomHeight(z === 1 ? vh : `calc(${vh} / ${z})`);
   }, []);
 
   useMountEffect(() => {
@@ -559,13 +569,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Ctrl+Tab switcher and the Ctrl+I/Ctrl+P jump shortcuts.
   const sessionListOnSelect = useOpenSession();
 
-  useMountEffect(() => {
-    setIsMobile(window.innerWidth < 768);
-  });
-
-  useEventListener("resize", () => {
-    setIsMobile(window.innerWidth < 768);
-  });
+  // Growing past the phone width swaps the drawer for the panel; an open
+  // drawer would otherwise keep its focus trap and scroll lock over a desktop
+  // layout that no longer shows it.
+  useWatchEffect(() => {
+    if (!isMobile) setIsMobileSidebarOpen(false);
+  }, [isMobile]);
 
   // The route-default effects below adjust the rail when you NAVIGATE between
   // surfaces. A tab switch also changes `pathname` (it reports the active
@@ -984,7 +993,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The sync effects stay: an embedded document still feeds its own store.
   if (PANE_EMBED) {
     return (
-      <div data-cc-shell data-cc-embed className={`bg-sol-bg overflow-hidden${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`} style={{ height: zoomHeight }}>
+      <div data-cc-shell data-cc-embed className={`bg-sol-bg overflow-hidden${shellModeClass}`} style={{ height: zoomHeight }}>
         <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
           <DashboardSyncEffects />
         </ErrorBoundary>
@@ -1052,7 +1061,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   );
 
   return (
-    <div data-cc-shell className={`bg-sol-bg flex flex-col overflow-hidden${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`} style={{ height: zoomHeight }}>
+    <div data-cc-shell className={`bg-sol-bg flex flex-col overflow-hidden${shellModeClass}`} style={{ height: zoomHeight }}>
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
@@ -1099,15 +1108,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
             </ErrorBoundary>
             {!hideSidebar && (
-              <button
+              <TopbarButton
                 onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-                className="md:hidden p-1.5 sm:p-2 text-sol-text hover:text-sol-yellow transition-colors"
-                aria-label="Toggle menu"
+                className="md:hidden"
+                active={isMobileSidebarOpen}
+                aria-label="Open menu"
+                aria-expanded={isMobileSidebarOpen}
               >
-                <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
+                <Menu />
+              </TopbarButton>
             )}
           </div>
 
@@ -1343,38 +1352,28 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         </ErrorBoundary>
       )}
 
-      {/* Mobile sidebar overlay */}
-      {isMobileSidebarOpen && (
-        <>
-          <div
-            className="md:hidden fixed inset-0 z-40 bg-black/50"
-            onClick={() => setIsMobileSidebarOpen(false)}
+      {/* Phone drawers: the nav slides in from the left, the session list from
+          the right. Each is the single render point of its rail on small
+          screens; the drawer stays mounted through its close animation. */}
+      {!hideSidebar && (
+        <MobileDrawer open={isMobileSidebarOpen && isMobile} onOpenChange={setIsMobileSidebarOpen} side="left" title="Menu" className={shellModeClass}>
+          <ErrorBoundary name="Sidebar" level="panel">
+            <Sidebar
+              directoryFilter={directoryFilter}
+              isMobileOpen
+              onMobileClose={closeMobileSidebar}
+            />
+          </ErrorBoundary>
+        </MobileDrawer>
+      )}
+      <MobileDrawer open={showMobileSessionList} onOpenChange={(open) => { if (!open) s.toggleSidePanel(); }} side="right" title="Sessions" className={shellModeClass}>
+        <ErrorBoundary name="SessionList" level="panel">
+          <SessionListPanel
+            onSessionSelect={sessionListOnSelect}
+            activeSessionId={sessionListActiveId}
           />
-          <div className="md:hidden fixed inset-y-0 left-0 z-50 w-[85vw] max-w-sm shadow-xl animate-slide-in-left">
-            <ErrorBoundary name="Sidebar" level="panel">
-              <Sidebar
-                directoryFilter={directoryFilter}
-                isMobileOpen={isMobileSidebarOpen}
-                onMobileClose={closeMobileSidebar}
-              />
-            </ErrorBoundary>
-          </div>
-        </>
-      )}
-      {/* Mobile session list overlay — single render point for SessionListPanel on small screens */}
-      {showMobileSessionList && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => s.toggleSidePanel()} />
-          <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
-            <ErrorBoundary name="SessionList" level="panel">
-              <SessionListPanel
-                onSessionSelect={sessionListOnSelect}
-                activeSessionId={sessionListActiveId}
-              />
-            </ErrorBoundary>
-          </div>
-        </>
-      )}
+        </ErrorBoundary>
+      </MobileDrawer>
       {s.palette.open && (
         <ErrorBoundary name="CommandPalette" level="inline">
           <Suspense fallback={null}><CommandPalette /></Suspense>
