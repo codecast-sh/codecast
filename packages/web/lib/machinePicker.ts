@@ -218,7 +218,7 @@ export function defaultMachineId(
   // …otherwise the work queues for a local machine to pick up when it wakes.
   const locals = devices.filter((d) => !d.is_remote);
   if (locals.length > 0) {
-    return owner && !owner.is_remote ? owner.device_id : stable(preferOpenable(locals, projectPath));
+    return owner && locals.some((d) => d.device_id === owner.device_id) ? owner.device_id : stable(preferOpenable(locals, projectPath));
   }
 
   // Cloud-only user: an online remote is the only machine that can serve.
