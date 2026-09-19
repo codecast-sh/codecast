@@ -75,13 +75,20 @@ describe("the rest verdict (classifySession.rest over the shared classifier)", (
 });
 
 describe("classifySession.rest", () => {
+  it("a run that declared done and then exited rests as done, not as an ask", () => {
+    // isExitAfterDone (shared/contracts/inboxProjection.ts): the process ending
+    // after the agent declared the work delivered, with nothing queued, is the
+    // ordinary end of a headless run — nobody is owed anything.
+    const c = classifySession(mk("d", { agent_status: "stopped", thread_state_status: "done" }));
+    expect(c.rest).toBe("done");
+  });
+
   it("a hard block is needs_input whatever verdict the MACHINE produced", () => {
     for (const s of [
       mk("q", { agent_status: "dormant", awaiting_input: true }),
       mk("p", { agent_status: "done", is_idle: false, awaiting_input: true }),
       mk("e", { agent_status: "dormant", pending_api_error: true }),
       mk("b", { agent_status: "permission_blocked", settle_verdict: "done" }),
-      mk("d", { agent_status: "stopped", thread_state_status: "done" }),
     ]) {
       const c = classifySession(s);
       expect(c.waiting).toBe(true);
