@@ -14,6 +14,9 @@ export const sessionTypes = new Set([
   // An alert about a whole machine, but it belongs where a reader looks for "my
   // agents are not moving": a frozen daemon is why nothing is coming back.
   "daemon_overloaded",
+  // The hourly fold-up of sessions waiting for input. Names no conversation —
+  // it opens the inbox.
+  "sessions_need_input",
 ]);
 
 // Which rows wear an agent's face. A row about a session does; the daemon's
@@ -80,6 +83,7 @@ export const typeLabels: Record<string, string> = {
   chat_added: "added you to a channel",
   chat_post: "posted in a channel you follow",
   daemon_overloaded: "daemon under load",
+  sessions_need_input: "waiting for you",
   goal_stall: "goal stalled",
 };
 
@@ -109,6 +113,7 @@ export const typeColors: Record<string, string> = {
   chat_added: "text-sol-cyan",
   chat_post: "text-sol-cyan",
   daemon_overloaded: "text-sol-orange",
+  sessions_need_input: "text-sol-green",
   goal_stall: "text-sol-yellow",
 };
 

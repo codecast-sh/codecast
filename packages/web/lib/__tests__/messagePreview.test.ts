@@ -6,6 +6,11 @@ import { filterUserMessages } from "../../../convex/convex/userMessagesFilter";
 const image = { media_type: "image/png", storage_id: "stored-image" };
 const trusted = (src: string) => src.startsWith("/images/");
 
+test("prompt previews unwrap pasted Markdown and truncated closing tags", () => {
+  expect(messagePreview('<pasted_content id="a83d">\n**Fix this**\n</pasted_content id="a8', [], () => false).text)
+    .toBe("**Fix this**");
+});
+
 describe("prompt image previews", () => {
   test("carries stored attachments from the server through navigator rows without image bytes or tool results", () => {
     const rows = buildNavigatorRows(filterUserMessages([{

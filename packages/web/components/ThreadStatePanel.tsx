@@ -170,7 +170,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
                 </span>
               )}
               {view.provenance && (
-                <span className={`text-[10px] shrink-0 ml-auto ${tone.meta}`}>{view.provenance}</span>
+                <span data-cc-tech className={`text-[10px] shrink-0 ml-auto ${tone.meta}`}>{view.provenance}</span>
               )}
             </button>
             <PrStatusChip status={prStatus} size="panel" className="shrink-0" />
