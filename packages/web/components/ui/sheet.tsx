@@ -52,14 +52,16 @@ interface SheetContentProps
     VariantProps<typeof sheetVariants> {
   /** Skip the corner X; the caller renders its own SheetClose (a drawer with a header row). */
   hideClose?: boolean
+  /** Extra classes for the backdrop behind the content. */
+  overlayClassName?: string
 }
 
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", hideClose, className, children, ...props }, ref) => (
+>(({ side = "right", hideClose, overlayClassName, className, children, ...props }, ref) => (
   <SheetPortal>
-    <SheetOverlay />
+    <SheetOverlay className={overlayClassName} />
     <SheetPrimitive.Content
       ref={ref}
       // Radix does not render aria-modal itself; the shortcut dispatcher's

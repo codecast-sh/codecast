@@ -35,6 +35,7 @@ export function MobileDrawer({
       <SheetContent
         side={side}
         hideClose
+        overlayClassName="cc-mobile-drawer-overlay"
         data-cc-mobile-drawer={side}
         className={cn(
           "cc-mobile-drawer flex flex-col w-[85vw] max-w-sm p-0 bg-sol-bg-alt text-sol-text border-sol-border shadow-xl",
