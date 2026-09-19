@@ -21799,7 +21799,12 @@ async function collectResourceSnapshot(): Promise<void> {
     const elapsed = lastResourceTickAt > 0 ? now - lastResourceTickAt : 0;
     const sleepSkip = lastResourceTickAt === 0 || isInWakeGrace() || elapsed > RESOURCE_TICK_SLEEP_GAP_MS;
     if (lastResourceTickAt === 0) {
-      try { sessionAwakeIdleMs.restore(fs.readFileSync(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8"), now); } catch {}
+      // Read it off the tick: a sync read on this path is what the loop budget
+      // guard forbids, and the counters only need the snapshot from the next
+      // tick on — this one is skipped as the first.
+      void fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8")
+        .then((raw) => { sessionAwakeIdleMs.restore(raw, Date.now()); })
+        .catch(() => { /* no snapshot yet, or unreadable: start from zero */ });
     }
     lastResourceTickAt = now;
 
