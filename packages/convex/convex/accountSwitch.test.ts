@@ -714,7 +714,7 @@ describe("decideAutoSwitch", () => {
     expect(d.action).toBe("exhausted");
   });
 
-  test("does not re-try a continue that already failed for this park", () => {
+  test("waits for fresh limit evidence after a continue was queued", () => {
     const d = decideAutoSwitch({
       now,
       parkedAt,
@@ -725,14 +725,10 @@ describe("decideAutoSwitch", () => {
       ],
       attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: parkedAt + 120_000 }],
     });
-    // Continue was already attempted after this park — fall through to a switch.
-    expect(d).toEqual({ action: "switch", profile: "b" });
+    expect(d.action).toBe("wait");
   });
 
-  test("a re-park after continue is not another continue without new evidence (jx7dnat)", () => {
-    // The continue itself bumps conversation.updated_at, which is what
-    // autoSwitchCheck passes as parkedAt. Old gate `lastContinue < parkedAt`
-    // then retried every cooldown while the quota was still spent.
+  test("a park on another account does not repeat a continue or displace the healthy active account", () => {
     const continuedAt = parkedAt + 1_000;
     const d = decideAutoSwitch({
       now,
@@ -754,7 +750,7 @@ describe("decideAutoSwitch", () => {
       attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: continuedAt }],
       allowSwitch: false,
     });
-    expect(d.action).toBe("exhausted");
+    expect(d.action).toBe("wait");
   });
 
   test("a session window that rolls after the last continue is worth another continue", () => {
@@ -1341,7 +1337,7 @@ describe("parks on another account's pin", () => {
       activeParkedAt: null,
       attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: parkedAt + 1000 }],
     });
-    expect(d.action).toBe("exhausted");
+    expect(d.action).toBe("wait");
   });
 
   test("a snapshot older than the activation still waits for the post-switch probe", () => {

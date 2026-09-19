@@ -17,14 +17,17 @@ import { STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
 
 const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "daemon.ts"), "utf8");
 
-const PAYLOAD = JSON.stringify({
+const SESSION_RESET = Math.floor(Date.now() / 1000) + 3_600;
+const WEEKLY_RESET = SESSION_RESET + 7 * 86_400;
+const payload = (session = 41, weekly = 62) => JSON.stringify({
   session_id: "f03e4098-8b2b-44e0-9370-de3b4fc2edd0",
   cost: { total_duration_ms: 17462 },
   rate_limits: {
-    five_hour: { used_percentage: 41, resets_at: 1_788_759_000 },
-    seven_day: { used_percentage: 62, resets_at: 1_789_016_400 },
+    five_hour: { used_percentage: session, resets_at: SESSION_RESET },
+    seven_day: { used_percentage: weekly, resets_at: WEEKLY_RESET },
   },
 });
+const PAYLOAD = payload();
 
 let home: string;
 let savedHome: string | undefined;
@@ -39,11 +42,24 @@ async function post(query: string, body: string): Promise<number> {
 
 // The route answers before it writes, so Claude Code's status line is never
 // waiting on a disk. Reads of the cache therefore have to wait for the write.
-async function cacheSettles(): Promise<void> {
+async function cacheSettles(session = 41, weekly = 62): Promise<void> {
   for (let i = 0; i < 100; i++) {
-    if (Object.keys(readUsageCache().accounts).length > 0) return;
+    const snap = readUsageCache().accounts["uuid-union"];
+    if (snap?.source === "live-session" && snap.session?.percent === session && snap.weekly?.percent === weekly) return;
     await new Promise((r) => setTimeout(r, 20));
   }
+}
+
+function seedUsage(): void {
+  fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
+    accounts: {
+      "uuid-union": {
+        fetched_at: Date.now() - 1_000,
+        session: { percent: 40, resets_at: SESSION_RESET * 1_000 },
+        weekly: { percent: 61, resets_at: WEEKLY_RESET * 1_000 },
+      },
+    },
+  }));
 }
 
 beforeEach(async () => {
@@ -69,7 +85,8 @@ afterEach(async () => {
 });
 
 describe("/hook/statusline", () => {
-  test("files a post under the session's pinned account", async () => {
+  test("files a post under the account whose reset windows match", async () => {
+    seedUsage();
     expect(await post("?account=union", PAYLOAD)).toBe(200);
     await cacheSettles();
     const snap = readUsageCache().accounts["uuid-union"];
@@ -78,10 +95,24 @@ describe("/hook/statusline", () => {
     expect(snap?.source).toBe("live-session");
   });
 
-  test("an unpinned session's post goes to the machine's active account", async () => {
+  test("an unpinned session's post uses the reset windows instead of the active account", async () => {
+    seedUsage();
     expect(await post("", PAYLOAD)).toBe(200);
     await cacheSettles();
-    expect(readUsageCache().accounts["uuid-active"]?.session?.percent).toBe(41);
+    expect(readUsageCache().accounts["uuid-union"]?.session?.percent).toBe(41);
+    expect(readUsageCache().accounts["uuid-active"]).toBeUndefined();
+  });
+
+  test("a delayed post cannot reopen an exhausted account before its reset", async () => {
+    seedUsage();
+    expect(await post("?account=union", payload(102, 62))).toBe(200);
+    await cacheSettles(102, 62);
+    expect(readUsageCache().accounts["uuid-union"]?.session?.percent).toBe(102);
+    expect(await post("?account=union", payload(96, 63))).toBe(200);
+    await cacheSettles(102, 63);
+    const snap = readUsageCache().accounts["uuid-union"];
+    expect(snap?.session?.percent).toBe(102);
+    expect(snap?.weekly?.percent).toBe(63);
   });
 
   // The hook cannot retry and does not read the answer, so nothing here may

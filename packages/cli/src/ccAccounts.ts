@@ -2357,6 +2357,10 @@ function mergeLiveUsage(
     polled: CcUsageWindow | undefined,
   ): CcUsageWindow | undefined => {
     if (!live) return polled;
+    if (
+      polled && polled.percent >= 100 && live.percent < polled.percent &&
+      (polled.resets_at === undefined || polled.resets_at > snap.fetched_at)
+    ) return polled;
     return polled?.resets_at !== undefined
       ? { ...live, resets_at: polled.resets_at }
       : { percent: live.percent };

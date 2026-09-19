@@ -267,7 +267,7 @@ describe("Codex limit parks through the backend handler", () => {
     const already = codexFixture({ codexResetsAt: Date.now() - 10_000 });
     already.device.cc_auto_switch_state = { attempts: [{ profile: AUTO_SWITCH_CODEX_CONTINUE_KEY, at: already.now }] } as any;
     already.tables.conversations.push(already.park());
-    expect(await already.run()).toMatchObject({ acted: "exhausted" });
+    expect(await already.run()).toMatchObject({ acted: "wait" });
   });
 
   test("with both parked, the next look is booked on whichever window rolls first", async () => {

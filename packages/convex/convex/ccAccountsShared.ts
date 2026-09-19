@@ -728,6 +728,15 @@ export function decideAutoSwitch(input: {
     return { action: "continue" };
   }
 
+  if (
+    !input.activeDead &&
+    lastContinue &&
+    (noParkOnActive || activeParkedAt <= lastContinue) &&
+    !isUsageExhausted(active?.usage, now)
+  ) {
+    return { action: "wait", retry_at: now + AUTO_SWITCH_PROBE_RETRY_MS };
+  }
+
   // A reset credit beats a switch outright: it clears the windows on the
   // account the sessions are already pinned to, so nothing moves and no other
   // account's week is spent. It is offered only when the human opted in, and
