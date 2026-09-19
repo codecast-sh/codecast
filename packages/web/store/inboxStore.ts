@@ -5862,6 +5862,25 @@ function dedupeReplayedMessages(messages: Message[]): Message[] {
 // images. Evicted conversations stay in IDB and reload instantly.
 export const MAX_IN_MEMORY_CONVERSATIONS = 400;
 
+// The message page the server sends on open (useConversationMessages'
+// snapshot fetch). The cache keeps the same tail per conversation. Persisting
+// every message wrote one 24 MB row for an 8337 message transcript, serialized
+// it again on every push to that conversation, and made a phone parse 78 MB of
+// such rows at boot. Older rows load from the server through hasMoreAbove,
+// exactly as they do after a cold open.
+export const MESSAGE_PAGE_SIZE = 200;
+
+function persistMessageTail(convId: string, messages: Message[], pagination: PaginationState | undefined) {
+  if (messages.length <= MESSAGE_PAGE_SIZE) {
+    writeConversationMessages(convId, messages, pagination);
+    return;
+  }
+  writeConversationMessages(convId, messages.slice(-MESSAGE_PAGE_SIZE), {
+    ...(pagination ?? DEFAULT_PAGINATION),
+    hasMoreAbove: true,
+  });
+}
+
 export function evictInactiveMessages(draft: any, activeConvId: string) {
   const loaded = Object.keys(draft.messages);
   if (loaded.length <= MAX_IN_MEMORY_CONVERSATIONS) return;
@@ -10314,7 +10333,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
-    if (source !== "cache") writeConversationMessages(convId, merged, pag);
+    if (source !== "cache") persistMessageTail(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -10343,7 +10362,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), initialized: true };
     this.pagination[convId] = pag;
-    writeConversationMessages(convId, merged, pag);
+    persistMessageTail(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -10368,7 +10387,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.messages[convId] = merged;
     const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
     if (meta) this.pagination[convId] = pag;
-    writeConversationMessages(convId, merged, pag);
+    persistMessageTail(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -12977,23 +12996,18 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
       }
     }
 
-    // Preload messages for the active inbox sessions so clicks are instant.
-    // Scope: the authoritative live set + the restored focus target — NOT every
-    // cached session row. Iterating the whole cache here meant thousands of IDB
-    // probes at boot and loaded messages for hundreds of conversations straight
-    // into memory for the eviction cap to fight back out. Anything else
-    // hydrates on demand (ensureHydrated on open / the inbox warm loop).
-    const preloadIds = new Set<string>(cached?.liveInboxIdList ?? []);
+    // Preload messages for the restored focus target only. The rows on screen
+    // are hydrated by the inbox warm loop (hooks/inboxWarm.ts) in rendered
+    // order, and anything else hydrates on open. Preloading the whole live
+    // inbox set here made a phone with 594 live sessions parse 78 MB of cached
+    // message JSON on the JS thread right after first paint, and load hundreds
+    // of conversations into memory for the eviction cap to fight back out.
     const focusId = useInboxStore.getState().currentSessionId;
-    if (focusId) {
-      await ensureHydrated(focusId);
-      preloadIds.delete(focusId);
-    }
+    if (focusId) await ensureHydrated(focusId);
 
     if (!useInboxStore.getState().clientStateInitialized) {
       useInboxStore.setState({ clientStateInitialized: true });
     }
-    for (const id of preloadIds) ensureHydrated(id);
 
     // Deferred: list views + secondary data hydrate just after first paint.
     // setTimeout, NOT requestAnimationFrame: rAF is paused in background tabs, so
