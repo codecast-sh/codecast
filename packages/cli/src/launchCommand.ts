@@ -20,7 +20,24 @@ import {
 } from "@codecast/shared/contracts";
 import { getAgentArgs, type Config } from "./config/types.js";
 import { stableClaudeBinary } from "./stableClaudeBinary.js";
-import type { ApprovalPolicy, SandboxMode } from "./codexAppServer.js";
+import type { ApprovalPolicy, SandboxMode, ThreadStartParams } from "./codexAppServer.js";
+
+export function blankCodexRecoveryParams(
+  data: { conversation: { agent_type?: string; model?: string | null; effort?: string; message_count?: number }; messages: unknown[] },
+  cwd: string | null,
+  permissions: { approvalPolicy: ApprovalPolicy; sandbox: SandboxMode },
+): ThreadStartParams | null {
+  if (data.conversation.agent_type !== "codex" || data.messages.length > 0 || (data.conversation.message_count ?? 0) > 0 || !cwd) return null;
+  const { model, effort } = data.conversation;
+  return {
+    cwd,
+    ...permissions,
+    ...(model ? { model: findModelOption("codex", model)?.cliAlias ?? model } : {}),
+    ...(effort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(effort)
+      ? { config: { model_reasoning_effort: effort } }
+      : {}),
+  };
+}
 
 function codexPermissionArgs(args: readonly string[]): Array<[string, string | undefined]> {
   const options: Array<[string, string | undefined]> = [];
