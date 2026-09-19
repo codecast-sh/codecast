@@ -15,7 +15,10 @@ test("TmuxAttachPill module mocks cannot replace hibernation subscriptions", asy
     "--test-name-pattern", "TmuxAttachPill under|hibernation commands preserve",
   ], 27_000);
   expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
-  expect(stderr).toContain("5 pass");
+  // The child run passing is the point; the exact count moves whenever a
+  // sibling test matching the pattern is added.
+  expect(stderr).toContain("0 fail");
+  expect(stderr).toMatch(/[1-9]\d* pass/);
 }, 30_000);
 
 test("a hanging nested child is killed before its parent deadline and leaves no surviving process", async () => {

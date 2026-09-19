@@ -22,6 +22,12 @@ const restoreGlobals = replaceGlobals({
   window: dom.window,
   document: dom.window.document,
   navigator: dom.window.navigator,
+  // The element classes as globals, not just on the window: the markdown
+  // surface pulls Prism, whose polyfill check reads `Element.prototype`
+  // directly and throws before any test runs when it is missing.
+  Element: dom.window.Element,
+  HTMLElement: dom.window.HTMLElement,
+  Node: dom.window.Node,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
