@@ -39,7 +39,9 @@ describe("divertNavigation", () => {
   let opened: string[];
 
   beforeEach(() => {
-    useInboxStore.setState({ tabs: [inboxTab], activeTabId: inboxTab.id });
+    // A fresh copy per test: the split tests write a layout onto the tab, and
+    // the shared fixture object carried it into the next test.
+    useInboxStore.setState({ tabs: [{ ...inboxTab }], activeTabId: inboxTab.id });
     opened = [];
     (globalThis as any).window = {
       location: { pathname: "/inbox", search: "", origin: "https://codecast.sh", href: "https://codecast.sh/inbox" },
