@@ -8619,7 +8619,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {formatRelativeTime(timestamp)}
         </a>
         {isBookmarked && (
-          <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
             <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
         )}
@@ -9540,7 +9540,7 @@ function AssistantBlockImpl({
             {formatRelativeTime(timestamp)}
           </a>
           {isBookmarked && (
-            <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
               <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
             </svg>
           )}

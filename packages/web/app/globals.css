@@ -1247,6 +1247,10 @@ pre[class*="language-"] {
   [data-cc-mobile-drawer="right"] {
     padding-right: env(safe-area-inset-right);
   }
+  /* The drawer header already spaces the rail from the top edge. */
+  .cc-mobile-drawer [data-sv-nav] {
+    padding-top: 4px;
+  }
   /* The rail's rows (the same selector set the simple view tightens above). */
   .cc-mobile-drawer [data-sv-nav] button.w-full,
   .cc-mobile-drawer [data-sv-nav] a.w-full,
@@ -4230,7 +4234,16 @@ pre[class*="language-"] {
 /* Turns carry no name row: the side of the page says who spoke, and the time
    is on the turn's tooltip and in the divider between sittings. */
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] {
+  margin: 0;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] > :not([data-cc-bookmarked]) {
   display: none;
+}
+/* The one thing the row still shows: the bookmark you put on the message. */
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] > [data-cc-bookmarked] {
+  width: 12px;
+  height: 12px;
+  margin-bottom: 6px;
 }
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-overflow] .text-xs {
   display: none;

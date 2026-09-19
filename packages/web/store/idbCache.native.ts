@@ -26,7 +26,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
-import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
+import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 
 let Storage: any = null;
 // Send writes the pending-input journal with setItemSync. That used to hit the
@@ -676,10 +676,14 @@ export function writeConversationUserMessages(convId: string, userMessages: any[
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (!Storage || _hydrating) return;
-  const latestTimestamp = messages.length > 0
-    ? Math.max(...messages.map((m: any) => m.timestamp || 0))
-    : 0;
-  scheduleWrite(CONVMSG_PREFIX + convId, () => JSON.stringify({ messages, pagination, latestTimestamp }));
+  // Everything runs at flush time: the array is the store's own, finalized by
+  // then, and a spread over thousands of rows would overflow the call stack.
+  scheduleWrite(CONVMSG_PREFIX + convId, () => {
+    const tail = persistedMessageTail(messages, pagination);
+    let latestTimestamp = 0;
+    for (const m of tail.messages) if ((m?.timestamp || 0) > latestTimestamp) latestTimestamp = m.timestamp;
+    return JSON.stringify({ messages: tail.messages, pagination: tail.pagination, latestTimestamp });
+  });
 }
 
 // -- Dispatch outbox: persist server-bound mutations until acknowledged --

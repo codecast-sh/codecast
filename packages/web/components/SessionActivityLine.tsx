@@ -21,6 +21,7 @@ export function LivePulseDot({ className = "w-1 h-1" }: { className?: string }) 
  */
 export function useLinger<T>(value: T | null): { value: T | null; leaving: boolean } {
   const [held, setHeld] = useState<T | null>(value);
+  // eslint-disable-next-line no-restricted-syntax -- the exit timer is keyed to the value it is holding open
   useEffect(() => {
     if (value !== null) {
       setHeld(value);
@@ -48,6 +49,7 @@ export function CrossfadeText({ text, className = "" }: { text: string; classNam
     setOutgoing({ text: shown, n: (outgoing?.n ?? 0) + 1 });
   }
   const n = outgoing?.n ?? 0;
+  // eslint-disable-next-line no-restricted-syntax -- one exit timer per outgoing line, cancelled when it is replaced
   useEffect(() => {
     if (!outgoing) return;
     const id = setTimeout(() => setOutgoing((o) => (o && o.n === n ? null : o)), EXIT_MS * 2);

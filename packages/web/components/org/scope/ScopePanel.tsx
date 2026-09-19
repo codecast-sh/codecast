@@ -99,6 +99,7 @@ export function ScopePanel(p: ScopePanelProps) {
   const stripRef = useRef<HTMLElement | null>(null);
   // Eleven tabs do not fit the panel's width: the active one scrolls into view
   // so a link straight to a tab lands on a tab the person can see.
+  // eslint-disable-next-line no-restricted-syntax -- scrolls the active tab into the strip when it changes
   useEffect(() => {
     const el = stripRef.current?.querySelector<HTMLElement>(`[data-scope-tab="${tab}"]`);
     el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });

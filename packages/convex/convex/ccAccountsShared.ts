@@ -762,13 +762,8 @@ export function decideAutoSwitch(input: {
     if (candidates[0]) return { action: "switch", profile: candidates[0].name };
   }
 
-  const resets: number[] = [];
-  for (const p of allowSwitch ? profiles : active ? [active] : []) {
-    for (const w of [p.usage?.session, p.usage?.weekly, p.usage?.weekly_scoped]) {
-      if (w?.resets_at && w.resets_at > now) resets.push(w.resets_at);
-    }
-  }
-  const retryAt = (resets.length ? Math.min(...resets) : now + 60 * 60 * 1000) + 2 * 60 * 1000;
+  const earliestReset = earliestUsageResetAt(allowSwitch ? profiles : active ? [active] : [], now);
+  const retryAt = (earliestReset ?? now + 60 * 60 * 1000) + 2 * 60 * 1000;
   return { action: "exhausted", retry_at: retryAt };
 }
 
@@ -785,6 +780,41 @@ export const DEVICE_ONLINE_MS = 2 * 60 * 1000;
 
 export function isDeviceOnline(device: { last_seen: number }, now: number): boolean {
   return now - device.last_seen < DEVICE_ONLINE_MS;
+}
+
+// The freshest online NON-remote device: it holds the keychain profiles and is
+// the canonical credential source remotes are pushed from.
+export async function listOnlineDevices(
+  ctx: { db: any },
+  userId: string,
+  now: number,
+): Promise<{ online: any[]; primary: any | undefined }> {
+  const devices: any[] = await ctx.db
+    .query("devices")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const online = devices.filter((d) => isDeviceOnline(d, now));
+  const primary = online
+    .filter((d) => !d.is_remote)
+    .sort((a, b) => b.last_seen - a.last_seen)[0];
+  return { online, primary };
+}
+
+// The earliest future reset among the given accounts' limit windows, or
+// undefined when no window reports one. What "wait for the window to roll"
+// means in wall-clock terms, for the auto-switch loop's retry and for a
+// scheduled run parked at a limit.
+export function earliestUsageResetAt(
+  profiles: Array<{ usage?: CcUsage | null }>,
+  now: number,
+): number | undefined {
+  const resets: number[] = [];
+  for (const p of profiles) {
+    for (const w of [p.usage?.session, p.usage?.weekly, p.usage?.weekly_scoped]) {
+      if (w?.resets_at && w.resets_at > now) resets.push(w.resets_at);
+    }
+  }
+  return resets.length ? Math.min(...resets) : undefined;
 }
 
 // Selection predicate for the revive actions: a conversation parked on a

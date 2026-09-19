@@ -137,6 +137,11 @@ export default defineSchema({
       // (emails/digest.ts). Absent reads as ON; the unsubscribe link and the
       // settings toggle both write false here.
       email_notifications: v.optional(v.boolean()),
+      // Fold the "a session is waiting for you" alerts into one an hour
+      // (notifications.ts, the idle digest). Absent reads as ON: the first
+      // settle in a quiet hour still alerts at once, and everything that
+      // settles behind it rides one aggregate alert at the window's end.
+      session_idle_digest: v.optional(v.boolean()),
       // The Lock Screen Live Activity (liveActivity.ts). Absent reads as ON;
       // false ends the running activity and stops every start.
       live_activity: v.optional(v.boolean()),
@@ -146,6 +151,14 @@ export default defineSchema({
     email_digest_last_sent_at: v.optional(v.number()),
     // Bearer for the one-click unsubscribe link. Minted lazily on first digest.
     email_unsub_token: v.optional(v.string()),
+    // Cooldown state for the needs-input digest (notifications.ts). One alert
+    // per window per person: `last_alerted_at` stamps the alert that opened the
+    // current window, `flush_due_at` the scheduled fold-up at its end (absent
+    // once that fold-up has run).
+    idle_digest_state: v.optional(v.object({
+      last_alerted_at: v.number(),
+      flush_due_at: v.optional(v.number()),
+    })),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     // Dedupe/cooldown state for the aggregated "sessions blocked" notification
     // (accountSwitch.blockedNotifyCheck). One write per incident, not per park.
@@ -3391,7 +3404,11 @@ export default defineSchema({
       v.literal("daemon_overloaded"),
       // A role telling a person who reports to it that a high priority goal
       // has stalled (org-roles-run-work.md R6); one a day at most.
-      v.literal("goal_stall")
+      v.literal("goal_stall"),
+      // The needs-input digest: one row naming every session that started
+      // waiting inside the window. Names no conversation on purpose — it
+      // points at the inbox, not at one session out of several.
+      v.literal("sessions_need_input")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -3429,6 +3446,10 @@ export default defineSchema({
     message: v.string(),
     read: v.boolean(),
     created_at: v.number(),
+    // A row that belongs in the list but must not interrupt: no desktop
+    // banner, no push. The needs-input digest writes these while its window is
+    // open, then one aggregate row carries the alert for all of them.
+    quiet: v.optional(v.boolean()),
   })
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
@@ -4037,6 +4058,10 @@ export default defineSchema({
     // trigger; anything else records a skipped run and spends no session.
     // Event triggers ignore it — the webhook already IS the evidence.
     precheck: v.optional(v.string()),
+    // `cast trigger add --spawn --wake`: a clean report of a once run wakes
+    // the session that armed it (runOwnerWakeOf) instead of only posting
+    // there. Failures, deaths and --needs-attention wake it regardless.
+    wake_creator: v.optional(v.boolean()),
 
     status: v.union(
       v.literal("scheduled"),

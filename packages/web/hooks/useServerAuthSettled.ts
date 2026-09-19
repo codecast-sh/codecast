@@ -44,6 +44,7 @@ export function useServerAuthSettled(): boolean {
   // on every render and hook order never shifts.
   let isAuthenticated = true;
   try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- reads its context before it can throw, so the hook count is the same on every render (see above)
     isAuthenticated = useConvexAuth().isAuthenticated;
   } catch {
     isAuthenticated = true;

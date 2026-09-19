@@ -140,7 +140,7 @@ function Summary({ scope, waitingFloor }: { scope: ScopeRef; waitingFloor: numbe
   const { data } = useScopeSummary(scope);
   const waiting = Math.max(waitingFloor, data?.sessions.needs_input ?? 0);
   const cells: Array<{ label: string; value: number | string; color?: string }> = [
-    { label: waiting === 1 ? 'session waiting' : 'sessions waiting', value: waiting, color: waiting > 0 ? Theme.accent : undefined },
+    { label: 'waiting on you', value: waiting, color: waiting > 0 ? Theme.accent : undefined },
     { label: 'open tasks', value: data ? data.tasks.open : '·' },
     { label: 'open decisions', value: data ? data.decisions.open : '·', color: data && data.decisions.open > 0 ? Theme.accent : undefined },
     { label: data?.plans.length === 1 ? 'plan' : 'plans', value: data ? data.plans.length : '·' },

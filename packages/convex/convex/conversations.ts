@@ -1013,6 +1013,11 @@ export const createConversation = mutation({
     // delivery. Optional for older CLIs; claim-time stamping remains the
     // fallback for conversations created without it.
     owner_device_id: v.optional(v.string()),
+    // The schedule this conversation is a run of, stamped at birth by the
+    // daemon's task scheduler (it creates the run's row before the agent
+    // writes a line, so the run nests under its owner from its first paint;
+    // agentTasks.stampRunConversation is the backfill for rows born without it).
+    agent_task_id: v.optional(v.id("agent_tasks")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1034,6 +1039,7 @@ export const createConversation = mutation({
 
     if (existing) {
       const patch: Record<string, any> = {};
+      if (args.agent_task_id && !existing.agent_task_id) patch.agent_task_id = args.agent_task_id;
       if (args.parent_conversation_id) {
         if (!existing.parent_conversation_id) {
           patch.parent_conversation_id = args.parent_conversation_id as Id<"conversations">;
@@ -1112,6 +1118,7 @@ export const createConversation = mutation({
       parent_conversation_id: parentConversationId,
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
         (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      agent_task_id: args.agent_task_id,
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,

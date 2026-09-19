@@ -157,6 +157,10 @@ export function DesktopProvider() {
     for (const n of notifications) {
       if (
         !seenIdsRef.current.has(n._id) &&
+        // A quiet row belongs in the list, not on screen: the needs-input
+        // digest writes one per waiting session and carries their alert in a
+        // single fold-up row at the end of the window (convex/notifications.ts).
+        !(n as any).quiet &&
         !n.read &&
         n.created_at >= mountedAtRef.current &&
         Date.now() - n.created_at < BANNER_FRESH_MS
