@@ -1935,8 +1935,8 @@ const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waitin
 // server's report stays fresh enough to vouch for the status past the
 // quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
 const OPEN_TASKS_REFRESH_MS = 4 * 60_000;
-function openTasksRefreshDue(sessionId: string, now: number): boolean {
-  return now - (lastOpenTasksSentAt.get(sessionId) ?? 0) >= OPEN_TASKS_REFRESH_MS;
+export function openTasksRefreshDue(status: AgentStatus | undefined, taskCount: number, lastSentAt: number | undefined, now: number): boolean {
+  return (status === "waiting" || status === "dormant") && taskCount > 0 && now - (lastSentAt ?? 0) >= OPEN_TASKS_REFRESH_MS;
 }
 
 // Log the status carried on a heartbeat. Throttled per-session to once every
@@ -14103,7 +14103,7 @@ export function paneReconcileTarget(
     // waiting → idle, and without this leg nothing ever climbs back — the
     // session sits in needs-input while a live watcher stands. The re-derive
     // is O(transcript delta) and publishes only when the verdict changes.
-    return stored === undefined || staleActive || stored === "waiting" || stored === "idle" ? "idle" : null;
+    return stored === undefined || staleActive || stored === "waiting" || stored === "dormant" || stored === "idle" ? "idle" : null;
   }
   if (state === "busy") {
     // The settle verdicts count as quiet too: a busy pane over a parked
@@ -14145,7 +14145,7 @@ function reconcileStatusFromPane(
     // Unchanged status: send only to publish a report that moved, or the
     // periodic re-publish that keeps a "waiting" vouched for; otherwise
     // nothing.
-    if (pendingOpenTasksChanged(sessionId) || (stored === "waiting" && openTasksRefreshDue(sessionId, Date.now()))) {
+    if (pendingOpenTasksChanged(sessionId) || openTasksRefreshDue(stored, pendingOpenTaskReports.get(sessionId)?.length ?? 0, lastOpenTasksSentAt.get(sessionId), Date.now())) {
       sendAgentStatus(syncService, conversationId, sessionId, target);
     } else {
       pendingOpenTaskReports.delete(sessionId);
@@ -17522,10 +17522,13 @@ function buildSessionFileIndex(home: string): SessionFileIndexBuild {
   return build;
 }
 
-async function buildSessionFileIndexAsync(home: string, signal?: AbortSignal): Promise<SessionFileIndexBuild> {
+async function buildSessionFileIndexAsync(home: string, signal?: AbortSignal, observe?: (store: IndexStore, files: WalkEntry[]) => void): Promise<SessionFileIndexBuild> {
   const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
   for (const store of sessionFileIndexStores(home)) {
-    await walkEntryBatches(store.root, { ...store.walk, signal, requireComplete: true }, (files) => recordIndexFiles(build, store, files));
+    await walkEntryBatches(store.root, { ...store.walk, signal, requireComplete: true }, (files) => {
+      recordIndexFiles(build, store, files);
+      observe?.(store, files);
+    });
   }
   return build;
 }
@@ -17569,7 +17572,13 @@ export function refreshSessionFileIndex(): Promise<void> {
   sessionFileIndexController = controller;
   const generation = ++sessionFileIndexGeneration;
   sessionFileIndexRefreshHome = home;
-  const pending = buildSessionFileIndexAsync(home, controller.signal)
+  const pending = buildSessionFileIndexAsync(home, controller.signal, (store, files) => {
+    if (controller.signal.aborted || generation !== sessionFileIndexGeneration || (process.env.HOME || "") !== home) return;
+    if (!sessionFileIndex || !codexRolloutIndex || sessionFileIndexHome !== home) {
+      installSessionFileIndex(home, { index: new Map(), codexRollouts: new Map() }, false);
+    }
+    recordIndexFiles({ index: sessionFileIndex!, codexRollouts: codexRolloutIndex! }, store, files);
+  })
     .then((built) => {
       if (!controller.signal.aborted && generation === sessionFileIndexGeneration && (process.env.HOME || "") === home) installSessionFileIndex(home, built);
     })
@@ -20907,7 +20916,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   // waiting (might have drained back to idle / woken to working). The scan
   // behind it is primed above, so it costs only the delta.
   const needsTaskScan = file.agentType === "claude" &&
-    (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
+    (stored === "waiting" || stored === "dormant" || reconciledStatus(stored, turn) === "idle");
   const openTasks = needsTaskScan ? verifiedOpenTasks(file.path, sessionId) : [];
   const hasOpenTasks = openTasks.length > 0;
   // The stamp read is a single small file, paid only when a settle correction
@@ -20919,7 +20928,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   // OPEN_TASKS_REFRESH_MS); nothing else about the status changes.
   if (needsTaskScan) pendingOpenTaskReports.set(sessionId, toOpenTaskReports(openTasks));
   const refresh = !corrected && needsTaskScan &&
-    (pendingOpenTasksChanged(sessionId) || (stored === "waiting" && hasOpenTasks && openTasksRefreshDue(sessionId, Date.now())));
+    (pendingOpenTasksChanged(sessionId) || openTasksRefreshDue(stored, openTasks.length, lastOpenTasksSentAt.get(sessionId), Date.now()));
   if (!corrected && !refresh) { pendingOpenTaskReports.delete(sessionId); return; }
   // Only now (a correction is warranted) pay the conversation-cache read.
   const conversationId = readConversationCache()[sessionId];

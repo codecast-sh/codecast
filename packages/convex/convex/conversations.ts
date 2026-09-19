@@ -9633,7 +9633,7 @@ export function ownAsk(
 // same names, same meaning). Both the overlay and inboxForCLI go through here.
 export function placeConversationRow(
   conv: any,
-  lv: { agent_status?: string | null; is_idle?: boolean | null; awaiting_input?: boolean | null; is_unresponsive?: boolean | null; agent_status_boundary?: boolean | null },
+  lv: Partial<Pick<LivenessFields, "agent_status" | "is_idle" | "awaiting_input" | "is_unresponsive" | "agent_status_boundary" | "open_tasks" | "open_tasks_at">>,
   asking: boolean,
   lastUserMessage: string | null | undefined,
   now: number,
@@ -9653,6 +9653,8 @@ export function placeConversationRow(
       is_idle: lv.is_idle ?? null,
       awaiting_input: lv.awaiting_input ?? null,
       is_unresponsive: lv.is_unresponsive ?? null,
+      open_tasks: lv.open_tasks ?? null,
+      open_tasks_at: lv.open_tasks_at ?? null,
       last_message_preview: lastUserMessage ?? null,
       last_user_message: null,
       last_turn_allows_park: undefined,

@@ -523,8 +523,7 @@ describe("paneReconcileTarget — a parked waiting over an idle pane is re-deriv
     // A stored idle re-derives too — the climb-back for a waiting a false
     // task-death verdict collapsed (stale cached agent pid, 2026-08-30).
     expect(paneReconcileTarget("idle", "idle")).toBe("idle");
-    // Declared verdicts are still left alone by the pane: nothing to re-check.
-    expect(paneReconcileTarget("idle", "dormant")).toBeNull();
+    expect(paneReconcileTarget("idle", "dormant")).toBe("idle");
     expect(paneReconcileTarget("idle", "done")).toBeNull();
   });
 });
