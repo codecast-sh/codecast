@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { composerPresenceEnabled, presenceMember, typingRows } from "../CollabComposer";
+import { composerPresenceEnabled, presenceMember, typingRows } from "../../lib/composerPresence";
 
 const row = (user_id: string, user_name: string, draft_text?: string) => ({ user_id, user_name, user_color: "#000", draft_text });
 

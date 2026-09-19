@@ -21,7 +21,7 @@ import {
 import { taskVisual } from "./TaskStatusBadge";
 import { InitiativeHoverContent } from "./initiatives/InitiativeHoverContent";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
-import { useHoverCard } from "./ui/HoverCard";
+import { useHoverCard } from "../hooks/useHoverCard";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
