@@ -1,3 +1,4 @@
+import type { Root } from "react-dom/client";
 import { afterAll, afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
@@ -22,7 +23,7 @@ const restoreGlobals = replaceGlobals({
 });
 // react-dom/client decides at load whether a DOM exists, so it is loaded
 // here — after the globals above — not as a static import.
-const {createRoot, type Root} = await import("react-dom/client");
+const { createRoot } = await import("react-dom/client");
 
 // jsdom has no layout: the provider scrolls the active thumb into view.
 (dom.window.HTMLElement.prototype as any).scrollIntoView = () => {};
