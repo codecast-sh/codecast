@@ -1,6 +1,5 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
-import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
@@ -22,6 +21,10 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// react-dom/client decides at load whether a DOM exists, so it is loaded
+// here — after the globals above — not as a static import.
+const {createRoot} = await import("react-dom/client");
+
 afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();
