@@ -5,28 +5,16 @@
 // (pause only for an editor, resume when paused, the caps and wake log links).
 // Run: bun components/RoleWakeCard.mount.test.tsx
 import assert from "node:assert/strict";
-import { afterAll, mock as bunMock, test } from "bun:test";
+import { test } from "bun:test";
 
 import { closeDomWindow } from "../test-helpers/domGlobals";
-// This file stubs the markdown pipeline so the card never drags the pill
-// resolver. `mock.module` is process-global and permanent, so without this the
-// stubs answer for every later file — the next one rendered a pill as plain
-// text. Capture the real modules now and put them back when this file ends.
-const REAL_MODULES: Array<[string, unknown]> = [
-  ["react-markdown", await import("react-markdown")],
-  ["./messageMarkdown", await import("./messageMarkdown")],
-  ["../lib/remarkEntityIds", await import("../lib/remarkEntityIds")],
-  ["next/link", await import("next/link")],
-];
-function restoreRealModules(): void {
-  for (const [spec, real] of REAL_MODULES) {
-    if (spec === "react-markdown") bunMock.module("react-markdown", () => real as object);
-    else if (spec === "./messageMarkdown") bunMock.module("./messageMarkdown", () => real as object);
-    else if (spec === "../lib/remarkEntityIds") bunMock.module("../lib/remarkEntityIds", () => real as object);
-    else bunMock.module("next/link", () => real as object);
-  }
-}
-afterAll(restoreRealModules);
+// The markdown pipeline is left REAL here. It used to be stubbed so the card
+// would not drag the pill resolver, but `mock.module` is process-global and
+// permanent: the stub answered for every later file, and the next one rendered
+// `tr-42` as plain text instead of a pill. Putting a module back afterwards
+// does not work either, because bun links a later file's imports before this
+// file's hooks run. So the card renders through the real pipeline, and its
+// lines are counted as the paragraphs it produces.
 
 async function mountCard() {
   const { JSDOM } = await import("jsdom");
@@ -39,9 +27,6 @@ async function mountCard() {
   const React = await import("react");
   // The markdown pipeline drags the pill resolver and the store; the card only
   // hands it each line. Render the line's text, so an id stays visible.
-  mock.module("react-markdown", () => ({ default: ({ children }: { children: string }) => React.createElement("span", { "data-md": true }, children) }));
-  mock.module("./messageMarkdown", () => ({ MESSAGE_MD_REHYPE: [], MESSAGE_MD_COMPONENTS: {} }));
-  mock.module("../lib/remarkEntityIds", () => ({ entityRemarkPlugins: [] }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   // The routing strip renders each hand as the live session pill; the pill
   // drags the resolver and the store, so here it is its label and its ref.
@@ -97,7 +82,7 @@ async function verifyRoleWakeCard() {
     assert.ok(why.textContent?.includes("task ct-51321 is done"));
     assert.ok(!why.textContent?.includes('"Investigate repeated iOS crashes'));
     assert.ok(!why.textContent?.includes("(held)"));
-    assert.equal(why.querySelectorAll("[data-md]").length, 8);
+    assert.equal(why.querySelectorAll("p").length, 8);
     assert.ok(why.textContent?.includes("held"));
     assert.ok(why.textContent?.includes("passive"));
     // The scope section is folded: nothing of its body is in the DOM yet.
@@ -111,11 +96,11 @@ async function verifyRoleWakeCard() {
     // The line cap: a long section shows the cap then "show all N lines".
     const long = { ...frame, sections: [{ key: "why" as const, title: "Why you are awake", lines: Array.from({ length: 30 }, (_, i) => `- task ct-${i} is open`) }] };
     await render({ frame: long });
-    assert.equal($$("[data-md]").length, ROLE_WAKE_LINE_CAP);
+    assert.equal($$("p").length, ROLE_WAKE_LINE_CAP);
     const more = $$("button").find((b) => b.textContent === "show all 30 lines");
     assert.ok(more);
     await act(() => { more.click(); });
-    assert.equal($$("[data-md]").length, 30);
+    assert.equal($$("p").length, 30);
     await render();
 
     // Footer: open role, pause (an editor), caps, the wake log.
@@ -184,9 +169,5 @@ async function verifyRoleWakeCard() {
 }
 
 test("the wake card mounts and shows what the reader sees", async () => {
-  try {
-    await verifyRoleWakeCard();
-  } finally {
-    restoreRealModules();
-  }
+  await verifyRoleWakeCard();
 }, 120_000);
