@@ -1377,6 +1377,35 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect((await ingestStatusLineUsage(statusLinePayload(6, 6), { account: "b", now: NOW + 31_000 }))?.wrote).toBe(true);
   });
 
+  it("keeps an exhausted session or week closed when a delayed live post reports less usage", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(102, 100), { account: "b", now: NOW + 1_000 });
+    await ingestStatusLineUsage(statusLinePayload(96, 28), { account: "b", now: NOW + 16_000 });
+    const b = readUsageCache().accounts["uuid-b"];
+    expect(b?.session?.percent).toBe(102);
+    expect(b?.weekly?.percent).toBe(100);
+    expect(b?.fetched_at).toBe(NOW + 1_000);
+  });
+
+  it("allows an exhausted session window to reset without reopening an exhausted week", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(102, 100), { account: "b", now: NOW + 1_000 });
+    const nextWindow = statusLinePayload(3, 28);
+    nextWindow.rate_limits.five_hour.resets_at = SESSION_RESET_S + 5 * 3_600;
+    await ingestStatusLineUsage(nextWindow, { account: "b", now: SESSION_RESET_S * 1_000 + 1_000 });
+    const b = readUsageCache().accounts["uuid-b"];
+    expect(b?.session?.percent).toBe(3);
+    expect(b?.weekly?.percent).toBe(100);
+  });
+
+  it("accepts an authoritative usage probe that clears an exhausted window", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(102, 100), { account: "b", now: NOW + 1_000 });
+    await refreshUsageSnapshots({ now: NOW + 31 * 60_000, fetchImpl: usageFetch([]) });
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
+    expect(readUsageCache().accounts["uuid-b"]?.source).toBeUndefined();
+  });
+
   // The token endpoint + usage endpoint behind one fetch: a refresh with the
   // expected refresh token rotates; anything else is refused with the given
   // status. Usage answers carry the bearer token so the test can see which

@@ -1506,7 +1506,7 @@ export const autoSwitchCheck = internalMutation({
     // have used — resuming it now spends the fresh window on abandoned work.
     // (With auto-switch on the user opted into the wider 48h revive.)
     const recentEnough = (c: Doc<"conversations">): boolean =>
-      allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS;
+      allowSwitch || (c.pending_api_error_at ?? c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS;
     const limitBlocked = blocked.filter((c) => c.pending_api_error_kind === "limit" && recentEnough(c));
     // A park is evidence about the account the session RAN on, and a Codex
     // session does not run on a Claude account: its window, its reset time and
@@ -1648,7 +1648,7 @@ export const autoSwitchCheck = internalMutation({
       const codexDecision = decideAutoSwitch({
         now,
         resetCredit: codexResetCreditOffer(primary, codexLimit),
-        parkedAt: Math.max(...codexLimit.map((c) => c.updated_at ?? 0)),
+        parkedAt: Math.max(...codexLimit.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)),
         activeEmail: primary.codex_accounts?.active_email,
         activeSince: primary.codex_accounts?.active_since,
         profiles: primary.codex_accounts?.profiles ?? [],
@@ -1764,8 +1764,8 @@ export const autoSwitchCheck = internalMutation({
       // and does nothing for a Claude session. The Codex pass above is the only
       // place it can be offered, so the wrong-provider redeem is impossible by
       // construction rather than by a filter that could be dropped.
-      parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
-      activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.updated_at ?? 0)) : null,
+      parkedAt: Math.max(...targets.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)),
+      activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)) : null,
       activeEmail: primary.cc_accounts?.active_email,
       activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
@@ -1818,6 +1818,7 @@ export const autoSwitchCheck = internalMutation({
     if (decision.action === "switch") {
       const switched = targets;
       const targetProfile = activeProfiles.find((p) => p.name === decision.profile);
+      const outgoingProfile = activeProfiles.find((p) => p.email && p.email === activeEmail);
       await insertSwitchCommands(ctx, args.user_id, {
         profile: decision.profile,
         blocked: switched,
@@ -1828,7 +1829,7 @@ export const autoSwitchCheck = internalMutation({
       });
       await recordAction(
         `switch:${decision.profile}`,
-        [decision.profile],
+        [...(outgoingProfile ? [outgoingProfile.name] : []), decision.profile],
         await bookCodexFollowUp(),
         buildDecision("switch", targetProfile),
       );
