@@ -7112,7 +7112,7 @@ function CommandMessageBlock({
         </button>
       </div>
 
-      <div className="flex items-center gap-2 mb-2">
+      <div data-cc-message-who className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
         <span className="text-sol-text-dim text-xs" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
@@ -7187,7 +7187,7 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
         </button>
       </div>
 
-      <div className="flex items-center gap-2 mb-2">
+      <div data-cc-message-who className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
         <span className="inline-flex items-center gap-1 font-mono text-[10px] text-sol-magenta/80 bg-sol-magenta/10 border border-sol-magenta/25 rounded px-1.5 py-px" title="Shell command run from the composer">bash</span>
@@ -8607,7 +8607,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           </svg>
         </button>
       </div>
-      <div className="flex items-center gap-2 mb-2">
+      <div data-cc-message-who className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
         <a

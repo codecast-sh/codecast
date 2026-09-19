@@ -1256,8 +1256,7 @@ pre[class*="language-"] {
 }
 @media (prefers-reduced-motion: reduce) {
   .cc-mobile-drawer,
-  .cc-mobile-drawer + *,
-  [data-cc-mobile-drawer] ~ [data-state] {
+  .cc-mobile-drawer-overlay {
     animation: none !important;
   }
 }
@@ -3817,10 +3816,6 @@ pre[class*="language-"] {
   box-shadow: none;
 }
 
-.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] > .flex.items-center.gap-2.mb-2 {
-  display: none;
-}
-
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] > .pl-8,
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] > .text-sol-text.pl-8 {
   padding-left: 0;
@@ -4232,8 +4227,8 @@ pre[class*="language-"] {
   padding-inline: var(--cc-feed-inset, 24px);
 }
 
-/* Assistant turns carry no name row: the side of the page says who spoke, and
-   the time is on the turn's tooltip and in the divider between sittings. */
+/* Turns carry no name row: the side of the page says who spoke, and the time
+   is on the turn's tooltip and in the divider between sittings. */
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] {
   display: none;
 }
