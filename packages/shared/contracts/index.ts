@@ -14,6 +14,9 @@ export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./agentDefinitions";
 export * from "./workState";
+// The needs-input digest: the window, the wording and the row grouping, shared
+// by the Convex fold-up and the web bell so both name the same set.
+export * from "./idleDigest";
 // The Lock Screen Live Activity wire contract and the merge that produces it,
 // shared by Convex (the pusher) and the app (the local starter).
 export * from "./liveActivity";

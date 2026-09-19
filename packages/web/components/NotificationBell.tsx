@@ -2,10 +2,6 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
-import { AvatarImg } from "../lib/avatarCache";
-import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
-import { AgentTypeIcon } from "./AgentTypeIcon";
-import { SessionGlyph } from "./identity";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useRouter } from "next/navigation";
@@ -13,72 +9,13 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
-import { agentNames, notificationActor, notificationRoute, sessionLabel, showsAgentIcon, typeColors, typeLabels } from "../lib/notificationTypes";
+import { notificationRoute } from "../lib/notificationTypes";
+import { groupIdleNotifications } from "@codecast/shared/contracts";
+import { NotificationGroupRow, NotificationRow, notificationHref } from "./notifications/NotificationRow";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
-// The URL a notification lands on — for opening in a new tab, where the
-// in-app store navigation of handleNotificationClick can't reach.
-export function notificationHref(n: any): string {
-  if (n.link) return n.link;
-  return (
-    notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ??
-    (n.conversation_id ? `/conversation/${n.conversation_id}` : "/inbox")
-  );
-}
-
-function timeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString();
-}
-
-function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; className?: string }) {
-  if (agentType === "codex" || agentType === "codex_cli") {
-    return (
-      <span className={`${className} rounded-full bg-[#0f0f0f] flex items-center justify-center shrink-0`}>
-        <OpenAIIcon className="w-4 h-4 text-white" />
-      </span>
-    );
-  } else if (agentType === "cursor") {
-    return (
-      <span className={`${className} rounded-full bg-[#1a1a2e] flex items-center justify-center shrink-0`}>
-        <CursorIcon className="w-4 h-4 text-white" />
-      </span>
-    );
-  } else if (agentType === "gemini") {
-    return (
-      <span className={`${className} rounded-full bg-[#1a73e8] flex items-center justify-center shrink-0`}>
-        <GeminiIcon className="w-4 h-4 text-white" />
-      </span>
-    );
-  } else if (agentType === "grok") {
-    return (
-      <span className={`${className} rounded-full bg-[#0a0a0a] flex items-center justify-center shrink-0`}>
-        <GrokIcon className="w-4 h-4 text-white" />
-      </span>
-    );
-  } else if (agentType === "muse") {
-    // No dedicated brand glyph — reuse the canonical AgentTypeIcon so muse
-    // never falls through to the Claude badge.
-    return (
-      <span className={`${className} rounded-full bg-sol-bg-alt flex items-center justify-center shrink-0`}>
-        <AgentTypeIcon agentType={agentType} className="w-4 h-4" />
-      </span>
-    );
-  }
-  return (
-    <span className={`${className} rounded-full bg-sol-orange flex items-center justify-center shrink-0`}>
-      <ClaudeIcon className="w-4 h-4 text-sol-bg" />
-    </span>
-  );
-}
+export { notificationHref };
 
 export function NotificationBell() {
   const router = useRouter();
@@ -140,7 +77,24 @@ export function NotificationBell() {
     setIsOpen(false);
   };
 
-  const recentNotifications = sortedNotifications.slice(0, 20);
+  // Fold each waiting burst into one entry (the same fold-up the hourly alert
+  // makes), then take 20 ENTRIES — so a fleet of twenty sessions no longer
+  // pushes everything else out of the list.
+  const entries = useMemo(
+    () => groupIdleNotifications(sortedNotifications, (n: any) => String(n._id)).slice(0, 20),
+    [sortedNotifications]
+  );
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const toggleGroup = useCallback(
+    (key: string) => setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] })),
+    []
+  );
+  const openNotification = useCallback(
+    (n: any) => handleNotificationClick(n._id, n.conversation_id, n.entity_type, n.entity_id, n.link, n.chat_message_id),
+    // handleNotificationClick is stable enough for this dropdown's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -167,7 +121,7 @@ export function NotificationBell() {
       </ShortcutTooltip>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-[calc(100vw-1rem)] sm:w-[520px] max-w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">
+        <div className="cc-topbar-menu absolute right-0 mt-2 w-[calc(100vw-1rem)] sm:w-[520px] max-w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">
           <div className="px-5 py-3 border-b border-sol-border flex items-center justify-between">
             <h3 className="text-sm font-semibold text-sol-text">Notifications</h3>
             {unreadCount !== undefined && unreadCount > 0 && (
@@ -176,88 +130,34 @@ export function NotificationBell() {
           </div>
 
           <div className="max-h-[600px] overflow-y-auto">
-            {recentNotifications.length === 0 ? (
+            {entries.length === 0 ? (
               <div className="px-5 py-12 text-center text-sol-text-muted">
                 No notifications yet
               </div>
             ) : (
-              recentNotifications.map((notification: any) => {
-                const label = sessionLabel(notification.conversation);
-                const { name: actorName, avatar: actorAvatar } = notificationActor(notification);
-                const agentType = notification.conversation?.agent_type || "claude_code";
-                const agentIcon = showsAgentIcon(notification);
-                const typeLabel = typeLabels[notification.type] || notification.type;
-                const typeColor = typeColors[notification.type] || "text-sol-text-muted";
-
-                return (
-                  <button
-                    key={notification._id}
-                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id, (notification as any).link, (notification as any).chat_message_id)}
-                    onContextMenu={(e) => ctxMenu.open(e, notification)}
-                    className={`w-full px-5 py-4 text-left border-b border-sol-border/50 hover:bg-sol-bg-alt transition-colors ${
-                      !notification.read ? 'bg-sol-bg-alt/40' : ''
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      {actorAvatar ? (
-                        <AvatarImg
-                          src={actorAvatar}
-                          alt={actorName || ''}
-                          className="w-9 h-9 rounded-full flex-shrink-0 mt-0.5"
-                          fallback={
-                            <div className="w-9 h-9 rounded-full flex-shrink-0 mt-0.5 bg-sol-bg-alt border border-sol-border flex items-center justify-center">
-                              <span className="text-sm font-medium text-sol-text-muted">{(actorName || "?").charAt(0).toUpperCase()}</span>
-                            </div>
-                          }
-                        />
-                      ) : agentIcon ? (
-                        <div className="flex-shrink-0 mt-0.5">
-                          <AgentIcon agentType={agentType} />
-                        </div>
-                      ) : (
-                        <div className="w-9 h-9 rounded-full flex-shrink-0 mt-0.5 bg-sol-bg-alt border border-sol-border flex items-center justify-center">
-                          {actorName ? (
-                            <span className="text-sm font-medium text-sol-text-muted">{actorName.charAt(0).toUpperCase()}</span>
-                          ) : (
-                            <svg className="w-4 h-4 text-sol-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                            </svg>
-                          )}
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          {actorName ? (
-                            <span className="text-sm font-medium text-sol-text">{actorName}</span>
-                          ) : agentIcon ? (
-                            <span className="text-sm font-medium text-sol-text">{agentNames[agentType] || agentType}</span>
-                          ) : null}
-                          <span className={`text-xs ${typeColor}`}>{typeLabel}</span>
-                          <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(notification.created_at)}</span>
-                          {!notification.read && (
-                            <div className="w-2 h-2 bg-sol-yellow rounded-full flex-shrink-0" />
-                          )}
-                        </div>
-                        <p className="text-sm text-sol-text leading-relaxed line-clamp-2">{notification.message}</p>
-                        {label && (
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <span className="inline-flex items-center gap-1.5 text-xs text-sol-text-muted bg-sol-bg-alt px-2 py-0.5 rounded truncate max-w-[280px]">
-                              {/* Which session this is about, by its face
-                                  (session-characters.md S3). */}
-                              <SessionGlyph row={notification.conversation} size={14} className="flex-shrink-0" />
-                              {label}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })
+              entries.map((entry: any) =>
+                entry.kind === "group" ? (
+                  <NotificationGroupRow
+                    key={entry.key}
+                    group={entry}
+                    open={!!openGroups[entry.key]}
+                    onToggle={() => toggleGroup(entry.key)}
+                    onOpen={openNotification}
+                    onContextMenu={(e, n) => ctxMenu.open(e, n)}
+                  />
+                ) : (
+                  <NotificationRow
+                    key={entry.key}
+                    notification={entry.row}
+                    onOpen={openNotification}
+                    onContextMenu={(e, n) => ctxMenu.open(e, n)}
+                  />
+                )
+              )
             )}
           </div>
 
-          {recentNotifications.length > 0 && (
+          {entries.length > 0 && (
             <div className="px-5 py-3 border-t border-sol-border">
               <button
                 onClick={() => {

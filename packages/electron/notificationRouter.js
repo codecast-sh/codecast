@@ -20,15 +20,23 @@
 // decision about WHETHER a banner goes up at all (see the block below it).
 
 const { createNotificationRouter } = require("@platform/desktop").notificationRouter;
+const { appForRoute } = require("./appWindows.mjs");
 
 const router = createNotificationRouter({
   // The people window answers every ring. Keyed on the banner's KIND, not its
   // route, because a call or walkie banner usually carries the DM route it came
   // from — which would otherwise send the click to whichever window shows that
   // conversation, away from the window hosting the audio.
+  //
+  // Below it, the Chat and Work windows own their routes outright: a chat
+  // banner lands in the Chat window even when the main window shows that
+  // very channel (an exact match scores 100), because chat stays in chat.
   windowBonus: (win, target) => {
     const kind = (target && target.kind) || null;
-    return win.isPeople && (kind === "call" || kind === "walkie") ? 110 : null;
+    if (win.isPeople && (kind === "call" || kind === "walkie")) return 110;
+    const route = target && target.route;
+    if (win.app && route && appForRoute(route) === win.app) return 105;
+    return null;
   },
 
   // While a people window exists it plays the notification sounds, focused or

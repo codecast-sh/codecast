@@ -108,6 +108,7 @@ async function readPresence(
 // Aggregate body for a multi-row flush, grouped by notification type.
 const TYPE_LABELS: Record<string, [string, string]> = {
   session_idle: ["session waiting for input", "sessions waiting for input"],
+  sessions_need_input: ["session waiting for input", "sessions waiting for input"],
   permission_request: ["permission request", "permission requests"],
   session_error: ["session error", "session errors"],
   session_assigned: ["session ownership update", "session ownership updates"],
