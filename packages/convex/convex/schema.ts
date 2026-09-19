@@ -5790,7 +5790,11 @@ export default defineSchema({
       // to a device either. Present for the same reason: one shape.
       v.literal("device"),
       // A code comment names its recipients directly. Same reason: one shape.
-      v.literal("code")
+      v.literal("code"),
+      // A role, by short id: a goal stall notice to a person who reports to
+      // it. Direct recipients only, like a device — nothing subscribes to a
+      // role. Present for the same reason: one shape.
+      v.literal("org_role")
     ),
     entity_id: v.string(),
     reason: v.union(

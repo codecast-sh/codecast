@@ -197,7 +197,7 @@ function isServerId(value: unknown): value is string {
   return typeof value === "string" && SERVER_ID_RE.test(value);
 }
 
-type HandlerCtx = { db: any; storage?: any; runMutation?: any };
+type HandlerCtx = { db: any; storage?: any; runMutation?: any; runQuery?: any };
 type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any, result?: any) => Promise<any>;
 
 type ReceiptActionEnvelope = {
