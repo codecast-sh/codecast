@@ -178,8 +178,16 @@ describe("command groups stay off the boot graph", () => {
     //
     // 232 after ct-52405: selfExec.ts, the one "run this build again" resolver
     // index.ts and the daemon each used to carry a copy of. Imports only node.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(232);
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3204);
+    //
+    // 247 after the 2026-09-19 landing: eleven leaves, each work the command
+    // tree itself does rather than a group arriving sideways. The three Claude
+    // Code hook handlers with their shared hookJson.ts (cast runs them as
+    // hooks, so index.ts dispatches them), initiativeCommand.ts with its
+    // contracts/initiative.ts (the initiative line formatters index.ts renders)
+    // and the four org/idle/handoff contracts the tree reads directly.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(247);
+    // 3404 KB with those eleven leaves and the growth of index.ts itself.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3404);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -222,7 +230,10 @@ describe("command groups stay off the boot graph", () => {
     // daemon's own work (it runs both on its credential tick), so these are
     // leaves it legitimately gained rather than a subsystem arriving sideways.
     // 321 after ct-52405: selfExec.ts (above). Imports only node.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(321);
+    // 326 after the same landing: the daemon picked up the leaves index.ts did
+    // where they are its own work too (the hook handlers it dispatches and the
+    // shared contracts), not a command group.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(326);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
