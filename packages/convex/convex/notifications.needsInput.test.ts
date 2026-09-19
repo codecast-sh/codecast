@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { performNeedsInputCheck } from "./notifications";
+import {
+  performNeedsInputCheck,
+  performIdleDigestFlush,
+  summarizeIdleDigest,
+  IDLE_DIGEST_WINDOW_MS,
+} from "./notifications";
 import { settleRunConversation } from "./agentTasks";
 import { runResultThreadOf } from "@codecast/shared/contracts";
 import { performPushFlush } from "./pushRouter";
@@ -48,9 +53,20 @@ function createCtx(seed: Record<string, Rec[]>) {
     },
     query(table: string) {
       const constraints: Array<{ field: string; val: any }> = [];
+      // Range arms of an index read (the digest flush asks for rows created
+      // since the window opened).
+      const ranges: Array<(r: Rec) => boolean> = [];
       const q: any = {
         eq(field: string, val: any) {
           constraints.push({ field, val });
+          return q;
+        },
+        gte(field: string, val: any) {
+          ranges.push((r) => (r[field] ?? 0) >= val);
+          return q;
+        },
+        gt(field: string, val: any) {
+          ranges.push((r) => (r[field] ?? 0) > val);
           return q;
         },
       };
@@ -68,6 +84,7 @@ function createCtx(seed: Record<string, Rec[]>) {
         const rows = (tables[table] ?? []).filter(
           (r) =>
             constraints.every((c) => String(r[c.field]) === String(c.val)) &&
+            ranges.every((p) => p(r)) &&
             rowPredicates.every((p) => p(r))
         );
         if (desc) rows.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
@@ -250,13 +267,29 @@ describe("needs-input push — settled idle", () => {
     const next = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(next.notified).toBe(true);
     expect(tables.notifications.length).toBe(1);
-    expect(tables.notifications[0]._id).not.toBe(firstRowId); // fresh _id = new banner
-    // Both episodes staged a push. The first row now points at a DELETED
-    // notification (the state row was superseded), so a flush would drop it
-    // and send only the fresh one — exactly the storm-collapse behavior.
-    expect(tables.push_outbox.length).toBe(2);
+    // The row is superseded IN PLACE: same _id, so no second banner, and the
+    // push the first episode staged still points at a live row.
+    expect(tables.notifications[0]._id).toBe(firstRowId);
+    // The first episode alerted and opened the digest window, so the second
+    // rides it: its row is quiet and stages no push. One buzz, not two.
+    expect(tables.notifications[0].quiet).toBe(true);
+    expect(tables.push_outbox.length).toBe(1);
     await performPushFlush(ctx as any, "u1");
     expect(scheduled.filter((s) => s.args.push_token).length).toBe(1);
+  });
+
+  test("with the digest off, every episode alerts on its own", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      users: [{
+        _id: "u1", notifications_enabled: true, push_token: "tok-u1",
+        notification_preferences: { session_idle_digest: false },
+      }],
+    });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    tables.conversations[0].message_count = 6;
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(tables.notifications[0].quiet).toBeUndefined();
+    expect(tables.push_outbox.length).toBe(2);
   });
 
   test("state rows replace per conversation; event rows and other convos survive", async () => {
@@ -885,5 +918,133 @@ describe("needs-input check — a session boundary is not a completion", () => {
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.reason).toBe("session_boundary");
     expect(tables.conversations[0].inbox_stashed_at).toBe(111);
+  });
+});
+
+// ── The needs-input digest ───────────────────────────────────────────────────
+//
+// The whole point: a fleet settling over an afternoon buzzes once an hour, not
+// once per session, and the fold-up names the sessions that are still waiting.
+describe("needs-input digest — one alert an hour", () => {
+  // Three sessions on one user, each settled past the idle grace.
+  function fleetWorld(prefs?: Record<string, any>) {
+    const now = Date.now();
+    const ids = ["conv1", "conv2", "conv3"];
+    const titles = ["Fix the parser", "Auth refactor", "Ship the CLI"];
+    return createCtx({
+      users: [{
+        _id: "u1", notifications_enabled: true, push_token: "tok-u1",
+        ...(prefs ? { notification_preferences: prefs } : {}),
+      }],
+      conversations: ids.map((id, i) => ({
+        _id: id, user_id: "u1", title: titles[i], status: "active",
+        message_count: 5, updated_at: now - 120_000, last_message_role: "assistant",
+      })),
+      managed_sessions: ids.map((id, i) => ({
+        _id: `ms${i + 1}`, user_id: "u1", conversation_id: id, session_id: `sess-${i + 1}`,
+        agent_status: "idle", agent_status_updated_at: now - 60_000, last_heartbeat: now - 5_000,
+      })),
+      messages: ids.map((id, i) => ({
+        _id: `m${i + 1}`, conversation_id: id, role: "assistant",
+        content: "Done — what next?", timestamp: now - 70_000,
+      })),
+      pending_permissions: [],
+      notifications: [],
+    });
+  }
+
+  test("the first settle alerts; the rest of the hour goes quiet and folds up", async () => {
+    const { ctx, tables } = fleetWorld();
+    for (const id of ["conv1", "conv2", "conv3"]) {
+      await performNeedsInputCheck(ctx as any, { conversation_id: id });
+    }
+    // Three rows in the list, one alert: only the first carries a push.
+    expect(tables.notifications.length).toBe(3);
+    expect(tables.notifications.map((n: Rec) => !!n.quiet)).toEqual([false, true, true]);
+    expect(tables.push_outbox.length).toBe(1);
+
+    // The window is armed once, not once per session.
+    const armed = tables.users[0].idle_digest_state;
+    expect(armed.flush_due_at).toBe(armed.last_alerted_at + IDLE_DIGEST_WINDOW_MS);
+
+    // Wind the clock past the window and run the fold-up the enqueue armed.
+    tables.users[0].idle_digest_state.last_alerted_at = Date.now() - IDLE_DIGEST_WINDOW_MS - 1;
+    const res = await performIdleDigestFlush(ctx as any, "u1");
+    expect(res).toEqual({ notified: true, count: 2 });
+
+    const digest = tables.notifications.find((n: Rec) => n.type === "sessions_need_input");
+    expect(digest.message).toBe("Auth refactor and Ship the CLI need your attention");
+    expect(digest.conversation_id).toBeUndefined(); // opens the inbox, not one session
+    expect(tables.push_outbox.length).toBe(2);
+    expect(tables.push_outbox[1].title).toBe("2 sessions need your attention");
+  });
+
+  test("a session the user already answered is not named", async () => {
+    const { ctx, tables } = fleetWorld();
+    for (const id of ["conv1", "conv2", "conv3"]) {
+      await performNeedsInputCheck(ctx as any, { conversation_id: id });
+    }
+    // conv2 got a reply: the turn moved past the episode its row announced.
+    tables.conversations[1].message_count = 7;
+    tables.users[0].idle_digest_state.last_alerted_at = Date.now() - IDLE_DIGEST_WINDOW_MS - 1;
+
+    const res = await performIdleDigestFlush(ctx as any, "u1");
+    expect(res.count).toBe(1);
+    const digest = tables.notifications.find((n: Rec) => n.type === "sessions_need_input");
+    expect(digest.message).toBe("Ship the CLI needs your attention");
+  });
+
+  test("a quiet hour spends no alert: the window closes and the next settle rings", async () => {
+    const { ctx, tables } = fleetWorld();
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv2" });
+    // Both answered before the fold-up ran.
+    tables.conversations[0].message_count = 9;
+    tables.conversations[1].message_count = 9;
+    tables.users[0].idle_digest_state.last_alerted_at = Date.now() - IDLE_DIGEST_WINDOW_MS - 1;
+
+    const res = await performIdleDigestFlush(ctx as any, "u1");
+    expect(res).toEqual({ notified: false, reason: "nothing_waiting" });
+    expect(tables.notifications.some((n: Rec) => n.type === "sessions_need_input")).toBe(false);
+
+    // The budget was not spent, so the next session to settle alerts at once.
+    const pushesBefore = tables.push_outbox.length;
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv3" });
+    expect(tables.push_outbox.length).toBe(pushesBefore + 1);
+    expect(tables.notifications.find((n: Rec) => n.conversation_id === "conv3").quiet).toBeUndefined();
+  });
+
+  test("a fold-up that fires before its window ends waits the rest out", async () => {
+    const { ctx, tables, scheduled } = fleetWorld();
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv2" });
+    const res = await performIdleDigestFlush(ctx as any, "u1");
+    expect(res.reason).toBe("early");
+    expect(tables.notifications.some((n: Rec) => n.type === "sessions_need_input")).toBe(false);
+    expect(scheduled.some((s) => s.args.user_id === "u1")).toBe(true);
+  });
+
+  test("the fold-up replaces the previous one instead of stacking", async () => {
+    const { ctx, tables } = fleetWorld();
+    tables.notifications.push({
+      _id: "n_old_digest", recipient_user_id: "u1", type: "sessions_need_input",
+      message: "2 sessions need your attention", read: false, created_at: Date.now() - 1000,
+    });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv2" });
+    tables.users[0].idle_digest_state.last_alerted_at = Date.now() - IDLE_DIGEST_WINDOW_MS - 1;
+    await performIdleDigestFlush(ctx as any, "u1");
+    expect(tables.notifications.filter((n: Rec) => n.type === "sessions_need_input").length).toBe(1);
+    expect(tables.notifications.some((n: Rec) => n._id === "n_old_digest")).toBe(false);
+  });
+
+  test("the aggregate line names two and counts the rest", () => {
+    expect(summarizeIdleDigest(["A"])).toEqual({
+      title: "1 session needs your attention",
+      message: "A needs your attention",
+    });
+    expect(summarizeIdleDigest(["A", "B"]).message).toBe("A and B need your attention");
+    expect(summarizeIdleDigest(["A", "B", "C"]).message).toBe("A, B and 1 other need your attention");
+    expect(summarizeIdleDigest(["A", "B", "C", "D"]).message).toBe("A, B and 2 others need your attention");
   });
 });
