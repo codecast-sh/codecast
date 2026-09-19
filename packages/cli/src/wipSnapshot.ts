@@ -125,6 +125,14 @@ export function parseSnapshotTrailer(message: string, key: string): string | und
  */
 export const CLOUD_SEED_EXCLUDES = [".codecast/workspaces", ".codecast/worktrees", ".codecast/logs"];
 
+/** The author a snapshot object carries, so it never needs the machine's. */
+const SNAPSHOT_IDENTITY = {
+  GIT_AUTHOR_NAME: "codecast",
+  GIT_AUTHOR_EMAIL: "codecast@localhost",
+  GIT_COMMITTER_NAME: "codecast",
+  GIT_COMMITTER_EMAIL: "codecast@localhost",
+} as const;
+
 /**
  * Capture the working tree as a dangling commit — the strict variant. Returns
  * null ONLY when `cwd` has no HEAD to parent onto (not a repo, or no commits);
@@ -166,7 +174,16 @@ export async function createWipSnapshotStrict(cwd: string, opts: { exclude?: str
     head,
     "-m",
     buildSnapshotMessage({ branch }),
-  ], { ...process.env, GIT_AUTHOR_DATE: snapshotDate, GIT_COMMITTER_DATE: snapshotDate });
+  ], {
+    ...process.env,
+    GIT_AUTHOR_DATE: snapshotDate,
+    GIT_COMMITTER_DATE: snapshotDate,
+    // A dangling snapshot is machinery, not authorship, so it carries a fixed
+    // identity: git refuses to write a commit on a machine that configured
+    // none ("Author identity unknown"), and a constant also keeps the sha the
+    // same for the same tree wherever it is taken.
+    ...SNAPSHOT_IDENTITY,
+  });
   return { sha, base: head, branch, dirty, tree };
 }
 
