@@ -30,6 +30,8 @@ export type TemplateReceipt = InstanceState & {
   bindings?: Record<string, { host: string; path_hash: string; bound_at: number }>;
   /** Ledger tasks (H7), one per manifest ledger, found or created by marker. */
   ledgers?: Record<string, { taskId: string; shortId: string }>;
+  /** The server's instance row (org_template_instances), once the host step registered it. */
+  instanceId?: string;
   role?: { id: string; handle: string; sessionId?: string };
   routines: Record<string, { triggerId?: string; attempted?: boolean; external?: boolean; paused?: boolean; retired?: boolean; actualIntervalMs?: number; every: string }>;
 };
@@ -381,34 +383,78 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     const config: Record<string, string> = { ...(receipt.config ?? {}), ...paths };
     const ledgerInputs = Object.fromEntries(Object.entries(receipt.ledgers).map(([id, l]) => [`ledgers.${id}`, l.shortId]));
     const file = writeInstanceFile(dir, instance, { inputs: [...(manifest.inputs ?? []), ...Object.keys(ledgerInputs).map((key) => ({ key, label: key, kind: "string" as const }))], instance_file: manifest.instance_file }, { ...config, ...ledgerInputs });
+    // The server row is the record the web reads (org-hire.md H1); the receipt
+    // keeps the pin. Registered by the receipt's key, so a rerun updates it.
+    const row = await request(deps, "/cli/org/template/instance", {
+      instance_key: receipt.key, instance, template_id: receipt.template.id, version: receipt.template.version, digest: receipt.template.hash,
+      project_id: receipt.project.id, role_id: receipt.role!.id, host: { machine: os.hostname(), dir: receipt.project.dir }, phase: "ready",
+      config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, ...boundary(receipt),
+    });
+    receipt.instanceId = String(row._id ?? row.id);
     save(receipt);
     return { ...receipt, instanceFile: file } as TemplateReceipt & { instanceFile: string };
   });
 }
 
 
-/** The instance's own record (H5 to H7), written under the receipt lock. */
-async function withState<T>(options: TemplateOptions, instance: string, work: (manifest: OrgTemplate, receipt: TemplateReceipt) => T): Promise<T> {
+/**
+ * The instance's own record (H5 to H7). The server row is the record; the
+ * same rules run there (orgTemplateState, shared). Before the host step has
+ * registered the row, the receipt alone holds it, so a run can record while
+ * the hire is still being bound; the bind step then registers everything.
+ */
+async function withState<T>(deps: OrgInitDeps, options: TemplateOptions, instance: string, local: (manifest: OrgTemplate, receipt: TemplateReceipt) => T, remote: (receipt: TemplateReceipt) => Promise<unknown> | undefined): Promise<T> {
   const dir = canonicalDirectory(options.dir);
   return locked(dir, instance, async () => {
     const receipt = readReceipt(dir, instance);
     if (!receipt.role) throw new Error("Template role has not been approved and applied");
-    const result = work(verifiedArtifact(receipt).manifest, receipt);
+    const result = local(verifiedArtifact(receipt).manifest, receipt);
+    if (receipt.instanceId) await remote(receipt);
     save(receipt);
     return result;
   });
 }
-export const evidenceTemplate = (instance: string, check: string, options: TemplateOptions) =>
-  withState(options, instance, (manifest, receipt) => recordEvidence(manifest, receipt, check, { status: options.status ?? "", source: options.source, detail: options.detail }));
-export const reportTemplate = (instance: string, entries: string[], options: TemplateOptions) =>
-  withState(options, instance, (manifest, receipt) => recordScores(manifest, receipt, entries, { source: options.source, observedAt: options.observedAt ? Date.parse(options.observedAt) : undefined }));
-export const setupTemplate = (instance: string, id: string | undefined, options: TemplateOptions) =>
-  withState(options, instance, (manifest, receipt) => {
-    if (!id) return setupRows(manifest, receipt);
-    const chosen = [options.done && "done", options.skip && "skipped", options.open && "open"].filter(Boolean) as string[];
-    if (chosen.length !== 1) throw new Error("Give exactly one of --done, --skip or --open");
-    return markSetup(manifest, receipt, id, { status: chosen[0]!, evidence: options.evidence, fromAgent: !!(options.session || sessionIdFromEnv()) });
+export const evidenceTemplate = (deps: OrgInitDeps, instance: string, check: string, options: TemplateOptions) =>
+  withState(deps, options, instance,
+    (manifest, receipt) => recordEvidence(manifest, receipt, check, { status: options.status ?? "", source: options.source, detail: options.detail }),
+    (receipt) => request(deps, "/cli/org/template/evidence", { instance_key: receipt.key, check, status: options.status, source: options.source, detail: options.detail }));
+export const reportTemplate = (deps: OrgInitDeps, instance: string, entries: string[], options: TemplateOptions) =>
+  withState(deps, options, instance,
+    (manifest, receipt) => recordScores(manifest, receipt, entries, { source: options.source, observedAt: options.observedAt ? Date.parse(options.observedAt) : undefined }),
+    (receipt) => request(deps, "/cli/org/template/report", { instance_key: receipt.key, entries, source: options.source, observed_at: options.observedAt ? Date.parse(options.observedAt) : undefined }));
+export const setupTemplate = (deps: OrgInitDeps, instance: string, id: string | undefined, options: TemplateOptions) => {
+  const chosen = [options.done && "done", options.skip && "skipped", options.open && "open"].filter(Boolean) as string[];
+  const fromAgent = !!(options.session || sessionIdFromEnv());
+  return withState(deps, options, instance,
+    (manifest, receipt) => {
+      if (!id) return setupRows(manifest, receipt);
+      if (chosen.length !== 1) throw new Error("Give exactly one of --done, --skip or --open");
+      return markSetup(manifest, receipt, id, { status: chosen[0]!, evidence: options.evidence, fromAgent });
+    },
+    (receipt) => (id ? request(deps, "/cli/org/template/setup", { instance_key: receipt.key, id, status: chosen[0], evidence: options.evidence, from_agent: fromAgent }) : undefined));
+};
+
+/** A lesson to the template's publisher (H9): a row on the template, never a task in their workspace. */
+export async function lessonTemplate(deps: OrgInitDeps, instance: string, body: string, options: TemplateOptions & { evidence?: string[] }): Promise<unknown> {
+  const receipt = readReceipt(options.dir, instance);
+  if (!receipt.instanceId) throw new Error("Bind the instance first; a lesson is filed on the server's record of it");
+  const evidence = (options.evidence ?? []).map((entry) => { const at = entry.indexOf("="); if (at <= 0) throw new Error(`Evidence must be label=link: ${entry}`); return { label: entry.slice(0, at), href: entry.slice(at + 1) }; });
+  return request(deps, "/cli/org/template/lesson", { instance_key: receipt.key, body, evidence });
+}
+
+/** Publish a release folder as a template (H1): the validated manifest and the folder's digest, under the caller's workspace or as Codecast. */
+export async function publishTemplate(deps: OrgInitDeps, source: string, options: { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string }): Promise<unknown> {
+  const artifact = readArtifact(source);
+  const workspace = options.codecast ? undefined : (await currentWorkspace(deps, options)).workspace;
+  return request(deps, "/cli/org/template/publish", {
+    manifest: artifact.manifest, digest: artifact.hash, status: options.status, changelog: options.changelog, review_project_id: options.reviewProject,
+    ...(options.codecast ? { as_codecast: true } : workspace?.kind === "team" ? { team_id: workspace.id } : {}),
   });
+}
+export async function catalogTemplates(deps: OrgInitDeps, options: { team?: string; personal?: boolean }): Promise<unknown> {
+  const { workspace } = await currentWorkspace(deps, options);
+  return request(deps, "/cli/org/template/catalog", workspace.kind === "team" ? { team_id: workspace.id } : {});
+}
 
 export async function reconcileTemplate(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<TemplateReceipt> {
   return locked(options.dir, instance, async () => {

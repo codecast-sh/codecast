@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { bindTemplate, evidenceTemplate, installTemplate, reportTemplate, setupTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, lessonTemplate, publishTemplate, reportTemplate, setupTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -36,6 +36,9 @@ class Server {
   decisions: any[] = [];
   triggers: any[] = [];
   work: any[] = [];
+  instances: any[] = [];
+  lessons: any[] = [];
+  recordCalls: Array<{ endpoint: string; body: any }> = [];
   calls: Array<{ endpoint: string; body: any }> = [];
   failAfter?: string;
   failBefore?: string;
@@ -94,6 +97,18 @@ class Server {
       }
       case "/cli/tasks/pause": { if (this.pauseWorks) this.triggers.find((t) => t._id === body.task_id).status = "paused"; return { success: this.pauseWorks }; }
       case "/cli/tasks/update": Object.assign(this.triggers.find((t) => t._id === body.task_id), body); return { success: true };
+      case "/cli/org/template/instance": {
+        const row = this.instances.find((r) => r.instance_key === body.instance_key);
+        if (row) { Object.assign(row, body); return row; }
+        const created = { ...body, _id: `inst-${this.instances.length + 1}` }; this.instances.push(created); return created;
+      }
+      case "/cli/org/template/evidence": case "/cli/org/template/report": case "/cli/org/template/setup": {
+        if (!this.instances.some((r) => r.instance_key === body.instance_key)) throw new Error("Instance not found");
+        this.recordCalls.push({ endpoint, body }); return { ok: true };
+      }
+      case "/cli/org/template/lesson": { const row = { ...body, _id: `lesson-${this.lessons.length + 1}`, status: "open" }; this.lessons.push(row); return { id: row._id, status: "open" }; }
+      case "/cli/org/template/publish": return { action: "created", template_id: body.manifest.id, digest: body.digest, as_codecast: !!body.as_codecast, team_id: body.team_id };
+      case "/cli/org/template/catalog": return [{ template_id: "growth", team_id: body.team_id }];
       case "/cli/work/list": return { tasks: this.work.filter((t) => !body.label || (t.labels ?? []).includes(body.label)) };
       case "/cli/work/create": {
         const existing = this.work.find((t) => t.client_key === body.client_key);
@@ -454,11 +469,23 @@ describe("manifest v2 hires", () => {
     expect(Bun.TOML.parse(instanceFile)).toEqual({ product: { slug: "acme" }, accounts: { ads: secret }, ledgers: { cmo: "ct-2", ads: "ct-41" } });
     expect(instanceFile).not.toContain("never-copied");
     // The instance's own record: evidence, scoreboard, setup; status derives readiness and the one ask.
-    await expect(evidenceTemplate("acme-growth", "ads_read", { ...options, status: "pass", source: "ct-1" })).rejects.toThrow(/Not an evidence check/);
-    // Rerun: nothing new created, same ledgers.
+    await expect(evidenceTemplate(server.deps, "acme-growth", "ads_read", { ...options, status: "pass", source: "ct-1" })).rejects.toThrow(/Not an evidence check/);
+    // The server row is registered by the receipt's key with everything but secret values.
+    expect(bound.instanceId).toBe("inst-1");
+    expect(server.instances[0]).toMatchObject({ instance_key: bound.key, instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: bound.template.hash, project_id: "project-1", role_id: "role-1", phase: "ready", config: { "product.slug": "acme" }, host: { dir: server.dir }, team_id: "team-1" });
+    expect(JSON.stringify(server.instances[0])).not.toContain(secret);
+    // Rerun: nothing new created, same ledgers, same row.
     const again = await bindTemplate(server.deps, "acme-growth", options);
     expect(again.ledgers).toEqual(bound.ledgers);
     expect(server.work).toHaveLength(2);
+    expect(server.instances).toHaveLength(1);
+    // A lesson goes to the server as a row on the template; publish and catalog reach their routes.
+    await expect(lessonTemplate(server.deps, "acme-growth", "short", options)).resolves.toMatchObject({ status: "open" });
+    expect(server.lessons[0]).toMatchObject({ instance_key: bound.key, body: "short", evidence: [] });
+    await expect(lessonTemplate(server.deps, "acme-growth", "x", { ...options, evidence: ["broken"] })).rejects.toThrow(/label=link/);
+    expect(await publishTemplate(server.deps, source, { team: "team-1", status: "canary" })).toMatchObject({ action: "created", template_id: "growth", team_id: "team-1" });
+    expect(await publishTemplate(server.deps, source, { codecast: true })).toMatchObject({ as_codecast: true });
+    expect(await catalogTemplates(server.deps, { team: "team-1" })).toEqual([{ template_id: "growth", team_id: "team-1" }]);
   }, 30000);
 });
 
@@ -492,16 +519,22 @@ describe("instance record, readiness and the loader", () => {
     const server = new Server(tmp());
     const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1" };
     await installTemplate(server.deps, source, "acme", options);
-    await expect(evidenceTemplate("acme", "technical", { ...options, status: "pass", source: "ct-9" })).rejects.toThrow(/approved and applied/);
+    await expect(evidenceTemplate(server.deps, "acme", "technical", { ...options, status: "pass", source: "ct-9" })).rejects.toThrow(/approved and applied/);
     server.approve(); await reconcileTemplate(server.deps, "acme", options);
     let status = await templateStatus(server.deps, "acme", options);
     expect(status.ask).toMatchObject({ id: "search-console", who: "human", status: "open" });
     expect(status.readiness.weekly).toEqual({ ready: false, mode: "propose", missing: ["evidence technical has no pass"] });
     expect(status.readiness.ads).toEqual({ ready: true, mode: "propose", missing: [] });
-    await expect(setupTemplate("acme", "search-console", { ...options, done: true })).rejects.toThrow(/person's step/);
-    await setupTemplate("acme", "measurement", { ...options, done: true, evidence: "ct-48703" });
-    await evidenceTemplate("acme", "technical", { ...options, status: "pass", source: "https://codecast.sh/t/ct-48700", detail: ["routes=38"] });
-    await reportTemplate("acme", ["primary_events_7d=7"], { ...options, source: "ct-48702" });
+    await expect(setupTemplate(server.deps, "acme", "search-console", { ...options, done: true })).rejects.toThrow(/person's step/);
+    await setupTemplate(server.deps, "acme", "measurement", { ...options, done: true, evidence: "ct-48703" });
+    await evidenceTemplate(server.deps, "acme", "technical", { ...options, status: "pass", source: "https://codecast.sh/t/ct-48700", detail: ["routes=38"] });
+    await reportTemplate(server.deps, "acme", ["primary_events_7d=7"], { ...options, source: "ct-48702" });
+    // Before the host step the record lives on the receipt alone; after bind every write also reaches the server row.
+    expect(server.recordCalls).toHaveLength(0);
+    await bindTemplate(server.deps, "acme", options);
+    await evidenceTemplate(server.deps, "acme", "technical", { ...options, status: "pass", source: "ct-48700" });
+    expect(server.recordCalls.map((c) => c.endpoint)).toEqual(["/cli/org/template/evidence"]);
+    expect(server.recordCalls[0]!.body).toMatchObject({ check: "technical", status: "pass", source: "ct-48700" });
     status = await templateStatus(server.deps, "acme", options);
     expect(status.readiness.weekly).toEqual({ ready: true, mode: "apply", missing: [] });
     expect(status.scoreboard.primary_events_7d).toMatchObject({ value: "7", source: "ct-48702" });
@@ -523,7 +556,7 @@ describe("instance record, readiness and the loader", () => {
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "publish", "catalog", "upgrade", "instructions"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
 

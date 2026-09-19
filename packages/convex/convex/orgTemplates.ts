@@ -78,7 +78,7 @@ export async function performPublish(ctx: Ctx, userId: Id<"users">, args: Publis
   }
   const now = Date.now();
   const existing = await templateRow(ctx, manifest.id, access);
-  const release = { version: manifest.version, digest: args.digest, status, changelog: args.changelog, storage_id: args.storage_id, published_at: now, published_by: userId };
+  const release = { version: manifest.version, digest: args.digest, status, changelog: args.changelog, storage_id: args.storage_id, manifest, published_at: now, published_by: userId };
   if (!existing) {
     const id = await ctx.db.insert("org_templates", {
       template_id: manifest.id, workspace: access, name: manifest.name, description: manifest.description, avatar: manifest.role.avatar,
@@ -179,9 +179,10 @@ async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: string): 
   if (!row || !(await workspaceGrantsAccess(ctx as any, userId, row.workspace))) throw new Error("Instance not found");
   const template = await visibleTemplate(ctx, row.template_id, row.workspace);
   if (!template) throw new Error("The instance's template is no longer available");
-  const release = template.releases.find((r: any) => r.version === row.version);
-  // The instance runs its pinned release; the latest manifest may differ.
-  return { row, manifest: (release?.manifest ?? template.manifest) as OrgTemplate };
+  // The instance runs its pinned release; the template's latest manifest may differ.
+  const release = template.releases.find((r: any) => r.version === row.version && r.digest === row.digest);
+  if (!release) throw new Error("The instance's pinned release is no longer published");
+  return { row, manifest: release.manifest as OrgTemplate };
 }
 const stateOf = (row: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, authority: row.authority });
 

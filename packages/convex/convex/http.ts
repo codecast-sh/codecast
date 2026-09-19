@@ -4180,6 +4180,22 @@ cliRoute("/cli/org/proposal/accept-all", async (ctx, body) => ctx.runMutation((a
 cliRoute("/cli/org/proposal/decide-ask", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decideAsk, body));
 cliRoute("/cli/org/proposal/withdraw", async (ctx, body) => ctx.runMutation((api as any).orgProposals.withdraw, body));
 cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api as any).orgProposals.revise, body));
+// Roles hired from a template (docs/architecture/org-hire.md W8): the template
+// as a server object, the instance row and its record, lessons back to the
+// publisher. Reads are one equality against the caller's workspace key or the
+// value "codecast"; writes carry the rules the CLI applies locally.
+cliRoute("/cli/org/template/publish", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.publish, body));
+cliRoute("/cli/org/template/catalog", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.catalog, body));
+cliRoute("/cli/org/template/get", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.get, body));
+cliRoute("/cli/org/template/instance", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.upsertInstance, body));
+cliRoute("/cli/org/template/instance-status", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.instanceStatus, body));
+cliRoute("/cli/org/template/instances", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.listInstances, body));
+cliRoute("/cli/org/template/evidence", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.recordEvidenceCheck, body));
+cliRoute("/cli/org/template/report", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.report, body));
+cliRoute("/cli/org/template/setup", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.setup, body));
+cliRoute("/cli/org/template/lesson", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.fileLesson, body));
+cliRoute("/cli/org/template/lessons", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.listLessons, body));
+cliRoute("/cli/org/template/lesson-status", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.setLessonStatus, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the

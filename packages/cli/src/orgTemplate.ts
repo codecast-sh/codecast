@@ -48,21 +48,43 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
     .option("--detail <key=value>", "A fact of the observation (repeatable)", (value: string, all: string[]) => [...all, value], [])
     .action(async (instance: string, check: string, options: any) => {
       const { evidenceTemplate } = await import("./orgTemplateRun.js");
-      console.log(JSON.stringify(await evidenceTemplate(instance, check, options), null, 2));
+      console.log(JSON.stringify(await evidenceTemplate(deps, instance, check, options), null, 2));
     });
   context(template.command("report <instance> <key=value...>").description("Write scoreboard values the template declares, each with its source"))
     .requiredOption("--source <href>", "A link or codecast short id a person can open")
     .option("--observed-at <iso>", "When the values were observed (default: now)")
     .action(async (instance: string, entries: string[], options: any) => {
       const { reportTemplate } = await import("./orgTemplateRun.js");
-      console.log(JSON.stringify(await reportTemplate(instance, entries, options), null, 2));
+      console.log(JSON.stringify(await reportTemplate(deps, instance, entries, options), null, 2));
     });
   context(template.command("setup <instance> [id]").description("List the setup items, or mark one; a person's step is refused from an agent session"))
     .option("--done", "Mark the item done").option("--skip", "Mark the item skipped").option("--open", "Reopen the item")
     .option("--evidence <href>", "What shows it is done (required for the role's own items)")
     .action(async (instance: string, id: string | undefined, options: any) => {
       const { setupTemplate } = await import("./orgTemplateRun.js");
-      console.log(JSON.stringify(await setupTemplate(instance, id, options), null, 2));
+      console.log(JSON.stringify(await setupTemplate(deps, instance, id, options), null, 2));
+    });
+  context(template.command("lesson <instance> <body>").description("Send a lesson to the template's publisher: a row on the template they review and may release; '-' reads the body from stdin"))
+    .option("--evidence <label=link>", "A link or short id a person can open (repeatable)", (value: string, all: string[]) => [...all, value], [])
+    .action(async (instance: string, body: string, options: any) => {
+      const { lessonTemplate } = await import("./orgTemplateRun.js");
+      const text = body === "-" ? await new Response(process.stdin).text() : body;
+      console.log(JSON.stringify(await lessonTemplate(deps, instance, text, options), null, 2));
+    });
+  template.command("publish <folder>").description("Publish a release folder as a template under a workspace, or as Codecast for every workspace")
+    .option("--team <name|id>", "Publishing team workspace").option("--personal", "Publish under your personal workspace").option("--codecast", "Publish as Codecast (its admins only)")
+    .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin")
+    .option("--review-project <id>", "Where this template's lessons are reviewed").option("--json", "Machine-readable output")
+    .action(async (folder: string, options: any) => {
+      const { publishTemplate } = await import("./orgTemplateRun.js");
+      const changelog = options.changelog === "-" ? await new Response(process.stdin).text() : options.changelog;
+      console.log(JSON.stringify(await publishTemplate(deps, folder, { ...options, changelog }), null, 2));
+    });
+  template.command("catalog").description("The templates this workspace may hire: its own and Codecast's")
+    .option("--team <name|id>", "Team workspace").option("--personal", "Personal workspace").option("--json", "Machine-readable output")
+    .action(async (options: any) => {
+      const { catalogTemplates } = await import("./orgTemplateRun.js");
+      console.log(JSON.stringify(await catalogTemplates(deps, options), null, 2));
     });
   context(template.command("upgrade <instance> <folder>").description("Preview a release change; --apply advances this instance only"))
     .option("--apply", "Apply the reviewed release change, preserving role and external trigger state")

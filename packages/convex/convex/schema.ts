@@ -1402,6 +1402,7 @@ export default defineSchema({
       status: v.union(v.literal("draft"), v.literal("canary"), v.literal("stable")),
       changelog: v.optional(v.string()),
       storage_id: v.optional(v.id("_storage")), // the release snapshot, for install from the record
+      manifest: v.any(), // this release's validated manifest; an instance reads its pinned one
       published_at: v.number(),
       published_by: v.id("users"),
     })),
