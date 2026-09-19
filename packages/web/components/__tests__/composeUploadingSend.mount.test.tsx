@@ -193,7 +193,10 @@ async function runScenario(order: "create-first" | "upload-first", opts: { failU
     expect(useInboxStore.getState().pendingMessages[REAL_ID]?.[0]?.images?.[0]).toMatchObject({ uploading: true });
     expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(0);
     uploadGate.resolve();
-    await flush(opts.failUploadsFirst ? 1500 * opts.failUploadsFirst + 200 : 100);
+    // The retries back off 1.5s each, so wait for the send rather than for a
+    // span: a slower runner made the fixed wait end before it happened.
+    await flushUntil(() => calls.some((c) => c.action === "sendMessage"),
+      opts.failUploadsFirst ? 1500 * opts.failUploadsFirst + 8_000 : 8_000);
   } else {
     uploadGate.resolve();
     await flushUntil(() => !!(useInboxStore.getState().pendingMessages[stubId]?.[0]?.images?.[0] as { storage_id?: string } | undefined)?.storage_id);
@@ -201,7 +204,7 @@ async function runScenario(order: "create-first" | "upload-first", opts: { failU
     expect(useInboxStore.getState().pendingMessages[stubId]?.[0]?.images).toEqual([{ media_type: "image/png", storage_id: STORAGE_ID }]);
     expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(0);
     createGate.resolve();
-    await flush(100);
+    await flushUntil(() => calls.some((c) => c.action === "sendMessage"));
   }
 
   const sends = calls.filter((c) => c.action === "sendMessage");
@@ -268,7 +271,9 @@ test("a refused commit keeps the popup open with the text instead of dismissing"
   await act(() => {
     textarea.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   });
-  await flush();
+  // The refusal comes back from the server call, so wait for its toast rather
+  // than for a span.
+  await flushUntil(() => toasts.some((t) => t.startsWith("error:")));
   expect(dismissed).toBe(0);
   expect(container.querySelector("textarea")).toBeTruthy();
   expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("[Image 1] look at this");
