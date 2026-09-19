@@ -23,6 +23,7 @@ export function ScopeWakesTab({ role, highlight, now }: { role: OrgRole; highlig
   const { data, error, missing } = useRoleWakes(role._id);
   const problem = queryProblem(error, missing, "The wake log");
   const target = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line no-restricted-syntax -- brings the highlighted wake into view as the list fills
   useEffect(() => { target.current?.scrollIntoView({ block: "center" }); }, [data?.length, highlight]);
   return (
     <div className="space-y-2" data-wakes-tab>

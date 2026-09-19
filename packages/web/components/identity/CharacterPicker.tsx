@@ -5,6 +5,7 @@
 // serves the whole selection, and the footer decides whether they share one
 // face or take a different face each.
 "use client";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Shuffle, RotateCcw } from "lucide-react";
 import {
@@ -104,7 +105,7 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
     pickFace(AVATAR_KEYS[next]);
   }, [pickFace]);
 
-  useEffect(() => { faceRefs.current[focus]?.focus(); /* mount focus only */ }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useMountEffect(() => { faceRefs.current[focus]?.focus(); });
 
   if (!first) return null;
 

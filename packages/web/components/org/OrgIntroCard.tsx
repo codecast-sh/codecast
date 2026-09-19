@@ -26,6 +26,7 @@ import { useIsPhone } from "../../hooks/useIsPhone";
 import { RoleAvatar } from "./avatars";
 import { OrgButton } from "./OrgButton";
 import { ORG_INTRO_CHIEF, ORG_INTRO_TITLE, markOrgUpsellSeen } from "./OrgIntro";
+import { useMountEffect } from "../../hooks/useMountEffect";
 
 export const ORG_MEET_TOAST_ID = "org-meet";
 
@@ -62,13 +63,14 @@ export function composerLift(doc: Document, viewportHeight: number, toastBottomO
  *  rises and nothing blank is left under it. */
 function useComposerLift(ref: React.RefObject<HTMLDivElement | null>): number {
   const [lift, setLift] = useState(0);
-  useEffect(() => {
+  useMountEffect(() => {
     const measure = () => setLift(composerLift(document, window.innerHeight));
     measure();
     const id = window.setInterval(measure, 500);
     window.addEventListener("resize", measure);
     return () => { window.clearInterval(id); window.removeEventListener("resize", measure); };
-  }, []);
+  });
+  // eslint-disable-next-line no-restricted-syntax -- writes the row's margin to match the measured lift, and clears it on the way out
   useEffect(() => {
     const li = ref.current?.closest("li");
     if (!li) return;
@@ -178,10 +180,12 @@ export function OrgIntroAnywhere() {
 
   // Sold by another route while the card is up (the person opened the org
   // page from the sidebar, or answered on another device): the card goes.
+  // eslint-disable-next-line no-restricted-syntax -- dismisses the toast when the upsell is seen
   useEffect(() => {
     if (risen.current && upsellSeen) toast.dismiss(ORG_MEET_TOAST_ID);
   }, [upsellSeen]);
 
+  // eslint-disable-next-line no-restricted-syntax -- arms the rise timer when the facts that gate it change
   useEffect(() => {
     if (risen.current) return;
     const facts: OrgIntroCardFacts = { initialized, signedIn, onOrgPage, phone, callPhase, composerHasText: false, introSeen, upsellSeen };

@@ -53,6 +53,7 @@ function AnchorSpace() {
   const router = useRouter();
   useSyncOrgTreeFeeder();
   const chief = useOrgRoles().roles.find((r) => r.handle === "chief-of-staff" && r.status !== "retired");
+  // eslint-disable-next-line no-restricted-syntax -- redirects once the chief seat resolves, so it follows that row, not the mount
   useEffect(() => {
     if (!chief) return;
     // Said once (S16): the person typed /anchor and landed somewhere else.

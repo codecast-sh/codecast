@@ -52,6 +52,7 @@ export function useSyncOrgHealth(enabled = true): { health: OrgHealth | null; re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, syncTable]);
 
+  // eslint-disable-next-line no-restricted-syntax -- owns its own refresh interval, rearmed when the key changes
   useEffect(() => {
     if (!key) return;
     let cancelled = false;

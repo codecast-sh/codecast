@@ -22,6 +22,7 @@ function ChipMenu({ open, onClose, trigger, children }: { open: boolean; onClose
   const wrap = useRef<HTMLSpanElement>(null);
   const items = () => [...(wrap.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
   const focusTrigger = () => wrap.current?.querySelector<HTMLElement>("[aria-haspopup]")?.focus();
+  // eslint-disable-next-line no-restricted-syntax -- moves focus into the menu each time it opens
   useEffect(() => { if (open) items()[0]?.focus(); }, [open]);
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!open) return;

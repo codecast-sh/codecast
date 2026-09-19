@@ -62,9 +62,11 @@ function StackBody({ stack }: { stack: DecisionStackItem }) {
   const [dueInput, setDueInput] = useState(() => toLocalInput(stack.policy.due_at));
   // The row is the truth: a due written on another device, or cleared by
   // the server, re-seeds the input.
+  // eslint-disable-next-line no-restricted-syntax -- the box follows the row, so another device's write is not left stale
   useEffect(() => { setDueInput(toLocalInput(stack.policy.due_at)); }, [stack.policy.due_at]);
   // The hours field follows the row too, so a change from another device or
   // a server side clear does not leave a stale number in the box.
+  // eslint-disable-next-line no-restricted-syntax -- same: the hours box follows the row
   useEffect(() => { setHoursInput(String(hours || "")); }, [hours]);
   const [delegateInput, setDelegateInput] = useState("");
 

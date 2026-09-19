@@ -24,6 +24,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { RoleAvatar } from "./avatars";
 import { OrgButton } from "./OrgButton";
+import { useEventListener } from "../../hooks/useEventListener";
+import { useMountEffect } from "../../hooks/useMountEffect";
+
+// Capture: the intro answers Escape before the page under it does.
+const INTRO_KEY_CAPTURE = { capture: true } as const;
 
 /** A line's text carries its own emphasis between double asterisks: the
  *  subject it leads with, and the one or two words that carry it. Nothing
@@ -175,20 +180,16 @@ export function OrgIntro({ hasRoles, compact = false, leaving = false, onStart, 
   onLater: () => void;
   lines?: readonly OrgIntroLine[];
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onLater(); }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onLater]);
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") { e.stopPropagation(); onLater(); }
+  }, undefined, INTRO_KEY_CAPTURE);
   // The keyboard lands on the start action once it has revealed, so Enter
   // starts and Escape defers without a reach for the mouse.
   const startRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
+  useMountEffect(() => {
     const t = window.setTimeout(() => startRef.current?.focus({ preventScroll: true }), T.actions + 200);
     return () => window.clearTimeout(t);
-  }, []);
+  });
   const rootRef = useRef<HTMLDivElement | null>(null);
   const scale = useRoomScale(rootRef, compact);
   return (

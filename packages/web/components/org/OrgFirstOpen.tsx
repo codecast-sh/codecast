@@ -13,11 +13,15 @@
 // last step's buttons ARE the two buttons above. Dismissing writes the
 // org_nux_seen pref through the store; "How this page works" in the toolbar
 // reopens it by hand.
+import { useEventListener } from "../../hooks/useEventListener";
 import { staffingPaneWord } from "./orgMeta";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { Sparkles, UserRoundPlus, X } from "lucide-react";
 import { OrgButton } from "./OrgButton";
 import type { OrgPerson } from "./orgTypes";
+
+// Capture: the wizard answers the key before the page under it does.
+const KEY_CAPTURE = { capture: true } as const;
 
 export type OrgGuideStep = {
   id: string;
@@ -166,15 +170,11 @@ export function OrgGuide({ steps, step, onStep, onDone, onAction }: {
   const cur = steps[step] ?? steps[0];
   const rect = useTargetRect(cur?.target ?? null);
   const last = step >= steps.length - 1;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onDone(); }
-      else if (e.key === "ArrowRight" || e.key === "Enter") { if (last) onDone(); else onStep(step + 1); }
-      else if (e.key === "ArrowLeft" && step > 0) onStep(step - 1);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [step, last, onStep, onDone]);
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") { e.stopPropagation(); onDone(); }
+    else if (e.key === "ArrowRight" || e.key === "Enter") { if (last) onDone(); else onStep(step + 1); }
+    else if (e.key === "ArrowLeft" && step > 0) onStep(step - 1);
+  }, undefined, KEY_CAPTURE);
 
   const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
