@@ -16,7 +16,8 @@ import { armedTriggerKindFor } from "./dormancy";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueRoleEvent } from "./orgEvents";
-import { normalizeThreadState, runResultThreadOf, triggerLifecycleInstructions } from "@codecast/shared/contracts";
+import { normalizeThreadState, runOwnerOf, runOwnerWakeOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
+import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -130,11 +131,16 @@ async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 // Resolve a spawned run's conversation (session_id IS the uuid the daemon
 // assigned via `claude --session-id`) and stamp agent_task_id on it, so the run
 // stays attributable to its schedule forever — not just while it's the latest.
-// Idempotent; returns the conversation or null if it hasn't synced yet.
-async function stampRunConversation(
+// A run with an owner (runOwnerOf: a once trigger armed from a session) nests
+// under it as a subagent row, the same shape `cast spawn --subagent` makes, so
+// it never surfaces as a loose inbox card nobody owns. The daemon stamps both
+// at birth (createConversation agent_task_id + parent_conversation_id); this
+// is the backfill for rows born without them. Idempotent; returns the
+// conversation, or null if it hasn't synced yet.
+export async function stampRunConversation(
   ctx: TaskCtx,
   userId: Id<"users">,
-  taskId: Id<"agent_tasks">,
+  task: Doc<"agent_tasks">,
   runSessionUuid: string
 ): Promise<Doc<"conversations"> | null> {
   const conv = await ctx.db
@@ -143,10 +149,130 @@ async function stampRunConversation(
     .filter((q: any) => q.eq(q.field("user_id"), userId))
     .first();
   if (!conv) return null;
-  if (conv.agent_task_id !== taskId) {
-    await ctx.db.patch(conv._id, { agent_task_id: taskId });
+  const patch: Record<string, any> = {};
+  if (conv.agent_task_id !== task._id) patch.agent_task_id = task._id;
+  const owner = runOwnerOf(task);
+  if (owner && !conv.parent_conversation_id && owner.toString() !== conv._id.toString()) {
+    patch.parent_conversation_id = owner;
+    patch.is_subagent = true;
+  }
+  if (Object.keys(patch).length > 0) {
+    await ctx.db.patch(conv._id, patch);
+    Object.assign(conv, patch);
   }
   return conv;
+}
+
+// The newest conversation stamped as a run of this task (linkRunConversation
+// stamps agent_task_id within seconds of the spawn), for callers that hold
+// no run uuid: the reclaim sweep judging a lapsed lease.
+async function latestRunConversation(ctx: TaskCtx, task: Doc<"agent_tasks">): Promise<Doc<"conversations"> | null> {
+  if (task.originating_conversation_id) return null;
+  const runs: Doc<"conversations">[] = await ctx.db
+    .query("conversations")
+    .withIndex("by_agent_task", (q: any) => q.eq("agent_task_id", task._id))
+    .collect();
+  const latest = runs.sort((a, b) => b._creationTime - a._creationTime)[0];
+  // Through the stamp, so the run nests under its owner like every other path.
+  return latest ? stampRunConversation(ctx, task.user_id, task, latest.session_id) : null;
+}
+
+// The run's agent process is gone: the daemon stamps the managed session
+// "stopped" when the process it registered exits (its conversation row keeps
+// no such field). A run never registered is not known to be over.
+async function runAgentStopped(ctx: TaskCtx, runConv: Doc<"conversations">): Promise<boolean> {
+  const managed = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", runConv.session_id))
+    .first();
+  return managed?.agent_status === "stopped";
+}
+
+// A run's agent parked at a usage limit: the CLI wrote its limit banner and
+// the process ended (a headless `claude -p` cannot wait at the dialog an
+// interactive session parks on). Stamped server-side from the banner, exactly
+// like an interactive session's park (pending_api_error_kind "limit").
+function runIsLimitParked(runConv: Doc<"conversations"> | null): boolean {
+  return runConv?.pending_api_error_kind === "limit";
+}
+
+// How long a limit-parked run waits when no account reports a reset time, and
+// the margin past a reported reset so the first request lands after the
+// window rolled rather than on its last second.
+const LIMIT_PARK_FALLBACK_MS = 60 * 60 * 1000;
+const LIMIT_PARK_GRACE_MS = 2 * 60 * 1000;
+
+// A usage limit is a machine-wide condition, not a fault of the run: retrying
+// a minute later spends a fresh session on the same wall, and three of those
+// retire the trigger without a single line of work done (tr-887, 2026-09-18:
+// three runs, three inbox cards, one report never written). So the run is
+// PARKED, the way an interactive session is: the trigger re-arms at the
+// earliest window reset the primary machine's accounts report (the same
+// number the auto-switch loop waits on), the retry budget is untouched, and
+// the run keeps its session so the resume continues where the agent stopped
+// (taskScheduler: last_run_failed + last_run_session_uuid → `--resume`).
+async function parkRunAtLimit(
+  ctx: TaskCtx,
+  task: Doc<"agent_tasks">,
+  runConv: Doc<"conversations">,
+  now: number,
+): Promise<void> {
+  const { primary } = await listOnlineDevices(ctx, task.user_id, now);
+  const resetAt = earliestUsageResetAt(primary?.cc_accounts?.profiles ?? [], now);
+  const runAt = (resetAt ?? now + LIMIT_PARK_FALLBACK_MS) + LIMIT_PARK_GRACE_MS;
+  const when = new Date(runAt).toISOString();
+  await patchTask(ctx, task, {
+    status: "scheduled",
+    run_at: runAt,
+    lease_holder: undefined,
+    lease_expires_at: undefined,
+    last_run_summary: `Parked at a usage limit; resumes ${when}`,
+    last_run_failed: true,
+    last_run_session_uuid: runConv.session_id,
+    last_run_conversation_id: runConv._id,
+    parked_run_session_uuid: runConv.session_id,
+  });
+}
+
+// Wake the run's owner with the outcome (runOwnerWakeOf decides whether this
+// outcome wakes at all). The owner takes a turn on it, as it would on any
+// scheduler injection: the same wrapper the web renders as a trigger block,
+// the same origin that keeps a hidden stash hidden and never chimes. A killed
+// owner is resurrected for delivery, as a scheduled follow-up into a closed
+// session is — a failure nobody reads is the exact card this replaces.
+async function wakeRunOwner(
+  ctx: TaskCtx,
+  task: Doc<"agent_tasks">,
+  runConv: Doc<"conversations"> | null,
+  outcome: RunOutcome,
+  detail: string | undefined,
+  now: number,
+): Promise<boolean> {
+  const ownerId = runOwnerWakeOf(task, outcome);
+  if (!ownerId) return false;
+  const owner = await ctx.db.get(ownerId);
+  if (!owner || owner.user_id !== task.user_id) return false;
+  const handle = task.short_id ?? task.title;
+  const runRef = runConv ? runConv.short_id ?? runConv._id.toString().slice(0, 7) : null;
+  const run = runRef ? `Run ${runRef} of ${handle}` : `A run of ${handle}`;
+  const read = runRef ? ` Read it with cast read ${runRef}.` : "";
+  const body =
+    outcome === "failed"
+      ? `${run} failed and the trigger is retired${detail ? `: ${detail}` : ""}.${read} This trigger is yours: re-arm it with a better brief, or file what the run found. Nobody else will act on it.`
+      : outcome === "unreported_exit"
+        ? `${run} ended without reporting.${read} If the work is done, use or file its result; if the run died, re-arm the trigger.`
+        : outcome === "attention"
+          ? `${run} finished and needs attention:\n\n${detail ?? ""}`
+          : `${run} finished:\n\n${detail ?? ""}`;
+  const label =
+    outcome === "failed" ? "failed" : outcome === "unreported_exit" ? "ended without reporting" : outcome === "attention" ? "needs attention" : "finished";
+  const safeTitle = `${handle} run ${label}`.replace(/"/g, "&quot;");
+  await enqueuePendingMessage(ctx, owner, task.user_id, {
+    content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${body}</scheduled-task>`,
+    origin: "scheduler",
+    client_id: `run-outcome:${task._id}:${task.run_count}:${outcome}:${now}`,
+  });
+  return true;
 }
 
 // Kill is the strongest triage gesture — "make this stop". Any armed schedule
@@ -245,6 +371,7 @@ interface NewTaskArgs {
   max_runtime_ms?: number;
   max_retries?: number;
   precheck?: string;
+  wake_creator?: boolean;
 }
 
 export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
@@ -291,6 +418,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     mode: (args.mode === "propose" ? "propose" : "apply") as "propose" | "apply",
     max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
     precheck: args.precheck?.trim() || undefined,
+    wake_creator: args.wake_creator || undefined,
     status: "scheduled" as const,
     retry_count: 0,
     max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
@@ -358,6 +486,9 @@ export const createTask = mutation({
     max_runtime_ms: v.optional(v.number()),
     max_retries: v.optional(v.number()),
     precheck: v.optional(v.string()),
+    // `--spawn --wake`: a clean report wakes the session that armed the
+    // trigger (runOwnerWakeOf). Meaningful for once spawn triggers only.
+    wake_creator: v.optional(v.boolean()),
     // Any session ref (short id, conversation _id, or Claude session uuid) the
     // schedule should inject into — `cast trigger add --for <session>`.
     // Resolved own-only: you can bind a schedule only to your own session.
@@ -672,10 +803,13 @@ export const claimTask = mutation({
     // Through patchTask (scheduled → running are both armed statuses, so the
     // home's armed_trigger_kind is unchanged — but every lifecycle writer
     // routes through the one restamping chokepoint; see the exhaustive test).
+    // The parked session uuid rides out on the claimed task (the daemon
+    // resumes it) and clears on the row: a run is resumed once.
     await patchTask(ctx, task, {
       status: "running",
       lease_holder: args.daemon_id,
       lease_expires_at: now + LEASE_DURATION_MS,
+      parked_run_session_uuid: undefined,
     });
 
     return { ...task, status: "running" as const };
@@ -759,27 +893,35 @@ function nextArmingAfterRun(task: Doc<"agent_tasks">, now: number): Record<strin
 //    through the same writer. Without it the run's process exit reads as a dead
 //    session with output: every clean run filed under Needs Input, and the
 //    stall rule pulled a folded one back out seconds after the fold.
-// 2. The result is posted where it is read (runResultThreadOf).
+// 2. The result is posted where it is read (runResultThreadOf) — or, when the
+//    outcome is the owner's to act on (runOwnerWakeOf: a death, an ask, or a
+//    report the trigger asked to be woken for), delivered to the owner as a
+//    turn instead of a line it may never open.
 // 3. The run folds out of the inbox once its result lives somewhere else: a
 //    repeating trigger's standing row, or the thread from step 2. A once run
 //    with nowhere to post stays in the inbox, filed under Done — its single
 //    result IS the deliverable. Pins, earlier triage and queued messages are
 //    the user's intent and are never overridden.
 export async function settleRunConversation(
-  ctx: MutationCtx,
+  ctx: TaskCtx,
   task: Doc<"agent_tasks">,
   runConv: Doc<"conversations"> | null,
   args: { summary?: string; needs_attention?: boolean; daemon_id?: string },
   now: number,
 ): Promise<void> {
   const summary = args.summary ? normalizeThreadState(args.summary) : "";
-  const selfReported = !!runConv && !args.daemon_id && !!summary;
+  // The agent's own report (no daemon_id) — a codex run reports too, though
+  // its conversation is never resolved (no session uuid), so the outcome is
+  // judged on the report alone and the declaration only where a row exists.
+  const reported = !args.daemon_id && !!summary;
+  const selfReported = !!runConv && reported;
   if (runConv && selfReported) {
-    await performSetThreadState(ctx, runConv, summary, args.needs_attention ? "blocked" : "done");
+    await performSetThreadState(ctx as MutationCtx, runConv, summary, args.needs_attention ? "blocked" : "done");
   }
 
-  let posted = false;
-  const threadId = runResultThreadOf(task);
+  const outcome: RunOutcome = reported ? (args.needs_attention ? "attention" : "reported") : "unreported_exit";
+  let posted = await wakeRunOwner(ctx, task, runConv, outcome, reported ? args.summary : undefined, now);
+  const threadId = posted ? undefined : runResultThreadOf(task);
   const thread = threadId && args.summary ? await ctx.db.get(threadId) : null;
   if (thread) {
     // A spawned run names its trigger and its own session, so the line in the
@@ -873,7 +1015,14 @@ export const completeTaskRun = mutation({
     // conversation — which is the schedule's home, not a run of it.
     let runConv: Doc<"conversations"> | null = null;
     if (args.run_session_uuid && !task.originating_conversation_id) {
-      runConv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+      runConv = await stampRunConversation(ctx, auth.userId, task, args.run_session_uuid);
+    }
+
+    // The daemon reporting the process gone while the run's transcript ends
+    // on a limit banner is a park, not a completion: nothing ran.
+    if (args.daemon_id && runConv && runIsLimitParked(runConv) && task.status === "running") {
+      await parkRunAtLimit(ctx, task, runConv, now);
+      return true;
     }
 
     await settleRunConversation(ctx, task, runConv, args, now);
@@ -968,8 +1117,14 @@ export const failTaskRun = mutation({
     // stamp it too (and last_run_failed gates the auto-fold: a failed run
     // must stay visible in the inbox when the retry starts). Spawn tasks only,
     // same reason as completeTaskRun.
+    let runConv: Doc<"conversations"> | null = null;
     if (runUuid && !task.originating_conversation_id) {
-      await stampRunConversation(ctx, auth.userId, args.task_id, runUuid);
+      runConv = await stampRunConversation(ctx, auth.userId, task, runUuid);
+    }
+
+    if (runConv && runIsLimitParked(runConv)) {
+      await parkRunAtLimit(ctx, task, runConv, Date.now());
+      return true;
     }
 
     if (newRetryCount < maxRetries) {
@@ -1004,6 +1159,9 @@ export const failTaskRun = mutation({
           await ctx.db.patch(home._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
         }
       }
+      // A fresh run's death is its owner's to act on: the run is nested under
+      // it and out of the inbox, so the owner is told, not the human.
+      await wakeRunOwner(ctx, task, runConv, "failed", args.error, Date.now());
 
       const user = await ctx.db.get(auth.userId);
       if (user?.push_token && user.notifications_enabled) {
@@ -1109,7 +1267,7 @@ export const linkRunConversation = mutation({
     const task = await getOwnedTask(ctx, args.task_id, auth.userId);
     if (!task) return { linked: false, retry: false };
 
-    const conv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+    const conv = await stampRunConversation(ctx, auth.userId, task, args.run_session_uuid);
     if (!conv) return { linked: false, retry: true }; // not synced yet — daemon retries
 
     const repeatingSpawn =
@@ -1964,6 +2122,24 @@ export const reclaimStaleTasks = internalMutation({
     let reclaimed = 0;
     for (const task of runningTasks) {
       if (task.lease_expires_at && task.lease_expires_at < now) {
+        // A lease lapses when the daemon that held it stopped renewing, most
+        // often because it restarted mid-run and lost the run's monitor. The
+        // run itself may be over: its agent exited (stopped) or parked at a
+        // limit. Re-firing then spends a whole fresh session on finished
+        // work, so a finished run settles as an unreported exit (its owner is
+        // told, runOwnerWakeOf) and a parked one re-arms at the reset.
+        const runConv = await latestRunConversation(ctx, task);
+        if (runConv && runIsLimitParked(runConv)) {
+          await parkRunAtLimit(ctx, task, runConv, now);
+          reclaimed++;
+          continue;
+        }
+        if (runConv && (await runAgentStopped(ctx, runConv))) {
+          await settleRunConversation(ctx, task, runConv, { daemon_id: "reclaim" }, now);
+          await patchTask(ctx, task, completedTaskRunFields(task, now, {}, false));
+          reclaimed++;
+          continue;
+        }
         const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
         if (task.retry_count < maxRetries) {
           await patchTask(ctx, task, {
