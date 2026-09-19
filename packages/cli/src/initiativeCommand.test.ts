@@ -18,8 +18,8 @@ describe("cast initiative: reading what a person types", () => {
 describe("cast initiative ls", () => {
   test("one line carries status, owner, projects, progress, health with its date and the target", () => {
     const line = initiativeLine(c, {
-      short_id: "in-3", title: "Win enterprise", status: "active", health: "at_risk", health_at: Date.UTC(2026, 8, 18),
-      owner_label: "@growth", projects: [{}, {}], task_counts: { total: 8, done: 2 }, target_date: Date.UTC(2026, 11, 1),
+      short_id: "in-3", title: "Win enterprise", status: "active", health: "at_risk", health_at: new Date(2026, 8, 18, 23, 59).getTime(),
+      owner_label: "@growth", projects: [{}, {}], task_counts: { total: 8, done: 2 }, target_date: new Date(2026, 11, 1, 23, 59, 59).getTime(),
     });
     expect(line).toBe("  ◉ in-3 Win enterprise At risk (2026-09-18) Active | @growth | 2 projects | 2/8 done (25%) | target 2026-12-01");
   });

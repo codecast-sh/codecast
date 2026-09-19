@@ -16083,6 +16083,7 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
   if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
+  if (t.created_at) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
   if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
   if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
   if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
@@ -16092,6 +16093,16 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
     console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
     for (const sess of t.sessions) {
       console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
+    }
+  }
+  if (t.history?.length) {
+    console.log(`\n  ${c.bold}History (${t.history.length})${c.reset}`);
+    for (const h of t.history) {
+      const what = h.action === "created"
+        ? "created this task"
+        : `${h.field}: ${h.old_value ?? "none"} to ${h.new_value ?? "none"}`;
+      const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
+      console.log(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${h.actor ?? "system"} ${what}${from}`);
     }
   }
   if (t.comments?.length) {

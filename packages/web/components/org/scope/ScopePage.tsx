@@ -244,6 +244,7 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
       canEditBrief={canEditBrief}
       hostName={hostName}
       model={model}
+      standingId={standingId ?? null}
       counters={counters}
       armRetire={retireArmed}
       now={now}

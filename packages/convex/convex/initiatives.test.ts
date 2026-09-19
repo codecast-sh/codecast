@@ -50,8 +50,14 @@ function fixtures() {
       { _id: "tasks_1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "done", title: "a" },
       { _id: "tasks_2", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "open", title: "b" },
       { _id: "tasks_3", user_id: ME, team_id: TEAM, workspace: WS, project_id: Q, status: "done", title: "c" },
+      // Filed under a plan of Growth, no project of its own: Growth's work.
+      { _id: "tasks_4", user_id: ME, team_id: TEAM, workspace: WS, plan_id: "plans_growth", status: "done", title: "d" },
+      // Dropped: out of the total.
+      { _id: "tasks_5", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "dropped", title: "e" },
+      // Someone else's private task in Growth: not the caller's to count.
+      { _id: "tasks_6", user_id: STRANGER, workspace: `user:${STRANGER}`, project_id: P, status: "done", title: "f" },
     ],
-    plans: [],
+    plans: [{ _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, title: "Growth plan", status: "active" }],
     projects: [
       project(P, "Growth"),
       project(Q, "Billing"),
@@ -272,12 +278,14 @@ describe("initiatives: projects", () => {
     await expect(run(addProject, db, { id: "in-1", project_id: "projects_missing" })).rejects.toThrow("No project");
   });
 
-  test("the terminal reads join project titles and roll task counts up; the synced row stays raw", async () => {
+  test("the terminal reads join project titles and roll task counts up the way the role page does; the synced row stays raw", async () => {
     const db = fixtures();
     await run(create, db, { ...inTeam, title: "Win enterprise", status: "active", project_ids: [P, Q] });
     const [row] = await run(list, db, { status: "active" });
-    expect(row.projects.map((p: any) => [p.title, p.task_counts])).toEqual([["Growth", { total: 2, done: 1 }], ["Billing", { total: 1, done: 1 }]]);
-    expect(row.task_counts).toEqual({ total: 3, done: 2 });
+    // Growth: one open, one done, one done through its plan; the dropped one
+    // and the stranger's private one are not counted.
+    expect(row.projects.map((p: any) => [p.title, p.task_counts])).toEqual([["Growth", { total: 3, done: 2 }], ["Billing", { total: 1, done: 1 }]]);
+    expect(row.task_counts).toEqual({ total: 4, done: 3 });
     expect(await run(list, db, { status: "completed" })).toEqual([]);
 
     const [raw] = await run(webList, db, inTeam);

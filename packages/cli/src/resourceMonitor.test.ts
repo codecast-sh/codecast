@@ -327,6 +327,23 @@ describe("resourceMonitor", () => {
       expect(clock.previous("late", NOW + 2 * TICK)).toBe(5 * 3600_000); // and the tick that finds it continues from it
     });
 
+    it("a session collected on the first tick continues from its restored counter, not from zero", () => {
+      // The regression (ct-52784): the restore landed after the first tick's
+      // set loop, that loop stored a live 0 for every collected session, and
+      // live outranks restored, so 102 of 102 counters went to zero at boot.
+      // The daemon must restore before the loop; this pins the clock's side of
+      // that contract: a restore that precedes the first set is honored.
+      const clock = new AwakeIdleClock();
+      clock.restore(snapshotOf({ a: 5 * 3600_000 }, NOW), NOW);
+      clock.set("a", nextAwakeIdleMs({ prevIdleMs: clock.previous("a", NOW), cpu: 0, status: "idle", elapsedMs: 0, sleepSkip: true }));
+      expect(clock.get("a")).toBe(5 * 3600_000);
+      // And the failure shape, so the test names what a late restore does.
+      const late = new AwakeIdleClock();
+      late.set("a", nextAwakeIdleMs({ prevIdleMs: late.previous("a", NOW), cpu: 0, status: "idle", elapsedMs: 0, sleepSkip: true }));
+      late.restore(snapshotOf({ a: 5 * 3600_000 }, NOW), NOW);
+      expect(late.previous("a", NOW + TICK)).toBe(0);
+    });
+
     it("expires unclaimed restored counters with the window and prunes live ones the tick did not collect", () => {
       const clock = new AwakeIdleClock();
       clock.restore(snapshotOf({ late: 5 * 3600_000 }, NOW), NOW);

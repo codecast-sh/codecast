@@ -13,6 +13,7 @@
 // the side effect of its own name.
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarDays, Flag, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { INITIATIVE_STATUSES, INITIATIVE_STATUS_LABEL, type InitiativeOwner, type InitiativeRow, type InitiativeStatus } from "@codecast/shared/contracts/initiative";
 import { InboxConversation } from "../../app/inbox/QueuePageClient";
@@ -25,7 +26,8 @@ import { useSyncPlans } from "../../hooks/useSyncPlans";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
-import { initiativeProgress, ownerId, ownerSeat, progressPercent } from "../../lib/initiatives";
+import { initiativeHref, initiativeProgress, ownerId, ownerSeat, progressPercent } from "../../lib/initiatives";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { canEditRole } from "../../lib/scopePage";
 import { cn } from "../../lib/utils";
 import { EntityIdPill } from "../EntityIdPill";
@@ -65,6 +67,12 @@ export function InitiativePageInner({ id }: { id: string }) {
   const session = conversationId ? (st.sessions[conversationId] as any) : undefined;
 
   const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone);
+  // A page opened by a stub's key moves to the `in-N` the server minted, so
+  // the address a person copies is the one that lasts.
+  const router = useRouter();
+  useWatchEffect(() => {
+    if (initiative?.short_id && id !== initiative.short_id) router.replace(initiativeHref(initiative));
+  }, [initiative?.short_id, id]);
   const progress = initiative ? initiativeProgress(initiative, byProject) : null;
 
   // Talk follows the seat's own rule: a role's host, its parent or an admin;

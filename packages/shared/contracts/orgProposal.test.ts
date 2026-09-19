@@ -366,6 +366,9 @@ describe("a role that names an existing session (seat)", () => {
     expect(orgChangeError(role)).toBeNull();
     expect(orgChangeError({ ...role, seat: {} })).toContain("seat is { existing");
     expect(orgChangeError({ ...role, seat: { existing: "jx7b88a", helpers: -1 } })).toContain("helpers is a count");
+    // Naming keeps the session's reporting line; a role as parent is a separate move.
+    expect(orgChangeError({ ...role, reports_to: "@matching" })).toContain("keeps the session's reporting line");
+    expect(orgChangeError({ ...role, reports_to: undefined })).toBeNull();
     expect(describeOrgChange(role)).toBe("name session jx7b88a as role Market growth mandate @market-growth reporting to me over Growth");
   });
 
@@ -375,6 +378,10 @@ describe("a role that names an existing session (seat)", () => {
     expect(ask.title).toBe("Name Market growth mandate as a role");
     expect(ask.effect).toContain("Naming it changes nothing about how it works");
     expect(ask.effect).toContain("It becomes a role, reporting to you and looking after the Growth project.");
+    // A move on the named role rides in its ask as its own sentence, so the person can skip it.
+    const [withMove] = deriveAsks([{ seq: 1, change: role }, { seq: 2, change: { kind: "move", handle: "market-growth", reports_to: "@matching", reason: "same area" } as OrgChange }]);
+    expect(withMove.seqs).toEqual([1, 2]);
+    expect(withMove.effect).toContain("A separate change puts it under matching; skip that and it keeps reporting to whoever runs it today.");
     expect(orgChangeDependencies([{ seq: 1, change: role }, { seq: 2, change: { kind: "routine", handle: "market-growth", title: "Daily run", prompt: "p", every: "1d" } as OrgChange }])).toEqual({ 2: "runs on the session #1 seats" });
   });
 

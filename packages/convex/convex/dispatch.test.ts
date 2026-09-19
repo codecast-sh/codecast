@@ -452,6 +452,25 @@ describe("createSession side effect", () => {
     expect(conversation.active_task_id).toBe(taskId);
   });
 
+  test("a team task that pins no path launches in its team's directory, not the viewer's open repo", async () => {
+    const taskId = "tasks_union";
+    const db = createSessionDb({
+      directory_team_mappings: [
+        { _id: "m1", user_id: userId, team_id: "teams_codecast", path_prefix: "/repo", auto_share: true },
+        { _id: "m2", user_id: userId, team_id: "teams_union", path_prefix: "/union", auto_share: true },
+      ],
+      tasks: [{ _id: taskId, user_id: userId, team_id: "teams_union", title: "Tips", conversation_ids: [] }],
+    });
+
+    // createLinkedSession sends project_path "/repo": the viewer's open repo.
+    const conversationId = await createLinkedSession(db, { type: "task", id: taskId });
+    const conversation = db._tables.conversations.find((row: any) => row._id === conversationId);
+
+    expect(conversation.project_path).toBe("/union");
+    expect(conversation.team_id).toBe("teams_union");
+    expect(conversation.is_private).toBe(false);
+  });
+
   test("atomically links a context-created session to its doc", async () => {
     const docId = "docs_context";
     const db = createSessionDb({

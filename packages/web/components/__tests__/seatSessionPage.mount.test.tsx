@@ -58,7 +58,7 @@ mock.module("../FleetBoard", () => ({ FleetBoard: () => <div data-fleet />, Inbo
 mock.module("../ActivityFeed", () => ({ ActivityFeed: () => <div data-feed /> }));
 mock.module("../EmptyState", () => ({ EmptyState: () => null }));
 mock.module("../SharePopover", () => ({ SharePopover: () => <button data-share>Share</button> }));
-mock.module("../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null }));
+mock.module("../SessionErrorBanner", () => ({ SessionErrorBanner: () => <div data-error-banner />, SessionResumeBanner: () => null }));
 mock.module("../PlanContextPanel", () => ({ PlanContextPanel: () => null }));
 mock.module("../WorkflowContextPanel", () => ({ WorkflowContextPanel: () => null }));
 mock.module("../TriggerContextPanel", () => ({ TriggerContextPanel: () => <div data-trigger-panel /> }));
@@ -221,18 +221,35 @@ test("the seat keeps the session header and every slot, resting on one row", asy
   expect(layout.getAttribute("data-hide-header")).toBe("0");
   expect(layout.getAttribute("data-density")).toBe("condensed");
   expect(q("[data-sv-convhead] [data-share]")).not.toBeNull();
-  expect(q("[data-trigger-panel]")).not.toBeNull();
   expect(q("[data-seat-label]")).not.toBeNull();
   expect(q("[data-lead]")).not.toBeNull();
+  // At rest the routine line waits behind the expander, not above the first message.
+  expect(q("[data-trigger-panel]")).toBeNull();
 
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("rest");
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("open");
-  // The label leaves the DOM, which is what makes the row's squeeze measure again.
+  expect(q("[data-trigger-panel]")).not.toBeNull();
+  // The state slot leaves the DOM, which is what makes the row's squeeze measure again.
   expect(q("[data-seat-label]")).toBeNull();
   expect(q("[data-seat-head-toggle]")?.getAttribute("aria-expanded")).toBe("true");
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("rest");
+}, 600_000);
+
+test("a stall replaces the state word at rest; the banner waits behind the expander", async () => {
+  await mount();
+  await act(async () => useInboxStore.setState({ sessions: { ...useInboxStore.getState().sessions, [SEAT]: { ...useInboxStore.getState().sessions[SEAT], session_error: "the agent died" } } as any }));
+  await go((s) => { s.navigateToSession(SEAT); s.setShowMySessions(false); });
+  expectRolePage();
+  expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(true);
+  expect(q("[data-seat-stall]")?.textContent).toContain("Session error");
+  expect(q("[data-seat-stall-action]")?.textContent).toBe("Resume");
+  expect(q("[data-error-banner]")).toBeNull();
+
+  await click("[data-seat-head-toggle]");
+  expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(false);
+  expect(q("[data-error-banner]")).not.toBeNull();
 }, 600_000);
 
 // The fold is CSS over the real header, so no action is rebuilt and none can

@@ -143,6 +143,7 @@ import type * as lib_orgActivity from "../lib/orgActivity.js";
 import type * as lib_orgCharter from "../lib/orgCharter.js";
 import type * as lib_orgCoverage from "../lib/orgCoverage.js";
 import type * as lib_orgScope from "../lib/orgScope.js";
+import type * as lib_projectWork from "../lib/projectWork.js";
 import type * as lib_repoSearch from "../lib/repoSearch.js";
 import type * as lib_sanitize from "../lib/sanitize.js";
 import type * as lib_siteUrl from "../lib/siteUrl.js";
@@ -399,6 +400,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orgCharter": typeof lib_orgCharter;
   "lib/orgCoverage": typeof lib_orgCoverage;
   "lib/orgScope": typeof lib_orgScope;
+  "lib/projectWork": typeof lib_projectWork;
   "lib/repoSearch": typeof lib_repoSearch;
   "lib/sanitize": typeof lib_sanitize;
   "lib/siteUrl": typeof lib_siteUrl;
