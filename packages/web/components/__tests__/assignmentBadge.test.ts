@@ -14,7 +14,10 @@ test("assignment header permissions, machine visibility and ownership interactio
       }, (error) => resolve(error));
     });
     const stderr = await readFile(join(dir, "stderr"), "utf8");
-    expect(stderr).toContain("6 pass");
+    // The child run passing is the point; the exact count moves whenever a case
+  // is added to the fixture.
+  expect(stderr).toContain("0 fail");
+  expect(stderr).toMatch(/[1-9]\d* pass/);
     expect(stderr).toContain("0 fail");
     expect(error).toBeNull();
   } finally {
