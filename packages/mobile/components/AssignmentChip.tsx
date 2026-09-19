@@ -11,7 +11,6 @@ import { Image,
   StyleSheet,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { Text, TextInput } from '@/components/Themed';
 import { useMutation, useQuery } from 'convex/react';
@@ -99,7 +98,7 @@ export function AssignmentChip({
     notify: (msg) => showToast(msg),
   }));
   const { ownerList, displayFor } = owners;
-  const { height: windowHeight } = useWindowDimensions();
+  const [dbg, setDbg] = useState('');
 
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
 
@@ -187,12 +186,14 @@ export function AssignmentChip({
         supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
       >
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <Pressable style={styles.backdrop} onPress={() => setSheetVisible(false)}>
-          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: windowHeight * 0.85 }]} onPress={() => {}}>
+        {/* accessible={false} on both: a Pressable defaults to accessible, which
+            would flatten the whole sheet into one VoiceOver element. */}
+        <Pressable style={styles.backdrop} onPress={() => setSheetVisible(false)} accessible={false}>
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => {}} accessible={false} onLayout={(e) => { const h = Math.round(e.nativeEvent.layout.height); setDbg((d) => d + ` sheet=${h}`); }}>
             <View style={styles.grabber} />
-            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} onLayout={(e) => { const h = Math.round(e.nativeEvent.layout.height); setDbg((d) => d + ` list=${h}`); }} onContentSizeChange={(_w, h) => { const c = Math.round(h); setDbg((d) => d + ` content=${c}`); }}>
 
-            <Text style={styles.sectionLabel}>Run on device · which machine</Text>
+            <Text style={styles.sectionLabel}>Run on device · which machine{dbg}</Text>
             {sortedDevices.length === 0 && (
               <Text style={styles.emptyText}>No devices yet. Run the codecast daemon on a machine.</Text>
             )}
@@ -504,13 +505,17 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(0, 0, 0, 0.45)',
   },
+  // Same pair as MessageNavigatorSheet: the sheet caps at a share of the
+  // screen and the list shrinks to fit it, so long rosters scroll.
   sheet: {
+    maxHeight: '85%',
     backgroundColor: Theme.cardBg,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: 20,
     paddingTop: 8,
   },
+  list: { flexGrow: 0, flexShrink: 1 },
   grabber: {
     alignSelf: 'center',
     width: 36,

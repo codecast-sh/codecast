@@ -13,7 +13,7 @@ beforeAll(async () => {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "HTMLElement", "Element", "Node", "getComputedStyle"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
   }
   host = await import("./revealHost");
   quote = await import("./quoteUnits");

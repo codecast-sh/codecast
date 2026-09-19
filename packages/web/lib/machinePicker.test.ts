@@ -10,6 +10,15 @@ const dev = (id: string, over: Partial<MachineCandidate> = {}): MachineCandidate
 });
 
 describe("defaultMachineId", () => {
+  it("queues for an offline Mac instead of stamping a live Linux runtime onto a Mac checkout", () => {
+    const devices = [
+      dev("runtime", { platform: "linux" }),
+      dev("mac", { platform: "darwin", online: false, local_project_roots: ["/Users/me/src/app"] }),
+    ];
+    expect(defaultMachineId(devices, { projectPath: "/Users/me/src/app" })).toBe("mac");
+    expect(defaultMachineId(devices, { projectPath: "/Users/me/src/app", lastPicked: "runtime" })).toBe("mac");
+  });
+
   it("prefers the conversation's owner while it's online", () => {
     const devices = [dev("laptop", { last_seen: 5000 }), dev("desktop")];
     expect(defaultMachineId(devices, { ownerDeviceId: "desktop" })).toBe("desktop");

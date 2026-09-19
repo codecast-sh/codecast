@@ -132,6 +132,8 @@ if (import.meta.hot) {
 // query id maps to which function, instead of waiting for Add frames.
 if (import.meta.env.DEV && typeof window !== "undefined") {
   (window as any).__convexClient = convex;
+  // Fire any toast from the console to check its face: __toast.success("Saved").
+  (window as any).__toast = toast;
 }
 
 export function Providers({ children }: { children: ReactNode }) {

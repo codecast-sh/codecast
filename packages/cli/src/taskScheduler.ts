@@ -3,7 +3,7 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as crypto from "crypto";
 import { SyncService } from "./syncService.js";
-import { hasTmux } from "./tmux.js";
+import { hasTmux, isTmuxSessionMissingError, tmuxRunAsync } from "./tmux.js";
 import { deviceId, isRemoteDevice } from "./remote/device.js";
 import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
 import { launchTokenLedger } from "./launchToken.js";
@@ -103,8 +103,15 @@ export function buildRunLaunch(
         if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
       }
     }
-    // Only auto-assign if the operator didn't pin one via agent_args.claude.
-    if (!extraAgentArgs.includes("--session-id")) {
+    // A run parked at a usage limit resumes its own session, so the firing
+    // stays one conversation and the agent continues where it stopped.
+    // Otherwise a fresh uuid — only auto-assigned if the operator didn't pin
+    // one via agent_args.claude.
+    if (task.parked_run_session_uuid) {
+      const parked: string = task.parked_run_session_uuid;
+      runSessionUuid = parked;
+      extraAgentArgs.push("--resume", parked);
+    } else if (!extraAgentArgs.includes("--session-id")) {
       runSessionUuid = crypto.randomUUID();
       extraAgentArgs.push("--session-id", runSessionUuid);
     }
@@ -120,6 +127,28 @@ export function buildRunLaunch(
     requestedEffort: launch.effort,
   });
   return { agentBin, extraAgentArgs, runSessionUuid };
+}
+
+// A run is over when its pane's shell has no child process: the launch
+// script and the agent under it are both gone, or the pane itself is. Read
+// from the process tree, never from the prompt text: a prompt that ends in
+// anything but $, % or # (this machine's ends in ":") left every finished run
+// sitting until the 10 min cap, where it filed as "Exceeded max runtime" with
+// its work done and cost a retry (tr-887, 2026-09-18). A tmux or pgrep
+// failure answers "not yet"; the cap still bounds the run.
+export async function runPaneFinished(
+  tmuxSession: string,
+  childrenOf: (pid: string) => Promise<string> = async (pid) =>
+    (await execAsync(`pgrep -P ${pid}`).catch(() => ({ stdout: "" }))).stdout,
+): Promise<boolean> {
+  const panes = await tmuxRunAsync(["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"], { timeout: 3000 });
+  if (panes.status !== 0) return isTmuxSessionMissingError(panes);
+  const pids = panes.stdout.trim().split(/\s+/).filter(Boolean);
+  if (pids.length === 0) return false;
+  for (const pid of pids) {
+    if ((await childrenOf(pid)).trim()) return false;
+  }
+  return true;
 }
 
 export class TaskScheduler {
@@ -468,21 +497,12 @@ export class TaskScheduler {
       return;
     }
 
-    // Detect if agent has exited (shell prompt visible)
-    try {
-      const { stdout } = await execAsync(
-        `tmux capture-pane -p -J -t '${entry.tmuxSession}' -S -20 2>/dev/null`
-      );
-      const lines = stdout.trim().split("\n").filter(Boolean);
-      const lastLine = lines[lines.length - 1]?.trim() || "";
-      if (lastLine.endsWith("$") || lastLine.endsWith("%") || lastLine.endsWith("#")) {
-        this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
-        try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
-        this.cleanupTask(taskId);
-      }
-    } catch {
-      // Capture failed, will check again next heartbeat
+    // Detect if the agent has exited: the pane's shell has nothing under it.
+    if (await runPaneFinished(entry.tmuxSession)) {
+      this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
+      try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
+      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
+      this.cleanupTask(taskId);
     }
   }
 

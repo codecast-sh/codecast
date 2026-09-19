@@ -20,7 +20,7 @@ async function verifyScopePage() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
   }
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   (dom.window as any).HTMLElement.prototype.scrollIntoView = () => {};
@@ -49,8 +49,16 @@ async function verifyScopePage() {
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
 
   mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
-  mock.module("../../../hooks/useSyncOrgTree", () => ({ useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }) }));
-  for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) mock.module(`../../../hooks/${h}`, () => ({ [h]: () => {} }));
+  // Spread the real module: a substitution is process-global, so a stub that
+  // drops its other exports breaks every file that loads it afterwards.
+  const realOrgTree = { ...(await import("../../../hooks/useSyncOrgTree")) };
+  mock.module("../../../hooks/useSyncOrgTree", () => ({ ...realOrgTree, useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }) }));
+  for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) {
+    // Spread the real module: these export ingest helpers other files
+    // import, and a substitution answers for the whole run.
+    const realSync = { ...(await import(`../../../hooks/${h}`)) };
+    mock.module(`../../../hooks/${h}`, () => ({ ...realSync, [h]: () => {} }));
+  }
   mock.module("../../../hooks/useSyncDocs", () => ({ useSyncDocs: () => {}, useSyncDocDetail: () => {} }));
   mock.module("../../../hooks/useSyncDecisionStacks", () => ({ useSyncDecisionStacks: () => {} }));
   mock.module("../../../hooks/useCollectionRows", () => ({ useCollectionRows: () => [] }));

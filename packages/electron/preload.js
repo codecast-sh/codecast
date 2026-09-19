@@ -79,6 +79,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // renderer it IS that window, so it draws the panel and mounts the call and
   // walkie pumps. The always-on-top pin is honored only from that window and
   // persists across launches.
+  // The app windows (Chat, Work): `appWindow` names the app THIS renderer is
+  // (null in the main window and a plain breakout). `openAppWindow` opens or
+  // raises one, on a path when given; `routeNavigate` hands a path to the
+  // shell to land in whichever window owns it. All absent on older builds.
+  appWindow: (process.argv.find((a) => a.startsWith("--app-window=")) || "").split("=")[1] || null,
+  openAppWindow: (app, navPath) => ipcRenderer.invoke("open-app-window", app, navPath ?? null),
+  closeAppWindow: (app) => ipcRenderer.invoke("close-app-window", app),
+  routeNavigate: (navPath) => ipcRenderer.invoke("route-navigate", navPath),
   isPeopleWindow: process.argv.includes("--people-window"),
   openPeopleWindow: () => ipcRenderer.invoke("open-people-window"),
   // With a voice host the buddy list is the WALL, a shape of that window;

@@ -58,8 +58,12 @@ async function verifyInitiatives() {
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
 
   mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
-  mock.module("../../hooks/useSyncOrgTree", () => ({ useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }), useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
-  for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) mock.module(`../../hooks/${h}`, () => ({ [h]: () => {} }));
+  const realOrgTree = { ...(await import("../../hooks/useSyncOrgTree")) };
+  mock.module("../../hooks/useSyncOrgTree", () => ({ ...realOrgTree, useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }), useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
+  for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) {
+    const realSync = { ...(await import(`../../hooks/${h}`)) };
+    mock.module(`../../hooks/${h}`, () => ({ ...realSync, [h]: () => {} }));
+  }
   mock.module("../../hooks/useSyncCollection", () => ({ useSyncCollection: () => ({ ready: true, refused: false, retry: () => {} }) }));
   mock.module("../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => collections[key] ?? [] }));
   mock.module("../../hooks/useCollectionRows", () => ({ useCollectionRows: (key: string, opts: any = {}) => (collections[key] ?? []).filter(opts.where ?? (() => true)).sort(opts.sort ?? (() => 0)) }));
@@ -79,11 +83,16 @@ async function verifyInitiatives() {
     InboxConversation: (props: any) => React.createElement("div", { "data-thread": props.sessionId, "data-thread-owner": props.seat?.seedOwnership ? "1" : "0", "data-thread-placeholder": props.seat?.layout?.composerPlaceholder ?? "", "data-thread-hide-diff": props.seat?.layout?.hideDiff ? "1" : "0", "data-thread-autofocus": props.autoFocusInput ? "1" : "0" }, props.seat?.layout?.leadNode, React.createElement("textarea", { "data-composer": true })),
   }));
   mock.module("../../lib/sessionViewVisit", () => ({ askSessionView: (id: string) => calls.push(`sessionView:${id}`) }));
-  mock.module("../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
-  mock.module("../EntityIdPill", () => ({ EntityIdPill: ({ id, type }: any) => React.createElement("span", { "data-pill": `${type}:${id}` }, id) }));
-  mock.module("../charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }) }));
-  mock.module("../org/RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
-  mock.module("../identity/AssigneeFace", () => ({ AssigneeFace: ({ info }: any) => React.createElement("span", { "data-face": info.kind === "role" ? `role:${info.handle}` : `person:${info.name}` }) }));
+  const realKeys = { ...(await import("../KeyboardShortcutsHelp")) };
+  mock.module("../KeyboardShortcutsHelp", () => ({ ...realKeys, ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
+  const realPill = { ...(await import("../EntityIdPill")) };
+  mock.module("../EntityIdPill", () => ({ ...realPill, EntityIdPill: ({ id, type }: any) => React.createElement("span", { "data-pill": `${type}:${id}` }, id) }));
+  const realLeadChip = { ...(await import("../charter/ProjectLeadChip")) };
+  mock.module("../charter/ProjectLeadChip", () => ({ ...realLeadChip, ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }) }));
+  const realRoleFace = { ...(await import("../org/RoleFace")) };
+  mock.module("../org/RoleFace", () => ({ ...realRoleFace, RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
+  const realAssignee = { ...(await import("../identity/AssigneeFace")) };
+  mock.module("../identity/AssigneeFace", () => ({ ...realAssignee, AssigneeFace: ({ info }: any) => React.createElement("span", { "data-face": info.kind === "role" ? `role:${info.handle}` : `person:${info.name}` }) }));
   mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: any) => React.createElement("div", { "data-markdown": true }, content) }));
   mock.module("../ui/dropdown-menu", () => ({ DropdownMenu: ({ children }: any) => children, DropdownMenuContent: () => null, DropdownMenuItem: () => null, DropdownMenuLabel: () => null, DropdownMenuTrigger: ({ children }: any) => children }));
   // A popover that is simply open: the lists inside are what the test reads.

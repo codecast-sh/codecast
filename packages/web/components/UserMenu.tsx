@@ -12,6 +12,7 @@ import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
   BookOpen, ExternalLink, Radio, Newspaper, Home, Monitor,
+  Blocks,
 } from "lucide-react";
 import { isDesktopShell } from "../lib/desktop";
 import { track } from "../lib/analytics";
@@ -207,6 +208,7 @@ export function UserMenu() {
               trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
             />
             <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
+            <MenuItem icon={Blocks} label="Capabilities" onClick={() => go("/capabilities")} />
             <MenuItem
               icon={BookOpen}
               label="Documentation"
