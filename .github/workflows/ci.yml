@@ -266,9 +266,12 @@ jobs:
         # DAEMON_BUILD_ID_CHECK turns on the daemon build id stamp check, which
         # walks the whole daemon import closure. Off locally so the normal test
         # loop stays fast.
+        # --isolate: a fresh global per file, for the same reason the web suite
+        # has it — `mock.module` substitutions are permanent in one process and
+        # a test that passes alone then fails in the suite depending on order.
         env:
           DAEMON_BUILD_ID_CHECK: "1"
-        run: bun test src/ --bail=5
+        run: bun test src/ --isolate --bail=5
 
       - name: E2E messaging pipeline (real tmux + fake-claude shim)
         working-directory: packages/cli
