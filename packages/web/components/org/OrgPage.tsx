@@ -50,7 +50,7 @@ import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFIN
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
 import { StateTally } from "./OrgNodeCards";
 import { OrgButton } from "./OrgButton";
-import { layoutOrgTree, parentNodeId, parentRefOfNodeId, ORG_STACK_VISIBLE, type OrgFocusTarget, type OrgLayoutNode, type OrgLayoutView } from "./orgLayout";
+import { layoutOrgTree, parentNodeId, parentRefOfNodeId, roleNodeId, ORG_STACK_VISIBLE, type OrgFocusTarget, type OrgLayoutNode, type OrgLayoutView } from "./orgLayout";
 import { firstServerCursor, moveExpandedSession } from "./orgPager";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "./orgFixture";
 import { sortOrgSessions, sameParent, type OrgParentRef, type OrgSession, type OrgTree, EMPTY_COUNTS } from "./orgTypes";
@@ -336,7 +336,10 @@ export function OrgPageInner() {
   // With a proposal open, the last step points at it (the remaining count is
   // read where staffingCount is, below; the steps only need the two facts).
   const guideProposal = proposal?.status === "open" ? { short_id: proposal.short_id, remaining: asksProgress(proposalAsks(proposal)).remaining } : null;
-  const guideSteps = useMemo(() => orgGuideSteps(meNodeId, liveRoles > 0, guideProposal), [meNodeId, liveRoles, guideProposal?.short_id, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The role step points at a real card, so it needs a live role's node id
+  // rather than the old "are there any roles" boolean.
+  const guideRoleNodeId = tree ? (tree.roles.find((r) => r.status !== "retired")?._id ?? null) : null;
+  const guideSteps = useMemo(() => orgGuideSteps({ meNodeId, roleNodeId: guideRoleNodeId ? roleNodeId(guideRoleNodeId) : null, openProposal: guideProposal }), [meNodeId, guideRoleNodeId, guideProposal?.short_id, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Which cards may be picked up at all: no drag that would only snap back. */
   const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
 
@@ -568,7 +571,7 @@ export function OrgPageInner() {
       machineRoster: st.machineRoster,
     });
     const input = { ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}), ...(projectPath ? { project_path: projectPath } : {}), host_user_id: host, client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`, ...(seat ? { seat } : {}) };
-    if (preview) { run("staffChiefOfStaff", input); toast.success("Hiring the chief of staff: its first review lands as a proposal here"); return; }
+    if (preview) { run("staffChiefOfStaff", input); toast.success("Hiring the chief of staff", { description: "Its first review lands as a proposal here." }); return; }
     void useInboxStore.getState().staffChiefOfStaff(input).then((r) => {
       // Route to the thread and say what changed (S16). A seat keeps the agent;
       // a fresh start replaces it. When no thread came back, the review still
@@ -582,9 +585,9 @@ export function OrgPageInner() {
         const was = r?.previous_title?.trim();
         toast.success(`Your agent${was ? `, formerly ${was},` : ""} is now your Chief of Staff. Nothing restarted.`, { action: open });
       } else if (r?.seated === "fresh") {
-        toast.success("Your new Chief of Staff is running. The old agent was retired, its thread kept and linked from its page.", { action: open });
+        toast.success("Your new Chief of Staff is running", { description: "The old agent was retired. Its thread is kept and linked from its page.", action: open });
       } else {
-        toast.success("Hiring the chief of staff: its first review lands as a proposal here", { action: open });
+        toast.success("Hiring the chief of staff", { description: "Its first review lands as a proposal here.", action: open });
       }
     }).catch(() => {});
   }, [tree, me, meId, run, preview, openSession]);
