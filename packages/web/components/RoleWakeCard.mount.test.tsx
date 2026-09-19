@@ -27,10 +27,16 @@ async function mountCard() {
   const React = await import("react");
   // The markdown pipeline drags the pill resolver and the store; the card only
   // hands it each line. Render the line's text, so an id stays visible.
+  // The entity pill resolves through convex hooks. Answer them with nothing —
+  // the pill then shows the label the card passed it — rather than replacing
+  // the pill module, which is process-global and left every later file with a
+  // stub in place of the component under test.
+  const { MemoryRouter } = await import("react-router");
+  const realConvexReact = { ...(await import("convex/react")) };
+  mock.module("convex/react", () => ({ ...realConvexReact, useQuery: () => undefined, useQueries: () => ({}) }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   // The routing strip renders each hand as the live session pill; the pill
   // drags the resolver and the store, so here it is its label and its ref.
-  mock.module("./EntityIdPill", () => ({ EntityIdPill: ({ id, shortId, label }: any) => React.createElement("span", { "data-pill": id ?? shortId }, label ?? shortId ?? id) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { RoleWakeCard } = await import("./RoleWakeCard");
@@ -43,7 +49,9 @@ async function mountCard() {
   const role: any = { _id: "role8", short_id: "or-8", name: "Reliability lead", handle: "reliability", status: "active", host_user_id: "u1" };
   const render = (props: Partial<Parameters<typeof RoleWakeCard>[0]> = {}) =>
     act(() => {
-      root.render(React.createElement(RoleWakeCard, { frame, now: frame.at! + 5 * 60_000, role, canEdit: true, onSetPaused: (p: boolean) => calls.push(p), ...props }));
+      // The real entity pill routes, so the card mounts inside a router.
+      root.render(React.createElement(MemoryRouter, null,
+        React.createElement(RoleWakeCard, { frame, now: frame.at! + 5 * 60_000, role, canEdit: true, onSetPaused: (p: boolean) => calls.push(p), ...props })));
     });
   await render();
   const $ = (sel: string) => document.querySelector(sel) as HTMLElement | null;
@@ -142,11 +150,11 @@ async function verifyRoleWakeCard() {
     const row = $("[data-hand='conversations_h1']");
     assert.ok(row, "the hand renders as a row");
     assert.ok(row.textContent?.includes("started"));
-    assert.equal(row.querySelector("[data-pill='conversations_h1']")?.textContent, "Get codecast main CI green");
+    assert.ok(row.textContent?.includes("Get codecast main CI green"), "the hand's title reads as a pill");
     assert.equal(row.querySelector("[data-hand-state]")?.getAttribute("data-hand-state"), "working");
     assert.ok(row.textContent?.includes("working"));
     assert.ok(row.textContent?.includes("bisecting the five red jobs"));
-    assert.ok(row.querySelector("[data-pill='ct-52058']"));
+    assert.ok(row.textContent?.includes("ct-52058"), "the task it is on");
     assert.ok(row.textContent?.includes("4m"), "age from the hand's start against now");
     // The word is the observed work state, the one the panel's Sessions tab
     // groups the same hand under; a declared status changes the pinned line
@@ -159,7 +167,7 @@ async function verifyRoleWakeCard() {
     const sent = $("[data-sent-to='jx7h101']");
     assert.ok(sent, "a follow up names the hand it went to");
     assert.ok(sent.textContent?.includes("sent to"));
-    assert.ok(sent.querySelector("[data-pill='jx7h101']"));
+    assert.ok(sent.textContent?.includes("jx7h101"), "the hand it went to");
     await render({ routing: { hands: [], sentTo: [] } });
     assert.ok(!text().includes("Where it went"));
 
