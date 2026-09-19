@@ -3,6 +3,7 @@ import { useQuery, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
+import { MESSAGE_PAGE_SIZE } from "../store/cacheRetention";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
@@ -262,7 +263,7 @@ export function useConversationMessages(
     try {
       const res: any = await convex.query(api.conversations.listMessages, {
         conversation_id: convId,
-        paginationOpts: { numItems: 200, cursor: null },
+        paginationOpts: { numItems: MESSAGE_PAGE_SIZE, cursor: null },
         ...shareTokenArg(conversationId),
       });
       const state = useInboxStore.getState();

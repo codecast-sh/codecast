@@ -12,7 +12,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
-import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
+import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 
 export type OutboxEntry = {
   id: string;
@@ -43,7 +43,7 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 40;
+export const CACHE_SCHEMA_VERSION = 41;
 export const CACHE_SCHEMA_SIGNATURE =
   "agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|decisionDetails:_id|decisionStacks:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|handledDecisions:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|orgProposalChanges:_id, proposal_id|orgProposals:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|taskEvidence:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
@@ -58,7 +58,13 @@ const SYSTEM_TABLES = {
   // shared row would need a read-modify-write per flush to avoid one list
   // clobbering the other. Pruned in lockstep with conversationMessages.
   conversationUserMessages: "convId",
-  dispatchOutbox: "id, ts",
+  // No index, on purpose. Every dispatch puts a row here and deletes it on ack,
+  // and Chromium never removes the index entry of a deleted row while a
+  // connection stays open: a read through the index steps over every dead
+  // entry since boot to learn the table is empty. With a `ts` index, loading
+  // this empty table took 476ms in a day-old tab (3ms by primary key) and
+  // pinned the desktop app's browser process. loadOutbox sorts the few live rows.
+  dispatchOutbox: "id",
 } as const;
 
 /** Stable serialization of the derived collection schema (sorted). */
@@ -479,7 +485,8 @@ async function _writeMessageSnapshot(convId: string, snapshot: MessageSnapshot) 
   _inFlightMsgWrites.add(convId);
   try {
     const { messages, pagination } = snapshot;
-    await db.conversationMessages.put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) });
+    const tail = persistedMessageTail(messages, pagination);
+    await db.conversationMessages.put({ convId, messages: tail.messages, pagination: tail.pagination, latestTimestamp: _latestTs(tail.messages) });
     if (_pendingMsgWrites.get(convId) === snapshot) _pendingMsgWrites.delete(convId);
   } catch (error) {
     captureException(error, { tags: { source: "conversation-cache" } });
@@ -507,25 +514,33 @@ async function _pruneConversations() {
       else _touchedAt.delete(convId); // let the recency map self-bound
     }
 
-    // Ascending by latestTimestamp (oldest first); everything past the cap is the
-    // least-recently-active tail. primaryKeys() reads the index only, not the rows.
-    const orderedKeys = await db.conversationMessages.orderBy("latestTimestamp").primaryKeys();
-    const overCap =
-      orderedKeys.length > MAX_CACHED_CONVERSATIONS
-        ? orderedKeys.slice(0, orderedKeys.length - MAX_CACHED_CONVERSATIONS)
-        : [];
-    const expired = await db.conversationMessages
-      .where("latestTimestamp")
-      .below(now - CONVERSATION_TTL_MS)
-      .primaryKeys();
+    // One WRITABLE transaction, even when nothing gets deleted. Each flush of a
+    // streaming conversation moves its latestTimestamp and strands the old index
+    // entry; Chromium deletes those dead entries as a cursor steps over them, but
+    // only in a writable transaction. Read-only, this walk re-paid for every
+    // entry stranded since boot (153ms for 1000 rows in a day-old tab, 9ms by
+    // primary key); writable, each prune pays only for the churn since the last.
+    await db.transaction("rw", db.conversationMessages, db.conversationUserMessages, async () => {
+      // Ascending by latestTimestamp (oldest first); everything past the cap is the
+      // least-recently-active tail. primaryKeys() reads the index only, not the rows.
+      const orderedKeys = await db.conversationMessages.orderBy("latestTimestamp").primaryKeys();
+      const overCap =
+        orderedKeys.length > MAX_CACHED_CONVERSATIONS
+          ? orderedKeys.slice(0, orderedKeys.length - MAX_CACHED_CONVERSATIONS)
+          : [];
+      const expired = await db.conversationMessages
+        .where("latestTimestamp")
+        .below(now - CONVERSATION_TTL_MS)
+        .primaryKeys();
 
-    const doomed = new Set<string>([...overCap, ...expired]);
-    for (const id of protectedIds) doomed.delete(id);
-    if (doomed.size > 0) {
-      const ids = [...doomed];
-      await db.conversationMessages.bulkDelete(ids);
-      await db.conversationUserMessages.bulkDelete(ids);
-    }
+      const doomed = new Set<string>([...overCap, ...expired]);
+      for (const id of protectedIds) doomed.delete(id);
+      if (doomed.size > 0) {
+        const ids = [...doomed];
+        await db.conversationMessages.bulkDelete(ids);
+        await db.conversationUserMessages.bulkDelete(ids);
+      }
+    });
   } catch {
     // Maintenance is best-effort — the durable cache tolerates skipped prunes.
   }
@@ -572,7 +587,8 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
   const userMessages = await _loadUserMessages(convId);
   const pending = _pendingMsgWrites.get(convId);
   if (pending) {
-    return { messages: pending.messages, pagination: pending.pagination, latestTimestamp: _latestTs(pending.messages), userMessages };
+    const tail = persistedMessageTail(pending.messages, pending.pagination);
+    return { messages: tail.messages, pagination: tail.pagination, latestTimestamp: _latestTs(tail.messages), userMessages };
   }
   try {
     const row = await db.conversationMessages.get(convId);
@@ -615,7 +631,7 @@ export function removeDispatch(id: string): Promise<void> {
 
 export async function loadOutbox(): Promise<OutboxEntry[]> {
   try {
-    return await db.dispatchOutbox.orderBy("ts").toArray();
+    return (await db.dispatchOutbox.toArray()).sort((a, b) => a.ts - b.ts);
   } catch {
     return [];
   }

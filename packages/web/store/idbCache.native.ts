@@ -26,7 +26,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
-import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
+import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 
 let Storage: any = null;
 // Send writes the pending-input journal with setItemSync. That used to hit the
@@ -317,6 +317,81 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 }
 
+// One SQL statement for a whole read instead of one per key. kv-store's
+// multiGet runs getFirstAsync per key, and a boot read spans ~22,000 rows;
+// every call is a native round trip, and React Native's callback registry
+// (LongLivedObjectCollection) walks every outstanding call on each
+// completion, so thousands in flight cost a full core for the first minute
+// after launch. The table is kv-store's own ("storage": key, value), opened
+// read-only beside it. Null when expo-sqlite is not there (tests inject a
+// shim), and the callers fall back to the per-key path.
+let cacheDb: Promise<any> | null | undefined;
+function openCacheDb(): Promise<any> | null {
+  if (cacheDb !== undefined) return cacheDb;
+  try {
+    const name = Storage?.databaseName;
+    const { openDatabaseAsync } = require("expo-sqlite");
+    cacheDb = typeof name === "string" && typeof openDatabaseAsync === "function"
+      ? openDatabaseAsync(name).catch(() => null)
+      : null;
+  } catch {
+    cacheDb = null;
+  }
+  return cacheDb;
+}
+
+let cacheDbSync: any | null | undefined;
+function openCacheDbSync(): any | null {
+  if (cacheDbSync !== undefined) return cacheDbSync;
+  try {
+    const name = Storage?.databaseName;
+    const { openDatabaseSync } = require("expo-sqlite");
+    cacheDbSync = typeof name === "string" && typeof openDatabaseSync === "function" ? openDatabaseSync(name) : null;
+  } catch {
+    cacheDbSync = null;
+  }
+  return cacheDbSync;
+}
+
+/** What a read covers: whole key prefixes (a collection's rows) and exact keys (blobs, meta). */
+export function readPlan(wanted: Set<string> | null): { prefixes: string[]; exact: string[] } {
+  const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
+  const perRowMeta = [...PER_ROW_META_KEYS].filter(key => !wanted || wanted.has(key));
+  const metaKeys = [...META_KEYS].filter(key => (!wanted || wanted.has(key)) && !PER_ROW_META_KEYS.has(key));
+  return {
+    prefixes: [
+      ...collectionKeys.map(key => COLLECTION_PREFIX + key + ":"),
+      ...perRowMeta.map(key => META_PREFIX + key + ":"),
+    ],
+    exact: [
+      ...collectionKeys.map(collectionBlobKey),
+      ...perRowMeta.map(key => META_PREFIX + key),
+      ...metaKeys.map(key => META_PREFIX + key),
+    ],
+  };
+}
+
+/** `SELECT key, value` over the plan: a half-open range per prefix, IN for the exact keys. */
+export function readPlanSql(plan: { prefixes: string[]; exact: string[] }): { sql: string; params: string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  for (const prefix of plan.prefixes) {
+    clauses.push("(key >= ? AND key < ?)");
+    params.push(prefix, prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1));
+  }
+  if (plan.exact.length > 0) {
+    clauses.push(`key IN (${plan.exact.map(() => "?").join(", ")})`);
+    params.push(...plan.exact);
+  }
+  return { sql: `SELECT key, value FROM storage WHERE ${clauses.join(" OR ") || "0"}`, params };
+}
+
+function rowsToMap(rows: { key: string; value: string | null }[]): Map<string, string | null> {
+  const byKey = new Map<string, string | null>();
+  for (const row of rows) byKey.set(row.key, row.value);
+  return byKey;
+}
+
 async function storageKeys(): Promise<string[]> {
   if (typeof Storage.getAllKeysSync === "function") return Storage.getAllKeysSync();
   if (typeof Storage.getAllKeys === "function") return await Storage.getAllKeys();
@@ -532,10 +607,20 @@ export function loadCacheSync(
   if (typeof Storage.getAllKeysSync !== "function") return null;
   try {
     const wanted = keys ? new Set(keys) : null;
-    const toRead = collectReadKeys(Storage.getAllKeysSync() as string[], wanted);
-    const byKey = new Map<string, string | null>();
-    for (const key of toRead) {
-      byKey.set(key, scheduledValue(key) ?? Storage.getItemSync(key));
+    const db = openCacheDbSync();
+    let byKey: Map<string, string | null>;
+    if (db) {
+      const { sql, params } = readPlanSql(readPlan(wanted));
+      byKey = rowsToMap(db.getAllSync(sql, params));
+      for (const key of byKey.keys()) {
+        const scheduled = scheduledValue(key);
+        if (scheduled !== undefined) byKey.set(key, scheduled);
+      }
+    } else {
+      byKey = new Map<string, string | null>();
+      for (const key of collectReadKeys(Storage.getAllKeysSync() as string[], wanted)) {
+        byKey.set(key, scheduledValue(key) ?? Storage.getItemSync(key));
+      }
     }
     return materializeLoadedCache(byKey, wanted);
   } catch {
@@ -612,9 +697,15 @@ export async function loadCache(keys?: readonly string[], context: Record<string
   if (!Storage) return null;
   try {
     const wanted = keys ? new Set(keys) : null;
-    const allKeys = await storageKeys();
-    const pairs = await Storage.multiGet(collectReadKeys(allKeys, wanted));
-    const byKey = new Map(pairs) as Map<string, string | null>;
+    const db = await openCacheDb();
+    let byKey: Map<string, string | null>;
+    if (db) {
+      const { sql, params } = readPlanSql(readPlan(wanted));
+      byKey = rowsToMap(await db.getAllAsync(sql, params));
+    } else {
+      const allKeys = await storageKeys();
+      byKey = new Map(await Storage.multiGet(collectReadKeys(allKeys, wanted))) as Map<string, string | null>;
+    }
     const result: Record<string, any> = materializeLoadedCache(byKey, wanted) ?? {};
     let hasData = Object.keys(result).length > 0;
 
@@ -676,10 +767,14 @@ export function writeConversationUserMessages(convId: string, userMessages: any[
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (!Storage || _hydrating) return;
-  const latestTimestamp = messages.length > 0
-    ? Math.max(...messages.map((m: any) => m.timestamp || 0))
-    : 0;
-  scheduleWrite(CONVMSG_PREFIX + convId, () => JSON.stringify({ messages, pagination, latestTimestamp }));
+  // Everything runs at flush time: the array is the store's own, finalized by
+  // then, and a spread over thousands of rows would overflow the call stack.
+  scheduleWrite(CONVMSG_PREFIX + convId, () => {
+    const tail = persistedMessageTail(messages, pagination);
+    let latestTimestamp = 0;
+    for (const m of tail.messages) if ((m?.timestamp || 0) > latestTimestamp) latestTimestamp = m.timestamp;
+    return JSON.stringify({ messages: tail.messages, pagination: tail.pagination, latestTimestamp });
+  });
 }
 
 // -- Dispatch outbox: persist server-bound mutations until acknowledged --

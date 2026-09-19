@@ -1788,6 +1788,9 @@ export type ClientUI = {
   // The color of your own messages in the Minimal style: a preset id or a
   // #rrggbb hex (lib/bubbleColor.ts). Follows the person, so it is stamped.
   user_bubble_color?: string;
+  // Minimal hides the schedule, plan and workflow strips under a conversation's
+  // header; true brings them back. Classic always shows them.
+  show_session_context?: boolean;
   // One line per session in the inbox list, in every style. Unset means the
   // style decides (resolveInboxCompact).
   inbox_compact?: boolean;
@@ -2303,6 +2306,40 @@ function mergeOverlayFacts(target: Record<string, unknown>, incoming: Record<str
     if (!Object.is(target[key], facts[key])) target[key] = facts[key];
   }
   return nextPending;
+}
+
+// True when merging `incoming` onto `base` would change nothing. An overlay
+// payload carries the whole live set (~600 rows) on every push, and almost
+// every row repeats the last one. The merge reads and writes through mutative
+// draft proxies and looks each field up in the pending map: on a phone that
+// was a quarter of the JS thread's busy time after a signed in launch. This
+// check reads only plain objects, so an unchanged row never touches the draft.
+// Mirrors mergeOverlayFacts: an absent fact reads as null, stamps are skipped.
+function overlayRowUnchanged(base: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
+  for (const key of INBOX_FACT_FIELDS) {
+    if (!sameOverlayValue(base[key], incoming[key] ?? null)) return false;
+  }
+  for (const key in incoming) {
+    if (SESSIONS_STRIP_FIELD_SET.has(key) || INBOX_FACT_FIELD_SET.has(key)) continue;
+    if (!sameOverlayValue(base[key], incoming[key])) return false;
+  }
+  return true;
+}
+function sameOverlayValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  // The few structured facts (open_tasks, activity) arrive as fresh objects.
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Session ids with a pending entry: a lock or an exclude may change what a
+// merge writes, so those rows always take the full merge.
+function sessionIdsWithPending(pending: Record<string, PendingEntry>): Set<string> {
+  const ids = new Set<string>();
+  for (const key in pending) {
+    if (key.startsWith("sessions:")) ids.add(key.split(":", 2)[1]);
+  }
+  return ids;
 }
 
 // Facts the overlay delivered for ids the store did not hold yet: a session a
@@ -5862,6 +5899,18 @@ function dedupeReplayedMessages(messages: Message[]): Message[] {
 // images. Evicted conversations stay in IDB and reload instantly.
 export const MAX_IN_MEMORY_CONVERSATIONS = 400;
 
+// Values read inside a draft are draft proxies: rows a merged array carried
+// over from the store, and the pagination object itself when a merge passes
+// it through. mutative revokes them when the draft ends, so the deferred cache
+// write threw when it serialized them. The throw was swallowed, and streamed
+// rows never reached the disk cache on either platform.
+function plain<T>(value: T): T {
+  return isDraft(value) ? (current(value as object) as T) : value;
+}
+function plainMessages(messages: Message[]): Message[] {
+  return messages.some(isDraft) ? messages.map(plain) : messages;
+}
+
 export function evictInactiveMessages(draft: any, activeConvId: string) {
   const loaded = Object.keys(draft.messages);
   if (loaded.length <= MAX_IN_MEMORY_CONVERSATIONS) return;
@@ -7632,6 +7681,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const stamps: Record<string, InboxProjectionStamp> = {};
     const held: Record<string, Record<string, unknown>> = {};
     const collection = this.sessions;
+    // Plain views of the state as this action found it, for the unchanged-row
+    // check: reading them creates no draft proxies.
+    const baseSessions = (isDraft(collection) ? original(collection) : collection) as Record<string, Record<string, unknown> | undefined>;
+    const lockedIds = sessionIdsWithPending(isDraft(this.pending) ? original(this.pending) : this.pending);
     for (const id in liveness) {
       const row = liveness[id];
       if (!row || typeof row !== "object") continue;
@@ -7650,6 +7703,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       }
       // Field-by-field merge over untyped bags: the payload row is unvalidated
       // wire data and the session row's fact fields are an open set.
+      const base = baseSessions[id];
+      if (base && !lockedIds.has(id) && overlayRowUnchanged(base, row as Record<string, unknown>)) continue;
       const target = collection[id] as Record<string, unknown> | undefined;
       if (!target) {
         // An overlay never creates a row, it only annotates one — hold the
@@ -10314,7 +10369,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
-    if (source !== "cache") writeConversationMessages(convId, merged, pag);
+    if (source !== "cache") writeConversationMessages(convId, plainMessages(merged), plain(pag));
     evictInactiveMessages(this, convId);
   }),
 
@@ -10343,7 +10398,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), initialized: true };
     this.pagination[convId] = pag;
-    writeConversationMessages(convId, merged, pag);
+    writeConversationMessages(convId, plainMessages(merged), plain(pag));
     evictInactiveMessages(this, convId);
   }),
 
@@ -10368,7 +10423,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.messages[convId] = merged;
     const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
     if (meta) this.pagination[convId] = pag;
-    writeConversationMessages(convId, merged, pag);
+    writeConversationMessages(convId, plainMessages(merged), plain(pag));
     evictInactiveMessages(this, convId);
   }),
 
@@ -12977,23 +13032,18 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
       }
     }
 
-    // Preload messages for the active inbox sessions so clicks are instant.
-    // Scope: the authoritative live set + the restored focus target — NOT every
-    // cached session row. Iterating the whole cache here meant thousands of IDB
-    // probes at boot and loaded messages for hundreds of conversations straight
-    // into memory for the eviction cap to fight back out. Anything else
-    // hydrates on demand (ensureHydrated on open / the inbox warm loop).
-    const preloadIds = new Set<string>(cached?.liveInboxIdList ?? []);
+    // Preload messages for the restored focus target only. The rows on screen
+    // are hydrated by the inbox warm loop (hooks/inboxWarm.ts) in rendered
+    // order, and anything else hydrates on open. Preloading the whole live
+    // inbox set here made a phone with 594 live sessions parse 78 MB of cached
+    // message JSON on the JS thread right after first paint, and load hundreds
+    // of conversations into memory for the eviction cap to fight back out.
     const focusId = useInboxStore.getState().currentSessionId;
-    if (focusId) {
-      await ensureHydrated(focusId);
-      preloadIds.delete(focusId);
-    }
+    if (focusId) await ensureHydrated(focusId);
 
     if (!useInboxStore.getState().clientStateInitialized) {
       useInboxStore.setState({ clientStateInitialized: true });
     }
-    for (const id of preloadIds) ensureHydrated(id);
 
     // Deferred: list views + secondary data hydrate just after first paint.
     // setTimeout, NOT requestAnimationFrame: rAF is paused in background tabs, so
