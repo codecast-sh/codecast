@@ -8,6 +8,7 @@
 import { useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { toast } from "sonner";
+import { persistentToast } from "../lib/persistentToast";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -65,14 +66,15 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       const key = `${pending.profile}:slow`;
       if (announced.current === key) return;
       announced.current = key;
-      toast.message(machineSwitchPendingCopy("slow", pending.profile), { id: pending.toastId, duration: Infinity });
+      toast.message(machineSwitchPendingCopy("slow", pending.profile), { id: pending.toastId, ...persistentToast });
       return;
     }
     if (resolved.phase === "succeeded") {
       const key = `${pending.profile}:ok`;
       if (announced.current === key) return;
       announced.current = key;
-      toast.success(machineSwitchSuccessCopy(pending.profile), { id: pending.toastId });
+      const copy = machineSwitchSuccessCopy(pending.profile);
+      toast.success(copy.title, { id: pending.toastId, description: copy.description });
       setOutcome({ kind: "success", profile: pending.profile, message: `Now using ${pending.profile}` });
       setPending(null);
       return;
@@ -115,7 +117,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
     announced.current = null;
     setOutcome(null);
     setPending({ profile, email, commandId: null, startedAt: Date.now(), toastId });
-    toast.message(machineSwitchPendingCopy("waiting", profile), { id: toastId, duration: Infinity });
+    toast.message(machineSwitchPendingCopy("waiting", profile), { id: toastId, ...persistentToast });
     try {
       const res = await requestSwitch({
         profile,

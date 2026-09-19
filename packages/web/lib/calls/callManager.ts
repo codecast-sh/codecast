@@ -1164,8 +1164,8 @@ function reportRingOutcomes(results: RingOutcome[]): void {
   const nameOf = (id: string) =>
     memberDisplayName(members.find((m: any) => String(m._id) === id), "A teammate");
   for (const r of results) {
-    if (r.refused) toast.error(`${nameOf(r.to_user)} isn't on this huddle's team, so they can't be rung`);
-    else if (r.cooldown) toast(`${nameOf(r.to_user)} declined a moment ago — try again in a minute`);
+    if (r.refused) toast.error(`${nameOf(r.to_user)} can't be rung`, { description: "They aren't on this huddle's team." });
+    else if (r.cooldown) toast(`${nameOf(r.to_user)} declined a moment ago`, { description: "Try again in a minute." });
   }
 }
 
