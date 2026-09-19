@@ -78,8 +78,6 @@ describe("native dependency convention", () => {
   // Guarded requires that predate the helper. Remove a name when its file
   // moves onto optionalNative; never add one.
   const HAND_WRITTEN_PROBES = new Set([
-    "components/CastCanvas.tsx", // in another session's hands when the helper landed
-    "app/session/[id].tsx", // same
     "lib/asrCapture.ts",
     "lib/clipboard.ts", // falls back to the React Native clipboard, not to null
     "lib/dispatchOutbox.ts", // must reject, not return null: the send journal fails honestly
