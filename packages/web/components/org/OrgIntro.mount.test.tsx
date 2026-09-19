@@ -10,10 +10,12 @@
 // writes the pref whichever way it is answered.
 //
 // Run: bun test --timeout 120000 components/org/OrgIntro.mount.test.tsx
-import { test, expect, beforeAll, mock } from "bun:test";
-import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
+import { test, expect, beforeAll, afterAll, mock } from "bun:test";
 
-restoreInboxStoreAfterAll();
+// The real store module, snapshotted before anything substitutes it, and put
+// back when this file ends: `mock.module` is process-global and permanent.
+const realInboxStore = { ...(await import("../../store/inboxStore")) };
+afterAll(() => { mock.module("../../store/inboxStore", () => realInboxStore); });
 
 let React: typeof import("react");
 let act: typeof import("react").act;
@@ -46,9 +48,22 @@ beforeAll(async () => {
   React = await import("react");
   act = React.act;
   ({ createRoot } = await import("react-dom/client"));
+  // Link the component graph BEFORE substituting the store: replacing a
+  // module that a dynamic import is still resolving deadlocks that import,
+  // and the substitution mutates the live module object, so modules already
+  // linked still read the stub.
+  intro = await import("./OrgIntro");
+  card = await import("./OrgIntroCard");
   mock.module("../../store/inboxStore", () => ({
     ...realInboxStore,
-    useInboxStore: { getState: () => fake.state },
+    // Keep the hook's own methods (subscribe, setState, getInitialState): a
+    // bare { getState } stub leaves the module graph waiting on a store that
+    // can never answer, and the import never settles.
+    useInboxStore: Object.assign(
+      (selector: (state: unknown) => unknown) => selector(fake.state),
+      realInboxStore.useInboxStore,
+      { getState: () => fake.state },
+    ),
     useTrackedStore: () => fake.state,
   }));
   mock.module("next/navigation", () => ({ usePathname: () => fake.pathname, useRouter: () => ({ push: (p: string) => fake.pushes.push(p), replace: () => {} }) }));
@@ -59,9 +74,7 @@ beforeAll(async () => {
       dismiss: (id: string) => fake.dismissed.push(id),
     },
   }));
-  intro = await import("./OrgIntro");
-  card = await import("./OrgIntroCard");
-});
+}, 120_000);
 
 const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
 const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
@@ -133,7 +146,7 @@ test("the first visit: faces, S20's five lines, the two actions, seen once", asy
   const st2 = { clientState: { ui: { org_upsell_seen: true } as Ui }, updateClientUI: (p: Ui) => writes.push(p) };
   intro.markOrgIntroSeen(st2);
   expect(writes[1]).toEqual({ org_intro_seen: true });
-});
+}, 120_000);
 
 // ---------------------------------------------------------------- the card's gate
 
@@ -205,7 +218,7 @@ test("the card rises once the page settles and Not now sells it", async () => {
   fake.toasts[0].onDismiss?.();
   expect(fake.writes.length).toBe(1);
   await act(async () => { toastRoot.unmount(); root.unmount(); });
-});
+}, 120_000);
 
 test("See it opens the org page and sells it; the gates hold it back", async () => {
   fake.reset();
@@ -238,4 +251,4 @@ test("See it opens the org page and sells it; the gates hold it back", async () 
     await act(async () => m.root.unmount());
     document.getElementById("draft")?.remove();
   }
-});
+}, 120_000);
