@@ -15,6 +15,7 @@ import { isPidAlive } from "../workspace/chrome.js";
 import { OWNER_HARNESS_ENV } from "./owner.js";
 import { sameDocument } from "./url.js";
 import { ownerState, scanLiveOwners, type LiveOwners } from "./engineReap.js";
+import { authorizesTeardown } from "@codecast/shared/contracts";
 
 /** The engine daemon for this session, if one is alive. */
 export function sessionDaemonPid(session: string, stateDir = engineStateDir()): number | null {
@@ -176,7 +177,9 @@ export async function listCastTabs(endpoint: CdpEndpoint): Promise<CastTab[]> {
 }
 
 function holderExitedFn(live: LiveOwners): (holder: string) => boolean {
-  return (holder) => ownerState(holder, live) === "exited";
+  // Ask the gate, never the word: only `exited` may retire a holder, and a
+  // holder we could not verify keeps its claim on the tab (liveness.guard).
+  return (holder) => authorizesTeardown(ownerState(holder, live));
 }
 
 async function reclaimCastTab(endpoint: CdpEndpoint, session: string, url: string): Promise<CastTab | null> {
