@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { setGestureChannelFactory } from "../../../store/gestureBridge";
 
+import { closeDomWindow } from "../../../test-helpers/domGlobals";
 const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
 mock.module("../../../lib/calls/callManager", () => ({ ...realCallManager, getRoom: () => null }));
 const { useInboxStore } = await import("../../../store/inboxStore");
@@ -24,7 +25,7 @@ const restoreGlobals = replaceGlobals({
 // The bridge posts on every follow change; a null channel keeps the test silent.
 setGestureChannelFactory(() => null);
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
   setGestureChannelFactory(null);
   mock.module("../../../lib/calls/callManager", () => realCallManager);

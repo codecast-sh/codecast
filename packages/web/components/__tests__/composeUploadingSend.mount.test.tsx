@@ -14,6 +14,7 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { pendingImageUploads } from "../../lib/draftImages";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The compose popup (Ctrl+N) contract: Enter sends the first message and the
 // popup unmounts on the same tick. An image still uploading at that moment
 // must ride along — the send waits for the upload in the background and then
@@ -21,7 +22,7 @@ import { pendingImageUploads } from "../../lib/draftImages";
 // or the upload.
 
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

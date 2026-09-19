@@ -5,6 +5,27 @@
 // (pause only for an editor, resume when paused, the caps and wake log links).
 // Run: bun components/RoleWakeCard.mount.test.tsx
 import assert from "node:assert/strict";
+import { afterAll, mock as bunMock, test } from "bun:test";
+
+import { closeDomWindow } from "../test-helpers/domGlobals";
+// This file stubs the markdown pipeline so the card never drags the pill
+// resolver. `mock.module` is process-global and permanent, so without this the
+// stubs answer for every later file — the next one rendered a pill as plain
+// text. Capture the real modules now and put them back when this file ends.
+const REAL_MODULES: Array<[string, unknown]> = [
+  ["react-markdown", await import("react-markdown")],
+  ["./messageMarkdown", await import("./messageMarkdown")],
+  ["../lib/remarkEntityIds", await import("../lib/remarkEntityIds")],
+  ["next/link", await import("next/link")],
+];
+afterAll(() => {
+  for (const [spec, real] of REAL_MODULES) {
+    if (spec === "react-markdown") bunMock.module("react-markdown", () => real as object);
+    else if (spec === "./messageMarkdown") bunMock.module("./messageMarkdown", () => real as object);
+    else if (spec === "../lib/remarkEntityIds") bunMock.module("../lib/remarkEntityIds", () => real as object);
+    else bunMock.module("next/link", () => real as object);
+  }
+});
 
 async function mountCard() {
   const { JSDOM } = await import("jsdom");
@@ -157,8 +178,8 @@ async function verifyRoleWakeCard() {
     assert.ok(!text().includes("Where it went"));
 
     await act(() => root.unmount());
-    dom.window.close();
+    closeDomWindow(dom);
     console.log("role wake card mount: passed");
 }
 
-if (import.meta.main) await verifyRoleWakeCard();
+test("the wake card mounts and shows what the reader sees", verifyRoleWakeCard, 120_000);

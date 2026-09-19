@@ -11,6 +11,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import type { BrowserPaneState } from "../browser/backends/types";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const placed: unknown[] = [];
 // The two gestures the frame hands its messages to, stood in for. Spread from
 // the real modules and handed back in afterAll: a module mock is process-wide
@@ -49,7 +50,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

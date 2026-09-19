@@ -10,6 +10,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 let ui: Record<string, unknown> = {};
 const { CallSettings, CallSettingsSheet } = await import("../calls/CallSettings");
 
@@ -29,7 +30,7 @@ afterEach(async () => {
   useInboxStore.setState({ clientState });
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 async function renderToMarkup(children: ReactNode): Promise<string> {

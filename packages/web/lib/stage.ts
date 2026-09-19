@@ -25,6 +25,7 @@ import { tabNavigate } from "../src/compat/tabRouting";
 import { isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { borrowsTabShell } from "./desktop";
+import { routeElsewhere } from "./desktopApps";
 import { browserRoutePath, hasPaneHost, postToPaneHost, type BrowserSource } from "./browserPane";
 import { registerSplitOpener } from "./openIntent";
 import { rememberBrowserPaneUrl } from "./browserPaneRecents";
@@ -115,8 +116,16 @@ export function sessionPanePath(sessionId: string): string {
   return `/conversation/${sessionId}`;
 }
 
+/** The session a pane path names, or null when the path is not the bare pane
+ *  spelling. A /conversation URL that carries a query is a PAGE entry, not a
+ *  pane: a share link (`?share=<token>`), a highlight, a prefill. The
+ *  conversation page owns those — it presents the token, redeems it for the
+ *  signed-in viewer, and only then redirects into the inbox. Painting a
+ *  SessionPane for the id instead drops the token, and every id-only read
+ *  denies: the viewer sees "This session is no longer available" on a link
+ *  that works logged out. */
 export function paneSessionId(path: string): string | null {
-  const m = path.split("?")[0].match(/^\/conversation\/([^/#]+)$/);
+  const m = path.match(/^\/conversation\/([^/?#]+)$/);
   return m ? m[1] : null;
 }
 
@@ -275,6 +284,10 @@ export function performStageDrop(zone: DropZone, payload: PaneDragPayload): bool
  */
 export function requestStagePlacement(path: string, title?: string): boolean {
   if (typeof window === "undefined" || window.innerWidth < 900 || borrowsTabShell()) return false;
+  // A path another desktop window owns (a channel while the Chat window is
+  // up) is never a pane here: it has already been handed to that window, and
+  // there is nothing left to place. True, so the caller does not navigate.
+  if (routeElsewhere(path)) return true;
   const tab = activeTab();
   if (!tab || !tabStageLayout(tab) || isNonTabRoute(path)) return false;
   useInboxStore.getState().setStagePick({ path, title });

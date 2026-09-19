@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 async function verifyHireFlow() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -68,7 +69,7 @@ async function verifyHireFlow() {
   assert.equal(document.querySelector<HTMLInputElement>('input[placeholder="/path/to/templates/growth"]')!.value, "/src/templates/growth");
   assert.equal(document.querySelector<HTMLInputElement>('input[name="template-instance"]')!.value, "product-growth");
   await act(async () => root.unmount());
-  dom.window.close();
+  closeDomWindow(dom);
   console.log("org template hire mount: passed");
 }
 

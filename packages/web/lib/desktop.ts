@@ -58,6 +58,15 @@ declare global {
       detachTab: (path: string) => Promise<void>;
       attachTab: (path: string) => Promise<void>;
       onAdoptTab: (cb: (path: string) => void) => void;
+      // The app windows (Chat, Work): `appWindow` names the app THIS renderer
+      // is (null in the main window and a plain breakout). `openAppWindow`
+      // opens or raises one, on a path when given; `routeNavigate` hands a
+      // path to the shell to land in whichever window owns it (lib/desktopApps).
+      // All absent on older builds — gate on them.
+      appWindow?: string | null;
+      openAppWindow?: (app: string, path?: string | null) => Promise<boolean>;
+      closeAppWindow?: (app: string) => Promise<void>;
+      routeNavigate?: (path: string) => Promise<boolean>;
       // The people window (the floating buddy list at /people). A singleton:
       // openPeopleWindow focuses the one that exists. setAlwaysOnTop resolves
       // the pin the shell actually applied — it is honored only from the people
@@ -385,6 +394,14 @@ export type DesktopWindowRole = {
   /** The person wants the buddy list up, as the WALL shape of the voice host.
    *  Exclusive with the faces: they are two sizes of one glance at the team. */
   peopleWall: boolean;
+  /** Which of the Chat and Work windows exist right now (lib/desktopApps):
+   *  the sidebar marks their sections as popped out, and every navigation
+   *  to their routes is handed to them. Empty on an older shell. */
+  apps: Partial<Record<string, boolean>>;
+  /** The app THIS window is, when the shell made it one out of a warm spare
+   *  window: a spare's preload arguments were fixed before anyone knew what
+   *  it would become, so its identity arrives here instead. */
+  app: string | null;
 };
 
 /** A room handed to the voice host, with the state the person is already in. */
@@ -1289,6 +1306,8 @@ let windowRole: DesktopWindowRole = {
   voiceWindow: false,
   facesOverlay: false,
   peopleWall: false,
+  apps: {},
+  app: null,
 };
 // The bridge the tracker installed on. In the app there is exactly one and it
 // never changes; a test that stands a second shell up gets a second install
@@ -1333,6 +1352,8 @@ export function installWindowRoleTracker(): void {
       voiceWindow: !!role.voiceWindow,
       facesOverlay: !!role.facesOverlay,
       peopleWall: !!role.peopleWall,
+      apps: role.apps && typeof role.apps === "object" ? { ...role.apps } : {},
+      app: typeof role.app === "string" ? role.app : null,
     };
     for (const cb of windowRoleWatchers) cb();
   });

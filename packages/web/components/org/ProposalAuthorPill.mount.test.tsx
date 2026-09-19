@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 restoreInboxStoreAfterAll();
 
 async function verifyAuthorPill() {
@@ -121,7 +122,7 @@ async function verifyAuthorPill() {
   }
 
   await act(async () => root.unmount());
-  dom.window.close();
+  closeDomWindow(dom);
   console.log("proposal author pill mount: passed");
 }
 

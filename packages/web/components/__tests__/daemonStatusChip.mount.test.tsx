@@ -6,6 +6,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
   url: "https://local.codecast.sh",
   pretendToBeVisual: true,
@@ -25,7 +26,7 @@ const restoreGlobals = replaceGlobals({
 });
 afterAll(() => {
   Date.now = realNow;
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

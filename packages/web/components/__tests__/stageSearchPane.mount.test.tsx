@@ -14,6 +14,7 @@ import { stageRenderLayout } from "../../lib/stage";
 import { tabNavigate } from "../../src/compat/tabRouting";
 import StageSplitView from "../stage/StageSplitView";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/inbox" });
 const restoreGlobals = replaceGlobals({
   window: Object.assign(dom.window, { innerWidth: 1400 }),
@@ -23,7 +24,7 @@ const restoreGlobals = replaceGlobals({
   localStorage: dom.window.localStorage,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const tab = (): AppTab => ({ id: "t1", title: "Inbox", path: "/inbox", createdAt: 0 });
 beforeEach(() => { useInboxStore.setState({ tabs: [tab()], activeTabId: "t1" } as any); });

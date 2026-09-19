@@ -135,3 +135,22 @@ for (const name of appDeps) {
     expect(config.resolver.resolveRequest(sdk, name, 'ios')).toEqual(expected);
   });
 }
+
+// What expo provides arrives through several parents, each with its own copy
+// (two expo-asset installs shipped in one release bundle). Those resolve from
+// the app's own expo install, whoever imports them.
+const expoRoot = fs.realpathSync(path.join(__dirname, 'node_modules', 'expo'));
+for (const name of ['expo-asset', 'expo-modules-core', 'expo-file-system']) {
+  test(`a nested copy of ${name} resolves to the copy expo provides`, () => {
+    const expected = resolve(context(path.join(expoRoot, 'package.json')), name, 'ios');
+    const peer = path.join(fixture, 'node_modules', name);
+    if (!fs.existsSync(path.join(peer, 'package.json'))) {
+      fs.mkdirSync(peer, { recursive: true });
+      fs.writeFileSync(path.join(peer, 'package.json'), JSON.stringify({ name, main: 'index.js' }));
+      fs.writeFileSync(path.join(peer, 'index.js'), 'module.exports = {};');
+    }
+    const sdk = context(path.join(fixture, 'index.js'));
+    expect(resolve(sdk, name, 'ios').filePath).toContain(fixture);
+    expect(config.resolver.resolveRequest(sdk, name, 'ios')).toEqual(expected);
+  });
+}

@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import React, { act, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 // Regression: SessionListPanel keeps the current chip filter FUNCTION in state
 // so it can re-close the Stashed/Killed buckets when the filter identity
 // changes. A function handed straight to a state setter is an UPDATER, so
@@ -20,7 +21,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 
