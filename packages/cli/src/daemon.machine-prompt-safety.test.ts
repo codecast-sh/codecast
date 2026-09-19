@@ -651,9 +651,12 @@ describe("machine prompt delivery safety", () => {
     expect(f.events).toEqual(["Escape"]);
   });
 
-  test("started-pane machine callback precedes trust input without altering default probes", async () => {
+  test("started-pane machine callback precedes the trust path without altering default probes", async () => {
     const f = fixture("tmux", false);
-    f.state.menu = `Do you trust this folder?\n❯ 1. Yes\n  2. No\nEnter to select · Esc to cancel`;
+    // A held prompt, not a folder-trust dialog: assertPromptAbsent returns
+    // early for trust (the launch path answers it with acceptTrustPrompt), so
+    // trust is the one dialog that never parks a delivery.
+    f.state.menu = menu;
     await expect(f.deliver(session("context"))).rejects.toThrow("human answer");
     expect(f.events).toEqual([]);
     expect(f.statuses).toEqual([]);
