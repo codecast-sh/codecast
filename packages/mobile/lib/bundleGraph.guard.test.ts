@@ -68,6 +68,18 @@ for (const platform of ["ios", "android"] as const) {
       expect(webOnly.map(chainTo)).toEqual([]);
     });
 
+    // One `import { captureException } from "@sentry/react"` in a shared hook
+    // shipped ~300 files of a second Sentry version to the phone. Shared code
+    // reports through ../lib/analytics, which has a native twin.
+    test("no web only SDK reaches the native bundle", () => {
+      // dexie still arrives: @platform/engine's index exports its Dexie cache
+      // (src/idbCache.ts) beside helpers the phone uses. Add it here when that
+      // module gets a native twin or leaves the index.
+      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js"];
+      const hit = [...graph.externals].filter((spec) => WEB_ONLY.some((pkg) => spec === pkg || spec.startsWith(pkg + "/")));
+      expect(hit).toEqual([]);
+    });
+
     test("a shared web file never uses the @/ alias, which Metro points at mobile", () => {
       const offenders: string[] = [];
       for (const file of graph.nodes.keys()) {

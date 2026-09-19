@@ -73,7 +73,17 @@ export function useStoreOwnersEnv(
  */
 export function useSessionRoleFacts(conversationId: string) {
   const { roles } = useOrgRoles();
-  const liveRoles = roles.filter((r) => r.status !== "retired");
+  // A team role only takes sessions routed to its team; a personal role takes
+  // any (sessionOwnership.performReparentSession). The menu offers only the
+  // roles the server will accept. `undefined` means the row is not in the
+  // store, so the team is unknown and nothing is ruled out.
+  const sessionTeamId = useInboxStore((s) => {
+    const row = sessionRowOf(s, conversationId);
+    return row ? ((row.team_id as string | undefined) ?? null) : undefined;
+  });
+  const liveRoles = roles.filter(
+    (r) => r.status !== "retired" && (sessionTeamId === undefined || !r.team_id || r.team_id === sessionTeamId),
+  );
   const orgRoleId = useInboxStore((s) => {
     const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
     return ((s.sessions as any)?.[live]?.org_role_id ?? (s.conversations as any)?.[conversationId]?.org_role_id) as string | undefined;

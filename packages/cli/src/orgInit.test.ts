@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, ORG_ASKED_FOR_RULES, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
 import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
@@ -329,6 +329,16 @@ describe("buildOrgAnalyzerPrompt", () => {
     }
     expect(ORG_UNNAMED_ROLES_RULE).toContain("A session older than a week with a standing purpose is a role that has not been named");
     expect(ORG_UNNAMED_ROLES_RULE).toContain("name the long running sessions you considered and did not propose");
+    expect(ORG_UNNAMED_ROLES_RULE).toContain("An area that a role already watches is not a reason to leave such a session unnamed");
+  });
+  // The two role shapes people asked for on the 2026-09-18 huddle (R6).
+  test("an agent quality role runs cast-lessons weekly over one agent; a role a person reports to is a goal tracker, not a gatekeeper", () => {
+    const p = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
+    expect(p).toContain("## Two roles people asked for");
+    expect(p).toContain(ORG_ASKED_FOR_RULES.agent_quality);
+    expect(p).toContain(ORG_ASKED_FOR_RULES.goal_tracker);
+    expect(ORG_ASKED_FOR_RULES.agent_quality).toContain("cast-lessons harvest every week");
+    expect(ORG_ASKED_FOR_RULES.goal_tracker).toContain("a goal tracker, not a gatekeeper");
   });
   // S10: every proposed role is standing or a program, says which, and names
   // its end; tenure rides on the role change and the spec example carries it.

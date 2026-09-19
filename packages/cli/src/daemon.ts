@@ -32,6 +32,7 @@ import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
   HIBERNATE_MAX_PER_PASS,
+  HIBERNATE_RESUME_GRACE_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -288,7 +289,8 @@ import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOpti
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
-import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { atomicWriteFile } from "./atomicWrite.js";
+import { AwakeIdleClock, collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -6427,17 +6429,25 @@ async function executeRemoteCommand(
         // Claude UUID. We were churning through kill → repair → reconstitute
         // → start-fresh for every such call, racing the tryStartedTmux path
         // that was already about to deliver the user's first message.
+        //
+        // "Just" is the whole condition. A start record lives for a day, and a
+        // pane that never linked (started here while another device owned the
+        // conversation) sits in it that long. Treating that record as a boot in
+        // progress made a transfer to this machine return here with nothing
+        // started and no delivery scheduled. Past the boot window the pane is
+        // replaced: it is torn down and the resume below starts a current one.
         if (conversationId) {
           const startedEntry = startedSessionTmux.get(conversationId);
-          if (startedEntry) {
-            const cache = readConversationCache();
-            const reverseCache = buildReverseConversationCache(cache);
-            const linkedSessionId = reverseCache[conversationId];
-            if (!linkedSessionId) {
-              log(`[REMOTE] Skipping resume for ${sessionId.slice(0, 8)} — conversation ${conversationId.slice(0, 12)} has a freshly started tmux (${startedEntry.tmuxSession}) that hasn't been linked yet; tryStartedTmux will handle delivery.`);
-              result = JSON.stringify({ skipped: true, reason: "fresh_session_unlinked" });
-              break;
-            }
+          const linked = !!startedEntry && !!buildReverseConversationCache(readConversationCache())[conversationId];
+          const guard = startedSessionGuard(startedEntry, linked);
+          if (startedEntry && guard === "skip_booting") {
+            log(`[REMOTE] Skipping resume for ${sessionId.slice(0, 8)} — conversation ${conversationId.slice(0, 12)} has a freshly started tmux (${startedEntry.tmuxSession}) that hasn't been linked yet; tryStartedTmux will handle delivery.`);
+            result = JSON.stringify({ skipped: true, reason: "fresh_session_unlinked" });
+            break;
+          }
+          if (startedEntry && guard === "replace_stale") {
+            log(`[REMOTE] Replacing stale started tmux ${startedEntry.tmuxSession} for conversation ${conversationId.slice(0, 12)}: unlinked ${Math.round((Date.now() - startedEntry.startedAt) / 60_000)}m after start`);
+            await teardownConversationBackendsLive(conversationId);
           }
         }
         let projectPath = parsed.project_path;
@@ -6965,7 +6975,7 @@ async function executeRemoteCommand(
 
           if (!reconstituted) {
             const existingStarted = startedSessionTmux.get(conversationId);
-            if (existingStarted && (Date.now() - existingStarted.startedAt) < 60_000) {
+            if (existingStarted && startedSessionGuard(existingStarted, false) === "skip_booting") {
               log(`[REMOTE] Fresh session ${existingStarted.tmuxSession} already started for ${conversationId.slice(0, 12)}, skipping duplicate`);
               result = JSON.stringify({ started_fresh: true, tmux_session: existingStarted.tmuxSession, deduplicated: true });
               break;
@@ -7005,6 +7015,10 @@ async function executeRemoteCommand(
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
               });
+              // Same redelivery contract as the resume branches above: a first
+              // message that exhausted its budget against the old pane, or on
+              // the previous owner, has to reach this one.
+              await clearConversationDeliveryAndResumeState(conversationId, undefined, "resume_session_blank");
               result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
               log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
             } catch (spawnErr) {
@@ -17716,6 +17730,11 @@ function recentSessionObservation(sessionId: string, codexOnly: boolean): Sessio
   return null;
 }
 export async function awaitRecentSessionFile(sessionId: string, codexOnly = false): Promise<SessionFileInfo | null> {
+  // The boot index is empty until its first walk lands, and the recent scan
+  // only sees directories changed since that empty install. Without this wait
+  // every transcript already on disk reads as missing for the first minutes of
+  // a daemon's life, which is when a restart asks.
+  await ensureSessionFileIndex();
   const hit = findSessionFile(sessionId, { staleOk: true });
   if (hit) return hit;
   recentSessionObservation(sessionId, codexOnly);
@@ -19599,8 +19618,10 @@ async function publishLocalRepos(
 // This reaps a terminal ONLY when multiple independent ground-truth signals agree
 // it is finished, and writes every kill to a dedicated reaper.log so the action is
 // auditable. The signals (all must pass):
-//   - no transcript activity for REAP_IDLE_MS (file mtime) — long-quiet, which a
-//     genuine long-running tool never is (real tools finish in minutes)
+//   - no transcript activity for REAP_IDLE_MS (the newest real message; mtime only
+//     as the fast path when it is itself old — an idle agent touches its file
+//     hourly, see transcriptIdleMs) — long-quiet, which a genuine long-running
+//     tool never is (real tools finish in minutes)
 //   - the LIVE pane reads "idle" (classifyTmuxLiveState is a positive whitelist;
 //     a spinner / "esc to interrupt" / any modal reads non-idle and is skipped)
 //   - the transcript tail shows a COMPLETED turn (classifyTranscriptTail === idle;
@@ -19781,8 +19802,32 @@ async function paneChildCount(pid: number): Promise<number | null> {
 // time, and a PINNED card is visible even when killed (see shouldShowInInbox).
 // Unknown lifecycle fails CLOSED — the opposite of the resurrection gate,
 // because here the cautious move is to leave the agent running.
+export type StampedPaneReapFacts = {
+  /** The daemon's last sent status: "waiting" = open background work, "dormant" = a machine wakes it. */
+  agentStatus?: AgentStatus;
+  /** Undelivered messages are queued for the conversation. */
+  pendingMessages: boolean;
+  /** A resume or a delivery is landing in the pane right now. */
+  deliveryActive: boolean;
+  /** A subagent of this session is still writing its own transcript. */
+  subagentsLive: boolean;
+  /** Hibernation or a send holds the tmux target. */
+  targetLocked: boolean;
+  /** Since the session was last resumed; a fresh resume has produced nothing to judge yet. */
+  resumedAgoMs: number;
+};
+
+// Out of the inbox is necessary, not sufficient. A parked session that is
+// WAITING on something keeps its process, because the wait lives inside it:
+// open background work (a Monitor or a background task dies with the agent),
+// a declared machine wake, queued messages nobody has delivered, a delivery
+// landing this instant, a live subagent, a tmux target another path holds, or
+// a resume still settling. The same facts hibernation refuses on, read from
+// the same sources, so the two teardowns cannot disagree about what "waiting"
+// means.
 export function stampedPaneReapEligibility(
   lifecycle: ConversationLifecycle | null | undefined,
+  facts?: StampedPaneReapFacts,
 ): { eligible: boolean; reason: string | null } {
   // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
   // hide state at all, and reading its silence as "inbox-visible" would put a lie
@@ -19793,6 +19838,14 @@ export function stampedPaneReapEligibility(
   if (lifecycle.inboxPinnedAt) return { eligible: false, reason: "pinned" };
   const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
   if (!hidden) return { eligible: false, reason: "inbox-visible" };
+  if (!facts) return { eligible: true, reason: null };
+  if (facts.agentStatus === "waiting") return { eligible: false, reason: "open-background-work" };
+  if (facts.agentStatus === "dormant") return { eligible: false, reason: "dormant" };
+  if (facts.pendingMessages) return { eligible: false, reason: "pending-messages" };
+  if (facts.deliveryActive) return { eligible: false, reason: "delivery-active" };
+  if (facts.subagentsLive) return { eligible: false, reason: "live-subagents" };
+  if (facts.targetLocked) return { eligible: false, reason: "in-flight-messages" };
+  if (facts.resumedAgoMs < HIBERNATE_RESUME_GRACE_MS) return { eligible: false, reason: "recently-resumed" };
   return { eligible: true, reason: null };
 }
 
@@ -19984,6 +20037,22 @@ export function tmuxSessionIsSinglePane(listPanesStdout: string): boolean {
   return panes.length === 1;
 }
 
+// The idle clock of a LIVE agent at its prompt. File mtime lies upward: an idle
+// Claude Code process refreshes its transcript's mtime about hourly with no new
+// content (2026-09-19: 104 of the 117 transcripts touched in one hour belonged
+// to live idle panes whose newest real message was 14 to 36 hours old), so a
+// clock read from mtime alone called every parked session "active" and the
+// reaper retired nothing for a day while 120 agents held 43 GB. The newest REAL
+// message is the honest clock; mtime is only the fallback when no message
+// carries a timestamp (a codex transcript, a tail of meta lines). This measures
+// idleness, never liveness: whether the agent is mid-turn is the pane's and the
+// tail's call, and the delivery gates in stampedPaneReapEligibility cover the
+// instant between an injected message and the agent's first line about it.
+export function transcriptIdleMs(input: { mtimeMs: number; lastRealTimestampMs: number | null; now: number }): number {
+  if (input.lastRealTimestampMs === null) return input.now - input.mtimeMs;
+  return input.now - input.lastRealTimestampMs;
+}
+
 // The reason a terminal is NOT safe to reap, or null if it passed every gate.
 // On success returns the resolved transcript path + idle age so the caller need
 // not re-scan. Cheapest gates first (idle-age before the pane/tail reads).
@@ -19994,16 +20063,26 @@ async function reapBlockReason(
   if (!file) return { reason: "no-transcript" };
   const classifyTail = classifyTranscriptTailFor(file.agentType);
   if (!classifyTail) return { reason: `agent=${file.agentType}` };
-  let idleMs: number;
-  try { idleMs = now - fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
-  if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
+  let mtimeMs: number;
+  try { mtimeMs = fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
+  // An old mtime is old for real (a file is never older than its newest line),
+  // so it stays the free fast path. A young one proves nothing and is checked
+  // against the content — see transcriptIdleMs.
+  let tail: string | null = null;
+  let idleMs = now - mtimeMs;
+  if (idleMs < REAP_IDLE_MS) {
+    try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+    idleMs = transcriptIdleMs({ mtimeMs, lastRealTimestampMs: transcriptTailLastRealTimestamp(tail), now });
+    if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
+  }
   let pane: string;
   try { ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 })); }
   catch { return { reason: "pane-capture-failed" }; }
   const live = classifyLivePaneFor(file.agentType, pane);
   if (live !== "idle") return { reason: `pane=${live}` };
-  let tail: string;
-  try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  if (tail === null) {
+    try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  }
   const turn = classifyTail(tail);
   let idleHours = Math.round(idleMs / 3600000);
   if (turn !== "idle") {
@@ -20162,7 +20241,14 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       const lifecycle = convId && syncServiceRef
         ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
         : null;
-      const eligibility = stampedPaneReapEligibility(lifecycle);
+      const eligibility = stampedPaneReapEligibility(lifecycle, {
+        agentStatus: lastSentAgentStatus.get(sessionId),
+        pendingMessages: !!lifecycle?.hasPendingMessages,
+        deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
+        subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
+        targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
+        resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
+      });
       if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
       const gcWorktree = !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
       if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
@@ -21312,6 +21398,21 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
 // MAX_RESUME_READINESS_POLL_MS, so a boot under load (seven launches in one
 // second has been observed) still binds.
 const DISCOVERY_POLL_ATTEMPTS = 60;
+const DISCOVERY_POLL_INTERVAL_MS = 2000;
+
+/** How long an unlinked start record counts as a boot in progress: the budget
+ * discovery polls the pane for. After it nothing is still trying to link. */
+export const STARTED_SESSION_BOOT_WINDOW_MS = DISCOVERY_POLL_ATTEMPTS * DISCOVERY_POLL_INTERVAL_MS;
+
+/** What resume_session does about a conversation's start record. */
+export function startedSessionGuard(
+  entry: { startedAt: number } | undefined,
+  linked: boolean,
+  now: number = Date.now(),
+): "proceed" | "skip_booting" | "replace_stale" {
+  if (!entry || linked) return "proceed";
+  return now - entry.startedAt < STARTED_SESSION_BOOT_WINDOW_MS ? "skip_booting" : "replace_stale";
+}
 
 async function discoverAndLinkSession(
   conversationId: string,
@@ -21356,7 +21457,7 @@ async function discoverAndLinkSession(
   };
 
   for (let attempt = 0; attempt < DISCOVERY_POLL_ATTEMPTS; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, DISCOVERY_POLL_INTERVAL_MS));
     const entry = startedSessionTmux.get(conversationId);
     if (!entry) {
       log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);
@@ -21650,8 +21751,11 @@ const RESOURCE_MONITOR_INTERVAL_MS = 30_000;
 // Sleep-aware idle accounting. We accumulate idle time per session only across
 // ticks where the machine was awake, so a closed-lid gap never makes a frozen
 // session look "idle for hours" the moment it wakes. A session's counter resets
-// to 0 whenever it shows activity (CPU above the floor or a working status).
-const sessionAwakeIdleMs = new Map<string, number>();
+// to 0 on a working status; see nextAwakeIdleMs for why CPU alone only pauses it.
+// The counters are written to disk after each tick and read back on the first
+// tick of the next daemon, so a restart does not start every session at zero.
+const sessionAwakeIdleMs = new AwakeIdleClock();
+const AWAKE_IDLE_SNAPSHOT_FILE = path.join(CONFIG_DIR, "awake-idle.json");
 // Last metrics actually pushed per session, so shouldReportMetrics can skip
 // re-reporting idle, unchanged sessions every tick (see resourceMonitor.ts).
 const lastReportedMetrics = new Map<string, ReportedMetrics>();
@@ -21665,7 +21769,7 @@ export function getLatestSessionResources(): ReadonlyMap<string, SessionResource
 }
 
 export function getSessionAwakeIdleMs(sessionId: string): number {
-  return sessionAwakeIdleMs.get(sessionId) ?? 0;
+  return sessionAwakeIdleMs.get(sessionId);
 }
 
 async function collectResourceSnapshot(): Promise<void> {
@@ -21694,11 +21798,14 @@ async function collectResourceSnapshot(): Promise<void> {
     const now = Date.now();
     const elapsed = lastResourceTickAt > 0 ? now - lastResourceTickAt : 0;
     const sleepSkip = lastResourceTickAt === 0 || isInWakeGrace() || elapsed > RESOURCE_TICK_SLEEP_GAP_MS;
+    if (lastResourceTickAt === 0) {
+      try { sessionAwakeIdleMs.restore(fs.readFileSync(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8"), now); } catch {}
+    }
     lastResourceTickAt = now;
 
     for (const [sessionId, r] of resources) {
       sessionAwakeIdleMs.set(sessionId, nextAwakeIdleMs({
-        prevIdleMs: sessionAwakeIdleMs.get(sessionId) ?? 0,
+        prevIdleMs: sessionAwakeIdleMs.previous(sessionId, now),
         cpu: r.cpu,
         status: lastSentAgentStatus.get(sessionId),
         elapsedMs: elapsed,
@@ -21711,9 +21818,10 @@ async function collectResourceSnapshot(): Promise<void> {
       }));
     }
     // Drop counters for sessions whose process tree is gone (no longer collected).
-    for (const sessionId of sessionAwakeIdleMs.keys()) {
-      if (!resources.has(sessionId)) sessionAwakeIdleMs.delete(sessionId);
-    }
+    sessionAwakeIdleMs.prune(new Set(resources.keys()), now);
+    try {
+      atomicWriteFile(AWAKE_IDLE_SNAPSHOT_FILE, sessionAwakeIdleMs.encode(now), { mode: 0o644 });
+    } catch {}
     for (const sessionId of lastReportedMetrics.keys()) {
       if (!resources.has(sessionId)) lastReportedMetrics.delete(sessionId);
     }
@@ -21749,7 +21857,7 @@ async function collectResourceSnapshot(): Promise<void> {
         metricsReported++;
         lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt, at: now });
         await syncServiceRef!.reportSessionMetrics(
-          sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0, agentStartedAt,
+          sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId), agentStartedAt,
         ).catch(() => {});
       }, "Metrics worker");
     }
@@ -22425,7 +22533,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // cwd resolution and readiness timing, and its absence means the fork cannot
   // run here (the client copies state it must be able to read).
   const forkFromSessionId = opts?.forkFromSessionId;
-  let sessionFile = findSessionFile(forkFromSessionId ?? sessionId);
+  // Awaited, because "missing" here is destructive: it rebuilds the transcript
+  // from the server over whatever is on disk. The index walks every five
+  // minutes and answers null for a younger transcript on the first ask, so the
+  // plain lookup made a restart of a young session overwrite its real
+  // transcript and then refuse to resume it.
+  let sessionFile = await awaitRecentSessionFile(forkFromSessionId ?? sessionId);
   if (sessionFileStaleForAgent(sessionFile?.agentType, agentTypeHint)) {
     logDelivery(`Ignoring ${sessionFile!.agentType} transcript for ${sessionId.slice(0, 8)} — conversation is now ${agentTypeHint}`);
     sessionFile = null;
@@ -22513,7 +22626,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
       }
       sessionId = reconId;
-      sessionFile = findSessionFile(reconId);
+      sessionFile = await awaitRecentSessionFile(reconId);
       if (!sessionFile && !isStoreOwnedResume) {
         logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
         return false;
@@ -23333,6 +23446,15 @@ export function pickReusableConversationTmux(
 // tmux is the durable source of truth for "is a session for this conversation
 // already running?" — unlike startedSessionTmux, which persists to disk and
 // reloads stale entries on each daemon construction.
+/** When tmux created the pane's session. An adopted pane keeps its real age:
+ * stamping the adoption time made every daemon restart turn an old unlinked
+ * pane back into a "freshly started" one that blocks its own replacement. */
+async function tmuxSessionCreatedAtMs(tmuxSession: string): Promise<number> {
+  const { stdout } = await tmuxExec(["display-message", "-p", "-t", tmuxSession, "#{session_created}"]).catch(() => ({ stdout: "" }));
+  const seconds = Number(stdout.trim());
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Date.now();
+}
+
 async function findLiveTmuxForConversation(
   conversationId: string,
 ): Promise<StartedSessionInfo | null> {
@@ -23351,7 +23473,7 @@ async function findLiveTmuxForConversation(
     const agentType =
       ((await getTmuxSessionOption(match, "@codecast_agent_type")) as StartedSessionInfo["agentType"] | null) ||
       "claude";
-    return { tmuxSession: match, projectPath, startedAt: Date.now(), agentType };
+    return { tmuxSession: match, projectPath, startedAt: await tmuxSessionCreatedAtMs(match), agentType };
   } catch {
     return null;
   }
@@ -26908,7 +27030,7 @@ async function main(): Promise<void> {
             startedSessionTmux.set(tmuxConvId, {
               tmuxSession: recoveredTmuxSession,
               projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
-              startedAt: Date.now(),
+              startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession),
               agentType,
             });
             if (syncServiceRef) {

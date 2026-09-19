@@ -95,6 +95,34 @@ export async function popOutWindow(
 }
 
 /**
+ * Say what happened when a rung was missing, in the two sentences a person
+ * needs. Both failures used to be silent, and each read as a dead button: a
+ * blocked popup made people press again instead of looking at the address
+ * bar, and an old desktop build quietly opened a Chrome window beside the app.
+ *
+ * The retry offered on a blocked popup is a plain tab rather than another
+ * popup, and it fires from the toast's own click, so it carries a fresh user
+ * gesture and the blocker lets it through. `toast` is passed in so this module
+ * keeps no UI import and stays testable.
+ */
+export function explainPopOut(
+  outcome: PopOutOutcome,
+  what: { thing: string; route: string; name: string },
+  toast: { error: (title: string, opts: { description: string; action?: { label: string; onClick: () => void } }) => unknown },
+): void {
+  if (outcome === "needs-update") {
+    toast.error("The desktop app needs an update for this", {
+      description: `This build cannot open ${what.thing} in a window of its own. Update Codecast and it will.`,
+    });
+  } else if (outcome === "blocked") {
+    toast.error(`Your browser blocked ${what.thing}`, {
+      description: "Allow popups for this site, or open it as a tab instead.",
+      action: { label: "Open as a tab", onClick: () => window.open(what.route, what.name) },
+    });
+  }
+}
+
+/**
  * The same page as a plain browser tab, outside every shell.
  *
  * Inside the desktop app the bridge hands the URL to the operating system,

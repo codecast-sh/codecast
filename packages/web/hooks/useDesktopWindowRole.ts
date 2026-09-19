@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { desktopAppWindow, type DesktopApp } from "../lib/desktopApps";
 import {
   getDesktopWindowRole,
   subscribeWindowRole,
@@ -15,4 +16,10 @@ import {
  */
 export function useDesktopWindowRole(): DesktopWindowRole {
   return useSyncExternalStore(subscribeWindowRole, getDesktopWindowRole, getDesktopWindowRole);
+}
+
+/** The app this window is (lib/desktopApps), as a React value: a window made
+ *  from the shell's warm spare learns it from its role after it has mounted. */
+export function useDesktopAppWindow(): DesktopApp | null {
+  return useSyncExternalStore(subscribeWindowRole, desktopAppWindow, () => null);
 }

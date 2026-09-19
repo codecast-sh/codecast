@@ -148,7 +148,7 @@ export default function OrgScreen() {
       <TouchableOpacity style={[styles.row, styles.sessionRow, pad]} activeOpacity={0.6} disabled={!tappable} onPress={() => toggleMore(item.parentId)}>
         <RNView style={[styles.dot, { backgroundColor: 'transparent', borderWidth: 1, borderColor: Theme.textDim }]} />
         <RNText style={[styles.sessionTitle, { color: Theme.textMuted }]} numberOfLines={1}>
-          {item.opened ? (item.remaining > 0 ? `Show fewer · ${item.remaining} more in the inbox` : 'Show fewer') : item.loaded > 0 ? `Show ${item.loaded} more${item.remaining > item.loaded ? ` of ${item.remaining}` : ''}` : `${item.remaining} more in the inbox`}
+          {item.opened ? (item.remaining > 0 ? `Show fewer · ${item.remaining} more in the inbox` : 'Show fewer') : item.loaded > 0 ? `Show ${item.loaded} more${item.remaining > item.loaded ? ` · ${item.remaining - item.loaded} more in the inbox` : ''}` : `${item.remaining} more in the inbox`}
         </RNText>
       </TouchableOpacity>
     );

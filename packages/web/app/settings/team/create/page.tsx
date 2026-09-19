@@ -129,7 +129,7 @@ export default function CreateTeamPage() {
       })
       .catch((err) => {
         console.error("Team identity update failed:", err);
-        toast.error("Could not update the team identity. You can change it in Settings.");
+        toast.error("Could not update the team identity", { description: "You can change it in Settings." });
       });
   }, [trimmed, identity, renameTeam, updateTeamIcon]);
 
@@ -187,7 +187,7 @@ export default function CreateTeamPage() {
       // step. That handler runs first and clears the promise ref.
       if (!teamIdPromise.current) return;
       console.error("Team setup save failed:", err);
-      toast.error("Could not save the team settings. You can change them in Settings.");
+      toast.error("Could not save the team settings", { description: "You can change them in Settings." });
     });
   };
 

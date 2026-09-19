@@ -186,7 +186,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
           <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists." : "Bring a complete job template into one project, with your approval before setup."}</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" role="group" aria-label="Role setup" hidden={!!seat}>
+        <div className={seat ? "hidden" : "grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1"} role="group" aria-label="Role setup">
           {([["manual", "Write a role"], ["template", "From a folder"]] as const).map(([value, label]) => (
             <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className="rounded-md px-3 py-2 text-[12px] font-semibold transition-colors focus-visible:outline focus-visible:outline-sol-cyan" style={{ background: mode === value ? "var(--sol-card)" : undefined, color: mode === value ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{label}</button>
           ))}
