@@ -8,6 +8,7 @@ import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock } from "lucide-reac
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useDocPresence, type PresenceRow } from "../hooks/useDocPresence";
+import { composerPresenceEnabled, typingRows, presenceMember } from "../lib/composerPresence";
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
 import { PresenceFacepile } from "./PresenceFacepile";
@@ -36,32 +37,6 @@ function useComposerPresence(
     enabled: opts.enabled,
     forceBroadcast: opts.forceBroadcast,
   });
-}
-
-/**
- * Whether a conversation can carry composer co-presence. It must be a real
- * server row: a fresh optimistic stub is keyed by its session uuid, which the
- * presence query's id validator rejects. Every real conversation qualifies,
- * private ones included: the server gates the read on access, and the owner
- * writes nothing until someone else appears, so a solo session costs one
- * silent subscription and no rows.
- */
-export function composerPresenceEnabled(conversation: { _id: unknown } | null | undefined): boolean {
-  return !!conversation && isConvexId(String(conversation._id));
-}
-
-/** The rows in a presence list that are forming words right now. */
-export function typingRows(present: readonly PresenceRow[]): PresenceRow[] {
-  return present.filter((p) => !!p.draft_text && p.draft_text.trim().length > 0);
-}
-
-/**
- * A presence row as the typing strip's member: the roster row when the
- * person is a teammate (their real face), else the name the row carries (a
- * share link guest, who is not on the roster).
- */
-export function presenceMember(row: PresenceRow, roster: readonly ChatMember[]): ChatMember {
-  return roster.find((m) => String(m._id) === row.user_id) ?? { _id: row.user_id, name: row.user_name };
 }
 
 // The line above a composer that says who else is in the box. Two states.

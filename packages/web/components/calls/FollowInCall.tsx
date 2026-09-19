@@ -15,7 +15,7 @@ import { firstName } from "./speakers";
 // ring, and the presenter sees how many follow them.
 
 /** This window's follow relation to one participant. */
-export function useCallFollow(identity: string): {
+function useCallFollow(identity: string): {
   isSelf: boolean;
   following: boolean;
   followers: number;

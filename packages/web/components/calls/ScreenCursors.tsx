@@ -8,6 +8,7 @@ import { hueFor } from "../../lib/avatarInitials";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { CursorArrow } from "../presence/CursorArrow";
+import { naturalOf, useScreenCursorSender } from "../../hooks/useScreenCursorSender";
 import { firstName } from "./speakers";
 
 // Teammates' cursors over a screen share tile, and mine going out.
@@ -23,29 +24,6 @@ import { firstName } from "./speakers";
 
 const TRANSITION = "transform 120ms cubic-bezier(.2,.7,.2,1), opacity 300ms ease";
 
-function naturalOf(video: HTMLVideoElement | null): { width: number; height: number } | null {
-  if (!video || !video.videoWidth || !video.videoHeight) return null;
-  return { width: video.videoWidth, height: video.videoHeight };
-}
-
-/** Pointer handlers for a screen tile: my pointer goes to the room. */
-export function useScreenCursorSender(tile: ParticipantTile, videoRef: RefObject<HTMLVideoElement | null>) {
-  const sid = tile.track.sid ?? "";
-  const onPointerMove = (e: ReactPointerEvent<HTMLElement>) => {
-    const video = videoRef.current;
-    const natural = naturalOf(video);
-    if (!video || !natural || !sid) return;
-    const p = mapToFrame(e.clientX, e.clientY, video.getBoundingClientRect(), natural);
-    if (!p) return;
-    sendCursor(getRoom(), sid, p.nx, p.ny);
-  };
-  const onPointerLeave = () => {
-    if (sid) sendCursorGone(getRoom(), sid);
-  };
-  return { onPointerMove, onPointerLeave };
-}
-
-/** The other participants' cursors over this share. */
 export function ScreenCursors({
   tile,
   boxRef,

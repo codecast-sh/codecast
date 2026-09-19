@@ -3,4 +3,12 @@
 // The tab shell already routes /routines to the workflows page
 // (components/RoutePane.tsx); this file gives a direct load the same page.
 // /workflows keeps working as the older address of the same surface.
-export { default } from "../workflows/page";
+//
+// Rendered rather than re-exported: `export { default } from …` is not a
+// component declaration, so the module stops being a Fast Refresh boundary
+// and every save of it re-executes its importers.
+import WorkflowsPage from "../workflows/page";
+
+export default function RoutinesPage() {
+  return <WorkflowsPage />;
+}
