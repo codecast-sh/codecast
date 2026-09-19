@@ -18,9 +18,11 @@ import {
   stampedPaneReapEligibility,
   summarizeReapSkips,
   tmuxSessionIsSinglePane,
+  transcriptIdleMs,
   transcriptTailLastRealTimestamp,
   trackSessionPaneForTests,
 } from "./daemon.js";
+import { HIBERNATE_RESUME_GRACE_MS } from "./hibernation.js";
 import { SyncService, isMissingFunctionError, resetLifecycleQueryLatch, shouldProbeLifecycleQuery } from "./syncService.js";
 import type { ConversationLifecycle } from "./syncService.js";
 
@@ -286,6 +288,68 @@ describe("stampedPaneReapEligibility", () => {
       .toEqual({ eligible: false, reason: "hide-state-unknown" });
     // Even when the degraded row happens to look killed, hide state is still unknown.
     expect(stampedPaneReapEligibility(degraded({ status: "completed" })).reason).toBe("hide-state-unknown");
+  });
+});
+
+describe("stampedPaneReapEligibility: a hidden session that is waiting on something keeps its process", () => {
+  const hidden = () => authoritative({ inboxStashedAt: 1_700_000_000_000 });
+  const clear = () => ({
+    agentStatus: "idle" as const,
+    pendingMessages: false,
+    deliveryActive: false,
+    subagentsLive: false,
+    targetLocked: false,
+    resumedAgoMs: Infinity,
+  });
+
+  test("nothing pending → eligible", () => {
+    expect(stampedPaneReapEligibility(hidden(), clear())).toEqual({ eligible: true, reason: null });
+  });
+
+  test("open background work lives inside the agent and dies with it", () => {
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), agentStatus: "waiting" }).reason).toBe("open-background-work");
+  });
+
+  test("a declared machine wake is a wait", () => {
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), agentStatus: "dormant" }).reason).toBe("dormant");
+  });
+
+  test("queued, landing or locked deliveries and live subagents all block", () => {
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), pendingMessages: true }).reason).toBe("pending-messages");
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), deliveryActive: true }).reason).toBe("delivery-active");
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), subagentsLive: true }).reason).toBe("live-subagents");
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), targetLocked: true }).reason).toBe("in-flight-messages");
+  });
+
+  test("a resume still settling is not judged yet", () => {
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), resumedAgoMs: HIBERNATE_RESUME_GRACE_MS - 1 }).reason).toBe("recently-resumed");
+    expect(stampedPaneReapEligibility(hidden(), { ...clear(), resumedAgoMs: HIBERNATE_RESUME_GRACE_MS }).eligible).toBe(true);
+  });
+
+  test("the hide gates still come first", () => {
+    expect(stampedPaneReapEligibility(authoritative(), { ...clear(), agentStatus: "waiting" }).reason).toBe("inbox-visible");
+  });
+});
+
+// The clock behind the reaper's idle gate. On 2026-09-19 every parked session on
+// this machine read as active for a day: an idle Claude Code process touches its
+// transcript's mtime about hourly with no new content, and the gate was reading
+// mtime. The newest real message is the clock; mtime only when no message
+// carries a timestamp.
+describe("transcriptIdleMs", () => {
+  const H = 3600_000;
+  const now = 1_800_000_000_000;
+
+  test("a young mtime over an old newest message is idle by the message", () => {
+    expect(transcriptIdleMs({ mtimeMs: now - 5 * 60_000, lastRealTimestampMs: now - 20 * H, now })).toBe(20 * H);
+  });
+
+  test("a young newest message is active whatever the file says", () => {
+    expect(transcriptIdleMs({ mtimeMs: now - 20 * H, lastRealTimestampMs: now - 60_000, now })).toBe(60_000);
+  });
+
+  test("no timestamped message → mtime is all there is", () => {
+    expect(transcriptIdleMs({ mtimeMs: now - 3 * H, lastRealTimestampMs: null, now })).toBe(3 * H);
   });
 });
 

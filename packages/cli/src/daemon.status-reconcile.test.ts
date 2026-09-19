@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, primeSessionFileIndexAtBoot, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked, trackSessionPaneForTests } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, primeSessionFileIndexAtBoot, awaitRecentSessionFile, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked, trackSessionPaneForTests } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import type { TranscriptTurnState } from "./daemon.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
@@ -709,6 +709,43 @@ describe("session file index: no cold sync walk on the loop while a refresh is i
     } finally {
       setSlowSyncSink(null);
       setSlowSyncFsThresholdForTests(null);
+      process.env.HOME = prevHome;
+      resetSessionFileIndexForTests();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-09-19: a session pulled to this machine seconds after a daemon restart
+  // logged "not found locally" for a transcript that was 20 minutes old. The
+  // boot index was still empty, and the recent scan only reads directories
+  // changed since that empty install. The resume path then rebuilt the
+  // transcript from the server over the real file.
+  test("the awaited lookup finds an old transcript while the boot walk is still in flight", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-await-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const proj = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(proj, { recursive: true });
+      const sid = "dddddddd-0000-0000-0000-000000000005";
+      const file = path.join(proj, `${sid}.jsonl`);
+      fs.writeFileSync(file, "{}\n");
+      const old = new Date(Date.now() - 20 * 60_000);
+      fs.utimesSync(file, old, old);
+      fs.utimesSync(proj, old, old);
+      resetSessionFileIndexForTests();
+
+      void primeSessionFileIndexAtBoot();
+      expect((await awaitRecentSessionFile(sid))?.path).toBe(file);
+      // On a tree this small the walk always lands before the recent scan, so
+      // the race itself is pinned by order: the wait for a real index comes
+      // before the first read of it.
+      const source = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf-8");
+      const body = source.slice(source.indexOf("export async function awaitRecentSessionFile"));
+      const wait = body.indexOf("await ensureSessionFileIndex();");
+      expect(wait).toBeGreaterThan(-1);
+      expect(wait).toBeLessThan(body.indexOf("findSessionFile(sessionId, { staleOk: true })"));
+    } finally {
       process.env.HOME = prevHome;
       resetSessionFileIndexForTests();
       fs.rmSync(tmpHome, { recursive: true, force: true });

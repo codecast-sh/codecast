@@ -6,6 +6,8 @@ import {
   collectSessionResources,
   formatResourcesLog,
   nextAwakeIdleMs,
+  AwakeIdleClock,
+  AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS,
   shouldReportMetrics,
   isSessionActive,
   IDLE_METRICS_REFRESH_MS,
@@ -225,9 +227,26 @@ describe("resourceMonitor", () => {
       expect(idle).toBe(2 * TICK);
     });
 
-    it("resets to 0 when CPU is above the floor", () => {
+    it("pauses, but does not reset, on a CPU reading above the floor with a resting status", () => {
       const idle = nextAwakeIdleMs({ prevIdleMs: 5 * TICK, cpu: 25, status: "idle", elapsedMs: TICK, sleepSkip: false });
-      expect(idle).toBe(0);
+      expect(idle).toBe(5 * TICK);
+    });
+
+    it("a resting session that blips past the floor every twentieth tick still banks eight hours", () => {
+      // The regression: a resting Claude Code process crosses 2% on its own
+      // often enough that a reset on every such tick never let any session
+      // reach an 8h hibernate_idle_ms (0 parks in 246 passes, 2026-09-19).
+      const eightHours = 8 * 3600_000;
+      let idle = 0;
+      let ticks = 0;
+      while (ticks < 1200) {
+        ticks++;
+        const cpu = ticks % 20 === 0 ? 4.9 : 0.3;
+        idle = nextAwakeIdleMs({ prevIdleMs: idle, cpu, status: "idle", elapsedMs: TICK, sleepSkip: false });
+      }
+      // 1200 ticks, 60 of them paused: 1140 × 30s = 9.5h banked.
+      expect(idle).toBe(1140 * TICK);
+      expect(idle).toBeGreaterThanOrEqual(eightHours);
     });
 
     it("resets to 0 on a working status even at near-zero CPU (blocked on a tool/network call)", () => {
@@ -279,6 +298,60 @@ describe("resourceMonitor", () => {
     it("treats undefined status as not-working (idle accrues on low CPU)", () => {
       const idle = nextAwakeIdleMs({ prevIdleMs: 0, cpu: 0.0, status: undefined, elapsedMs: TICK, sleepSkip: false });
       expect(idle).toBe(TICK);
+    });
+  });
+
+  describe("AwakeIdleClock", () => {
+    const NOW = 1_800_000_000_000;
+    const TICK = 30_000;
+    const snapshotOf = (idle: Record<string, number>, at: number) => JSON.stringify({ at, idle });
+
+    it("carries the counters across a daemon restart", () => {
+      const clock = new AwakeIdleClock();
+      clock.restore(snapshotOf({ a: 7 * 3600_000, b: 90_000 }, NOW), NOW + 40_000);
+      expect(clock.previous("a", NOW + 40_000)).toBe(7 * 3600_000);
+      expect(clock.previous("b", NOW + 40_000)).toBe(90_000);
+      expect(clock.previous("c", NOW + 40_000)).toBe(0);
+    });
+
+    it("keeps a restored counter through early ticks that have not seen its session yet", () => {
+      // The regression: the first tick after boot sees part of the fleet, and
+      // pruning on it erased the other sessions' restored counters (2026-09-19,
+      // 56 of 96 sessions on the first tick).
+      const clock = new AwakeIdleClock();
+      clock.restore(snapshotOf({ seen: 3600_000, late: 5 * 3600_000 }, NOW), NOW);
+      clock.set("seen", 3600_000 + TICK);
+      clock.prune(new Set(["seen"]), NOW + TICK);
+      expect(clock.get("late")).toBe(0); // not a live session yet, so nothing reads it as idle
+      expect(JSON.parse(clock.encode(NOW + TICK)).idle.late).toBe(5 * 3600_000); // but the next daemon still gets it
+      expect(clock.previous("late", NOW + 2 * TICK)).toBe(5 * 3600_000); // and the tick that finds it continues from it
+    });
+
+    it("expires unclaimed restored counters with the window and prunes live ones the tick did not collect", () => {
+      const clock = new AwakeIdleClock();
+      clock.restore(snapshotOf({ late: 5 * 3600_000 }, NOW), NOW);
+      clock.set("gone", TICK);
+      const after = NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS;
+      clock.prune(new Set(), after);
+      expect(clock.get("gone")).toBe(0);
+      expect(clock.previous("late", after)).toBe(0);
+      expect(JSON.parse(clock.encode(after)).idle).toEqual({});
+    });
+
+    it("discards a snapshot older than the restore window, a future stamp, malformed text and junk values", () => {
+      const stale = new AwakeIdleClock();
+      stale.restore(snapshotOf({ a: 7 * 3600_000 }, NOW), NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1);
+      expect(stale.previous("a", NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1)).toBe(0);
+      const future = new AwakeIdleClock();
+      future.restore(snapshotOf({ a: 5 }, NOW + 60_000), NOW);
+      expect(future.previous("a", NOW)).toBe(0);
+      const broken = new AwakeIdleClock();
+      broken.restore("{not json", NOW);
+      expect(broken.previous("a", NOW)).toBe(0);
+      const junk = new AwakeIdleClock();
+      junk.restore(JSON.stringify({ at: NOW, idle: { a: "9", b: -1, c: 0, d: 12 } }), NOW);
+      expect(junk.previous("d", NOW)).toBe(12);
+      expect(junk.previous("a", NOW)).toBe(0);
     });
   });
 

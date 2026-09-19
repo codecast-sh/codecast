@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler, buildRunLaunch } from "./taskScheduler.js";
+import { TaskScheduler, buildRunLaunch, runPaneFinished } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
@@ -222,6 +222,17 @@ describe("spawned run launch flags", () => {
     expect(extraAgentArgs).not.toContain("--model");
   });
 
+  it("a run parked at a usage limit resumes its own session instead of starting a fresh one", () => {
+    const { extraAgentArgs, runSessionUuid } = buildRunLaunch(
+      { ...spawnTask("t1"), mode: "apply", parked_run_session_uuid: "parked-uuid" },
+      {} as any,
+    );
+    expect(runSessionUuid).toBe("parked-uuid");
+    expect(extraAgentArgs).toContain("--resume");
+    expect(extraAgentArgs[extraAgentArgs.indexOf("--resume") + 1]).toBe("parked-uuid");
+    expect(extraAgentArgs).not.toContain("--session-id");
+  });
+
   it("uses codex's -m for a codex trigger", () => {
     const { agentBin, extraAgentArgs } = buildRunLaunch(
       { ...spawnTask("t1"), agent_type: "codex", model: "gpt-5.3-codex" },
@@ -394,5 +405,22 @@ describe("precheck gate", () => {
     await scheduler.poll();
     expect(calls.skipped).toEqual([]);
     expect(calls.injected).toEqual(["conv123"]);
+  });
+});
+
+// The finished check reads the pane's process tree, never the prompt text: a
+// prompt ending in ":" (this machine's) is not a "$", and the old text check
+// left every finished run sitting until the 10 min cap.
+describe("runPaneFinished", () => {
+  it("a pane whose shell has no children is finished; a missing session is finished; a live child is not", async () => {
+    const tmux = await import("./tmux.js");
+    const live = spyOn(tmux, "tmuxRunAsync").mockResolvedValue({ status: 0, stdout: "4242\n", stderr: "" });
+    expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(true);
+    expect(await runPaneFinished("ct-claude-x", async () => "4300\n")).toBe(false);
+    live.mockResolvedValue({ status: 1, stdout: "", stderr: "can't find session: ct-claude-x", code: 1 } as any);
+    expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(true);
+    live.mockResolvedValue({ status: null, stdout: "", stderr: "", killed: true } as any);
+    expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(false);
+    live.mockRestore();
   });
 });
