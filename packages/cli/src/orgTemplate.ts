@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
+import { readStdinBody } from "./sendBody.js";
 
 export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps): void {
   const org = program.commands.find((c) => c.name() === "org");
@@ -68,7 +69,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
     .option("--evidence <label=link>", "A link or short id a person can open (repeatable)", (value: string, all: string[]) => [...all, value], [])
     .action(async (instance: string, body: string, options: any) => {
       const { lessonTemplate } = await import("./orgTemplateRun.js");
-      const text = body === "-" ? await new Response(process.stdin).text() : body;
+      const text = body === "-" ? readStdinBody() : body;
       console.log(JSON.stringify(await lessonTemplate(deps, instance, text, options), null, 2));
     });
   template.command("publish <folder>").description("Publish a release folder as a template under a workspace, or as Codecast for every workspace")
@@ -77,7 +78,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
     .option("--review-project <id>", "Where this template's lessons are reviewed").option("--json", "Machine-readable output")
     .action(async (folder: string, options: any) => {
       const { publishTemplate } = await import("./orgTemplateRun.js");
-      const changelog = options.changelog === "-" ? await new Response(process.stdin).text() : options.changelog;
+      const changelog = options.changelog === "-" ? readStdinBody() : options.changelog;
       console.log(JSON.stringify(await publishTemplate(deps, folder, { ...options, changelog }), null, 2));
     });
   template.command("catalog").description("The templates this workspace may hire: its own and Codecast's")
