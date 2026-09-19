@@ -29,6 +29,7 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
+import { INITIATIVE_STATUS_ICONS, dayText, healthText, initiativeLine, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
 import {
   parseEntityUrl,
   buildEntityUrl,
@@ -8813,7 +8814,7 @@ program
     if (options.type) {
       const t = normalizeEntityType(options.type);
       if (!t) {
-        console.error(`Error: unknown --type "${options.type}" (use session | task | plan | doc | project | trigger | pr | commit)`);
+        console.error(`Error: unknown --type "${options.type}" (use session | task | plan | doc | project | initiative | trigger | pr | commit)`);
         process.exit(1);
       }
       entityType = t;
@@ -14559,8 +14560,9 @@ trigger
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers ignore it.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
-  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger; a trigger that fires once posts its result back into this session.")
+  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger. A trigger that fires once runs as this session's worker: nested under it, its result posted back here, and this session woken if the run fails, dies, or asks for attention.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
+  .option("--wake", "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.")
   .action(async (prompt, options) => {
     prompt = prompt.trim();
     if (!prompt) {
@@ -14671,6 +14673,9 @@ trigger
     // session. Requested via --spawn that's the point — confirm it. Otherwise
     // it's a silent behavior fork, so say it out loud — an agent creating a
     // loop for its own session must see when the link didn't take.
+    if (options.wake && !(options.spawn && schedule_type === "once" && creatorSessionUuid)) {
+      console.error("--wake needs --spawn, a trigger that fires once (--in), and a calling session to wake; it is ignored here");
+    }
     if (options.spawn) {
       console.error(
         "runs will spawn fresh sessions (no history) in " +
@@ -14721,6 +14726,7 @@ trigger
           mode: options.safe ? "propose" : options.mode,
           max_runtime_ms: maxRuntimeMs,
           precheck: options.precheck,
+          wake_creator: options.wake || undefined,
         }),
       });
 
@@ -15605,7 +15611,8 @@ function formatWorkItem(t: any, verbose = false, indent = 0): string {
   const pri = t.priority !== "medium" ? ` ${pcolor}${t.priority}${c.reset}` : "";
   const labels = t.labels?.length ? ` ${c.dim}[${t.labels.join(", ")}]${c.reset}` : "";
   const blocked = t.blocked_by?.length ? ` ${c.red}blocked${c.reset}` : "";
-  const assignee = t.assignee_name ? ` ${c.dim}@${t.assignee_name}${c.reset}` : "";
+  // A role's name already carries its "@"; a person's does not.
+  const assignee = t.assignee_name ? ` ${c.dim}@${String(t.assignee_name).replace(/^@/, "")}${c.reset}` : "";
   // A meeting task was decided by people; an agent only wrote it down. Marking
   // it here is what lets a reader tell it apart from agent bookkeeping.
   const origin = t.source === "meeting" ? ` ${c.magenta}meeting${c.reset}` : "";
@@ -15931,6 +15938,7 @@ work
   .description("List work items (default: active only)")
   .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: the directory's mapping, else the active team)")
   .option("-p, --project <ref>", "Filter by project ID, short ID, or title substring")
+  .option("--initiative <in-N>", "Only the tasks of the initiative's projects (with -p, that project must be one of them)")
   .option("-s, --status <status>", "Filter by status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today")
   .option("-r, --ready", "Show only ready items (open, no blockers)")
   .option("-a, --all", "Include done/dropped tasks")
@@ -15946,6 +15954,7 @@ work
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
     if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
+    if (options.initiative) body.initiative = options.initiative;
     if (options.project) body.project_id = await resolveProjectId(options.project, options.team);
     if (options.all) body.include_done = true;
     if (options.status) body.status = options.status;
@@ -16408,7 +16417,7 @@ work
       const p = result.subtaskProgress;
       console.log(`\n## Subtasks${p ? ` (${p.done}/${p.total} done)` : ""}`);
       const printSub = (sub: any, indent: string) => {
-        const who = sub.assignee_name ? ` @${sub.assignee_name}` : "";
+        const who = sub.assignee_name ? ` @${String(sub.assignee_name).replace(/^@/, "")}` : "";
         console.log(`${indent}- ${sub.short_id}: ${sub.title} [${sub.status}]${who}`);
         for (const child of sub.subtasks || []) printSub(child, indent + "  ");
       };
@@ -16912,6 +16921,208 @@ projectCmd
     if (events.length === body.limit) {
       console.log(fmt.muted(`  … showing the ${events.length} most recent (raise -n for more)`));
     }
+  });
+
+// --- Initiatives ---
+// A goal the company is trying to reach, carried by projects, with one owner
+// (docs/architecture/initiatives-projects-role-page.md I1). `update` posts an
+// update (how it is going); `set` changes the fields.
+
+const initiativeCmd = program
+  .command("initiative")
+  .alias("in")
+  .description("Manage initiatives (a goal above projects, with an owner and a health)")
+  .showHelpAfterError(true);
+
+// A person writes a health as "on track"; the wire says on_track.
+function initiativeHealthArg(text: string): string {
+  const health = parseInitiativeHealth(text);
+  if (!health) { console.error(`Invalid --health "${text}" — on_track, at_risk, or off_track`); process.exit(1); }
+  return health;
+}
+
+async function initiativeProjectIds(refs: string[] | undefined, team?: string): Promise<string[] | undefined> {
+  if (!refs?.length) return undefined;
+  const ids: string[] = [];
+  for (const ref of refs) ids.push(await resolveProjectId(ref, team));
+  return ids;
+}
+
+// What a write answered, in one line, plus what happened to the owner role's
+// scope (the person is told once, in the same breath).
+function printInitiativeWrite(verb: string, result: any, detail?: any): void {
+  const row = detail ?? result.row ?? {};
+  console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${result.short_id}${c.reset}: ${row.title ?? ""}`);
+  const titles = new Map<string, string>((row.projects ?? []).map((p: any) => [String(p._id), p.title]));
+  const sentence = scopeSentence(row.owner_label, result.scope, (id) => titles.get(id) ?? id);
+  if (sentence) console.log(`  ${c.dim}${sentence}${c.reset}`);
+}
+
+initiativeCmd
+  .command("create")
+  .description("Create an initiative")
+  .argument("<title>", stdinText("Initiative title"))
+  .option("-d, --description <text>", stdinText("Purpose, scope and context ('-' reads stdin)"))
+  .option("--owner <who>", "Who drives it: me, @handle (a role first, then a person), or or-N")
+  .option("--status <status>", "proposed (default), planned, active, completed, cancelled")
+  .option("--target <date>", "Target date (YYYY-MM-DD)")
+  .option("--priority <p>", "p0, p1, p2, p3")
+  .option("--project <ref>", "A project it carries (repeatable): id, short id or title substring", collectRepeatable)
+  .option("--parent <in-N>", "The initiative this one sits under (one level)")
+  .option("--labels <labels>", "Comma-separated labels")
+  .option("--team <name|id|personal>", "Workspace to create in (default: the active team)")
+  .action(async (title: string, options: any) => {
+    const ws = await writeWorkspace(options.team);
+    const body: Record<string, any> = { title, ...workspaceScope(ws) };
+    if (options.description) body.description = options.description;
+    if (options.owner) body.owner = options.owner;
+    if (options.status) {
+      body.status = parseInitiativeStatus(options.status);
+      if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
+    }
+    if (options.target) body.target_date = parseDeadlineDate(options.target);
+    if (options.priority) body.priority = options.priority;
+    if (options.parent) body.parent_initiative_id = options.parent;
+    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    const project_ids = await initiativeProjectIds(options.project, options.team);
+    if (project_ids) body.project_ids = project_ids;
+    const result = await cliPost("/cli/initiatives/create", body);
+    printInitiativeWrite("Created initiative", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
+  });
+
+initiativeCmd
+  .command("ls")
+  .alias("list")
+  .description("List initiatives by status, with owner, health, target and progress")
+  .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: every workspace you belong to)")
+  .option("-s, --status <status>", "Filter by status: proposed, planned, active, completed, cancelled")
+  .option("--json", "Output as JSON")
+  .action(async (options: any) => {
+    const body: Record<string, any> = {};
+    if (options.status) {
+      body.status = parseInitiativeStatus(options.status);
+      if (!body.status) { console.error(`Invalid --status "${options.status}"`); process.exit(1); }
+    }
+    if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
+    const rows = await cliPost("/cli/initiatives/list", body);
+    if (options.json) { printJson(rows); return; }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      console.log(fmt.muted("No initiatives yet. Create one with: cast initiative create \"Title\" --owner @role --project <ref>"));
+      return;
+    }
+    // By status in the order a goal moves through them, active first.
+    const order = ["active", "planned", "proposed", "completed", "cancelled"];
+    rows.sort((a: any, b: any) => order.indexOf(a.status) - order.indexOf(b.status) || a.short_id.localeCompare(b.short_id, undefined, { numeric: true }));
+    for (const row of rows) console.log(initiativeLine(c, row));
+    console.log(fmt.muted(`\n  ${rows.length} initiatives`));
+  });
+
+initiativeCmd
+  .command("show")
+  .description("Show an initiative: its projects with leads and progress, its updates, its sub initiatives")
+  .argument("<in-N>", "Initiative short id or id")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, options: any) => {
+    const row = await cliPost("/cli/initiatives/get", { id: ref });
+    if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
+    if (options.json) { printJson(row); return; }
+    const icon = INITIATIVE_STATUS_ICONS[row.status as keyof typeof INITIATIVE_STATUS_ICONS] ?? "?";
+    console.log(`\n  ${icon} ${c.bold}${row.title}${c.reset}  ${c.cyan}${row.short_id}${c.reset}`);
+    const facts = [row.status, `owner ${row.owner_label ?? `${c.yellow}none${c.reset}`}`, `health ${healthText(c, row.health, row.health_at)}`];
+    if (row.priority) facts.push(row.priority);
+    if (row.target_date) facts.push(`target ${dayText(row.target_date)}`);
+    if (row.parent) facts.push(`under ${c.cyan}${row.parent.short_id}${c.reset} ${row.parent.title}`);
+    console.log(`  ${c.dim}${facts.join(" | ")}${c.reset}`);
+    if (row.labels?.length) console.log(`  ${c.dim}Labels: ${row.labels.join(", ")}${c.reset}`);
+    if (row.description) console.log(`\n${row.description.split("\n").map((l: string) => `  ${l}`).join("\n")}`);
+    console.log(`\n  ${c.bold}Projects (${row.projects.length})${c.reset} ${c.dim}${progressText(row.task_counts)}${c.reset}`);
+    if (!row.projects.length) console.log(fmt.muted("  None yet: cast initiative add-project " + row.short_id + " <project>"));
+    for (const p of row.projects) {
+      console.log(`  ${PROJECT_STATUS_ICONS[p.status] ?? "?"} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | lead ${p.lead ?? `${c.yellow}none${c.reset}${c.dim}`} | ${progressText(p.task_counts)}${c.reset}`);
+    }
+    if (row.sub_initiatives?.length) {
+      console.log(`\n  ${c.bold}Sub initiatives${c.reset}`);
+      for (const s of row.sub_initiatives) console.log(`  ${INITIATIVE_STATUS_ICONS[s.status as keyof typeof INITIATIVE_STATUS_ICONS] ?? "?"} ${c.cyan}${s.short_id}${c.reset} ${s.title} ${healthText(c, s.health)}`);
+    }
+    console.log(`\n  ${c.bold}Updates (${row.updates.length})${c.reset}`);
+    if (!row.updates.length) console.log(fmt.muted(`  None yet: cast initiative update ${row.short_id} --health on_track "How it is going"`));
+    for (const u of row.updates) {
+      console.log(`  ${healthText(c, u.health)} ${c.dim}· ${u.by_label ?? "unknown"} · ${formatRelativeTime(u.at)}${c.reset}`);
+      console.log(u.body.split("\n").map((l: string) => `    ${l}`).join("\n"));
+    }
+    console.log();
+  });
+
+initiativeCmd
+  .command("update")
+  .description("Post an update: how the initiative is going, in the owner's words")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("[body]", stdinText("The update ('-' reads a heredoc)"))
+  .option("--health <h>", "on_track, at_risk, or off_track (default: as the last update said)")
+  .action(async (ref: string, bodyArg: string | undefined, options: any) => {
+    const text = bodyArg !== undefined ? bodyArg : process.stdin.isTTY ? "" : readStdinBody();
+    if (!text.trim()) { console.error("Empty update — pass text or '-' with a heredoc"); process.exit(1); }
+    const body: Record<string, any> = { id: ref, body: text };
+    if (options.health) body.health = initiativeHealthArg(options.health);
+    const sessionId = detectCurrentSessionId();
+    if (sessionId) body.session_id = sessionId;
+    const result = await cliPost("/cli/initiatives/post", body);
+    console.log(`${c.green}ok${c.reset} Posted an update to ${c.cyan}${ref}${c.reset}: ${healthText(c, result.row.health)}`);
+  });
+
+initiativeCmd
+  .command("add-project")
+  .description("Add a project to an initiative (an owner role gains it in its scope)")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("<project>", "Project id, short id or title substring")
+  .option("--team <name|id|personal>", "Workspace the project title is matched in")
+  .action(async (ref: string, project: string, options: any) => {
+    const result = await cliPost("/cli/initiatives/add-project", { id: ref, project_id: await resolveProjectId(project, options.team) });
+    printInitiativeWrite(result.added ? "Added a project to" : "Already in", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
+  });
+
+initiativeCmd
+  .command("remove-project")
+  .description("Remove a project from an initiative (the owner role's scope is left as it is)")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("<project>", "Project id, short id or title substring")
+  .option("--team <name|id|personal>", "Workspace the project title is matched in")
+  .action(async (ref: string, project: string, options: any) => {
+    const result = await cliPost("/cli/initiatives/remove-project", { id: ref, project_id: await resolveProjectId(project, options.team) });
+    printInitiativeWrite(result.removed ? "Removed a project from" : "Not in", result);
+  });
+
+initiativeCmd
+  .command("set")
+  .description("Change an initiative's fields")
+  .argument("<in-N>", "Initiative short id or id")
+  .option("--title <text>", stdinText("New title"))
+  .option("-d, --description <text>", stdinText("New description ('none' clears)"))
+  .option("--status <status>", "proposed, planned, active, completed, cancelled")
+  .option("--owner <who>", "me, @handle, or or-N ('none' clears)")
+  .option("--target <date>", "Target date (YYYY-MM-DD; 'none' clears)")
+  .option("--priority <p>", "p0, p1, p2, p3 ('none' clears)")
+  .option("--parent <in-N>", "The initiative this one sits under ('none' clears)")
+  .option("--labels <labels>", "Comma-separated labels (replaces; 'none' clears)")
+  .action(async (ref: string, options: any) => {
+    const body: Record<string, any> = { id: ref };
+    if (options.title) body.title = options.title;
+    if (options.description !== undefined) body.description = NONE(options.description) ? null : options.description;
+    if (options.status) {
+      body.status = parseInitiativeStatus(options.status);
+      if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
+    }
+    if (options.owner !== undefined) body.owner = NONE(options.owner) ? null : options.owner;
+    if (options.target) body.target_date = parseDeadlineDate(options.target);
+    if (options.priority !== undefined) body.priority = NONE(options.priority) ? null : options.priority;
+    if (options.parent !== undefined) body.parent_initiative_id = NONE(options.parent) ? null : options.parent;
+    if (options.labels !== undefined) body.labels = NONE(options.labels) ? [] : options.labels.split(",").map((s: string) => s.trim());
+    if (Object.keys(body).length === 1) {
+      console.error("Nothing to change — pass --title, --description, --status, --owner, --target, --priority, --parent, or --labels");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/initiatives/update", body);
+    printInitiativeWrite("Updated initiative", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
   });
 
 // --- Plans ---

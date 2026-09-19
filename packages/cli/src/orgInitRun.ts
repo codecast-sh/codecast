@@ -14,7 +14,7 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_INIT_LABEL, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, ORG_ASKED_FOR_RULES, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt (S8, S9, S10) ─────────────────────────────────────────────────
 //
@@ -117,7 +117,13 @@ How to read the evidence. The activity block says which paths had commits and se
 
   const unnamed = `## Sessions that already are roles
 
-${ORG_UNNAMED_ROLES_RULE}`;
+${ORG_UNNAMED_ROLES_RULE}
+
+## Two roles people asked for
+
+${ORG_ASKED_FOR_RULES.agent_quality}
+
+${ORG_ASKED_FOR_RULES.goal_tracker}`;
 
   const coverage = `## Initiatives, and a lead for every piece of work
 
