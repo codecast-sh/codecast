@@ -8,6 +8,7 @@
 // Run: bun components/org/StaffingPane.mount.test.tsx
 import assert from "node:assert/strict";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 async function verifyStaffingPane() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -322,7 +323,7 @@ async function verifyStaffingPane() {
   assert.match(q("[data-proposal-link]")!.textContent!, /looking it up/);
 
   await act(async () => root.unmount());
-  dom.window.close();
+  closeDomWindow(dom);
   console.log("staffing pane mount: passed");
 }
 

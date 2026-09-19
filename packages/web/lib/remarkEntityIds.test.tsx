@@ -1,5 +1,6 @@
 import { test, expect, describe, mock } from "bun:test";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 // DocEmbed resolves docs through convex/react's useQuery; tests run without a
 // Convex connection, so the hook is replaced before the component graph loads.
 // Any non-skip doc query resolves to FAKE_DOC.
@@ -114,7 +115,7 @@ describe("authored local file links", () => {
       await act(() => root.unmount());
       useInboxStore.setState({ tabs, activeTabId });
       restore();
-      dom.window.close();
+      closeDomWindow(dom);
     }
   }, 15_000);
 });
@@ -244,7 +245,7 @@ describe("authored conversation message deep links", () => {
       await act(() => root.unmount());
       useInboxStore.setState({ pendingNavigateId, pendingScrollToMessageId });
       restore();
-      dom.window.close();
+      closeDomWindow(dom);
     }
   }, 15_000);
 });

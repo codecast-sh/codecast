@@ -715,6 +715,7 @@ import {
 } from "./desktop";
 import { afterDocumentParsed } from "./desktopHandoff";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 // Starting the codecast:// navigation stops the parser. The pre-boot gate runs
 // from the top of <head>, so a launch while the document was still loading
 // left the handoff screen at the end of <body> unparsed: a blank tab.
@@ -735,7 +736,7 @@ describe("afterDocumentParsed", () => {
   afterEach(() => {
     if (saved) Object.defineProperty(g, "document", saved);
     else delete g.document;
-    dom.window.close();
+    closeDomWindow(dom);
   });
 
   const fire = () => dom.window.document.dispatchEvent(new dom.window.Event("readystatechange"));
@@ -856,7 +857,7 @@ describe("runPreBootHandoff + bootAfterHandoffGate (jsdom)", () => {
     dom.window.dispatchEvent(new dom.window.Event("focus"));
     Date.now = realNow;
     await new Promise((r) => setTimeout(r, 5));
-    dom.window.close();
+    closeDomWindow(dom);
   });
 
   afterAll(() => {

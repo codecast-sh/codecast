@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const previous = new Map<string, { present: boolean; value: unknown }>();
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   pretendToBeVisual: true,
@@ -61,7 +62,7 @@ afterAll(() => {
     if (prior.present) globals[key] = prior.value;
     else delete globals[key];
   }
-  dom.window.close();
+  closeDomWindow(dom);
 });
 
 describe("ThemeProvider Minimal style", () => {

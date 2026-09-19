@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
 import { replaceGlobals } from "../../test-helpers/globals";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/tasks" });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -20,7 +21,7 @@ const restoreGlobals = replaceGlobals({
   IntersectionObserver: class { observe() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const { GenericListView } = await import("../GenericListView");
 const { TabParamsCtx } = await import("../../lib/tabParams");

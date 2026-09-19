@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The task page as the line (docs/architecture/the-line.md L3, L5, L10):
 // the strip paints from the store alone. A held task shows the marker on its
 // current station, linking the decision; a live run shows its node, its
@@ -35,7 +36,7 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const TASK_ID = "k97abcdefabcdefabcdefabcdefabcde";
 const RUN_ID = "kw1abcdefabcdefabcdefabcdefabcde";

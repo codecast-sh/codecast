@@ -18,7 +18,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 
@@ -32,6 +32,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { resetFirstRunDialogsForTests, useFirstRunDialog } from "../firstRunDialogs";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const opened: Record<string, boolean> = {};
 const closers: Record<string, () => void> = {};
 

@@ -22,6 +22,7 @@ import { declareViewNav } from "../../store/viewNav";
 import { RevealAncestryCtx, useRevealHost } from "../../lib/revealHost";
 import { RevealHost } from "../ObjectReveal";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/inbox" });
 const restoreGlobals = replaceGlobals({
   window: Object.assign(dom.window, { innerWidth: 1400 }),
@@ -37,7 +38,7 @@ const restoreGlobals = replaceGlobals({
 });
 // jsdom lays nothing out: the band's scroll follow is a no-op here.
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const tab = (): AppTab => ({ id: "t1", title: "Inbox", path: "/inbox", createdAt: 0 });
 beforeEach(() => {

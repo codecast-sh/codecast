@@ -7,6 +7,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { FileDiffLayout } from "../FileDiffLayout";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
@@ -23,7 +24,7 @@ const restoreGlobals = replaceGlobals({
   ResizeObserver: TestResizeObserver,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
-afterAll(() => { dom.window.close(); restoreGlobals(); });
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 for (const mode of ["unified", "split"] as const) {
   test(`${mode} diff keeps highlighting until patch or language changes`, async () => {

@@ -8,6 +8,7 @@ import { besideLeafId, seedLeafId } from "../../store/stageSplit";
 import { openBeside, stageRenderLayout } from "../../lib/stage";
 import StageSplitView from "../stage/StageSplitView";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 // A plain tab renders through the flat stage as one solo cell, and the first
 // split keeps that cell: the page in it is never remounted. Pinned at the DOM
 // — the cell element and the wrapper the page renders into must be the SAME
@@ -22,7 +23,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 

@@ -5,6 +5,7 @@
 // Run: bun components/org/OrgFirstOpen.mount.test.tsx
 import assert from "node:assert/strict";
 
+import { closeDomWindow } from "../../test-helpers/domGlobals";
 async function verifyFirstOpen() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><button data-org-guide='staffing'>Staffing</button><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -99,7 +100,7 @@ async function verifyFirstOpen() {
   assert.equal(retireToastText("Growth lead", undefined), "Retired Growth lead");
 
   await act(async () => root.unmount());
-  dom.window.close();
+  closeDomWindow(dom);
   console.log("first open and retire confirm mount: passed");
 }
 

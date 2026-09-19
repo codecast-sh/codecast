@@ -2,6 +2,7 @@ import { replaceGlobals } from "../test-helpers/globals";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
+import { closeDomWindow } from "../test-helpers/domGlobals";
 // The walker is DOM-driven: replies are `.cc-msg-review` regions under
 // `#msg-<id>` rows, chunks are the top-level blocks of their `.cc-content`.
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
@@ -13,7 +14,7 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
 });
 afterAll(() => {
-  dom.window.close();
+  closeDomWindow(dom);
   restoreGlobals();
 });
 
