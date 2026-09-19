@@ -222,6 +222,17 @@ describe("spawned run launch flags", () => {
     expect(extraAgentArgs).not.toContain("--model");
   });
 
+  it("a run parked at a usage limit resumes its own session instead of starting a fresh one", () => {
+    const { extraAgentArgs, runSessionUuid } = buildRunLaunch(
+      { ...spawnTask("t1"), mode: "apply", parked_run_session_uuid: "parked-uuid" },
+      {} as any,
+    );
+    expect(runSessionUuid).toBe("parked-uuid");
+    expect(extraAgentArgs).toContain("--resume");
+    expect(extraAgentArgs[extraAgentArgs.indexOf("--resume") + 1]).toBe("parked-uuid");
+    expect(extraAgentArgs).not.toContain("--session-id");
+  });
+
   it("uses codex's -m for a codex trigger", () => {
     const { agentBin, extraAgentArgs } = buildRunLaunch(
       { ...spawnTask("t1"), agent_type: "codex", model: "gpt-5.3-codex" },

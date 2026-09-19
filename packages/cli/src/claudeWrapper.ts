@@ -4,7 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
 import { hasTmux, tmuxExecSync } from "./tmux.js";
-import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
+import { deliverTextIntoPane } from "./tmuxPaste.js";
 import type { Config } from "./config/types.js";
 import { readAuthConfig } from "./config/readAuthConfig.js";
 import { resolveClaudeInstall, stableClaudeBinary } from "./stableClaudeBinary.js";
@@ -81,12 +81,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Named for what it delivers, not how: deliverTextIntoPane picks the gesture
+// Claude's composer wants, which is typed input rather than a paste.
 async function pasteClaudeMessage(target: string, content: string): Promise<void> {
-  await pasteTextIntoPane(
+  await deliverTextIntoPane(
     async (args) => tmuxExecSync(args),
     target,
     content,
-    clientAcceptsBracketedPaste("claude"),
+    { agentType: "claude" },
   );
 }
 

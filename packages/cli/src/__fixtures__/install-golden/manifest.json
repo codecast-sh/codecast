@@ -158,7 +158,7 @@
   "orchestration": {
     "config": {
       "orch_enabled": true,
-      "orch_version": "10"
+      "orch_version": "11"
     },
     "stdout": "* Orchestration — updated in ~/.claude/skills/, ~/.claude/agents/, and ~/.claude/settings.json (hooks)\n",
     "wroteClaudeMd": false,

@@ -739,6 +739,32 @@ describe("inboxForCLI path — the same placement, tallied from the stamps", () 
 // server stamps, a replica holding the same facts computes the same thing at
 // the same instants.
 describe("the replica's live derivation is the server's", () => {
+  test("refreshed dormant background work agrees across the CLI, overlay, and replica", async () => {
+    const tables = {
+      conversations: [conv("dormant", { updated_at: EPOCH - 3 * H, thread_state_status: "dormant" })],
+      managed_sessions: [{
+        _id: "ms_dormant", user_id: ME, conversation_id: "conversations_dormant",
+        last_heartbeat: EPOCH - 5_000, agent_status: "dormant", agent_status_updated_at: EPOCH - 3 * H,
+        open_tasks: [{ id: "bjmsej5ia", kind: "background" }], open_tasks_at: EPOCH - MIN,
+      }],
+    };
+    for (const [tasks, at, expected] of [
+      [tables.managed_sessions[0].open_tasks, EPOCH - MIN, "dormant"],
+      [tables.managed_sessions[0].open_tasks, EPOCH - 11 * MIN, "needs_input"],
+      [[], EPOCH - MIN, "needs_input"],
+    ] as const) {
+      const input = { ...tables, managed_sessions: [{ ...tables.managed_sessions[0], open_tasks: tasks, open_tasks_at: at }] };
+      const { liveness } = await computeSessionsLiveness({ db: db(input) }, ME as any);
+      const overlay = liveness.conversations_dormant;
+      const cli = await computeInboxSessions({ db: db(input) }, ME as any, { show_all: true, projection: true });
+      const row = cli.sessions.find((s: any) => s._id === "conversations_dormant");
+      const replica = placeProjectableRow({ ...tables.conversations[0], ...overlay }, false, EPOCH);
+      expect(overlay).toMatchObject({ bucket: expected, work_state: expected });
+      expect(row).toMatchObject({ bucket: expected, work_state: expected });
+      expect(replica).toEqual({ bucket: expected, work_state: expected });
+    }
+  });
+
   test("deriveLiveAt at the epoch equals the shipped live fields; rowLiveDeadlines + computeBucketStale equal the shipped flip", async () => {
     const tables = {
       conversations: [
@@ -748,6 +774,7 @@ describe("the replica's live derivation is the server's", () => {
         conv("parent", { updated_at: EPOCH - 10 * MIN, message_count: 9 }),
         conv("child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 2 * MIN, message_count: 4 }),
         conv("waiting", { updated_at: EPOCH - 3 * H, message_count: 20 }),
+        conv("dormant", { updated_at: EPOCH - 3 * H, message_count: 275, thread_state_status: "dormant" }),
         conv("done", { updated_at: EPOCH - 5 * H, message_count: 30, thread_state_status: "done" }),
         conv("dead", { updated_at: EPOCH - 3 * MIN, message_count: 7 }),
         conv("own", { updated_at: EPOCH - MIN, message_count: 3 }),
@@ -758,6 +785,7 @@ describe("the replica's live derivation is the server's", () => {
         { _id: "ms_parent", user_id: ME, conversation_id: "conversations_parent", last_heartbeat: EPOCH - 5_000, agent_status: "idle", agent_status_updated_at: EPOCH - 10 * MIN },
         { _id: "ms_child", user_id: ME, conversation_id: "conversations_child", last_heartbeat: EPOCH - 5_000, agent_status: "working", agent_status_updated_at: EPOCH - 2 * MIN },
         { _id: "ms_waiting", user_id: ME, conversation_id: "conversations_waiting", last_heartbeat: EPOCH - 5_000, agent_status: "waiting", agent_status_updated_at: EPOCH - 3 * H, open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 4 * MIN },
+        { _id: "ms_dormant", user_id: ME, conversation_id: "conversations_dormant", last_heartbeat: EPOCH - 5_000, agent_status: "dormant", agent_status_updated_at: EPOCH - 3 * H, open_tasks: [{ id: "bjmsej5ia" }], open_tasks_at: EPOCH - MIN },
         { _id: "ms_done", user_id: ME, conversation_id: "conversations_done", last_heartbeat: EPOCH - 5 * H, agent_status: "done", agent_status_updated_at: EPOCH - 5 * H },
         { _id: "ms_dead", user_id: ME, conversation_id: "conversations_dead", last_heartbeat: EPOCH - 4 * MIN, agent_status: "working", agent_status_updated_at: EPOCH - 3 * MIN },
         { _id: "ms_own", user_id: ME, conversation_id: "conversations_own", last_heartbeat: EPOCH - 1000, agent_status: "permission_blocked", agent_status_updated_at: EPOCH - MIN },
