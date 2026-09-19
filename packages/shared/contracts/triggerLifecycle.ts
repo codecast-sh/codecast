@@ -13,13 +13,55 @@ export function triggerLifecycleInstructions(task: { _id: string; short_id?: str
   ].join("\n");
 }
 
+// The session that OWNS a fresh run. A ONCE trigger armed from inside a
+// session and run in a fresh one is that session's worker: it answers a
+// question the session asked, so the run nests under it (the same subagent
+// row `cast spawn --subagent` makes) and its outcome comes back to it. A
+// repeating trigger belongs to nobody in particular: its standing row carries
+// the latest summary, and nesting every firing under the session that once
+// installed it would file a role's routine under a long-dead installer. An
+// inject trigger has no fresh run to own.
+export function runOwnerOf<Id extends string>(task: {
+  schedule_type?: string;
+  originating_conversation_id?: Id;
+  created_by_conversation_id?: Id;
+}): Id | undefined {
+  const onceSpawn = task.schedule_type === "once" && !task.originating_conversation_id;
+  return onceSpawn ? task.created_by_conversation_id : undefined;
+}
+
+// How a fresh run ended, as the owner sees it. "reported": the agent ran
+// `cast trigger complete` and nobody needs to act. "attention": it completed
+// with --needs-attention. "unreported_exit": the process ended without
+// reporting (the agent forgot, crashed, or never started). "failed": the
+// scheduler gave up after the retry budget.
+export type RunOutcome = "reported" | "attention" | "unreported_exit" | "failed";
+
+// Which conversation a finished run WAKES, as a conversation id: the owner
+// takes a turn on the outcome, so a run that failed, died or asked for a
+// person is never a card nobody acts on. A clean report is read at leisure
+// and wakes the owner only when the trigger asked for it (`--wake`), because
+// waking a session whose prompt cache has expired rebuilds its whole context,
+// which is the cost `--spawn` was chosen to avoid.
+export function runOwnerWakeOf<Id extends string>(
+  task: {
+    schedule_type?: string;
+    originating_conversation_id?: Id;
+    created_by_conversation_id?: Id;
+    wake_creator?: boolean;
+  },
+  outcome: RunOutcome,
+): Id | undefined {
+  const owner = runOwnerOf(task);
+  if (!owner) return undefined;
+  if (outcome === "reported") return task.wake_creator ? owner : undefined;
+  return owner;
+}
+
 // Where a finished run's result is read, as a conversation id. `--thread` names
-// the conversation outright. A ONCE trigger armed from inside a session and run
-// in a fresh one answers a question that session asked, so its result goes back
-// there: the fresh run is the worker, the creating thread is where the human is
-// reading. A repeating trigger never posts to its creator on its own, because
-// one line per firing would bury the thread; its standing row carries the
-// latest summary. An inject trigger has no fresh run to route.
+// the conversation outright; otherwise the run's owner (runOwnerOf), which is
+// where the human is reading. A repeating trigger never posts to its creator
+// on its own, because one line per firing would bury the thread.
 //
 // One definition for both readers: the server posts by it
 // (agentTasks.settleRunConversation) and the daemon briefs the run by it
@@ -31,7 +73,5 @@ export function runResultThreadOf<Id extends string>(task: {
   originating_conversation_id?: Id;
   created_by_conversation_id?: Id;
 }): Id | undefined {
-  if (task.target_conversation_id) return task.target_conversation_id;
-  const onceSpawn = task.schedule_type === "once" && !task.originating_conversation_id;
-  return onceSpawn ? task.created_by_conversation_id : undefined;
+  return task.target_conversation_id ?? runOwnerOf(task);
 }

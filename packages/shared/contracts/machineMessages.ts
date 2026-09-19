@@ -8,12 +8,18 @@
 // which re-exports these and adds the parsers), the profile feed's Typed view
 // and the insert-time Sends counter (convex/lib/userSend.ts).
 
+export function stripPastedContent(text: string): string {
+  return text
+    .replace(/<pasted_content(?=[\s>]|$)[^>]*(?:>|$)\r?\n?/g, "")
+    .replace(/(?:\r?\n)?<\/pasted_content(?=[\s>]|$)[^>]*(?:>|$)/g, "");
+}
+
 // Normalize the wrappers/control chars the daemon may prepend before a wire
 // tag. A session message is injected via tmux, so the input-clearing
 // keystrokes (Ctrl-A/Ctrl-K) occasionally leak in as leading control chars,
 // and system/task reminders can be appended by the harness.
 export function stripInjectionNoise(text: string): string {
-  return text
+  return stripPastedContent(text)
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
     .replace(/^[\x00-\x1f\s]+/, "")
@@ -43,7 +49,7 @@ export function isToolResultCarrier(m: { role?: string; content?: string | null;
 // show it as the person's prompt: the feed hides it, the sticky header and
 // the navigator skip it.
 export function isPollResponsePayload(rawContent: string | null | undefined): boolean {
-  const t = (rawContent ?? "").trimStart();
+  const t = stripPastedContent(rawContent ?? "").trimStart();
   if (!t.startsWith("{") || !t.includes("__cc_poll")) return false;
   try { return !!JSON.parse(t).__cc_poll; } catch { return false; }
 }
@@ -181,7 +187,7 @@ export function isTeammateFramingOnly(leftover: string): boolean {
 // <scheduled-task> tag is the frozen wire format from before the triggers
 // rename; old transcripts carry it forever.
 export function isScheduledTaskMessage(rawContent: string | null | undefined): boolean {
-  return !!rawContent && /^<scheduled-task[\s>]/.test(rawContent.trim());
+  return !!rawContent && /^<scheduled-task[\s>]/.test(stripInjectionNoise(rawContent));
 }
 
 // The prompt convex/chat.ts buildAnchorWake hands the anchor session when a
@@ -213,7 +219,7 @@ export function isRoleWakeFrame(rawContent: string | null | undefined): boolean 
 // completion the harness injected as a user turn. Keys off the opening tag
 // only, same truncated-preview rule as isSessionMessage.
 export function isTaskNotificationMessage(rawContent: string | null | undefined): boolean {
-  return !!rawContent && rawContent.trim().startsWith("<task-notification>");
+  return !!rawContent && stripInjectionNoise(rawContent).startsWith("<task-notification>");
 }
 
 // A `cast send --raw` report from another session: the body was injected as a

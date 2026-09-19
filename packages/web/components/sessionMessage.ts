@@ -21,6 +21,7 @@
 import {
   parseHuddleSummaryTag,
   stripInjectionNoise,
+  stripPastedContent,
   isSessionMessage,
   isAgentMessage,
   isTeammateMessage,
@@ -38,6 +39,7 @@ export {
   isHuddleSummaryTag,
   parseHuddleSummaryTag,
   stripInjectionNoise,
+  stripPastedContent,
   isSessionMessage,
   isAgentMessage,
   isUserMessage,
@@ -236,6 +238,7 @@ export function parseMachineDeliveredMessage(
   rawContent: string | null | undefined,
 ): { kind: MachineDeliveredKind; source: string; body: string } | null {
   if (!rawContent) return null;
+  rawContent = stripPastedContent(rawContent);
   if (isScheduledTaskMessage(rawContent)) {
     const m = rawContent.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
     const title = (m?.[1] ?? "").replace(/&quot;/g, '"');
@@ -313,12 +316,12 @@ export interface SpawnedTaskPrompt {
 const SPAWNED_TASK_HEADER = /^\[Codecast Task: (.*)\]\nTask ID: ([^\n]+)\nMode: ([^\n]+)\n+/;
 
 export function isSpawnedTaskPrompt(rawContent: string | null | undefined): boolean {
-  return !!rawContent && SPAWNED_TASK_HEADER.test(rawContent.trim());
+  return !!rawContent && SPAWNED_TASK_HEADER.test(stripInjectionNoise(rawContent).trim());
 }
 
 export function parseSpawnedTaskPrompt(rawContent: string | null | undefined): SpawnedTaskPrompt | null {
   if (!rawContent) return null;
-  const text = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+  const text = stripInjectionNoise(rawContent).trim();
   const header = text.match(SPAWNED_TASK_HEADER);
   if (!header) return null;
   let rest = text.slice(header[0].length);
@@ -427,6 +430,7 @@ export function foldNudgeRuns(rows: NudgeRow[]): { runs: Map<string, NudgeRun>; 
 
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
+  raw = stripPastedContent(raw);
   if (raw.trimStart().startsWith("<turn_aborted>")) return null;
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
   // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.

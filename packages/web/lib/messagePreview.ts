@@ -1,4 +1,5 @@
 import { extractSessionImages } from "./sessionImages";
+import { stripPastedContent } from "@codecast/shared/contracts";
 
 export type PromptImage = {
   media_type: string;
@@ -16,7 +17,7 @@ export function messagePreview(content: string, images: PromptImage[] = [], isTr
       entries.splice(index, 0, { key: image.preview_url, src: image.preview_url });
     }
   }
-  const text = content
+  const text = stripPastedContent(content)
     .replace(/^\s*(?:\[Image\s+#?\d+\]\s*)+/i, prefix => entries.length ? "" : prefix)
     .replace(/\[Image\s+(?:\/|~\/)[^\]]+\]/gi, token => entries.length ? "" : token)
     .replace(/!\[([^\]]*)\]\(([^)\s]+?)(?:\s+"[^"]*")?\)/g, (token, alt: string, src: string) =>
