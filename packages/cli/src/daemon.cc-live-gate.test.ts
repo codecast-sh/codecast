@@ -9,10 +9,10 @@ import { parseLiveClaudeSessions } from "./daemon.js";
 describe("parseLiveClaudeSessions", () => {
   it("takes the claude panes and their account stamps", () => {
     const rows = [
-      "cc-claude-abc|claude|",
-      "cc-claude-pinned|claude|work",
-      "cc-codex-def|codex|",
-      "cc-resume-claude-xyz|claude|",
+      "claude|cc-claude-abc|claude|",
+      "claude|cc-claude-pinned|claude|work",
+      "codex|cc-codex-def|codex|",
+      "claude|cc-resume-claude-xyz|claude|",
     ].join("\n");
     expect(parseLiveClaudeSessions(rows)).toEqual([
       { id: "cc-claude-abc" },
@@ -27,21 +27,32 @@ describe("parseLiveClaudeSessions", () => {
   // the pane. Both read as "not stamped", so an unstamped pane is skipped
   // rather than misattributed.
   it("treats an unexpanded tmux placeholder as no stamp at all", () => {
-    expect(parseLiveClaudeSessions("cc-claude-abc|#{@codecast_agent_type}|#{@codecast_cc_account}")).toEqual([]);
-    expect(parseLiveClaudeSessions("cc-claude-abc|claude|#{@codecast_cc_account}")).toEqual([
+    expect(parseLiveClaudeSessions("claude|cc-claude-abc|#{@codecast_agent_type}|#{@codecast_cc_account}")).toEqual([]);
+    expect(parseLiveClaudeSessions("claude|cc-claude-abc|claude|#{@codecast_cc_account}")).toEqual([
       { id: "cc-claude-abc" },
     ]);
   });
 
   it("keeps a session name that contains the field separator", () => {
-    expect(parseLiveClaudeSessions("weird|name|claude|work")).toEqual([
+    expect(parseLiveClaudeSessions("claude|weird|name|claude|work")).toEqual([
       { id: "weird|name", account: "work" },
+    ]);
+  });
+
+  // A pane sitting at the shell holds no credential — the agent exited, or
+  // never launched (a launch line mangled by an interactive shell prompt left
+  // ~100 such panes on InterGalactic, each counted as a live claude).
+  it("drops a stamped pane whose foreground process is the shell", () => {
+    const rows = ["zsh|cc-claude-dead|claude|", "claude|cc-claude-live|claude|work", "node|cc-claude-node|claude|"].join("\n");
+    expect(parseLiveClaudeSessions(rows)).toEqual([
+      { id: "cc-claude-live", account: "work" },
+      { id: "cc-claude-node" },
     ]);
   });
 
   it("ignores blank output and rows with too few fields", () => {
     expect(parseLiveClaudeSessions("")).toEqual([]);
-    expect(parseLiveClaudeSessions("just-a-name\n\ncc-claude-a|claude")).toEqual([]);
+    expect(parseLiveClaudeSessions("just-a-name\n\ncc-claude-a|claude|\nclaude|cc-claude-a|claude")).toEqual([]);
   });
 });
 

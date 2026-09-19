@@ -115,6 +115,7 @@ import {
   writeAccountToken,
   removeAccountToken,
 } from "./ccAccounts.js";
+import { planPushedCredentialAbsorb } from "./remoteCredentialAbsorb.js";
 import { STATUSLINE_HOOK_PATH, STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
 import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
@@ -3850,6 +3851,45 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
 // refused and one of the two copies is stranded. So when a live claude holds
 // the active credential the daemon stands back and reads back what the CLI
 // rotated instead (ccLiveGate.ts, resnapshotIfActiveFresher).
+// The other side of pushCredentialToRemoteHosts, for a remote that is a Mac.
+// The primary lands its login in ~/.claude/.credentials.json; Claude Code on
+// macOS reads the keychain and ignores that file, so the remote daemon (the one
+// process here with keychain access — plain ssh has none) folds each push into
+// the keychain item, refresh token removed (remoteCredentialAbsorb.ts). A
+// minute's cadence keeps a session parked on "Login expired" waiting no longer
+// than that once the primary's push lands. Linux remotes need nothing: claude
+// reads the file there.
+const REMOTE_CRED_ABSORB_INTERVAL_MS = 60 * 1000;
+let remoteCredAbsorbInFlight = false;
+let lastRemoteAbsorbSkip: string | null = null;
+
+async function absorbPushedCredentialOnRemote(reason: string): Promise<void> {
+  if (!isRemoteDevice() || process.platform !== "darwin" || remoteCredAbsorbInFlight) return;
+  remoteCredAbsorbInFlight = true;
+  try {
+    const pushedFile = path.join(process.env.HOME || "/tmp", ".claude", ".credentials.json");
+    const pushed = await fs.promises.readFile(pushedFile, "utf-8").catch(() => null);
+    const active = await readActiveCredentialAsync();
+    const plan = planPushedCredentialAbsorb({ pushed, active });
+    if (plan.action === "skip") {
+      // One line per distinct state, not one per minute.
+      if (plan.reason !== lastRemoteAbsorbSkip) {
+        log(`[REMOTE-AUTH] pushed credential not absorbed: ${plan.reason} (${reason})`);
+        lastRemoteAbsorbSkip = plan.reason;
+      }
+      return;
+    }
+    lastRemoteAbsorbSkip = null;
+    writeActiveCredential(plan.credential);
+    const mins = Math.round((plan.expiresAt - Date.now()) / 60000);
+    log(`[REMOTE-AUTH] absorbed the pushed credential into the keychain (${mins}m to expiry; ${reason})`);
+  } catch (err) {
+    log(`[REMOTE-AUTH] absorb failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteCredAbsorbInFlight = false;
+  }
+}
+
 const CC_TOKEN_MAINT_INTERVAL_MS = 10 * 60 * 1000;
 const CC_TOKEN_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
 let ccTokenMaintInFlight = false;
@@ -3904,19 +3944,29 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
 // including for panes a previous daemon started. Built on call because
 // REAP_FIELD_SEP is declared further down the module.
 function ccGateListFormat(): string {
-  return `#{session_name}${REAP_FIELD_SEP}#{@codecast_agent_type}${REAP_FIELD_SEP}#{@codecast_cc_account}`;
+  return `#{pane_current_command}${REAP_FIELD_SEP}#{session_name}${REAP_FIELD_SEP}#{@codecast_agent_type}${REAP_FIELD_SEP}#{@codecast_cc_account}`;
 }
 
+// A pane whose foreground process is the shell holds no credential: the agent
+// exited, or never started. A launch line mangled by an interactive shell
+// prompt left ~100 such panes on InterGalactic, and the gate counted every one
+// as a live claude and deferred the token refresh for a week.
+const SHELL_COMMANDS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh"]);
+
 /** Parse `tmux list-sessions -F ccGateListFormat()` into the claude panes.
- *  A tmux too old to expand `#{@opt}` hands the placeholder back verbatim and
- *  an unset option expands to nothing; both read as "not stamped", so such a
- *  row is skipped rather than misattributed to the keychain login. */
+ *  The command sits first and the two stamps last, so a session name carrying
+ *  the separator survives in the middle. A tmux too old to expand `#{@opt}`
+ *  hands the placeholder back verbatim and an unset option expands to nothing;
+ *  both read as "not stamped", so such a row is skipped rather than
+ *  misattributed to the keychain login. */
 export function parseLiveClaudeSessions(stdout: string): LiveClaudeSession[] {
   const out: LiveClaudeSession[] = [];
   for (const row of stdout.split("\n")) {
     const parts = row.split(REAP_FIELD_SEP);
-    if (parts.length < 3) continue;
+    if (parts.length < 4) continue;
     const expanded = (v: string) => (v.includes("#{") ? "" : v.trim());
+    const command = expanded(parts.shift()!);
+    if (SHELL_COMMANDS.has(command)) continue;
     const account = expanded(parts.pop()!);
     const agentType = expanded(parts.pop()!);
     const name = parts.join(REAP_FIELD_SEP).trim();
@@ -26705,6 +26755,8 @@ async function main(): Promise<void> {
   // manual /login into its saved profile (primary devices only).
   setTimeout(() => { maintainActiveCcToken("daemon start").catch(() => {}); }, 45_000);
   setInterval(() => { maintainActiveCcToken("periodic").catch(() => {}); }, CC_TOKEN_MAINT_INTERVAL_MS);
+  setTimeout(() => { absorbPushedCredentialOnRemote("daemon start").catch(() => {}); }, 20_000);
+  setInterval(() => { absorbPushedCredentialOnRemote("periodic").catch(() => {}); }, REMOTE_CRED_ABSORB_INTERVAL_MS);
 
   // Per-account usage snapshots for the web's meters + auto-switch decisions.
   setTimeout(() => { maintainCcUsageSnapshots("daemon start").catch(() => {}); }, 75_000);
