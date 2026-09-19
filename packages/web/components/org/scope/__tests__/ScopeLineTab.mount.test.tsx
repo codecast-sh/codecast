@@ -33,6 +33,9 @@ afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 mock.module("../../../../hooks/useSyncCollection", () => ({ useSyncCollection: () => ({ ready: true }), keyRowsBy: (rows: any[]) => rows ?? [] }));
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
 mock.module("../../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: { name: string }) => React.createElement("span", { "data-avatar": name }) }));
+// The card names its assignee through AssigneeFace now, not the comment
+// stream's Avatar; the marker stays so the assertions read the same name.
+mock.module("../../../identity/AssigneeFace", () => ({ AssigneeFace: ({ info }: { info?: { name?: string } }) => React.createElement("span", { "data-avatar": info?.name ?? "" }) }));
 
 const { useInboxStore } = await import("../../../../store/inboxStore");
 const { ScopeLineTab } = await import("../ScopeLineTab");
