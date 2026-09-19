@@ -1,6 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": true, "incremental": false },
-  "include": [],
-  "files": ["./orgTemplates.ts", "./orgTemplates.test.ts", "./schema.ts", "./http.ts"]
-}
