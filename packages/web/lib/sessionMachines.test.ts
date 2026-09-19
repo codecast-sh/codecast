@@ -20,6 +20,12 @@ const linuxLaptop = { device_id: "linux-laptop", label: "thinkpad", platform: "l
 const linuxBox = { ...cloud, device_id: "linux-box", bot_name: "Boxy" };
 
 describe("new-session machines", () => {
+  test("a remembered incompatible runtime cannot override the checkout holder", () => {
+    expect(defaultSessionMachineId([linuxLaptop, { ...laptop, online: false }], {
+      projectPath: "/Users/me/src/app", lastPicked: linuxLaptop.device_id,
+    })).toBe(laptop.device_id);
+  });
+
   test("adds team agent boxes with their own folders", () => {
     expect(sessionMachineChoices([laptop], [mini])).toEqual([laptop, mini]);
   });

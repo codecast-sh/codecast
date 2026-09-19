@@ -1,6 +1,6 @@
 import type { Device } from "../components/DeviceBadge";
-import { cloudPlacementFor, deviceDisplayName, type CloudStartFrom } from "@codecast/shared/contracts";
-import { defaultMachineId, wakesOnUse, type MachineCandidate } from "./machinePicker";
+import { cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudStartFrom } from "@codecast/shared/contracts";
+import { defaultMachineId, deviceSeesPath, wakesOnUse, type MachineCandidate } from "./machinePicker";
 
 export type SessionMachine = Device & { bot_name?: string | null };
 
@@ -56,7 +56,8 @@ export function defaultSessionMachineId(devices: Candidate[], opts: SelectionOpt
   const own = devices.filter((d) => d.bot_name === undefined);
   const wakeOk = (d: MachineCandidate) => isCloudHost(d as Candidate);
   const intended = devices.find((d) => d.device_id === opts?.ownerDeviceId && (d.online || isCloudHost(d)))
-    ?? devices.find((d) => d.device_id === opts?.lastPicked && (d.online || isCloudHost(d)));
+    ?? devices.find((d) => d.device_id === opts?.lastPicked && (d.online || isCloudHost(d))
+      && (!opts.projectPath || isCloudHost(d) || deviceSeesPath(d, opts.projectPath) || platformCanOpenPath(d.platform, opts.projectPath)));
   return intended?.device_id ?? defaultMachineId(own.length ? own : devices, { ...opts, wakeOk });
 }
 
