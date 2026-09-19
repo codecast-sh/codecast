@@ -11,7 +11,9 @@ function setup(env: NodeJS.ProcessEnv, alias = false) {
     users: [{ _id: "owner" }],
     conversations: [
       { _id: "source", short_id: "jxsrc01", session_id: alias ? "old-thread" : "native-thread", user_id: "owner", is_private: true },
-      { _id: "target", short_id: "jxdst01", session_id: "target-thread", user_id: "owner", is_private: true, owner_device_id: "device" },
+      // updated_at: a live target. Without it the row reads as decades idle and
+      // the wake-cost hold refuses the send before provenance is ever exercised.
+      { _id: "target", short_id: "jxdst01", session_id: "target-thread", user_id: "owner", is_private: true, owner_device_id: "device", updated_at: Date.now() },
     ],
     managed_sessions: alias ? [{ _id: "alias", session_id: "native-thread", conversation_id: "source", user_id: "owner" }] : [],
     pending_messages: [],

@@ -135,9 +135,12 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     // `{ agentType: detectedType }` safety option. The latter is deliberately not
     // a loose "anything until )" match, so a renamed/moved delivery call still
     // fails this guard instead of silently reducing the number of audited sites.
+    // The two tmux paths now run inside `deliveryStep`, which times the step and
+    // logs a slow one; the await moved to the wrapper. Keep the wrapper in the
+    // pattern so an un-awaited paste still fails this guard.
     const directPasteCallSites = [
-      /await\s+injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
-      /await\s+injectViaTmux\(\s*injectTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
+      /await\s+deliveryStep\([^)]*?,\s*\(\)\s*=>\s*injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
+      /await\s+deliveryStep\([^)]*?,\s*\(\)\s*=>\s*injectViaTmux\(\s*injectTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
       /await\s+injectViaTerminal\(\s*live\.proc\.tty\s*,\s*content\s*,\s*live\.proc\.termProgram\s*(?:,\s*\{\s*agentType:\s*detectedType\s*,?\s*\})?\s*\)/g,
     ];
 
