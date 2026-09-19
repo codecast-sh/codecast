@@ -1,3 +1,4 @@
+import { useMountEffect } from "../hooks/useMountEffect";
 import { useEffect } from "react";
 import NProgress from "nprogress";
 import { AppLoader } from "./AppLoader";
@@ -9,9 +10,9 @@ import { AppLoader } from "./AppLoader";
  * state instead of an empty pane.
  */
 export function RouteFallback() {
-  useEffect(() => {
+  useMountEffect(() => {
     NProgress.start();
     return () => { NProgress.done(); };
-  }, []);
+  });
   return <AppLoader className="min-h-0 h-full bg-transparent" deferIndicator />;
 }

@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
+import { persistentToast } from "@/components/ui/sonner";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 
@@ -74,7 +75,7 @@ export function useConversationsWithError(
               window.location.reload();
             },
           },
-          duration: Infinity,
+          ...persistentToast,
         });
       }
     } else {

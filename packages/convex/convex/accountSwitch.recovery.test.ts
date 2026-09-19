@@ -294,7 +294,8 @@ describe("Codex limit parks through the backend handler", () => {
     // Only the Claude row was continued.
     const sent = f.db._inserted.filter((i: any) => i.table === "pending_messages");
     expect(sent.map((i: any) => i.doc.conversation_id)).toEqual(["conversations_claude"]);
-    const followUp = f.now + 3 * 60_000 + 5_000;
+    expect(f.device.cc_auto_switch_state.last_action_at).toBeGreaterThanOrEqual(f.now);
+    const followUp = f.device.cc_auto_switch_state.last_action_at + 3 * 60_000 + 5_000;
     expect(f.device.cc_auto_switch_state.next_check_at).toBe(followUp);
     expect(f.scheduled.some((s) => s.at === followUp)).toBe(true);
   });

@@ -1,0 +1,77 @@
+"use client";
+// The header of an app window (Chat, Work): the traffic-light inset, the
+// app's name, and its sections as tabs. It replaces the dashboard's top bar,
+// tab strip and rails in that window, so the window reads as one small app
+// rather than a copy of the whole dashboard with the chrome switched off.
+//
+// It is also the window's titlebar: the row is the drag region and indents
+// past the macOS lights (desktopHeaderClass), the way the top bar does in
+// the main window; its links are no-drag by the same stylesheet rule.
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useChatUnread } from "../../hooks/useChatSync";
+import { desktopHeaderClass } from "../../lib/desktop";
+import { DESKTOP_APPS, sectionForRoute, type DesktopApp } from "../../lib/desktopApps";
+import { cn } from "../../lib/utils";
+
+function SectionTab({ href, label, active, badge }: { href: string; label: string; active: boolean; badge?: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      data-app-section={href}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "relative flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors",
+        active ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text",
+      )}
+    >
+      {label}
+      {badge}
+    </Link>
+  );
+}
+
+/** The Chat tab's unread mark: mentions as a count, plain unread as a dot. */
+function ChatBadge() {
+  const { channels, mentions } = useChatUnread();
+  if (mentions > 0) {
+    return (
+      <span
+        className="min-w-[16px] rounded-full bg-sol-red px-1 text-center text-[10px] font-semibold leading-4 text-white"
+        aria-label={`${mentions} mentions`}
+      >
+        {mentions > 99 ? "99+" : mentions}
+      </span>
+    );
+  }
+  if (channels > 0) return <span className="h-1.5 w-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />;
+  return null;
+}
+
+export function AppWindowBar({ app }: { app: DesktopApp }) {
+  const spec = DESKTOP_APPS[app];
+  const pathname = usePathname() ?? "";
+  const active = sectionForRoute(app, pathname);
+  return (
+    <header
+      data-cc-appbar={app}
+      className={cn(
+        "relative z-[100] flex flex-shrink-0 items-center gap-1 border-b border-black/10 bg-sol-bg px-2 py-1.5",
+        desktopHeaderClass(),
+      )}
+    >
+      <span className="select-none pl-1 pr-2 text-[13px] font-semibold tracking-tight text-sol-text">{spec.title}</span>
+      <nav aria-label={`${spec.title} sections`} className="flex items-center gap-0.5">
+        {spec.sections.map((s) => (
+          <SectionTab
+            key={s.path}
+            href={s.path}
+            label={s.label}
+            active={active?.path === s.path}
+            badge={app === "chat" && s.path === "/chat" ? <ChatBadge /> : undefined}
+          />
+        ))}
+      </nav>
+    </header>
+  );
+}

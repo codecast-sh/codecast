@@ -7464,7 +7464,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (isMonitorEventNotification(parsed) && parsed.event) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
+      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
         <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-blue/70" />
         <span className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
         <ExpandableLine
@@ -7479,7 +7479,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (isMonitorEndedNotification(parsed)) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
+      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
         <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-text-dim" />
         <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
         {desc && <ExpandableLine text={desc} className="text-sol-text-dim" />}
@@ -7511,6 +7511,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
          both are machine deliveries into this thread, so they share one
          visual language. */
       <div
+        data-cc-feed-card
         className={`mb-1.5 mx-1 rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
         onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
       >
@@ -8619,7 +8620,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {formatRelativeTime(timestamp)}
         </a>
         {isBookmarked && (
-          <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
             <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
         )}
@@ -9540,7 +9541,7 @@ function AssistantBlockImpl({
             {formatRelativeTime(timestamp)}
           </a>
           {isBookmarked && (
-            <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
               <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
             </svg>
           )}
@@ -9864,7 +9865,7 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (
-    <div className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
+    <div data-cc-feed-card className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15">
         <Workflow className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
         <span className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>

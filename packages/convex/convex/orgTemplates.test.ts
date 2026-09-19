@@ -6,9 +6,9 @@ import { performCatalog, performFileLesson, performInstanceStatus, performListLe
 // catalog, the instance row, its record and lessons, driven through the same
 // perform functions the mutations wrap.
 
-const ME = "u".repeat(31) + "m"; // admin of Acme and of the Codecast team
-const MATE = "u".repeat(31) + "t"; // Acme member
-const OUT = "u".repeat(31) + "o"; // member of another team only
+const ME = ("u".repeat(31) + "m") as any; // admin of Acme and of the Codecast team
+const MATE = ("u".repeat(31) + "t") as any; // Acme member
+const OUT = ("u".repeat(31) + "o") as any; // member of another team only
 const ACME = "teams_acme" as any, OTHER = "teams_other" as any, CODECAST = "teams_codecast" as any;
 const WS = `team:${ACME}`;
 const P = "projects_p";

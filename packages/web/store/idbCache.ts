@@ -12,7 +12,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
-import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
+import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 
 export type OutboxEntry = {
   id: string;
@@ -479,7 +479,8 @@ async function _writeMessageSnapshot(convId: string, snapshot: MessageSnapshot) 
   _inFlightMsgWrites.add(convId);
   try {
     const { messages, pagination } = snapshot;
-    await db.conversationMessages.put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) });
+    const tail = persistedMessageTail(messages, pagination);
+    await db.conversationMessages.put({ convId, messages: tail.messages, pagination: tail.pagination, latestTimestamp: _latestTs(tail.messages) });
     if (_pendingMsgWrites.get(convId) === snapshot) _pendingMsgWrites.delete(convId);
   } catch (error) {
     captureException(error, { tags: { source: "conversation-cache" } });
@@ -572,7 +573,8 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
   const userMessages = await _loadUserMessages(convId);
   const pending = _pendingMsgWrites.get(convId);
   if (pending) {
-    return { messages: pending.messages, pagination: pending.pagination, latestTimestamp: _latestTs(pending.messages), userMessages };
+    const tail = persistedMessageTail(pending.messages, pending.pagination);
+    return { messages: tail.messages, pagination: tail.pagination, latestTimestamp: _latestTs(tail.messages), userMessages };
   }
   try {
     const row = await db.conversationMessages.get(convId);

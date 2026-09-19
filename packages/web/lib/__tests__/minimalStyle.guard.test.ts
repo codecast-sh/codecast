@@ -31,9 +31,10 @@ describe("Minimal interface style", () => {
 
   test("keeps the composer compact and conversation text readable", () => {
     expect(css).toMatch(/\[data-sv-composer\] form:not\(\.w-full\) > div \{[\s\S]*?min-height: 52px;[\s\S]*?padding: 9px 12px 8px;/);
-    expect(css).toMatch(/\[data-sv-title\] \{[\s\S]*?font-size: 15px;/);
-    expect(css).toMatch(/\[data-sv-prompt\] \{[\s\S]*?font-size: 12\.5px;/);
-    expect(css).toMatch(/\[data-sv-sec\] \{[\s\S]*?font-size: 12px;/);
+    // One scale: the list scans at --t-ui, its second lines at --t-sub.
+    expect(css).toMatch(/--t-ui: 13px;/);
+    expect(css).toMatch(/\.minimal-style \[data-sv-rail\] \[data-sv-title\] \{[\s\S]*?font-size: var\(--t-ui\);/);
+    expect(css).toMatch(/\.minimal-style \[data-sv-rail\] \[data-sv-sec\] \{[\s\S]*?font-size: var\(--t-sub\);/);
   });
 
   test("paints your bubble, in the feed and pinned, from the one color you chose", () => {
@@ -57,6 +58,8 @@ describe("Minimal interface style", () => {
 
   test("rests the header on its title: only marked controls stay visible", () => {
     expect(css).toContain("[data-cc-conv-actions] > :not([data-cc-keep])");
+    // Hidden, not faded: nothing in Minimal appears on hover.
+    expect(css).not.toMatch(/\.minimal-style[^{]*:hover[^{]*\{[^}]*opacity: 1/);
     expect(conversationView).toContain("<button data-cc-keep aria-label=\"Session menu\"");
     // The name row of the pinned bubble is hidden by its own hook. A class
     // match here once hid the dismiss and expand buttons along with it.

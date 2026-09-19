@@ -6,7 +6,7 @@
 // small batch per beat, and the reader fetches a single row when a card opens.
 
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { identityText, sanitizeReported } from "./capabilityState";

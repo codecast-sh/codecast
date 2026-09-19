@@ -22,6 +22,7 @@ export function useHoverCard() {
   const openSoon = useCallback(() => { cancel(); timer.current = setTimeout(() => setOpen(true), HOVER_CARD_OPEN_MS); }, [cancel]);
   const closeSoon = useCallback(() => { cancel(); timer.current = setTimeout(() => setOpen(false), HOVER_CARD_CLOSE_MS); }, [cancel]);
   const closeNow = useCallback(() => { cancel(); setOpen(false); }, [cancel]);
+  // eslint-disable-next-line no-restricted-syntax -- drops the pending open/close timer when the card goes away
   useEffect(() => cancel, [cancel]);
   return { open, setOpen, openSoon, closeSoon, closeNow, cancel };
 }

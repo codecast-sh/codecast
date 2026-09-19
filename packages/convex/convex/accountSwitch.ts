@@ -59,28 +59,12 @@ import {
   resumePinFor,
   activeCodexProfile,
   codexAccountNeedsRestart,
+  listOnlineDevices,
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { withSafetyBlock, describeDecision } from "@codecast/shared/contracts";
 
-// The freshest online NON-remote device: it holds the keychain profiles and is
-// the canonical credential source remotes are pushed from.
-async function listOnlineDevices(
-  ctx: { db: any },
-  userId: Id<"users">,
-  now: number,
-): Promise<{ online: Doc<"devices">[]; primary: Doc<"devices"> | undefined }> {
-  const devices: Doc<"devices">[] = await ctx.db
-    .query("devices")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  const online = devices.filter((d) => isDeviceOnline(d, now));
-  const primary = online
-    .filter((d) => !d.is_remote)
-    .sort((a, b) => b.last_seen - a.last_seen)[0];
-  return { online, primary };
-}
 
 // A revive targets the CURRENT incident, not history: pending_api_error flags
 // linger on sessions that died mid-banner weeks ago (first live run selected 51

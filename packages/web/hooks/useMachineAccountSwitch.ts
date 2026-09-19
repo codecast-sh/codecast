@@ -8,6 +8,7 @@
 import { useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { toast } from "sonner";
+import { persistentToast } from "@/components/ui/sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -65,7 +66,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       const key = `${pending.profile}:slow`;
       if (announced.current === key) return;
       announced.current = key;
-      toast.message(machineSwitchPendingCopy("slow", pending.profile), { id: pending.toastId, duration: Infinity });
+      toast.message(machineSwitchPendingCopy("slow", pending.profile), { id: pending.toastId, ...persistentToast });
       return;
     }
     if (resolved.phase === "succeeded") {
@@ -115,7 +116,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
     announced.current = null;
     setOutcome(null);
     setPending({ profile, email, commandId: null, startedAt: Date.now(), toastId });
-    toast.message(machineSwitchPendingCopy("waiting", profile), { id: toastId, duration: Infinity });
+    toast.message(machineSwitchPendingCopy("waiting", profile), { id: toastId, ...persistentToast });
     try {
       const res = await requestSwitch({
         profile,

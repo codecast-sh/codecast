@@ -225,9 +225,26 @@ describe("resourceMonitor", () => {
       expect(idle).toBe(2 * TICK);
     });
 
-    it("resets to 0 when CPU is above the floor", () => {
+    it("pauses, but does not reset, on a CPU reading above the floor with a resting status", () => {
       const idle = nextAwakeIdleMs({ prevIdleMs: 5 * TICK, cpu: 25, status: "idle", elapsedMs: TICK, sleepSkip: false });
-      expect(idle).toBe(0);
+      expect(idle).toBe(5 * TICK);
+    });
+
+    it("a resting session that blips past the floor every twentieth tick still banks eight hours", () => {
+      // The regression: a resting Claude Code process crosses 2% on its own
+      // often enough that a reset on every such tick never let any session
+      // reach an 8h hibernate_idle_ms (0 parks in 246 passes, 2026-09-19).
+      const eightHours = 8 * 3600_000;
+      let idle = 0;
+      let ticks = 0;
+      while (ticks < 1200) {
+        ticks++;
+        const cpu = ticks % 20 === 0 ? 4.9 : 0.3;
+        idle = nextAwakeIdleMs({ prevIdleMs: idle, cpu, status: "idle", elapsedMs: TICK, sleepSkip: false });
+      }
+      // 1200 ticks, 60 of them paused: 1140 × 30s = 9.5h banked.
+      expect(idle).toBe(1140 * TICK);
+      expect(idle).toBeGreaterThanOrEqual(eightHours);
     });
 
     it("resets to 0 on a working status even at near-zero CPU (blocked on a tool/network call)", () => {

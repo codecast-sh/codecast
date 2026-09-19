@@ -61,11 +61,17 @@ export interface SessionResources {
 export const IDLE_CPU_FLOOR_PCT = 2;
 const WORKING_STATUSES = new Set(["working", "thinking", "compacting", "starting", "resuming"]);
 
+// The agent's own word that a turn is underway. This is the only signal that
+// restarts the idle clock: see nextAwakeIdleMs.
+export function isWorkingStatus(status: string | undefined): boolean {
+  return status !== undefined && WORKING_STATUSES.has(status);
+}
+
 // A session is "active" this tick if it's burning CPU or its agent_status is a
-// working state. Single source of truth for both idle accounting and the metrics
-// report gate, so the two never disagree about what counts as idle.
+// working state. Gates the metrics report, so a burst of CPU on a resting
+// session still reaches the web promptly.
 export function isSessionActive(cpu: number, status: string | undefined): boolean {
-  return cpu >= IDLE_CPU_FLOOR_PCT || (status !== undefined && WORKING_STATUSES.has(status));
+  return cpu >= IDLE_CPU_FLOOR_PCT || isWorkingStatus(status);
 }
 
 // Idle sessions' metrics are flat, but the old code reported every session every
@@ -119,8 +125,19 @@ export function shouldReportMetrics(args: {
  * Returns the new accumulated idle time. The counter measures idle time only
  * while the machine is AWAKE: a `sleepSkip` tick (first tick, wake grace, or an
  * oversized gap from suspend/stall) carries the previous value forward unchanged,
- * so a closed-lid period never inflates idle time. Any sign of activity — CPU at
- * or above the floor, or a working status — resets the counter to 0.
+ * so a closed-lid period never inflates idle time. A working status resets the
+ * counter to 0: the agent says a turn is underway, so whatever idle it had
+ * banked is over.
+ *
+ * CPU at or above the floor on a resting status only PAUSES the counter. It is
+ * not a reset, because a resting Claude Code process crosses 2% on its own
+ * often enough (hooks, status line, transcript writes, a loaded machine
+ * inflating every wake) that a reset never let any session bank eight hours:
+ * on 2026-09-19 five of a hundred panes silent for over eight hours read 2%+
+ * at a single instant, and over the 960 ticks in eight hours that reset every
+ * one of them, so an 8h hibernate_idle_ms parked nothing in 246 passes. A
+ * pause keeps the tick out of the total without discarding what came before,
+ * and a session doing real work announces it through its status.
  *
  * `sharesRootPid` is the same carry-forward, for a different lie: that session's
  * cpu is 0 because its subtree was credited to the session that OWNS the pid, not
@@ -138,8 +155,8 @@ export function nextAwakeIdleMs(params: {
   sleepSkip: boolean;
   sharesRootPid?: boolean;
 }): number {
-  if (isSessionActive(params.cpu, params.status)) return 0;
-  if (params.sharesRootPid || params.sleepSkip) return params.prevIdleMs;
+  if (isWorkingStatus(params.status)) return 0;
+  if (params.sharesRootPid || params.sleepSkip || params.cpu >= IDLE_CPU_FLOOR_PCT) return params.prevIdleMs;
   return params.prevIdleMs + params.elapsedMs;
 }
 

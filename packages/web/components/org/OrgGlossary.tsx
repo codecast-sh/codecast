@@ -23,6 +23,7 @@ export function OrgGlossary({ open, onClose, tree, health, proposal }: {
   proposal: Pick<OrgProposalRow, "short_id" | "changes" | "counts"> | null;
 }) {
   const [cur, setCur] = useState<GlossaryPage>(open ?? "how");
+  // eslint-disable-next-line no-restricted-syntax -- the dialog opens on the section it was asked for
   useEffect(() => { if (open) setCur(open); }, [open]);
   const entries = glossaryEntries(tree, health, proposal);
   return (

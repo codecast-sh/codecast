@@ -81,6 +81,8 @@ import { useOpenSession } from "../hooks/useOpenSession";
 import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
+import { AppWindowBar } from "./desktop/AppWindowBar";
+import { desktopAppWindow } from "../lib/desktopApps";
 import { tabTitle } from "../lib/tabTitle";
 import { pathLabel, poppedTabPath } from "../lib/pathLabel";
 import { leavesOf } from "../store/stageSplit";
@@ -347,6 +349,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Stable handles: an inline lambda here re-rendered the (235-hook) Sidebar on
   // every layout render.
   const closeMobileSidebar = useCallback(() => setIsMobileSidebarOpen(false), []);
+  // The phone's sessions drawer has its own open state. The saved rail slot
+  // means "a column beside the page" and the route effects below open it on
+  // arrival; on a phone that would drop a modal over every page load, and
+  // closing it there would fold the rail on the desktop too.
+  const [isMobileSessionListOpen, setIsMobileSessionListOpen] = useState(false);
   // ComposeView's guarded close (draft keep/discard confirm) — the compose
   // backdrop below routes clicks through it. Null until the popup mounts.
   const composeCloseGuardRef = useRef<(() => void) | null>(null);
@@ -401,6 +408,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = selectNavCollapsed(s);
+  // This document is the Chat or Work window (lib/desktopApps): the app's
+  // own bar stands in for the top bar, and no rail or peek is drawn around
+  // its page. Fixed for the document's life, so it is a constant here.
+  const appWindow = desktopAppWindow();
   // Shell display modes, as classes on the shell root and on anything that
   // portals out of it (the phone drawers), so the mode's scoped rules apply.
   const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`;
@@ -535,14 +546,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // it would overlay the whole flow on arrival, on desktop it stacks
   // unrelated inbox cards beside a focused step and pushes the centered
   // shell off axis. The persisted rail choice still applies everywhere else.
-  const showSessionList = railOpen && !isMobile && !isOnSettingsPage;
-  const showMobileSessionList = railOpen && isMobile && !isOnSettingsPage;
+  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow;
+  const showMobileSessionList = isMobileSessionListOpen && isMobile && !isOnSettingsPage && !appWindow;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
   // Never in zen mode (same rule as the left peek): zen means nothing slides in.
   // Keyed to showSessionList, not railOpen, so the flow pages that suppress
   // the rail still reach the list through the edge peek.
-  const rightPeekEnabled = !showSessionList && !isMobile && !isZenMode;
+  const rightPeekEnabled = !showSessionList && !isMobile && !isZenMode && !appWindow;
 
   // No route carries a conversation along as a second column any more: the
   // page takes the full stage, and side by side is the tab's split layout,
@@ -568,12 +579,19 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // the inbox, leave for the inbox from every other surface. Shared with the
   // Ctrl+Tab switcher and the Ctrl+I/Ctrl+P jump shortcuts.
   const sessionListOnSelect = useOpenSession();
+  // In the phone drawer a pick also closes the drawer, so the session shows.
+  const selectFromMobileSessionList = useCallback((id: string) => {
+    sessionListOnSelect(id);
+    setIsMobileSessionListOpen(false);
+  }, [sessionListOnSelect]);
 
   // Growing past the phone width swaps the drawer for the panel; an open
   // drawer would otherwise keep its focus trap and scroll lock over a desktop
   // layout that no longer shows it.
   useWatchEffect(() => {
-    if (!isMobile) setIsMobileSidebarOpen(false);
+    if (isMobile) return;
+    setIsMobileSidebarOpen(false);
+    setIsMobileSessionListOpen(false);
   }, [isMobile]);
 
   // The route-default effects below adjust the rail when you NAVIGATE between
@@ -859,7 +877,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // "Loading conversation..." state). Visibility is driven imperatively.
   const sidebarPanelRef = usePanelRef();
   const sessionListPanelRef = usePanelRef();
-  const sidebarHidden = !!hideSidebar || isZenMode || sidebarCollapsed || isMobile;
+  const sidebarHidden = !!hideSidebar || isZenMode || sidebarCollapsed || isMobile || !!appWindow;
 
   // Animated collapse/expand: panels are flex-grow sized with no built-in
   // transition, so we enable one (globals.css `.sidebar-animating`) only for
@@ -925,7 +943,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Hover-peek: with a side panel collapsed, touching the screen edge slides the
   // full panel out as an overlay (state machine + markup in EdgePeek). Left edge
   // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
-  const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
+  const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile && !appWindow;
 
   // The context slot owns the rail's width. Its size field serves whichever
   // pane holds the edge — a percent for the session list, pixels for the
@@ -1067,9 +1085,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       </ErrorBoundary>
       {/* Zen hides this header. On the desktop app each surface's own top row
           then stands in as the titlebar — drag region + traffic-light inset —
-          via useTitlebarHead, so no strip is needed above the page. */}
+          via useTitlebarHead, so no strip is needed above the page. An app
+          window (Chat, Work) replaces it with the app's own bar below. */}
+      {appWindow && <AppWindowBar app={appWindow} />}
       {/* Header spans full width */}
-      <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
+      <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
@@ -1213,7 +1233,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <AttachTabButton />
               <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
                 <TopbarButton
-                  onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
+                  onClick={(e) => {
+                    if (isMobile) setIsMobileSessionListOpen((open) => !open);
+                    else s.toggleSidePanel();
+                    tipActions.whisper('sidebar.toggleRight', e);
+                  }}
                   aria-label="Toggle sessions panel"
                 >
                   <PanelRight />
@@ -1366,10 +1390,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </ErrorBoundary>
         </MobileDrawer>
       )}
-      <MobileDrawer open={showMobileSessionList} onOpenChange={(open) => { if (!open) s.toggleSidePanel(); }} side="right" title="Sessions" className={shellModeClass}>
+      <MobileDrawer open={showMobileSessionList} onOpenChange={setIsMobileSessionListOpen} side="right" title="Sessions" className={shellModeClass}>
         <ErrorBoundary name="SessionList" level="panel">
           <SessionListPanel
-            onSessionSelect={sessionListOnSelect}
+            onSessionSelect={selectFromMobileSessionList}
             activeSessionId={sessionListActiveId}
           />
         </ErrorBoundary>
