@@ -177,6 +177,7 @@ import type * as orgInit from "../orgInit.js";
 import type * as orgLine from "../orgLine.js";
 import type * as orgProposals from "../orgProposals.js";
 import type * as orgRoles from "../orgRoles.js";
+import type * as orgTemplates from "../orgTemplates.js";
 import type * as orgWakes from "../orgWakes.js";
 import type * as patterns from "../patterns.js";
 import type * as pendingMessageWrites from "../pendingMessageWrites.js";
@@ -432,6 +433,7 @@ declare const fullApi: ApiFromModules<{
   orgLine: typeof orgLine;
   orgProposals: typeof orgProposals;
   orgRoles: typeof orgRoles;
+  orgTemplates: typeof orgTemplates;
   orgWakes: typeof orgWakes;
   patterns: typeof patterns;
   pendingMessageWrites: typeof pendingMessageWrites;
