@@ -203,6 +203,23 @@ describe("parseHostToolsOutput / summary", () => {
 });
 
 /** The "host": run the script exactly as ssh would, locally, against $HOME with a stubbed PATH. */
+/** The system tool directories mirrored as symlinks, with any `gh` left out. */
+function systemPathWithoutGh(): string {
+  const mirror = path.join(dir, "sysbin");
+  fs.mkdirSync(mirror, { recursive: true });
+  for (const d of ["/usr/bin", "/bin"]) {
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(d); } catch { continue; }
+    for (const name of entries) {
+      if (name === "gh") continue;
+      const link = path.join(mirror, name);
+      if (fs.existsSync(link)) continue;
+      try { fs.symlinkSync(path.join(d, name), link); } catch { /* racing or unreadable: skip */ }
+    }
+  }
+  return mirror;
+}
+
 function localRun(_host: RemoteHost, script: string) {
   const r = spawnSync("/bin/sh", ["-c", HOST_TOOLS_REMOTE_COMMAND], { input: script, encoding: "utf-8", env: process.env, timeout: 60_000 });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", ...(r.error ? { error: r.error } : {}) };
@@ -251,8 +268,11 @@ describe("the script run locally against a temp HOME (stubs on PATH, no network)
   test("gh counts only the real gh: the wrapper alone is missing, the real one behind it is ok with its version", () => {
     stub("node", "echo v22.12.0");
     stub("gh", ghWrapperScript().replace("#!/bin/sh\n", ""));
-    // A gh elsewhere on the machine would count, so the check runs with a PATH that has none.
-    process.env.PATH = "/usr/bin:/bin";
+    // A gh elsewhere on the machine would count, so the check runs with a PATH
+    // that has none. "/usr/bin:/bin" is not that PATH everywhere: a GitHub
+    // runner ships gh at /usr/bin/gh, which counted and made the wrapper look
+    // like a real install. So mirror the system directories minus gh.
+    process.env.PATH = systemPathWithoutGh();
     const required: RequiredHostTools = { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [{ tool: "gh", version: "2.86.0" }], unsupported: [] };
     expect(runHostTools(host, required, { install: false, run: localRun }).missing.map((m) => m.tool)).toEqual(["gh"]);
     write(home, REAL_GH_REL, "#!/bin/sh\necho gh version 2.86.0\n", 0o755);
