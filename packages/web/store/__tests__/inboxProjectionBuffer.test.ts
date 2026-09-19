@@ -75,6 +75,50 @@ describe("field list derivation (signature)", () => {
   });
 });
 
+describe("applyInboxLivenessPayload — a repeated row costs nothing", () => {
+  // Every push carries the whole live set, and almost every row repeats the
+  // last one. Merging each row through draft proxies was a quarter of the
+  // phone's JS time after a signed in launch. An unchanged row must not be
+  // touched: same row object, same sessions object, so no subscriber wakes.
+  const facts = { agent_status: "working", is_idle: false, message_count: 7, updated_at: 123456, activity: { verb: "Editing", target: "a.ts" } };
+  const push = (over: Record<string, unknown> = {}) =>
+    useInboxStore.getState().applyInboxLivenessPayload("mine", { liveness: { [A]: { ...facts, ...over, ...stamp } }, projection: envelope() });
+
+  it("keeps row and collection identity when the payload repeats, fresh objects included", () => {
+    push();
+    const before = useInboxStore.getState();
+    push({ activity: { verb: "Editing", target: "a.ts" } });
+    const after = useInboxStore.getState();
+    expect(after.sessions[A]).toBe(before.sessions[A]);
+    expect(after.sessions).toBe(before.sessions);
+    expect(after.pending).toBe(before.pending);
+    // Stamps still refresh: the buffer is replaced on every payload.
+    expect(after.sessionsProjection["mine"].stamps[A]).toEqual(stamp as any);
+  });
+
+  it("still applies a changed fact, and a fact the payload dropped", () => {
+    push();
+    push({ message_count: 8 });
+    expect((useInboxStore.getState().sessions[A] as any).message_count).toBe(8);
+    useInboxStore.getState().applyInboxLivenessPayload("mine", { liveness: { [A]: { is_idle: true, ...stamp } }, projection: envelope() });
+    const row = useInboxStore.getState().sessions[A] as any;
+    expect(row.agent_status).toBeNull();
+    expect(row.activity).toBeNull();
+  });
+
+  it("a row with a pending lock always takes the full merge", () => {
+    push();
+    useInboxStore.setState({
+      sessions: { ...useInboxStore.getState().sessions, [A]: { ...(useInboxStore.getState().sessions[A] as any), permission_mode: "plan" } },
+      pending: { [`sessions:${A}:permission_mode`]: { type: "field", value: "plan", ts: Date.now() } },
+    } as any);
+    push({ permission_mode: "bypass" });
+    expect((useInboxStore.getState().sessions[A] as any).permission_mode).toBe("plan");
+    push({ permission_mode: "plan" });
+    expect(useInboxStore.getState().pending[`sessions:${A}:permission_mode`]).toBeUndefined();
+  });
+});
+
 describe("applyInboxLivenessPayload — the one applier for { liveness, projection }", () => {
   it("splits a member row: facts merge onto the session row, stamps land in the scope buffer", () => {
     useInboxStore.getState().applyInboxLivenessPayload("mine", {
