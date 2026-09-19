@@ -1,6 +1,5 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { act } from "react";
-import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -35,6 +34,10 @@ const restoreGlobals = replaceGlobals({
   cancelAnimationFrame: (id: number) => clearTimeout(id),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// react-dom/client decides at load whether a DOM exists, so it is loaded
+// here — after the globals above — not as a static import.
+const {createRoot} = await import("react-dom/client");
+
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const decision: any = {

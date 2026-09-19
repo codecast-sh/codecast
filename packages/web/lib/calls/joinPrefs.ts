@@ -33,6 +33,11 @@ export type JoinPrefs = {
   cameraOn: boolean;
   /** Whether a deliberate join opens the microphone. On until muted once. */
   micOn: boolean;
+  /** Whether the microphone may open BEFORE the person asks for it: ahead of a
+   *  press while a talk button or a teammate's face is under the pointer, and
+   *  muted inside a prewarmed room. Off means a press, an unmute or a record is
+   *  the only thing that opens it. On until turned off once. */
+  micAutoOpen: boolean;
 };
 
 function ui(): any {
@@ -46,6 +51,7 @@ export function readJoinPrefs(): JoinPrefs {
     cameraDeviceId: u.call_camera_device_id || undefined,
     cameraOn: u.call_camera_on !== false,
     micOn: u.call_mic_on !== false,
+    micAutoOpen: u.call_mic_auto_open !== false,
   };
 }
 
@@ -69,6 +75,13 @@ export function rememberCamera(on: boolean): void {
 export function rememberMic(on: boolean): void {
   if (readJoinPrefs().micOn === on) return;
   useInboxStore.getState().updateClientUI({ call_mic_on: on });
+}
+
+/** The person decided whether the microphone may open ahead of a press. Off is
+ *  the answer to "the recording light is on and I pressed nothing". */
+export function rememberMicAutoOpen(on: boolean): void {
+  if (readJoinPrefs().micAutoOpen === on) return;
+  useInboxStore.getState().updateClientUI({ call_mic_auto_open: on });
 }
 
 /**
