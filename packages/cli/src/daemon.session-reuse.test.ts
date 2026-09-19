@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { pickReusableConversationTmux } from "./daemon.js";
+import { pickReusableConversationTmux, startedSessionGuard, STARTED_SESSION_BOOT_WINDOW_MS } from "./daemon.js";
 
 // Regression coverage for the web new-session double-start (root-caused 2026-05-25).
 //
@@ -100,7 +100,7 @@ describe("double-start fix invariants", () => {
     // findLiveTmuxForConversation can later see it (the orphaned-oqssy1 fix).
     const anchor = daemonSource.indexOf("[REMOTE] Started fresh session ${tmuxSession} for conversation");
     expect(anchor).toBeGreaterThan(-1);
-    const region = daemonSource.slice(anchor - 1200, anchor);
+    const region = daemonSource.slice(anchor - 2000, anchor);
     expect(region).toContain('setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId)');
   });
 
@@ -108,7 +108,7 @@ describe("double-start fix invariants", () => {
     const start = daemonSource.indexOf("Waiting up to 12s for start_session");
     expect(start).toBeGreaterThan(-1);
     const waitLoop = daemonSource.slice(start, start + 2500);
-    expect(waitLoop).toContain("if (await tryAppServerDelivery()) return true");
+    expect(waitLoop).toMatch(/if \(await [^\n]*tryAppServerDelivery\)?\(?\)?\) return true/);
     expect(waitLoop.indexOf("tryAppServerDelivery")).toBeLessThan(
       waitLoop.indexOf("startFreshSessionForDelivery"),
     );
@@ -122,5 +122,71 @@ describe("double-start fix invariants", () => {
     expect(body.indexOf('if (declaredAgentType !== "claude")')).toBeLessThan(
       body.indexOf('const tmuxSession = `cc-claude-${shortId}`'),
     );
+  });
+});
+
+// A transfer ("run on this device") queues resume_session for the destination.
+// On 2026-09-19 two transfers did nothing: each conversation still had a start
+// record from 18 hours earlier (the pane was started here while another device
+// owned the conversation, so its first message was never delivered and the pane
+// never linked). The resume guard treated any unlinked record as "freshly
+// started" and returned early, so no pane was started and no delivery was
+// scheduled until the human pressed kill and restart.
+describe("startedSessionGuard", () => {
+  const now = 1_789_826_355_000;
+
+  test("skips the resume while an unlinked pane is still inside its boot window", () => {
+    expect(startedSessionGuard({ startedAt: now - 5_000 }, false, now)).toBe("skip_booting");
+    expect(startedSessionGuard({ startedAt: now - STARTED_SESSION_BOOT_WINDOW_MS + 1 }, false, now)).toBe("skip_booting");
+  });
+
+  test("replaces an unlinked start record that outlived its boot window", () => {
+    expect(startedSessionGuard({ startedAt: now - STARTED_SESSION_BOOT_WINDOW_MS }, false, now)).toBe("replace_stale");
+    expect(startedSessionGuard({ startedAt: now - 18 * 60 * 60 * 1000 }, false, now)).toBe("replace_stale");
+  });
+
+  test("proceeds when there is no record or the conversation is linked", () => {
+    expect(startedSessionGuard(undefined, false, now)).toBe("proceed");
+    expect(startedSessionGuard({ startedAt: now - 5_000 }, true, now)).toBe("proceed");
+  });
+
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const source = fs.readFileSync(path.join(here, "daemon.ts"), "utf-8");
+
+  test("resume_session tears a stale pane down instead of returning early", () => {
+    const start = source.indexOf("// Fresh-session guard.");
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, start + 3000);
+    expect(body).toContain("startedSessionGuard(");
+    expect(body).toContain('"replace_stale"');
+    expect(body.indexOf("teardownConversationBackendsLive(conversationId)")).toBeGreaterThan(body.indexOf('"replace_stale"'));
+  });
+
+  test("the blank restart shares the boot window and reschedules delivery", () => {
+    const anchor = source.indexOf("[REMOTE] Started fresh session ${tmuxSession} for conversation");
+    const region = source.slice(anchor - 4500, anchor + 600);
+    expect(region).not.toContain("60_000");
+    expect(region).toContain('startedSessionGuard(existingStarted, false) === "skip_booting"');
+    expect(region).toContain('clearConversationDeliveryAndResumeState(conversationId, undefined, "resume_session_blank")');
+  });
+});
+
+// 2026-09-19: pulling a four minute old session to this machine logged "not
+// found locally", rebuilt its transcript from the server over the real file,
+// then failed with "Reconstituted file not found" while the file sat at that
+// exact path. findSessionFile answers null on the first ask for a transcript
+// younger than the index; the resume path treats null as absent.
+describe("autoResumeSession transcript lookup", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const source = fs.readFileSync(path.join(here, "daemon.ts"), "utf-8");
+  const end = source.indexOf("Reconstituted file not found at expected path");
+  const start = source.lastIndexOf("const forkFromSessionId = opts?.forkFromSessionId;", end);
+
+  test("awaits ground truth before it decides the transcript is missing", () => {
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, end);
+    expect(body).toContain("await awaitRecentSessionFile(forkFromSessionId ?? sessionId)");
+    expect(body).toContain("await awaitRecentSessionFile(reconId)");
+    expect(body).not.toMatch(/sessionFile = findSessionFile\(/);
   });
 });

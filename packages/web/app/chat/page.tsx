@@ -90,6 +90,7 @@ import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { mentionWakeLine } from "../../lib/chatMentionWakes";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { desktopAppWindow } from "../../lib/desktopApps";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 
@@ -223,7 +224,8 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   // The app sidebar lists the WORKSPACE's rooms, never the public ones, so
   // the community page always carries its own rail (and a visitor has no
   // sidebar at all).
-  const showInlineRail = community || navCollapsed || zenMode || narrowViewport;
+  // The Chat window draws no sidebar either, so the rail is the page's there.
+  const showInlineRail = community || navCollapsed || zenMode || narrowViewport || !!desktopAppWindow();
   // Switching workspace writes BOTH the local mirror and the canonical
   // users.active_team_id (hooks/useSwitchWorkspace) — one path for every caller.
   const switchWorkspace = useSwitchWorkspace();

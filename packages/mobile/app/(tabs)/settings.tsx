@@ -173,7 +173,7 @@ export default function SettingsScreen() {
 
   const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : "skip");
 
-  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity') => {
+  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_idle_digest' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity') => {
     const currentPrefs = currentUser?.notification_preferences || {
       team_session_start: true,
       mention: true,
@@ -194,6 +194,7 @@ export default function SettingsScreen() {
         notification_preferences: {
           ...currentPrefs,
           session_idle: currentPrefs.session_idle ?? true,
+          session_idle_digest: (currentPrefs as any).session_idle_digest ?? true,
           session_error: currentPrefs.session_error ?? true,
           task_activity: currentPrefs.task_activity ?? true,
           doc_activity: currentPrefs.doc_activity ?? true,
@@ -495,6 +496,23 @@ export default function SettingsScreen() {
                 <Switch
                   value={currentUser?.notification_preferences?.session_idle ?? true}
                   onValueChange={() => handleToggleNotificationType('session_idle')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Hourly Digest</RNText>
+                  <RNText style={styles.settingDescription}>
+                    Fold waiting sessions into one alert an hour
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={(currentUser?.notification_preferences as any)?.session_idle_digest ?? true}
+                  onValueChange={() => handleToggleNotificationType('session_idle_digest')}
                   trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
                   thumbColor="#fff"
                   ios_backgroundColor={Theme.bgHighlight}

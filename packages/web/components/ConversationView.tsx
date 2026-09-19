@@ -3992,25 +3992,25 @@ function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResu
     : { border: "border-sol-cyan/25", bg: "bg-sol-cyan/[0.06]", divider: "border-sol-cyan/15" };
 
   return (
-    <div className={`my-2 rounded-lg border ${frame.border} ${frame.bg} overflow-hidden`}>
+    <div data-cc-feed-card className={`my-2 rounded-lg border ${frame.border} ${frame.bg} overflow-hidden`}>
       <div
         className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-sol-bg-highlight/40 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <Workflow className={`w-3.5 h-3.5 flex-shrink-0 ${isError ? "text-sol-red" : "text-sol-cyan"}`} />
-        <span className={`text-[10px] uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
+        <span data-cc-tech className={`text-[10px] uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
           Workflow
         </span>
         <span className="text-xs text-sol-text-muted truncate">{name}</span>
         {resumeFromRunId && (
-          <span className="px-1 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
+          <span data-cc-tech className="px-1 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
             resume
           </span>
         )}
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {run?.agent_count != null && <span className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
-          {run?.total_tokens ? <span className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
-          {launch.taskId && <span className="text-[10px] text-sol-text-dim/70 font-mono">{launch.taskId}</span>}
+          {run?.agent_count != null && <span data-cc-tech className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
+          {run?.total_tokens ? <span data-cc-tech className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
+          {launch.taskId && <span data-cc-tech className="text-[10px] text-sol-text-dim/70 font-mono">{launch.taskId}</span>}
           {isError ? (
             <span className="text-[10px] flex items-center gap-1 text-sol-red">{"✗"} failed</span>
           ) : run ? (
@@ -4029,12 +4029,12 @@ function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResu
               launching
             </span>
           )}
-          <span className="text-sol-text-dim text-[10px]">{expanded ? "collapse" : "expand"}</span>
+          <span data-cc-tech className="text-sol-text-dim text-[10px]">{expanded ? "collapse" : "expand"}</span>
         </div>
       </div>
 
       {summary && (
-        <div className="px-3 pb-2 -mt-0.5">
+        <div data-cc-wf-summary className="px-3 pb-2 -mt-0.5">
           <div className={`text-xs text-sol-text-dim ${expanded ? "" : "line-clamp-2"}`}>{summary}</div>
         </div>
       )}
@@ -6299,15 +6299,15 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
     <div data-cc-monitor-card className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
         <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
+        <span data-cc-tech className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
-            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
+            <span data-cc-tech className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
         <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
         {(row?.eventCount ?? 0) > 0 && (
-          <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
+          <span data-cc-tech className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
           </span>
         )}
@@ -6321,6 +6321,7 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
       </div>
       {input.command && (
         <button
+          data-cc-tech
           onClick={() => setShowCommand((v) => !v)}
           className="w-full text-left px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
           title={showCommand ? "Collapse the watch command" : "Show the full watch command"}
@@ -6333,7 +6334,7 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
         </button>
       )}
       {row?.lastEvent && (
-        <div className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
+        <div data-cc-tech className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
           <span className={`truncate min-w-0 font-medium ${watching ? "text-sol-text-muted" : "text-sol-text-dim"}`}>
             <span className="mr-0.5 text-sol-blue/50">&gt;</span>
             {row.lastEvent}
@@ -7464,9 +7465,9 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (isMonitorEventNotification(parsed) && parsed.event) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
+      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
         <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-blue/70" />
-        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
+        <span data-cc-tech className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
         <ExpandableLine
           text={decodeEntities(parsed.event)}
           className="text-sol-text-muted"
@@ -7479,7 +7480,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (isMonitorEndedNotification(parsed)) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
+      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
         <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-text-dim" />
         <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
         {desc && <ExpandableLine text={desc} className="text-sol-text-dim" />}
@@ -7511,6 +7512,8 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
          both are machine deliveries into this thread, so they share one
          visual language. */
       <div
+        data-cc-feed-card
+        data-status={parsed.status}
         className={`mb-1.5 mx-1 rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
         onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
       >
@@ -7528,7 +7531,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
           ) : (
             <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
           )}
-          <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+          <span data-cc-tech className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
           <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
           <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
           {childId && (
@@ -7536,7 +7539,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           )}
-          <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+          <span data-cc-tech className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
           <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
       </div>
@@ -7545,6 +7548,8 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
 
   return (
     <div
+      data-cc-feed-card
+      data-status={parsed.status}
       className={`mb-2 px-3 py-2 flex items-start gap-2.5 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
       onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
     >
@@ -7558,7 +7563,7 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
       {/* A batch notice names its tasks inside the summary itself, so pinning
           one id on the row would read as if the rest weren't there. */}
       {!isOrphanSummaryNotification(parsed) && (
-        <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+        <span data-cc-tech className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
       )}
       <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
@@ -8619,7 +8624,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {formatRelativeTime(timestamp)}
         </a>
         {isBookmarked && (
-          <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
             <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
         )}
@@ -9540,7 +9545,7 @@ function AssistantBlockImpl({
             {formatRelativeTime(timestamp)}
           </a>
           {isBookmarked && (
-            <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
               <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
             </svg>
           )}
@@ -9864,14 +9869,14 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (
-    <div className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
+    <div data-cc-feed-card className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15">
         <Workflow className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
-        <span className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
+        <span data-cc-tech className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
         <span className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {run?.agent_count != null && <span className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
-          {run?.total_tokens ? <span className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
+          {run?.agent_count != null && <span data-cc-tech className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
+          {run?.total_tokens ? <span data-cc-tech className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
           {status && (
             <span className={`text-[10px] flex items-center gap-1 ${sm.cls}`}>
               {sm.dot ? <span className={`w-1.5 h-1.5 rounded-full ${sm.dot}`} /> : sm.icon}
@@ -13170,6 +13175,10 @@ const ConversationViewInner = (
   // Toggling Simple view retunes the open conversation immediately — but only
   // when the user hasn't explicitly picked a density for it (that choice wins).
   const simpleViewPref = useInboxStore((st) => resolveSimpleView(st.clientState.ui));
+  // Minimal tucks the schedule, plan and workflow strips under the header
+  // away; this preference (session menu, command palette) brings them back.
+  const minimalStyle = useInboxStore((st) => st.clientState.ui?.visual_style === "minimal");
+  const showSessionContext = useInboxStore((st) => st.clientState.ui?.show_session_context === true);
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
     setDensityState(resolveDefaultDensity());
@@ -16546,6 +16555,7 @@ const ConversationViewInner = (
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
     { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, shortcutAction: "conv.toggleThinking", available: hasAnyThinking, run: () => setShowThinking(s => !s) },
+    { key: "view_context", label: showSessionContext ? "Hide schedule and plan" : "Show schedule and plan", icon: PaletteEye, available: minimalStyle, run: () => updateUI({ show_session_context: !showSessionContext }) },
     { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
     { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
@@ -17302,7 +17312,7 @@ const ConversationViewInner = (
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById}>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main data-cc-conversation data-reveal-chrome={compactChrome ? "" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={compactChrome ? "" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -17832,6 +17842,11 @@ const ConversationViewInner = (
                     }}>
                       {stickyDisabled ? "Enable sticky headers" : "Disable sticky headers"}
                     </DropdownMenuItem>
+                    {minimalStyle && (
+                      <DropdownMenuItem onClick={() => updateUI({ show_session_context: !showSessionContext })}>
+                        {showSessionContext ? "Hide schedule and plan" : "Show schedule and plan"}
+                      </DropdownMenuItem>
+                    )}
                     {conversation.git_branch && (
                       <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
                         {diffExpanded ? "Hide git diff" : "Show git diff"}

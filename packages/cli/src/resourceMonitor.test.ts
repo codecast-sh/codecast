@@ -6,6 +6,9 @@ import {
   collectSessionResources,
   formatResourcesLog,
   nextAwakeIdleMs,
+  encodeAwakeIdleSnapshot,
+  decodeAwakeIdleSnapshot,
+  AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS,
   shouldReportMetrics,
   isSessionActive,
   IDLE_METRICS_REFRESH_MS,
@@ -225,9 +228,26 @@ describe("resourceMonitor", () => {
       expect(idle).toBe(2 * TICK);
     });
 
-    it("resets to 0 when CPU is above the floor", () => {
+    it("pauses, but does not reset, on a CPU reading above the floor with a resting status", () => {
       const idle = nextAwakeIdleMs({ prevIdleMs: 5 * TICK, cpu: 25, status: "idle", elapsedMs: TICK, sleepSkip: false });
-      expect(idle).toBe(0);
+      expect(idle).toBe(5 * TICK);
+    });
+
+    it("a resting session that blips past the floor every twentieth tick still banks eight hours", () => {
+      // The regression: a resting Claude Code process crosses 2% on its own
+      // often enough that a reset on every such tick never let any session
+      // reach an 8h hibernate_idle_ms (0 parks in 246 passes, 2026-09-19).
+      const eightHours = 8 * 3600_000;
+      let idle = 0;
+      let ticks = 0;
+      while (ticks < 1200) {
+        ticks++;
+        const cpu = ticks % 20 === 0 ? 4.9 : 0.3;
+        idle = nextAwakeIdleMs({ prevIdleMs: idle, cpu, status: "idle", elapsedMs: TICK, sleepSkip: false });
+      }
+      // 1200 ticks, 60 of them paused: 1140 × 30s = 9.5h banked.
+      expect(idle).toBe(1140 * TICK);
+      expect(idle).toBeGreaterThanOrEqual(eightHours);
     });
 
     it("resets to 0 on a working status even at near-zero CPU (blocked on a tool/network call)", () => {
@@ -279,6 +299,27 @@ describe("resourceMonitor", () => {
     it("treats undefined status as not-working (idle accrues on low CPU)", () => {
       const idle = nextAwakeIdleMs({ prevIdleMs: 0, cpu: 0.0, status: undefined, elapsedMs: TICK, sleepSkip: false });
       expect(idle).toBe(TICK);
+    });
+  });
+
+  describe("awake idle snapshot", () => {
+    const NOW = 1_800_000_000_000;
+
+    it("carries the counters across a daemon restart", () => {
+      const banked = new Map([["a", 7 * 3600_000], ["b", 90_000]]);
+      const raw = encodeAwakeIdleSnapshot(banked, NOW);
+      expect(decodeAwakeIdleSnapshot(raw, NOW + 40_000)).toEqual(banked);
+    });
+
+    it("discards a snapshot older than the restore window", () => {
+      const raw = encodeAwakeIdleSnapshot(new Map([["a", 7 * 3600_000]]), NOW);
+      expect(decodeAwakeIdleSnapshot(raw, NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1).size).toBe(0);
+    });
+
+    it("restores nothing from a malformed file, a future stamp, or junk values", () => {
+      expect(decodeAwakeIdleSnapshot("{not json", NOW).size).toBe(0);
+      expect(decodeAwakeIdleSnapshot(JSON.stringify({ at: NOW + 60_000, idle: { a: 5 } }), NOW).size).toBe(0);
+      expect(decodeAwakeIdleSnapshot(JSON.stringify({ at: NOW, idle: { a: "9", b: -1, c: 0, d: 12 } }), NOW)).toEqual(new Map([["d", 12]]));
     });
   });
 

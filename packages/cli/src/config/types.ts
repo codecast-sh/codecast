@@ -191,7 +191,10 @@ export interface Config {
   // A session awake and idle for this long is parked whatever the fleet size.
   // The clock is awake idle time (machine sleep excluded), which the resource
   // monitor only measures on macOS, so on other platforms only the cap above
-  // does anything. 0 or absent = no idle bar.
+  // does anything. Only a working agent status restarts the clock; a CPU blip
+  // on a resting session pauses it for that tick (nextAwakeIdleMs). The clock
+  // lives in daemon memory, so a restart starts every session at zero and the
+  // first idle park lands this long after boot. 0 or absent = no idle bar.
   //
   // The daemon reads both knobs from the config it loaded at boot, so editing
   // them here changes nothing until the daemon restarts (`cast restart`).

@@ -2,7 +2,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { besideLeafId, leavesOf, seedLeafId } from "../../store/stageSplit";
-import { openBeside, openBrowserPane, performStageDrop, stageRenderLayout } from "../stage";
+import { openBeside, openBrowserPane, paneSessionId, performStageDrop, stageRenderLayout } from "../stage";
 import { parseBrowserRoute } from "../browserPane";
 
 // performStageDrop is the one entry point every drag source funnels into;
@@ -293,5 +293,24 @@ describe("stageRenderLayout", () => {
     const t = activeTab();
     expect(stageRenderLayout(t, true)).toEqual(leavesOf(t.layout)[1]);
     expect(stageRenderLayout(t, true).path).toBe("/docs");
+  });
+});
+
+describe("paneSessionId", () => {
+  const id = "jx78ksdh85pw088a1d2ce6ndgx83z42a";
+  it("a bare /conversation/<id> is the pane spelling", () => {
+    expect(paneSessionId(`/conversation/${id}`)).toBe(id);
+  });
+  it("a share link carries its token in the query: the conversation page must present and redeem it, not a bare pane", () => {
+    // Rachel opened /conversation/<id>?share=<token> while signed in and saw
+    // "This session is no longer available": the stage rendered a SessionPane
+    // for the id, dropping the token, and getConversation denied the id-only
+    // read (no redemption was ever recorded because ConversationPageClient
+    // never mounted).
+    expect(paneSessionId(`/conversation/${id}?share=d20fc511-7b8d-4efc-b482-c62d2f32b76e`)).toBeNull();
+    expect(paneSessionId(`/conversation/${id}?highlight=foo`)).toBeNull();
+  });
+  it("a message hash is the reveal band's business, not a pane match", () => {
+    expect(paneSessionId(`/conversation/${id}#msg-abc`)).toBeNull();
   });
 });
