@@ -10,6 +10,7 @@
 // The import itself is visible: while history comes over, each row counts the
 // lines that have landed (read from the store's link rows, which the server
 // updates page by page), so nobody has to wonder whether it is still working.
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useAction, useQuery } from "convex/react";
 import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -60,7 +61,7 @@ export function SlackChannelBrowser({
   onClose: () => void;
   onAdded?: (chatChannelId: string) => void;
 }) {
-  const team = useQuery(api.slackSync.getTeamSlack, { team_id: teamId } as any);
+  const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId } as any).data;
   const listChannels = useAction(api.slackSync.listSlackChannels);
   const linkChannel = useAction(api.slackSync.linkChannel);
   const getInstallUrl = useAction(api.slack.getInstallUrl);

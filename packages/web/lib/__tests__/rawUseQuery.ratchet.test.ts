@@ -24,7 +24,7 @@ const ALLOWLIST = join(import.meta.dir, "rawUseQuery.allowlist.txt");
 const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
 
 /** How many files subscribe with a plain useQuery today. May only fall. */
-const PIN = 44;
+const PIN = 43;
 
 const result = checkRatchet({
   name: "raw useQuery outside hooks",

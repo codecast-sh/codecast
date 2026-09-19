@@ -6,6 +6,7 @@
 // (one button that asks Slack for them), connected and ready (the switch, the
 // history window, and what the scan found). Everything it shows comes from
 // getTeamSlack, so the settings card and the browser cannot disagree.
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { AlertTriangle, Loader2, MessageSquareLock } from "lucide-react";
@@ -17,7 +18,7 @@ import { Switch } from "../ui/switch";
 import "./chat.css";
 
 export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: boolean }) {
-  const team = useQuery(api.slackSync.getTeamSlack, { team_id: teamId } as any);
+  const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId } as any).data;
   const setDmSync = useMutation(api.slackSync.setDmSync);
   const getInstallUrl = useAction(api.slack.getInstallUrl);
   const [busy, setBusy] = useState(false);
