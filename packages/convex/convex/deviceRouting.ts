@@ -87,11 +87,10 @@ export function pickOwnerDevice(
   },
   now: number,
 ): string | null {
-  const online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
-
   const paths = [opts.gitRoot, opts.projectPath].filter((p): p is string => !!p);
   const hasCheckout = (d: RoutableDevice) =>
     (d.local_project_roots ?? []).some((r) => paths.some((p) => pathUnderRoot(p, r)));
+  let online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
 
   // 1. Explicit pick, if online.
   if (opts.targetDeviceId && online.some((d) => d.device_id === opts.targetDeviceId)) {
@@ -118,6 +117,10 @@ export function pickOwnerDevice(
   if (opts.ownerDeviceId && online.some((d) => d.device_id === opts.ownerDeviceId)) {
     return opts.ownerDeviceId;
   }
+
+  const openable = devices.filter((d) => hasCheckout(d) || paths.every((p) => platformCanOpenPath(d.platform, p)));
+  if (openable.length > 0) devices = openable;
+  online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
 
   // From here a LOCAL device always outranks a remote; a remote only auto-owns
   // when it provably has the checkout (rung 5) or nothing else exists (rung 7).

@@ -54,7 +54,7 @@ const stable = (list: MachineCandidate[]): string | null =>
  * pin the mistake rather than let the server correct it.
  */
 const canOpen = (d: MachineCandidate, p?: string | null): boolean =>
-  !p || platformCanOpenPath(d.platform, p);
+  !p || deviceSeesPath(d, p) || platformCanOpenPath(d.platform, p);
 
 /** Openable candidates if any, else the whole pool — never return nothing. */
 const preferOpenable = (list: MachineCandidate[], p?: string | null): MachineCandidate[] => {
@@ -198,9 +198,10 @@ export function defaultMachineId(
   // 2. Your standing choice. A stale id (machine removed or asleep) isn't
   //    selectable, so fall through rather than highlight a chip that can't serve.
   const picked = lastPicked ? devices.find((d) => d.device_id === lastPicked) : undefined;
-  if (picked && canServe(picked)) return picked.device_id;
+  if (picked && canServe(picked) && (canOpen(picked, projectPath) || opts.wakeOk?.(picked))) return picked.device_id;
 
   const hasCheckout = (d: MachineCandidate) => !!projectPath && deviceSeesPath(d, projectPath);
+  devices = preferOpenable(devices, projectPath);
 
   const onlineLocals = devices.filter((d) => !d.is_remote && d.online);
   if (onlineLocals.length > 0) {
