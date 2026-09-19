@@ -5,7 +5,6 @@
 // except the meeting block, which renders nothing in a browser.
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
@@ -22,6 +21,10 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// react-dom/client decides at load whether a DOM exists, so it is loaded
+// here — after the globals above — not as a static import.
+const {createRoot, type Root} = await import("react-dom/client");
+
 let root: Root | undefined;
 const clientState = useInboxStore.getState().clientState;
 afterEach(async () => {
@@ -56,21 +59,23 @@ describe("call settings", () => {
     const sw = switches(await renderToMarkup(<CallSettings />));
     expect(sw["Camera on when I join"]).toBe(true);
     expect(sw["Microphone on when I join"]).toBe(true);
+    expect(sw["Microphone opens before I press"]).toBe(true);
     expect(sw["Sound effects"]).toBe(true);
   });
 
   test("an explicit off is shown off", async () => {
-    ui = { call_camera_on: false, call_mic_on: false, sounds_enabled: false };
+    ui = { call_camera_on: false, call_mic_on: false, call_mic_auto_open: false, sounds_enabled: false };
     const sw = switches(await renderToMarkup(<CallSettings />));
     expect(sw["Camera on when I join"]).toBe(false);
     expect(sw["Microphone on when I join"]).toBe(false);
+    expect(sw["Microphone opens before I press"]).toBe(false);
     expect(sw["Sound effects"]).toBe(false);
   });
 
   test("carries every block: join, devices, walkie, sounds", async () => {
     ui = {};
     const html = await renderToMarkup(<CallSettings />);
-    for (const t of ["When I join a call", "Devices", "Walkie", "Sounds", "Let teammates talk to me"]) {
+    for (const t of ["When I join a call", "Microphone", "Open before I press", "Devices", "Walkie", "Sounds", "Let teammates talk to me"]) {
       expect(html).toContain(t);
     }
     // The meeting block is the desktop's; in a browser it renders nothing.
