@@ -22,7 +22,7 @@ function DevicePermissionRow() {
   return <PermissionRow kind="notifications" readiness={readiness} onChange={refresh} />;
 }
 
-type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications";
+type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_idle_digest" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications";
 
 const NOTIF_SECTIONS = [
   {
@@ -31,6 +31,7 @@ const NOTIF_SECTIONS = [
     items: [
       { key: "team_session_start" as NotifType, label: "Team sessions", desc: "When a team member starts a session" },
       { key: "session_idle" as NotifType, label: "Session idle", desc: "When your session is waiting for input" },
+      { key: "session_idle_digest" as NotifType, label: "Hourly digest", desc: "Fold sessions waiting for input into one alert an hour instead of one each" },
       { key: "session_error" as NotifType, label: "Session errors", desc: "When a session encounters an error" },
       { key: "permission_request" as NotifType, label: "Permission requests", desc: "When a session needs your approval" },
     ],
@@ -60,6 +61,7 @@ const DEFAULT_PREFS = {
   mention: true,
   permission_request: true,
   session_idle: true,
+  session_idle_digest: true,
   session_error: true,
   task_activity: true,
   doc_activity: true,

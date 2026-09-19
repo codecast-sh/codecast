@@ -32,6 +32,7 @@ import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
   HIBERNATE_MAX_PER_PASS,
+  HIBERNATE_RESUME_GRACE_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -253,6 +254,7 @@ import {
   PASTE_END,
   PASTE_START,
   clientAcceptsBracketedPaste,
+  composerCollapsesPasteToChip,
   deliverTextIntoPane,
   pasteAndSubmitText,
   prepareInjectedContent,
@@ -1935,8 +1937,8 @@ const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waitin
 // server's report stays fresh enough to vouch for the status past the
 // quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
 const OPEN_TASKS_REFRESH_MS = 4 * 60_000;
-function openTasksRefreshDue(sessionId: string, now: number): boolean {
-  return now - (lastOpenTasksSentAt.get(sessionId) ?? 0) >= OPEN_TASKS_REFRESH_MS;
+export function openTasksRefreshDue(status: AgentStatus | undefined, taskCount: number, lastSentAt: number | undefined, now: number): boolean {
+  return (status === "waiting" || status === "dormant") && taskCount > 0 && now - (lastSentAt ?? 0) >= OPEN_TASKS_REFRESH_MS;
 }
 
 // Log the status carried on a heartbeat. Throttled per-session to once every
@@ -6411,17 +6413,25 @@ async function executeRemoteCommand(
         // Claude UUID. We were churning through kill → repair → reconstitute
         // → start-fresh for every such call, racing the tryStartedTmux path
         // that was already about to deliver the user's first message.
+        //
+        // "Just" is the whole condition. A start record lives for a day, and a
+        // pane that never linked (started here while another device owned the
+        // conversation) sits in it that long. Treating that record as a boot in
+        // progress made a transfer to this machine return here with nothing
+        // started and no delivery scheduled. Past the boot window the pane is
+        // replaced: it is torn down and the resume below starts a current one.
         if (conversationId) {
           const startedEntry = startedSessionTmux.get(conversationId);
-          if (startedEntry) {
-            const cache = readConversationCache();
-            const reverseCache = buildReverseConversationCache(cache);
-            const linkedSessionId = reverseCache[conversationId];
-            if (!linkedSessionId) {
-              log(`[REMOTE] Skipping resume for ${sessionId.slice(0, 8)} — conversation ${conversationId.slice(0, 12)} has a freshly started tmux (${startedEntry.tmuxSession}) that hasn't been linked yet; tryStartedTmux will handle delivery.`);
-              result = JSON.stringify({ skipped: true, reason: "fresh_session_unlinked" });
-              break;
-            }
+          const linked = !!startedEntry && !!buildReverseConversationCache(readConversationCache())[conversationId];
+          const guard = startedSessionGuard(startedEntry, linked);
+          if (startedEntry && guard === "skip_booting") {
+            log(`[REMOTE] Skipping resume for ${sessionId.slice(0, 8)} — conversation ${conversationId.slice(0, 12)} has a freshly started tmux (${startedEntry.tmuxSession}) that hasn't been linked yet; tryStartedTmux will handle delivery.`);
+            result = JSON.stringify({ skipped: true, reason: "fresh_session_unlinked" });
+            break;
+          }
+          if (startedEntry && guard === "replace_stale") {
+            log(`[REMOTE] Replacing stale started tmux ${startedEntry.tmuxSession} for conversation ${conversationId.slice(0, 12)}: unlinked ${Math.round((Date.now() - startedEntry.startedAt) / 60_000)}m after start`);
+            await teardownConversationBackendsLive(conversationId);
           }
         }
         let projectPath = parsed.project_path;
@@ -6949,7 +6959,7 @@ async function executeRemoteCommand(
 
           if (!reconstituted) {
             const existingStarted = startedSessionTmux.get(conversationId);
-            if (existingStarted && (Date.now() - existingStarted.startedAt) < 60_000) {
+            if (existingStarted && startedSessionGuard(existingStarted, false) === "skip_booting") {
               log(`[REMOTE] Fresh session ${existingStarted.tmuxSession} already started for ${conversationId.slice(0, 12)}, skipping duplicate`);
               result = JSON.stringify({ started_fresh: true, tmux_session: existingStarted.tmuxSession, deduplicated: true });
               break;
@@ -6989,6 +6999,10 @@ async function executeRemoteCommand(
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
               });
+              // Same redelivery contract as the resume branches above: a first
+              // message that exhausted its budget against the old pane, or on
+              // the previous owner, has to reach this one.
+              await clearConversationDeliveryAndResumeState(conversationId, undefined, "resume_session_blank");
               result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
               log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
             } catch (spawnErr) {
@@ -14103,7 +14117,7 @@ export function paneReconcileTarget(
     // waiting → idle, and without this leg nothing ever climbs back — the
     // session sits in needs-input while a live watcher stands. The re-derive
     // is O(transcript delta) and publishes only when the verdict changes.
-    return stored === undefined || staleActive || stored === "waiting" || stored === "idle" ? "idle" : null;
+    return stored === undefined || staleActive || stored === "waiting" || stored === "dormant" || stored === "idle" ? "idle" : null;
   }
   if (state === "busy") {
     // The settle verdicts count as quiet too: a busy pane over a parked
@@ -14145,7 +14159,7 @@ function reconcileStatusFromPane(
     // Unchanged status: send only to publish a report that moved, or the
     // periodic re-publish that keeps a "waiting" vouched for; otherwise
     // nothing.
-    if (pendingOpenTasksChanged(sessionId) || (stored === "waiting" && openTasksRefreshDue(sessionId, Date.now()))) {
+    if (pendingOpenTasksChanged(sessionId) || openTasksRefreshDue(stored, pendingOpenTaskReports.get(sessionId)?.length ?? 0, lastOpenTasksSentAt.get(sessionId), Date.now())) {
       sendAgentStatus(syncService, conversationId, sessionId, target);
     } else {
       pendingOpenTaskReports.delete(sessionId);
@@ -16398,6 +16412,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // prepareInjectedContent. Applies to poll free-text answers too: those are
   // usually one line, but nothing stops a user from writing several.
   const bracketed = clientAcceptsBracketedPaste(agentType);
+  // Whether the composer can COLLAPSE what we deliver into a paste chip, which
+  // a typed client never does however well its TUI handles a paste. Separate
+  // from `bracketed` on purpose: that one answers whether newlines survive.
+  const chipable = composerCollapsesPasteToChip(agentType);
   const poll = parsePollMessage(content);
   if (poll) {
     // Poll keys only mean anything against a live menu. A stale card click (the
@@ -16581,7 +16599,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     if (prior.phase === "paste" || settled) {
       try {
         gate = await awaitTmuxComposerPayload(target, sanitized, {
-          bracketedPaste: bracketed,
+          bracketedPaste: chipable,
           rePaste: async () => { throw new TmuxDeliveryUncertainError("the earlier paste has not appeared intact"); },
           allowRePaste: false,
           budgetMs: opts?.gateBudgetMs,
@@ -16620,7 +16638,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
     // match doubles as paste confirmation for the post-submit verifier.
     gate = await awaitTmuxComposerPayload(target, sanitized, {
-      bracketedPaste: bracketed,
+      bracketedPaste: chipable,
       prePaste,
       rePaste: delivery ? async () => { throw new TmuxDeliveryUncertainError("the paste has not appeared intact"); } : doPaste,
       allowRePaste: !delivery,
@@ -16706,7 +16724,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       pasteConfirmed,
       payloadObserved: !retryingSubmit && gate === "matched",
       contentPrefix,
-      bracketedPaste: bracketed,
+      bracketedPaste: chipable,
       chipLines: pasteChipLines(sanitized),
       pasteAt,
       paneTitleBefore,
@@ -19574,8 +19592,10 @@ async function publishLocalRepos(
 // This reaps a terminal ONLY when multiple independent ground-truth signals agree
 // it is finished, and writes every kill to a dedicated reaper.log so the action is
 // auditable. The signals (all must pass):
-//   - no transcript activity for REAP_IDLE_MS (file mtime) — long-quiet, which a
-//     genuine long-running tool never is (real tools finish in minutes)
+//   - no transcript activity for REAP_IDLE_MS (the newest real message; mtime only
+//     as the fast path when it is itself old — an idle agent touches its file
+//     hourly, see transcriptIdleMs) — long-quiet, which a genuine long-running
+//     tool never is (real tools finish in minutes)
 //   - the LIVE pane reads "idle" (classifyTmuxLiveState is a positive whitelist;
 //     a spinner / "esc to interrupt" / any modal reads non-idle and is skipped)
 //   - the transcript tail shows a COMPLETED turn (classifyTranscriptTail === idle;
@@ -19756,8 +19776,32 @@ async function paneChildCount(pid: number): Promise<number | null> {
 // time, and a PINNED card is visible even when killed (see shouldShowInInbox).
 // Unknown lifecycle fails CLOSED — the opposite of the resurrection gate,
 // because here the cautious move is to leave the agent running.
+export type StampedPaneReapFacts = {
+  /** The daemon's last sent status: "waiting" = open background work, "dormant" = a machine wakes it. */
+  agentStatus?: AgentStatus;
+  /** Undelivered messages are queued for the conversation. */
+  pendingMessages: boolean;
+  /** A resume or a delivery is landing in the pane right now. */
+  deliveryActive: boolean;
+  /** A subagent of this session is still writing its own transcript. */
+  subagentsLive: boolean;
+  /** Hibernation or a send holds the tmux target. */
+  targetLocked: boolean;
+  /** Since the session was last resumed; a fresh resume has produced nothing to judge yet. */
+  resumedAgoMs: number;
+};
+
+// Out of the inbox is necessary, not sufficient. A parked session that is
+// WAITING on something keeps its process, because the wait lives inside it:
+// open background work (a Monitor or a background task dies with the agent),
+// a declared machine wake, queued messages nobody has delivered, a delivery
+// landing this instant, a live subagent, a tmux target another path holds, or
+// a resume still settling. The same facts hibernation refuses on, read from
+// the same sources, so the two teardowns cannot disagree about what "waiting"
+// means.
 export function stampedPaneReapEligibility(
   lifecycle: ConversationLifecycle | null | undefined,
+  facts?: StampedPaneReapFacts,
 ): { eligible: boolean; reason: string | null } {
   // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
   // hide state at all, and reading its silence as "inbox-visible" would put a lie
@@ -19768,6 +19812,14 @@ export function stampedPaneReapEligibility(
   if (lifecycle.inboxPinnedAt) return { eligible: false, reason: "pinned" };
   const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
   if (!hidden) return { eligible: false, reason: "inbox-visible" };
+  if (!facts) return { eligible: true, reason: null };
+  if (facts.agentStatus === "waiting") return { eligible: false, reason: "open-background-work" };
+  if (facts.agentStatus === "dormant") return { eligible: false, reason: "dormant" };
+  if (facts.pendingMessages) return { eligible: false, reason: "pending-messages" };
+  if (facts.deliveryActive) return { eligible: false, reason: "delivery-active" };
+  if (facts.subagentsLive) return { eligible: false, reason: "live-subagents" };
+  if (facts.targetLocked) return { eligible: false, reason: "in-flight-messages" };
+  if (facts.resumedAgoMs < HIBERNATE_RESUME_GRACE_MS) return { eligible: false, reason: "recently-resumed" };
   return { eligible: true, reason: null };
 }
 
@@ -19959,6 +20011,22 @@ export function tmuxSessionIsSinglePane(listPanesStdout: string): boolean {
   return panes.length === 1;
 }
 
+// The idle clock of a LIVE agent at its prompt. File mtime lies upward: an idle
+// Claude Code process refreshes its transcript's mtime about hourly with no new
+// content (2026-09-19: 104 of the 117 transcripts touched in one hour belonged
+// to live idle panes whose newest real message was 14 to 36 hours old), so a
+// clock read from mtime alone called every parked session "active" and the
+// reaper retired nothing for a day while 120 agents held 43 GB. The newest REAL
+// message is the honest clock; mtime is only the fallback when no message
+// carries a timestamp (a codex transcript, a tail of meta lines). This measures
+// idleness, never liveness: whether the agent is mid-turn is the pane's and the
+// tail's call, and the delivery gates in stampedPaneReapEligibility cover the
+// instant between an injected message and the agent's first line about it.
+export function transcriptIdleMs(input: { mtimeMs: number; lastRealTimestampMs: number | null; now: number }): number {
+  if (input.lastRealTimestampMs === null) return input.now - input.mtimeMs;
+  return input.now - input.lastRealTimestampMs;
+}
+
 // The reason a terminal is NOT safe to reap, or null if it passed every gate.
 // On success returns the resolved transcript path + idle age so the caller need
 // not re-scan. Cheapest gates first (idle-age before the pane/tail reads).
@@ -19969,16 +20037,26 @@ async function reapBlockReason(
   if (!file) return { reason: "no-transcript" };
   const classifyTail = classifyTranscriptTailFor(file.agentType);
   if (!classifyTail) return { reason: `agent=${file.agentType}` };
-  let idleMs: number;
-  try { idleMs = now - fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
-  if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
+  let mtimeMs: number;
+  try { mtimeMs = fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
+  // An old mtime is old for real (a file is never older than its newest line),
+  // so it stays the free fast path. A young one proves nothing and is checked
+  // against the content — see transcriptIdleMs.
+  let tail: string | null = null;
+  let idleMs = now - mtimeMs;
+  if (idleMs < REAP_IDLE_MS) {
+    try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+    idleMs = transcriptIdleMs({ mtimeMs, lastRealTimestampMs: transcriptTailLastRealTimestamp(tail), now });
+    if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
+  }
   let pane: string;
   try { ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 })); }
   catch { return { reason: "pane-capture-failed" }; }
   const live = classifyLivePaneFor(file.agentType, pane);
   if (live !== "idle") return { reason: `pane=${live}` };
-  let tail: string;
-  try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  if (tail === null) {
+    try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  }
   const turn = classifyTail(tail);
   let idleHours = Math.round(idleMs / 3600000);
   if (turn !== "idle") {
@@ -20137,7 +20215,14 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       const lifecycle = convId && syncServiceRef
         ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
         : null;
-      const eligibility = stampedPaneReapEligibility(lifecycle);
+      const eligibility = stampedPaneReapEligibility(lifecycle, {
+        agentStatus: lastSentAgentStatus.get(sessionId),
+        pendingMessages: !!lifecycle?.hasPendingMessages,
+        deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
+        subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
+        targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
+        resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
+      });
       if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
       const gcWorktree = !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
       if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
@@ -20907,7 +20992,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   // waiting (might have drained back to idle / woken to working). The scan
   // behind it is primed above, so it costs only the delta.
   const needsTaskScan = file.agentType === "claude" &&
-    (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
+    (stored === "waiting" || stored === "dormant" || reconciledStatus(stored, turn) === "idle");
   const openTasks = needsTaskScan ? verifiedOpenTasks(file.path, sessionId) : [];
   const hasOpenTasks = openTasks.length > 0;
   // The stamp read is a single small file, paid only when a settle correction
@@ -20919,7 +21004,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   // OPEN_TASKS_REFRESH_MS); nothing else about the status changes.
   if (needsTaskScan) pendingOpenTaskReports.set(sessionId, toOpenTaskReports(openTasks));
   const refresh = !corrected && needsTaskScan &&
-    (pendingOpenTasksChanged(sessionId) || (stored === "waiting" && hasOpenTasks && openTasksRefreshDue(sessionId, Date.now())));
+    (pendingOpenTasksChanged(sessionId) || openTasksRefreshDue(stored, openTasks.length, lastOpenTasksSentAt.get(sessionId), Date.now()));
   if (!corrected && !refresh) { pendingOpenTaskReports.delete(sessionId); return; }
   // Only now (a correction is warranted) pay the conversation-cache read.
   const conversationId = readConversationCache()[sessionId];
@@ -21287,6 +21372,21 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
 // MAX_RESUME_READINESS_POLL_MS, so a boot under load (seven launches in one
 // second has been observed) still binds.
 const DISCOVERY_POLL_ATTEMPTS = 60;
+const DISCOVERY_POLL_INTERVAL_MS = 2000;
+
+/** How long an unlinked start record counts as a boot in progress: the budget
+ * discovery polls the pane for. After it nothing is still trying to link. */
+export const STARTED_SESSION_BOOT_WINDOW_MS = DISCOVERY_POLL_ATTEMPTS * DISCOVERY_POLL_INTERVAL_MS;
+
+/** What resume_session does about a conversation's start record. */
+export function startedSessionGuard(
+  entry: { startedAt: number } | undefined,
+  linked: boolean,
+  now: number = Date.now(),
+): "proceed" | "skip_booting" | "replace_stale" {
+  if (!entry || linked) return "proceed";
+  return now - entry.startedAt < STARTED_SESSION_BOOT_WINDOW_MS ? "skip_booting" : "replace_stale";
+}
 
 async function discoverAndLinkSession(
   conversationId: string,
@@ -21331,7 +21431,7 @@ async function discoverAndLinkSession(
   };
 
   for (let attempt = 0; attempt < DISCOVERY_POLL_ATTEMPTS; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, DISCOVERY_POLL_INTERVAL_MS));
     const entry = startedSessionTmux.get(conversationId);
     if (!entry) {
       log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);

@@ -581,6 +581,18 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
     capabilities: { panePromptMonitoring: true, fork: true, reconstitute: true, bracketedPaste: true },
+    // Why: Claude Code 2.1.277 (2026-09-18) wraps EVERY bracketed paste in a
+    // `<pasted_content id="…">` block, whatever its size, and its own system
+    // prompt tells the model that instructions inside such a block carry no
+    // user authority. A delivered message is the whole turn, so the human's own
+    // words arrived as quoted third party text and sessions discounted them
+    // (jx7d91e refused a brief on exactly that ground). A long paste is also
+    // read in chunks and each chunk is wrapped separately: a 5.9 KB brief
+    // arrived as five blocks split mid word. Typed input carries none of that,
+    // and Claude's composer takes Ctrl+J as a literal newline, so typing keeps
+    // a multi-line message whole. The pane still ENABLES bracketed paste, which
+    // is what the capability above reports; we simply stop using the gesture.
+    typedComposerInput: { newlineKey: "C-j" },
     // All verified by driving the real CLI in a sandbox HOME (2026-08-12/13).
     // Plugins live in settings.json; MCP lives in ~/.claude.json (`enabledPlugins`
     // read back null there) — the two files must not be conflated. `~/.agents/skills`

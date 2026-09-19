@@ -115,8 +115,16 @@ export function sessionPanePath(sessionId: string): string {
   return `/conversation/${sessionId}`;
 }
 
+/** The session a pane path names, or null when the path is not the bare pane
+ *  spelling. A /conversation URL that carries a query is a PAGE entry, not a
+ *  pane: a share link (`?share=<token>`), a highlight, a prefill. The
+ *  conversation page owns those — it presents the token, redeems it for the
+ *  signed-in viewer, and only then redirects into the inbox. Painting a
+ *  SessionPane for the id instead drops the token, and every id-only read
+ *  denies: the viewer sees "This session is no longer available" on a link
+ *  that works logged out. */
 export function paneSessionId(path: string): string | null {
-  const m = path.split("?")[0].match(/^\/conversation\/([^/#]+)$/);
+  const m = path.match(/^\/conversation\/([^/?#]+)$/);
   return m ? m[1] : null;
 }
 

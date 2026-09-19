@@ -1247,10 +1247,16 @@ pre[class*="language-"] {
   [data-cc-mobile-drawer="right"] {
     padding-right: env(safe-area-inset-right);
   }
-  /* The rail's rows (the same selector set the simple view tightens above). */
-  .cc-mobile-drawer [data-sv-nav] button.w-full,
-  .cc-mobile-drawer [data-sv-nav] a.w-full,
-  .cc-mobile-drawer [data-sv-nav] [data-nav-row] {
+  /* The rail inside a drawer. The visual styles further down (simple view,
+     minimal) size the same rows with equal specificity and win by order, so
+     these name the drawer twice to hold on a phone whatever style is active. */
+  /* The drawer header already spaces the rail from the top edge. */
+  .cc-mobile-drawer[data-cc-mobile-drawer] [data-sv-nav] {
+    padding-top: 4px;
+  }
+  .cc-mobile-drawer[data-cc-mobile-drawer] [data-sv-nav] button.w-full,
+  .cc-mobile-drawer[data-cc-mobile-drawer] [data-sv-nav] a.w-full,
+  .cc-mobile-drawer[data-cc-mobile-drawer] [data-sv-nav] [data-nav-row] {
     min-height: 44px;
   }
 }
@@ -4149,34 +4155,25 @@ pre[class*="language-"] {
 }
 
 /* ==== Minimal: rest on the conversation ====================================
-   At rest a Minimal conversation is a title, a transcript and a composer.
-   Everything else is still there and still in the DOM: it fades in when the
-   pointer reaches its region or the keyboard focuses into it, and the session
-   menu, the context menus and the command palette carry every action too.
-   Pointer devices only: a touch screen has no hover, and there the header's
-   own squeeze already folds these controls into the session menu. */
-@media (hover: hover) and (pointer: fine) {
-  .minimal-style [data-sv-convhead] [data-cc-conv-meta],
-  .minimal-style [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
-  .minimal-style [data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle],
-  .minimal-style [data-cc-topbar] .people-bar:not([data-holding], :has([data-rx], [data-tx], [data-joined], [data-hold])),
-  .minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
-  .minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div {
-    opacity: 0;
-    transition: opacity 220ms ease 320ms;
-  }
-  .minimal-style [data-sv-convhead]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-conv-meta] {
-    opacity: 0.78;
-    transition: opacity 140ms ease;
-  }
-  .minimal-style [data-sv-convhead]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-conv-actions] > :not([data-cc-keep]),
-  .minimal-style [data-sv-convhead]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-conv-actions] [data-huddle-idle],
-  .minimal-style [data-cc-topbar]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) .people-bar,
-  .minimal-style [data-cc-topbar]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
-  .minimal-style [data-cc-topbar]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div {
-    opacity: 1;
-    transition: opacity 140ms ease;
-  }
+   A Minimal conversation is a title, a transcript and a composer. The header's
+   metadata and icon actions, the top bar's people row and account cluster,
+   the session list's filter chips and view tools are hidden, not faded: the
+   session menu at the end of the header carries every action (search, view
+   density, copy link, send to chat, restart, rename, resume commands, thinking,
+   git diff, branch map, model and agent), the command palette carries the
+   terminal and the pages, and the context menus carry the rest. What must
+   never disappear does not: a live status, a live huddle, a daemon warning, an
+   open search, a filter that is narrowing the list, the blocked sessions alert,
+   and a call in the people row. The list's view tools stay: the team inbox
+   switch and favorites have no other door. */
+.minimal-style [data-sv-convhead] [data-cc-conv-meta],
+.minimal-style [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
+.minimal-style [data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle],
+.minimal-style [data-cc-topbar] .people-bar:not([data-holding], :has([data-rx], [data-tx], [data-joined], [data-hold])),
+.minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
+.minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div,
+.minimal-style [data-sv-rail] [data-sv-label-chips]:not(:has([aria-pressed="true"])) {
+  display: none !important;
 }
 
 /* The session menu is the one header control that never hides. */
@@ -4230,7 +4227,16 @@ pre[class*="language-"] {
 /* Turns carry no name row: the side of the page says who spoke, and the time
    is on the turn's tooltip and in the divider between sittings. */
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] {
+  margin: 0;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] > :not([data-cc-bookmarked]) {
   display: none;
+}
+/* The one thing the row still shows: the bookmark you put on the message. */
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] > [data-cc-bookmarked] {
+  width: 12px;
+  height: 12px;
+  margin-bottom: 6px;
 }
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-overflow] .text-xs {
   display: none;
@@ -4328,23 +4334,6 @@ pre[class*="language-"] {
   font-weight: 600;
 }
 
-/* The session list rests on its rows. The label chips and the view tools come
-   forward when the pointer reaches the head; a chip that is filtering the list
-   never hides, because a filtered list with no visible filter reads as lost
-   sessions, and neither does the blocked sessions alert. */
-@media (hover: hover) and (pointer: fine) {
-  .minimal-style [data-sv-rail] [data-sv-label-chips]:not(:has([aria-pressed="true"])),
-  .minimal-style [data-sv-rail] [data-sv-head-tools] > :not([data-cc-keep]) {
-    opacity: 0;
-    transition: opacity 220ms ease 320ms;
-  }
-  .minimal-style [data-sv-rail] .cc-panel__head:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-sv-label-chips],
-  .minimal-style [data-sv-rail] .cc-panel__head:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-sv-head-tools] > * {
-    opacity: 1;
-    transition: opacity 140ms ease;
-  }
-}
-
 /* A row says what the session is and where it stands. The last prompt, the
    branch and the lineage are one click away inside the session. */
 .minimal-style [data-sv-rail] [data-sv-prompt],
@@ -4358,6 +4347,324 @@ pre[class*="language-"] {
 .minimal-style.inbox-compact [data-sv-rail] [data-session-id] > [role="button"],
 .minimal-style .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
   padding-block: 7px;
+}
+
+
+/* ==== Minimal: one type scale, one inset, one head height =================
+   Four sizes: 15 for what you read and write (prose, bubbles, composer, the
+   conversation title), 13 for what you scan (session rows, navigation, tabs,
+   the search field), 12 for the line under a title (state, summary, strips),
+   11 for marks (chips, times, counts). Three weights: 400, 500 for a chip,
+   600 for a name or a title. Every panel starts its content 16px from its
+   edge and every panel head is 44px tall, so the header, the tab strip and the
+   list head share one line across the screen. */
+.minimal-style {
+  --cc-inset: 16px;
+  --cc-panel-head-h: 44px;
+  --t-read: 15px;
+  --t-ui: 13px;
+  --t-sub: 12px;
+  --t-mark: 11px;
+}
+
+/* Conversation header */
+.minimal-style [data-sv-convhead] .cc-panel__head {
+  height: var(--cc-panel-head-h);
+  min-height: var(--cc-panel-head-h);
+  padding-inline: var(--cc-inset) 10px;
+  gap: 10px;
+}
+.minimal-style [data-sv-convhead] .cc-panel__title {
+  font-size: var(--t-read);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: var(--sol-text);
+}
+.minimal-style [data-sv-convhead] [data-cc-conv-status] {
+  height: 22px;
+  padding-inline: 9px;
+  font-family: var(--font-ui);
+  font-size: var(--t-mark);
+  font-weight: 500;
+}
+.minimal-style [data-cc-context-panel] > button {
+  min-height: 34px;
+  padding: 0 var(--cc-inset);
+  font-size: var(--t-sub);
+}
+.minimal-style [data-cc-context-panel] > button .font-mono {
+  font-size: var(--t-mark);
+}
+
+/* Top bar and tab strip */
+.minimal-style [data-cc-topbar] {
+  border-bottom-color: var(--cc-panel-rule);
+}
+.minimal-style [data-cc-topbar-search] input {
+  font-size: var(--t-ui);
+}
+.minimal-style [data-cc-tabbar] {
+  height: 36px;
+  padding-inline: 10px;
+  border-bottom-color: var(--cc-panel-rule);
+  background: var(--sol-bg);
+  font-family: var(--font-ui);
+  font-size: var(--t-sub);
+}
+.minimal-style [data-cc-tabbar] button,
+.minimal-style [data-cc-tabbar] a {
+  border-radius: 7px;
+}
+
+/* Left navigation */
+.minimal-style [data-sv-nav] {
+  padding-inline: 8px;
+  font-size: var(--t-ui);
+}
+.minimal-style [data-sv-nav] .text-sm,
+.minimal-style [data-sv-nav] [data-nav-row],
+.minimal-style [data-sv-nav] button.w-full,
+.minimal-style [data-sv-nav] a.w-full {
+  font-size: var(--t-ui);
+  font-weight: 400;
+}
+.minimal-style [data-sv-nav] button.w-full,
+.minimal-style [data-sv-nav] a.w-full,
+.minimal-style [data-sv-nav] [data-nav-row] {
+  min-height: 30px;
+  padding: 5px 8px;
+}
+.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row]):is([aria-current="page"], .bg-sol-bg-highlight, [data-active="true"]) {
+  font-weight: 600;
+}
+.minimal-style [data-sv-nav] .uppercase {
+  margin: 16px 8px 4px;
+  font-size: var(--t-mark);
+  font-weight: 500;
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-nav] [data-sv-count] {
+  font-size: var(--t-mark);
+  font-weight: 500;
+}
+
+/* Session list */
+.minimal-style [data-sv-rail] .cc-panel__head {
+  height: var(--cc-panel-head-h);
+  min-height: var(--cc-panel-head-h);
+  padding-inline: var(--cc-inset) 10px;
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] button,
+.minimal-style [data-sv-rail] [data-sv-controls] button {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] button:hover,
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[aria-pressed="true"],
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"] {
+  color: var(--sol-text);
+}
+.minimal-style [data-sv-rail] [data-session-id] > [role="button"] {
+  padding: 10px var(--cc-inset);
+}
+.minimal-style.inbox-compact [data-sv-rail] [data-session-id] > [role="button"],
+.minimal-style .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
+  padding: 8px var(--cc-inset);
+}
+.minimal-style [data-sv-rail] [data-sv-title] {
+  font-size: var(--t-ui);
+  font-weight: 400;
+  line-height: 1.3;
+  letter-spacing: -0.004em;
+}
+.minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
+  font-weight: 600;
+  color: var(--sol-text);
+}
+.minimal-style [data-sv-rail] [data-sv-title] > span.truncate {
+  font-weight: 400;
+  color: var(--sol-text-secondary);
+}
+.minimal-style [data-sv-rail] [data-active="true"] [data-sv-title] > span.truncate {
+  color: var(--sol-text);
+}
+.minimal-style [data-sv-rail] [data-sv-titlerow] {
+  gap: 8px;
+}
+.minimal-style [data-sv-rail] [data-sv-state],
+.minimal-style [data-sv-rail] [data-sv-summary] {
+  margin-top: 3px;
+  font-size: var(--t-sub);
+  line-height: 1.45;
+}
+.minimal-style [data-sv-rail] [data-sv-state] > span:not([data-sv-status-chip]) {
+  font-size: var(--t-sub);
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-sv-rail] [data-sv-status-chip] {
+  margin-top: 0;
+  font-size: var(--t-mark);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.minimal-style [data-sv-rail] [data-sv-meta] {
+  margin-top: 5px;
+  font-size: var(--t-mark);
+  opacity: 1;
+}
+.minimal-style [data-sv-rail] [data-sv-meta] .text-\[10px\],
+.minimal-style [data-sv-rail] [data-sv-meta] .text-\[9px\],
+.minimal-style [data-sv-rail] [data-sv-status] .tabular-nums {
+  font-size: var(--t-mark);
+  font-weight: 400;
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-sv-sec] {
+  padding: 14px var(--cc-inset) 4px;
+  font-size: var(--t-sub);
+  font-weight: 500;
+}
+.minimal-style [data-sv-rail] [data-sv-sec] > span {
+  font-size: var(--t-sub);
+}
+.minimal-style [data-sv-rail] [data-schedstrip],
+.minimal-style [data-sv-rail] [data-schedrow] {
+  padding-inline: var(--cc-inset);
+  font-size: var(--t-sub);
+}
+.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\],
+.minimal-style [data-sv-rail] [data-schedstrip] .text-\[10px\] {
+  font-size: var(--t-sub);
+}
+.minimal-style [data-sv-rail] [data-sv-hidden-head] {
+  padding-inline: var(--cc-inset);
+  font-size: var(--t-sub);
+}
+
+/* Transcript */
+.minimal-style [data-cc-conversation] [data-sv-feed] .prose {
+  font-size: var(--t-read);
+  line-height: 1.7;
+}
+.minimal-style [data-cc-conversation] [data-sv-sticky] .text-sm,
+.minimal-style [data-cc-conversation] [data-sv-sticky] .prose {
+  font-size: var(--t-read);
+  line-height: 1.55;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-tool-receipt],
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-compact-turn],
+.minimal-style [data-cc-conversation] [data-sv-feed] button[class*="border-dashed"] {
+  border-style: solid;
+  border-color: var(--cc-panel-rule);
+  font-family: var(--font-ui);
+  font-size: var(--t-sub);
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] .text-\[10px\],
+.minimal-style [data-cc-conversation] [data-sv-feed] .text-\[11px\] {
+  font-size: var(--t-mark);
+}
+.minimal-style [data-cc-thread-state] > div > div > div {
+  font-family: var(--font-ui);
+  font-size: var(--t-sub);
+}
+.minimal-style [data-cc-thread-state] .text-\[10px\],
+.minimal-style [data-cc-thread-state] .text-\[11px\] {
+  font-size: var(--t-mark);
+}
+.minimal-style [data-cc-conversation] [data-sv-composer] textarea {
+  font-size: var(--t-read);
+}
+.minimal-style [data-cc-conversation] [data-cc-composer-meta] p {
+  font-size: var(--t-mark);
+}
+
+/* ==== Minimal: one ink =====================================================
+   Color in Minimal marks a state (needs input, running, failed) and your own
+   bubble. It does not label kinds of things: section heads, pins, workflow and
+   background cards and their small caps labels all read in the page's ink, in
+   sentence case, on the same quiet surface as the other receipts. */
+.minimal-style [data-sv-rail] [data-sv-sec],
+.minimal-style [data-sv-rail] [data-sv-sec] > span,
+.minimal-style [data-sv-rail] [data-sv-sec] svg {
+  color: var(--sol-text-muted) !important;
+  border-bottom-color: var(--cc-panel-rule) !important;
+}
+.minimal-style [data-sv-rail] [data-sv-pin] button {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-sv-pin] svg {
+  width: 12px;
+  height: 12px;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) {
+  margin-inline: 0;
+  border: 1px solid var(--cc-panel-rule);
+  border-radius: 10px;
+  background: var(--sol-bg-alt);
+  font-family: var(--font-ui);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-feed-card] > div:first-child {
+  border-bottom-color: var(--cc-panel-rule);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] .uppercase:not([class*="red"]) {
+  color: var(--sol-text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-mark);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  display: inline-block;
+}
+/* Labels written in lower case for the small caps treatment start a sentence now. */
+.minimal-style [data-cc-conversation] [data-sv-feed] .uppercase:not([class*="red"])::first-letter {
+  text-transform: uppercase;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) > div > svg:first-child {
+  color: var(--sol-text-dim);
+}
+
+/* ==== Minimal: plain words, not machinery ==================================
+   The person reading Minimal is not an engineer. [data-cc-tech] marks a detail
+   only an engineer wants: an id, a shell line, a token count, a kind label, an
+   agent count. Minimal hides every one of them, and Classic shows them all.
+   What is left of a background job or a workflow is one quiet receipt, in the
+   same shape as "ran 3 commands": what it is for, and how it ended. The echo
+   that says a job completed is dropped, because the receipt already says done;
+   a job that failed, timed out or was stopped keeps its line.
+   The strips under the header (the trigger that runs the session, its plan,
+   its workflow) are tucked away too; "Show schedule and plan" in the session
+   menu or the command palette brings them back. */
+.minimal-style [data-cc-conversation] [data-cc-tech],
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-feed-card][data-status="completed"],
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-wf-summary]:has(> .line-clamp-2),
+.minimal-style [data-cc-conversation]:not([data-cc-context]) [data-cc-context-panel] {
+  display: none !important;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) {
+  width: fit-content;
+  max-width: 100%;
+  margin-block: 6px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sol-text-muted);
+  font-size: var(--t-sub);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) > div:first-child,
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-feed-card]:not(:has(> div)) {
+  padding: 5px 10px;
+  gap: 8px;
+  border-bottom: 0;
+  align-items: center;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) .text-xs,
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) .text-sol-text {
+  font-size: var(--t-sub);
+  font-weight: 400;
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] :is([data-cc-feed-card], [data-cc-monitor-card]) .ml-auto {
+  margin-left: 4px;
 }
 
 .minimal-style [role="dialog"] {

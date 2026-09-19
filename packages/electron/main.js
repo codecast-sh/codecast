@@ -53,6 +53,9 @@ for (const dir of ["downloads", "temp"]) {
 }
 
 const { pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+// The desktop's apps (Chat, Work): which routes live in a window of their own.
+// An ES module the web bundle imports too, so both sides read one table.
+const { appForRoute, placeRoute, isDesktopApp, DESKTOP_APPS } = require("./appWindows.mjs");
 const {
   shouldHandBackCall,
   shouldHideCallWindow,
@@ -199,7 +202,29 @@ app.on("open-url", (e, url) => {
   }
 });
 
+// The window a deep link lands in: the Chat or Work window when the link's
+// path is theirs and the window exists, else the main window. An app window
+// gets the link straight (its preload buffers until the page subscribes); the
+// main window keeps the load-aware hold below.
+function deepLinkTarget(url) {
+  let route = null;
+  try {
+    const u = new URL(url);
+    route = u.hostname === "open" ? u.pathname : `/${u.hostname}${u.pathname}`;
+  } catch {}
+  const place = route ? placeRoute(route, null, openAppWindows()) : "here";
+  const win = isDesktopApp(place) ? appWindowFor.get(place) : null;
+  return win && !win.isDestroyed() ? win : null;
+}
+
 function handleDeepLink(url) {
+  const appWin = deepLinkTarget(url);
+  if (appWin) {
+    appWin.show();
+    appWin.focus();
+    appWin.webContents.send("deep-link", url);
+    return;
+  }
   if (!mainWindow) { deepLinkUrl = url; return; }
   mainWindow.show();
   mainWindow.focus();
@@ -389,7 +414,7 @@ function sanitizeTabPath(navPath) {
 
 // The window itself, hidden and unpositioned. Both the cold path and the warm
 // spare build one of these; only what gets loaded into it differs.
-function buildTabWindow() {
+function buildTabWindow(extraArgs = []) {
   const zoom = getAutoZoomFactor();
   const win = new BrowserWindow({
     width: 1100,
@@ -401,7 +426,7 @@ function buildTabWindow() {
     webPreferences: {
       ...preloadPrefs(),
       zoomFactor: zoom,
-      additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window"],
+      additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window", ...extraArgs],
       // Same as the main window: keep live-query WebSockets delivering while
       // the window sits unfocused behind others.
       backgroundThrottling: false,
@@ -521,7 +546,12 @@ function createTabWindow(navPath) {
 
 ipcMain.handle("detach-tab", (_e, navPath) => {
   const clean = sanitizeTabPath(navPath);
-  if (clean) createTabWindow(clean);
+  if (!clean) return;
+  // A chat or work path broken out is that app's window, not a plain window:
+  // one Chat window, one Work window, so a second breakout raises the first.
+  const app = appForRoute(clean);
+  if (app) createAppWindow(app, clean);
+  else createTabWindow(clean);
 });
 
 ipcMain.handle("attach-tab", (e, navPath) => {
@@ -542,6 +572,133 @@ ipcMain.handle("attach-tab", (e, navPath) => {
 });
 
 // ---------------------------------------------------------------------------
+// App windows: Chat and Work, each a singleton window of its own.
+//
+// The person keeps them beside the main window the way they keep Slack beside
+// an editor. Each is a detached tab window (buildTabWindow, so every rule
+// about a borrowed tab shell applies) flagged with --app-window=<app>, which
+// the renderer reads to draw the app's own compact header instead of the
+// dashboard chrome. Which routes belong to which app is appWindows.mjs, the
+// one table the shell and the web share; routeToWindow below applies it to
+// every path the shell is asked to land, so chat stays in the Chat window and
+// a session always lands in the main window, whatever the entry point.
+// ---------------------------------------------------------------------------
+
+const APP_WINDOW_SIZE = { width: 1100, height: 760, minWidth: 700, minHeight: 500 };
+const appWindowFor = new Map(); // app → BrowserWindow
+
+function loadAppWindowState(app) {
+  const all = loadFullSettings().appWindows;
+  const saved = all && typeof all === "object" ? all[app] : null;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function saveAppWindowBounds(app, win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  const all = loadFullSettings().appWindows;
+  updateSettings({ appWindows: { ...(all && typeof all === "object" ? all : {}), [app]: { bounds: win.getBounds() } } });
+}
+
+// Dragging and resizing fire continuously; save once the gesture settles, and
+// once more on close so the last move is never lost.
+function persistBounds(win, save) {
+  let timer = null;
+  const later = () => {
+    clearTimeout(timer);
+    timer = setTimeout(save, 400);
+  };
+  win.on("move", later);
+  win.on("resize", later);
+  win.on("close", () => {
+    clearTimeout(timer);
+    save();
+  });
+}
+
+/** The app a window is, or null for the main window and plain breakouts. */
+function appOf(win) {
+  for (const [app, w] of appWindowFor) if (w === win) return app;
+  return null;
+}
+
+/** Which app windows exist right now, as the role broadcast and the router see them. */
+function openAppWindows() {
+  const out = {};
+  for (const [app, win] of appWindowFor) if (!win.isDestroyed()) out[app] = true;
+  return out;
+}
+
+function createAppWindow(app, navPath = null) {
+  const existing = appWindowFor.get(app);
+  if (existing && !existing.isDestroyed()) {
+    if (navPath) sendNavigate(existing, navPath);
+    existing.show();
+    existing.focus();
+    return existing;
+  }
+  const win = buildTabWindow([`--app-window=${app}`]);
+  const bounds = clampToVisibleDisplay(loadAppWindowState(app).bounds, APP_WINDOW_SIZE);
+  if (bounds) win.setBounds(bounds);
+  else if (mainWindow && !mainWindow.isDestroyed()) {
+    // First open: beside the main window rather than on top of it.
+    const base = mainWindow.getBounds();
+    win.setPosition(base.x + 60, base.y + 60);
+  }
+  appWindowFor.set(app, win);
+  win.loadURL(`${currentBaseUrl}${navPath || DESKTOP_APPS[app].home}`);
+  win.once("ready-to-show", () => win.show());
+  persistBounds(win, () => saveAppWindowBounds(app, win));
+  win.on("closed", () => {
+    if (appWindowFor.get(app) === win) appWindowFor.delete(app);
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+// Land a path in the window that owns it: the app window when the path
+// belongs to an app that has one, else the main window (booted if it is
+// gone), else the asking window itself. `from` is the renderer asking, so a
+// Chat window asking for a session hands it to the main window.
+function routeToWindow(navPath, from = null) {
+  const here = from ? appOf(from) : null;
+  const place = placeRoute(navPath, here, openAppWindows());
+  let win = null;
+  if (place === "here" && from && !from.isDestroyed()) win = from;
+  else if (place === "here" || place === "main") win = mainWindow;
+  else win = appWindowFor.get(place);
+  if (!win || win.isDestroyed()) {
+    // No main window (macOS keeps the app alive with every window closed):
+    // boot one and let the deep-link buffer deliver the path on load.
+    deepLinkUrl = `codecast://open${navPath}`;
+    createWindow();
+    return true;
+  }
+  win.show();
+  win.focus();
+  sendNavigate(win, navPath);
+  return true;
+}
+
+ipcMain.handle("open-app-window", (_e, app, navPath) => {
+  if (!isDesktopApp(app)) return false;
+  const clean = navPath == null ? null : sanitizeTabPath(navPath);
+  createAppWindow(app, clean);
+  return true;
+});
+
+ipcMain.handle("close-app-window", (_e, app) => {
+  const win = isDesktopApp(app) ? appWindowFor.get(app) : null;
+  if (win && !win.isDestroyed()) win.close();
+});
+
+ipcMain.handle("route-navigate", (e, navPath) => {
+  const clean = sanitizeTabPath(navPath);
+  if (!clean) return false;
+  return routeToWindow(clean, BrowserWindow.fromWebContents(e.sender));
+});
+
+// ---------------------------------------------------------------------------
 // The people window: a compact floating buddy list (route /people) carrying the
 // roster, status and calling. Singleton — one per app, focused rather than
 // duplicated. It is the phone: while it exists it is the notification leader
@@ -558,7 +715,6 @@ const PEOPLE_PATH = "/people";
 const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 240, minHeight: 56 };
 
 let peopleWindow = null;
-let peopleBoundsTimer = null;
 
 function loadPeopleState() {
   const saved = loadFullSettings().peopleWindow;
@@ -659,17 +815,7 @@ function createPeopleWindow() {
     return { action: "deny" };
   });
 
-  // Dragging and resizing fire continuously; save once the gesture settles.
-  const rememberBounds = () => {
-    clearTimeout(peopleBoundsTimer);
-    peopleBoundsTimer = setTimeout(() => savePeopleBounds(win), 400);
-  };
-  win.on("move", rememberBounds);
-  win.on("resize", rememberBounds);
-  win.on("close", () => {
-    clearTimeout(peopleBoundsTimer);
-    savePeopleBounds(win);
-  });
+  persistBounds(win, () => savePeopleBounds(win));
   win.on("closed", () => {
     if (peopleWindow === win) peopleWindow = null;
     broadcastWindowRole();
@@ -1467,7 +1613,7 @@ ipcMain.handle("close-call-panel", (e, opts) => {
 // click. The call already lives here; this only makes the window visible.
 ipcMain.handle("show-call-panel", () => {
   if (!callWindowHostsRoom()) {
-    const owner = appWindows().find((win) => windowStates.get(win.webContents.id)?.inCall);
+    const owner = routedWindows().find((win) => windowStates.get(win.webContents.id)?.inCall);
     if (!owner) return false;
     if (owner.isMinimized()) owner.restore();
     owner.show();
@@ -1651,13 +1797,14 @@ const windowStates = new Map();
 const lastFocusedAt = new Map();
 const recentBanners = new RecentKeys();
 
-// The app windows that count for routing: main + detached tab windows + the
-// people window. The palette is a floating summon, never a place a banner
-// should land or sound.
-function appWindows() {
+// The windows that count for routing: main + detached tab windows + the Chat
+// and Work windows + the people window. The palette is a floating summon,
+// never a place a banner should land or sound.
+function routedWindows() {
   const out = [];
   if (mainWindow && !mainWindow.isDestroyed()) out.push(mainWindow);
   for (const w of tabWindows) if (!w.isDestroyed()) out.push(w);
+  for (const w of appWindowFor.values()) if (!w.isDestroyed()) out.push(w);
   if (peopleWindow && !peopleWindow.isDestroyed()) out.push(peopleWindow);
   // The call panel counts: `anyInCall` is computed from these windows' reports,
   // and it is what makes every OTHER window show "in a huddle in another
@@ -1673,13 +1820,13 @@ function appWindows() {
 // current mirror are how it knows. A mirror replayed once and never updated
 // would have it deciding off a call that ended.
 function toldWindows() {
-  const out = appWindows();
+  const out = routedWindows();
   if (callRingWindow && !callRingWindow.isDestroyed()) out.push(callRingWindow);
   return out;
 }
 
 function describeWindows() {
-  return appWindows().map((win) => {
+  return routedWindows().map((win) => {
     const st = windowStates.get(win.webContents.id) || {};
     return {
       id: win.id,
@@ -1689,6 +1836,8 @@ function describeWindows() {
       // Routing that wants a dashboard surface needs to tell it apart from an
       // ordinary detached tab window.
       isCallPanel: win === callWindow,
+      // The Chat or Work window: banners for its routes land in it.
+      app: appOf(win),
       focused: win.isFocused(),
       lastFocusedAt: lastFocusedAt.get(win.id) || 0,
       active: st.active || null,
@@ -1699,7 +1848,7 @@ function describeWindows() {
 }
 
 function isAppFocused() {
-  return appWindows().some((w) => w.isFocused());
+  return routedWindows().some((w) => w.isFocused());
 }
 
 // Tell every window its role. Coalesced to a tick: focus flips, reports and
@@ -1747,6 +1896,9 @@ function broadcastWindowRole() {
         voiceWindow,
         facesOverlay,
         peopleWall,
+        // Which of the Chat and Work windows exist: the sidebar marks their
+        // sections as popped out, and every window routes their paths there.
+        apps: openAppWindows(),
       });
     }
   }, 30);
@@ -1779,8 +1931,11 @@ ipcMain.on("report-window-state", (e, state) => {
   broadcastWindowRole();
 });
 
+// `placed` tells the renderer the shell already chose this window, so it must
+// show the path itself rather than route it back here (the renderer applies
+// the same table before every navigation of its own).
 function sendNavigate(win, navPath, tabId) {
-  const detail = tabId ? { path: navPath, tabId } : navPath;
+  const detail = { path: navPath, tabId: tabId || null, placed: true };
   win.webContents.executeJavaScript(
     `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(detail)} }))`
   );
@@ -2260,7 +2415,7 @@ function openFullSessionInMain() {
 function detachFocusedView(win) {
   const target = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
   if (!target || target.isDestroyed()) return;
-  if (target !== mainWindow && !tabWindows.has(target)) return;
+  if (target !== mainWindow && !tabWindows.has(target) && !appOf(target)) return;
   target.webContents.executeJavaScript(
     "window.__CODECAST_DETACH_VIEW && window.__CODECAST_DETACH_VIEW()"
   );
@@ -2341,7 +2496,8 @@ function createTray() {
     { type: "separator" },
     { label: "Dashboard", click: () => navigateMain("/dashboard") },
     { label: "Inbox", click: () => navigateMain("/inbox") },
-    { label: "Tasks", click: () => navigateMain("/tasks") },
+    { label: "Chat", click: () => routeToWindow("/chat") },
+    { label: "Tasks", click: () => routeToWindow("/tasks") },
     { type: "separator" },
     { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
     { label: `Version ${app.getVersion()}`, enabled: false },
@@ -2392,6 +2548,10 @@ function buildAppMenu() {
         { label: "New Quick Session", click: () => showCompose() },
         { label: "Command Palette", click: () => togglePalette() },
         { type: "separator" },
+        // The apps: each a window of its own, raised if it already exists.
+        { label: "Chat Window", click: () => createAppWindow("chat") },
+        { label: "Work Window", click: () => createAppWindow("work") },
+        { type: "separator" },
         { role: "close" },
       ],
     },
@@ -2414,9 +2574,15 @@ function buildAppMenu() {
       submenu: [
         { label: "Dashboard", click: () => navigateMain("/dashboard") },
         { label: "Inbox", click: () => navigateMain("/inbox") },
-        { label: "Tasks", click: () => navigateMain("/tasks") },
-        { label: "Plans", click: () => navigateMain("/plans") },
-        { label: "Docs", click: () => navigateMain("/docs") },
+        { type: "separator" },
+        // Chat and Work paths land in their window when it exists.
+        { label: "Chat", click: () => routeToWindow("/chat") },
+        { label: "Calls", click: () => routeToWindow("/calls") },
+        { type: "separator" },
+        { label: "Projects", click: () => routeToWindow("/projects") },
+        { label: "Tasks", click: () => routeToWindow("/tasks") },
+        { label: "Docs", click: () => routeToWindow("/docs") },
+        { label: "Plans", click: () => routeToWindow("/plans") },
         { type: "separator" },
         // Same chords as the renderer's nav.back/nav.forward (web shortcuts
         // registry): the page handles the key first and swallows it, so the
@@ -2447,6 +2613,8 @@ function buildAppMenu() {
         { role: "zoom" },
         { type: "separator" },
         { label: "Command Palette", click: () => togglePalette() },
+        { label: "Chat Window", click: () => createAppWindow("chat") },
+        { label: "Work Window", click: () => createAppWindow("work") },
         { label: "Switch Environment", click: () => toggleEnvironment() },
         { type: "separator" },
         { role: "front" },
@@ -2768,15 +2936,12 @@ ipcMain.on("palette-ready", (_e, mode) => {
   finishReveal(mode);
 });
 
+// The palette picked a place: a task lands in the Work window when there is
+// one, a channel in the Chat window, everything else in the main window.
 ipcMain.on("palette-navigate", (_e, navPath) => {
   hidePalette();
-  if (mainWindow) {
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(navPath)} }))`
-    );
-  }
+  const clean = sanitizeTabPath(navPath);
+  if (clean) routeToWindow(clean);
 });
 
 ipcMain.on("palette-hide", () => {

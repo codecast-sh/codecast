@@ -38,9 +38,9 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { toast } from "sonner";
-import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { useSyncTeams } from "../hooks/useSyncTeams";
-import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
+import { AppPopOutButton, PoppedMark } from "./desktop/AppPopOutButton";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -82,11 +82,14 @@ interface SidebarProps {
 /** Stable empty bag: a fresh {} here would rewake every reader on each render. */
 const NO_SECTION_PINS: Record<string, boolean> = Object.freeze({});
 
-function RailHeading({ label, isNarrow }: { label: string; isNarrow: boolean }) {
+function RailHeading({ label, isNarrow, action }: { label: string; isNarrow: boolean; action?: React.ReactNode }) {
   if (isNarrow) return null;
   return (
-    <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 mt-4 first:mt-0">
-      {label}
+    <div className="group/rail flex items-center text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 mt-4 first:mt-0">
+      <span className="flex-1">{label}</span>
+      {/* An action that belongs to the whole group, revealed on hover the
+          way a section row reveals its own. */}
+      {action}
     </div>
   );
 }
@@ -223,6 +226,7 @@ function NavSection({
   unread,
   items,
   headerAction,
+  popped,
   expanded,
   onToggle,
 }: {
@@ -246,6 +250,9 @@ function NavSection({
   /** An action that belongs to the SECTION, not to any row in it — revealed on
    *  hover beside the label, the way Calls reveals "start huddle". */
   headerAction?: React.ReactNode;
+  /** The desktop app whose window this section lives in when popped out
+   *  (lib/desktopApps); the row wears a mark while that window exists. */
+  popped?: "chat" | "work";
   expanded?: boolean;
   onToggle?: () => void;
 }) {
@@ -279,6 +286,7 @@ function NavSection({
         >
           {icon}
           {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
+          {!isNarrow && popped && <PoppedMark app={popped} />}
         </Link>
         {!isNarrow && headerAction}
         {hasChildren && (
@@ -434,6 +442,7 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
       ) : (
         <>
           <span>Threads</span>
+          <PoppedMark app="chat" />
           {unread > 0 && <NavCount n={unread} tone="bg-sol-cyan text-sol-bg" />}
         </>
       )}
@@ -631,9 +640,8 @@ const ChatNavRow = memo(function ChatNavRow({
         }
         icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         items={[...items, ...suggestedItems]}
-        headerAction={
-          <PopOutPeopleButton className="mr-1 rounded p-1 text-sol-text-dim opacity-0 transition-opacity hover:text-sol-text focus-visible:opacity-100 group-hover/nav:opacity-100" />
-        }
+        popped="chat"
+        headerAction={<AppPopOutButton app="chat" className="mr-1" />}
         expanded={expanded}
         onToggle={onToggle}
       />
@@ -699,6 +707,7 @@ const CallsNavRow = memo(function CallsNavRow({
         {!isNarrow && (
           <>
             <span>Calls</span>
+            <PoppedMark app="chat" />
             {liveRooms > 0 && (
               <span className="relative flex h-2 w-2" aria-label="Live huddle">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
@@ -889,7 +898,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
-  const isCapabilities = pathname === "/capabilities";
   const isVault = pathname === "/files" || pathname?.startsWith("/files/") ||
     pathname === "/vault" || pathname?.startsWith("/vault/"); // /vault = pre-rename alias
   const isPages = pathname === "/pages" || pathname?.startsWith("/pages/") ||
@@ -1318,13 +1326,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         {/* What you are working on. Projects leads: it is the container the rest
             of this group files into, so the rail reads top-down as project →
             its tasks → the docs and files around them. */}
-        <RailHeading label="Work" isNarrow={isNarrow} />
+        <RailHeading label="Work" isNarrow={isNarrow} action={<AppPopOutButton app="work" />} />
         <div className="text-sm">
           {/* The goals above the projects (initiatives-projects-role-page.md I1). */}
           <NavSection
             label="Initiatives"
             href="/initiatives"
             isActive={!!isInitiatives}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             title="Initiatives: what the company is trying to reach"
@@ -1334,6 +1343,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Projects"
             href="/projects"
             isActive={isProjects}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={projectItems}
@@ -1345,6 +1355,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Tasks"
             href="/tasks"
             isActive={isTasks}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={taskViewItems}
@@ -1360,6 +1371,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Docs"
             href="/docs"
             isActive={isDocs || isPlans}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={docViewItems}
@@ -1370,15 +1382,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             }
-          />
-          <NavSection
-            label="Capabilities"
-            href="/capabilities"
-            icon={<Blocks className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-            isActive={isCapabilities}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            items={[]}
           />
           <NavSection
             label="Code"

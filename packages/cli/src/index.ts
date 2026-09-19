@@ -14559,8 +14559,9 @@ trigger
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers ignore it.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
-  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger; a trigger that fires once posts its result back into this session.")
+  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger. A trigger that fires once runs as this session's worker: nested under it, its result posted back here, and this session woken if the run fails, dies, or asks for attention.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
+  .option("--wake", "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.")
   .action(async (prompt, options) => {
     prompt = prompt.trim();
     if (!prompt) {
@@ -14671,6 +14672,9 @@ trigger
     // session. Requested via --spawn that's the point — confirm it. Otherwise
     // it's a silent behavior fork, so say it out loud — an agent creating a
     // loop for its own session must see when the link didn't take.
+    if (options.wake && !(options.spawn && schedule_type === "once" && creatorSessionUuid)) {
+      console.error("--wake needs --spawn, a trigger that fires once (--in), and a calling session to wake; it is ignored here");
+    }
     if (options.spawn) {
       console.error(
         "runs will spawn fresh sessions (no history) in " +
@@ -14721,6 +14725,7 @@ trigger
           mode: options.safe ? "propose" : options.mode,
           max_runtime_ms: maxRuntimeMs,
           precheck: options.precheck,
+          wake_creator: options.wake || undefined,
         }),
       });
 
