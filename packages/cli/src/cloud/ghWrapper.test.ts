@@ -1,3 +1,4 @@
+import { systemPathWithout } from "../test-helpers/systemPath.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -48,7 +49,7 @@ function runGh(args: string[], env: Record<string, string> = {}) {
     cwd: work,
     encoding: "utf-8",
     timeout: 20_000,
-    env: { HOME: home, PATH: `${path.dirname(wrapper)}:${castBin}:${realBin}:/usr/bin:/bin`, ...env },
+    env: { HOME: home, PATH: `${path.dirname(wrapper)}:${castBin}:${realBin}:${systemPathWithout("gh")}`, ...env },
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -150,7 +151,7 @@ describe("ghWrapperScript", () => {
 });
 
 describe("ghWrapperInstallSnippet", () => {
-  const install = () => spawnSync("bash", ["-c", ghWrapperInstallSnippet()], { encoding: "utf-8", env: { HOME: home, PATH: "/usr/bin:/bin" }, timeout: 20_000 });
+  const install = () => spawnSync("bash", ["-c", ghWrapperInstallSnippet()], { encoding: "utf-8", env: { HOME: home, PATH: systemPathWithout("gh") }, timeout: 20_000 });
   const wrapperPath = () => path.join(home, GH_WRAPPER_REL);
 
   test("moves a real gh at the wrapper's path aside, writes the wrapper 0755, and a rerun changes nothing", () => {
