@@ -3,7 +3,9 @@
 import { test, expect } from "bun:test";
 import { FIXTURE_INITIATIVES as ROWS, FIXTURE_NOW, FIXTURE_PLANS, FIXTURE_PROJECTS, FIXTURE_TASKS } from "../../components/initiatives/initiativeFixture";
 import { computePlanProgress } from "../liveEntities";
-import { groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, tasksByProject, topLevelInitiatives } from "../initiatives";
+import { ORG_FIXTURE } from "../../components/org/orgFixture";
+import type { OrgTree } from "../../components/org/orgTypes";
+import { groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, ownerSeat, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, tasksByProject, topLevelInitiatives } from "../initiatives";
 
 const byProject = tasksByProject(FIXTURE_TASKS);
 const row = (short: string) => ROWS.find((r) => r.short_id === short)!;
@@ -65,4 +67,15 @@ test("the wake signature ignores a bare updated_at and sees a health change", ()
   const r = row("in-1");
   expect(initiativeSig({ ...r, updated_at: r.updated_at + 1 })).toBe(initiativeSig(r));
   expect(initiativeSig({ ...r, health: "off_track" })).not.toBe(initiativeSig(r));
+});
+
+test("the conversation an initiative opens beside: a role's seat, a person's own anchor, the root seat they host", () => {
+  const tree = ORG_FIXTURE as unknown as OrgTree;
+  expect(ownerSeat(tree, { kind: "role", role_id: "fixture-role-growth" })).toMatchObject({ conversationId: "fixture-growth-conv", speaker: ORG_FIXTURE.roles[0].name });
+  expect(ownerSeat(tree, { kind: "user", user_id: "fixture-user-me" })).toMatchObject({ role: null, conversationId: "fixture-anchor-conv" });
+  // On a workspace whose only anchor is the chief of staff's seat, the person who hosts it opens on that seat.
+  const chiefSeat: OrgTree = { ...tree, roles: [{ ...tree.roles[0], handle: "chief-of-staff", anchor_id: "fixture-anchor" }], anchors: [{ ...tree.anchors[0], org_role_id: "fixture-role-growth" }] };
+  expect(ownerSeat(chiefSeat, { kind: "user", user_id: "fixture-user-me" }).conversationId).toBe("fixture-anchor-conv");
+  expect(ownerSeat(chiefSeat, { kind: "user", user_id: "fixture-user-sam" }).conversationId).toBeNull();
+  expect(ownerSeat(tree, undefined).conversationId).toBeNull();
 });

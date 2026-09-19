@@ -49,6 +49,9 @@ export type RoleScopeViewProps = {
   onFilePlan?: (planRef: string, projectId: string) => void;
   /** Page only: the role's sessions grouped by who acts next. */
   sessions?: ReactNode;
+  /** Page only: the viewer's goals, when they report to the role (R6): what
+   *  moved on each and what stalled. */
+  goals?: ReactNode;
   /** Page only: sessions waiting on a person anywhere in the role's area (the
    *  ones bound to its tasks and plans too), when that is more than the
    *  sessions that report to it. The page header says this number; the
@@ -59,7 +62,7 @@ export type RoleScopeViewProps = {
   className?: string;
 };
 
-export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
+export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, goals, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
   const moreWaiting = !(density === "card") && waitingInArea > (model.sessions?.waiting ?? 0);
   const card = density === "card";
   const projects = card ? model.projects.slice(0, CARD_PROJECTS) : model.projects;
@@ -112,6 +115,8 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, rend
           {!card && model.sessions && (model.sessions.total > 0 || moreWaiting) && <More onClick={() => onTab?.("sessions")}>{model.sessions.total > 0 ? `All ${model.sessions.total} ${model.sessions.total === 1 ? "session" : "sessions"}` : "See the sessions in this area"}</More>}
         </Section>
       )}
+
+      {!card && goals && <Section density={density} label="Your goals" name="goals">{goals}</Section>}
 
       <Section density={density} label="Its job" name="charter">
         {model.charter.paragraph

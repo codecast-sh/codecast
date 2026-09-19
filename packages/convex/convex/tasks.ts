@@ -104,8 +104,8 @@ export async function resolveWorkerParentConversation(
  * itself stores no remote). Shared by `dispatch.createSession` and
  * `tasks.assignToAgent` so both task-launch paths stamp the conversation and
  * route the daemon identically — without a project_path the conversation can't
- * be started by any daemon (the "start agent run did nothing" bug). `seed` lets
- * a caller-supplied path win over the task's.
+ * be started by any daemon (the "start agent run did nothing" bug). `seed` is the
+ * caller's path: it refines the choice inside the task's team and never overrides it.
  */
 export async function resolveTaskGitContext(
   ctx: any,
@@ -114,19 +114,27 @@ export async function resolveTaskGitContext(
   mappings: any[],
   seed?: { project_path?: string; git_root?: string },
 ): Promise<{ project_path?: string; git_root?: string; git_remote_url?: string }> {
-  let project_path = seed?.project_path;
   let git_root = seed?.git_root;
   let git_remote_url: string | undefined;
 
-  if (!project_path) {
-    if (task.project_path) {
-      project_path = task.project_path;
-    } else if (task.team_id) {
-      const teamMapping = mappings.find((m: any) => m.team_id?.toString() === task.team_id.toString());
-      if (teamMapping) project_path = teamMapping.path_prefix;
-    }
-    if (!git_root) git_root = project_path;
-  }
+  // What the task pins wins: its own path, then its project's. A seed is only
+  // trusted past that when it already sits inside the task's team, because the
+  // web sends the viewer's open repo as the seed when the task pins nothing —
+  // and that repo may belong to another team entirely (a Union task launched
+  // three sessions into ~/src/codecast this way). Otherwise the team's mapped
+  // directory routes, and a foreign seed is the last resort that keeps a task
+  // whose team has no mapping startable at all.
+  const project = task.project_id ? await ctx.db.get(task.project_id).catch(() => null) : null;
+  const teamKey = task.team_id?.toString();
+  const seedInTaskTeam = !!teamKey
+    && resolveTeamForPath(mappings, seed?.project_path, undefined).teamId?.toString() === teamKey;
+  const project_path: string | undefined =
+    task.project_path
+    || project?.project_path
+    || (seedInTaskTeam ? seed?.project_path : undefined)
+    || (teamKey ? mappings.find((m: any) => m.team_id?.toString() === teamKey)?.path_prefix : undefined)
+    || seed?.project_path;
+  if (!git_root && project_path !== seed?.project_path) git_root = project_path;
 
   // A git_root that isn't an ancestor of the resolved project_path describes a
   // DIFFERENT repo — typically the viewer's currently-open conversation stamped

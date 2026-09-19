@@ -1572,13 +1572,18 @@ export const wakes = query({
 export async function performSetReports(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; from_session?: string },
+  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; set?: Id<"users">[]; from_session?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   if (role.status === "retired") throw new Error("That role is retired");
   const admin = await userCanAdminRole(ctx, userId, role);
-  const add = args.add ?? [];
-  const remove = args.remove ?? [];
+  // `set` is the whole list as a surface holds it (the Settings tab): the
+  // difference against the stored row is taken here, where the row is, so
+  // the same per person rule below covers it.
+  const held = (role.reports_user_ids ?? []) as Id<"users">[];
+  const wanted = args.set ? new Set(args.set.map(String)) : null;
+  const add = wanted ? args.set!.filter((uid) => !held.some((h) => String(h) === String(uid))) : args.add ?? [];
+  const remove = wanted ? held.filter((uid) => !wanted.has(String(uid))) : args.remove ?? [];
   if (add.length + remove.length === 0) return role;
   const names = new Map<string, string>();
   for (const uid of [...add, ...remove]) {
@@ -1612,7 +1617,7 @@ export async function performSetReports(
 }
 
 export const setReports = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), set: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetReports(ctx, await requireCaller(ctx, api_token), args),
 });
 

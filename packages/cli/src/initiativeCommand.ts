@@ -36,12 +36,19 @@ export const parseInitiativeStatus = (text: string): InitiativeStatus | null => 
 const healthColor = (c: Palette, health: InitiativeHealth) =>
   health === "on_track" ? c.green : health === "at_risk" ? c.yellow : health === "off_track" ? c.red : c.dim;
 
-export function healthText(c: Palette, health: InitiativeHealth, at?: number): string {
-  const when = at ? ` ${c.dim}(${new Date(at).toISOString().slice(0, 10)})${c.reset}` : "";
-  return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
+// The person's own day: a target set as 2026-12-31 is stored as that day's
+// local end, which the UTC day would print as the first of January.
+export function dayText(ms?: number): string | undefined {
+  if (!ms) return undefined;
+  const d = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
-export const dayText = (ms?: number) => (ms ? new Date(ms).toISOString().slice(0, 10) : undefined);
+export function healthText(c: Palette, health: InitiativeHealth, at?: number): string {
+  const when = at ? ` ${c.dim}(${dayText(at)})${c.reset}` : "";
+  return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
+}
 
 export function progressText(counts?: { total: number; done: number }): string {
   if (!counts?.total) return "no tasks";

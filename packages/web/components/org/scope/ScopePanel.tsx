@@ -28,7 +28,8 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeWakesTab } from "./ScopeWakesTab";
-import type { RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
+import type { BriefPerson, RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
+import { PersonGoals } from "./PersonGoals";
 import type { PanelLayout } from "./ConversationWithPanel";
 
 export type ScopeTabKey = "scope" | "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
@@ -82,6 +83,8 @@ export type ScopePanelProps = {
   canEditBrief: boolean;
   hostName: string;
   model: string | null;
+  /** The standing session; Settings says where it runs. */
+  standingId: string | null;
   counters: RoleCounters | null;
   armRetire: boolean;
   now: number;
@@ -155,7 +158,7 @@ export function ScopePanel(p: ScopePanelProps) {
       {tab !== "feed" && tab !== "tasks" && (
         <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
           {!p.summary && p.summaryProblem && <p className="px-2.5 pb-2 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{p.summaryProblem}</p>}
-          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} canEdit={p.canEdit} waiting={p.waiting} onTab={p.onTab} />}
+          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} canEdit={p.canEdit} waiting={p.waiting} onTab={p.onTab} me={viewerGoals(tree, role, p.brief?.facts?.people)} />}
           {tab === "line" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
           {tab === "plans" && <ScopePlansTab ids={p.scopeIds} />}
           {tab === "docs" && <ScopeDocsTab ids={p.scopeIds} />}
@@ -165,7 +168,7 @@ export function ScopePanel(p: ScopePanelProps) {
           {tab === "wakes" && role && <ScopeWakesTab role={role} highlight={p.wakeHighlight} now={p.now} />}
           {tab === "charter" && role && <ScopeCharterTab role={role} charter={p.brief?.charter ?? role.charter ?? ""} canEdit={p.canEdit} backHref={p.backHref} onUpdateCharter={(v) => p.onUpdate({ charter: v })} />}
           {tab === "settings" && role && (
-            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} counters={p.counters} armRetire={p.armRetire} onUpdate={p.onUpdate} onReparent={p.onReparent} onRetire={p.onRetire} />
+            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} armRetire={p.armRetire} onUpdate={p.onUpdate} onReparent={p.onReparent} onRetire={p.onRetire} />
           )}
         </div>
       )}
@@ -176,7 +179,18 @@ export function ScopePanel(p: ScopePanelProps) {
 /** The Scope tab: RoleScopeView at full size, with the two pieces only the
  *  page can afford, a project's lead chip and the role's sessions grouped by
  *  who acts next (the tree's top rows; the Sessions tab pages the rest). */
-function ScopeOverviewTab({ role, now, canEdit, waiting, onTab }: { role: OrgRole; now: number; canEdit: boolean; waiting: number; onTab: (next: ScopeTabKey) => void }) {
+/** The viewer's row among the people who report to the role. The brief is
+ *  what knows the goals, so nothing shows until it answers; a viewer who just
+ *  started reporting (the tree has them, the brief not yet) gets an empty
+ *  row, so the section says where goals go. */
+function viewerGoals(tree: OrgTree, role: OrgRole, people: BriefPerson[] | undefined): BriefPerson | null {
+  const me = tree.people.find((x) => x.is_me);
+  if (!people || !me || !(role.reports_user_ids ?? []).includes(me.user_id)) return null;
+  return people.find((x) => x.user_id === me.user_id)
+    ?? { user_id: me.user_id, name: me.name, has_section: false, goals: [], sessions_changed: [], sessions_total: 0, stalled_high: 0 };
+}
+
+function ScopeOverviewTab({ role, now, canEdit, waiting, onTab, me }: { role: OrgRole; now: number; canEdit: boolean; waiting: number; onTab: (next: ScopeTabKey) => void; me: BriefPerson | null }) {
   const { model, escalated } = useRoleScope(role.short_id);
   const openLinked = useOpenLinkedSession();
   const open = (s: { _id: string; short_id: string; title: string; agent_type: string }) => openLinked({ _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type });
@@ -195,6 +209,7 @@ function ScopeOverviewTab({ role, now, canEdit, waiting, onTab }: { role: OrgRol
       // named side effect (dispatch.updatePlan) makes the write.
       onFilePlan={canEdit ? (planRef, projectId) => useInboxStore.getState().updatePlan(planRef, { project_id: projectId }) : undefined}
       sessions={rest.length > 0 ? <HandGroups rows={rest} now={now} onOpen={open} /> : null}
+      goals={me ? <PersonGoals person={me} roleHandle={role.handle} now={now} own /> : null}
       onTab={onTab}
       onOpenSession={open}
     />

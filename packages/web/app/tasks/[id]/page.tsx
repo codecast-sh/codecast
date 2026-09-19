@@ -959,6 +959,12 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               <span className="flex items-center gap-1.5 text-xs text-sol-text-muted" title={formatDateFull(data.created_at)}>
                 <Clock className="w-3 h-3 text-sol-text-dim" />
                 {formatDate(data.created_at)}
+                {data.creator && (
+                  <>
+                    <span className="text-sol-text-dim">by</span>
+                    <UserBadge name={data.creator.name} image={data.creator.image} username={(data.creator as any).github_username} />
+                  </>
+                )}
               </span>
             </div>
 
