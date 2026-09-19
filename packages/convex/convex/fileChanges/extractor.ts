@@ -51,6 +51,21 @@ function toolName(name: string): string {
   return name.split(".").at(-1)!.toLowerCase();
 }
 
+/**
+ * The before/after strings of one string-replacing edit, under whichever names
+ * the client that wrote it uses: Claude `old_string`/`new_string`, opencode
+ * `oldString`/`newString`, gemini `oldText`/`newText`, muse `find`/`replace`.
+ * Returns undefined unless BOTH sides are strings — an edit missing one is not
+ * a file change. Shared with the conversation's inline diff so both render an
+ * edit from the same rule.
+ */
+export function editStringsFromInput(edit: Record<string, unknown>): { oldStr: string; newStr: string } | undefined {
+  const oldStr = edit.old_string ?? edit.oldString ?? edit.oldText ?? edit.find;
+  const newStr = edit.new_string ?? edit.newString ?? edit.newText ?? edit.replace;
+  if (typeof oldStr !== "string" || typeof newStr !== "string") return undefined;
+  return { oldStr, newStr };
+}
+
 /** Cheap pre-filter: does this message carry any tool call that could produce a file change? */
 export function hasFileChangeToolCall(message: ExtractableMessage): boolean {
   return !!message.tool_calls?.some((tc) => EDIT_TOOL_NAMES.has(toolName(tc.name)));
@@ -140,9 +155,9 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
           if (!Array.isArray(edits)) continue;
           for (const [index, edit] of edits.entries()) {
             if (!edit || typeof edit !== "object") continue;
-            const oldContent = edit.old_string ?? edit.oldString ?? edit.oldText;
-            const newContent = edit.new_string ?? edit.newString ?? edit.newText;
-            if (typeof oldContent !== "string" || typeof newContent !== "string") continue;
+            const strings = editStringsFromInput(edit);
+            if (!strings) continue;
+            const { oldStr: oldContent, newStr: newContent } = strings;
             changes.push({
               id: name === "multiedit" ? `${toolCall.id}:${index}` : toolCall.id,
               toolCallId: toolCall.id,

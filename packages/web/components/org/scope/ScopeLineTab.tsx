@@ -21,7 +21,8 @@ import { statusVisual, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import { resolveAssigneeInfo } from "../../../lib/liveEntities";
 import { decisionHref } from "../../../lib/decisionLinks";
 import { cn } from "../../../lib/utils";
-import { Avatar } from "../../tasks/TaskCommentStream";
+import { AssigneeFace } from "../../identity/AssigneeFace";
+import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { ORG_STATE_META } from "../orgMeta";
 import { handWorkState, heldDecisionFor, isLiveRun, runForTask, runLiveNode } from "../../../lib/taskLine";
 import { evidenceCount, lineColumns } from "./lineBoard";
@@ -103,6 +104,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
   // The hand's state as one scalar, never its row: a heartbeat cannot
   // re-render the card, a state change does. Assignee names come from the
   // live roster (lib/liveEntities), not the server snapshot.
+  const { roles: orgRoles } = useOrgRoles();
   const s = useTrackedStore([
     (st) => { const row = handId ? st.sessions[handId] : undefined; return row ? handWorkState(classifySession(row), null) : null; },
     (st) => st.teamMembers,
@@ -115,7 +117,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
   // the run's own enrichment; a run waiting at a gate with no hand says so.
   const handState = live && (handRow || live.session) ? handWorkState(handRow ? classifySession(handRow) : null, live.session) : null;
   const handMeta = handState ? ORG_STATE_META[handState] : null;
-  const assignee = resolveAssigneeInfo(task.assignee, task.assignee_info, s.teamMembers, s.currentUser);
+  const assignee = resolveAssigneeInfo(task.assignee, task.assignee_info, s.teamMembers, s.currentUser, orgRoles);
   const evidenceLine = [evidence.pages ? `${evidence.pages} page${evidence.pages === 1 ? "" : "s"}` : "", evidence.files ? `${evidence.files} file${evidence.files === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
 
   return (
@@ -126,7 +128,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
           <span style={{ fontFamily: "var(--font-mono)" }}>{task.short_id}</span>
           {assignee && (
             <span className="inline-flex items-center gap-1 min-w-0 truncate" title={assignee.name}>
-              <Avatar name={assignee.name} image={assignee.image} size="sm" />
+              <AssigneeFace info={assignee} size={16} />
               <span className="truncate">{assignee.name}</span>
             </span>
           )}

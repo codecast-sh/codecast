@@ -4,8 +4,10 @@ description: Look at the organization of agents and people around this work, the
 argument-hint: "[--team <name>|personal] [what to change, in plain words]"
 ---
 
-The organization is people, standing roles with a scope, and the sessions
-under them. This skill is that conversation, held wherever the person
+The organization is read from the top down: initiatives, the goals the
+company set; the projects that carry each; the plans and tasks inside a
+project; the roles that lead projects and own initiatives; the people they
+report to; and the sessions that do the work. This skill is that conversation, held wherever the person
 already is. The org page does the same work with a chart and a guided
 setup, and it stays the only place a change is accepted; say so once, then
 carry on here.
@@ -21,6 +23,8 @@ here, and a list of roles does not reveal it.
 cast org ls                      # people, roles with their scopes, the sessions under each
 cast org proposals               # anything already waiting on a person
 cast org health                  # load, flags, stale records, span
+cast initiative ls               # the goals: status, owner, health, target
+cast org inputs                  # ends with coverage: projects with a lead, work outside any project
 ```
 
 Then open in one of three ways.
@@ -62,9 +66,23 @@ sessions and commits are, what is filed. When that is one person in one
 area with nothing filed, there is nothing to organize: say so, say what
 would make a chart worth having, and stop. Otherwise run init.
 
-**A chart exists.** Read it back in a few lines: each role, what it owns,
-what health flags on it, and the records the activity says are behind.
+**A chart exists.** Read it back in a few lines: each initiative and how it
+is going, each role, what it owns, what health flags on it, the projects
+with no lead, and the records the activity says are behind.
 Then run review.
+
+## The default is coverage
+
+Unless the person asks for something narrower, the aim is that every piece
+of work has a lead. Every active initiative has an owner, and one without
+is the first thing you say. Every project with work planned or in progress
+has a lead, and a project without one gets a role that wraps the project as
+it is filed, under its own name. Work that sits outside any project
+(sessions, commits, plans with none) gets a project first, then a lead.
+About one role per project; when two small projects share a lead or a large
+one is split, say why. Say where coverage stands before and after, in
+counts. Full coverage costs a daily limit per role, so say the cost with it
+and let the person trim.
 
 ## Ground, then propose
 
@@ -73,9 +91,9 @@ cast org init --here             # no roles: the analyzer prompt, in this sessio
 cast org review --here           # roles exist: the same prompt in review mode
 ```
 
-Follow the prompt it prints. It carries the capacity model, the grounding
-rules, the standing versus program rule, the honesty rules and the spec it
-wants; do not restate or replace them. One thing differs because the person
+Follow the prompt it prints. It carries the initiative and coverage rules,
+the capacity model, the grounding rules, the standing versus program rule,
+the honesty rules and the spec it wants; do not restate or replace them. One thing differs because the person
 is here: where the prompt ends with a post, this skill shows the shape
 first and posts when the person says it is right.
 
@@ -84,11 +102,15 @@ first and posts when the person says it is right.
 A list of roles is not judgeable; the evidence beside each role is. Put the
 proposal in the thread before any file exists:
 
+- how each active initiative is doing, one line each, and any with no
+  owner;
 - the records to bring in line, as counts per kind with a few named, and
   what closing them takes out of the loads;
 - each role in one line: handle, standing or program and what ends it, the
   projects it owns, who it reports to, and the numbers that justify it
   (sessions, commits, open work in its scope, its load against the model);
+- coverage before and after in counts, with any project left without a
+  lead and the reason;
 - the filings and charters in one line, and the company budget today next
   to after;
 - what you could not verify.

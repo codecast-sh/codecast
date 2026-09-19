@@ -4039,6 +4039,19 @@ cliRoute("/cli/projects/timeline", async (ctx, body) => {
   return await ctx.runQuery(api.projectUpdates.timeline, body);
 });
 
+// Initiatives (initiatives-projects-role-page.md I1): `cast initiative`.
+for (const [verb, fn] of [
+  ["create", "create"],
+  ["update", "update"],
+  ["add-project", "addProject"],
+  ["remove-project", "removeProject"],
+  ["post", "postUpdate"],
+] as const) {
+  cliRoute(`/cli/initiatives/${verb}`, async (ctx, body) => ctx.runMutation(api.initiatives[fn], body));
+}
+cliRoute("/cli/initiatives/list", async (ctx, body) => ctx.runQuery(api.initiatives.list, body));
+cliRoute("/cli/initiatives/get", async (ctx, body) => ctx.runQuery(api.initiatives.get, body));
+
 // Anchors (standing agent members)
 cliRoute("/cli/anchor/create", async (ctx, body) => {
   return await ctx.runMutation(api.anchors.provisionAnchor, body);
@@ -4126,6 +4139,7 @@ cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.r
 cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
 cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
+cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));
 cliRoute("/cli/role/wakes", async (ctx, body) => ctx.runQuery(api.orgRoles.wakes, body));
 cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
 // The scope's line (the-line.md L2): `cast role line <handle> [--set <slug>]`.

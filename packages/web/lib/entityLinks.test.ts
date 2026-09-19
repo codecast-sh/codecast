@@ -488,3 +488,36 @@ describe("contextual pull request references", () => {
     expect(parseContextualPrRef("doc:abc")).toBeNull();
   });
 });
+
+describe("initiatives (in-N)", () => {
+  // `in` is the one registered prefix that is also an English word, so it
+  // takes digits only. The rule lives in the registry, and every matcher
+  // (prose, mentions, the editor's scanner) derives from it.
+  test("in-N resolves to the initiative type, whatever its case", () => {
+    expect(inferEntityTypeFromShortId("in-7")).toBe("initiative");
+    expect(entityTypeFromId("IN-12")).toBe("initiative");
+    expect(isEntityId("in-7")).toBe(true);
+  });
+
+  test("prose that starts with in- is never an initiative", () => {
+    for (const word of ["in-app", "in-house", "in-flight", "in-7th", "in-"]) {
+      expect(inferEntityTypeFromShortId(word)).toBeNull();
+      expect(isEntityId(word)).toBe(false);
+    }
+    const prose = "We ship in-app fixes for in-7 and IN-12 (see ct-4102), all in-house, by the in-7th week.";
+    expect(prose.match(bareEntityIdRegex())).toEqual(["in-7", "IN-12", "ct-4102"]);
+  });
+
+  test("an @[Title in-N] mention carries the id, and a prose word does not", () => {
+    expect(entityMentionRegex().exec("see @[Win enterprise in-7] today")?.slice(1, 3)).toEqual(["Win enterprise", "in-7"]);
+    // "in-app" stays part of the title: the id group is empty.
+    expect(entityMentionRegex().exec("the @[checkout in-app] flow")?.slice(1, 3)).toEqual(["checkout in-app", undefined]);
+  });
+
+  test("an initiative routes to its page and its url parses back", () => {
+    expect(entityRoute("initiative", "in-7")).toBe("/initiatives/in-7");
+    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/initiatives/in-7");
+    expect(parseEntityUrl("https://codecast.sh/initiatives/in-7")).toEqual({ type: "initiative", id: "in-7" });
+    expect(normalizeEntityType("initiatives")).toBe("initiative");
+  });
+});

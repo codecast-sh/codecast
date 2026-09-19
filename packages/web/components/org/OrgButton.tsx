@@ -3,18 +3,19 @@
 // page): violet primary, bordered secondary, red for danger. One primary
 // colour across the page, so cyan stays the "done" state and orange stays the
 // anchor's identity.
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
-export function OrgButton({ primary, danger, size = "md", grow, className, children, style, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
+export const OrgButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & {
   primary?: boolean;
   danger?: boolean;
   size?: "sm" | "md";
   grow?: boolean;
   children: ReactNode;
-}) {
+}>(function OrgButton({ primary, danger, size = "md", grow, className, children, style, ...rest }, ref) {
   return (
     <button
+      ref={ref}
       type="button"
       className={cn(
         "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-45 disabled:cursor-not-allowed",
@@ -31,4 +32,4 @@ export function OrgButton({ primary, danger, size = "md", grow, className, child
       {children}
     </button>
   );
-}
+});

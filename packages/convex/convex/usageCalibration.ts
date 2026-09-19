@@ -27,7 +27,7 @@
 // rate. The median absorbs a few; requiring every one of a user's devices to have
 // reported a fresh snapshot in BOTH readings removes most of the rest.
 
-import { internalMutation, query } from "./functions";
+import { internalMutation, internalQuery, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { weightedTokens, type UsageCalibration } from "@codecast/shared/contracts";
@@ -60,7 +60,7 @@ export const MAX_USERS_PER_RUN = 40;
  *  paired with; a stale one describes usage from before the slot began. */
 export const SNAPSHOT_FRESH_MS = 2 * CALIBRATION_SLOT_MS;
 
-export type WindowReading = { key: string; percent: number; resets_at?: number };
+export type WindowReading = { key: string; percent: number; resets_at?: number; fetched_at?: number };
 
 /** Every limit window a user's devices report right now, one entry per account
  *  and window kind. Keyed so the next run can pair the same window with itself —
@@ -76,23 +76,50 @@ export function windowReadingsOf(devices: any[]): WindowReading[] {
       const key = `${profile.email || profile.name}`;
       // Several devices report the same account; the freshest reading wins.
       const seen = out.get(key);
-      if (seen && (seen as any).fetched_at >= usage.fetched_at) continue;
-      out.set(key, { key, percent: session.percent, resets_at: session.resets_at, ...( { fetched_at: usage.fetched_at } as any) });
+      if (seen && (seen.fetched_at ?? 0) >= usage.fetched_at) continue;
+      out.set(key, { key, percent: session.percent, resets_at: session.resets_at, fetched_at: usage.fetched_at });
     }
   }
-  return [...out.values()].map(({ key, percent, resets_at }) => ({ key, percent, resets_at }));
+  return [...out.values()];
+}
+
+/** Two readings describe the SAME window. The reset time is the identity, but it
+ *  cannot be compared exactly: the provider recomputes it per request and returns
+ *  a different sub-second fraction every time (measured 2026-09-18, one window
+ *  answering …18:20:00.327288 and …18:20:00.582121 seconds apart). Exact equality
+ *  therefore rejects every pair and the fit never sees a rise. A window's reset is
+ *  stable to the minute, and windows are hours long, so a couple of minutes of
+ *  tolerance separates "same window" from "the next one" with room to spare. */
+export const WINDOW_MATCH_TOLERANCE_MS = 2 * 60 * 1000;
+
+export function sameWindow(a: WindowReading, b: WindowReading): boolean {
+  if (a.resets_at == null || b.resets_at == null) return a.resets_at === b.resets_at;
+  return Math.abs(a.resets_at - b.resets_at) <= WINDOW_MATCH_TOLERANCE_MS;
 }
 
 /** How far a user's meters moved between two readings: the summed rise across
- *  every window present in BOTH, still inside the same window (same reset), and
- *  rising. A window that rolled, appeared, or fell contributes nothing — a fall
- *  means the reading describes a different window than we think it does. */
-export function percentRise(before: WindowReading[], after: WindowReading[]): number {
+ *  every window present in BOTH, still inside the same window, and rising. A
+ *  window that rolled, appeared, or fell contributes nothing — a fall means the
+ *  reading describes a different window than we think it does.
+ *
+ *  Staleness is judged PER WINDOW, not per person. People keep many saved
+ *  accounts and only the ones in use are polled, so a dormant account's snapshot
+ *  is always old; disqualifying a user for holding one threw away exactly the
+ *  heavy users this fit needs (measured: the two users whose meters moved were
+ *  the two dropped). A window nobody re-read contributes nothing instead. */
+export function percentRise(
+  before: WindowReading[],
+  after: WindowReading[],
+  at?: { before: number; after: number },
+): number {
+  const fresh = (w: WindowReading, asOf: number | undefined) =>
+    asOf === undefined || w.fetched_at === undefined || asOf - w.fetched_at <= SNAPSHOT_FRESH_MS;
   const prior = new Map(before.map((w) => [w.key, w]));
   let rise = 0;
   for (const now of after) {
     const was = prior.get(now.key);
-    if (!was || was.resets_at !== now.resets_at) continue;
+    if (!was || !sameWindow(was, now)) continue;
+    if (!fresh(was, at?.before) || !fresh(now, at?.after)) continue;
     if (now.percent > was.percent) rise += now.percent - was.percent;
   }
   return rise;
@@ -130,8 +157,33 @@ export const get = query({
   },
 });
 
+/** The fit's working state, for operating it: when the last reading was taken,
+ *  which slot it belongs to, how many users it covered, and the samples behind
+ *  the published rate. Internal — it is a diagnostic, not a surface. */
+export const diag = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const row = await ctx.db.query("usage_calibration").withIndex("by_key", (q) => q.eq("key", "global")).unique();
+    if (!row) return null;
+    const now = Date.now();
+    return {
+      rate: row.tokens_per_percent ?? null,
+      recent: row.recent ?? [],
+      updated_ago_ms: now - row.updated_at,
+      last_sample_at_ago_ms: row.last_sample ? now - row.last_sample.at : null,
+      last_sample_slot: row.last_sample?.slot ?? null,
+      current_slot: calibrationSlot(now),
+      users_in_last_sample: row.last_sample?.users.length ?? 0,
+      last_run: row.last_run ?? null,
+    };
+  },
+});
+
 /** One calibration run: read the slot that just closed, pair it with the meters,
- *  store this run's reading for the next one to diff against. */
+ *  store this run's reading for the next one to diff against. A run whose
+ *  predecessor did not land in the slot being summed takes no sample — cron
+ *  drift makes that happen now and then, and a missed sample costs nothing
+ *  while a mispaired one would move the published rate. */
 export const sample = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -155,7 +207,10 @@ export const sample = internalMutation({
     // Why a run produced nothing is the first question anyone asks of a fitted
     // number, so every rejection is counted and returned rather than inferred
     // from a silent zero.
-    const skipped = { unpaired: 0, below_floor: 0, stale_snapshot: 0, no_tokens: 0 };
+    const skipped = { unpaired: 0, below_floor: 0, no_tokens: 0 };
+    // The largest rise any user showed, kept even when nothing qualified: it is
+    // the difference between "nobody is working" and "the floor is too high".
+    let bestRise = 0;
     for (const [userKey, userDevices] of [...byUser].slice(0, MAX_USERS_PER_RUN)) {
       const windows = windowReadingsOf(userDevices);
       if (!windows.length) continue;
@@ -166,15 +221,9 @@ export const sample = internalMutation({
       // no previous reading, or one taken outside the slot, means no sample.
       const prior = before?.users.find((u) => String(u.user_id) === userKey);
       if (!prior || !before || before.slot !== slot) { skipped.unpaired++; continue; }
-      const rise = percentRise(prior.windows, windows);
+      const rise = percentRise(prior.windows, windows, { before: before.at, after: now });
+      bestRise = Math.max(bestRise, rise);
       if (rise < MIN_PERCENT_DELTA) { skipped.below_floor++; continue; }
-
-      // A device that stopped reporting between the readings means usage we
-      // cannot see, which would read as percent without tokens.
-      const stale = userDevices.some((d) =>
-        (d.cc_accounts?.profiles ?? []).some((p: any) => p.usage && now - p.usage.fetched_at > SNAPSHOT_FRESH_MS),
-      );
-      if (stale) { skipped.stale_snapshot++; continue; }
 
       const tokens = await slotTokensForUser(ctx, userId, slot, now);
       if (tokens <= 0) { skipped.no_tokens++; continue; }
@@ -189,6 +238,7 @@ export const sample = internalMutation({
       samples: folded.recent.length,
       ...(folded.rate != null ? { tokens_per_percent: folded.rate } : {}),
       last_sample: { at: now, slot: calibrationSlot(now), users },
+      last_run: { users: users.length, added: fresh.length, ...skipped, best_rise: bestRise },
     };
     if (row) await ctx.db.patch(row._id, patch);
     else await ctx.db.insert("usage_calibration", patch);

@@ -60,3 +60,20 @@ export function mockInboxStore(overrides: (real: State) => State, extra: State =
   afterAll(() => { active = false; mock.module("../../store/inboxStore", () => real); });
   return getState;
 }
+
+/** The store module's true exports, snapshotted before anything substituted
+ *  them. A file that must hand-roll its own substitution (a whole fake state,
+ *  a mount test that stubs `useTrackedStore`) spreads this so the module keeps
+ *  its other exports while that file runs. */
+export const realInboxStore = real as State;
+
+/** Put the real store module back when this file's tests finish.
+ *
+ *  `mock.module` is process-global and permanent, so a file that substitutes
+ *  the store answers for every file bun runs AFTER it — the whole suite then
+ *  reads a stub with no `setState`, which is how one mount test can take down
+ *  hundreds of unrelated ones. Every file that substitutes the store calls
+ *  this, and a guard test (mockLeak.guard.test.ts) fails the ones that forget. */
+export function restoreInboxStoreAfterAll() {
+  afterAll(() => { mock.module("../../store/inboxStore", () => real); });
+}

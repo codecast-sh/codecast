@@ -1,5 +1,6 @@
 import type { MentionItem } from "../components/editor/MentionList";
 import type { RecentVisit } from "../store/inboxStore";
+import { identityLine } from "./sessionIdentity";
 
 // How the @-mention dropdown decides what to show first.
 //
@@ -67,10 +68,13 @@ export function matchScore(text: string, query: string): number {
  * An empty query returns the same rung for everything, so recency alone
  * orders the list.
  */
-export function mentionMatchRank(item: MentionItem, query: string): number {
+export function mentionMatchRank(item: MentionItem, query: string, personifyAll = false): number {
   const q = query.trim().toLowerCase();
   if (!q) return 0;
-  const name = matchScore(item.label, q);
+  // A personified session is named twice over: the character's name the row
+  // shows and the title behind it. Whichever the reader typed leads.
+  const persona = item.identity ? identityLine(item.identity, item.label, personifyAll).name : null;
+  const name = Math.min(matchScore(item.label, q), persona ? matchScore(persona, q) : Infinity);
   if (name <= 1) return item.type === "person" ? 0 : 1;
   const handle = item.handle?.toLowerCase();
   const shortId = item.shortId?.toLowerCase().replace(/^@/, "");
@@ -107,7 +111,7 @@ export function compareMentionRecency(a: MentionItem, b: MentionItem): number {
   return (b.viewedAt ?? 0) - (a.viewedAt ?? 0) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
-export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = ""): MentionItem[] {
+export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", personifyAll = false): MentionItem[] {
   const byId = new Map<string, MentionItem>();
   for (const item of [...local, ...remote]) {
     const key = `${item.type}:${item.id}`;
@@ -115,7 +119,7 @@ export function mergeMentionSuggestions(local: MentionItem[], remote: MentionIte
   }
   const ranked = [...byId.values()];
   const ranks = new Map<MentionItem, number>();
-  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query));
+  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll));
   const counts = new Map<string, number>();
   return ranked
     .sort((a, b) => ranks.get(a)! - ranks.get(b)! || compareMentionRecency(a, b))

@@ -14,6 +14,8 @@ import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { AgentLogoSvg } from '@/components/AgentLogo';
+import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 
 export type SessionData = {
   _id: string;
@@ -228,6 +230,7 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress }: 
   // Broken preview image → drop the slot, otherwise it reserves row width.
   const [thumbBroken, setThumbBroken] = useState(false);
   const thumbUrl = showImageThumb && !thumbBroken ? session.image_preview_url : null;
+  const identityRow = useSessionIdentityRow(session._id, session as any);
   const ackAssignment = useAckAssignment();
   // Handoff note starts clamped; tapping the pill body reveals the full reason.
   const [pingExpanded, setPingExpanded] = useState(false);
@@ -252,9 +255,19 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress }: 
           {/* Unread carries by WEIGHT plus a leading dot — the same two signals
               the web card and the chat rail use, never a count. */}
           {isUnread && <RNView style={styles.unreadDot} />}
-          <RNText style={[styles.conversationTitle, isUnread && styles.conversationTitleUnread]} numberOfLines={1}>
-            {cleanTitle(session.title)}
-          </RNText>
+          {/* Personified: the face, then the name leading the title (the web
+              card's order). Nobody opted in: the row reads as it always did. */}
+          <MobileIdentityFace
+            row={identityRow}
+            size={18}
+            style={styles.identityFace}
+            badge={session.agent_type ? <AgentLogoSvg agentType={session.agent_type} size={8} /> : undefined}
+          />
+          <MobileSessionIdentityLine
+            row={identityRow}
+            title={cleanTitle(session.title)}
+            style={[styles.conversationTitle, isUnread && styles.conversationTitleUnread]}
+          />
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
@@ -594,6 +607,7 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 3,
   },
+  identityFace: { marginRight: 6 },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',

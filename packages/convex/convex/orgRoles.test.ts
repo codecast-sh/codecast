@@ -299,10 +299,12 @@ describe("orgRoles.reparentSession + retire", () => {
     const row = db._tables.pending_messages[0];
     expect(row.status).toBe("held");
     expect(row.content).toContain("You now report to Mate. Yours now.");
-    // Nothing about the session moved: not resurrected, not resurfaced, not bumped.
+    // Not resurrected, not bumped. The stash comes off: the new owner has
+    // never seen the session and it must appear in their inbox. A kill stays
+    // (cast restore is the gesture for that).
     const c = db._tables.conversations[0];
     expect(c.inbox_killed_at).toBe(stale);
-    expect(c.inbox_stashed_at).toBe(stale);
+    expect(c.inbox_stashed_at).toBeUndefined();
     expect(c.updated_at).toBe(stale);
     expect(c.has_pending_messages).toBeUndefined();
     // The next real message releases it, and it is the older row, so it reads first.
@@ -310,6 +312,18 @@ describe("orgRoles.reparentSession + retire", () => {
     await enqueuePendingMessage(ctx, c, ME as any, { content: "pick this up", human: true });
     expect(db._tables.pending_messages.map((p: any) => p.status)).toEqual(["pending", "pending"]);
     expect(db._tables.pending_messages[0].content).toContain("You now report to Mate.");
+  });
+
+  test("a reparent to a role keeps the stash: the role triages and the row nests under it without anyone's eyes", async () => {
+    const stale = Date.now() - 2 * 60 * 60 * 1000;
+    const db = fixtures({ conversations: [conv({ updated_at: stale, inbox_stashed_at: stale, inbox_stash_hidden: true })] });
+    const ctx = ctxOf(db);
+    const role = await performCreateRole(ctx, ME as any, { name: "A", handle: "aa", team_id: TEAM });
+    await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "role", role_id: role._id } });
+    const c = db._tables.conversations[0];
+    expect(c.org_role_id).toBe(role._id);
+    expect(c.inbox_stashed_at).toBe(stale);
+    expect(c.inbox_stash_hidden).toBe(true);
   });
 
   test("the acting person's own session signs the line; a bot still cannot own", async () => {

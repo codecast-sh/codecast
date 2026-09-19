@@ -1045,9 +1045,8 @@ export function buildBlankLaunchArgs(
   }
   if (agentType === "muse") {
     // Same codex shape: getPermissionFlags returns null when agent_args.muse
-    // pins an approval mode, so concatenating can't double up. Without this
-    // branch a blank muse launched in its default on-request mode and parked
-    // on TUI approval prompts nobody can answer.
+    // pins an approval mode, so concatenating can't double up. The flags
+    // carry `--yolo` unless the stored mode is explicitly "default".
     const flags = [getAgentArgs(config, "muse") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
@@ -6105,8 +6104,17 @@ async function executeRemoteCommand(
       // "Update now" from the in-app banner: apply the published desktop release
       // immediately (force quit + swap + relaunch) instead of waiting for the
       // next app quit. Forced, so it stops a running app via SIGTERM/SIGKILL.
+      // Sent by a click, or by the web's below-floor gate on its own. Forced, so
+      // it runs from a source checkout, ignores the retry throttle and stops a
+      // running app; but never a reinstall of an app that is already current —
+      // the gate broadcasts to every daemon of the user, and a second Mac that
+      // is fine must stay untouched.
       case "desktop_update": {
-        const applied = await checkForDesktopUpdate((msg) => log(msg), { force: true });
+        const applied = await checkForDesktopUpdate((msg) => log(msg), {
+          force: true,
+          reinstall: false,
+          warn: (msg) => logWarn(msg),
+        });
         if (applied) {
           result = "desktop_updated";
         } else {
@@ -25700,7 +25708,7 @@ function maybeUpdateDesktopApp(syncService: SyncService): void {
     try {
       minVersion = await syncService.getMinDesktopVersion();
     } catch {}
-    await checkForDesktopUpdate((msg) => log(msg), { minVersion });
+    await checkForDesktopUpdate((msg) => log(msg), { minVersion, warn: (msg) => logWarn(msg) });
   })().catch(() => {});
 }
 

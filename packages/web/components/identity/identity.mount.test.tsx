@@ -109,3 +109,24 @@ test("a role's standing session wears the role and is personified without opting
   const same = await render(<SessionIdentityLine row={row as never} title="Infra lead" />);
   assert.equal(same.textContent, "Infra lead@infra");
 });
+
+test("a list's glyph: the face when personified, the surface's own mark when not", async () => {
+  const { SessionGlyph } = await import("./SessionGlyph");
+  await setPersonifyAll(false);
+  const plain = await render(
+    <SessionGlyph row={{ _id: ID }} fallback={<span data-old-mark>icon</span>} />,
+  );
+  assert.ok(!plain.querySelector("img"), "nobody opted in: no face");
+  assert.ok(plain.querySelector("[data-old-mark]"), "the row keeps the mark it always had");
+
+  const chosen = await render(
+    <SessionGlyph row={{ _id: ID, character_avatar: "otter" }} fallback={<span data-old-mark>icon</span>} />,
+  );
+  assert.ok(chosen.querySelector("img"), "a chosen character shows its face");
+  assert.ok(!chosen.querySelector("[data-old-mark]"), "and replaces the old mark");
+
+  await setPersonifyAll(true);
+  const all = await render(<SessionGlyph row={{ _id: ID }} fallback={<span data-old-mark>icon</span>} />);
+  assert.ok(all.querySelector("img"), "the workspace switch personifies every row");
+  await setPersonifyAll(false);
+});

@@ -31,13 +31,22 @@ export function orgRolesSig(tree: OrgTree | null | undefined): string {
   // too: the task board's Chain axis nests a role under whoever it reports to
   // (lib/taskChain), so a role moved from one person to another must repaint.
   for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}|${r.avatar ?? ""}|${r.scope.project_ids.join(",")}|${r.reports_to.kind}:${r.reports_to.kind === "role" ? r.reports_to.role_id : r.reports_to.user_id}`;
+  // A role's seat is a bot user on the roster. Surfaces that list people
+  // (the assignee picker, the assignee filter) leave those out, because the
+  // role is the thing to name; so the pairing is part of what they draw.
+  for (const a of tree.anchors) if (a.org_role_id) sig += `\n@${a.bot_user_id}:${a.org_role_id}`;
   return sig;
 }
 
-export function useOrgRoles(): { roles: OrgRole[]; workspace: OrgWorkspace | null } {
+const NO_IDS: ReadonlySet<string> = new Set();
+
+export function useOrgRoles(): { roles: OrgRole[]; workspace: OrgWorkspace | null; roleBotUserIds: ReadonlySet<string> } {
   const sig = useInboxStore((s) => orgRolesSig(s.orgTree));
   return useMemo(() => {
     const tree = useInboxStore.getState().orgTree;
-    return { roles: tree?.roles ?? NO_ROLES, workspace: tree?.workspace ?? null };
+    const roleBotUserIds = tree?.anchors.some((a) => a.org_role_id)
+      ? new Set(tree.anchors.filter((a) => a.org_role_id).map((a) => a.bot_user_id))
+      : NO_IDS;
+    return { roles: tree?.roles ?? NO_ROLES, workspace: tree?.workspace ?? null, roleBotUserIds };
   }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
 }

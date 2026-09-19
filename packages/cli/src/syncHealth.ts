@@ -198,9 +198,21 @@ export async function getStuckSyncs(options: {
     }
 
     const identity = sessionIdentity(filePath, record);
-    const signature = isSignatureUnit(filePath, record);
+    const unit = record.sourceGeneration?.unit;
+    const client = record.sourceGeneration?.client;
+    // Count-unit clients track message counts, not byte offsets, and
+    // opencode/cursorDb share one sqlite store across every session under a
+    // single ledger key — so neither the store's size nor its mtime can be
+    // attributed to the recorded session. A 1.5GB opencode.db once reported
+    // its whole file as one fully-synced idle session's backlog. There is no
+    // honest stuck signal here, so skip these records entirely.
+    if (unit === "count" && (client === "opencode" || client === "cursorDb")) continue;
+    // Any other non-byte unit (signatures, or a per-session count-unit file
+    // like gemini's) reports stale writes without byte claims — `size -
+    // position` would mix bytes with counts or signatures.
+    const unexamined = isSignatureUnit(filePath, record) || unit === "count";
 
-    if (signature) {
+    if (unexamined) {
       if (isGrokUpdatesPath(filePath) && grokGrowthIsHousekeeping(filePath, record.lastSyncedAt)) continue;
       if (isMuseSessionPath(filePath) && museGrowthIsHousekeeping(filePath, record.lastSyncedAt)) continue;
       const pendingSince = record.lastSyncedAt;

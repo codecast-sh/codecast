@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { installTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, evidenceTemplate, installTemplate, reportTemplate, setupTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -35,6 +35,7 @@ class Server {
   stacks: any[] = [];
   decisions: any[] = [];
   triggers: any[] = [];
+  work: any[] = [];
   calls: Array<{ endpoint: string; body: any }> = [];
   failAfter?: string;
   failBefore?: string;
@@ -93,6 +94,12 @@ class Server {
       }
       case "/cli/tasks/pause": { if (this.pauseWorks) this.triggers.find((t) => t._id === body.task_id).status = "paused"; return { success: this.pauseWorks }; }
       case "/cli/tasks/update": Object.assign(this.triggers.find((t) => t._id === body.task_id), body); return { success: true };
+      case "/cli/work/list": return { tasks: this.work.filter((t) => !body.label || (t.labels ?? []).includes(body.label)) };
+      case "/cli/work/create": {
+        const existing = this.work.find((t) => t.client_key === body.client_key);
+        if (existing) return existing;
+        const row = { ...body, _id: `work-${this.work.length + 1}`, short_id: `ct-${this.work.length + 1}` }; this.work.push(row); return row;
+      }
       default: throw new Error(`Unexpected API: ${endpoint}`);
     }
   }
@@ -389,10 +396,134 @@ describe("upgrades and adoption", () => {
 });
 function saveReceipt(dir: string, receipt: any) { atomicJson(receiptPath(dir, receipt.instance), receipt); }
 
+describe("manifest v2 hires", () => {
+  test("answers substitute into the handle, charter, routine titles and instructions; secrets never enter the receipt", async () => {
+    const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0", inputs: [
+      { key: "product.slug", label: "Short name", kind: "string", required: true },
+      { key: "budget.monthly_envelope_usd", label: "Envelope", kind: "money", required: true },
+      { key: "accounts.ads", label: "Ads credentials", kind: "secret" },
+      { key: "voice", label: "Voice", kind: "choice", choices: ["plain", "playful"], default: "plain" },
+    ], authority: [{ id: "ads-spend", kind: "spend", label: "Paid search", limit: { usd_per_month: "{{input.budget.monthly_envelope_usd}}" }, requires: ["accounts.ads"] }] };
+    m.role.handle = "{{input.product.slug}}-cmo";
+    m.routines[1].title = "Ads for {{input.product.slug}}";
+    m.routines[1].requires = { authority: ["ads-spend"] };
+    const source = folder(m);
+    fs.writeFileSync(path.join(source, "org/charter.md"), "Own {{project.name}} as {{input.product.slug}} within {{input.budget.monthly_envelope_usd}} a month, voice {{input.voice}}.");
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1", input: ["product.slug=acme", "budget.monthly_envelope_usd=300"] };
+    await expect(installTemplate(server.deps, source, "acme-growth", { ...options, input: ["product.slug=acme"] })).rejects.toThrow(/Required input not answered/);
+    await installTemplate(server.deps, source, "acme-growth", options);
+    const receipt = readReceipt(server.dir, "acme-growth");
+    expect(receipt.config).toEqual({ "product.slug": "acme", "budget.monthly_envelope_usd": "300", voice: "plain" });
+    expect(receipt.proposal.handle).toBe("acme-cmo");
+    expect(JSON.stringify(receipt)).not.toContain("accounts.ads");
+    expect(server.decisions[0].context_md).toContain("Own Product as acme within 300 a month, voice plain.");
+    server.approve();
+    await reconcileTemplate(server.deps, "acme-growth", options);
+    expect(server.triggers.map((t: any) => t.title)).toContain("Ads for acme");
+    const text = await templateInstructions(server.deps, "acme-growth", "charter", options);
+    expect(text).toContain("as acme within 300 a month, voice plain");
+  });
+  test("bind writes the instance file, binds secrets by hash only, and finds or creates ledgers by marker", async () => {
+    const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0", instance_file: ".codecast/packs/growth.toml", inputs: [
+      { key: "product.slug", label: "Short name", kind: "string", required: true },
+      { key: "accounts.ads", label: "Ads credentials", kind: "secret" },
+    ], ledgers: [{ id: "cmo", title: "CMO ledger for {{input.product.slug}}" }, { id: "ads", title: "Ads ledger" }] };
+    const source = folder(m);
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1", input: ["product.slug=acme"] };
+    await installTemplate(server.deps, source, "acme-growth", options);
+    await expect(bindTemplate(server.deps, "acme-growth", options)).rejects.toThrow(/reconcile first/);
+    server.approve();
+    await reconcileTemplate(server.deps, "acme-growth", options);
+    const secret = path.join(tmp(), "ads.json");
+    fs.writeFileSync(secret, "{\"token\":\"never-copied\"}", { mode: 0o644 });
+    await expect(bindTemplate(server.deps, "acme-growth", { ...options, secret: [`accounts.ads=${secret}`] })).rejects.toThrow(/chmod 600/);
+    fs.chmodSync(secret, 0o600);
+    await expect(bindTemplate(server.deps, "acme-growth", { ...options, secret: ["product.slug=" + secret] })).rejects.toThrow(/Not a secret input/);
+    // An older ledger with the marker already exists in the project: adopted, not duplicated.
+    server.work.push({ _id: "work-old", short_id: "ct-41", title: "Ads ledger (old)", labels: ["ledger", `org-template:${readReceipt(server.dir, "acme-growth").key}:ledger:ads`] });
+    const bound = await bindTemplate(server.deps, "acme-growth", { ...options, secret: [`accounts.ads=${secret}`] });
+    expect(bound.ledgers).toEqual({ cmo: { taskId: "work-2", shortId: "ct-2" }, ads: { taskId: "work-old", shortId: "ct-41" } });
+    expect(server.work.find((t) => t.short_id === "ct-2")).toMatchObject({ title: "CMO ledger for acme", task_type: "chore", project_id: "project-1" });
+    expect(bound.bindings!["accounts.ads"]).toMatchObject({ host: expect.any(String), path_hash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    const receiptText = fs.readFileSync(receiptPath(server.dir, "acme-growth"), "utf8");
+    expect(receiptText).not.toContain("never-copied");
+    expect(receiptText).not.toContain(secret);
+    const instanceFile = fs.readFileSync(path.join(server.dir, ".codecast/packs/growth.toml"), "utf8");
+    expect(Bun.TOML.parse(instanceFile)).toEqual({ product: { slug: "acme" }, accounts: { ads: secret }, ledgers: { cmo: "ct-2", ads: "ct-41" } });
+    expect(instanceFile).not.toContain("never-copied");
+    // The instance's own record: evidence, scoreboard, setup; status derives readiness and the one ask.
+    await expect(evidenceTemplate("acme-growth", "ads_read", { ...options, status: "pass", source: "ct-1" })).rejects.toThrow(/Not an evidence check/);
+    // Rerun: nothing new created, same ledgers.
+    const again = await bindTemplate(server.deps, "acme-growth", options);
+    expect(again.ledgers).toEqual(bound.ledgers);
+    expect(server.work).toHaveLength(2);
+  }, 30000);
+});
+
+describe("the project's lead", () => {
+  test("a hire beside an existing lead is refused; hiring under the lead is proposed; face and tenure ride the proposal", async () => {
+    const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0" };
+    m.role.avatar = "fox"; m.role.tenure = { kind: "program", then: "review" };
+    const source = folder(m);
+    const server = new Server(tmp());
+    server.roles.push({ _id: "role-lead", short_id: "or-9", handle: "growth", name: "Growth lead", status: "paused", scope: { project_ids: ["project-1"], plan_ids: [] } }, { _id: "role-cos", short_id: "or-1", handle: "chief-of-staff", name: "Chief of Staff", status: "active", scope: { project_ids: [], plan_ids: [] } }, { _id: "role-old", short_id: "or-2", handle: "old-lead", name: "Old", status: "retired", scope: { project_ids: ["project-1"], plan_ids: [] } });
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1" };
+    await expect(installTemplate(server.deps, source, "acme", options)).rejects.toThrow(/already has a lead, @growth.*--reports-to @growth/);
+    await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@chief-of-staff" })).rejects.toThrow(/already has a lead, @growth/);
+    await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@nobody" })).rejects.toThrow(/No active role @nobody/);
+    await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "growth" })).rejects.toThrow(/me or @handle/);
+    expect(server.writes()).toHaveLength(0);
+    const receipt = await installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@growth" });
+    expect(receipt.proposal).toMatchObject({ reports_to: "@growth", avatar: "fox", tenure: { kind: "program", ends: { project: "pr-1" }, then: "review" }, trust: "understand" });
+  });
+});
+
+describe("instance record, readiness and the loader", () => {
+  test("setup ask, evidence, scoreboard and readiness flow through status and the routine's instructions", async () => {
+    const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0",
+      authority: [{ id: "site-write", kind: "write", label: "Ship pages into the working tree" }],
+      setup: [{ id: "search-console", title: "Verify the domain", who: "human", unlocks: ["weekly"] }, { id: "measurement", title: "See one real event", who: "role" }],
+      evidence: [{ id: "technical", title: "Crawler HTML verified", max_age: "7d", required_for: ["weekly"] }],
+      scoreboard: [{ key: "primary_events_7d", label: "Primary events" }] };
+    m.routines[0].mode = "apply"; m.routines[0].requires = { evidence: ["technical"] };
+    const source = folder(m);
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1" };
+    await installTemplate(server.deps, source, "acme", options);
+    await expect(evidenceTemplate("acme", "technical", { ...options, status: "pass", source: "ct-9" })).rejects.toThrow(/approved and applied/);
+    server.approve(); await reconcileTemplate(server.deps, "acme", options);
+    let status = await templateStatus(server.deps, "acme", options);
+    expect(status.ask).toMatchObject({ id: "search-console", who: "human", status: "open" });
+    expect(status.readiness.weekly).toEqual({ ready: false, mode: "propose", missing: ["evidence technical has no pass"] });
+    expect(status.readiness.ads).toEqual({ ready: true, mode: "propose", missing: [] });
+    await expect(setupTemplate("acme", "search-console", { ...options, done: true })).rejects.toThrow(/person's step/);
+    await setupTemplate("acme", "measurement", { ...options, done: true, evidence: "ct-48703" });
+    await evidenceTemplate("acme", "technical", { ...options, status: "pass", source: "https://codecast.sh/t/ct-48700", detail: ["routes=38"] });
+    await reportTemplate("acme", ["primary_events_7d=7"], { ...options, source: "ct-48702" });
+    status = await templateStatus(server.deps, "acme", options);
+    expect(status.readiness.weekly).toEqual({ ready: true, mode: "apply", missing: [] });
+    expect(status.scoreboard.primary_events_7d).toMatchObject({ value: "7", source: "ct-48702" });
+    expect(status.setup.map((r: any) => [r.id, r.status])).toEqual([["search-console", "open"], ["measurement", "done"]]);
+    // A person activates the routine; its instructions then carry the mode it runs in now.
+    const weekly = server.triggers.find((t: any) => t.title === "CMO portfolio review");
+    Object.assign(weekly, { status: "scheduled", precheck: undefined });
+    expect(await templateInstructions(server.deps, "acme", "weekly", options)).toContain("grants remain authoritative.\nMode now: apply.\n\nRun weekly");
+    // The pass ages out: same schedule, propose mode, and the run is told why.
+    const receipt = readReceipt(server.dir, "acme");
+    receipt.evidence!.technical!.observed_at = Date.now() - 9 * 86400000;
+    atomicJson(receiptPath(server.dir, "acme"), receipt);
+    const lapsed = await templateInstructions(server.deps, "acme", "weekly", options);
+    expect(lapsed).toContain("Mode now: propose.\nNot met for weekly: evidence technical is 9 days old.\nPropose mode: read, draft and report; make no external change, spend nothing, publish nothing.");
+    expect(await templateInstructions(server.deps, "acme", "charter", options)).not.toContain("Mode now");
+  }, 30000);
+});
+
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "upgrade", "instructions"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
 

@@ -100,7 +100,9 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, clas
         lead={lead}
         noun="lead"
         size={size}
-        onChange={editable && roles ? onChange : undefined}
+        onChange={editable ? onChange : undefined}
+        // Editable with no role to offer: the chip is disabled and says why,
+        // instead of a "No lead" that looks like nothing can be done.
         blockedReason={otherWorkspace ? "Switch to the project's workspace to name its lead" : undefined}
       />
       {lead.kind === "none" && canHire && (
@@ -141,12 +143,12 @@ export function ProjectLeadMark({ projectId, roleId }: { projectId: string; role
   if (lead.kind === "watchers") {
     return (
       <span className="shrink-0 italic" style={{ color: "var(--sol-yellow)" }} title={`${watchersLabel(lead.roles.length)}: ${lead.roles.map((r) => r.name).join(", ")}. The project names none of them as its lead.`} data-project-lead="watchers">
-        no lead
+        · no lead
       </span>
     );
   }
   if (lead.role._id === roleId) {
-    return <span className="shrink-0 font-semibold" style={{ color: "var(--sol-violet)" }} title={lead.by === "owner" ? "The project names this role as its lead" : "The only role whose scope lists this project, so it leads it"} data-project-lead="self">lead</span>;
+    return <span className="shrink-0 font-semibold" style={{ color: "var(--sol-violet)" }} title={lead.by === "owner" ? "The project names this role as its lead" : "The only role whose scope lists this project, so it leads it"} data-project-lead="self">· lead</span>;
   }
   return (
     <RoleHoverCard role={lead.role} side="top" triggerClassName="inline-flex shrink-0">

@@ -3,7 +3,7 @@ import { extractInlineImages } from "./inlineImage.js";
 import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
-import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isModelSwitchLimitBanner, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -173,12 +173,14 @@ function stripControlPrefix(text: unknown): string {
 // reached your Fable limit …"); the entry's own errorDetails tells them apart,
 // and this is the only place that sees it — so the throttle is rewritten into
 // the shared classifier's marked form here, once, for every reader (sync,
-// tail probes, the web card).
+// tail probes, the web card). Exception: the short "/model to switch models."
+// form is a spent model window whose 429 payload is identical to a burst's,
+// so the words alone decide and it keeps the CLI's own text (kind "limit").
 export function claudeBannerText(
   entry: Pick<ClaudeSessionEntry, "isApiErrorMessage" | "apiErrorStatus" | "errorDetails">,
   text: string,
 ): string {
-  if (entry.isApiErrorMessage && isTransientRateLimit429(entry.apiErrorStatus, entry.errorDetails)) {
+  if (entry.isApiErrorMessage && !isModelSwitchLimitBanner(text) && isTransientRateLimit429(entry.apiErrorStatus, entry.errorDetails)) {
     return throttleBannerContent(text);
   }
   return text;
@@ -2090,7 +2092,17 @@ export function extractGrokSessionId(content: string): string | undefined {
 //     [{id/call_id, name, args: JSON-string}]} → assistant turn carrying
 //     toolCalls (args parse-failures become {}, never a throw).
 //   - "tool_result_batch_committed" {batch_id, results: [{tool_call_id,
-//     text}]} → assistant turn carrying toolResults (pi convention).
+//     text}]} → the results for the calls, MERGED onto the message whose
+//     message_id equals batch_id (muse reuses the id for both halves, so
+//     emitting a second message would mint two rows with one uuid: the sync
+//     delta keys on uuid, and the collision re-sent the call row on every
+//     pass forever). A batch with no matching call stands alone.
+//   - "run_retracted" → the run never produced output and muse put the prompt
+//     back in the composer (an interrupt before the first token). Every
+//     message of that run is dropped, so the prompt the user re-submits is
+//     ONE turn, not two. Already-synced rows disappear through the daemon's
+//     orphan sweep (computePiSyncDelta), which deletes uuids the parser no
+//     longer emits.
 //   - "reasoning_summary_committed" {text} → thinking on the turn's most
 //     recent assistant message (summaries only).
 //   - "model_completed" {usage: {input_tokens, output_tokens,
@@ -2136,7 +2148,20 @@ function museText(value: unknown): string {
 export function parseMuseSessionFile(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   const runModel = new Map<string, string>();
+  // Which run produced each message, so run_retracted can drop the whole run,
+  // and the message each uuid belongs to, so a result batch merges onto its
+  // own tool-call message instead of becoming a second row under one uuid.
+  const messageRun = new Map<ParsedMessage, string | undefined>();
+  const byUuid = new Map<string, ParsedMessage>();
+  const retractedRuns = new Set<string>();
   let lastAssistant: ParsedMessage | null = null;
+
+  const emit = (msg: ParsedMessage, runId: string | undefined): ParsedMessage => {
+    messages.push(msg);
+    messageRun.set(msg, runId);
+    if (msg.uuid) byUuid.set(msg.uuid, msg);
+    return msg;
+  };
 
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
@@ -2169,7 +2194,7 @@ export function parseMuseSessionFile(content: string): ParsedMessage[] {
         const prompt = museText(event.prompt);
         if (isCodecastImportNotice(prompt)) break;
         if (prompt.trim()) {
-          messages.push({ uuid: runId, role: "user", content: prompt, timestamp });
+          emit({ uuid: runId, role: "user", content: prompt, timestamp }, runId);
           lastAssistant = null;
         }
         break;
@@ -2185,9 +2210,34 @@ export function parseMuseSessionFile(content: string): ParsedMessage[] {
             timestamp,
             model: runId ? runModel.get(runId) : undefined,
           };
-          messages.push(msg);
+          emit(msg, runId);
           lastAssistant = msg;
         }
+        break;
+      }
+      case "terminal": {
+        // A run that FAILED stops with no assistant turn to show for it, so
+        // the transcript otherwise goes silent and the next thing in it is
+        // the same prompt again (the user re-submits). muse's reason says
+        // what actually happened — billing, a missing login, a keychain the
+        // CLI cannot read — so carry it as the turn's last word.
+        const terminal = museText((event as { terminal?: unknown }).terminal);
+        const reason = museText((event as { reason?: unknown }).reason);
+        if (terminal === "failed" && reason.trim()) {
+          lastAssistant = emit({
+            uuid: runId ? `${runId}:failed` : undefined,
+            role: "assistant",
+            content: reason,
+            timestamp,
+            model: runId ? runModel.get(runId) : undefined,
+          }, runId);
+        }
+        break;
+      }
+      case "run_retracted": {
+        // The run produced nothing and muse restored the prompt to the
+        // composer; its records are not transcript history.
+        if (runId) retractedRuns.add(runId);
         break;
       }
       case "reasoning_summary_committed": {
@@ -2231,7 +2281,7 @@ export function parseMuseSessionFile(content: string): ParsedMessage[] {
             toolCalls,
             model: runId ? runModel.get(runId) : undefined,
           };
-          messages.push(msg);
+          emit(msg, runId);
           lastAssistant = msg;
         }
         break;
@@ -2252,13 +2302,27 @@ export function parseMuseSessionFile(content: string): ParsedMessage[] {
         }
         if (toolResults.length > 0) {
           const batchId = museText((event as { batch_id?: unknown }).batch_id);
-          messages.push({
-            uuid: batchId || undefined,
-            role: "assistant",
-            content: "",
-            timestamp,
-            toolResults,
-          });
+          const callMessage = batchId ? byUuid.get(batchId) : undefined;
+          if (callMessage) {
+            // Same uuid, same turn step: hang the results on the calls they
+            // answer. A re-emitted batch replaces a result for the same call
+            // rather than appending a second copy of it.
+            const merged = callMessage.toolResults ?? [];
+            for (const result of toolResults) {
+              const at = merged.findIndex((r) => r.toolUseId === result.toolUseId);
+              if (at >= 0) merged[at] = result;
+              else merged.push(result);
+            }
+            callMessage.toolResults = merged;
+          } else {
+            emit({
+              uuid: batchId || undefined,
+              role: "assistant",
+              content: "",
+              timestamp,
+              toolResults,
+            }, runId);
+          }
         }
         break;
       }
@@ -2285,7 +2349,11 @@ export function parseMuseSessionFile(content: string): ParsedMessage[] {
     }
   }
 
-  return messages;
+  if (retractedRuns.size === 0) return messages;
+  return messages.filter((msg) => {
+    const runId = messageRun.get(msg);
+    return !runId || !retractedRuns.has(runId);
+  });
 }
 
 /** cwd of a muse session, from the session log's own `route_facts` record —

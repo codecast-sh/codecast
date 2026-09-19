@@ -8,3 +8,4 @@
 cli = "packages/cli/tsconfig.typecheck.json"
 web = "packages/web/tsconfig.json"
 convex = "packages/convex/convex/tsconfig.json"
+mobile = "packages/mobile/tsconfig.json"

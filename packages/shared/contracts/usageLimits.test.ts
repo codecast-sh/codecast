@@ -10,6 +10,7 @@ import {
   describeDecision,
   recoveryModeOf,
   RESUME_BURST_SPACING_MS,
+  pendingProposal,
   type CcUsage,
 } from "./usageLimits";
 
@@ -201,5 +202,26 @@ describe("resume pacing — one rate for every revive path", () => {
     expect(perMinute).toBeLessThanOrEqual(3);
     // Eight sessions must now take over two minutes, not 48 seconds.
     expect(7 * RESUME_BURST_SPACING_MS).toBeGreaterThan(120_000);
+  });
+})
+
+describe("pendingProposal — the ask the banner and the card surface", () => {
+  const propose = (at: number) => ({ kind: "propose" as const, at, target_name: `t${at}` });
+  test("finds the newest proposal on an online primary machine", () => {
+    expect(
+      pendingProposal([
+        { online: true, auto_switch_state: { last_decision: propose(1) } },
+        { online: true, auto_switch_state: { last_decision: propose(5) } },
+      ])?.at,
+    ).toBe(5);
+  });
+  test("ignores offline and remote machines, and decisions that are not asks", () => {
+    expect(
+      pendingProposal([
+        { online: false, auto_switch_state: { last_decision: propose(9) } },
+        { online: true, is_remote: true, auto_switch_state: { last_decision: propose(8) } },
+        { online: true, auto_switch_state: { last_decision: { kind: "continue", at: 7 } } },
+      ]),
+    ).toBeNull();
   });
 })

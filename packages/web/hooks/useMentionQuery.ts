@@ -8,6 +8,8 @@ import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
+import { identityLine, identityRowOf } from "../lib/sessionIdentity";
+import { personifyAllNow } from "./usePersonifyAll";
 
 // score/matchScore moved to lib/mentionRanking, which owns ranking and must not
 // import this module back. Re-exported so every existing caller is unchanged.
@@ -140,7 +142,15 @@ export function labelMentionItems(s: {
 export function mentionItemMatches(m: MentionItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
+  // A personified session answers to its NAME as well as its title: the
+  // dropdown shows "Dune", so typing "dune" has to find it (session-characters
+  // .md S3). The name it wears depends on the workspace switch, so this asks
+  // the same resolver the row's own rendering asks.
+  const persona = m.identity
+    ? identityLine(m.identity, m.label, personifyAllNow()).name
+    : null;
   return (
+    (!!persona && matchScore(persona, q) !== Infinity) ||
     matchScore(m.label, q) !== Infinity ||
     (!!m.shortId && m.shortId.toLowerCase().includes(q)) ||
     (!!m.sublabel && matchScore(m.sublabel, q) !== Infinity) ||
@@ -199,9 +209,10 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       messageCount: sess.message_count, projectPath: sess.git_root || sess.project_path,
       status: sess.agent_status ?? undefined, agentType: sess.agent_type,
       model: sess.model ?? undefined, updatedAt: sess.updated_at, idleSummary: sess.idle_summary,
+      identity: identityRowOf(sess as never),
     })),
   ];
-  return mergeMentionSuggestions(items, [], mentionViewTimes(s));
+  return mergeMentionSuggestions(items, [], mentionViewTimes(s), Infinity, "", personifyAllNow());
 }
 
 export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
@@ -212,7 +223,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const s = useInboxStore.getState();
     return mergeMentionSuggestions(
       buildMentionItems(s, kind === "team" ? { kind, teamId } : kind === "personal" ? { kind, userId } : { kind }).filter((item) => mentionItemMatches(item, rawQ)),
-      [], mentionViewTimes(s), rawQ.trim() ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE, rawQ,
+      [], mentionViewTimes(s), rawQ.trim() ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE, rawQ, personifyAllNow(),
     );
   }, [kind, teamId, userId]);
 }

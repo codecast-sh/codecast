@@ -29,6 +29,7 @@ import { type Device, deviceColor, deviceDisplayName } from '@/components/Device
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { TriggerDock } from '@/components/TriggerDock';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { useQuery } from 'convex/react';
 import { mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
@@ -969,10 +970,13 @@ type SearchResult = {
 function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
   const Theme = useTheme();
   const firstMatch = result.matches[0];
+  // A found session reads as the same character its inbox row wears.
+  const identityRow = useSessionIdentityRow(result.conversationId);
   return (
     <TouchableOpacity onPress={onPress} style={styles.searchResultItem} activeOpacity={0.6}>
       <RNView style={styles.searchResultHeader}>
-        <RNText style={styles.searchResultTitle} numberOfLines={1}>{result.title}</RNText>
+        <MobileIdentityFace row={identityRow} size={18} style={{ marginRight: 6 }} />
+        <MobileSessionIdentityLine row={identityRow} title={result.title} style={styles.searchResultTitle} />
         <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
       </RNView>
       {firstMatch && (
@@ -1625,6 +1629,19 @@ export default function InboxScreen() {
             this is still one tap from opening the app. The route is cast for
             the same reason the chat pushes are: expo's typed-route union only
             regenerates when Metro runs, so a new route is unknown to tsc. */}
+        {/* The org sits here for the same reason the recorder does: no room
+            for a sixth tab, and the inbox is one tap from opening the app. */}
+        {!isSearching && (
+          <TouchableOpacity
+            style={styles.recordBtn}
+            onPress={() => router.push({ pathname: '/org' } as never)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Open the org"
+          >
+            <FontAwesome name="sitemap" size={14} color={Theme.textMuted} />
+          </TouchableOpacity>
+        )}
         {!isSearching && (
           <TouchableOpacity
             style={styles.recordBtn}

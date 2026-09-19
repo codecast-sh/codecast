@@ -101,6 +101,7 @@ export function pathLabel(path: string): string {
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
     "/org": "Org",
+    "/initiatives": "Initiatives",
     "/chat": "Chat",
     "/community": "Community",
     "/threads": "Threads",

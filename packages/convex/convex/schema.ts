@@ -231,12 +231,14 @@ export default defineSchema({
       claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
       gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+      muse: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
     })),
     agent_default_params: v.optional(v.object({
       claude: v.optional(v.record(v.string(), v.string())),
       codex: v.optional(v.record(v.string(), v.string())),
       gemini: v.optional(v.record(v.string(), v.string())),
       cursor: v.optional(v.record(v.string(), v.string())),
+      muse: v.optional(v.record(v.string(), v.string())),
     })),
     available_agents: v.optional(v.array(v.object({
       name: v.string(),
@@ -1244,6 +1246,15 @@ export default defineSchema({
     // The fact horizon the last delivered frame covered (a change_log seq,
     // i.e. a timestamp); the next frame diffs against it.
     last_frame_seq: v.optional(v.number()),
+    // People who report to the role (org-roles-run-work.md R6): the role keeps
+    // their goals in its brief, reads their sessions against those goals at
+    // every wake, and tells them once a day at most when a high goal stalls.
+    // Edited from the role's Settings tab or `cast role reports`; a person may
+    // add or remove themself, an admin of the role anyone in its boundary.
+    reports_user_ids: v.optional(v.array(v.id("users"))),
+    // The UTC day a stalled goal notice last went to each reporting person
+    // (keyed by user id), so a person hears about a stall once a day at most.
+    goal_notices: v.optional(v.record(v.string(), v.string())),
     // Standing or program (org-staffing.md S10). A program ends with a plan,
     // a project or a date; when the end comes org.health raises program_ended
     // and the next review proposes what `then` says. Absent = undeclared.
@@ -1370,6 +1381,95 @@ export default defineSchema({
     applied_note: v.optional(v.string()),
     applied_at: v.optional(v.number()),
   }).index("by_proposal", ["proposal_id", "seq"]),
+
+  // ── Roles hired from a template (docs/architecture/org-hire.md W8) ──
+  // A template is a role a person can hire more than once: the folder is its
+  // release, this row is what the catalog and the hire form read. `workspace`
+  // is the ACCESS key (lib/access): the publishing workspace's key, or the
+  // positive value "codecast" for a template every workspace may hire. An
+  // absent or unknown key grants nothing.
+  org_templates: defineTable({
+    template_id: v.string(), // the manifest's slug, unique per publisher
+    workspace: v.string(),
+    name: v.string(),
+    description: v.string(),
+    avatar: v.optional(v.string()),
+    latest: v.object({ version: v.string(), digest: v.string() }),
+    // Oldest first. Same version with another digest is refused at publish.
+    releases: v.array(v.object({
+      version: v.string(),
+      digest: v.string(),
+      status: v.union(v.literal("draft"), v.literal("canary"), v.literal("stable")),
+      changelog: v.optional(v.string()),
+      storage_id: v.optional(v.id("_storage")), // the release snapshot, for install from the record
+      published_at: v.number(),
+      published_by: v.id("users"),
+    })),
+    // The latest release's validated manifest (orgTemplateManifest.OrgTemplate),
+    // so the hire form renders inputs, authority and setup without the folder.
+    manifest: v.any(),
+    // Where lessons for this template are filed as tasks (H9).
+    review_project_id: v.optional(v.id("projects")),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace", ["workspace"])
+    .index("by_template_id", ["template_id"]),
+
+  // One hire of a template on one project. The receipt on the host stays the
+  // local pin; this row is the record the web reads and an upgrade walks.
+  // `instance_key` is the receipt's UUID, so the host step upserts by it.
+  org_template_instances: defineTable({
+    instance_key: v.string(),
+    instance: v.string(), // the slug a person chose
+    workspace: v.string(), // ACCESS key of the hiring workspace
+    template_id: v.string(),
+    version: v.string(),
+    digest: v.string(),
+    project_id: v.id("projects"),
+    role_id: v.optional(v.id("org_roles")),
+    host: v.optional(v.object({ machine: v.string(), dir: v.string() })),
+    phase: v.union(v.literal("awaiting_host"), v.literal("ready"), v.literal("upgrading"), v.literal("retired")),
+    update_policy: v.union(v.literal("manual"), v.literal("canary"), v.literal("stable")),
+    config: v.optional(v.record(v.string(), v.string())), // hire answers; never a secret
+    // Secret inputs bound on a host: which machine, and the hash of the path.
+    bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),
+    ledgers: v.optional(v.record(v.string(), v.object({ taskId: v.string(), shortId: v.string() }))),
+    // The instance's own record (orgTemplateState): written by the role with
+    // sources a person can open, read by readiness and the role page.
+    evidence: v.optional(v.record(v.string(), v.object({ status: v.union(v.literal("pass"), v.literal("fail")), observed_at: v.number(), source: v.string(), detail: v.optional(v.record(v.string(), v.string())) }))),
+    scoreboard: v.optional(v.record(v.string(), v.object({ value: v.string(), observed_at: v.number(), source: v.string() }))),
+    setup: v.optional(v.record(v.string(), v.object({ status: v.union(v.literal("open"), v.literal("done"), v.literal("skipped")), done_at: v.optional(v.number()), evidence: v.optional(v.string()) }))),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_instance_key", ["instance_key"])
+    .index("by_workspace", ["workspace"])
+    .index("by_role", ["role_id"])
+    .index("by_template", ["template_id"]),
+
+  // A lesson an instance sends to its template's publisher (H9). It carries
+  // the PUBLISHER's access key: the hiring workspace writes it and afterwards
+  // sees only its status, never the publisher's workspace.
+  org_template_lessons: defineTable({
+    template_id: v.string(),
+    workspace: v.string(), // ACCESS key of the publisher, or "codecast"
+    from_workspace: v.string(),
+    instance_key: v.string(),
+    release: v.object({ version: v.string(), digest: v.string() }),
+    body: v.string(),
+    evidence: v.array(v.object({ label: v.string(), href: v.string() })),
+    status: v.union(v.literal("open"), v.literal("accepted"), v.literal("declined"), v.literal("released")),
+    released_in: v.optional(v.string()),
+    task_id: v.optional(v.id("tasks")),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_template_status", ["template_id", "status"])
+    .index("by_instance", ["instance_key"]),
 
   // A Slack workspace connected via the "Add to Slack" OAuth flow. Holds the
   // per-workspace bot token (replaces the single app-level SLACK_BOT_TOKEN env
@@ -3287,7 +3387,10 @@ export default defineSchema({
       // One machine's daemon event loop froze past the budget in the last hour
       // (daemonLogs.checkDeviceLoopFreeze). Entity is the device, not a session:
       // the whole machine is late, not one conversation.
-      v.literal("daemon_overloaded")
+      v.literal("daemon_overloaded"),
+      // A role telling a person who reports to it that a high priority goal
+      // has stalled (org-roles-run-work.md R6); one a day at most.
+      v.literal("goal_stall")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -3306,7 +3409,10 @@ export default defineSchema({
       v.literal("device"),
       // A place in a repository (`owner/repo@sha` or `owner/repo#12`): a code
       // comment named the recipient.
-      v.literal("code")
+      v.literal("code"),
+      // A role (its short id): the goal stall notice opens the role's page,
+      // where the person reads their goals with what moved and what stalled.
+      v.literal("org_role")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -4091,6 +4197,76 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"]),
+
+  // An initiative (docs/architecture/initiatives-projects-role-page.md I1): a
+  // goal the company is trying to reach, carried by an intentional set of
+  // projects, with one owner who drives it. The row shape is
+  // @codecast/shared/contracts/initiative. Low volume and read whole, so it
+  // stays off the change feed: the web reads one live query per workspace.
+  initiatives: defineTable({
+    // Who created it. The access stamp reads `user_id` on every table.
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    // ACCESS axis — see tasks.workspace.
+    workspace: v.string(),
+    short_id: v.string(), // "in-N"
+    // The optimistic stub's key; the row that carries it supersedes the stub.
+    client_key: v.optional(v.string()),
+    title: v.string(),
+    // Purpose, scope and context.
+    description: v.optional(v.string()),
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("planned"),
+      v.literal("active"),
+      v.literal("completed"),
+      v.literal("cancelled")
+    ),
+    // A person or a role (org-roles-run-work.md R5). Absent = nobody drives it.
+    owner: v.optional(v.union(
+      v.object({ kind: v.literal("user"), user_id: v.id("users") }),
+      v.object({ kind: v.literal("role"), role_id: v.id("org_roles") })
+    )),
+    target_date: v.optional(v.number()),
+    priority: v.optional(v.union(v.literal("p0"), v.literal("p1"), v.literal("p2"), v.literal("p3"))),
+    labels: v.optional(v.array(v.string())),
+    // Ordered, added on purpose. A project may sit in several initiatives.
+    project_ids: v.array(v.id("projects")),
+    // One level: a row that has a parent is never a parent itself.
+    parent_initiative_id: v.optional(v.id("initiatives")),
+    // Copied from the latest update when it is posted; "none" before one.
+    health: v.union(v.literal("none"), v.literal("on_track"), v.literal("at_risk"), v.literal("off_track")),
+    health_at: v.optional(v.number()),
+    latest_update_id: v.optional(v.id("initiative_updates")),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
+    .index("by_short_id", ["short_id"])
+    .index("by_parent", ["parent_initiative_id"]),
+
+  // What the owner said about an initiative, and how it is going. Access is
+  // the parent initiative's; `workspace` and `team_id` are copies written with
+  // the row (an initiative never changes workspace), so a list filters on them
+  // without reading the parent.
+  initiative_updates: defineTable({
+    initiative_id: v.id("initiatives"),
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.string(),
+    client_key: v.optional(v.string()),
+    body: v.string(),
+    health: v.union(v.literal("on_track"), v.literal("at_risk"), v.literal("off_track")),
+    // A person, or a role through its standing session.
+    by: v.union(
+      v.object({ kind: v.literal("user"), user_id: v.id("users") }),
+      v.object({ kind: v.literal("role"), role_id: v.id("org_roles"), conversation_id: v.optional(v.id("conversations")) })
+    ),
+    at: v.number(),
+  })
+    .index("by_initiative_at", ["initiative_id", "at"]),
 
   // A post on a project's Updates tab: a human status post or an agent's
   // periodic digest. Untracked by the change feed (same trade as
@@ -6202,6 +6378,16 @@ export default defineSchema({
     samples: v.optional(v.number()),
     recent: v.optional(v.array(v.number())),
     updated_at: v.number(),
+    // Why the last run kept or dropped each user, so a rate that never moves can
+    // be diagnosed from the row instead of by instrumenting the job again.
+    last_run: v.optional(v.object({
+      users: v.number(),
+      added: v.number(),
+      unpaired: v.number(),
+      below_floor: v.number(),
+      no_tokens: v.number(),
+      best_rise: v.number(),
+    })),
     // The previous reading, which the next run diffs against: when it was taken
     // and, per user, the utilization of every window their devices reported.
     last_sample: v.optional(v.object({
@@ -6213,6 +6399,9 @@ export default defineSchema({
           key: v.string(),
           percent: v.number(),
           resets_at: v.optional(v.number()),
+          // When that account was last polled: a window nobody re-read between
+          // two runs cannot testify about the traffic between them.
+          fetched_at: v.optional(v.number()),
         })),
       })),
     })),

@@ -3,20 +3,26 @@ import {
   useMemo,
   useState } from 'react';
 import { Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import { Text } from '@/components/Themed';
+import { Text, TextInput } from '@/components/Themed';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useOwners, useOwnerCandidates, pickRoster } from '@codecast/web/hooks/useOwners';
+import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi } from '@codecast/web/hooks/useOwners';
+import { useStoreOwnersEnv, useSessionRoleFacts } from '@codecast/web/hooks/useOwnersStoreEnv';
+import { useSyncOrgTreeFeeder } from '@codecast/web/hooks/useSyncOrgTree';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, chipText, CHROME_FONT_CAP, CHIP_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
 import {
@@ -35,8 +41,9 @@ import {
  * lives in (owners). The axes stay independent — moving the device never
  * changes owners and vice versa — they just share a surface.
  *
- * Device rows are one-shot (tap moves the session and closes the sheet);
- * owner rows are a multi-select (tap toggles, the sheet stays open).
+ * Device rows are one-shot (tap moves the session and closes the sheet), and
+ * so are "Take ownership" and a role under "Move to a role"; owner rows are a
+ * multi-select (tap toggles, the sheet stays open).
  */
 
 function OwnerAvatar({ name, image, size = 18 }: { name: string; image?: string; size?: number }) {
@@ -84,16 +91,15 @@ export function AssignmentChip({
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<'teams'> | undefined;
   const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : 'skip');
-  const owners = useOwners(conversationId ?? '', {
+  // The store binding web uses: every owner change and role move rides the one
+  // reparent path, so the inbox refiles and open questions follow the owners.
+  const owners = useOwners(conversationId ?? '', useStoreOwnersEnv(conversationId ?? '', {
     teamMembers: teamMembers as any[] | undefined,
     currentUser,
     notify: (msg) => showToast(msg),
-  });
-  const { ownerIds, ownerList, displayFor, toggle, clearAll, selectable: fallbackSelectable } = owners;
-  const serverRoster = useOwnerCandidates(conversationId ?? '', currentUser, sheetVisible);
-  const selectable = pickRoster(serverRoster, fallbackSelectable).filter(
-    (m: any) => m && !m.is_bot,
-  );
+  }));
+  const { ownerList, displayFor } = owners;
+  const { height: windowHeight } = useWindowDimensions();
 
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
 
@@ -180,9 +186,11 @@ export function AssignmentChip({
         onRequestClose={() => setSheetVisible(false)}
         supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.backdrop} onPress={() => setSheetVisible(false)}>
-          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => {}}>
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: windowHeight * 0.85 }]} onPress={() => {}}>
             <View style={styles.grabber} />
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
             <Text style={styles.sectionLabel}>Run on device · which machine</Text>
             {sortedDevices.length === 0 && (
@@ -226,46 +234,150 @@ export function AssignmentChip({
 
             <View style={styles.divider} />
 
-            <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
-            {selectable.length === 0 && <Text style={styles.emptyText}>No teammates</Text>}
-            {selectable.map((m: any) => {
-              const isYou = currentUser && m._id === currentUser._id;
-              const checked = ownerIds.has(m._id);
-              return (
-                <TouchableOpacity
-                  key={m._id}
-                  style={styles.row}
-                  activeOpacity={0.6}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    toggle(m._id);
-                  }}
-                >
-                  <OwnerAvatar name={m.name || m.email || '?'} image={m.image || m.github_avatar_url} />
-                  <Text style={[styles.rowLabel, { flex: 1 }, checked && { color: Theme.cyan }]} numberOfLines={1}>
-                    {m.name || m.email?.split('@')[0]}
-                    {isYou ? ' (you)' : ''}
-                  </Text>
-                  {checked && <FontAwesome name="check" size={13} color={Theme.cyan} />}
-                </TouchableOpacity>
-              );
-            })}
-            {ownerList.length > 0 && (
-              <TouchableOpacity
-                style={styles.row}
-                activeOpacity={0.6}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  clearAll();
-                }}
-              >
-                <FontAwesome name="times" size={13} color={Theme.textMuted} style={{ width: 20 }} />
-                <Text style={[styles.rowLabel, { color: Theme.textMuted }]}>Clear all owners</Text>
-              </TouchableOpacity>
-            )}
+            <OwnerSheetRows
+              owners={owners}
+              conversationId={conversationId}
+              activeTeamId={currentUser ? (currentUser.active_team_id ?? null) : undefined}
+              onDone={() => setSheetVisible(false)}
+            />
+            </ScrollView>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
+    </>
+  );
+}
+
+/**
+ * Feeds the roles slice while the sheet is open, so "Move to a role" can list
+ * the workspace's roles. Its own component because the team pointer arrives
+ * with the current user: mounting it only once that is known keeps the mirror
+ * pointer, which mobile never writes, out of the subscription.
+ */
+function OrgRolesFeeder({ teamId }: { teamId: string | null }) {
+  useSyncOrgTreeFeeder(teamId);
+  return null;
+}
+
+/**
+ * The owners half of the sheet, mobile twin of the web OwnerMenuItems: the
+ * role the session reports to, "Move to a role", "Take ownership", the roster
+ * as a multi-select with an optional note, and clear-all. Mounted only while
+ * the sheet is open, which bounds the roster and role subscriptions to it.
+ */
+function OwnerSheetRows({
+  owners,
+  conversationId,
+  activeTeamId,
+  onDone,
+}: {
+  owners: OwnersApi;
+  conversationId: string;
+  // undefined while the current user loads; null is the personal workspace.
+  activeTeamId: string | null | undefined;
+  onDone: () => void;
+}) {
+  const Theme = useTheme();
+  const { ownerIds, ownerList, toggle, moveToRole, clearAll, currentUser } = owners;
+  const serverRoster = useOwnerCandidates(conversationId, currentUser);
+  const selectable = pickRoster(serverRoster, owners.selectable).filter((m: any) => m && !m.is_bot);
+  const { liveRoles, orgRoleId, currentRole, isStandingThread } = useSessionRoleFacts(conversationId);
+  const [rolesOpen, setRolesOpen] = useState(false);
+  // Optional note, sent along with the NEXT assignment made from this sheet.
+  // It rides the notification and the assignee's "assigned to you" banner,
+  // then clears once used.
+  const [note, setNote] = useState('');
+  const tap = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  return (
+    <>
+      {activeTeamId !== undefined && <OrgRolesFeeder teamId={activeTeamId} />}
+      {currentRole && (
+        <>
+          <Text style={styles.sectionLabel}>Reports to a role</Text>
+          <View style={styles.row}>
+            <FontAwesome name="sitemap" size={13} color={Theme.violet} style={{ width: 20 }} />
+            <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>{currentRole.name}</Text>
+            <Text style={styles.rowHint}>@{currentRole.handle}</Text>
+          </View>
+        </>
+      )}
+      {!isStandingThread && liveRoles.length > 0 && (
+        <>
+          <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); setRolesOpen((o) => !o); }}>
+            <FontAwesome name="sitemap" size={13} color={Theme.text} style={{ width: 20 }} />
+            <Text style={[styles.rowLabel, { flex: 1 }]}>Move to a role</Text>
+            <FontAwesome name={rolesOpen ? 'chevron-up' : 'chevron-down'} size={11} color={Theme.textMuted} />
+          </TouchableOpacity>
+          {rolesOpen && liveRoles.map((r) => {
+            const isCurrent = r._id === orgRoleId;
+            return (
+              <TouchableOpacity
+                key={r._id}
+                style={[styles.row, styles.nestedRow]}
+                activeOpacity={0.6}
+                disabled={isCurrent}
+                onPress={() => { tap(); onDone(); void moveToRole(r._id, r.name); }}
+              >
+                <Text style={[styles.rowLabel, { flex: 1 }, isCurrent && { color: Theme.violet }]} numberOfLines={1}>{r.name}</Text>
+                <Text style={styles.rowHint}>@{r.handle}</Text>
+                {isCurrent && <FontAwesome name="check" size={13} color={Theme.violet} />}
+              </TouchableOpacity>
+            );
+          })}
+          <View style={styles.divider} />
+        </>
+      )}
+
+      <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
+      {currentUser && !currentUser.is_bot && !ownerIds.has(currentUser._id) && (
+        <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); onDone(); void toggle(currentUser._id); }}>
+          <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 20 }} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.rowLabel, { color: Theme.cyan }]}>Take ownership</Text>
+            <Text style={styles.rowHint}>Add to your inbox; keep existing owners</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+      {selectable.length === 0 && <Text style={styles.emptyText}>No teammates</Text>}
+      {selectable.map((m: any) => {
+        const isYou = currentUser && m._id === currentUser._id;
+        const checked = ownerIds.has(m._id);
+        return (
+          <TouchableOpacity
+            key={m._id}
+            style={styles.row}
+            activeOpacity={0.6}
+            onPress={() => {
+              tap();
+              void toggle(m._id, checked ? undefined : note);
+              if (!checked) setNote('');
+            }}
+          >
+            <OwnerAvatar name={m.name || m.email || '?'} image={m.image || m.github_avatar_url} />
+            <Text style={[styles.rowLabel, { flex: 1 }, checked && { color: Theme.cyan }]} numberOfLines={1}>
+              {m.name || m.email?.split('@')[0]}
+              {isYou ? ' (you)' : ''}
+            </Text>
+            {checked && <FontAwesome name="check" size={13} color={Theme.cyan} />}
+          </TouchableOpacity>
+        );
+      })}
+      {selectable.some((m: any) => !currentUser || m._id !== currentUser._id) && (
+        <TextInput
+          value={note}
+          onChangeText={setNote}
+          placeholder="Add a note with the assignment…"
+          style={styles.noteInput}
+          returnKeyType="done"
+        />
+      )}
+      {ownerList.length > 0 && (
+        <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); void clearAll(); }}>
+          <FontAwesome name="times" size={13} color={Theme.textMuted} style={{ width: 20 }} />
+          <Text style={[styles.rowLabel, { color: Theme.textMuted }]}>Clear all owners</Text>
+        </TouchableOpacity>
+      )}
     </>
   );
 }
@@ -433,6 +545,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 12,
     color: Theme.textMuted,
     marginTop: 1,
+  },
+  nestedRow: { paddingLeft: 30 },
+  noteInput: {
+    fontSize: 13,
+    marginTop: 4,
+    marginBottom: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    backgroundColor: Theme.bgAlt,
   },
   divider: {
     height: StyleSheet.hairlineWidth,

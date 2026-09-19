@@ -17,6 +17,7 @@ import {
   useContext,
   useLayoutEffect,
   useMemo,
+  useState,
   useSyncExternalStore,
   type MouseEvent,
   type RefObject,
@@ -149,6 +150,33 @@ export function useRevealRef(target: RevealTarget, ref: RefObject<HTMLElement | 
     if (hostKey && ref.current) toggleReveal(hostKey, target, ref.current);
   }, [hostKey, target, ref]);
   return { host: host !== null, open, toggle };
+}
+
+/**
+ * Does the surface around `ref` HOST the open band? The band is portalled
+ * into a slot placed in the surface's own DOM, so containment answers it —
+ * and a slot that left the document (its conversation gone, its row recycled)
+ * is contained by nothing.
+ *
+ * `subject` is what the surface is currently showing. The check has to run
+ * again when that changes: the inbox reuses ONE conversation view for every
+ * session it selects, so a surface that hosted a band and then swapped to
+ * another session would otherwise keep reporting that it hosts one — the
+ * reader lands on a conversation folded down to its title with no band in
+ * sight, and nothing unfolds it again.
+ */
+export function useHostsReveal(
+  ref: RefObject<HTMLElement | null>,
+  rootSelector: string,
+  subject?: unknown,
+): boolean {
+  const reveal = useOpenReveal();
+  const [hosting, setHosting] = useState(false);
+  useLayoutEffect(() => {
+    const root = ref.current?.closest(rootSelector);
+    setHosting(!!(reveal && root && root.contains(reveal.slot)));
+  }, [ref, rootSelector, reveal, subject]);
+  return hosting;
 }
 
 /** True inside a band: a host there is inert, so a reference in a revealed

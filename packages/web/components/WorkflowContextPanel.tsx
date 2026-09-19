@@ -60,7 +60,7 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   const name = workflow?.name ?? run.workflow_name ?? "run";
 
   return (
-    <div className="border-b border-sol-border/30 bg-sol-bg-alt/20">
+    <div data-cc-context-panel className="border-b border-sol-border/30 bg-sol-bg-alt/20">
       <button
         type="button"
         aria-expanded={expanded}

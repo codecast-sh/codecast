@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, computeInboxVisible, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, computeInboxVisible, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { _resetSnapshotLedger } from "../idbCollectionDiff";
 import { isPersistedStoreKey } from "../idbCache";
 import { ingestPlanDetail } from "../../hooks/useSyncPlans";
 import { placeSections } from "./placeTestHarness";
@@ -4706,5 +4707,38 @@ describe("reconcileDisownedSessions — stale ownership cleared by payload absen
     useInboxStore.getState().reconcileDisownedSessions([STILL_MINE]);
     const scoped = filterInboxScope(useInboxStore.getState().sessions, "mine", ME);
     expect(Object.keys(scoped).sort()).toEqual([MY_OWN_RUN, STILL_MINE].sort());
+  });
+});
+
+describe("a snapshot collection stays pruned across boot hydration", () => {
+  // Repro (2026-09-18): sd-94 / sd-95 belonged to a session handed to a
+  // teammate. The server stopped listing them for the old holder, the snapshot
+  // sync dropped them from memory, and the deferred IDB hydration merged the
+  // cached copies ("pending, asked: you") straight back. The decision queue
+  // then opened that session, which put it back in the old holder's QUESTIONS
+  // until the next push pruned memory again.
+  const KEEP = "k97aaaaaaaaaaaaaaaaaaaaaaaaaaaa1";
+  const GONE = "k97bbbbbbbbbbbbbbbbbbbbbbbbbbbb2";
+  const row = (_id: string) => ({ _id, conversation_id: "c1", status: "pending", question: "q", created_at: 1 }) as any;
+
+  it("hydration does not resurrect a row the landed snapshot omits", () => {
+    _resetSnapshotLedger();
+    useInboxStore.setState({ sessionDecisions: {} } as any);
+    const cached = { [KEEP]: row(KEEP), [GONE]: row(GONE), temp_stub: row("temp_stub") };
+
+    // Before any snapshot lands the cache is the floor, exactly as before.
+    expect(Object.keys(hydrateMergeValue("sessionDecisions", cached, {}).value as object)).toEqual([KEEP, GONE, "temp_stub"]);
+
+    useInboxStore.getState().syncTable("sessionDecisions", [row(KEEP)]);
+    const live = useInboxStore.getState().sessionDecisions;
+    const merged = hydrateMergeValue("sessionDecisions", cached, live).value as Record<string, unknown>;
+    expect(Object.keys(merged).sort()).toEqual([KEEP, "temp_stub"].sort());
+  });
+
+  it("a delta collection keeps the cache as its floor", () => {
+    const cached = { [KEEP]: { _id: KEEP }, [GONE]: { _id: GONE } };
+    useInboxStore.getState().syncTable("tasks", [{ _id: KEEP, title: "t" }] as any);
+    const merged = hydrateMergeValue("tasks", cached, useInboxStore.getState().tasks).value as Record<string, unknown>;
+    expect(Object.keys(merged)).toContain(GONE);
   });
 });

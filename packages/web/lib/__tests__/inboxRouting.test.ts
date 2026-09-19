@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, resolveSessionSelectKind } from "../inboxRouting";
+import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, resolveSessionSelectKind } from "../inboxRouting";
 
 describe("inboxRouting", () => {
   it("detects real inbox routes", () => {
@@ -28,6 +28,31 @@ describe("pageOwnsRailHighlight", () => {
     expect(pageOwnsRailHighlight("/conversation/abc")).toBe(false);
     expect(pageOwnsRailHighlight(null)).toBe(false);
     expect(pageOwnsRailHighlight(undefined)).toBe(false);
+  });
+});
+
+// Regression: opening /tasks (or any page with no conversation on the stage)
+// left a session row lit in the rail, because leaving the inbox copied the
+// attended conversation into the rail pointer and leaving a conversation page
+// copied the session you had just left. A lit row reads as "this session is
+// open" when nothing is.
+describe("railPointerOnNavigate", () => {
+  it("clears the pointer on pages that show no conversation", () => {
+    expect(railPointerOnNavigate("/tasks")).toBe("clear");
+    expect(railPointerOnNavigate("/docs")).toBe("clear");
+    expect(railPointerOnNavigate("/plans")).toBe("clear");
+    expect(railPointerOnNavigate("/org")).toBe("clear");
+  });
+
+  it("keeps it where the surface highlights its own pointer", () => {
+    expect(railPointerOnNavigate("/inbox")).toBe("keep");
+    expect(railPointerOnNavigate("/conversation/abc")).toBe("keep");
+    expect(railPointerOnNavigate("/conversation/abc", "inbox")).toBe("keep");
+  });
+
+  it("leaves the questions page alone — it publishes the pointer itself", () => {
+    expect(railPointerOnNavigate("/questions")).toBe("keep");
+    expect(railPointerOnNavigate("/questions/ds-4")).toBe("keep");
   });
 });
 

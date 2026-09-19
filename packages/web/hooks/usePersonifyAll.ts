@@ -6,3 +6,9 @@ import { useInboxStore } from "../store/inboxStore";
 export function usePersonifyAll(): boolean {
   return useInboxStore((s) => !!s.clientState?.ui?.personify_sessions);
 }
+
+/** The same switch, read once outside React — for ranking and matching, which
+ *  run in callbacks rather than in a render. */
+export function personifyAllNow(): boolean {
+  return !!useInboxStore.getState().clientState?.ui?.personify_sessions;
+}

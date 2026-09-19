@@ -114,11 +114,12 @@ export type OwnersEnv = {
   teamMembers: any[] | undefined;
   currentUser: any;
   notify?: (msg: string, kind: "success" | "error") => void;
-  // The web binding (org-staffing.md S11): route every owner change through the
-  // org store's reparentOrgSession so the chart node moves in the same tick and
-  // one dispatch reaches the core. It owns its own toast (the "now reports to"
+  // The store binding (org-staffing.md S11, built by useStoreOwnersEnv for web
+  // and mobile alike): route every owner change through the org store's
+  // reparentOrgSession so the chart node moves in the same tick and one
+  // dispatch reaches the core. It owns its own toast (the "now reports to"
   // line from the told counts, or the fallback for a plain remove/clear).
-  // Absent on mobile, which keeps the direct owner mutations below.
+  // A caller that only reads (the mobile handoff banner) leaves it absent.
   reparent?: (target: OwnerReparentTarget, opts: { note?: string; parentName?: string; toastFallback?: string }) => Promise<void>;
   // Human who started the session (author, else runner). When the owner set
   // is empty the chip and menu treat them as the owner — a person who started

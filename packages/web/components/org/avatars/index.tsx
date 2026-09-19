@@ -77,18 +77,25 @@ export const AVATAR_ART: Record<AvatarKey, AvatarArt> = Object.fromEntries(
   ]),
 ) as Record<AvatarKey, AvatarArt>;
 
+/** A face's box as a CSS length. A number is pixels; a string is any CSS
+ *  length, so a face inside a sentence can be sized in `em` and ride the
+ *  prose it sits in (the reference pill draws at 1em). */
+export function avatarLength(size: number | string): string {
+  return typeof size === "number" ? `${size}px` : size;
+}
+
 /**
  * A role's face at `size` px. `avatar` takes whatever a role row carries: a
  * known key draws that key, anything else (a handle, an unknown key from a
  * newer build) draws the stable default for that string, so every role has a
  * face without anyone choosing one.
  */
-export function RoleAvatar({ avatar, size = 20, className, title }: { avatar: string; size?: number; className?: string; title?: string }) {
+export function RoleAvatar({ avatar, size = 20, className, title }: { avatar: string; size?: number | string; className?: string; title?: string }) {
   const key = isAvatarKey(avatar) ? avatar : defaultAvatarFor(avatar);
   return (
     <span
       className={className}
-      style={{ width: `${size}px`, height: `${size}px`, display: "inline-block", flexShrink: 0, borderRadius: "9999px", overflow: "hidden" }}
+      style={{ width: avatarLength(size), height: avatarLength(size), display: "inline-block", flexShrink: 0, borderRadius: "9999px", overflow: "hidden" }}
     >
       <img src={AVATAR_URLS[key]} alt={title ?? AVATAR_LABELS[key]} data-avatar={key} style={{ width: "100%", height: "100%", display: "block" }} />
     </span>

@@ -5,6 +5,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { AvatarImg } from "../lib/avatarCache";
 import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { SessionGlyph } from "./identity";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useRouter } from "next/navigation";
@@ -240,7 +241,10 @@ export function NotificationBell() {
                         <p className="text-sm text-sol-text leading-relaxed line-clamp-2">{notification.message}</p>
                         {label && (
                           <div className="flex items-center gap-2 mt-1.5">
-                            <span className="text-xs text-sol-text-muted bg-sol-bg-alt px-2 py-0.5 rounded truncate max-w-[280px]">
+                            <span className="inline-flex items-center gap-1.5 text-xs text-sol-text-muted bg-sol-bg-alt px-2 py-0.5 rounded truncate max-w-[280px]">
+                              {/* Which session this is about, by its face
+                                  (session-characters.md S3). */}
+                              <SessionGlyph row={notification.conversation} size={14} className="flex-shrink-0" />
                               {label}
                             </span>
                           </div>

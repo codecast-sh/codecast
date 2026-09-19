@@ -252,6 +252,8 @@ describe("trigger run lifecycle guidance", () => {
     expect(prompt).toContain("open the summary with the ask: what you need them to do");
     expect(prompt).toContain("Work you have already given an owner does not need their eyes");
     expect(prompt).toContain("says something needs a look without naming the action");
+    expect(prompt).toContain("widen the interval with cast trigger update tr-42 --every <longer>");
+    expect(prompt).toContain("A quiet run is a reason to slow a trigger down, never a reason to call it complete");
     expect(prompt).toContain("Ongoing mandates remain active until explicitly ended");
     expect(prompt).toContain("Do not close unrelated tasks or cancel other triggers");
     expect(prompt).toContain("subordinate to this trigger's prompt, explicit user instructions, and the session's existing permissions");

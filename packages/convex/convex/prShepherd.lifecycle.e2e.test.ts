@@ -141,6 +141,29 @@ describe("passive discovery and explicit shepherd lifecycle", () => {
     expect((await f.db.get(f.pr().shepherd_task_id)).prompt).toContain("no longer merges cleanly");
   });
 
+  test("a merge-state poll GitHub has not computed yet leaves the PR exactly where it was", async () => {
+    const f = await fixture();
+    await f.toggle("on");
+    await call(applyMergeState, f.ctx, { pr_id: f.pr()._id, mergeable: false, mergeable_state: "dirty", behind_by: 113 });
+    expect(f.pr().shepherd_state).toBe("conflicts");
+    expect(f.pr().shepherd_wake_count).toBe(1);
+
+    // A commit lands on main. GitHub answers null/"unknown" while it works out
+    // whether the PR still merges. That is not news, and taking it as one used
+    // to fold the row down to "behind" and write a timeline row for it.
+    const pending = await call(applyMergeState, f.ctx, { pr_id: f.pr()._id, mergeable: null, mergeable_state: "unknown", behind_by: 114 });
+    expect(pending.retry).toBe(true);
+    expect(f.pr().shepherd_state).toBe("conflicts");
+    expect(f.pr().mergeable_state).toBe("dirty");
+    expect(f.pr().behind_by).toBe(114);
+    expect(f.pr().shepherd_wake_count).toBe(1);
+
+    // The computed answer arrives and says the same thing, so it stays quiet.
+    await call(applyMergeState, f.ctx, { pr_id: f.pr()._id, mergeable: false, mergeable_state: "dirty", behind_by: 114 });
+    expect(f.pr().shepherd_state).toBe("conflicts");
+    expect(f.pr().shepherd_wake_count).toBe(1);
+  });
+
   test("a failure queued during an active run is dropped if checks are green before the retry", async () => {
     const f = await fixture();
     await f.toggle("on");

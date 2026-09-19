@@ -160,6 +160,34 @@ describe("timeline", () => {
     const first = timeline[0];
     expect(first.kind === "comment" && first.replies.map((r) => r._id)).toEqual(["e"]);
   });
+
+  it("leaves out the kinds the header already answers", () => {
+    const timeline = buildPrTimeline({
+      events: [
+        { _id: "e1", created_at: 10, kind: "pr_behind" },
+        { _id: "e2", created_at: 20, kind: "pr_conflict" },
+      ],
+      reviews: [],
+      comments: [],
+    });
+    expect(timeline.map((i) => i.key)).toEqual(["e:e2"]);
+  });
+
+  it("keeps one row for a run of the same merge state and one per real change", () => {
+    const timeline = buildPrTimeline({
+      events: [
+        { _id: "c1", created_at: 10, kind: "pr_conflict" },
+        { _id: "c2", created_at: 20, kind: "pr_conflict" },
+        { _id: "c3", created_at: 30, kind: "pr_conflict" },
+        { _id: "ok", created_at: 40, kind: "pr_ready" },
+        { _id: "c4", created_at: 50, kind: "pr_conflict" },
+        { _id: "push", created_at: 60, kind: "pr_synchronize" },
+      ],
+      reviews: [],
+      comments: [],
+    });
+    expect(timeline.map((i) => i.key)).toEqual(["e:c3", "e:ok", "e:c4", "e:push"]);
+  });
 });
 
 describe("dayLabel", () => {

@@ -252,5 +252,43 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(hand.org_role_id).toBe("org_roles_infra");
     expect(hand.standing_role_id).toBeNull();
     expect(hand.role?.handle).toBe("infra");
+    expect(hand.escalated_by_role).toBeNull();
+  });
+
+  // org-roles-run-work.md R1, on rows through the server's own overlay: a
+  // role's session files with the role and leaves needs input; the one the
+  // role escalated is a needs input row of its own and carries the line.
+  test("a role's sessions ride its standing session; an escalated one stands alone with its line", async () => {
+    const escalation = { role_id: "org_roles_infra", line: "the pricing copy is ready and needs your eye", at: EPOCH - 5 * MIN };
+    const tables = {
+      org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" }],
+      // The role finished its wake and said so: its own state is done.
+      managed_sessions: [
+        { _id: "ms_standing", user_id: ME, conversation_id: "conversations_standing", last_heartbeat: EPOCH - 1000, agent_status: "done", agent_status_updated_at: EPOCH - MIN, tmux_session: "cc-2", permission_mode: "default" },
+      ],
+      conversations: [
+        conv("standing", { updated_at: EPOCH - MIN, anchor_id: "anchors_infra", standing_role_id: "org_roles_infra", thread_state_status: "done" }),
+        conv("waiting", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
+        conv("escalated", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: escalation }),
+        conv("mine", { updated_at: EPOCH - 4 * MIN }),
+        conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet" }),
+      ],
+    };
+    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    const bucketOf = (id: string) => (liveness as any)[`conversations_${id}`]?.bucket;
+    // On its own facts `waiting` is a needs input row; under the role it is not.
+    expect(bucketOf("mine")).toBe("needs_input");
+    expect(bucketOf("standing")).toBe("done");
+    expect(bucketOf("waiting")).toBe("done");
+    // The standing session surfaced because something rides it; one with
+    // nothing under it stays out of the inbox.
+    expect(bucketOf("quiet")).toBe("hidden");
+    expect(bucketOf("escalated")).toBe("needs_input");
+
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
+    const row = sessions.find((s: any) => s._id === "conversations_escalated");
+    // Key order is the store draft's, so a web gesture's field lock retires on the echo.
+    expect(JSON.stringify(row.escalated_by_role)).toBe(JSON.stringify(escalation));
+    expect(row.role?.handle).toBe("infra");
   });
 });

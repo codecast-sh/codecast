@@ -27,6 +27,9 @@ export const showsAgentIcon = (n: { type: string; conversation?: unknown }): boo
 
 export const socialTypes = new Set([
   "mention",
+  // A role telling a person who reports to it that a goal stalled: addressed
+  // to them by name, like a mention (org-roles-run-work.md R6).
+  "goal_stall",
   "comment_reply",
   "conversation_comment",
   "team_invite",
@@ -77,6 +80,7 @@ export const typeLabels: Record<string, string> = {
   chat_added: "added you to a channel",
   chat_post: "posted in a channel you follow",
   daemon_overloaded: "daemon under load",
+  goal_stall: "goal stalled",
 };
 
 export const typeColors: Record<string, string> = {
@@ -105,6 +109,7 @@ export const typeColors: Record<string, string> = {
   chat_added: "text-sol-cyan",
   chat_post: "text-sol-cyan",
   daemon_overloaded: "text-sol-orange",
+  goal_stall: "text-sol-yellow",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous
@@ -169,6 +174,9 @@ export function notificationRoute(
   // A device has no page of its own; the roster with its health is the place a
   // reader can act on the alert.
   if (entityType === "device") return "/settings/devices";
+  // A role's page opens on its Scope tab, where a person who reports to it
+  // reads their goals with what moved and what stalled.
+  if (entityType === "org_role") return `/org/${entityId}`;
   // A place in a repository: `owner/repo#12` is a pull request, `owner/repo@sha`
   // a commit — the two pages a code comment is read on.
   if (entityType === "code") {

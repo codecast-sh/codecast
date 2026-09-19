@@ -80,7 +80,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
-    <div className="border-b border-sol-border/30 bg-sol-bg-alt/20">
+    <div data-cc-context-panel className="border-b border-sol-border/30 bg-sol-bg-alt/20">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"

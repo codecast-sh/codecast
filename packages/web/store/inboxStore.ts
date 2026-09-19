@@ -23,6 +23,7 @@ import { installStoreListenerCensus } from "./storeListenerCensus";
 import { current, isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import type { AppPermissionKind } from "../lib/osPermissions";
+import { cacheFloorUnderSnapshot, keysWithSnapshotDrops, noteSnapshotSync } from "./idbCollectionDiff";
 import { loadCache, loadPaintCacheSync, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, setUpgradeBlockedListener, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
@@ -217,6 +218,8 @@ import {
   type ChatSliceState,
 } from "./chatSlice";
 import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
+import { writeAsServerShape } from "./serverShape";
+import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -423,20 +426,7 @@ export type PlanItem = {
 
 // The collections the cross-entity change feed can upsert/prune. Keep in sync
 // with hooks/useSyncChangeFeed's ENTITY_COLLECTION map.
-/** Write a field patch onto a draft row the way the server will echo it. A
- *  clear travels on the wire as null, "" or [] (the dispatch args stay as
- *  given), but the server drops the field, so the echo carries it ABSENT. The
- *  field lock the middleware records takes the draft value; storing the clear
- *  as undefined makes that lock equal to the echo and lets it retire. Stored
- *  as null or [] it would re-assert the clear over every push until the
- *  settle window. Skips undefined (not part of the patch); bumps updated_at. */
-export function writeAsServerShape(row: Record<string, any>, fields: Record<string, any>): void {
-  for (const [k, v] of Object.entries(fields)) {
-    if (v === undefined) continue;
-    row[k] = v === null || v === "" || (Array.isArray(v) && v.length === 0) ? undefined : v;
-  }
-  row.updated_at = Date.now();
-}
+export { writeAsServerShape };
 
 export type FeedCollection =
   | "sessions"
@@ -1723,6 +1713,12 @@ export type ClientUI = {
   // accepting costs. Dismissed once, or stamped by the first accepted change,
   // and never shown again. Stamped LWW: read on one device is read everywhere.
   org_intro_seen?: boolean;
+  // The introduction anywhere (org-staffing.md S20): the card that rises
+  // bottom right on the next visit to any page and introduces the org
+  // feature. Dismissed either way, or stamped by seeing the org page by any
+  // route, and never shown again. Stamped LWW: sold once, on one device, is
+  // sold once everywhere.
+  org_upsell_seen?: boolean;
   // The review "Propose an org now" started on the org page: when, in which
   // workspace, and the session doing it (its stub id first, the real id once
   // the server names it). Kept here, not in component state, so a reload or
@@ -1786,9 +1782,15 @@ export type ClientUI = {
   // re-derived from where you are now.
   workspace?: PersistedWorkspace;
   // Simple view: calm, low-chrome rendering of conversations and inbox cards —
-  // secondary badges, counts and meta rows drop away. A per-user preference
-  // ("my reading style follows me") → stamped LWW.
+  // secondary badges, counts and meta rows drop away. On by default; a
+  // per-user preference ("my reading style follows me") → stamped LWW.
   simple_view?: boolean;
+  // The color of your own messages in the Minimal style: a preset id or a
+  // #rrggbb hex (lib/bubbleColor.ts). Follows the person, so it is stamped.
+  user_bubble_color?: string;
+  // One line per session in the inbox list, in every style. Unset means the
+  // style decides (resolveInboxCompact).
+  inbox_compact?: boolean;
   // Open an agent's pane offer (`cast browser pane <url>`) without a click,
   // while the offered session is the one being read and the stage has room.
   // Off by default — an agent may ask for a pane, never take one. Per-user
@@ -4095,6 +4097,19 @@ export type ScheduleNavSets = {
   triggerOrder?: Array<{ key: string; ids: string[] }>;
 };
 
+// Simple view is a preference in Classic and a given in Minimal: the Minimal
+// style has no dense variant, so it never reads the toggle. Every reader goes
+// through here so the shell class, the feed density and the settings row agree.
+export function resolveSimpleView(ui: { simple_view?: boolean; visual_style?: "classic" | "minimal" } | undefined): boolean {
+  return ui?.visual_style === "minimal" || ui?.simple_view !== false;
+}
+
+// One line per session. The person's own choice wins in either style; with no
+// choice made, Minimal lists compactly and Classic keeps its full cards.
+export function resolveInboxCompact(ui: { inbox_compact?: boolean; visual_style?: "classic" | "minimal" } | undefined): boolean {
+  return ui?.inbox_compact ?? ui?.visual_style === "minimal";
+}
+
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
 // which ordering is on screen.
@@ -4668,7 +4683,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -5656,7 +5671,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, Omit<Registered
   moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
   // Charter fields (components/charter/charterMeta CharterPatch): null clears
   // a scalar, an empty array is a value.
-  updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
+  updatePlan: (shortId: string, fields: { title?: string; project_id?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
   /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
   setProjectLead: (projectId: string, roleId: string | null) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
   updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null }) => void;
@@ -9798,6 +9813,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
       }
     }
 
+    // A non-delta push is the server's complete set. Record it BEFORE the no-op
+    // bail (an empty or unchanged snapshot has still landed): the rows it
+    // dropped may now leave disk too, and boot hydration must not merge cached
+    // rows back under it. See durableDeletes / cacheFloorUnderSnapshot.
+    if (!config.isDelta) {
+      noteSnapshotSync(
+        field,
+        (incoming as any[]).map((r: any) => String(r._id)),
+        table === prevCollection ? [] : Object.keys(prevCollection).filter((id) => !table[id]),
+      );
+    }
+
     // No-op push: nothing to commit. Decided by ROW IDENTITY — applySyncTable
     // hands back the previous row object whenever nothing it compares changed
     // — never by `updated_at` alone: a table whose rows carry no updated_at
@@ -12340,6 +12367,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Org tree singleton + reshaping actions (store/orgSlice.ts), same spread rule.
   ...createOrgSlice(),
 
+  // Initiative writes (store/initiativeSlice.ts); the collections themselves
+  // are registry slots.
+  ...createInitiativeSlice(),
+
 });
 
 function createInboxStore() {
@@ -12655,9 +12686,10 @@ export function hydrateMergeValue(
       : { apply: false };
   }
   if (typeof val === "object") {
+    const live = cur as Record<string, unknown> | undefined;
     return {
       apply: true,
-      value: unionHydrate(val as Record<string, unknown>, cur as Record<string, unknown> | undefined),
+      value: unionHydrate(cacheFloorUnderSnapshot(key, val as Record<string, unknown>, live), live),
     };
   }
   return { apply: true, value: val };
@@ -12984,6 +13016,19 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
       // so delta overlays never drop rows; write-through then deletes only on a
       // real removal (dismiss/kill) or the crawl's authoritative snapshot.
     setHydrating(false);
+    // A snapshot that landed BEFORE hydration left its omitted rows on disk:
+    // the floor kept them out of memory, so no later prune will ever name them
+    // and no commit is pending for that collection. Spend those drops now —
+    // otherwise they wait for the collection's next change, and a follower
+    // window booting in between hydrates them with no feeder to correct it.
+    // Only a window that ran the feeder holds drops, so a follower never writes.
+    const stale = keysWithSnapshotDrops();
+    if (stale.length) {
+      writePatchesToIDB(
+        stale.map((key) => ({ op: "replace", path: [key], value: undefined }) as any),
+        useInboxStore.getState(),
+      );
+    }
     return true;
 }
 

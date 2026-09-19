@@ -7,6 +7,7 @@
 // (blocker filled, warn a ring, info none). Clicks on Accept, Edit, Skip and
 // a chip reach the handlers.
 // Run: bun components/org/OrgGhosts.mount.test.tsx
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 
 async function verifyGhostCards() {
@@ -148,4 +149,4 @@ async function verifyGhostCards() {
   console.log("OrgGhosts mount: ok");
 }
 
-verifyGhostCards().catch((e) => { console.error(e); process.exit(1); });
+test("the ghost cards mount and their gestures reach the handlers", verifyGhostCards, 120_000);

@@ -70,8 +70,11 @@ const {
   persistPendingMessageChanges,
 } = await import("../idbCache.native");
 
+const { noteSnapshotSync, _resetSnapshotLedger } = await import("../idbCollectionDiff");
+
 describe("idbCache.native", () => {
   beforeEach(() => {
+    _resetSnapshotLedger();
     kv.clear();
     setItemCalls.length = 0;
     getAllKeysSyncCalls = 0;
@@ -206,6 +209,22 @@ describe("idbCache.native", () => {
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [a._id]: a } });
     await flushPersistence();
     expect((await loadCache())!.sessions).toEqual({ [a._id]: a, [b._id]: b });
+  });
+
+  it("a row a SNAPSHOT sync dropped leaves disk — or hydration resurrects it every boot", async () => {
+    // sessionDecisions syncs as the server's complete set. A decision handed to
+    // a teammate drops out of that set; kept on disk it came back at every boot
+    // as "pending, asked: you" until the next push pruned memory again.
+    const a = { _id: "k97aaaaaaaaaaaaaaaaaaaaaaaaaaaa1", status: "pending" };
+    const b = { _id: "k97bbbbbbbbbbbbbbbbbbbbbbbbbbbb2", status: "pending" };
+    writePatchesToIDB([{ op: "replace", path: ["sessionDecisions"], value: {} } as any], { sessionDecisions: { [a._id]: a, [b._id]: b } });
+    await flushPersistence();
+    expect((await loadCache())!.sessionDecisions).toEqual({ [a._id]: a, [b._id]: b });
+
+    noteSnapshotSync("sessionDecisions", [a._id], [b._id]);
+    writePatchesToIDB([{ op: "replace", path: ["sessionDecisions"], value: {} } as any], { sessionDecisions: { [a._id]: a } });
+    await flushPersistence();
+    expect((await loadCache())!.sessionDecisions).toEqual({ [a._id]: a });
   });
 
   it("a client-minted stub DOES delete on removal — supersede must reach disk", async () => {

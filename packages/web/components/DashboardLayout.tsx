@@ -28,6 +28,7 @@ import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
+import { OrgIntroAnywhere } from "./org/OrgIntroCard";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
@@ -44,6 +45,7 @@ import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
 import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
 import { useSyncAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
+import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
@@ -52,7 +54,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
@@ -72,7 +74,7 @@ import { useChatToasts } from "../hooks/useChatToasts";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
-import { isInboxSessionView, pageOwnsRailHighlight, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
@@ -273,6 +275,9 @@ function HostFeeders() {
   // The workspace's agent definitions and chains: the compose "as" chooser,
   // the settings library and the spawn actions all read them.
   useSyncAgentDefinitions();
+  // The workspace's initiatives: few rows, read by the list, a project's
+  // line, the task board's axis and every `in-N` pill.
+  useSyncInitiatives();
   useSyncSettings();
   return null;
 }
@@ -362,7 +367,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.viewingDismissedId,
     s => selectCommentRailOpen(s),
     s => s.clientState.ui?.comments_enabled ?? false,
-    s => s.clientState.ui?.simple_view === true,
+    s => resolveSimpleView(s.clientState.ui),
+    s => resolveInboxCompact(s.clientState.ui),
     s => s.clientState.ui?.visual_style,
     // Re-render the header toggle when comments change, so a teammate's comment on
     // the viewed conversation surfaces the toggle even with the tools off. Subscribe
@@ -587,14 +593,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       // The Favorites view is a mode of the inbox's session list; leaving the
       // inbox drops back to the active desk so the rail isn't stuck on the shelf.
       if (store.showFavorites) store.setShowFavorites(false);
-      if (selectSessionRailUserClosed(store)) return;
-      // A page that publishes the rail pointer itself already wrote it in
-      // this commit; carrying the inbox's conversation over would erase it.
-      if (pageOwnsRailHighlight(pathname)) return;
-      const current = store.currentSessionId;
-      if (current) {
-        store.openSidePanel(current);
-      } else {
+      // Nothing is on the stage on /tasks, /docs and friends, so the rail shows
+      // no lit row (railPointerOnNavigate). A page that publishes the pointer
+      // itself already wrote it in this commit and is left alone.
+      if (railPointerOnNavigate(pathname, store.currentConversation?.source) === "clear") {
         store.clearSidePanelSession();
       }
     }
@@ -606,16 +608,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (!prev || prev === pathname) return;
     if (prevActiveTabRef.current !== s.activeTabId) return;
     const store = useInboxStore.getState();
+    // Same rule as leaving the inbox, and it runs before the rail-closed guard:
+    // a pointer left standing while the rail is shut lights a stale row the
+    // moment the rail is reopened on a page with no conversation on the stage.
+    if (railPointerOnNavigate(pathname, store.currentConversation?.source) === "clear") {
+      store.clearSidePanelSession();
+    }
     if (selectSessionRailUserClosed(store)) return;
     if (pageOwnsRailHighlight(pathname)) return;
-    const wasConvPage = prev.includes("/conversation/");
     const isNowConvPage = pathname?.includes("/conversation/");
-    if (wasConvPage && !isNowConvPage) {
-      const sessionId = prev.split("/conversation/")[1]?.split("?")[0];
-      if (sessionId) {
-        store.openSidePanel(sessionId);
-      }
-    }
     // Arriving at a conversation page (from notification, link, etc.) — open side panel
     if (isNowConvPage && !isOnInboxPage) {
       const sessionId = pathname?.split("/conversation/")[1]?.split("?")[0];
@@ -983,7 +984,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The sync effects stay: an embedded document still feeds its own store.
   if (PANE_EMBED) {
     return (
-      <div data-cc-shell data-cc-embed className={`bg-sol-bg overflow-hidden${s.clientState.ui?.simple_view ? " simple-view" : ""}`} style={{ height: zoomHeight }}>
+      <div data-cc-shell data-cc-embed className={`bg-sol-bg overflow-hidden${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`} style={{ height: zoomHeight }}>
         <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
           <DashboardSyncEffects />
         </ErrorBoundary>
@@ -1051,7 +1052,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   );
 
   return (
-    <div data-cc-shell className={`bg-sol-bg flex flex-col overflow-hidden${s.clientState.ui?.simple_view ? " simple-view" : ""}`} style={{ height: zoomHeight }}>
+    <div data-cc-shell className={`bg-sol-bg flex flex-col overflow-hidden${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`} style={{ height: zoomHeight }}>
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
@@ -1226,6 +1227,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <DesktopAppBanner />
         <SetupPromptBanner />
         <NewSnippetsBanner />
+        <OrgIntroAnywhere />
         <CliOfflineBanner />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />

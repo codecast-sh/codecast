@@ -11,9 +11,11 @@ import { TaskDetailContent } from "./[id]/page";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
 import { dragCarriesPane } from "../../lib/stage";
 import { AssigneeFace } from "../../components/identity/AssigneeFace";
-import { chainAssignees, roleAssigneeInfo, sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
-import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
+import { chainAssignees, sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { useOrgRoles } from "../../hooks/useOrgRoles";
+import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
+import { useInitiatives } from "../../hooks/useInitiatives";
+import { projectInitiativeIndex } from "../../lib/initiatives";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
@@ -1004,10 +1006,15 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // on teams with custom lists.
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
 
-  // Grouping by project is meaningless inside one project — every row shares it.
+  // The initiative a task serves, read through its project
+  // (initiatives-projects-role-page.md I1).
+  const initiatives = useInitiatives();
+  const initiativeOfProject = useMemo(() => projectInitiativeIndex(initiatives), [initiatives]);
+  // Grouping by project is meaningless inside one project — every row shares
+  // it, and so its initiative. A workspace with no initiatives offers no axis.
   const axisKeys = useMemo(
-    () => TASK_AXIS_KEYS.filter((k) => !(projectId && k === "project")),
-    [projectId]
+    () => TASK_AXIS_KEYS.filter((k) => !(projectId && (k === "project" || k === "initiative")) && !(k === "initiative" && initiatives.length === 0)),
+    [projectId, initiatives.length]
   );
   // The view is shareable from wherever it is rendered; only the path differs,
   // since the filters/sort/grouping travel in the query string either way.
@@ -1111,26 +1118,18 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   useSyncOrgTreeFeeder();
   const { roles: orgRoles } = useOrgRoles();
   // The assignee filter lists people, then roles, each under its own heading
-  // and drawn with its face. People come first so the list a person already
-  // knows keeps its order. "My reporting chain" is the filter form of the
-  // Chain grouping: my tasks and those of every role that answers to me.
-  const assigneeOptions = useMemo(() => {
-    const roles = orgRoles
-      .filter((r) => r.status !== "retired")
-      .map((r) => ({ key: r._id, label: r.name, section: "Roles", face: <AssigneeFace info={roleAssigneeInfo(r)} size={14} hover={false} /> }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-    const people = teamMembers.map((m) => {
-      const name = memberDisplayName(m, m._id);
-      return { key: m._id, label: name, section: roles.length ? "People" : undefined, face: <AssigneeFace info={{ name, image: memberAvatarUrl(m) }} size={14} /> };
-    });
-    return [
-      { key: "", label: "Anyone" },
-      { key: "_unassigned", label: "Unassigned" },
-      ...(roles.length ? [{ key: "_chain", label: "My reporting chain" }] : []),
-      ...people,
-      ...roles,
-    ];
-  }, [orgRoles, teamMembers]);
+  // and drawn with its face (hooks/useRolesAndPeopleOptions, the list an
+  // initiative's owner picker shares). People come first so the list a person
+  // already knows keeps its order. "My reporting chain" is the filter form of
+  // the Chain grouping: my tasks and those of every role that answers to me.
+  const { people, roles: roleOptions } = useRolesAndPeopleOptions(teamMembers);
+  const assigneeOptions = useMemo(() => [
+    { key: "", label: "Anyone" },
+    { key: "_unassigned", label: "Unassigned" },
+    ...(roleOptions.length ? [{ key: "_chain", label: "My reporting chain" }] : []),
+    ...people,
+    ...roleOptions,
+  ], [people, roleOptions]);
   const myChain = useMemo(
     () => (assigneeFilter === "_chain" && currentUser ? new Set(chainAssignees(currentUser._id, orgRoles)) : null),
     [assigneeFilter, currentUser, orgRoles]
@@ -1213,7 +1212,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
   // Which rows belong on the human's board is the shared isOnHumanBoard rule
   // (@codecast/shared/tasks): human/meeting origin, promoted, or assigned to a
-  // person. Web and mobile both use it so the two boards can't drift.
+  // person or a role. Web and mobile both use it so the two boards can't drift.
   const onHumanBoard = isOnHumanBoard;
   const sourceFilteredTasks = useMemo(() => {
     if (sourceFilter === "agent") {
@@ -1349,8 +1348,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // "Assignee · Project" — comes out of one keyed grouper (lib/taskGrouping),
   // so an added axis or pairing costs a descriptor rather than a memo.
   const groupCtx = useMemo(
-    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser }),
-    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser]
+    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject }),
+    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject]
   );
 
   const listGroups = useMemo(

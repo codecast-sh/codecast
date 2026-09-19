@@ -16,6 +16,12 @@
 
 import { avatarOf, type AvatarKey } from "./orgAvatars";
 
+// What the field means (org-roles-run-work.md R7). A session once refused to
+// ship a task because it was assigned to someone else; nothing had told it
+// that. Every place the CLI shows an assignee to an agent says this sentence,
+// so no model infers a permission from a name.
+export const ASSIGNEE_MEANS = "An assignee is who answers for the task being done, never who may work on it: any session may work any task.";
+
 export type PersonAssigneeInfo = { kind?: undefined; name: string; image?: string; github_username?: string };
 
 export type RoleAssigneeInfo = {

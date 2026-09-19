@@ -32,6 +32,8 @@ const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk
 const Browser = lazyPage("@/app/browser/page", () => import("@/app/browser/page"));
 const Org = lazyPage("@/app/org/page", () => import("@/app/org/page"));
 const OrgScope = lazyPage("@/app/org/[id]/page", () => import("@/app/org/[id]/page"));
+const Initiatives = lazyPage("@/app/initiatives/page", () => import("@/app/initiatives/page"));
+const InitiativeDetail = lazyPage("@/app/initiatives/[id]/page", () => import("@/app/initiatives/[id]/page"));
 const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
 const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
 const Community = lazyPage("@/app/community/page", () => import("@/app/community/page"));
@@ -137,6 +139,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/browser$/, paramNames: [], component: Browser },
   { pattern: /^\/org$/, paramNames: [], component: Org },
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
+  { pattern: /^\/initiatives$/, paramNames: [], component: Initiatives },
+  { pattern: /^\/initiatives\/([^/]+)$/, paramNames: ["id"], component: InitiativeDetail },
   { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
   { pattern: /^\/chat$/, paramNames: [], component: Chat },
   { pattern: /^\/community$/, paramNames: [], component: Community },

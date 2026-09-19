@@ -456,8 +456,11 @@ describe("print helpers", () => {
     expect(getPermissionFlags("codex", null)).toBe("--dangerously-bypass-approvals-and-sandbox");
   });
 
-  test("getPermissionFlags defaults muse to --disable-approval unless pinned", () => {
-    expect(getPermissionFlags("muse", null)).toBe("--disable-approval");
+  test("getPermissionFlags runs muse yolo by default unless pinned or opted out", () => {
+    expect(getPermissionFlags("muse", null)).toBe("--yolo");
+    expect(getPermissionFlags("muse", { agent_permission_modes: { muse: "bypass" } } as never)).toBe("--yolo");
+    // An explicit "default" mode opts back into standard on-request approvals.
+    expect(getPermissionFlags("muse", { agent_permission_modes: { muse: "default" } } as never)).toBeNull();
     for (const pinned of ["--disable-approval", "--approval-mode never", "--yolo"]) {
       expect(getPermissionFlags("muse", { agent_args: { muse: pinned } } as never)).toBeNull();
     }

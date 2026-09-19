@@ -12,7 +12,9 @@ try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
+import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
@@ -3550,8 +3552,16 @@ function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeN
 }
 
 export default function SessionDetailScreen() {
+  const { id, message, focus } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
+  return <SessionScreen id={id} message={message} focus={focus} />;
+}
+
+/** The session screen for a conversation id, apart from the route that names
+ *  it: a role's page (app/org/[id]) is this screen on the role's standing
+ *  conversation. `boardHref` adds the header's way to the board of a scope; a
+ *  role's standing session finds its own. */
+export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
   const Theme = useTheme();
-  const { id, message: highlightMessageParam, focus: focusParam } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
   // Wire the store's server dispatch (idempotent — just sets a ref). The inbox
   // tab mounts useSyncInboxSessions and stays mounted under this pushed screen,
   // so dispatch is usually already wired; but a cold deep-link can reach this
@@ -3665,6 +3675,11 @@ export default function SessionDetailScreen() {
 
   const conversation = (storeConversation as ConversationData | null)
     ?? (id === DESIGN_MOCK_ID ? DESIGN_MOCK_CONVO : undefined);
+  // Who this session is (its character, or its role): the header wears the
+  // same face and name the inbox row does.
+  const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
+  const seatIdentity = identityRow ? sessionIdentity(identityRow) : null;
+  const boardHref = boardHrefProp ?? (seatIdentity?.kind === 'role' ? `/org/${seatIdentity.role.short_id}/board` : null);
 
   // Gate every server query that takes a v.id("conversations") on isConvexId. A
   // freshly created session navigates here under a local stub id (see
@@ -4783,7 +4798,18 @@ export default function SessionDetailScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
             <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
-          <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{conversation.title || 'Conversation'}</RNText>
+          <MobileIdentityFace
+            row={identityRow}
+            size={22}
+            style={styles.headerFace}
+            badge={conversation.agent_type ? <AgentLogoSvg agentType={conversation.agent_type} size={10} /> : undefined}
+          />
+          <MobileSessionIdentityLine
+            row={identityRow}
+            title={conversation.title || 'Conversation'}
+            style={styles.headerTitleText}
+            maxFontSizeMultiplier={CHROME_FONT_CAP}
+          />
           {conversation?._id && <SessionHuddleButton conversationId={String(conversation._id)} teamId={conversation.team_id ? String(conversation.team_id) : null} />}
           {allSessionImages.length > 0 && (
             <TouchableOpacity
@@ -4797,6 +4823,11 @@ export default function SessionDetailScreen() {
           )}
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
+          )}
+          {boardHref && (
+            <TouchableOpacity onPress={() => router.push(boardHref as never)} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }} activeOpacity={0.6} accessibilityLabel="Open the board">
+              <Feather name="columns" size={17} color={Theme.textMuted} />
+            </TouchableOpacity>
           )}
           <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
@@ -5474,6 +5505,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  headerFace: { marginRight: 8 },
   headerTitleText: {
     flex: 1,
     fontSize: 15,

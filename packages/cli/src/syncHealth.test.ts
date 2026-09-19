@@ -120,6 +120,52 @@ test('a grok hook-only tail after last ingest is not a stuck sync', async () => 
   expect(await getStuckSyncs({ records: { [file]: record }, now })).toEqual([]);
 });
 
+function countUnitStore(client: string, sessionId: string, size: number, now: number, lastSyncedAt: number) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-health-count-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'store.db');
+  fs.writeFileSync(file, Buffer.alloc(size, 7));
+  const mtimeSec = now / 1000;
+  fs.utimesSync(file, mtimeSec, mtimeSec);
+  const record: SyncRecord = {
+    lastSyncedAt,
+    lastSyncedPosition: 35,
+    messageCount: 0,
+    conversationId: 'jx7dn3te51j4rm15r9sb1rahhn8enhn2',
+    sourceGeneration: {
+      client, sessionId, dev: 1, ino: 1, birthtimeMs: lastSyncedAt,
+      unit: 'count', watermark: 35, prefixProven: true,
+    },
+  };
+  return { file, record };
+}
+
+test('a fully-synced opencode session is not stuck when other sessions grow the shared db', async () => {
+  // The reported shape: 35-message session, watermark 35, a large shared
+  // opencode.db touched by other sessions hours after this one synced.
+  const now = Date.now();
+  const lastSyncedAt = now - 3 * 3_600_000;
+  const { file, record } = countUnitStore('opencode', 'ses_f4b303187ffeMkKQBP5eCO0zIv', 64 * 1024, now, lastSyncedAt);
+  expect(await getStuckSyncs({ records: { [file]: record }, now })).toEqual([]);
+});
+
+test('a cursorDb count-unit record on a shared store is not a byte backlog', async () => {
+  const now = Date.now();
+  const lastSyncedAt = now - 3 * 3_600_000;
+  const { file, record } = countUnitStore('cursorDb', 'sqlite', 64 * 1024, now, lastSyncedAt);
+  expect(await getStuckSyncs({ records: { [file]: record }, now })).toEqual([]);
+});
+
+test('a per-session count-unit file with stale writes is unexamined_writes, not bytes', async () => {
+  const now = Date.now();
+  const lastSyncedAt = now - 3 * 3_600_000;
+  const { file, record } = countUnitStore('gemini', 'doctor', 64 * 1024, now, lastSyncedAt);
+  const stuck = await getStuckSyncs({ records: { [file]: record }, now });
+  expect(stuck).toHaveLength(1);
+  expect(stuck[0].reason).toBe('unexamined_writes');
+  expect(stuck[0].unsyncedBytes).toBe(0);
+});
+
 test('a grok session with real writes after last ingest is stuck under its uuid, not "updates"', async () => {
   const now = Date.now();
   const lastSyncedAt = now - 11 * 3_600_000;

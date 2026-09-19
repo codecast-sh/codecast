@@ -32,6 +32,14 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/calls')).toBe('/(tabs)/chat');
   });
 
+  test('the org, a role and the root open their screens; a tab link opens the board', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/org')).toBe('/org');
+    expect(mobileRouteForUrl('/org/or-12')).toBe('/org/or-12');
+    expect(mobileRouteForUrl('https://codecast.sh/org/workspace')).toBe('/org/workspace');
+    expect(mobileRouteForUrl('https://codecast.sh/org/or-12?tab=feed')).toBe('/org/or-12/board');
+    expect(mobileRouteForUrl('https://example.com/org/or-12')).toBeNull();
+  });
+
   test('app pages that are not objects stay external', () => {
     // A published artifact is a web page, not a mobile screen — sending it to a
     // route would 404 inside the app.

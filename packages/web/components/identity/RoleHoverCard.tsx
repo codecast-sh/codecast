@@ -47,7 +47,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5 min-w-0">
             <span className="font-medium text-sol-text truncate">{r.name}</span>
-            {r.handle && <span className="font-mono text-[10px] text-sol-text-dim flex-shrink-0">@{r.handle}</span>}
+            {r.handle && r.name !== `@${r.handle}` && <span className="font-mono text-[10px] text-sol-text-dim flex-shrink-0">@{r.handle}</span>}
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[10px]">
             <span className="text-sol-violet font-medium">role</span>

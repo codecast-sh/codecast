@@ -6,6 +6,7 @@
 // one link with nothing clickable inside it, and the card still says something
 // honest when the tree, or the enrichment, or both are missing.
 // Run: bun components/identity/RoleScopeView.mount.test.tsx
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { OrgRole, OrgTree } from "../org/orgTypes";
 
@@ -43,7 +44,7 @@ async function verifyRoleScopeView() {
   };
   const tree: OrgTree = {
     ...ORG_FIXTURE,
-    roles: [{ ...growth, charter: "Owns organic search and paid search. Writes the weekly growth review.\n\nNever touches billing.", caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 }, counters: { day: today, hands: 1, wakes: 3, tokens: 0 } }, seo],
+    roles: [{ ...growth, scope: { ...growth.scope, plan_ids: [...growth.scope.plan_ids, "fixture-plan-loose"] }, scope_names: { ...growth.scope_names, plans: [...growth.scope_names.plans, { id: "fixture-plan-loose", title: "Pricing page rewrite", short_id: "pl-91" }] }, charter: "Owns organic search and paid search. Writes the weekly growth review.\n\nNever touches billing.", caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 }, counters: { day: today, hands: 1, wakes: 3, tokens: 0 } }, seo],
   };
   const row = (r: any) => ({ workspace: WS, team_id: TEAM, updated_at: 1, ...r });
   const seed = async (patch: Record<string, unknown>) => act(async () => { useInboxStore.setState(patch as never); });
@@ -52,7 +53,11 @@ async function verifyRoleScopeView() {
     clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM } },
     orgTree: tree,
     projects: { "fixture-project-growth": row({ _id: "fixture-project-growth", title: "Growth", short_id: "pr-4", status: "active", task_counts: { total: 0, done: 0, in_progress: 0 }, plan_count: 0, doc_count: 0 }) },
-    plans: { "fixture-plan-seo": row({ _id: "fixture-plan-seo", title: "SEO and AI citations", short_id: "pl-88", status: "active" }) },
+    plans: {
+      "fixture-plan-seo": row({ _id: "fixture-plan-seo", title: "SEO and AI citations", short_id: "pl-88", status: "active", project_id: "fixture-project-growth" }),
+      // In scope through nothing but the role naming it, and in no project.
+      "fixture-plan-loose": row({ _id: "fixture-plan-loose", title: "Pricing page rewrite", short_id: "pl-91", status: "active" }),
+    },
     tasks: {
       t1: row({ _id: "t1", short_id: "ct-1", title: "A", status: "open", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo", assignee: growth._id }),
       t2: row({ _id: "t2", short_id: "ct-2", title: "B", status: "in_progress", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo" }),
@@ -76,9 +81,11 @@ async function verifyRoleScopeView() {
   // ── the card: painted from the store, no enrichment at all ──
   await mount(<RoleHoverContent role={snapshot} />);
   assert.ok(q('[data-role-scope="card"]'), "the hover card carries the scope view at card size");
-  assert.deepEqual(qa("[data-scope-label]").map((el) => el.textContent), ["Looks after", "Sessions", "Its job", "Reports to", "Under it", "Owns", "Daily limit"], "the sections, in the order a person asks them");
-  assert.equal(q('[data-scope-project="pr-4"]')!.textContent, "Growth · 2 open tasks · lead", "a project by name, with its state, and that this role leads it");
-  assert.equal(q('[data-scope-plan="pl-88"]')!.textContent, "SEO and AI citations · 1 of 3 done", "a plan by name with live progress");
+  assert.deepEqual(qa("[data-scope-label]").map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to", "Under it", "Owns", "Daily limit"], "the sections, projects first");
+  assert.equal(q('[data-scope-project="pr-4"] [data-scope-project-line]')!.textContent, "Growth · 2 open tasks · 1 done · lead", "a project by name, with its state, and that this role leads it");
+  assert.equal(q('[data-scope-project="pr-4"] [data-scope-plan="pl-88"]')!.textContent, "SEO and AI citations · 1 of 3 done", "a plan sits inside its project, with live progress");
+  assert.equal(qa('[data-scope-plan="pl-88"]').length, 1, "and nowhere beside it");
+  assert.match(q("[data-scope-loose]")!.textContent!, /^Not in a projectPricing page rewrite/, "a plan in no project goes last, under its own heading");
   assert.match(q("[data-scope-sessions-line]")!.textContent!, /waiting on a person/, "sessions by who acts next, in plain words");
   assert.equal(q("[data-scope-charter]")!.textContent, "Owns organic search and paid search.", "the charter's first sentence only");
   assert.match(q('[data-scope-section="reports-to"]')!.textContent!, /Ashot Petrosian/);
@@ -95,8 +102,13 @@ async function verifyRoleScopeView() {
 
   // ── local first: an optimistic task edit moves the card in the same tick ──
   await seed({ tasks: { ...useInboxStore.getState().tasks, t2: { ...(useInboxStore.getState().tasks as any).t2, status: "done", updated_at: 2 } } });
-  assert.equal(q('[data-scope-project="pr-4"]')!.textContent, "Growth · 1 open task · lead");
+  assert.equal(q('[data-scope-project="pr-4"] [data-scope-project-line]')!.textContent, "Growth · 1 open task · 2 done · lead");
   assert.equal(q('[data-scope-plan="pl-88"]')!.textContent, "SEO and AI citations · 2 of 3 done");
+
+  // ── a session bound to a task in the project shows in that project's card ──
+  const bound = growth.sessions.find((x) => x.state === "working") ?? growth.sessions[0];
+  await seed({ tasks: { ...useInboxStore.getState().tasks, t1: { ...(useInboxStore.getState().tasks as any).t1, conversation_ids: [bound._id], updated_at: 3 } } });
+  assert.match(q('[data-scope-project="pr-4"] [data-scope-project-sessions]')!.textContent!, /^1 /, "the sessions at work in the project, by who acts next");
 
   // ── a session the role put in front of the person leads the Sessions line ──
   const first = growth.sessions[0];
@@ -113,6 +125,8 @@ async function verifyRoleScopeView() {
         density="page"
         escalated={escalated}
         renderLead={(id) => <span data-test-lead={id} />}
+        renderInitiative={(id) => <span data-test-initiative={id} />}
+        onFilePlan={(planRef, projectId) => { opened.push(`file:${planRef}:${projectId}`); useInboxStore.getState().updatePlan(planRef, { project_id: projectId }); }}
         sessions={<div data-test-sessions />}
         onTab={(t) => opened.push(`tab:${t}`)}
         onOpenSession={(s) => opened.push(`open:${s._id}`)}
@@ -121,10 +135,20 @@ async function verifyRoleScopeView() {
   }
   await mount(<Page />);
   assert.ok(q('[data-role-scope="page"]'));
-  assert.deepEqual(qa("[data-scope-label]").map((el) => el.textContent), ["Looks after", "Sessions", "Its job", "Reports to", "Under it", "Owns", "Daily limit"], "the page asks the same questions as the card");
-  assert.equal(q('[data-scope-project="pr-4"] a')!.getAttribute("href"), "/projects/pr-4", "a project row opens the project");
-  assert.ok(q('[data-scope-project="pr-4"] [data-test-lead="fixture-project-growth"]'), "and carries the project's lead chip");
-  assert.equal(q('[data-scope-plan="pl-88"]')!.getAttribute("href"), "/plans/pl-88");
+  assert.deepEqual(qa("[data-scope-label]").map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to", "Under it", "Owns", "Daily limit"], "the page asks the same questions as the card");
+  const projectCard = q('article[data-scope-project="pr-4"]')!;
+  assert.equal(projectCard.querySelector("header a")!.getAttribute("href"), "/projects/pr-4", "a project card opens the project");
+  assert.ok(projectCard.querySelector('[data-test-lead="fixture-project-growth"]'), "and carries the project's lead chip");
+  assert.ok(projectCard.querySelector('[data-scope-project-initiative] [data-test-initiative="fixture-project-growth"]'), "and the initiative it belongs to");
+  assert.equal(projectCard.querySelector("[data-scope-project-line]")!.textContent, "1 open task · 2 done", "open and done tasks");
+  assert.ok(projectCard.querySelector("[data-scope-project-sessions]"), "the sessions active in it");
+  assert.equal(projectCard.querySelector('[data-scope-plan="pl-88"] a')!.getAttribute("href"), "/plans/pl-88", "its plans are inside the card");
+  // The last card: plans in no project, and the one gesture that files them.
+  const loose = q("article[data-scope-loose]")!;
+  assert.match(loose.textContent!, /Not in a project/);
+  assert.ok(loose.querySelector('[data-scope-plan="pl-91"]'));
+  assert.ok(loose.querySelector('[data-scope-file-plan="pl-91"]'), "each offers File under a project");
+  assert.ok(loose.compareDocumentPosition(projectCard) & 2, "and it comes after the projects");
   assert.equal(q("[data-scope-charter]")!.textContent, "Owns organic search and paid search. Writes the weekly growth review.", "the page reads the whole first paragraph");
   // Escalated first, then the grouped sessions the page hands in.
   const sessionsSection = q('[data-scope-section="sessions"]')!;
@@ -165,4 +189,4 @@ async function verifyRoleScopeView() {
   console.log("role scope view, both densities: ok");
 }
 
-if (import.meta.main) await verifyRoleScopeView().catch((e) => { console.error(e); process.exit(1); });
+test("the role scope view mounts", verifyRoleScopeView, 600_000);

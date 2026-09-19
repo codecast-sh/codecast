@@ -957,6 +957,25 @@ describe("API-error banner rewrite (burst throttle vs quota park)", () => {
     expect(claudeBannerText({}, "hello")).toBe("hello");
     expect(claudeBannerText({ isApiErrorMessage: true, apiErrorStatus: 429, errorDetails: transient }, "x").startsWith("Rate limited ·")).toBe(true);
   });
+
+  test("the short /model-switch form keeps the CLI's own words despite a transient-looking 429", () => {
+    // A spent Fable window renders "You've reached your Fable limit. /model
+    // to switch models." with the same rate_limit_error payload as a burst
+    // (real JSONL 2026-09-15/18) — the words alone decide, so no rewrite.
+    const short = "You've reached your Fable limit. /model to switch models.";
+    const [msg] = extractMessages([banner({ apiErrorStatus: 429, errorDetails: transient })]);
+    expect(msg.content.startsWith("Rate limited ·")).toBe(true); // long-form control still rewrites
+    const [kept] = extractMessages([{
+      type: "assistant" as const,
+      uuid: "b2",
+      timestamp: "2026-09-18T19:02:43.993Z",
+      message: { role: "assistant" as const, model: "<synthetic>", content: [{ type: "text" as const, text: short }] },
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+      errorDetails: transient,
+    }]);
+    expect(kept.content).toBe(short);
+  });
 });
 
 describe("queued-command attachments (Ctrl+Enter / busy-agent delivery)", () => {

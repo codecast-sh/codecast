@@ -23,6 +23,7 @@ import {
 } from "./inboxFilters";
 import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
+import { identityFieldsOf } from "./conversations";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -319,9 +320,13 @@ export const list = query({
             github_avatar_url: face.avatar,
           } : null,
           conversation: conversation ? {
+            _id: conversation._id,
             title: conversation.title,
             project_path: conversation.project_path,
             agent_type: conversation.agent_type,
+            // Who the session is (docs/architecture/session-characters.md S1),
+            // so the row's session chip wears the same face as its card.
+            ...(await identityFieldsOf(conversation, (id: any) => ctx.db.get(id))),
           } : null,
         };
       })

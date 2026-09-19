@@ -589,7 +589,7 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
 
   test("the charter template carries the routing rule so a restart frame re-reads it", () => {
     const charter = charterTemplate({ name: "Infra lead", handle: "infra-lead" }, ["project Infrastructure"], "Me");
-    expect(ROLE_RULES).toHaveLength(6);
+    expect(ROLE_RULES).toHaveLength(7);
     expect(charter).toContain("5. A person's message is answered here or handed on to a hand, and the reply says which");
     expect(charter).toContain("a request to remember or forget is a brief write in the same turn");
     // The triage rule (org-roles-run-work.md R1) rides the same template.

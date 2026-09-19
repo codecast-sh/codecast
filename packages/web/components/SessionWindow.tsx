@@ -4,6 +4,8 @@ import { useWindowManager, type WindowState } from "../store/windowManagerStore"
 import { useTrackedStore, isSessionEffectivelyIdle, getSessionRenderKey } from "../store/inboxStore";
 import { InboxConversation } from "./GlobalSessionPanel";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { SessionGlyph } from "./identity";
+import { identityRowOf } from "../lib/sessionIdentity";
 import { Minus, Square, X, Maximize2 } from "lucide-react";
 
 interface SessionWindowProps {
@@ -111,7 +113,8 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
             />
           </span>
 
-          {/* Title */}
+          {/* Who the session is (session-characters.md S3), then its title. */}
+          <SessionGlyph row={session ? identityRowOf(session as any) : null} size={14} className="flex-shrink-0" />
           <span className="flex-1 min-w-0 truncate text-xs font-medium text-sol-text-muted">
             {title}
           </span>

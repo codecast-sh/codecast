@@ -245,6 +245,11 @@ function RootLayoutNav() {
                   <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
                   <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
                   <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
+                  <Stack.Screen name="org/index" options={{ title: 'Org' }} />
+                  {/* A role's page is the session screen on its standing
+                      conversation, which draws its own header. */}
+                  <Stack.Screen name="org/[id]/index" options={{ headerShown: false }} />
+                  <Stack.Screen name="org/[id]/board" options={{ title: 'Board' }} />
                   {/* Both draw their own header (a back chevron and a title),
                       so the nav header would be a second one stacked on top. */}
                   <Stack.Screen name="record" options={{ headerShown: false }} />

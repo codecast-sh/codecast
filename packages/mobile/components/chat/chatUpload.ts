@@ -9,16 +9,17 @@
 import { Alert } from 'react-native';
 import type { ConvexReactClient } from 'convex/react';
 import { uploadUriToStorage } from '@/lib/uploadToStorage';
+import { optionalNative } from '@/lib/optionalNative';
 
 // Lazy-required, NEVER statically imported: a native module missing from the
 // installed binary throws during initial JS eval — before expo-updates marks
 // the OTA launched — and silently rolls the update back (lib/gestureHandler.tsx
 // documents the saga). Same guard the session screen uses.
-let ImagePicker: typeof import('expo-image-picker') | null = null;
-try {
+const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
+  'ExponentImagePicker',
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  ImagePicker = require('expo-image-picker');
-} catch {}
+  () => require('expo-image-picker'),
+);
 
 export type PickedImage = {
   /** Local identity + the thumbnail the composer strip renders. */

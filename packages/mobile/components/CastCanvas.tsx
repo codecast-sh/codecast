@@ -14,6 +14,7 @@ import { openLink } from '@/lib/links';
 import { Theme, CHROME_FONT_CAP, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import { DOMPURIFY_SOURCE } from '@/lib/vendor/dompurifySource';
 import { CONVEX_ORIGIN } from '@/lib/convex';
+import { solTokens } from '@/lib/solColor';
 
 // Inline visual canvas — the mobile twin of web's HtmlSnippet. The agent emits a
 // ```cast-canvas fenced block of static HTML/CSS/SVG; we render it in a WebView
@@ -69,29 +70,7 @@ const TRUSTED_IMG_ORIGINS_JS = JSON.stringify([CONVEX_ORIGIN]);
 // --sol-* tokens bridged from the app theme so canvases authored against
 // codecast's palette render native-looking, same as web.
 function solTokensCss(): string {
-  const t = Theme as Record<string, string>;
-  const map: Record<string, string> = {
-    '--sol-bg': t.bg,
-    '--sol-bg-alt': t.bgAlt,
-    '--sol-bg-highlight': t.bgHighlight,
-    '--sol-card': t.cardBg,
-    '--sol-border': t.border,
-    '--sol-border-light': t.borderLight,
-    '--sol-text': t.text,
-    '--sol-text-secondary': t.textSecondary,
-    '--sol-text-muted': t.textMuted,
-    '--sol-text-dim': t.textDim,
-    '--sol-accent': t.accent,
-    '--sol-blue': t.blue,
-    '--sol-cyan': t.cyan,
-    '--sol-green': t.green,
-    '--sol-red': t.red,
-    '--sol-orange': t.orange,
-    '--sol-violet': t.violet,
-    '--sol-magenta': t.magenta,
-    '--sol-yellow': t.accent,
-  };
-  return Object.entries(map)
+  return Object.entries(solTokens(Theme))
     .map(([k, v]) => `${k}:${v}`)
     .join(';');
 }

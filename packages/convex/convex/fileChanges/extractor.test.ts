@@ -16,6 +16,18 @@ describe("shared file change formats", () => {
     expect(changes("search_replace", { target_file: "a.ts", old_string: "old", new_string: "new" })[0])
       .toMatchObject({ filePath: "a.ts", oldContent: "old", newContent: "new" });
   });
+  test("Muse edit_file names its strings find/replace and its path path", () => {
+    expect(changes("edit_file", { path: "a.ts", find: "old", replace: "new" })[0])
+      .toMatchObject({ filePath: "a.ts", changeType: "edit", oldContent: "old", newContent: "new" });
+  });
+  test("a client's own old_string/new_string wins over find/replace", () => {
+    expect(changes("edit_file", { path: "a.ts", old_string: "old", new_string: "new", find: "wrong", replace: "wrong" })[0])
+      .toMatchObject({ oldContent: "old", newContent: "new" });
+  });
+  test("Muse write_file lands as a whole-file write", () => {
+    expect(changes("write_file", { path: "a.ts", content: "body" })[0])
+      .toMatchObject({ filePath: "a.ts", changeType: "write", newContent: "body" });
+  });
   test("Grok run_terminal_command git commits land on the same change list", () => {
     expect(changes("run_terminal_command", { command: 'git commit -m "fix grok diffs"' })[0])
       .toMatchObject({ changeType: "commit", commitMessage: "fix grok diffs" });

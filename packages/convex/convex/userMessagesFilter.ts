@@ -9,7 +9,7 @@
 // be returned here. Keeping that invariant at the source means no client has to
 // re-filter by role (a guard that has been silently dropped by refactors twice).
 
-import { AGENT_SWITCH_NOTICE_PREFIX, MACHINE_SWITCH_NOTICE_PREFIX, MACHINE_MOVE_NOTICE_PREFIX, isAgentContextMessage, isPollResponsePayload, isTurnInterruptionNotice } from "@codecast/shared/contracts";
+import { AGENT_SWITCH_NOTICE_PREFIX, MACHINE_SWITCH_NOTICE_PREFIX, MACHINE_MOVE_NOTICE_PREFIX, isAgentContextMessage, isBootstrapPrompt, isPollResponsePayload, isTurnInterruptionNotice } from "@codecast/shared/contracts";
 
 export type FilterableMessage = {
   _id: string;
@@ -92,6 +92,9 @@ export function isNavigableUserMessage(m: FilterableMessage): boolean {
   // A poll answer the dashboard sent for the person (JSON with a __cc_poll
   // marker) is not a prompt: it must not become the sticky header.
   if (isPollResponsePayload(t)) return false;
+  // The prompt that seated a standing agent is the host's, not a person's ask
+  // (the same recogniser the scope page cuts the thread on).
+  if (isBootstrapPrompt(t)) return false;
   if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
   if (t.includes(SUMMARY_MARKER)) return false;
   if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;

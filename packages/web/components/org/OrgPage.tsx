@@ -39,6 +39,7 @@ import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
 import { OrgEmptyCanvas, OrgGuide, orgGuideSteps } from "./OrgFirstOpen";
+import { OrgIntro, markOrgIntroSeen, markOrgUpsellSeen } from "./OrgIntro";
 import { OrgGlossary, type GlossaryPage } from "./OrgGlossary";
 import { staffingPaneWord } from "./orgMeta";
 import { orgTreeReadState } from "./orgReadState";
@@ -124,6 +125,7 @@ export function OrgPageInner() {
     (st) => st.teams,
     (st) => st.clientState.ui?.org_nux_seen,
     (st) => st.clientState.ui?.org_intro_seen,
+    (st) => st.clientStateInitialized,
     (st) => st.clientState.ui?.org_review_run?.since,
     (st) => st.clientState.ui?.org_review_run?.session_id,
     // The review session's liveness, two fields of one row (never the row):
@@ -212,6 +214,12 @@ export function OrgPageInner() {
   // Opens on its own once, when the tree lands with no roles and the pref is
   // unset; "How this page works" reopens it; Done or dismiss writes the pref.
   const [guide, setGuide] = useState<{ step: number } | null>(null);
+  // The first visit (S20): the one screen built from the faces, over the
+  // body. Opens on its own once the tree and the prefs have landed and
+  // org_intro_seen is unset; "How this page works" reopens it by hand.
+  // Either action writes the pref, so it is seen once per person.
+  const [intro, setIntro] = useState<"auto" | "hand" | null>(null);
+  const introOffered = useRef(false);
   // The glossary and the short "how this works" page (S17): one dialog, opened
   // from the pane and from this header.
   const [glossary, setGlossary] = useState<GlossaryPage | null>(null);
@@ -310,11 +318,13 @@ export function OrgPageInner() {
   const liveRoles = tree ? tree.roles.filter((r) => r.status !== "retired").length : 0;
   const meNodeId = me ? parentNodeId({ kind: "user", user_id: me.user_id }) : null;
   const nuxSeen = s.clientState.ui?.org_nux_seen === true;
+  // The intro is the first open now (S20): the guide's own auto open waits
+  // for a later visit, so a new person never meets two onboardings in a row.
   useWatchEffect(() => {
-    if (guideOffered.current || !tree || preview || liveRoles > 0 || nuxSeen) return;
+    if (guideOffered.current || introOffered.current || intro || !tree || preview || liveRoles > 0 || nuxSeen) return;
     guideOffered.current = true;
     setGuide({ step: 0 });
-  }, [tree, preview, liveRoles, nuxSeen]);
+  }, [tree, preview, liveRoles, nuxSeen, intro]);
   // The first step is the person's own node: bring it into view.
   useWatchEffect(() => {
     if (guide?.step === 0 && meNodeId) askFocus("node", meNodeId);
@@ -578,6 +588,20 @@ export function OrgPageInner() {
       }
     }).catch(() => {});
   }, [tree, me, meId, run, preview, openSession]);
+  // -------- the first visit (S20)
+  // Seeing the org page by any route sells the feature: the card that
+  // introduces it elsewhere never rises afterwards.
+  useMountEffect(() => {
+    if (preview) return;
+    const st = useInboxStore.getState();
+    if (st.clientStateInitialized) markOrgUpsellSeen(st);
+  });
+  const initialized = s.clientStateInitialized;
+  useWatchEffect(() => {
+    if (introOffered.current || !tree || preview || !initialized || introSeen) return;
+    introOffered.current = true;
+    setIntro("auto");
+  }, [tree, preview, initialized, introSeen]);
   const hireChief = useCallback(() => {
     if (!tree) return;
     // The explained moment (S16): a workspace with a standing agent already
@@ -593,6 +617,14 @@ export function OrgPageInner() {
       doStaffChief();
     }
   }, [tree, doStaffChief]);
+  /** Either action closes the screen and writes the pref (S20). The start
+   *  action asks the chief of staff when the workspace has no roles; with
+   *  roles the chart is already under the screen. */
+  const closeIntro = useCallback((how: "start" | "later") => {
+    setIntro(null);
+    if (!preview) markOrgIntroSeen(useInboxStore.getState());
+    if (how === "start" && liveRoles === 0) hireChief();
+  }, [preview, liveRoles, hireChief]);
   /** "Propose an org now": one review from a fresh session, no hire (S8).
    *  Rides the same spawn route as every session the web starts. */
   const proposeNow = useCallback(() => {
@@ -798,7 +830,11 @@ export function OrgPageInner() {
   } : null;
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }}>
+    <div className="h-full flex flex-col overflow-hidden relative" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }}>
+      {/* the first visit (S20): the one screen over the whole page, header
+          included, so it fits a laptop without a scroll; its own title says
+          where the person is. Later or the start action brings the page back. */}
+      {intro && tree && <OrgIntro key={intro} hasRoles={liveRoles > 0} compact={phone} onStart={() => closeIntro("start")} onLater={() => closeIntro("later")} />}
       {/* header. While a proposal is open the pane is the page (org-staffing.md
           S19): the header folds to one line with the way back to the chart,
           and the glossary stays reachable from here and nowhere else. */}
@@ -828,7 +864,7 @@ export function OrgPageInner() {
             <span className="hidden sm:inline truncate">Who reports to whom: people, the roles they hired, every session. Drag a card to move it.</span>
             <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
             {tree && (
-              <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
+              <button type="button" onClick={() => setIntro("hand")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
             )}
             {tree && (
               <button type="button" onClick={() => setGlossary("words")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} title="The eight words this page uses, each in one sentence" data-org-glossary-open>Words</button>

@@ -18,6 +18,7 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { authorGroupKey, buildChatTimeline, memberHandle } from '@codecast/shared/chat';
 import { MessageRow, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
+import { useSessionIdentityLookup } from '@/components/identity';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
 import { MessageActionsSheet, type MessageAction } from '@/components/chat/MessageActionsSheet';
 import { ImageViewer } from '@/components/chat/ImageViewer';
@@ -227,6 +228,7 @@ export default function ChatThreadScreen() {
     return map;
   }, [thread?.reactions, viewerId]);
 
+  const identityFor = useSessionIdentityLookup();
   const toView = useCallback((m: any): MobileChatMessage => {
     const member = memberById.get(String(m.user_id));
     const humanName = member?.name || authorById.get(String(m.user_id))?.name;
@@ -242,7 +244,7 @@ export default function ChatThreadScreen() {
             id: String(m.user_id),
             name: m.origin_session_title || 'Agent session',
             isAgent: true,
-            session: { agentType: m.origin_agent_type, via: humanName },
+            session: { agentType: m.origin_agent_type, via: humanName, identity: identityFor(m.origin_session_id) },
           }
         : {
             id: String(m.user_id),
@@ -261,7 +263,7 @@ export default function ChatThreadScreen() {
       attachments: m.attachments?.length ? m.attachments : undefined,
       reactions: reactionsByMessage.get(String(m._id)),
     };
-  }, [memberById, authorById, viewerId, reactionsByMessage, thread?.anchor?.name]);
+  }, [memberById, authorById, viewerId, reactionsByMessage, thread?.anchor?.name, identityFor]);
 
   const rows = useMemo(() => {
     if (!thread?.root) return [];

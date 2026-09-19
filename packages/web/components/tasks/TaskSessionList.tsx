@@ -4,6 +4,8 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { Columns2, Pin } from "lucide-react";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
+import { SessionGlyph } from "../identity";
+import { identityRowOf } from "../../lib/sessionIdentity";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { LivenessDot } from "../LivenessDot";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -129,9 +131,18 @@ function TaskSessionRow({
         }}
         className="flex items-start gap-2 px-2 py-1.5 pr-7"
       >
-        <span className="flex-shrink-0 mt-0.5" title={formatAgentType(conv.agent_type)}>
-          <AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-        </span>
+        {/* Who the session is (session-characters.md S3), with the agent
+            brand riding the face; a plain row keeps the brand alone. */}
+        <SessionGlyph
+          row={identityRowOf(conv as any)}
+          className="flex-shrink-0 mt-0.5"
+          badge={<AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="w-full h-full p-[1px]" />}
+          fallback={
+            <span className="flex-shrink-0 mt-0.5" title={formatAgentType(conv.agent_type)}>
+              <AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+            </span>
+          }
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className={`truncate text-xs leading-tight ${live ? "text-sol-text font-medium" : "text-sol-text"}`}>

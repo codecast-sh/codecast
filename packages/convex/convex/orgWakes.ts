@@ -21,6 +21,8 @@ import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { nextShortId } from "./counters";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { computeBriefFacts, type BriefFacts } from "./org";
+import { PERSON_SESSION_LINES } from "./orgGoals";
+import { goalStateLine } from "@codecast/shared/contracts/roleGoals";
 import { collectLinesSince } from "./chat";
 import {
   OUTBOX_READ_CAP,
@@ -214,11 +216,24 @@ export function buildFrame(input: FrameInput): Frame {
   };
   const waiting = facts.hands.filter((h) => h.waiting_since).sort((a, b) => a.waiting_since! - b.waiting_since!);
   const others = facts.hands.filter((h) => !h.waiting_since);
+  // The people who report to the role (org-roles-run-work.md R6): each one's
+  // goals from the brief with what moved and what stalled, then their
+  // sessions that changed since the last frame. The role matches the
+  // sessions to the goals in its own words and writes the matches back.
+  const peopleLines: string[] = [];
+  for (const p of facts.people ?? []) {
+    const n = p.sessions_changed.length;
+    peopleLines.push(`${p.name} (${p.goals.length} goal${p.goals.length === 1 ? "" : "s"} in your brief · ${n} session${n === 1 ? "" : "s"} changed since your last frame):`);
+    if (!p.has_section) peopleLines.push(`  no goals yet: ask ${p.name} for their three to five and write them under "## Goals: ${p.name}" in your brief`);
+    p.goals.forEach((g, i) => peopleLines.push(`  ${i + 1}. ${g.text}${g.priority ? ` (${g.priority})` : ""} — ${goalStateLine(g, now)}`));
+    for (const s of capped(p.sessions_changed.map((s) => `  - ${s.short_id} ${s.title}: ${s.state}${s.state_line ? ` — ${s.state_line}` : ""}`), PERSON_SESSION_LINES, "sessions")) peopleLines.push(s);
+  }
   sections.push([
     `## Your sessions`,
     ...(waiting.length ? [`Waiting on a person:`, ...budgeted(waiting.map(handLine), budget)] : []),
     ...(others.length ? [...(waiting.length ? [`The rest:`] : []), ...budgeted(others.map(handLine), budget)] : []),
     ...(facts.hands.length ? [] : ["- no sessions report to you"]),
+    ...(peopleLines.length ? [`People who report to you:`, ...budgeted(peopleLines, budget)] : []),
   ].join("\n"));
 
   if (input.channelLines.length) {
@@ -238,6 +253,7 @@ export function buildFrame(input: FrameInput): Frame {
     0,
     ...facts.changed.map((c) => c.updated_at),
     ...facts.hands.map((h) => h.state_at ?? 0),
+    ...(facts.people ?? []).flatMap((p) => p.sessions_changed.map((s) => s.updated_at)),
     ...input.channelLines.map((l: any) => l.created_at ?? 0),
   );
   const text = `<role-wake ${role.short_id} at="${new Date(now).toISOString()}" causes="${groups.length}" held="${heldCount}">\n${sections.join("\n\n")}\n</role-wake>`;

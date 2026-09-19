@@ -1,4 +1,5 @@
 import { View, TouchableOpacity, StyleSheet, type TouchableOpacityProps } from 'react-native';
+import { optionalNative } from './optionalNative';
 
 // react-native-gesture-handler's native module is ABSENT on the Feb 1.0.2 App
 // Store binary: the dependency was first installed 2026-03-05, AFTER that build
@@ -11,30 +12,10 @@ import { View, TouchableOpacity, StyleSheet, type TouchableOpacityProps } from '
 // export null / a plain-View fallback when it is missing so the app renders and
 // is usable (gestures degrade) until a native build bundles it. Mirrors the
 // guarded requires in lib/analytics.ts, lib/clipboard.ts, store/idbCache.native.ts.
-function rnGestureHandlerNativeAvailable(): boolean {
-  // `getEnforcing` throws when absent, so use the non-throwing `get` (new arch)
-  // and the NativeModules map (old arch). This catches the case where requiring
-  // the JS succeeds but calling into native would crash.
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { TurboModuleRegistry, NativeModules } = require('react-native');
-    return !!(TurboModuleRegistry?.get?.('RNGestureHandlerModule') || NativeModules?.RNGestureHandlerModule);
-  } catch {
-    return false;
-  }
-}
-
 // The whole module namespace, or null when the native module is missing.
 // Consumers must handle null with a degraded (or PanResponder) path.
-let gh: any = null;
-try {
-  if (rnGestureHandlerNativeAvailable()) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    gh = require('react-native-gesture-handler');
-  }
-} catch {
-  gh = null;
-}
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const gh: any = optionalNative('RNGestureHandlerModule', () => require('react-native-gesture-handler'));
 
 export const gestureHandler: any = gh;
 

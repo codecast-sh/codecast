@@ -10,6 +10,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { MobileIdentityFace, useSessionIdentityRow } from '@/components/identity';
 import { openLink } from '@/lib/links';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
@@ -122,6 +123,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   const icon = notificationIcon(notification.type);
   const { name: actorName, avatar: avatarUrl } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
+  const identityRow = useSessionIdentityRow(notification.conversation_id ? String(notification.conversation_id) : null);
   // Same rule as the web bell: a row wears an agent face only when it names a
   // conversation. The daemon's machine alert is a session type with no
   // conversation, so it would otherwise show the Claude Code logo next to a
@@ -154,7 +156,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
         {avatarUrl ? (
           <Image source={{ uri: avatarUrl }} style={styles.avatar} />
         ) : isSessionNotif ? (
-          <AgentLogoSvg agentType={agentType} size={38} />
+          <MobileIdentityFace row={identityRow} size={38} fallback={<AgentLogoSvg agentType={agentType} size={38} />} />
         ) : (
           <RNView style={styles.avatarFallback}>
             <FontAwesome name={icon.name} size={16} color={icon.color} />

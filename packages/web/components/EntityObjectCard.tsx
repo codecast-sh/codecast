@@ -2,6 +2,7 @@ import React, { useCallback, useId, useRef, useState } from "react";
 import {
   ChevronDown,
   FileText,
+  Flag,
   Folder,
   FolderOpen,
   GitBranch,
@@ -16,6 +17,8 @@ import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notifi
 import { type EntityType } from "../lib/entityLinks";
 import { ACCENT, type Accent } from "../lib/entityCardAccent";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { SessionGlyph } from "./identity";
+import { identityRowOf } from "../lib/sessionIdentity";
 import { cleanUserMessage } from "./sessionMessage";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -63,6 +66,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   doc: FileText,
   trigger: Zap,
   project: Folder,
+  initiative: Flag,
   pr: GitPullRequest,
   commit: GitCommitHorizontal,
 };
@@ -208,9 +212,18 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
     <div className="flex items-start gap-2.5">
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-1.5 text-sm leading-snug text-sol-text">
-          <span className="flex-shrink-0" title={session.agent_type || "claude_code"}>
-            <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-          </span>
+          {/* Who the session is (session-characters.md S3), the agent brand
+              on its corner; a plain row keeps the brand alone. */}
+          <SessionGlyph
+            row={identityRowOf(session)}
+            className="flex-shrink-0"
+            badge={<AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" />}
+            fallback={
+              <span className="flex-shrink-0" title={session.agent_type || "claude_code"}>
+                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+              </span>
+            }
+          />
           <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{title}</span>
           {isLive && (
             <span className="relative flex h-1.5 w-1.5 flex-shrink-0" title="Live">

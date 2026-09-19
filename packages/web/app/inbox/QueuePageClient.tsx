@@ -1,5 +1,5 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
-import { useState, useCallback, useRef, memo, useMemo, useDeferredValue } from "react";
+import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
@@ -13,7 +13,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationPlaceholder } from "../../components/ConversationPlaceholder";
-import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
+import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
@@ -31,8 +31,38 @@ import { animatedHideSession } from "../../store/undoActions";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
+import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
+import { useSeedOwnership } from "../../components/anchor/AnchorConversation";
+import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
+import { standingRoleIdOf } from "../../lib/sessionIdentity";
+import { sessionViewAsked, settleSessionViewAsk } from "../../lib/sessionViewVisit";
+import { SeatHeadControls, SeatHeadLabel, RolePageControl } from "../../components/org/scope/SeatHead";
 
-export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
+// The role page is a whole surface (the board's tabs, the org tree feeder), so
+// the inbox loads it only when a seat is opened. The dynamic import also keeps
+// the two modules out of a static cycle: the role page mounts InboxConversation.
+const ScopePageInner = lazy(() => import("../../components/org/scope/ScopePage").then((m) => ({ default: m.ScopePageInner })));
+
+// One element, so the memoized conversation view keeps its props. It mounts
+// and unmounts with the fold: that is a DOM change inside the header's row,
+// which is what makes the row's squeeze (useSqueezeToFit) measure again. A
+// fold done in CSS alone would leave the level measured for the other state.
+const SEAT_HEAD_LABEL = <SeatHeadLabel />;
+
+/** What the role page asks of the pane when the session is a role's standing
+ *  session (initiatives-projects-role-page.md I3). The pane stays the session
+ *  page: its banners, share control, context panels and every header action
+ *  are the same ones. The seat changes how the transcript reads (the agent
+ *  talking to the person, under the role's lead) and folds the session header
+ *  to one row that expands on demand. */
+export type SeatConversation = {
+  layout: Pick<ConversationDiffLayoutProps, "leadNode" | "leadPinned" | "stickyPrompt" | "initialDensity" | "foldWorkingTurns" | "composerPlaceholder" | "hideDiff">;
+  /** The person may talk to the seat (host, parent or admin): see useSeedOwnership. */
+  seedOwnership: boolean;
+  onSessionView: () => void;
+};
+
+export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight, seat, headerEnd, autoFocusInput = true }: { sessionId: string; isIdle: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void; seat?: SeatConversation; headerEnd?: ReactNode; autoFocusInput?: boolean }) {
   devRenderCount("InboxConversation2");
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
@@ -120,7 +150,22 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   }, [sessionId, convCommand]);
 
   const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
-  const isOwnSession = !!conversation && (conversation as any).is_own !== false;
+  useSeedOwnership(sessionId, !!seat?.seedOwnership);
+  const isOwnSession = !!conversation && (!!seat?.seedOwnership || (conversation as any).is_own !== false);
+  // A seat opens on the agent talking to the person: its provisioning prompt
+  // folds away (scopes-and-feed.md F4.1). A deep link to a message keeps the
+  // whole window, because its target may sit above the cut.
+  const shown = useMemo(
+    () => (seat && !targetMessageId ? windowConversationSince(conversation as WindowedConversation | null, bootstrapCut(conversation as WindowedConversation | null)) : null),
+    [seat, targetMessageId, conversation],
+  );
+  // The seat's session header rests on one row and opens on demand (I3).
+  const [headOpen, setHeadOpen] = useState(false);
+  const onSessionView = seat?.onSessionView;
+  const seatHeaderEnd = useMemo(
+    () => (onSessionView ? <SeatHeadControls open={headOpen} onToggle={() => setHeadOpen((v) => !v)} onSessionView={onSessionView} /> : null),
+    [onSessionView, headOpen],
+  );
   // The public link must PRESENT the token (?share=) — a bare conversation id
   // grants nothing to anonymous viewers or link unfurlers (issue #27).
   const shareToken = conversation?.share_token;
@@ -167,7 +212,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   }
 
   return (
-    <div className="relative h-full flex flex-col">
+    <div className="relative h-full flex flex-col" data-seat-head={seat ? (headOpen ? "open" : "rest") : undefined}>
       {isOwnSession && (
         <SessionResumeBanner
           resumeState={resumeState}
@@ -188,10 +233,13 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       )}
       <div className="flex-1 min-h-0">
         <ConversationDiffLayout
-          conversation={conversation as ConversationData}
+          conversation={(shown?.conversation ?? conversation) as ConversationData}
           embedded
+          {...seat?.layout}
+          headerLeft={seat && !headOpen ? SEAT_HEAD_LABEL : undefined}
+          headerEnd={seat ? seatHeaderEnd : headerEnd}
           headerExtra={shareControls}
-          hasMoreAbove={hasMoreAbove}
+          hasMoreAbove={hasMoreAbove && !shown?.reachedStart}
           hasMoreBelow={hasMoreBelow}
           isLoadingOlder={isLoadingOlder}
           isLoadingNewer={isLoadingNewer}
@@ -203,7 +251,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           isOwner={isOwnSession}
           onSendAndAdvance={isOwnSession ? onSendAndAdvance : undefined}
           onSendAndDismiss={isOwnSession ? onSendAndDismiss : undefined}
-          autoFocusInput
+          autoFocusInput={autoFocusInput}
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={effectiveTargetMessageId}
@@ -218,6 +266,60 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     </div>
   );
 });
+
+export type InboxConversationProps = React.ComponentProps<typeof InboxConversation>;
+
+/** The pane's own props, handed through the role page to the conversation it
+ *  mounts, plus the way out to the plain view. */
+export type SeatSession = Omit<InboxConversationProps, "seat" | "headerEnd"> & { onSessionView: () => void };
+
+function OrgTreeFeeder() {
+  useSyncOrgTreeFeeder();
+  return null;
+}
+
+/**
+ * What opening a session renders (initiatives-projects-role-page.md I3). A
+ * role's standing session is the role page: the conversation with the scope
+ * beside it, in place, at the session's own address. Every way a session
+ * opens (a card, the chart, a pill, the palette, a link) ends in this pane, so
+ * the rule lives here once. A hand is a session and keeps the session page.
+ *
+ * "Session view" is a view, not a setting: it lasts until the person leaves
+ * this session, and the next open is the role page again.
+ */
+export function SessionPage(props: InboxConversationProps) {
+  const { sessionId } = props;
+  const roleId = useInboxStore((s) => {
+    const row = s.sessions[sessionId];
+    return row ? standingRoleIdOf(row) : null;
+  });
+  // The role page paints from the org tree. A seat whose role the tree does
+  // not hold (another workspace's, or a cold cache still filling) stays a
+  // plain session rather than a page that says it cannot find the role.
+  const roleKnown = useInboxStore((s) => !!roleId && !!s.orgTree?.roles.some((r) => r._id === roleId));
+  const [visit, setVisit] = useState(() => ({ sessionId, plain: sessionViewAsked(sessionId) }));
+  if (visit.sessionId !== sessionId) setVisit({ sessionId, plain: sessionViewAsked(sessionId) });
+  useWatchEffect(() => { settleSessionViewAsk(sessionId); }, [sessionId]);
+  const plain = visit.sessionId === sessionId && visit.plain;
+  const setPlain = useCallback((next: boolean) => setVisit({ sessionId, plain: next }), [sessionId]);
+  const onSessionView = useCallback(() => setPlain(true), [setPlain]);
+  const rolePageControl = useMemo(() => <RolePageControl onRolePage={() => setPlain(false)} />, [setPlain]);
+
+  if (roleId && roleKnown && !plain) {
+    return (
+      <Suspense fallback={<ConversationPlaceholder id={sessionId} />}>
+        <ScopePageInner id={roleId} session={{ ...props, onSessionView }} />
+      </Suspense>
+    );
+  }
+  return (
+    <>
+      {roleId && <OrgTreeFeeder />}
+      <InboxConversation {...props} headerEnd={roleId && roleKnown ? rolePageControl : undefined} />
+    </>
+  );
+}
 
 // SessionCard moved to GlobalSessionPanel.tsx as part of the shared SessionListPanel
 
@@ -609,7 +711,7 @@ export function QueuePageClient() {
         )
       ) : renderDismissedSession ? (
         <ErrorBoundary name="Conversation" level="inline">
-          <InboxConversation
+          <SessionPage
             sessionId={renderDismissedSession._id}
             isIdle={renderDismissedSession.is_idle}
             onSendAndAdvance={() => setViewingDismissedId(null)}
@@ -624,7 +726,7 @@ export function QueuePageClient() {
         </ErrorBoundary>
       ) : renderSession ? (
         <ErrorBoundary name="Conversation" level="inline">
-          <InboxConversation
+          <SessionPage
             sessionId={renderSession._id}
             isIdle={renderSession.is_idle}
             onSendAndAdvance={handleSendAndAdvance}

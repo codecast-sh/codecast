@@ -771,11 +771,18 @@ export const applyMergeState = internalMutation({
     const before = await ctx.db.get(args.pr_id);
     if (!before) return { retry: false };
 
-    const patch: Record<string, any> = {
-      mergeable: args.mergeable,
-      mergeable_state: args.mergeable_state,
-      merge_state_checked_at: Date.now(),
-    };
+    // `mergeable: null` is not an answer, it is "ask again in a moment", and
+    // GitHub gives it after every push to the base branch. Writing it down
+    // used to drop a conflicted PR to "behind" (the fold only calls conflicts
+    // on a definite `false`), and the retry 15s later put it back, so every
+    // commit to main wrote a pr_behind/pr_conflict pair into the timeline.
+    // Each field is written only when it carries an answer, so an unknown
+    // never overwrites what GitHub last told us.
+    const patch: Record<string, any> = { merge_state_checked_at: Date.now() };
+    if (args.mergeable === true || args.mergeable === false) patch.mergeable = args.mergeable;
+    if (args.mergeable_state !== undefined && args.mergeable_state !== "unknown") {
+      patch.mergeable_state = args.mergeable_state;
+    }
     if (args.head_sha) patch.head_sha = args.head_sha;
     if (args.base_sha) patch.base_sha = args.base_sha;
     if (args.draft !== undefined) patch.draft = args.draft;

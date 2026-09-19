@@ -23,7 +23,11 @@ import {
   slackClientId,
   stampOutbound,
   updateLink,
+  buildInboundResolver,
+  getSlackUser,
+  teammateHandles,
 } from "./slackSync";
+import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
 import { sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
@@ -397,6 +401,68 @@ describe("Slack-only people as mention targets", () => {
     const push = await call(pushContext, ctx, { message_id: row._id });
     expect(push.handle_to_slack).toEqual({ erin: "UERIN" });
   });
+  // The line as Slack finally sees it, from the same map the push builds.
+  const slackText = (content: string, push: any) =>
+    markdownToSlack(content, { handleToSlackUser: (h: string) => push.handle_to_slack[h] ?? null });
+
+  // Ashot wrote "@avery" on 2026-09-17 and Slack showed plain text. Avery is
+  // an agent identity (a Slack bot user), and the mention path skipped every
+  // bot row, so nothing resolved and nothing paged.
+  test("an agent or bot in the workspace is a real mention, not plain text", async () => {
+    const ctx = context(ALICE);
+    await call(upsertSlackUser, ctx, {
+      workspace_id: WS, slack_user_id: "UAVERY", team_id: TEAM,
+      profile: { id: "UAVERY", name: "avery", is_bot: true, profile: { display_name: "Avery" } },
+    });
+    const resolved = await resolveChatMentions(ctx, TEAM, "@avery can you take this?", ALICE);
+    expect(resolved.slack).toEqual([{ user: "UAVERY", handle: "avery", name: "Avery" }]);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@avery can you take this?" });
+    const row = messages(ctx).find((m: any) => m.content.startsWith("@avery"));
+    const push = await call(pushContext, ctx, { message_id: row._id });
+    expect(push.handle_to_slack).toEqual({ avery: "UAVERY" });
+    expect(slackText(row.content, push)).toBe("<@UAVERY> can you take this?");
+  });
+
+  // People write the name they see. Slack keeps a login underneath it, and a
+  // handle lookup against the login alone misses every time the two differ.
+  test("the name a person shows in Slack pages them, not only their login", async () => {
+    const ctx = context(ALICE);
+    await call(upsertSlackUser, ctx, {
+      workspace_id: WS, slack_user_id: "UAVERY2", team_id: TEAM,
+      profile: { id: "UAVERY2", name: "avery.chen", profile: { display_name: "Avery Chen", real_name: "Avery Chen" } },
+    });
+    const resolved = await resolveChatMentions(ctx, TEAM, "@avery ping", ALICE);
+    expect(resolved.slack).toEqual([{ user: "UAVERY2", handle: "avery.chen", name: "Avery Chen" }]);
+  });
+
+  // Two people could answer to it, so it names nobody rather than the wrong one.
+  test("an ambiguous name resolves to nobody", async () => {
+    const ctx = context(ALICE);
+    for (const id of ["UAV1", "UAV2"]) {
+      await call(upsertSlackUser, ctx, {
+        workspace_id: WS, slack_user_id: id, team_id: TEAM,
+        profile: { id, name: `${id.toLowerCase()}`, profile: { display_name: "Avery" } },
+      });
+    }
+    expect((await resolveChatMentions(ctx, TEAM, "@avery ping", ALICE)).slack).toEqual([]);
+  });
+
+  // A line written before the workspace roster knew that person still pages
+  // them when it goes out, and a handle nobody answers to stays readable.
+  test("the push resolves a handle the stored refs missed, and leaves an unknown one as text", async () => {
+    const ctx = context(ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@avery and @ghostwriter, see this" });
+    const row = messages(ctx).find((m: any) => m.content.startsWith("@avery"));
+    expect(row.mentions).toBeUndefined();
+    await call(upsertSlackUser, ctx, {
+      workspace_id: WS, slack_user_id: "UAVERY", team_id: TEAM,
+      profile: { id: "UAVERY", name: "avery", is_bot: true, profile: { display_name: "Avery" } },
+    });
+    const push = await call(pushContext, ctx, { message_id: row._id });
+    expect(push.handle_to_slack).toEqual({ avery: "UAVERY" });
+    expect(slackText(row.content, push)).toBe("<@UAVERY> and @ghostwriter, see this");
+  });
+
   test("a Slack person matched to a teammate resolves to the teammate, not a Slack ref", async () => {
     const ctx = context(ALICE);
     await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UBOBBY", team_id: TEAM, profile: { id: "UBOBBY", name: "bobby", profile: { display_name: "Bobby", email: "bob@example.test" } } });
@@ -592,5 +658,43 @@ describe("link management", () => {
     expect(link.paused).toBe(false);
     expect(link.last_error).toBeUndefined();
     expect(link.direction).toBe("slack_to_codecast");
+  });
+});
+
+describe("Slack mentions coming back", () => {
+  // The mirror of the outbound rule: an id Slack sent becomes the handle that
+  // person answers to here, and an unmapped person becomes a name that reads
+  // right and can never page a codecast teammate who shares it.
+  function actionContext(over: Record<string, any[]> = {}) {
+    const ctx = context(null, over);
+    const queries: Record<string, any> = {
+      "slackSync:getSlackUser": getSlackUser,
+      "slackSync:teammateHandles": teammateHandles,
+    };
+    ctx.runQuery = async (reference: any, args: any) => {
+      const fn = queries[getFunctionName(reference)];
+      if (!fn) throw new Error(`unexpected query ${getFunctionName(reference)}`);
+      return call(fn, ctx, args);
+    };
+    ctx.runMutation = async (reference: any, args: any) => call(
+      { "slackSync:upsertSlackUser": upsertSlackUser }[getFunctionName(reference)] as any, ctx, args);
+    return ctx;
+  }
+
+  test("a known id becomes the teammate's handle; an unmapped person becomes a plain name", async () => {
+    const ctx = actionContext();
+    await call(upsertSlackUser, ctx, {
+      workspace_id: WS, slack_user_id: "UBOBBY", team_id: TEAM,
+      profile: { id: "UBOBBY", name: "bobby", profile: { display_name: "Bobby", email: "bob@example.test" } },
+    });
+    await call(upsertSlackUser, ctx, {
+      workspace_id: WS, slack_user_id: "UERIN", team_id: TEAM,
+      profile: { id: "UERIN", name: "erin", profile: { display_name: "Erin" } },
+    });
+    const install = await ctx.db.get(INSTALL);
+    const link = await ctx.db.get(LINK);
+    const text = "<@UBOBBY> and <@UERIN> take a look";
+    const resolver = await buildInboundResolver(ctx, install, link, null, text);
+    expect(slackToMarkdown(text, resolver)).toBe("@bob and **@\u200bErin** take a look");
   });
 });

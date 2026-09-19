@@ -67,6 +67,21 @@ describe("the meters the denominator is read from", () => {
     expect(windowReadingsOf([device([{ name: "n", email: "c@x.com", usage: { fetched_at: NOW } }])])).toEqual([]);
   });
 
+  test("a window nobody re-read is skipped, but its owner is not", () => {
+    const at = { before: 1_000_000, after: 1_000_000 + CALIBRATION_SLOT_MS };
+    const before = [
+      { key: "live", percent: 30, resets_at: 1, fetched_at: at.before - 60_000 },
+      { key: "dormant", percent: 80, resets_at: 2, fetched_at: at.before - 6 * 3600_000 },
+    ];
+    const after = [
+      { key: "live", percent: 38, resets_at: 1, fetched_at: at.after - 60_000 },
+      { key: "dormant", percent: 80, resets_at: 2, fetched_at: at.before - 6 * 3600_000 },
+    ];
+    // The stale one contributes nothing; the live one still counts, so a person
+    // who keeps eight saved accounts is not disqualified by the seven idle ones.
+    expect(percentRise(before, after, at)).toBe(8);
+  });
+
   test("the rise sums every window that stayed in its own window and went up", () => {
     const before = [
       { key: "a", percent: 30, resets_at: 1 },
@@ -80,6 +95,16 @@ describe("the meters the denominator is read from", () => {
       { key: "d", percent: 50, resets_at: 4 }, // no before reading
     ];
     expect(percentRise(before, after)).toBe(10);
+  });
+
+  test("the same window jitters its own reset time, and still pairs", () => {
+    // Real readings seconds apart, 2026-09-18: the provider recomputes resets_at
+    // per request. Exact equality here dropped every pair and the rate never fit.
+    const first = Date.parse("2026-09-18T18:20:00.327Z");
+    const second = Date.parse("2026-09-18T18:20:00.582Z");
+    expect(percentRise([{ key: "a", percent: 30, resets_at: first }], [{ key: "a", percent: 46, resets_at: second }])).toBe(16);
+    // The NEXT window is five hours away, far outside the tolerance.
+    expect(percentRise([{ key: "a", percent: 90, resets_at: first }], [{ key: "a", percent: 4, resets_at: first + 5 * 3600_000 }])).toBe(0);
   });
 
   test("a percent that fell inside the same window is not negative usage", () => {

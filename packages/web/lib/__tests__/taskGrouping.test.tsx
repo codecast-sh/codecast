@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { buildTaskGroups, canSubGroup, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES } from "../taskGrouping";
-import { DEFAULT_TASK_STATUSES } from "@codecast/shared/tasks";
+import { DEFAULT_TASK_STATUSES, isOnHumanBoard } from "@codecast/shared/tasks";
 import { orderedStatuses, statusFill } from "../taskStatuses";
 
 const ctx = { projects: {}, onFilterLabel: () => {} };
@@ -278,6 +278,19 @@ describe("the chain axis", () => {
     const result = groups("chain+status", [task({ ...asRole(growth), status: "open" }), task({ ...asRole(growth), status: "done" }), task(asRole(ads))], "", orgCtx);
     // Inside a chain group the second axis keeps its own order (Done leads the board).
     expect(outline(result)).toEqual(["Ashot (0)", "  Growth · Done (1)", "  Growth · Open (1)", "    Ads · Open (1)"]);
+  });
+
+  // The page filters with isOnHumanBoard before it groups. A task an agent
+  // filed is hidden until someone holds it, and a role is someone (R5).
+  it("shows an agent filed task under the role that holds it, on the default board", () => {
+    const board = [
+      task({ ...asRole(growth), source: "agent", title: "held by a role" }),
+      task({ source: "agent", title: "one session's bookkeeping" }),
+      task({ ...person("founder", "Ashot"), source: "human" }),
+    ].filter(isOnHumanBoard);
+    const result = groups("chain", board, "", orgCtx);
+    expect(outline(result)).toEqual(["Ashot (1)", "  Growth (1)"]);
+    expect(result[1].items[0].title).toBe("held by a role");
   });
 
   it("only nests as the first axis, and never pairs with the assignee axis it repeats", () => {

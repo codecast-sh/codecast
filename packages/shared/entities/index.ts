@@ -13,7 +13,7 @@
  * 32-char ids: their table was simply never registered here.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "trigger" | "pr" | "commit";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "trigger" | "pr" | "commit";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -36,6 +36,7 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   session: "/conversation",
   doc: "/docs",
   project: "/projects",
+  initiative: "/initiatives",
   trigger: "/triggers",
   // Repository objects are addressed by repository plus number or sha, so
   // these prefixes are completed by `entityRoute` (see repoObjectRoute), not by
@@ -55,7 +56,15 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   ct: "task",
   pl: "plan",
   tr: "trigger",
+  in: "initiative",
 };
+
+/**
+ * A prefix that is also an English word takes digits only: `in-7` is an
+ * initiative, while "in-app" and "in-house" are prose. Every matcher below
+ * derives from this, so the rule holds on every surface at once.
+ */
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -75,6 +84,8 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   doc: "doc",
   projects: "project",
   project: "project",
+  initiatives: "initiative",
+  initiative: "initiative",
   triggers: "trigger",
   trigger: "trigger",
   // Pre-rename alias, still live in old links.
@@ -128,7 +139,8 @@ export function buildEntityUrl(type: string, id: string, base: string = CODECAST
  * historical `cast link` behavior).
  */
 export function inferEntityTypeFromShortId(id: string): EntityType | null {
-  const prefix = (id || "").trim().toLowerCase().split("-")[0];
+  const [prefix, ...rest] = (id || "").trim().toLowerCase().split("-");
+  if (DIGITS_ONLY_PREFIX.has(prefix) && !/^\d+$/.test(rest.join("-"))) return null;
   return SHORT_ID_PREFIX[prefix] ?? null;
 }
 
@@ -395,8 +407,18 @@ export function parseGitHubLocationUrl(href: string | undefined | null): GitHubL
 // skips matches when two callers interleave.
 // ---------------------------------------------------------------------------
 
-/** `ct|pl|tr` — the registered short-id prefixes, as a regex alternation. */
-const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
+/**
+ * The registered short ids as a regex source: `(?:ct|pl|tr)-<tail>|(?:in)-\d+`.
+ * `tail` is what follows a prefix that is not an English word. Exported so a
+ * surface with its own scanner (the editor's input rule) embeds this branch
+ * instead of rebuilding it from the prefix table.
+ */
+export function shortIdSource(tail = "[a-z0-9]+"): string {
+  const prefixes = Object.keys(SHORT_ID_PREFIX);
+  const loose = prefixes.filter((p) => !DIGITS_ONLY_PREFIX.has(p)).join("|");
+  const strict = prefixes.filter((p) => DIGITS_ONLY_PREFIX.has(p)).join("|");
+  return `(?:${loose})-${tail}|(?:${strict})-\\d+`;
+}
 
 /**
  * Bare ids as they appear in prose, widest form first. Exported as a source
@@ -404,10 +426,10 @@ const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
  * alternation — mobile's markdown tokenizer scans every inline form in one
  * pass, so it needs the branch, not a standalone matcher.
  */
-export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
 export function bareEntityIdRegex(): RegExp {

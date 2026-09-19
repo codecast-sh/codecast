@@ -343,7 +343,12 @@ export async function resolveAssigneeStr(
     if (member) return member.toString();
     const role = boundary ? await liveRoleByHandle(ctx, boundary, handle) : null;
     if (role) return role._id.toString();
-    assignee = handle;
+    // A handle is a claim that someone answers to it. One that matches nobody
+    // is refused: stored as a bare string it would sit on the board as an
+    // assignee no roster and no chart can ever resolve.
+    const anyone = await resolveAssigneeToUserId(ctx, handle, boundary?.team_id);
+    if (!anyone) throw new Error(`Nobody answers to @${handle} in this workspace: no teammate and no live role has that handle. Run cast role ls to see the roles here.`);
+    return anyone.toString();
   }
   const lower = assignee.toLowerCase();
   const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
@@ -738,9 +743,18 @@ const roleOf = (conv: any): string | undefined =>
 // own a task here (retired, another workspace). Another role's task does move:
 // the work is now being done under this one, and the chain view still rolls
 // it up to the same person when one reports to the other.
+//
+// Taking over, not creating: every task with an assignee shows on the
+// person's default board (`isOnHumanBoard`), which is right for work a role
+// takes over and wrong for a session's own bookkeeping. So a task this same
+// session filed stays unassigned and internal as it is today, and a subtask
+// stays nested under its parent with no assignee of its own; the parent says
+// who answers for the work.
 async function roleTakingTask(ctx: any, task: any, conv: any, boundary: AssigneeBoundary): Promise<any | null> {
   const roleId = roleOf(conv);
   if (!roleId) return null;
+  if (task.parent_id) return null;
+  if (task.created_from_conversation && String(task.created_from_conversation) === String(conv._id)) return null;
   const current: string | undefined = task.assignee || undefined;
   if (current && !current.startsWith("agent:") && !(await roleAssigneeOf(ctx, current))) return null;
   const role = await roleAssigneeOf(ctx, roleId);
@@ -1433,6 +1447,8 @@ export const list = query({
   args: {
     api_token: v.string(),
     project_id: v.optional(v.string()),
+    // `cast task ls --initiative in-N`: the tasks of the initiative's projects.
+    initiative: v.optional(v.string()),
     status: v.optional(v.string()),
     execution_status: v.optional(v.string()),
     ready: v.optional(v.boolean()),
@@ -1503,11 +1519,15 @@ export const list = query({
         .withIndex("by_assignee_updated", (q: any) => q.eq("assignee", assignee))
         .collect()))).flat();
       needsAccessFilter = true;
-    } else if (args.project_id) {
-      tasks = await ctx.db
+    } else if (args.project_id || args.initiative) {
+      // A task reaches an initiative through its project. With both flags the
+      // project must be one the initiative names.
+      const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId, args.initiative)).project_ids.map(String) : null;
+      const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
+      tasks = (await Promise.all(projectIds.map((projectId) => ctx.db
         .query("tasks")
-        .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
-        .collect();
+        .withIndex("by_project_id", (q) => q.eq("project_id", projectId as any))
+        .collect()))).flat();
       needsAccessFilter = true;
     } else if (isTaskStatusCategory(args.status) && !args.team) {
       tasks = await ctx.db

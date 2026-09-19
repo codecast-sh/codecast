@@ -22,6 +22,7 @@ import { EntityIdPill } from "./EntityIdPill";
 import { ORG_STATE_META } from "./org/orgMeta";
 import type { OrgRole } from "./org/orgTypes";
 import { RoleFace } from "./org/RoleFace";
+import { RoleHoverCard } from "./identity/RoleHoverCard";
 import { ROLE_WAKE_LINE_CAP, dedupeTitles, describeWake, type RoleWakeFrame, type RoleWakeSection } from "./roleWake";
 
 /** Where the message went, from what the role did in this turn (roleWake.ts):
@@ -180,11 +181,16 @@ export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused
         <BellRing className="w-3.5 h-3.5 shrink-0" style={{ color: violet }} />
         <span className="text-[11px] font-medium tracking-wide uppercase shrink-0" style={{ color: violet }}>Role wake</span>
         {/* The role's face (S13); falls back to the initial plate before the tree is warm. */}
-        {handle && <RoleFace role={{ avatar: role?.avatar, handle, name }} size={20} className="shrink-0" />}
-        <Link href={rolePath} className="min-w-0 truncate text-[12.5px] hover:underline" style={{ color: "var(--sol-text)" }} title={`Open ${name}`}>
-          <span className="font-medium">{name}</span>
-          {handle && <span className="ml-1" style={{ color: "var(--sol-text-muted)", fontFamily: "var(--font-mono)" }}>@{handle}</span>}
-        </Link>
+        {/* What the role looks after is one hover away (org-roles-run-work.md
+            R3); the frame always names the role's id, so the card works
+            before the tree is warm. */}
+        <RoleHoverCard role={{ short_id: frame.roleShortId, name, handle: handle ?? "", avatar: role?.avatar }} side="bottom" triggerClassName="inline-flex min-w-0 items-center gap-2">
+          {handle && <RoleFace role={{ avatar: role?.avatar, handle, name }} size={20} className="shrink-0" />}
+          <Link href={rolePath} className="min-w-0 truncate text-[12.5px] hover:underline" style={{ color: "var(--sol-text)" }}>
+            <span className="font-medium">{name}</span>
+            {handle && <span className="ml-1" style={{ color: "var(--sol-text-muted)", fontFamily: "var(--font-mono)" }}>@{handle}</span>}
+          </Link>
+        </RoleHoverCard>
         {frame.wakeShortId && (
           <Link href={wakesPath} className="hover:underline" title="This wake in the role's log">
             <Tag color={violet} bg={soft(12)}>{frame.wakeShortId}</Tag>

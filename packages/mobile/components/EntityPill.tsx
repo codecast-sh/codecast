@@ -10,6 +10,9 @@ import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
+import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
+import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
+import { MobileIdentityFace } from '@/components/identity';
 
 const api = _api as any;
 
@@ -25,6 +28,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   session: 'Session',
   doc: 'Doc',
   project: 'Project',
+  initiative: 'Initiative',
   trigger: 'Trigger',
   pr: 'Pull request',
   commit: 'Commit',
@@ -38,6 +42,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   task: Theme.violet,
   doc: Theme.green,
   project: Theme.textMuted,
+  initiative: Theme.textMuted,
   trigger: Theme.orange,
   pr: Theme.green,
   commit: Theme.yellow,
@@ -49,6 +54,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   task: 'circle',
   doc: 'file-text',
   project: 'folder',
+  initiative: 'flag',
   trigger: 'zap',
   pr: 'git-pull-request',
   commit: 'git-commit',
@@ -95,6 +101,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const resolvedType = useQuery(api.entities.resolveIdType, !typeProp && looksConvex ? { id: rawId } : 'skip');
   const type: EntityType | null = typeProp ?? (looksConvex ? resolvedType ?? null : entityTypeFromId(rawId));
   const isSession = type === 'session';
+  const personifyAll = usePersonifyAll();
 
   // Every type resolves its row: the pill reads as the object's title, so the
   // title is what we came for (the session/doc branches also need the Convex
@@ -129,12 +136,17 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   // object's NAME.
   const resolvedTitle: string | undefined =
     (type === 'trigger' ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
-  const label = entityReferenceLabel({
+  const refLabel = entityReferenceLabel({
     title: resolvedTitle,
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
   });
+  // A session that wears a character or a role is named as that person, the
+  // same rule as the web pill: its face in place of the glyph, its name as the
+  // label. A session nobody personified reads exactly as it did before.
+  const identityRow = isSession && entity?._id ? identityRowOf(entity) : null;
+  const label = (identityRow && identityLine(identityRow, refLabel, personifyAll).name) || refLabel;
 
   const targetId = isSession || type === 'doc'
     ? entity?._id ?? (looksConvex ? rawId : null)
@@ -156,7 +168,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
           return <Feather name={s.icon} size={10} color={s.color} />;
         })()
       ) : (
-        <Feather name={TYPE_ICON[type]} size={10} color={color} />
+        <MobileIdentityFace row={identityRow} size={12} fallback={<Feather name={TYPE_ICON[type]} size={10} color={color} />} />
       )}
       {isSession && entity?.status === 'active' && <RNText style={{ color: Theme.greenBright, fontSize: 8 }}>{' '}●</RNText>}
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}

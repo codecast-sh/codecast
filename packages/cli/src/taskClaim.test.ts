@@ -87,7 +87,9 @@ describe("cast task verdict argument parsing", () => {
   });
 });
 
-import { groupTasksByAssignee, startedForRoleLine } from "./taskClaim.js";
+import { groupTasksByAssignee, startedForRoleLine, startedLines } from "./taskClaim.js";
+import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
+import { snippetSection } from "@codecast/shared/contracts";
 
 describe("a role as assignee in the CLI (org-roles-run-work.md R5)", () => {
   test("task start says which role took the task, and says nothing otherwise", () => {
@@ -95,6 +97,13 @@ describe("a role as assignee in the CLI (org-roles-run-work.md R5)", () => {
       .toBe("Assigned to @growth (Head of Growth), the role this session works for");
     expect(startedForRoleLine({})).toBeNull();
     expect(startedForRoleLine(null)).toBeNull();
+  });
+
+  test("what an assignee means (R7) reaches the agent at start and in the system text", () => {
+    expect(ASSIGNEE_MEANS).toMatch(/never who may work on it/);
+    expect(startedLines({})).toEqual([ASSIGNEE_MEANS]);
+    expect(startedLines({ assigned_role: { handle: "growth", name: "Growth" } })[1]).toBe(ASSIGNEE_MEANS);
+    expect(snippetSection("tasks").body).toContain(ASSIGNEE_MEANS);
   });
 
   test("--chain groups by assignee: the person first, then each role by handle", () => {

@@ -7,6 +7,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { SlackLogo } from '@/components/SlackLogo';
+import { MobileIdentityFace, MobileSessionIdentityLine } from '@/components/identity';
+import type { IdentityRow } from '@codecast/web/lib/sessionIdentity';
 
 // One chat message on mobile. The same rules as the web row, in RN idiom:
 // a fixed avatar gutter that keeps its width when a message is grouped under
@@ -45,7 +47,13 @@ export type ChatAuthorLite = {
   /** A codecast session typed the line while running as its human: the row
    *  personifies the session (name is the session title, agent identity for the
    *  face) and credits the human in a dim "via". Mirrors web's ChatAuthor. */
-  session?: { agentType?: string; via?: string };
+  session?: {
+    agentType?: string;
+    via?: string;
+    /** Who the session is, when the viewer's store holds it: the row then
+     *  wears the session's face and leads with its name. */
+    identity?: IdentityRow | null;
+  };
   /** The author is a Slack person or app the bridge relayed (the row carries
    *  `external_author`). An app with no face gets the Slack mark as its tile. */
   slack?: { isBot: boolean; /** Their Slack user id — the grouping identity (shared authorGroupKey). */ userId?: string };
@@ -149,11 +157,13 @@ function SlackMark({ slack }: { slack: NonNullable<MobileChatMessage['slack']> }
 export function ChatAvatar({ author, size = 26 }: { author: ChatAuthorLite; size?: number }) {
   const Theme = useTheme();
   if (author.isAgent) {
-    return (
+    const chip = (
       <RNView style={[styles.avatar, styles.avatarAgent, { width: size, height: size }]}>
         <FontAwesome name="microchip" size={size * 0.5} color={Theme.violet} />
       </RNView>
     );
+    // A personified session wears its face; any other agent keeps the chip.
+    return <MobileIdentityFace row={author.session?.identity} size={size} fallback={chip} />;
   }
   if (author.avatarUrl) {
     return <Image source={{ uri: author.avatarUrl }} style={[styles.avatar, { width: size, height: size }]} />;
@@ -233,7 +243,7 @@ export const MessageRow = memo(function MessageRow({
       <RNView style={styles.body}>
         {!grouped && (
           <RNView style={styles.head}>
-            <RNText style={styles.author} numberOfLines={1}>{author.name}</RNText>
+            <MobileSessionIdentityLine row={author.session?.identity} title={author.name} style={styles.author} />
             {author.isAgent && (
               <RNView style={styles.agentChip}>
                 <RNText style={styles.agentChipText}>{author.session ? 'SESSION' : 'AGENT'}</RNText>

@@ -307,6 +307,38 @@ export const CLIENT_SYNC_REGISTRY = {
     // so they must be content-compared or a refetch lands as a no-op.
     sync: { isDelta: true, deepFields: ["task_counts"] },
   },
+  // Initiatives (initiatives-projects-role-page.md I1). SNAPSHOT, not delta:
+  // initiatives.webList returns the complete visible set of the workspace, so
+  // a row absent from a push is gone. A workspace holds tens of them, which is
+  // why they ride one live query and not the sync log. The row is raw
+  // (shared/contracts/initiative): progress, leads and sub initiatives are
+  // derived at render. A create paints a stub keyed by `client_key`; the
+  // server row that carries the same key supersedes it.
+  initiatives: {
+    persistence: { kind: "collection", key: "initiatives" },
+    indexes: "_id, short_id",
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    sync: { altKey: "client_key" },
+    // The server's copy of the latest update: its clock and its id. A client
+    // cannot predict either, so a lock on them would never retire. `health`
+    // itself is predictable and stays protected.
+    unprotectedFields: ["health_at", "latest_update_id"],
+    feeds: ["initiatives.webList"],
+  },
+  // One initiative's updates, newest first, fed for the initiative on screen.
+  // Delta: each page feeds its own initiative's rows and must not evict the
+  // others. NOT localFirst, for chat's reason: an update is append only and
+  // its `at` is a server clock, so a field lock could never retire. The stub
+  // renders until the row with the same `client_key` supersedes it.
+  initiativeUpdates: {
+    persistence: { kind: "collection", key: "initiativeUpdates" },
+    indexes: "_id, initiative_id",
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, altKey: "client_key" },
+    feeds: ["initiatives.webUpdates"],
+  },
   buckets: {
     persistence: { kind: "collection", key: "buckets" },
     localFirst: true,
@@ -1077,6 +1109,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   savedViews: "shared",
   plans: "shared",
   projects: "shared",
+  initiatives: "shared",
+  initiativeUpdates: "shared",
   buckets: "shared",
   bucketAssignments: "shared",
   comments: "shared",

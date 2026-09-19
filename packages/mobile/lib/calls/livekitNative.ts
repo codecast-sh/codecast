@@ -8,28 +8,14 @@
 //
 // Consumers read `livekit` (null when unavailable) and `callsNativeAvailable`;
 // callManager refuses to join without it, UI hides the affordances.
-function nativeAvailable(): boolean {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { TurboModuleRegistry, NativeModules } = require("react-native");
-    const has = (name: string) =>
-      !!(TurboModuleRegistry?.get?.(name) || NativeModules?.[name]);
-    return has("LivekitReactNativeModule") || has("WebRTCModule");
-  } catch {
-    return false;
-  }
-}
+import { nativeModulePresent, optionalNative } from "../optionalNative";
 
-let lk: typeof import("@livekit/react-native") | null = null;
 let registered = false;
-try {
-  if (nativeAvailable()) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    lk = require("@livekit/react-native");
-  }
-} catch {
-  lk = null;
-}
+const lk: typeof import("@livekit/react-native") | null = optionalNative(
+  nativeModulePresent("LivekitReactNativeModule") ? "LivekitReactNativeModule" : "WebRTCModule",
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  () => require("@livekit/react-native"),
+);
 
 export const callsNativeAvailable = lk !== null;
 export const livekit = lk;

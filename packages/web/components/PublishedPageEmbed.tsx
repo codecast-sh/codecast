@@ -89,7 +89,14 @@ const EMBED_HEIGHT_EXPANDED = "70vh";
  * All-span markup so it stays valid wherever markdown puts it (same contract
  * as DocEmbed).
  */
-export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: string }) {
+export function PublishedPageEmbed({ slug, caption, height }: {
+  slug: string;
+  caption?: string;
+  /** A shorter frame where the page is a slice of something else (a decision
+   *  card in a list), not the page's own surface. Its own expander still
+   *  opens it to full height. */
+  height?: number;
+}) {
   const meta = usePageMeta(slug);
   const [expanded, setExpanded] = useState(false);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -149,7 +156,7 @@ export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: 
           src={src}
           onLoad={onLoad}
           className="w-full bg-sol-card"
-          style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : EMBED_HEIGHT }}
+          style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : (height ?? EMBED_HEIGHT) }}
           sandbox="allow-scripts allow-popups"
           title={title}
         />

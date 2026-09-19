@@ -2,6 +2,8 @@ import { FolderGit2 } from "lucide-react";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor } from "@codecast/shared/contracts/sessionCharacter";
 import { AVATAR_LABELS, RoleAvatar } from "./org/avatars";
+import { SessionGlyph } from "./identity";
+import { identityRowOf } from "../lib/sessionIdentity";
 import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
@@ -33,6 +35,7 @@ import { RecentVisitGlyph } from "./RecentVisitRow";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
+import { sessionMatchesQuery, mergeSearchRows } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -223,6 +226,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
+  { label: "Initiatives", path: "/initiatives", icon: "grid", keywords: "initiative goals objectives company strategy roadmap health progress owner" },
   { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
@@ -441,7 +445,7 @@ export function ActionSubmenu({
   const listRef = useRef<HTMLDivElement>(null);
   // The workspace's roles, for the assign list: read from the store through a
   // wake signature, so every caller of this menu offers them with no prop.
-  const { roles: orgRoles } = useOrgRoles();
+  const { roles: orgRoles, roleBotUserIds } = useOrgRoles();
 
   // Two-step state for the "Start agent run" mode: pick an agent, then compose
   // the initial message before launching a run per selected task.
@@ -677,7 +681,8 @@ export function ActionSubmenu({
       return matched;
     }
     if (mode === "assign") {
-      const members = (teamMembers || []).filter(Boolean).map((m: any) => {
+      // A role's own bot user is not a person to pick: the role is (below).
+      const members = (teamMembers || []).filter((m: any) => m && !roleBotUserIds.has(m._id)).map((m: any) => {
         const name = memberDisplayName(m);
         return {
           key: m._id,
@@ -815,7 +820,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, roleBotUserIds]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -1715,11 +1720,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const out: any[] = [];
     for (let i = 0; i < scan.length && out.length < RECENT_RENDER_CAP; i++) {
       const conv = scan[i];
-      // Summaries are part of the haystack: subtitle (multi-line generated
-      // summary) and idle_summary (one-line blurb) match sessions the user
-      // remembers by what they did, not what they're titled.
-      const hay = `${cleanTitle(conv.title || "")} ${conv.subtitle || ""} ${conv.idle_summary || ""} ${conv.project_path || ""} ${conv.authorName || ""}`.toLowerCase();
-      if (hay.includes(q)) out.push(conv);
+      // One haystack for every session search (lib/instantSessionSearch):
+      // summaries count, so a session is findable by what it did rather than
+      // only by what it is titled.
+      if (sessionMatchesQuery(conv, q)) out.push(conv);
     }
     return out;
   }, [recentSessions, query]);
@@ -1767,13 +1771,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
   );
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
-  const searchRows = useMemo(() => {
-    const msgRows = searchData?.results ?? [];
-    const titleRows = titleData?.results ?? [];
-    if (!titleRows.length) return msgRows;
-    const seen = new Set(msgRows.map((r: any) => r.conversationId));
-    return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
-  }, [searchData, titleData]);
+  const searchRows = useMemo(
+    () => mergeSearchRows(searchData?.results as any, titleData?.results as any),
+    [searchData, titleData]
+  );
   // cmdk keeps the first row it selected. Full-search / new-session / new-note
   // always match, so if they mount before conversation search answers, Enter
   // never opens a hit. Hold them until there is a hit, or both title and
@@ -2730,9 +2731,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => chooseSession(fav)}
                 className={itemClass}
               >
-                <span className="text-amber-400 flex-shrink-0">
-                  <NavIcon type="star" />
-                </span>
+                <SessionGlyph
+                  row={identityRowOf(fav)}
+                  className="flex-shrink-0"
+                  fallback={<span className="text-amber-400 flex-shrink-0"><NavIcon type="star" /></span>}
+                />
                 <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(fav.updated_at)}</span>
@@ -2779,22 +2782,28 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => chooseSession(conv)}
                 className={`${itemClass} group`}
               >
-                {isTeam && (conv.authorAvatar || conv.authorName) ? (
-                  <AvatarImg
-                    src={conv.authorAvatar}
-                    alt={conv.authorName}
-                    className="w-4 h-4 rounded-full flex-shrink-0"
-                    fallback={
-                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                        {(conv.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                      </div>
-                    }
-                  />
-                ) : (
-                  <span className="text-sol-text-dim flex-shrink-0">
-                    <NavIcon type="session" />
-                  </span>
-                )}
+                {/* Who the session is (session-characters.md S3): its face,
+                    else the mark this row always had. */}
+                <SessionGlyph
+                  row={identityRowOf(conv)}
+                  className="flex-shrink-0"
+                  fallback={isTeam && (conv.authorAvatar || conv.authorName) ? (
+                    <AvatarImg
+                      src={conv.authorAvatar}
+                      alt={conv.authorName}
+                      className="w-4 h-4 rounded-full flex-shrink-0"
+                      fallback={
+                        <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                          {(conv.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                        </div>
+                      }
+                    />
+                  ) : (
+                    <span className="text-sol-text-dim flex-shrink-0">
+                      <NavIcon type="session" />
+                    </span>
+                  )}
+                />
                 <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
                 {(() => {
                   const bucket = labelForConv(conv._id);
@@ -3316,7 +3325,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 )}
                 className={itemClass}
               >
-                {!result.isOwn && (result.authorAvatar || result.authorName) ? (
+                <SessionGlyph
+                  row={identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) })}
+                  className="flex-shrink-0"
+                  fallback={!result.isOwn && (result.authorAvatar || result.authorName) ? (
                   <AvatarImg
                     src={result.authorAvatar}
                     alt={result.authorName}
@@ -3332,6 +3344,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                     <NavIcon type="session" />
                   </span>
                 )}
+                />
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-sm flex items-center gap-1.5">
                     <span className="truncate">{cleanTitle(result.title || "Untitled")}</span>

@@ -120,6 +120,8 @@ const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
+const Initiatives = lazy(() => import("@/app/initiatives/page"));
+const InitiativeDetail = lazy(() => import("@/app/initiatives/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
@@ -276,6 +278,8 @@ export const ROUTES: RouteEntry[] = [
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
+  { path: "initiatives", component: cast(Initiatives), layout: "dashboardShell", tab: "/initiatives", fullWidth: true },
+  { path: "initiatives/:id", component: cast(InitiativeDetail), layout: "dashboardShell", tab: "/initiatives/:id", fullWidth: true },
   // Chat is full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions and
   // /anchor), not via a DashboardLayout isOnXPage flag — so it carries no
   // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.

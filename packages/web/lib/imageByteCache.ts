@@ -48,10 +48,89 @@ export type ByteCache = {
   prefetch: (urls: Array<string | null | undefined>) => void;
 };
 
-// Byte-caching needs the Cache Storage API (absent during SSR) and an absolute
-// http(s) URL — data:/blob: srcs pass through untouched.
+// ── Origins that refuse cross-origin reads ───────────────────────────────────
+// An <img> renders any URL; fetch() needs the server's permission, so a CDN
+// that sends no `access-control-allow-origin` cannot be byte-cached at all.
+// Slack's avatar CDN is one (and Gravatar redirects to it whenever a Slack
+// user has no Gravatar, so those URLs fail the same way). Before this,
+// every such face fetched, failed, logged a CORS error, and rendered as
+// initials — a real picture the browser was perfectly willing to show.
+//
+// So we remember which origins refuse, and hand those URLs straight to the
+// <img>: the face renders, nothing is fetched, the console stays clean. The
+// only thing lost is the local byte copy, which for a face is a nicety.
+//
+// The list is seeded with the ones we know, learned from any fetch REJECTION
+// (a status code is a server answer, not a permission refusal), and re-tested
+// weekly so a CDN that starts sending the header gets its cache back.
+const OPAQUE_ORIGINS_KEY = "codecast:opaque-origins:v1";
+const OPAQUE_RETEST_MS = 7 * 24 * 3600_000;
+const SEEDED_OPAQUE_ORIGINS = ["https://avatars.slack-edge.com", "https://a.slack-edge.com"];
+
+// origin -> when we learned it refuses. Seeds never expire.
+const opaqueOrigins = new Map<string, number>();
+
+function loadOpaqueOrigins(): void {
+  for (const origin of SEEDED_OPAQUE_ORIGINS) opaqueOrigins.set(origin, Infinity);
+  try {
+    const raw = localStorage.getItem(OPAQUE_ORIGINS_KEY);
+    if (!raw) return;
+    const now = Date.now();
+    for (const [origin, at] of Object.entries(JSON.parse(raw) as Record<string, number>)) {
+      if (now - at < OPAQUE_RETEST_MS) opaqueOrigins.set(origin, at);
+    }
+  } catch {
+    // No storage, or a shape we no longer understand: the seeds still stand.
+  }
+}
+loadOpaqueOrigins();
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Record a fetch rejection as a permission refusal by this URL's origin. */
+function markOpaque(url: string): void {
+  // Offline rejects every fetch the same way; poisoning an origin over a
+  // network blip would cost it its cache for a week.
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  const origin = originOf(url);
+  if (!origin || opaqueOrigins.has(origin)) return;
+  opaqueOrigins.set(origin, Date.now());
+  try {
+    const stored: Record<string, number> = {};
+    for (const [key, at] of opaqueOrigins) if (Number.isFinite(at)) stored[key] = at;
+    localStorage.setItem(OPAQUE_ORIGINS_KEY, JSON.stringify(stored));
+  } catch {
+    // Storage full or blocked: the verdict still stands for this session.
+  }
+}
+
+// Byte-caching needs the Cache Storage API (absent during SSR), an absolute
+// http(s) URL — data:/blob: srcs pass through untouched — and an origin that
+// permits cross-origin reads.
 function canByteCache(url: string): boolean {
-  return typeof caches !== "undefined" && /^https?:\/\//.test(url);
+  if (typeof caches === "undefined" || !/^https?:\/\//.test(url)) return false;
+  const origin = originOf(url);
+  return !(origin && opaqueOrigins.has(origin));
+}
+
+/**
+ * Fetch bytes cross-origin, reading a REJECTION as the origin refusing
+ * permission. A status code (404, 403) is the server answering, so it leaves
+ * the origin's standing alone — only this URL is dead.
+ */
+async function corsFetch(url: string): Promise<Response> {
+  try {
+    return await fetch(url, { mode: "cors" });
+  } catch (err) {
+    markOpaque(url);
+    throw err;
+  }
 }
 
 const PREFETCH_CONCURRENCY = 3;
@@ -97,7 +176,7 @@ export function createByteCache(opts: ByteCacheOpts): ByteCache {
           }
         }
       } else {
-        const resp = await fetch(url, { mode: "cors" });
+        const resp = await corsFetch(url);
         if (!resp.ok) throw new Error(String(resp.status));
         const forCache = resp.clone();
         verdict = URL.createObjectURL(await resp.blob());
@@ -126,7 +205,7 @@ export function createByteCache(opts: ByteCacheOpts): ByteCache {
     try {
       const cache = await caches.open(cacheName);
       if (await cache.match(url)) return;
-      const resp = await fetch(url, { mode: "cors" });
+      const resp = await corsFetch(url);
       if (!resp.ok) return;
       await cache.put(url, resp);
       void prune(cache);

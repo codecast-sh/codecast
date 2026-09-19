@@ -21,12 +21,15 @@ import { ScopeFeed } from "./ScopeFeed";
 import { Empty, HandGroups, ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { RoleScopeView } from "../../identity/RoleScopeView";
 import { ProjectLeadChip } from "../../charter/ProjectLeadChip";
+import { ProjectInitiatives } from "../../initiatives/ProjectInitiatives";
 import { useRoleScope } from "../../../hooks/useRoleScope";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
+import { useInboxStore } from "../../../store/inboxStore";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeWakesTab } from "./ScopeWakesTab";
 import type { RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
+import type { PanelLayout } from "./ConversationWithPanel";
 
 export type ScopeTabKey = "scope" | "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
 export const SCOPE_TABS: { key: ScopeTabKey; label: string; icon: any; roleOnly?: boolean }[] = [
@@ -57,10 +60,7 @@ export function scopeTabFromParam(param: string | null, hasRole: boolean): Scope
   return hit ? hit.key : scopeDefaultTab(hasRole);
 }
 
-export type ScopePanelLayout = "side" | "overlay" | "sheet";
-
-/** The width of the panel's own column and of the overlay. */
-export const SCOPE_PANEL_W = 440;
+export type ScopePanelLayout = PanelLayout;
 
 export type ScopePanelProps = {
   tree: OrgTree;
@@ -154,7 +154,7 @@ export function ScopePanel(p: ScopePanelProps) {
       {tab !== "feed" && tab !== "tasks" && (
         <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
           {!p.summary && p.summaryProblem && <p className="px-2.5 pb-2 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{p.summaryProblem}</p>}
-          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} onTab={p.onTab} />}
+          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} canEdit={p.canEdit} waiting={p.waiting} onTab={p.onTab} />}
           {tab === "line" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
           {tab === "plans" && <ScopePlansTab ids={p.scopeIds} />}
           {tab === "docs" && <ScopeDocsTab ids={p.scopeIds} />}
@@ -175,7 +175,7 @@ export function ScopePanel(p: ScopePanelProps) {
 /** The Scope tab: RoleScopeView at full size, with the two pieces only the
  *  page can afford, a project's lead chip and the role's sessions grouped by
  *  who acts next (the tree's top rows; the Sessions tab pages the rest). */
-function ScopeOverviewTab({ role, now, onTab }: { role: OrgRole; now: number; onTab: (next: ScopeTabKey) => void }) {
+function ScopeOverviewTab({ role, now, canEdit, waiting, onTab }: { role: OrgRole; now: number; canEdit: boolean; waiting: number; onTab: (next: ScopeTabKey) => void }) {
   const { model, escalated } = useRoleScope(role.short_id);
   const openLinked = useOpenLinkedSession();
   const open = (s: { _id: string; short_id: string; title: string; agent_type: string }) => openLinked({ _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type });
@@ -187,7 +187,12 @@ function ScopeOverviewTab({ role, now, onTab }: { role: OrgRole; now: number; on
       model={model}
       density="page"
       escalated={escalated}
+      waitingInArea={waiting}
       renderLead={(projectId) => <ProjectLeadChip projectId={projectId} size="xs" />}
+      renderInitiative={(projectId) => <ProjectInitiatives projectId={projectId} size="xs" />}
+      // The draft moves the plan into its project's card in this tick; the
+      // named side effect (dispatch.updatePlan) makes the write.
+      onFilePlan={canEdit ? (planRef, projectId) => useInboxStore.getState().updatePlan(planRef, { project_id: projectId }) : undefined}
       sessions={rest.length > 0 ? <HandGroups rows={rest} now={now} onOpen={open} /> : null}
       onTab={onTab}
       onOpenSession={open}

@@ -2,6 +2,7 @@ import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate } from "./notificationGate";
 import { PANE_EMBED } from "./browserPane";
 import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandoff";
+import { cmpVersions, parseShellVersion } from "./desktopFloor";
 
 declare global {
   interface Window {
@@ -467,6 +468,13 @@ export function openExternalUrl(url: string): void {
 // file is inlined into <head> before any bundle exists and may import nothing.
 export function isDesktopShell(): boolean {
   return isElectron() || (typeof navigator !== "undefined" && / Electron\//.test(navigator.userAgent));
+}
+
+// The running desktop app's version, read from the user agent so it answers
+// on a build whose bridge is dead (the case the floor gate exists for). Null
+// in a browser.
+export function desktopShellVersion(): string | null {
+  return typeof navigator === "undefined" ? null : parseShellVersion(navigator.userAgent);
 }
 
 // This renderer is a DETACHED TAB WINDOW — one dashboard surface broken out
@@ -1484,19 +1492,6 @@ export async function getAppVersion(): Promise<string | null> {
     return bridge("getVersion")?.() ?? null;
   }
   return null;
-}
-
-// Numeric semver compare (mirrors the daemon's compareVersions).
-function cmpVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  return 0;
 }
 
 // Latest published desktop version, from our own server (same-origin — avoids a

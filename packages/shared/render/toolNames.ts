@@ -106,13 +106,25 @@ export const grokToolNames: Record<string, string> = {
   "Web search:": "Search",
 };
 
+// Muse (Meta Muse Code) tool ids. `read_file` and `web_fetch` already resolve
+// through the tables above; only the ids muse names differently live here.
+export const museToolNames: Record<string, string> = {
+  edit_file: "Edit",
+  write_file: "Write",
+  search: "Search",
+  write_todos: "Todos",
+  bash_input: "Terminal",
+  read_skill: "Skill",
+};
+
 // Turn a raw tool id into a short human-readable label. Looks up the curated
-// MCP/Codex/Grok tables first, then falls back to title-casing an `mcp__server__method`
+// MCP/Codex/Grok/Muse tables first, then falls back to title-casing an `mcp__server__method`
 // id (or any snake_case id) into words.
 export function formatToolName(name: string): string {
   if (mcpToolNames[name]) return mcpToolNames[name];
   if (codexToolNames[name]) return codexToolNames[name];
   if (grokToolNames[name]) return grokToolNames[name];
+  if (museToolNames[name]) return museToolNames[name];
   if (name.startsWith("mcp__")) {
     const parts = name.split("__");
     const method = parts[2] || parts[1] || "MCP";

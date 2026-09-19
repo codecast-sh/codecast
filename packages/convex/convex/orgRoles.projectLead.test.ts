@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performCreateRole, performSetProjectLead } from "./orgRoles";
+import { performCoverProjects, performCreateRole, performSetProjectLead } from "./orgRoles";
 
 // Naming a project's lead from the project page (org-roles-run-work.md R4):
 // the owner and, when the role's scope does not list the project, the scope,
@@ -108,5 +108,38 @@ describe("performSetProjectLead", () => {
   test("a role from another workspace is refused", async () => {
     const db = fixtures();
     await expect(performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: "@nobody" })).rejects.toThrow(/No role/);
+  });
+});
+
+// An initiative's owner role gains every project of the initiative in one act
+// (initiatives-projects-role-page.md I1): the same scope write as naming a lead.
+describe("performCoverProjects", () => {
+  test("adds the projects the scope does not list in one update and says which it already had", async () => {
+    const db = fixtures();
+    const growth = await role(db, "growth", [P]);
+    await db.patch(growth._id, { anchor_id: "anchors_growth" });
+    const out = await performCoverProjects(ctxOf(db), ME as any, growth._id, [P, Q, Q] as any);
+    expect(out).toMatchObject({ added: [Q], listed: [P], skipped: [] });
+    expect(await scopeOf(db, growth._id)).toEqual([P, Q]);
+    expect(causesFor(db, growth._id).filter((c) => c.startsWith("scope changed"))).toHaveLength(1);
+    // Calling it again is safe: nothing is written twice.
+    expect(await performCoverProjects(ctxOf(db), ME as any, growth._id, [P, Q] as any)).toMatchObject({ added: [], listed: [P, Q] });
+    expect(await scopeOf(db, growth._id)).toEqual([P, Q]);
+  });
+
+  test("a person who may not reshape the role is told so, never refused", async () => {
+    const db = fixtures();
+    const billing = await role(db, "billing", [Q]);
+    const out = await performCoverProjects(ctxOf(db, MATE), MATE as any, billing._id, [P] as any);
+    expect(out).toMatchObject({ added: [], skipped: [{ project_id: P, reason: "not_admin" }] });
+    expect(await scopeOf(db, billing._id)).toEqual([Q]);
+  });
+
+  test("a whole workspace owner keeps its whole workspace", async () => {
+    const db = fixtures();
+    const ops = await role(db, "ops", []);
+    const out = await performCoverProjects(ctxOf(db), ME as any, ops._id, [P, Q] as any);
+    expect(out.skipped.map((x) => x.reason)).toEqual(["whole_workspace", "whole_workspace"]);
+    expect(await scopeOf(db, ops._id)).toEqual([]);
   });
 });

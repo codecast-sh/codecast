@@ -16,6 +16,7 @@ import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { cn } from "../../lib/utils";
 import { RoleAvatar } from "./avatars";
+import { RoleHoverCard } from "../identity/RoleHoverCard";
 import type { OrgProposalAuthor, OrgProposalListRow } from "./orgStaffingTypes";
 import { proposalRefInContext, resolveProposalAuthor, type ProposalAuthorView } from "./staffingModel";
 
@@ -84,6 +85,16 @@ export function ProposalAuthorPill({ author, onOpenSession, className, size = "s
     );
     const style = { borderColor: "color-mix(in srgb, var(--sol-violet) 35%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 8%, transparent)", color: "var(--sol-text)" };
     const title = `Written by the role ${view.name}${view.handle ? ` (@${view.handle})` : ""}.${view.href ? " Opens its scope page." : ""}`;
+    // A role that exists has a page, and what it looks after is one hover
+    // away (org-roles-run-work.md R3); the card replaces the title tooltip.
+    const roleShortId = view.href ? /\/(or-\d+)$/.exec(view.href)?.[1] : undefined;
+    if (view.href && roleShortId) {
+      return (
+        <RoleHoverCard role={{ short_id: roleShortId, name: view.name, handle: view.handle ?? "", avatar: view.avatar }}>
+          <Link href={view.href} className={cn(base, "hover:bg-sol-bg-highlight")} style={style} data-proposal-author="role">{inner}</Link>
+        </RoleHoverCard>
+      );
+    }
     return view.href ? (
       <Link href={view.href} className={cn(base, "hover:bg-sol-bg-highlight")} style={style} title={title} data-proposal-author="role">{inner}</Link>
     ) : (

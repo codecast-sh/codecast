@@ -84,6 +84,11 @@ One component family under `components/identity/`:
   does. For a role the line is the role name and, muted, its `@handle`; the
   title is not repeated when it equals the role name (a standing session's
   title is the role's name, S16).
+- `SessionGlyph({ row, size, fallback })` is what a LIST calls: the face when
+  the row is personified, and whatever mark the surface drew before it when
+  nobody opted in. One call site per list, so the palette, the search page, the
+  tab strip, a task's linked sessions and a decision's asking session cannot
+  drift apart on when a face appears.
 - Hovering a face, a name or a session pill opens the hover card (S4).
 
 Surfaces, and the size the face takes:
@@ -151,3 +156,33 @@ recognised rather than read.
   snapshot `{ short_id, name, handle, avatar, status }`; the projection guard
   test lists them.
 - The name bank test: six names per face, all distinct, capitalised words.
+
+## S7. On the phone
+
+The mobile app draws the same characters from the same sources. It imports
+`sessionIdentity`, `identityLine`, `faceIdentity` and `identityRowOf` from
+`packages/web/lib/sessionIdentity.ts`, and the 24 WebP files from
+`packages/web/components/org/avatars/`. Metro bundles those files as assets,
+so there is one copy of the art and one resolver for both clients.
+
+`packages/mobile/components/identity/` holds the React Native drawing:
+
+- `MobileSessionFace` always draws a face, with the role ring and the agent
+  badge. It is an `Image`; it does not draw through `react-native-svg`.
+- `MobileIdentityFace` is the phone's `SessionGlyph`: the face when the row is
+  personified, else the mark the surface drew before.
+- `MobileSessionIdentityLine` leads with the name and dims the title.
+- `useSessionIdentityRow` and `useSessionIdentityLookup` subscribe to
+  `identitySig`, never to a row, because the inbox list's wake signature leaves
+  the character fields out.
+
+Faces render on the inbox row, the session header, chat lines a session typed,
+the session reference pill, inbox search results and session notifications.
+The chat mention strip offers people only, so it has no session to draw; the
+phone has no character picker yet, so choosing a face is done on the web.
+
+The phone's guard rails: `components/identity/identity.test.tsx` renders every
+key and fails any import in that folder outside React Native, the app and the
+shared packages; `metro.config.test.cjs` proves every module on the face path
+resolves the app's one pinned `react-native-svg`; `scripts/audit-export.mjs`
+checks an exported bundle for one copy of each native library and all 24 files.

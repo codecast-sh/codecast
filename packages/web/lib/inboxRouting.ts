@@ -44,6 +44,25 @@ export function pageOwnsRailHighlight(pathname?: string | null): boolean {
 }
 
 /**
+ * What NAVIGATION does to the rail's own pointer (`sidePanelSessionId`).
+ *
+ * The rail highlights what is on the stage. A page like /tasks or /docs puts no
+ * conversation there, so nothing on it is selected and the rail must show no
+ * lit row — carrying the inbox's attended session (or the session you just left)
+ * into the pointer made /tasks read as "this session is open" when it was not.
+ * So arriving on a "panel" surface CLEARS the pointer; a deliberate selection
+ * made while standing on that page (a liveness dot, a call panel, a new session)
+ * still lights the rail, because that is a click, not a navigation.
+ *
+ * "keep" covers the inbox and conversation pages, which highlight their own
+ * pointer anyway, and the pages that publish the rail pointer themselves.
+ */
+export function railPointerOnNavigate(pathname?: string | null, source?: string | null): "clear" | "keep" {
+  if (pageOwnsRailHighlight(pathname)) return "keep";
+  return sessionFocusKind(pathname, source) === "panel" ? "clear" : "keep";
+}
+
+/**
  * What clicking a session in the global list should do, given which surface is
  * mounted:
  *  - "leave": promote to the stage — navigate to the inbox with the session

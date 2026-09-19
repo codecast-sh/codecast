@@ -157,7 +157,9 @@ export function blockedKindsForAgent(agentType: string | null | undefined): Read
 // the banner into this marked form and everything downstream — the server
 // stamp, the switch loop, the web card — reads kind "throttle": blocked (the
 // turn died at the prompt), healed by a plain continue after a short wait,
-// never by an account switch.
+// never by an account switch. Exception: the short "/model to switch models."
+// form (isModelSwitchLimitBanner) — a spent model window whose 429 payload is
+// identical to a burst, so the words alone decide and it stays kind "limit".
 export const THROTTLE_BANNER_PREFIX = "Rate limited ·";
 const THROTTLE_BANNER_RE = /^rate limited ·/i;
 // The provider's transient rate-limit wording. A quota exhaustion carries the
@@ -223,6 +225,24 @@ const AUTH_BANNER_RE =
 // reference prose doesn't produce in that position.
 const LIMIT_BANNER_RE =
   /^(?:you['’]ve (?:hit|reached) your [\w '’-]{1,40}limit(?:\s*[·∙][^\n]*|\.\s*run \/usage-credits\b[^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
+
+// The short model-quota form: "You've reached your Fable limit. /model to
+// switch models." Real JSONL (2026-09-15/18) carries the SAME
+// transient-looking 429 for it as a burst throttle (rate_limit_error,
+// "would exceed your account's rate limit", no exceeded_limit payload), so
+// errorDetails cannot tell them apart — the shown words are the only signal,
+// and the remedy names a model switch, never a retry. This is a spent model
+// window, kind "limit": the parser must not rewrite it into the throttle
+// form, and a marked throttle banner quoting it re-reads as "limit".
+export const MODEL_SWITCH_LIMIT_RE =
+  /^you['’]ve (?:hit|reached) your [\w '’-]{1,40}limit\.\s*\/model to switch models\.?\s*$/i;
+
+/** Is this the CLI's short model-quota banner (a spent model window, not a
+ *  per-minute burst)? Judged from the shown words alone — the entry's own
+ *  errorDetails reads identically for both. */
+export function isModelSwitchLimitBanner(content: string | null | undefined): boolean {
+  return !!content && MODEL_SWITCH_LIMIT_RE.test(content.trim());
+}
 
 // Generic provider failure. No status code ("API Error: Connection closed
 // mid-response. The response above may be incomplete.", "API Error:
@@ -316,11 +336,17 @@ export function classifyApiErrorBanner(
     if (CODEX_PLAN_WINDOW_BODY_RE.test(body)) return "limit";
     return CLIENT_AUTH_ERROR_RE.test(body) ? "auth" : "error";
   }
-  if (THROTTLE_BANNER_RE.test(trimmed) && !trimmed.includes("\n")) return "throttle";
+  if (THROTTLE_BANNER_RE.test(trimmed) && !trimmed.includes("\n")) {
+    // A marked throttle quoting the short model-quota form is the quota park
+    // above, rewritten before the parser learned to leave it alone.
+    const shown = trimmed.split(/ showed:\s*/i).pop() ?? "";
+    if (isModelSwitchLimitBanner(shown)) return "limit";
+    return "throttle";
+  }
   if (isExceededLimit429(trimmed)) return "limit";
   if (trimmed.length === 0 || trimmed.length > 400) return null;
   if (AUTH_BANNER_RE.test(trimmed)) return "auth";
-  if (LIMIT_BANNER_RE.test(trimmed)) return "limit";
+  if (LIMIT_BANNER_RE.test(trimmed) || isModelSwitchLimitBanner(trimmed)) return "limit";
   const statusMatch = trimmed.match(STATUSFUL_BANNER_RE);
   if (statusMatch) {
     const status = Number(statusMatch[1]);

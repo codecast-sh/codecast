@@ -81,6 +81,16 @@ and rule 6 of `ROLE_RULES`; its dry run (4 of 4 samples escalate the brand
 call with a reason and answer the charter question themselves; 0 of 4 escalate
 with the bullet cut) is in `/tmp/r1dry`.
 
+Two limits, decided 2026-09-18. The hand refusal on `cast escalate` is the
+T4 limit (org-roles-standing.md): a hand runs under its host's token, so a
+hand that strips its session variables passes as the person; the refusal
+keeps an honest hand from escalating itself and is not a boundary. And a
+reparent to a person clears the row's stash, because the new owner has never
+seen the session and it must appear in their inbox, while a reparent to a role
+keeps it, because the role triages and the row nests under it without needing
+anyone's eyes (`sessionOwnership.performReparentSession`, both cases pinned
+in orgRoles.test.ts).
+
 ## R2. A long running session is a role that has not been named
 
 The analyzer's grounding (S9) reads sessions for who commits where. It also
@@ -157,6 +167,24 @@ session stays bound to it as today), unless the task already names a person.
 assigning a task to a role wakes the role (a fold row, T3) with the task in
 the frame.
 
+**Taking over, not creating.** The founder's words were "if an agent is
+taking over tasks it should assign it to themselves". So `cast task start`
+hands the task to the role only when the session is taking work over: the
+task was not filed by that same session, and it is not a subtask. A task a
+session files for its own bookkeeping and then starts stays unassigned and
+internal as it is today, because any assignee puts a task on the person's
+default board (the rule below). A subtask stays nested under its parent with
+no assignee of its own; the parent says who answers for the work. A role's
+standing session follows the same rule, and another session of the role that
+later takes that task over does assign it. The rule lives in the one place
+`task start` decides the assignee (`tasks.ts` `roleTakingTask`).
+
+**A handle names someone or is refused.** `--assignee @growth` resolves a
+teammate with that exact handle first, as chat does, then the live role with
+that handle in the task's workspace. A handle nobody answers to, a retired
+role and a role from another workspace are refused with a sentence that says
+why; none is stored as a bare string no roster or chart could resolve.
+
 **Group by assignee, and by chain.** The task board's assignee axis groups
 roles and people as peers, each group headed by its face and name. A new axis,
 Chain, groups by the person at the top of the reporting chain: a person's
@@ -166,6 +194,18 @@ and a lead sees theirs. `cast task ls --assignee @growth` and `cast task ls
 --chain me` are the CLI forms. The chain is read from the org tree
 (`reports_to`), never stored on the task.
 
+**A role's tasks are the company's work, so the board shows them.** The
+default board hides a task an agent filed for itself, because that is one
+session's bookkeeping. A task a role holds is not that: whatever created it,
+it shows on the default board, under the role on the Assignee and Chain axes,
+with no change of Source. This is the existing board rule and not a new one:
+`isOnHumanBoard` (`@codecast/shared/tasks`, read by web and mobile) puts any
+task with an assignee on the board, and a role is an assignee. An agent filed
+task with no assignee stays hidden as today. Ledger tasks (W8, type `ledger`)
+stay off the board whoever holds them; that exclusion is W8's to write, in
+the same predicate. `cast task ls` applies no board filter, so `--chain me`
+already lists the same tasks the Chain axis shows.
+
 ## The test
 
 A person who has never seen the feature opens their inbox and sees fewer
@@ -174,3 +214,50 @@ face and one line saying why it is in front of them. They hover a role
 anywhere and know in three seconds what it looks after. They open a project
 and see who leads it. They open the task board, group by chain, and see their
 whole company's work under the people who answer to them.
+
+## R6. A person who reports to a role
+
+From the team huddle of 2026-09-18. Two people asked to report to an agent and
+said what they meant by it: one place that keeps their three to five high
+level goals, tracks all of their sessions against those goals, and keeps them
+making forward progress; an agent that is "on top of me to make sure I am
+doing high priority stuff and not dropping the ball". Not permission to do
+things. So a role a person reports to is a goal tracker first.
+
+**Goals live in the role's brief, one section per person.** When a person
+reports to a role, the role keeps that person's goals (three to five, in the
+person's own words, set in the conversation: "my goals this month are...")
+in its brief under the person's name, with the sessions, tasks and plans it
+has matched to each goal. A goal with nothing matched to it for a week is a
+finding. Editing the goals is the same gesture as R4's remember: say it to
+the role, or edit the Brief tab.
+
+**Every wake, the role reads the person's sessions against the goals.** The
+frame's "Your sessions" section (R1) includes, for each person who reports
+to the role, their sessions that changed since the last wake, and the role
+matches them to goals in its own words. It never reads a private session it
+cannot open.
+
+**Where the person reads it.** The person's own view of a role they report
+to is the role's page, whose Scope tab (R3) shows, for that person, their
+goals with what moved on each and what stalled. The role's weekly note (its
+routine) says the same in prose, and a stall on a high priority goal is a
+fold wake to the person, one line, never more than one a day.
+
+**Tasks a role holds are visible to the person above it.** From the same
+call: a task leaving a person's list when a role takes it is "a little
+scary". The safeguards are R5's rule that a role never reassigns a task that
+names a person, the Chain axis that shows a role's tasks under the person it
+reports to, and the goal section above, where a task matched to a goal is
+reported on whether the role or the person holds it.
+
+## R7. What an assignee means
+
+From the same call: a session refused to ship a task because the task was
+assigned to someone else, and nothing in its instructions said to. The model
+inferred a permission boundary from the assignee field. Assignee means who is
+accountable for the task, never who may act on it; any session may work a
+task, and the assignee is who answers for it being done. The task context
+the CLI prints (`cast task context`, `cast task start`, the bound task line
+in the system text) says so in one sentence, so no model guesses the
+stricter reading. This matters more once roles hold tasks (R5).
