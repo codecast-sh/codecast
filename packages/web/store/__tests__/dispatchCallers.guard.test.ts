@@ -44,9 +44,11 @@ describe("durable dispatch call-site guards", () => {
     expect(layout).toContain(
       "props.allowUnhydratedGuest &&",
     );
-    expect(layout).toContain(
-      "if (!hydrated && !isSettledGuest) return <AppLoader deferIndicator />;",
-    );
+    // The gate itself, not its spelling: the early return grew a block so a
+    // cold desktop window can wear its bar while the cache hydrates.
+    const gate = layout.indexOf("if (!hydrated && !isSettledGuest)");
+    expect(gate).toBeGreaterThan(-1);
+    expect(layout.slice(gate, gate + 900)).toContain("<AppLoader deferIndicator />");
   });
 
   test("in-place agent switch is the default; forks stay an explicit opt-in", async () => {

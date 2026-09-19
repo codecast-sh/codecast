@@ -79,7 +79,10 @@ describe("useSyncCore owns the full feeder mount set", () => {
     // The one sanctioned args shape, now behind the sync-role gate: the
     // constant when this window hosts its own feeds, "skip" as a follower
     // (docs/architecture/sync-host.md).
-    expect(live.includes('useQuery(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip")')).toBe(true);
+    // The args shape, whichever reader wraps it: this call moved to
+    // useQueryNoThrow, and what matters is the constant when this window hosts
+    // its own feeds and "skip" as a follower.
+    expect(live.includes('(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip")')).toBe(true);
     const syncSrc = read(join(WEB_ROOT, "hooks", "useSyncInboxSessions.ts"));
     expect(syncSrc.includes("{ ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() }")).toBe(true);
     // No hand-built listInboxSessions args anywhere in the two files: every
