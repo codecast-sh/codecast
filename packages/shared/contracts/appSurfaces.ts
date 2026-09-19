@@ -50,6 +50,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("plans", "plans board"),
   dash("tasks", "tasks board"),
   dash("projects", "projects and their tasks"),
+  dash("initiatives", "the goals the company is trying to reach"),
   dash("workflows", "dynamic workflow runs"),
   dash("routines", "DOT-graph orchestration"),
   dash("triggers", "delayed, recurring and event-driven runs (alias /schedules)"),
