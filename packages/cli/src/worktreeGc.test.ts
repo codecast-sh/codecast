@@ -281,7 +281,9 @@ describe("seeded worktrees (ct-49433): released when the laptop still holds all 
     execFileSync("git", ["-C", repo, "add", "wip.txt"], { env, stdio: "ignore" });
     const tree = execFileSync("git", ["-C", repo, "write-tree"], { env, encoding: "utf-8" }).trim();
     fs.rmSync(path.join(repo, "wip.txt"));
-    const snapshot = sh(repo, "git", ["commit-tree", tree, "-p", base, "-m", "codecast wip snapshot"]);
+    // commit-tree writes a commit, so it needs an identity like every other
+    // commit here: a CI runner has none configured and git refuses outright.
+    const snapshot = sh(repo, "git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit-tree", tree, "-p", base, "-m", "codecast wip snapshot"]);
     const ref = `refs/codecast/cloud/${name}`;
     sh(repo, "git", ["update-ref", ref, snapshot]);
     const r = await acquireWorkspace(repo, name, { ...opts, branch: "feat/x-" + name, startPoint: ref });
