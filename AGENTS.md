@@ -73,6 +73,16 @@ Two separate fields, and conflating them is the bug class this replaced.
 
 **Mobile: `Text`/`TextInput` come from `packages/mobile/components/Themed`, never from `react-native`.** The Themed wrappers are what apply JetBrains Mono app-wide (web parity) and map `fontWeight` to the correct bundled face (`constants/fonts.ts`) — a raw RN `Text` renders San Francisco, and a custom `fontFamily` + `fontWeight` pair silently falls back to the system font on iOS. Nav-level styles (`headerTitleStyle`, `tabBarLabelStyle`) can't use the wrapper: give them an explicit face from `Mono` (e.g. `Mono.semiBold`) and no `fontWeight`.
 
+## Mobile bundle and native modules
+
+**A JS bundle outlives the binary it was written for.** An OTA update runs new JS on binaries built before a native library was added, and a static import of such a library throws during the first JS evaluation, before expo-updates can mark the update launched: the update rolls back in silence or the app dies at boot. So a native package that is not in the frozen baseline of `packages/mobile/lib/nativeDeps.guard.test.ts` is never imported statically. Load it through `optionalNative` (`packages/mobile/lib/optionalNative.ts`) inside the function that needs it, and give every caller a path for `null`. A new native package needs a new binary build; an OTA update can ship the JS that uses it, and that JS must work without it.
+
+**The native bundle holds one copy of every package the app names.** bun keeps a separate install of a package for each set of peers, and a second copy of a native library registers its views twice and crashes ("Tried to register two views with the same name"). `packages/mobile/metro.config.js` resolves every dependency in mobile's `package.json` from the app root, and `metro.config.test.cjs` tests each one. Add a package the bundle needs to mobile's `package.json` rather than relying on a transitive copy.
+
+**Metro applies mobile's `@/` alias to every file it reads, shared web files included.** Inside `packages/web`, a file that mobile can reach must import by relative path: `@/lib/x` there means `packages/mobile/lib/x` on the phone, which either fails the export or binds to a different module. `packages/mobile/lib/bundleGraph.guard.test.ts` walks the native import graph the way Metro does, in seconds, and fails on an unresolvable alias, on an `@/` import in a reachable web file, and on any web route or desktop stage file that reaches the bundle.
+
+**Build simulator binaries with signing allowed.** A simulator build carries its entitlements in a `__TEXT,__entitlements` section of the binary. A build made with `CODE_SIGNING_ALLOWED=NO` has none, every keychain call fails ("A required entitlement isn't present"), and nobody can sign in on it. Check with `otool -s __TEXT __entitlements <App>.app/<App>`.
+
 ## Store (inboxStore)
 
 ### Local-first is the law

@@ -12,6 +12,24 @@ import {
 import { isConvexId } from "../lib/entityLinks";
 import { CLIENT_SYNC_REGISTRY } from "./clientSyncRegistry";
 
+// The message page the server sends on open (useConversationMessages' snapshot
+// fetch). The persisted cache keeps the same tail per conversation, applied
+// when a write flushes, never inside a store draft (a copy made there holds
+// draft proxies that are revoked before the flush). Persisting every message
+// wrote one 24 MB row for an 8337 message transcript, serialized it again on
+// every push to that conversation, and made a phone parse 78 MB of such rows
+// at boot. Older rows load from the server through hasMoreAbove, exactly as
+// they do after a cold open.
+export const MESSAGE_PAGE_SIZE = 200;
+
+export function persistedMessageTail<T>(
+  messages: readonly T[],
+  pagination: Record<string, unknown> | undefined,
+): { messages: T[]; pagination: Record<string, unknown> | undefined } {
+  if (messages.length <= MESSAGE_PAGE_SIZE) return { messages: messages as T[], pagination };
+  return { messages: messages.slice(-MESSAGE_PAGE_SIZE), pagination: { ...(pagination ?? {}), hasMoreAbove: true } };
+}
+
 // Retention for the persisted sessions collection, applied at hydration. The
 // in-memory sessions map is never-prune BY DESIGN (rows the UI holds must not
 // vanish mid-session), which means the on-disk cache is append-only across

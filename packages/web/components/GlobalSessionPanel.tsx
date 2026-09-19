@@ -2311,7 +2311,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
   const attention = rows.some((r) => r.task.last_run_failed || r.task.last_run_needs_attention);
   const toggle = () => (open ? close() : setOpen(true));
   return (
-    <div className="relative shrink-0 border-t border-sol-border/40">
+    <div data-sv-triggers-foot className="relative shrink-0 border-t border-sol-border/40">
       {open && (
         <>
           {/* Click-away backdrop: anywhere outside the roster closes it. */}
@@ -3289,7 +3289,7 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
         {session.user_rest && !isDismissed && (
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-blue/70">
+          <div data-sv-rest className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-blue/70">
             <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />
             <span>{USER_REST_CARD_LINE[session.user_rest]}</span>
           </div>
@@ -4491,7 +4491,7 @@ function SessionListPanelImpl({
       // ignore — local clear persists; the server drain is best-effort.
     } finally {
       setDismissingStale(false);
-      toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"} — still searchable anytime`);
+      toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"}`, { description: "Still searchable anytime." });
     }
   }, [staleSessions, dismissStaleMutation, snoozeStalePrompt]);
 

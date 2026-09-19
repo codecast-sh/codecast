@@ -160,6 +160,10 @@ export function usePushNotifications() {
         } else {
           router.push({ pathname: '/chat/[id]', params: { id: String(data.channelId), ...m } } as never);
         }
+      } else if (data.type === 'sessions_need_input') {
+        // The hourly fold-up names several sessions — the inbox is where they
+        // all are, and where the needs-input group sits at the top.
+        router.push('/(tabs)/inbox' as never);
       } else if (data.type === 'aggregate') {
         // A batched push ("12 notifications") has no single session to open —
         // land on the list that itemizes them.

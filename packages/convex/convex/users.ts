@@ -1198,6 +1198,7 @@ export const updateNotificationPreferences = mutation({
       // stored object back and every toggle on web and mobile fails validation.
       chat_activity: v.optional(v.boolean()),
       email_notifications: v.optional(v.boolean()),
+      session_idle_digest: v.optional(v.boolean()),
       live_activity: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
