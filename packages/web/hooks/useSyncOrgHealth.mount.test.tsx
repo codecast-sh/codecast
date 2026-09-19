@@ -5,6 +5,9 @@
 // failing action as a feeder error while the cached snapshot stays.
 // Run: bun test hooks/useSyncOrgHealth.mount.test.tsx
 import { describe, expect, mock, test } from "bun:test";
+import { realInboxStore, restoreInboxStoreAfterAll } from "../components/__tests__/mockInboxStore";
+
+restoreInboxStoreAfterAll();
 
 describe("useSyncOrgHealth", () => {
   test("feeds the store from the fanned action, re-reads on a workspace switch, and keeps the cache on a failure", async () => {
@@ -22,7 +25,7 @@ describe("useSyncOrgHealth", () => {
       orgHealth: null,
       syncTable: (key: string, rows: unknown) => set({ [key]: rows }),
     }));
-    mock.module("../store/inboxStore", () => ({ useInboxStore, isConvexId: (s: string) => /^[a-z0-9]{32}$/.test(s) }));
+    mock.module("../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, isConvexId: (s: string) => /^[a-z0-9]{32}$/.test(s) }));
     const feederErrors: string[] = [];
     mock.module("./useSyncCollection", () => ({ useFeederError: (feeder: string, error?: Error) => { if (error) feederErrors.push(`${feeder}: ${error.message}`); }, useSyncCollection: () => ({ ready: false }) }));
     mock.module("./useSyncOrgTree", () => ({ isMissingFunctionError: (error?: Error) => !!error && /Could not find public function/i.test(error.message ?? "") }));

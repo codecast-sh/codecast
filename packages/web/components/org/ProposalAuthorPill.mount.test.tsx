@@ -4,6 +4,9 @@
 // session navigation, and a decision's origin line found from its context.
 // Run: bun components/org/ProposalAuthorPill.mount.test.tsx
 import assert from "node:assert/strict";
+import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
+
+restoreInboxStoreAfterAll();
 
 async function verifyAuthorPill() {
   const { JSDOM } = await import("jsdom");
@@ -25,7 +28,7 @@ async function verifyAuthorPill() {
   const origins: Record<string, any> = { "op-9": { short_id: "op-9", status: "open", author: { kind: "role", id: "role-x", name: "Platform", handle: "platform", short_id: "or-2" } }, "op-404": null, "op-500": new Error("boom") };
   const asked: string[] = [];
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-  mock.module("../../store/inboxStore", () => ({ useTrackedStore: () => state }));
+  mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useTrackedStore: () => state }));
   mock.module("../../hooks/useOrgRoles", () => ({ useOrgRoles: () => ({ roles, workspace: null }) }));
   mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: (_fn: unknown, args: any) => {
     if (args === "skip") return { data: undefined, error: undefined, retry: () => {} };
@@ -34,7 +37,10 @@ async function verifyAuthorPill() {
     return v instanceof Error ? { data: undefined, error: v, retry: () => {} } : { data: v, error: undefined, retry: () => {} };
   } }));
   mock.module("../../hooks/useOpenLinkedSession", () => ({ useOpenLinkedSession: () => (row: unknown) => opened.push(row) }));
-  mock.module("./avatars", () => ({ RoleAvatar: ({ avatar }: { avatar: string }) => React.createElement("i", { "data-avatar": avatar }) }));
+  // Spread the real module: a substitution is process-global, and a stub that
+  // drops avatarLength breaks every file that imports it afterwards.
+  const realAvatars = { ...(await import("./avatars")) };
+  mock.module("./avatars", () => ({ ...realAvatars, RoleAvatar: ({ avatar }: { avatar: string }) => React.createElement("i", { "data-avatar": avatar }) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { ProposalAuthorPill, DecisionProposalOrigin } = await import("./ProposalAuthorPill");
