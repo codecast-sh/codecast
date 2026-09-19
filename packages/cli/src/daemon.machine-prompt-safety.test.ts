@@ -8,7 +8,7 @@ import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
-import { clientAcceptsBracketedPaste, composerCollapsesPasteToChip, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
+import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 
@@ -153,7 +153,6 @@ function fixture(transport = "tmux", cached = true) {
     // importable; for the two that live in daemon.ts, the answer this fixture's
     // world gives: no transcript is on disk, and these panes are not Grok.
     deliveryStep: async <T>(_messageId: string, _step: string, run: () => Promise<T>): Promise<T> => run(),
-    composerCollapsesPasteToChip,
     awaitRecentSessionFile: async () => null,
     isGrokTrustDialog: () => false,
     tmuxTargetLocks: new Map(), TMUX_LOCK_WAIT_MS: 60000, hibernationInFlight: new Map(),

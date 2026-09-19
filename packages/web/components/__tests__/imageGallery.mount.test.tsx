@@ -1,6 +1,5 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { ImageGalleryProvider, GalleryMessageScope, useImageGallery, useGalleryMessageId, type GalleryImage } from "../ImageGallery";
@@ -21,6 +20,10 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// react-dom/client decides at load whether a DOM exists, so it is loaded
+// here — after the globals above — not as a static import.
+const {createRoot, type Root} = await import("react-dom/client");
+
 // jsdom has no layout: the provider scrolls the active thumb into view.
 (dom.window.HTMLElement.prototype as any).scrollIntoView = () => {};
 afterAll(() => {

@@ -1,6 +1,5 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { act } from "react";
-import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -36,6 +35,10 @@ const restoreGlobals = replaceGlobals({
   ResizeObserver: class { observe() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// react-dom/client decides at load whether a DOM exists, so it is loaded
+// here — after the globals above — not as a static import.
+const {createRoot} = await import("react-dom/client");
+
 // jsdom lays nothing out: the band's scroll follow is a no-op here.
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
