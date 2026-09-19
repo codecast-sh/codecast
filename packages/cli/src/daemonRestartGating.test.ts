@@ -70,6 +70,9 @@ describe("daemon restart gating", () => {
       isAutostartEnabled: () => false, hasTmux: () => false, deviceId: () => "test", deviceLabel: () => "test",
       BOOT_ID: "test", syncHealthFields: () => ({}),
       backendOutage: { markFailure: () => { failures++; }, markSuccess: () => { successes++; return 0; } },
+      // A free variable of the lifted function: in daemon.ts it marks the
+      // outage and logs at most once a minute, so the harness counts the mark.
+      notePollFailure: () => { failures++; },
       log: () => {}, executeCommandBatch: async () => { delivered++; if (holdCommand) await new Promise<void>((resolve) => { finishCommand = resolve; }); },
     };
     const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`let daemonCommandPollInFlight = false; async function poll() ${functionBody(src("daemon.ts"), "pollDaemonCommands")}`);
