@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, type Validator } from "convex/values";
 import {
   INITIATIVE_STATUSES,
   INITIATIVE_UPDATE_HEALTHS,
@@ -48,7 +48,10 @@ const MAX_BODY = 20_000;
 const MAX_PROJECTS = 100;
 const MAX_UPDATES_READ = 200;
 
-const statusArg = v.union(...INITIATIVE_STATUSES.map((s) => v.literal(s))) as any;
+// Typed (not `as any`): the create/update validators spread this into their
+// args, so an untyped union widens `fields.status` to unknown and the
+// fieldsPatch calls no longer typecheck.
+const statusArg = v.union(...INITIATIVE_STATUSES.map((s) => v.literal(s))) as Validator<InitiativeStatus>;
 const healthArg = v.union(...INITIATIVE_UPDATE_HEALTHS.map((h) => v.literal(h))) as any;
 const priorityArg = v.union(...PRIORITIES.map((p) => v.literal(p))) as any;
 

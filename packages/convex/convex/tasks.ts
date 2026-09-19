@@ -31,6 +31,7 @@ import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
+import { requireInitiative } from "./lib/initiativeRef";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
@@ -1522,7 +1523,7 @@ export const list = query({
     } else if (args.project_id || args.initiative) {
       // A task reaches an initiative through its project. With both flags the
       // project must be one the initiative names.
-      const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId, args.initiative)).project_ids.map(String) : null;
+      const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId as Id<"users">, args.initiative)).project_ids.map(String) : null;
       const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
       tasks = (await Promise.all(projectIds.map((projectId) => ctx.db
         .query("tasks")

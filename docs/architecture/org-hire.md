@@ -38,32 +38,42 @@ find its instances.
 
 ## H1. The template is a server object; the folder is its release
 
-**Tables.** `org_templates`: `{ template_id (slug), name, description,
-access (below), publisher: { kind: "workspace", id } | { kind: "codecast" },
-latest: { version, digest }, releases: [{ version, digest, published_at,
-changelog, status: "draft" | "canary" | "stable" }], manifest (the latest
-release's manifest, so the hire dialog renders inputs, authority and setup
-without the folder), avatar?, created_by, created_at }`.
-`org_template_instances`: `{ template_id, version, digest, access, workspace:
-{ kind, id }, project_id, instance (slug), role_id, host: { machine, dir },
-receipt_digest, config (answers, H3), authority_state (H4), setup (H5),
-evidence (H6), ledgers (H7), scoreboard (H7), update_policy: "manual" |
-"canary" | "stable", phase, created_at, updated_at }`. The receipt on disk
-stays the local pin and gains one field, `instance_id`; the server row is the
-record the web reads and the upgrade walks.
+**Tables.** `org_templates`: `{ template_id (slug), workspace (the access
+key, below), name, description, avatar?, latest: { version, digest },
+releases: [{ version, digest, status: "draft" | "canary" | "stable",
+changelog?, storage_id?, manifest, published_at, published_by }], manifest (the
+latest release's, so the hire dialog renders inputs, authority and setup without
+the folder; each release keeps its own, so an instance reads the manifest of the
+release it is pinned to), review_project_id?, created_by, created_at,
+updated_at }`.
+`org_template_instances`: `{ instance_key (the receipt's UUID), instance
+(slug), workspace (the hiring workspace's key), template_id, version, digest,
+project_id, role_id?, host?: { machine, dir }, phase: "awaiting_host" |
+"ready" | "upgrading" | "retired", update_policy: "manual" | "canary" |
+"stable", config (answers, H3; never a secret's value), bindings (H4), ledgers
+(H7), evidence (H6), scoreboard (H7), setup (H5), created_by, created_at,
+updated_at }`. The receipt on disk stays the local pin and gains one field,
+`instanceId`; the server row is the record the web reads and the upgrade
+walks. The host step upserts it by `instance_key`, so a hire change that
+creates the row first (`awaiting_host`) and a rerun of bind meet on one row.
 
-**Access.** Per the repo's access rule, both tables carry `access`, the
-workspace key a viewer's own key is compared against in one equality:
-`team:<id>` or `user:<id>` for a workspace's own rows. A template published
-by Codecast carries the positive value `access: "codecast"`, and the catalog
-query reads rows where `access` equals the viewer's key or equals `codecast`;
-an absent key never grants visibility. Instances always carry the hiring
-workspace's key.
+**Access.** Per the repo's access rule (`lib/access.ts`), every row carries
+`workspace`, the stored key a viewer's own key is compared against in one
+equality: `team:<id>` or `user:<id>`. A template published by Codecast
+carries the positive value `"codecast"`, and the catalog reads rows whose key
+equals the viewer's or equals that value; an absent or unknown key grants
+nothing. Publishing as Codecast is an act of the Codecast team's admins; the
+deployment names that team in `CODECAST_TEMPLATES_TEAM_ID`. Instances carry
+the hiring workspace's key, read from the project. Lessons carry the
+publisher's key.
 
-**Publishing.** `cast org template publish <folder> [--status canary|stable]
-[--changelog -]` inspects the folder (org-templates.md rules), uploads the
-snapshot as a storage blob, and writes or advances the `org_templates` row.
-Same version with a different digest is refused, as in the CLI today. The
+**Publishing.** `cast org template publish <folder> [--team|--personal|
+--codecast] [--status draft|canary|stable] [--changelog -]` inspects the folder
+(org-templates.md rules) and writes or advances the `org_templates` row with
+the validated manifest and the folder's digest. Same version with a different
+digest is refused; the same version and digest again only moves its status or
+changelog. The release snapshot as a storage blob (`storage_id`) lands with
+install from the record, below. The
 growth pack is published by Codecast and is the first entry of the catalog.
 `INSTANCES.toml` in the pack retires: the instances table is the registry.
 
@@ -359,14 +369,17 @@ cross over this way, one at a time, when the founder chooses.
 An instance lives in the hiring workspace and the template in the publisher's;
 a session in one cannot create a task in the other (the access boundary refuses
 it, as it should). So `cast org template lesson <instance> - <<'EOF' … EOF`
-writes `org_template_lessons: { template_id, instance_id, access (the
-publisher's key, or "codecast"), from: { workspace, project, release }, body,
-evidence: [{ label, href }], status: "open" | "accepted" | "declined" |
-"released", released_in?, task_id?, created_at }`. The body is the role's own
+writes `org_template_lessons: { template_id, workspace (the publisher's key,
+or "codecast"), from_workspace, instance_key, release: { version, digest },
+body, evidence: [{ label, href }], status: "open" | "accepted" | "declined"
+| "released", released_in?, task_id?, created_by, created_at, updated_at }`. The body is the role's own
 words with customer data stripped; evidence links stay readable only to those
 who could already open them. The server, acting inside the publisher's
 boundary, files one task per lesson on the publisher's review project, labelled
-`template-lesson`, and links it on the row. For `learn.review: codecast` that
+`template-lesson`, and links it on the row; that needs a server side task
+create (`tasks.create` is an inline handler today, and W7 R5 is in that file),
+so until it lands the lesson row itself is the landing place and the publisher
+reads it with `cast org template lessons` or on the template page. For `learn.review: codecast` that
 project is **Codecast: Templates** in the Codecast workspace, created with this
 slice so the first lesson has somewhere to land on day one; for `publisher` it
 is the project the template row names (`review_project_id`). The instance sees
@@ -490,6 +503,16 @@ files the project under one.
   once in `org/STATE.md`. A dry run of hiring it on Codecast's real project with
   its real answers and `--adopt` for tr-460 to tr-464 passed against the live
   server and read the ads trigger's live 3 day cadence as an override.
-- **Tests**: `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
+- **The server half that changes no existing behaviour** (2026-09-19, with the
+  org program's go): `convex/orgTemplates.ts` with the three tables appended to
+  the org block of `schema.ts` and twelve `/cli/org/template/*` routes. Publish
+  and catalog, the instance row upserted by the receipt's key, evidence,
+  scoreboard and setup through the shared rules, instance status with readiness,
+  lessons filed under the publisher's key with the writer seeing only status.
+  The manifest validator and the record rules moved to
+  `packages/shared/contracts/orgTemplateManifest.ts` and `orgTemplateState.ts`;
+  the CLI files re-export them. `bind` registers the row; the record verbs post
+  to it once it exists; new verbs `lesson`, `publish` and `catalog`.
+- **Tests**: `convex/orgTemplates.test.ts`, `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
   `orgTemplateInstance.test.ts`, `orgTemplateState.test.ts`,
   `orgTemplateActivation.test.ts`, and `orgTemplateReadiness.test.ts` in shared.
