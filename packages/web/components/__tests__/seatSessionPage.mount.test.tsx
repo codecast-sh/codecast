@@ -64,7 +64,10 @@ mock.module("../TriggerContextPanel", () => ({ TriggerContextPanel: () => <div d
 mock.module("../ConversationPlaceholder", () => ({ ConversationPlaceholder: ({ id }: any) => <div data-placeholder={id} /> }));
 mock.module("../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => <kbd>{children}</kbd> }));
 mock.module("../anchor/AnchorConversation", () => ({ useSeedOwnership: () => {} }));
-mock.module("../../hooks/useSyncOrgTree", () => ({ useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
+// Spread the real module: a substitution is process-global, so a stub that
+// drops its other exports breaks every file that loads it afterwards.
+const realOrgTree = { ...(await import("../../hooks/useSyncOrgTree")) };
+mock.module("../../hooks/useSyncOrgTree", () => ({ ...realOrgTree, useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
 mock.module("../../hooks/useMissingSessionRow", () => ({ useMissingSessionRow: () => undefined }));
 mock.module("../../hooks/useTitlebarHead", () => ({ useTitlebarHead: () => ({ current: null }) }));
 mock.module("../../hooks/useConversationMessages", () => ({
