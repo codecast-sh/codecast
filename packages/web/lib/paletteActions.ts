@@ -49,7 +49,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("rename", "Rename session…", Pencil, "r", "session.rename"),
       // Personifying is opt in, so the verb names what it does for a row that
       // has no character yet (session-characters.md S2).
-      row("character", isPersonified(target) ? (single ? "Change character…" : `Change character for ${targets.length} sessions…`) : (single ? "Give it a character…" : `Give ${targets.length} sessions characters…`), Smile, "e"),
+      row("character", isPersonified(target) ? (single ? "Change character…" : `Change character for ${targets.length} sessions…`) : (single ? "Give it a character…" : `Give ${targets.length} sessions characters…`), Smile, "y"),
       row("session_pin", target.is_pinned ? "Unpin session" : "Pin session", target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? "Remove from favorites" : "Add to favorites", Star, "v", "conv.favorite"),
       row("bucket", "Label session…", Tag, "l", "session.moveToBucket"),
