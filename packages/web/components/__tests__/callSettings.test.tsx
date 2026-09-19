@@ -3,6 +3,7 @@
 // reads the same source the joins read (absent = on), that the sheet is a
 // labelled dialog with one way out, and that nothing in it is desktop-only
 // except the meeting block, which renders nothing in a browser.
+import type { Root } from "react-dom/client";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
 import { JSDOM } from "jsdom";
@@ -23,7 +24,7 @@ const restoreGlobals = replaceGlobals({
 });
 // react-dom/client decides at load whether a DOM exists, so it is loaded
 // here — after the globals above — not as a static import.
-const {createRoot, type Root} = await import("react-dom/client");
+const { createRoot } = await import("react-dom/client");
 
 let root: Root | undefined;
 const clientState = useInboxStore.getState().clientState;
