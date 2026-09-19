@@ -12,6 +12,7 @@
 // already on screen), and the link action for the one write that has to
 // probe Slack first.
 
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useAction, useQuery } from "convex/react";
 import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -101,7 +102,7 @@ export function SlackSyncDialog({ channelId, onClose }: { channelId: string; onC
   const s = useTrackedStore([(st) => st.chatChannels[channelId]?.name, (st) => st.chatChannels[channelId]?.team_id]);
   const channel = s.chatChannels[channelId];
   const teamId = channel?.team_id as string | undefined;
-  const team = useQuery(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip");
+  const team = useQueryNoThrow(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip").data;
 
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -454,7 +455,7 @@ function SetupBody({
 function LinkedBody({ link, workspaceName, onClose }: { link: ChatSlackLinkRow; workspaceName: string | null; onClose: () => void }) {
   const update = useInboxStore((st) => st.updateChatSlackLink);
   const unlink = useInboxStore((st) => st.unlinkChatSlack);
-  const activity = useQuery(api.slackSync.linkActivity, { link_id: link._id } as any);
+  const activity = useQueryNoThrow(api.slackSync.linkActivity, { link_id: link._id } as any).data;
   const now = useCoarseNow(30_000);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [people, setPeople] = useState(false);
