@@ -210,7 +210,7 @@ export default function SyncPage() {
       setPendingUnsync(null);
     } catch (err) {
       console.error("Failed to unsync project:", err);
-      toast.error("Failed to remove sync. The project may have too many conversations to delete at once.");
+      toast.error("Failed to remove sync", { description: "The project may have too many conversations to delete at once." });
     } finally {
       unsyncingRef.current = false;
       setIsUnsyncing(false);

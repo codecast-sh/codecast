@@ -167,7 +167,7 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
     setBusy("remove");
     try {
       await removeToken({ device_id: device.device_id, profile: profile.name });
-      toast.success(`Token removed for ${who}. Sessions fall back to the saved login.`);
+      toast.success(`Token removed for ${who}`, { description: "Sessions fall back to the saved login." });
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't remove the token");

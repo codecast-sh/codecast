@@ -76,11 +76,11 @@ export function ProposalThread(props: ProposalThreadProps) {
     const body = content.trim();
     const pictures = images?.length ?? 0;
     if (!body) {
-      if (pictures > 0) toast.error("This conversation takes text for now; the picture was not sent.");
+      if (pictures > 0) toast.error("The picture was not sent", { description: "This conversation takes text for now." });
       return;
     }
     props.onSay(thread.conversationId, proposal.short_id, { changeSeq: aboutChangeSeq, askIndex: aboutAskIndex }, body);
-    if (pictures > 0) toast.warning(`Sent your words; the ${pictures === 1 ? "picture was" : "pictures were"} not, this conversation takes text for now.`);
+    if (pictures > 0) toast.warning(`Sent your words, not the ${pictures === 1 ? "picture" : "pictures"}`, { description: "This conversation takes text for now." });
   }, [props.onSay, thread.conversationId, proposal.short_id, aboutChangeSeq, aboutAskIndex]); // eslint-disable-line react-hooks/exhaustive-deps
   // Element props handed to the memoized conversation view keep identity
   // across this component's renders. `now` moves the letter's age and nothing

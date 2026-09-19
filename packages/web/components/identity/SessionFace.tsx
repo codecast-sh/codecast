@@ -45,6 +45,7 @@ export function SessionFace({ row, size = 18, className, title, badge }: {
       {showBadge && (
         <span
           aria-hidden
+          data-face-badge
           className="absolute rounded-full bg-sol-card flex items-center justify-center text-sol-text-muted"
           style={{ width: badgeSize, height: badgeSize, right: -1, bottom: -1, boxShadow: "0 0 0 1px var(--sol-bg)" }}
         >

@@ -12,6 +12,7 @@ import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
   BookOpen, ExternalLink, Radio, Newspaper, Home, Monitor,
+  Blocks,
 } from "lucide-react";
 import { isDesktopShell } from "../lib/desktop";
 import { track } from "../lib/analytics";
@@ -176,7 +177,7 @@ export function UserMenu() {
       </ShortcutTooltip>
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
-        <div className="absolute right-0 mt-2 w-60 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
+        <div className="cc-topbar-menu absolute right-0 mt-2 w-60 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
           <button
             onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)}
             className="w-full px-3 py-2.5 border-b border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
@@ -207,6 +208,7 @@ export function UserMenu() {
               trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
             />
             <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
+            <MenuItem icon={Blocks} label="Capabilities" onClick={() => go("/capabilities")} />
             <MenuItem
               icon={BookOpen}
               label="Documentation"

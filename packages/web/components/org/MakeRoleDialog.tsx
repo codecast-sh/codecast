@@ -65,7 +65,7 @@ export function MakeRoleDialog({ conversationId, onClose }: { conversationId: st
       initialProjects={home}
       onCreate={({ touched: _touched, ...input }) => {
         useInboxStore.getState().createOrgRole(input);
-        toast.success(`${input.name} is now a role. The session keeps running as it was.`);
+        toast.success(`${input.name} is now a role`, { description: "The session keeps running as it was." });
         onClose();
       }}
     />

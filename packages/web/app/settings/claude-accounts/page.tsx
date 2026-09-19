@@ -281,7 +281,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       // behind it, and its next heartbeat confirms — or resurrects the row
       // if the deletion failed.
       await removeProfile({ name: profile, device_id: device.device_id });
-      toast.success(`Removed "${profile}" — log into that account again anytime to re-add it`);
+      toast.success(`Removed "${profile}"`, { description: "Log into that account again anytime to re-add it." });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Remove failed");
     } finally {

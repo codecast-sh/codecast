@@ -154,7 +154,7 @@ export default function JoinTeamPage() {
         })
         .catch((err) => {
           console.error("Team setup save failed:", err);
-          toast.error("Could not save the team settings. You can change them in Settings.");
+          toast.error("Could not save the team settings", { description: "You can change them in Settings." });
         });
     }
     // This page lives outside the tab shell. Point the active tab at the

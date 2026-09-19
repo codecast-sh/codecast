@@ -103,6 +103,9 @@ export function machineSwitchPendingCopy(phase: MachineSwitchPhase, profile: str
   return `Switching this machine to "${profile}"…`;
 }
 
-export function machineSwitchSuccessCopy(profile: string): string {
-  return `This machine is now "${profile}" — new and resumed sessions will use it. Running sessions keep the account they started on.`;
+export function machineSwitchSuccessCopy(profile: string): { title: string; description: string } {
+  return {
+    title: `This machine is now "${profile}"`,
+    description: "New and resumed sessions will use it. Running sessions keep the account they started on.",
+  };
 }
