@@ -207,7 +207,12 @@ jobs:
 
       - name: Unit tests (web package)
         working-directory: packages/web
-        run: bun test
+        # --isolate: a fresh global per file. bun otherwise runs the whole suite
+        # in one process, where `mock.module` substitutions are permanent and a
+        # jsdom window installed on globalThis outlives the file that made it.
+        # One mount test then decides what hundreds of later files see, so a
+        # test passes alone and fails in the suite depending on file order.
+        run: bun test --isolate
 
       - name: Unit tests (shared/tasks)
         working-directory: packages/shared
