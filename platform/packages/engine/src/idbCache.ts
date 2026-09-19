@@ -3,8 +3,21 @@ import type { Patch } from "mutative";
 import { diffCollection } from "./idbCollectionDiff";
 import { deriveRegistryMaps, type RegistryMaps } from "./registry";
 import type { OutboxEntry, PlatformConfig } from "./types";
+import {
+  DEFAULT_EXCLUDE_TOMBSTONE_TTL_MS,
+  expireExcludeTombstones,
+  type DetailRecord,
+  type IdbCache,
+} from "./cacheContract";
 
-export const PERSISTENCE_AVAILABLE = typeof window !== "undefined" && typeof indexedDB !== "undefined";
+export {
+  PERSISTENCE_AVAILABLE,
+  DEFAULT_EXCLUDE_TOMBSTONE_TTL_MS,
+  expireExcludeTombstones,
+  type DetailRecord,
+  type PlatformCache,
+  type IdbCache,
+} from "./cacheContract";
 
 // Default retention for the detail tables. Every detail row ever written stays
 // on disk unless something prunes it, and detail payloads are the large ones
@@ -15,67 +28,6 @@ const DEFAULT_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DETAIL_WRITE_DEBOUNCE_MS = 300;
 const DETAIL_PRUNE_THROTTLE_MS = 5 * 60 * 1000; // at most once per 5 min
 const DETAIL_PROTECT_RECENT_MS = 10 * 60 * 1000; // never prune a row touched this recently
-
-// Exclude tombstones never clear for delta tables (absence ≠ deletion in
-// applySyncTable), so every removal adds a permanent `pending` entry — measured
-// at 1,832 entries after a heavy fan-out, and each one rides every sync push and
-// every persisted pending blob. A tombstone only matters while the server could
-// still resend the row, so age them out at hydration. Legacy entries without a
-// timestamp get stamped `now` and age out one window later. include/field
-// entries are local-first writes awaiting acknowledgment: never expired.
-export const DEFAULT_EXCLUDE_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-export function expireExcludeTombstones(
-  pending: Record<string, any>,
-  now: number,
-  ttlMs: number = DEFAULT_EXCLUDE_TOMBSTONE_TTL_MS,
-  isUnprotectedField?: (key: string, field: string) => boolean,
-): Record<string, any> {
-  const cleaned: Record<string, any> = {};
-  for (const [key, entry] of Object.entries(pending)) {
-    if (entry?.type === "exclude") {
-      if (!entry.ts) { cleaned[key] = { ...entry, ts: now }; continue; }
-      if (now - entry.ts > ttlMs) continue;
-    }
-    // A field the registry now declares unprotected can hold no lock — drop
-    // stale entries persisted by older builds (including corrupted ones whose
-    // value shape can never echo), or they would keep overriding every server
-    // push forever.
-    if (entry?.type === "field" && isUnprotectedField) {
-      const first = key.indexOf(":");
-      const second = key.indexOf(":", first + 1);
-      if (
-        first !== -1 && second !== -1 &&
-        isUnprotectedField(key.slice(0, first), key.slice(second + 1))
-      ) continue;
-    }
-    cleaned[key] = entry;
-  }
-  return cleaned;
-}
-
-export type DetailRecord = { value: any; latestTimestamp: number };
-
-/** The persistence contract, independent of the backing store. The Dexie cache
- *  implements it for the web; the KV cache implements it for native. */
-export type PlatformCache = {
-  writePatchesToIDB: (patches: Patch[], state: any) => void;
-  loadCache: () => Promise<Record<string, any> | null>;
-  setHydrating: (v: boolean) => void;
-  loadDetail: (table: string, key: string) => Promise<DetailRecord | null>;
-  writeDetail: (table: string, key: string, value: any) => void;
-  flushDetail: () => void;
-  enqueueDispatch: (entry: OutboxEntry) => Promise<void>;
-  removeDispatch: (id: string) => Promise<void>;
-  loadOutbox: () => Promise<OutboxEntry[]>;
-  purgeLocalCache: () => Promise<void>;
-};
-
-export type IdbCache = PlatformCache & {
-  db: Dexie;
-  /** Test hook: the persisted shadow would otherwise leak across tests. */
-  _resetPersistedShadow: () => void;
-};
 
 export function createIdbCache(
   config: PlatformConfig,
