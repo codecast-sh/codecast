@@ -494,6 +494,16 @@ export const getMessageCoverageV2 = query({
           q.eq("conversation_id", args.conversation_id).eq("client_id", commandId))
         .first()));
     const coveredCommandIds = commandIds.filter((_commandId, index) => !!matches[index]);
+    const deliveries = await Promise.all(commandIds.filter(id => !coveredCommandIds.includes(id)).map(async commandId => {
+      const message = await ctx.db.query("pending_messages")
+        .withIndex("by_conversation_client_id", q => q.eq("conversation_id", args.conversation_id).eq("client_id", commandId))
+        .first();
+      return message ? { commandId, status: message.status } : null;
+    }));
+    const settled = deliveries.filter(message => message?.status === "delivered" || message?.status === "cancelled")
+      .map(message => message!.commandId);
+    const failed = deliveries.filter(message => message?.status === "failed" || message?.status === "undeliverable")
+      .map(message => message!.commandId);
     // Command-id coverage, not a revision-covered row set — outside grantedView.
     return {
       ...identity,
@@ -503,6 +513,7 @@ export const getMessageCoverageV2 = query({
         kind: "command-ids" as const,
         commandIds: coveredCommandIds,
       },
+      ...(settled.length || failed.length ? { delivery: { settled, failed } } : {}),
     };
   },
 });

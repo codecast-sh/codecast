@@ -198,7 +198,7 @@ function fixture(transport = "tmux", cached = true) {
   };
   if (!fixtureFactory) {
     const names = [
-      "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog",
+      "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
@@ -269,6 +269,20 @@ function fixture(transport = "tmux", cached = true) {
 }
 
 describe("machine prompt delivery safety", () => {
+  test("skips the optional Codex update before delivering the original message", async () => {
+    const f = fixture();
+    f.state.menu = "Update available! 0.154.0 -> 0.155.1\n› 1. Update now (runs `bun install -g @openai/codex`)\n  2. Skip\n  3. Skip until next version\nPress enter to continue";
+    f.hooks.input = (event: string) => {
+      if (f.state.menu) {
+        expect(event).toBe("Escape");
+        f.state.menu = null;
+      }
+    };
+    await expect(f.deliver("preserve the queued question")).resolves.toBe(true);
+    expect(f.events[0]).toBe("Escape");
+    expect(f.bodies).toEqual(["preserve the queued question"]);
+  });
+
   test("a timed-out waiter does not steal the active terminal writer's lock", async () => {
     const f = fixture();
     const active = new Promise<void>(() => {});

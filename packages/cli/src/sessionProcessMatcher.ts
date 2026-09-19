@@ -27,13 +27,18 @@ function basename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+function agentBasename(path: string): string {
+  const name = basename(path.trim()).toLowerCase();
+  return /^muse-bin-\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$/.test(name) ? "muse" : name;
+}
+
 /** Does a process's `ps -o comm=` value belong to one of our agent clients?
  *  Pure and testable — the daemon's isAgentProcess is just this plus the `ps`
  *  read. */
 export function isRecognizedAgentComm(comm: string): boolean {
   const lower = comm.trim().toLowerCase();
   if (!lower) return false;
-  if (AGENT_BINARY_BASENAMES.has(basename(lower))) return true;
+  if (AGENT_BINARY_BASENAMES.has(agentBasename(lower))) return true;
   return AGENT_INTERPRETERS.some((i) => lower.includes(i));
 }
 
@@ -62,7 +67,7 @@ export function agentBinaryFromPsRow(comm: string, args: string): string | null 
   }
   candidates.push(comm);
   for (const c of candidates) {
-    const bin = basename(c.trim()).toLowerCase();
+    const bin = agentBasename(c);
     if (!bin) continue;
     if (AGENT_BINARY_BASENAMES.has(bin) || AGENT_BINARY_ALIASES.has(bin)) return bin;
   }
@@ -82,7 +87,7 @@ export interface StartedSessionEntry {
 }
 
 export function isResumeInvocation(agentType: AgentClientId, commandLine: string): boolean {
-  if (agentType === "codex" || agentType === "gemini") {
+  if (agentType === "codex" || agentType === "gemini" || agentType === "muse") {
     return /\s--resume(\s|$)/.test(commandLine) || /\sresume(\s|$)/.test(commandLine);
   }
   return /\s--resume(\s|$)/.test(commandLine);

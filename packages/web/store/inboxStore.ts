@@ -1744,6 +1744,12 @@ export type ClientUI = {
   // is a choice.
   call_camera_on?: boolean;
   call_mic_on?: boolean;
+  // Whether the microphone may open before the person presses anything: the
+  // walkie warms it under a hovered talk button and a prewarmed room publishes
+  // it muted (lib/calls/walkieMic). Absent means ON; an explicit false makes a
+  // press, an unmute or a record the only things that open it. Stamped LWW:
+  // "may the app hold my microphone" is about the person, not the machine.
+  call_mic_auto_open?: boolean;
   // Fold the pinned thread-state panel above the composer down to its headline
   // row. Expanded by default — the panel exists to be read on arrival — and
   // left unstamped, so it stays a per-device reading preference like the other

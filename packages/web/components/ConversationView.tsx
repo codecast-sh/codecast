@@ -7797,8 +7797,13 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendi
             <Clock className="w-2.5 h-2.5" />{queueLabel}
           </span>
         )}
+        {/* A queued message renders at the tail of the transcript, below turns
+            that arrived after it, because it has not entered the thread yet —
+            it is still waiting to be delivered. Its time is therefore how long
+            it has waited, not where it belongs, and saying so is what stops
+            the row reading as history that jumped out of order. */}
         {timestamp != null && timestamp > 0 && (
-          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${formatRelativeTime(timestamp)}` : formatRelativeTime(timestamp)}</span>
         )}
       </div>
       {/* A message from another session is someone else's context, not this

@@ -55,7 +55,6 @@ const ALLOWED = new Set<string>([
   "components/HtmlSnippet.tsx",
   "components/ImageGallery.tsx",
   "components/InlineDiff.tsx",
-  "components/NotificationBell.tsx",
   "components/OwnersBadge.tsx",
   "components/PermissionCard.tsx",
   "components/PlanDetailPanel.tsx",

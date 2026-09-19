@@ -2,8 +2,63 @@ import { expect, test } from "bun:test";
 import net from "node:net";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
-import { recoveringWebSocket } from "@codecast/shared/network";
+import { MAX_CONCURRENT_MUTATIONS, recoveringWebSocket } from "@codecast/shared/network";
 import { bindConvexConnectionState } from "./convexConnectionState.js";
+
+test("a disconnected client's mutation backlog drains without another overload or losing writes", async () => {
+  let connections = 0;
+  let peak = 0;
+  let timestamp = 0;
+  const received = new Set<number>();
+  const stamp = () => {
+    const bytes = Buffer.alloc(8);
+    bytes.writeBigUInt64LE(BigInt(timestamp));
+    return bytes.toString("base64");
+  };
+  const endpoint = Bun.serve<{ active: number; first: boolean; version: { querySet: number; identity: number; ts: string } }>({
+    port: 0,
+    fetch(request, server) {
+      if (server.upgrade(request, { data: { active: 0, first: ++connections === 1, version: { querySet: 0, identity: 0, ts: "AAAAAAAAAAA=" } } })) return;
+      return new Response("upgrade required", { status: 426 });
+    },
+    websocket: {
+      message(ws, raw) {
+        const message = JSON.parse(String(raw));
+        if (message.type !== "Mutation") return;
+        peak = Math.max(peak, ++ws.data.active);
+        if (ws.data.first) {
+          if (ws.data.active === MAX_CONCURRENT_MUTATIONS) ws.close(1013, "forced reconnect");
+          return;
+        }
+        setTimeout(() => {
+          received.add(message.requestId);
+          timestamp++;
+          ws.send(JSON.stringify({ type: "MutationResponse", requestId: message.requestId, success: true, result: message.args[0].value, ts: stamp(), logLines: [] }));
+          const endVersion = { ...ws.data.version, ts: stamp() };
+          ws.send(JSON.stringify({ type: "Transition", startVersion: ws.data.version, endVersion, modifications: [] }));
+          ws.data.version = endVersion;
+          ws.data.active--;
+        }, 2);
+      },
+    },
+  });
+  const client = new ConvexClient(`http://127.0.0.1:${endpoint.port}`, {
+    webSocketConstructor: recoveringWebSocket(), logger: false,
+  });
+  try {
+    const mutation = makeFunctionReference<"mutation", { value: number }, number>("test:write");
+    const expected = Array.from({ length: 2_000 }, (_, value) => value);
+    const results = await Promise.all(expected.map(value => client.mutation(mutation, { value })));
+    expect(results).toEqual(expected);
+    expect(received.size).toBe(expected.length);
+    expect(peak).toBe(MAX_CONCURRENT_MUTATIONS);
+    expect(connections).toBe(2);
+    expect(client.connectionState().inflightMutations).toBe(0);
+  } finally {
+    await client.close();
+    endpoint.stop(true);
+  }
+}, 15_000);
 
 test("stalled handshakes close and a retained subscription recovers without replacing the client", async () => {
   let attempts = 0;

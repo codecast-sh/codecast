@@ -7,6 +7,10 @@
 // it are blocked. Last-known accounts stay in the bar while the daemon is
 // quiet or offline so a session-limit surprise (or a missing switcher) never
 // is one; switching itself stays blocked until the machine is back.
+// The chip never leaves the bar. It keeps its account name at every width, it
+// holds the last resolve when the query goes quiet, and with no account ever
+// reported it holds the slot with a dim placeholder that opens the accounts
+// page. A control that disappears is one the reader has to go looking for.
 // Hovering the chip opens the full panel with the real meters: the ACTIVE
 // accounts broken out on top (what's "on" right now), the rest grouped by
 // email below, the auto-switch toggle, and the path to Settings.
@@ -113,10 +117,33 @@ function ProviderSegment({
     <span className="flex items-center gap-1.5" aria-label={title}>
       <StatusDot color={tone} ping={percent != null && percent >= 100} />
       {icon}
-      <span className="tb-squeeze-1 max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
+      <span className="max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
         {label}
       </span>
     </span>
+  );
+}
+
+// The chip before this machine has ever reported an account: same shape, same
+// slot, dim tone, and it still goes somewhere — the accounts page, where a
+// login is added. A held slot tells the reader the control exists and this
+// machine has nothing to show in it; an empty slot tells them nothing.
+function AccountChipEmpty({ onManage }: { onManage: () => void }) {
+  return (
+    <div className="relative hidden md:block">
+      <button
+        type="button"
+        onClick={onManage}
+        title="No accounts reported for this machine yet — open the accounts page"
+        className="flex items-center gap-2 rounded-full border border-sol-border/60 px-2 py-0.5 select-none transition-all duration-300"
+      >
+        <StatusDot color="var(--sol-text-dim)" />
+        <KeyRound className="h-3 w-3 shrink-0 text-sol-text-dim" />
+        <span className="max-w-[88px] truncate font-mono text-[11px] font-bold text-sol-text-dim">
+          accounts
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -161,11 +188,19 @@ export function AccountUsageChip() {
   // also carries remotes and a 7-day offline primary (for Settings); remotes
   // never win, and going quiet must not hide the switcher. Switch itself stays
   // blocked while the machine is offline.
-  const resolved = resolveAccountChip({
+  const liveResolved = resolveAccountChip({
     devices: data?.devices,
     currentAgentType,
     lastShown: lastShownProvider.current,
   });
+  // The switcher is a fixture of the bar, so a gap in the data never takes it
+  // away: a reconnect, a refetch or a backend that can't answer all read as
+  // undefined here, and blanking the chip on any of them is what made the
+  // control look like it comes and goes. Hold the last resolve and keep
+  // rendering it; a switch from stale rows is refused by the machine anyway.
+  const lastResolved = useRef<typeof liveResolved>(null);
+  if (liveResolved) lastResolved.current = liveResolved;
+  const resolved = liveResolved ?? lastResolved.current;
   const device = resolved?.device;
   // Hooks run unconditionally; the placeholder device is never flipped because
   // the panel (and its switches) only render once a real device exists.
@@ -189,7 +224,7 @@ export function AccountUsageChip() {
   const active = resolved?.active;
   const codexProfiles: ProfileRow[] = device?.codex_accounts?.profiles ?? [];
   const activeCodex = resolved?.activeCodex;
-  if (!resolved || !device) return null;
+  if (!resolved || !device) return <AccountChipEmpty onManage={() => router.push("/settings/claude-accounts")} />;
 
   // Time-aware: a window whose reset has passed contributes 0, so a dormant
   // account's old 100% never keeps the chip pegged red.

@@ -24,6 +24,15 @@ import {
 } from "./sessionProcessMatcher.js";
 
 describe("isRecognizedAgentComm", () => {
+  test("recognizes Muse's versioned executable after its launcher execs it", () => {
+    const binary = "/Users/ashot/.local/bin/muse-bin-1.3.0-R3401.1";
+    expect(isRecognizedAgentComm(binary)).toBe(true);
+    expect(agentBinaryFromPsRow("/Users/ashot/.lo", `${binary} resume 01a0b9e4-d00c-7321-8003-742a94210384 --yolo`)).toBe("muse");
+    expect(isResumeInvocation("muse", `${binary} resume 01a0b9e4-d00c-7321-8003-742a94210384`)).toBe(true);
+    expect(isRecognizedAgentComm("muse-bin-helper")).toBe(false);
+    expect(isRecognizedAgentComm("not-muse-bin-1.3.0-R3401.1")).toBe(false);
+  });
+
   // Fixtures are the exact `ps -o comm=` values observed from real tmux sessions
   // on 2026-07-17 (opencode 1.18.3, pi @mariozechner/pi-coding-agent, codex, claude).
 

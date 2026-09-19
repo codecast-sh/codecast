@@ -24,3 +24,25 @@ describe("usage chip hover panel vs titlebar drag", () => {
     expect(panel![1]).toContain("data-flyout");
   });
 });
+
+// The switcher is a fixture of the top bar. It used to go three ways: the
+// name vanished under 1460px (leaving a bare dot), a quiet or failed query
+// blanked the whole chip, and a machine with no reported account rendered
+// nothing at all. Each one read as a control that comes and goes.
+describe("usage chip never leaves the bar", () => {
+  test("the account name carries no width-gated hide", () => {
+    expect(chip).not.toContain("tb-squeeze");
+    expect(css).not.toContain("tb-squeeze");
+  });
+
+  test("a quiet query keeps the last resolve on screen", () => {
+    expect(chip).toContain("if (liveResolved) lastResolved.current = liveResolved;");
+    expect(chip).toContain("const resolved = liveResolved ?? lastResolved.current;");
+  });
+
+  test("an unresolved chip holds its slot instead of returning null", () => {
+    const branch = chip.match(/if \(!resolved \|\| !device\) return ([^;]+);/);
+    expect(branch).toBeTruthy();
+    expect(branch![1]).toContain("AccountChipEmpty");
+  });
+});

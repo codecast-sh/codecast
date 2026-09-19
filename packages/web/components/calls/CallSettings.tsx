@@ -14,7 +14,7 @@ import { useRef } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { Mic, Radio, Video, Volume2, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { rememberCamera, rememberMic } from "../../lib/calls/joinPrefs";
+import { rememberCamera, rememberMic, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
 import { useWalkieDoor } from "../../hooks/useWalkie";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "../settings/ui";
@@ -28,6 +28,7 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
   // Absent means ON — see lib/calls/joinPrefs — so only an explicit false is off.
   const cameraOn = useInboxStore((s) => s.clientState?.ui?.call_camera_on !== false);
   const micOn = useInboxStore((s) => s.clientState?.ui?.call_mic_on !== false);
+  const micAutoOpen = useInboxStore((s) => s.clientState?.ui?.call_mic_auto_open !== false);
   const soundsOn = useInboxStore((s) => s.clientState?.ui?.sounds_enabled !== false);
   const updateUI = useInboxStore((s) => s.updateClientUI);
   const door = useWalkieDoor();
@@ -44,6 +45,25 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
         </SettingsRow>
         <SettingsRow label="Microphone on" description="You are heard from the first word." className={pad}>
           <Switch checked={micOn} onCheckedChange={rememberMic} aria-label="Microphone on when I join" />
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Microphone"
+        icon={Mic}
+        description="When the app may hold your microphone open. Your system's recording light shows whenever it does."
+      >
+        <SettingsRow
+          label="Open before I press"
+          description={
+            micAutoOpen
+              ? "Your mic opens while you rest on a talk button or a teammate's face, so the first word is heard the moment you press. It closes about a minute after you move away."
+              : "Your mic opens only while you hold the talk key, unmute in a call, or press record. The first word of a talk may take a beat longer to reach them."
+          }
+          alignTop
+          className={pad}
+        >
+          <Switch checked={micAutoOpen} onCheckedChange={rememberMicAutoOpen} aria-label="Microphone opens before I press" />
         </SettingsRow>
       </SettingsSection>
 

@@ -10,12 +10,12 @@ import { useConvexSync } from "../../hooks/useConvexSync";
 import {
   NotificationGroupRow,
   NotificationRow,
-  notificationHref,
 } from "../../components/notifications/NotificationRow";
 import { groupIdleNotifications } from "@codecast/shared/contracts";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../components/ui/context-menu";
 import {
+  notificationHref,
   notificationRoute,
   sessionTypes,
   socialTypes,

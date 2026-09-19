@@ -13,35 +13,13 @@ import { ChevronRight } from "lucide-react";
 import {
   agentNames,
   notificationActor,
-  notificationRoute,
   sessionLabel,
   showsAgentIcon,
+  timeAgo,
   typeColors,
   typeLabels,
 } from "../../lib/notificationTypes";
 import { summarizeIdleDigest, type IdleGrouped } from "@codecast/shared/contracts";
-
-/** The URL a notification lands on — for opening it in a new tab, where the
- *  in-app store navigation can't reach. */
-export function notificationHref(n: any): string {
-  if (n.link) return n.link;
-  return (
-    notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ??
-    (n.conversation_id ? `/conversation/${n.conversation_id}` : "/inbox")
-  );
-}
-
-export function timeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString();
-}
 
 export function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; className?: string }) {
   if (agentType === "codex" || agentType === "codex_cli") {
@@ -109,7 +87,9 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
       onClick={() => onOpen(notification)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, notification) : undefined}
       className={`w-full text-left transition-colors hover:bg-sol-bg-alt ${
-        nested ? "pl-12 pr-5 py-3 border-b border-sol-border/30" : "px-5 py-4 border-b border-sol-border/50"
+        nested
+          ? "pl-11 pr-5 py-3 border-b border-sol-border/30 border-l-2 border-l-sol-green/40"
+          : "px-5 py-4 border-b border-sol-border/50"
       } ${!notification.read ? (nested ? "bg-sol-bg-alt/20" : "bg-sol-bg-alt/40") : size === "page" ? "bg-sol-bg" : ""}`}
     >
       <div className="flex items-start gap-3">
@@ -196,7 +176,7 @@ export function NotificationGroupRow({
   const faces = group.rows.slice(0, 4);
 
   return (
-    <div className={!open && group.unread > 0 ? "bg-sol-bg-alt/40" : size === "page" ? "bg-sol-bg" : ""}>
+    <div className={open ? "bg-sol-bg-alt/10" : group.unread > 0 ? "bg-sol-bg-alt/40" : size === "page" ? "bg-sol-bg" : ""}>
       <button
         onClick={onToggle}
         aria-expanded={open}
