@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
-import { act } from "react";
+import { act, useRef } from "react";
 import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -18,7 +18,7 @@ mock.module("../RoutePane", () => ({
 
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { declareViewNav } from "../../store/viewNav";
-import { RevealAncestryCtx, useRevealHost } from "../../lib/revealHost";
+import { RevealAncestryCtx, useRevealRef } from "../../lib/revealHost";
 import { RevealHost } from "../ObjectReveal";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
@@ -50,8 +50,11 @@ beforeEach(() => {
 });
 
 function Pill({ href }: { href: string }) {
-  const host = useRevealHost()!;
-  return <button data-pill onClick={() => host.toggle({ href, title: href })} />;
+  // The same hook the real pill uses: the host value carries only its key now,
+  // and the toggle needs the anchor element it should reattach to.
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const { toggle } = useRevealRef({ href, title: href }, ref);
+  return <button ref={ref} data-pill onClick={() => toggle()} />;
 }
 
 async function mount(ui: React.ReactNode) {
