@@ -1268,6 +1268,10 @@ export default defineSchema({
     // The UTC day a stalled goal notice last went to each reporting person
     // (keyed by user id), so a person hears about a stall once a day at most.
     goal_notices: v.optional(v.record(v.string(), v.string())),
+    // When the hourly sweep first saw each goal in the brief (orgGoals.goalKey
+    // to a time). A role rewrites its brief at every wake, so the brief's own
+    // age says nothing about how long a goal has sat with nothing matched.
+    goal_first_seen: v.optional(v.record(v.string(), v.number())),
     // Standing or program (org-staffing.md S10). A program ends with a plan,
     // a project or a date; when the end comes org.health raises program_ended
     // and the next review proposes what `then` says. Absent = undeclared.

@@ -11,7 +11,7 @@ import { Flag, Plus } from "lucide-react";
 import { INITIATIVE_STATUS_LABEL, type InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useInitiatives, useTasksByProject } from "../../hooks/useInitiatives";
+import { useInitiatives, useBoardTasks } from "../../hooks/useInitiatives";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
@@ -26,7 +26,7 @@ export function InitiativesList() {
   // An owner may be a role: the chips read the org roles, so keep them fed.
   useSyncOrgTreeFeeder();
   const rows = useInitiatives();
-  const byProject = useTasksByProject();
+  const tasks = useBoardTasks();
   const now = useCoarseNow(60_000);
   const phone = useIsPhone();
   const groups = useMemo(() => groupInitiativesByStatus(rows), [rows]);
@@ -65,9 +65,9 @@ export function InitiativesList() {
                 </h2>
                 <div className="rounded-xl border overflow-hidden" style={{ borderColor: HAIRLINE }}>
                   {g.rows.flatMap((r, i) => [
-                    <Row key={r._id} row={r} index={i} now={now} phone={phone} progress={initiativeProgress(r, byProject)} />,
+                    <Row key={r._id} row={r} index={i} now={now} phone={phone} progress={initiativeProgress(r, tasks)} />,
                     ...subInitiatives(rows, r._id).map((sub) => (
-                      <Row key={sub._id} row={sub} index={i} now={now} phone={phone} progress={initiativeProgress(sub, byProject)} nested />
+                      <Row key={sub._id} row={sub} index={i} now={now} phone={phone} progress={initiativeProgress(sub, tasks)} nested />
                     )),
                   ])}
                 </div>

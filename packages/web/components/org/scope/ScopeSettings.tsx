@@ -7,7 +7,10 @@
 import { useMemo, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
-import { TriangleAlert, Hash, MessageSquare, Trash2 } from "lucide-react";
+import { TriangleAlert, Hash, MessageSquare, Trash2, X } from "lucide-react";
+import { describeLimitRecovery, fallbackProfiles, nextPressuredReset, switchUsagePercent } from "@codecast/shared/contracts";
+import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { Avatar } from "../../tasks/TaskCommentStream";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -53,6 +56,70 @@ export function OverlapWarning({ overlaps, projectName, planName }: { overlaps: 
   );
 }
 
+type SeatMachine = { device_id: string; label?: string; platform?: string; is_remote: boolean };
+
+/** The seat's account is parked on a usage limit (R7): what codecast does
+ *  about it on that machine, in the sentence `cast usage` prints there, and
+ *  what a person can do. The roster carries only the viewer's machines, so a
+ *  seat on someone else's machine gets the general sentence. */
+function SeatLimitNote({ standingId, deviceId, machineLabel }: { standingId: string; deviceId: string | null; machineLabel: string }) {
+  const now = useCoarseNow(30_000);
+  const { data } = useQueryNoThrow(api.accountSwitch.listAccountProfiles, {});
+  const device = deviceId ? (data?.devices ?? []).find((d: any) => d.device_id === deviceId) : undefined;
+  const what = device
+    ? describeLimitRecovery({
+        now,
+        next_reset: nextPressuredReset(device.profiles.find((p: any) => p.email && p.email === device.active_email)?.usage, now),
+        fallbacks: fallbackProfiles(device.profiles, device.active_email, now).map((p: any) => ({ name: p.name, worst: switchUsagePercent(p.usage, now) })),
+        recovery: { auto_switch: device.auto_switch, auto_continue: device.auto_continue, mode: device.ask_first ? "ask" : undefined },
+      })
+    : "On a limit: codecast switches the machine to a saved account with headroom when it may, or continues the session when the window resets.";
+  return (
+    <p className="mt-3 rounded-lg border px-3 py-2 text-[12px] leading-relaxed" style={{ borderColor: "color-mix(in srgb, var(--sol-yellow) 40%, transparent)", background: "color-mix(in srgb, var(--sol-yellow) 7%, transparent)", color: "var(--sol-text-secondary)" }} data-seat-limit>
+      The account this seat runs on has reached a usage limit, so the role does not wake until it continues. {what} You can also <Link href={`/conversation/${standingId}`} className="underline" style={{ color: "var(--sol-text)" }}>open the session</Link> and move it to another machine from the chip in its header, or add an account on {machineLabel} with <code style={{ fontFamily: "var(--font-mono)" }}>cast accounts save &lt;name&gt;</code>.
+    </p>
+  );
+}
+
+/** Who reports to the role (R6): the people whose goals it keeps. A person
+ *  adds or removes themself; an admin of the role anyone in the workspace.
+ *  The list is a role field, so the edit paints in this tick and rides
+ *  updateOrgRole's dispatch to orgRoles.setReports. */
+function ReportingPeople({ tree, role, canEdit, onUpdate }: { tree: OrgTree; role: OrgRole; canEdit: boolean; onUpdate: (fields: OrgUpdateRoleInput) => void }) {
+  const ids = role.reports_user_ids ?? [];
+  const me = tree.people.find((p) => p.is_me);
+  const people = ids.map((id) => tree.people.find((p) => p.user_id === id)).filter((p): p is OrgTree["people"][number] => !!p);
+  const addable = canEdit ? tree.people.filter((p) => !ids.includes(p.user_id)) : [];
+  const set = (next: string[]) => onUpdate({ reports_user_ids: next });
+  return (
+    <Section title="People who report to it" hint="The role keeps each person's three to five goals in its brief, reads their sessions against those goals at every wake, and tells them when a high priority goal stalls. It gives the role no say over their work.">
+      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Nobody reports to it yet.</p>}
+      <ul className="flex flex-wrap gap-1.5" data-reporting-people={people.length}>
+        {people.map((p) => (
+          <li key={p.user_id} className="inline-flex items-center gap-1.5 h-7 pl-1 pr-1.5 rounded-full border text-[12px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text)" }}>
+            <Avatar name={p.name} image={p.image} size="sm" />{p.name}
+            {(canEdit || p.is_me) && (
+              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`${p.name} no longer reports to it`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+        {me && !ids.includes(me.user_id) && (
+          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Report to @{role.handle}</button>
+        )}
+        {addable.filter((p) => !p.is_me).length > 0 && (
+          <SelectBox value="" onChange={(e) => { if (e.target.value) set([...ids, e.target.value]); }} className="text-[12px]" aria-label="Add a person">
+            <option value="">Add a person</option>
+            {addable.filter((p) => !p.is_me).map((p) => <option key={p.user_id} value={p.user_id}>{p.name}</option>)}
+          </SelectBox>
+        )}
+        <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>cast role reports @{role.handle} --add me</span>
+      </div>
+    </Section>
+  );
+}
+
 export type ScopeSettingsProps = {
   tree: OrgTree;
   role: OrgRole;
@@ -60,6 +127,8 @@ export type ScopeSettingsProps = {
   overlaps: ScopeOverlap[];
   hostName: string;
   model: string | null;
+  /** The standing session, for the machine it runs on and a limit park. */
+  standingId: string | null;
   /** Today's counters, already checked against the UTC day by the header. */
   counters: RoleCounters | null;
   /** The header's Retire lands here with the confirmation open. */
@@ -71,7 +140,7 @@ export type ScopeSettingsProps = {
   onRetire: (standingSession?: "keep" | "retire") => void;
 };
 
-export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, counters, armRetire, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
+export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, armRetire, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
   const [confirmRetire, setConfirmRetire] = useState(!!armRetire);
   // Keeping the standing agent is the default (S16).
   useWatchEffect(() => { if (armRetire) setConfirmRetire(true); }, [armRetire]);
@@ -99,6 +168,16 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const orgIntents = useInboxStore((s) => ((s as any).orgIntents ?? NO_INTENTS) as OrgIntent[]);
   const echoedIds = useMemo(() => lineIntentEchoed(orgIntents, role._id, lineRow?.line_workflow_slug).map((i) => i.id).join(","), [orgIntents, role._id, lineRow?.line_workflow_slug]);
   useWatchEffect(() => { for (const id of echoedIds.split(",")) if (id) dropOrgIntent(id); }, [echoedIds]);
+
+  // Where the seat runs (org-roles-run-work.md R7): the standing session's
+  // machine. Enrichment, so the tab still says the host without it.
+  const machine = useQueryNoThrow(api.devices.getConversationMachine, standingId ? { conversation_id: standingId } : "skip").data as SeatMachine | null | undefined;
+  // A boolean out of the selector: the standing session heartbeats every
+  // second, and only a change of this answer may re-render the tab.
+  const limitParked = useInboxStore((s) => {
+    const row = standingId ? (s.sessions[standingId] as any) : undefined;
+    return row?.pending_api_error === true && row?.pending_api_error_kind === "limit";
+  });
 
   const projectName = (id: string) => role.scope_names.projects.find((p) => p.id === id)?.title ?? "a project";
   const planName = (id: string) => role.scope_names.plans.find((p) => p.id === id)?.short_id ?? "a plan";
@@ -166,6 +245,8 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </div>
       </Section>
 
+      <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
+
       <Section title="Trust" hint="What the role may do on its own. Each step is a person's decision and is logged on the charter.">
         <div className="grid sm:grid-cols-3 gap-2">
           {TRUST_STAGES.map((stage, i) => {
@@ -218,12 +299,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         )}
       </Section>
 
-      <Section title="Host and model" hint="The person whose machine runs the standing session, and the model it runs. Change the model from the session's own model picker.">
+      <Section title="Where it runs" hint="The person whose machine runs the standing session, the machine, and the model. Change the model from the session's own model picker.">
         <dl className="grid grid-cols-[110px_1fr] gap-y-1.5 text-[12.5px]">
           <dt style={{ color: "var(--sol-text-dim)" }}>host</dt><dd style={{ color: "var(--sol-text)" }}>{hostName}</dd>
+          <dt style={{ color: "var(--sol-text-dim)" }}>machine</dt><dd style={{ color: "var(--sol-text)" }} data-seat-machine>{machine ? `${machine.label || "an unnamed machine"}${machine.is_remote ? " (remote)" : ""}` : standingId ? "not reported yet" : "no standing session"}</dd>
           <dt style={{ color: "var(--sol-text-dim)" }}>model</dt><dd style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{model ?? (role.anchor_id ? "not reported yet" : "no standing session")}</dd>
           <dt style={{ color: "var(--sol-text-dim)" }}>reviews on</dt><dd style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{role.review_backend ?? "default"}</dd>
         </dl>
+        {limitParked && standingId && <SeatLimitNote standingId={standingId} deviceId={machine?.device_id ?? null} machineLabel={machine?.label || "its machine"} />}
       </Section>
 
       {/* S16: seating this role fresh retired the workspace's previous standing

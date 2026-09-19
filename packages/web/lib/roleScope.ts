@@ -11,8 +11,11 @@
 // derived at build time from the live rows (open tasks for a project, a plan's
 // progress, the tasks a role owns), never read off a stored twin, so an
 // optimistic edit moves the numbers in the same tick (CLAUDE.md, derived
-// fields). Pure: no React, no store.
+// fields). A project's counts follow the ONE rule every surface uses
+// (shared/tasks isOnProjectBoard, projectTaskCounts): the rows its board
+// would show, under the project the task itself names. Pure: no React, no store.
 import type { WorkState } from "@codecast/shared/contracts";
+import { isOnProjectBoard } from "@codecast/shared/tasks";
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { computePlanProgress } from "./liveEntities";
@@ -96,7 +99,7 @@ export function sourceFromCard(card: RoleCardAnswer): RoleScopeSource {
 
 type ProjectRow = { _id: string; title: string; short_id?: string; status?: string; owner_role_id?: string };
 type PlanRow = { _id: string; title: string; short_id?: string; status: string; project_id?: string | null };
-type TaskRow = { _id: string; status?: string; project_id?: string | null; plan_id?: string | null; assignee?: string | null };
+type TaskRow = { _id: string; status?: string; project_id?: string | null; plan_id?: string | null; assignee?: string | null; source?: string | null; promoted?: boolean | null; triage_status?: string | null };
 
 /** A session that reports to the role, and the task it is bound to, if any. */
 type SessionRow = { state: WorkState; task_id: string | null };
@@ -133,7 +136,6 @@ export type RoleScopeModel = {
 };
 
 const CLOSED = new Set(["done", "dropped"]);
-const isOpenTask = (t: TaskRow) => !CLOSED.has(t.status ?? "open");
 
 /** The order a role's own tasks read in: what moves first, then what waits. */
 const OWNED_ORDER: [string, string][] = [["in_progress", "in progress"], ["in_review", "in review"], ["open", "open"], ["backlog", "backlog"], ["done", "done"]];
@@ -177,20 +179,21 @@ export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, tod
   const projectRefs = source.whole ? rows.projects.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id })) : source.projects;
   const inScope = new Set(projectRefs.map((p) => p.id));
 
-  // A task with no project of its own counts under its plan's project, so a
-  // plan filed under a project brings its work with it in the same tick.
-  const projectOfTask = (t: TaskRow): string | null => t.project_id ?? (t.plan_id ? planById.get(t.plan_id)?.project_id ?? null : null);
+  // A task counts under the project it names, and only when the project's
+  // board would show it: the same rule as projectTaskCounts, in one pass.
   const openBy = new Map<string, number>();
   const doneBy = new Map<string, number>();
   const byPlan = new Map<string, TaskRow[]>();
   const ownedCounts = new Map<string, number>();
   const taskProject = new Map<string, string>();
   for (const t of rows.tasks) {
-    const pid = projectOfTask(t);
+    const pid = t.project_id ?? null;
     if (pid) {
       taskProject.set(t._id, pid);
-      if (isOpenTask(t)) openBy.set(pid, (openBy.get(pid) ?? 0) + 1);
-      else if (t.status === "done") doneBy.set(pid, (doneBy.get(pid) ?? 0) + 1);
+      if (isOnProjectBoard(t)) {
+        if (t.status === "done") doneBy.set(pid, (doneBy.get(pid) ?? 0) + 1);
+        else openBy.set(pid, (openBy.get(pid) ?? 0) + 1);
+      }
     }
     if (t.plan_id) { const list = byPlan.get(t.plan_id); if (list) list.push(t); else byPlan.set(t.plan_id, [t]); }
     if (source.role_id && t.assignee === source.role_id) ownedCounts.set(t.status ?? "open", (ownedCounts.get(t.status ?? "open") ?? 0) + 1);

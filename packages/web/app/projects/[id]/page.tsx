@@ -429,12 +429,10 @@ function ProjectDetailContent() {
               <Pencil className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 transition-opacity" />
             </h1>
           )}
+          {!editingTitle && <ProjectLeadChip projectId={project._id} editable />}
         </div>
 
-        <div className="flex items-center gap-3 flex-wrap">
-          <RepositoryLinks projectId={project._id} />
-          <ProjectLeadChip projectId={project._id} editable />
-        </div>
+        <RepositoryLinks projectId={project._id} />
 
         {/* The goals this project carries (initiatives-projects-role-page.md
             I1), under its lead. Nothing renders when it is in none. */}

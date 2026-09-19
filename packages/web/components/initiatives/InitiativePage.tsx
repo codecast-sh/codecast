@@ -13,19 +13,21 @@
 // the side effect of its own name.
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarDays, Flag, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { INITIATIVE_STATUSES, INITIATIVE_STATUS_LABEL, type InitiativeOwner, type InitiativeRow, type InitiativeStatus } from "@codecast/shared/contracts/initiative";
 import { InboxConversation } from "../../app/inbox/QueuePageClient";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useInitiative, useSyncInitiativeUpdates, useTasksByProject } from "../../hooks/useInitiatives";
+import { useInitiative, useSyncInitiativeUpdates, useBoardTasks } from "../../hooks/useInitiatives";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useSyncPlans } from "../../hooks/useSyncPlans";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
-import { initiativeProgress, ownerId, ownerSeat, progressPercent } from "../../lib/initiatives";
+import { initiativeHref, initiativeProgress, ownerId, ownerSeat, progressPercent } from "../../lib/initiatives";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { canEditRole } from "../../lib/scopePage";
 import { cn } from "../../lib/utils";
 import { EntityIdPill } from "../EntityIdPill";
@@ -50,7 +52,7 @@ export function InitiativePageInner({ id }: { id: string }) {
   useSyncInitiativeUpdates(initiative?._id ?? null);
   const { layout, phone } = usePanelLayout();
   const now = useCoarseNow(30_000);
-  const byProject = useTasksByProject();
+  const tasks = useBoardTasks();
   const me = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = me.currentUser?._id ? String(me.currentUser._id) : null;
 
@@ -65,7 +67,13 @@ export function InitiativePageInner({ id }: { id: string }) {
   const session = conversationId ? (st.sessions[conversationId] as any) : undefined;
 
   const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone);
-  const progress = initiative ? initiativeProgress(initiative, byProject) : null;
+  // A page opened by a stub's key moves to the `in-N` the server minted, so
+  // the address a person copies is the one that lasts.
+  const router = useRouter();
+  useWatchEffect(() => {
+    if (initiative?.short_id && id !== initiative.short_id) router.replace(initiativeHref(initiative));
+  }, [initiative?.short_id, id]);
+  const progress = initiative ? initiativeProgress(initiative, tasks) : null;
 
   // Talk follows the seat's own rule: a role's host, its parent or an admin;
   // a person's anchor is theirs alone. Anyone else reads and asks to send.

@@ -58,7 +58,7 @@ mock.module("../FleetBoard", () => ({ FleetBoard: () => <div data-fleet />, Inbo
 mock.module("../ActivityFeed", () => ({ ActivityFeed: () => <div data-feed /> }));
 mock.module("../EmptyState", () => ({ EmptyState: () => null }));
 mock.module("../SharePopover", () => ({ SharePopover: () => <button data-share>Share</button> }));
-mock.module("../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null }));
+mock.module("../SessionErrorBanner", () => ({ SessionErrorBanner: () => <div data-error-banner />, SessionResumeBanner: () => null }));
 mock.module("../PlanContextPanel", () => ({ PlanContextPanel: () => null }));
 mock.module("../WorkflowContextPanel", () => ({ WorkflowContextPanel: () => null }));
 mock.module("../TriggerContextPanel", () => ({ TriggerContextPanel: () => <div data-trigger-panel /> }));
@@ -112,7 +112,7 @@ const { createRoot } = await import("react-dom/client");
 
 const roleSnapshot = { _id: ROLE, name: "Chief of Staff", handle: "chief-of-staff", avatar: null };
 const row = (id: string, extra: Record<string, unknown>) => ({ _id: id, title: id, started_at: 1, updated_at: Date.now(), message_count: 3, is_idle: true, agent_type: "claude_code", ...extra });
-const seed = () => useInboxStore.setState({
+const seed = (rows: Record<string, Record<string, unknown>> = {}) => useInboxStore.setState({
   clientStateInitialized: true,
   showMySessions: false,
   orgTree: { roles: [{ _id: ROLE, short_id: "or-10", name: "Chief of Staff", handle: "chief-of-staff", status: "active" }] } as any,
@@ -120,14 +120,15 @@ const seed = () => useInboxStore.setState({
     [SEAT]: row(SEAT, { standing_role_id: ROLE, role: roleSnapshot }),
     [HAND]: row(HAND, { org_role_id: ROLE, role: roleSnapshot }),
     [STRAY]: row(STRAY, { standing_role_id: "role-elsewhere", role: { ...roleSnapshot, _id: "role-elsewhere" } }),
+    ...rows,
   } as any,
 });
 
 let root = createRoot(document.getElementById("root")!);
-const mount = async (qs = "") => {
+const mount = async (qs = "", rows: Record<string, Record<string, unknown>> = {}) => {
   await act(async () => root.unmount());
   env.qs = qs;
-  seed();
+  seed(rows);
   root = createRoot(document.getElementById("root")!);
   await act(async () => root.render(<queuePage.QueuePageClient />));
 };
@@ -221,18 +222,35 @@ test("the seat keeps the session header and every slot, resting on one row", asy
   expect(layout.getAttribute("data-hide-header")).toBe("0");
   expect(layout.getAttribute("data-density")).toBe("condensed");
   expect(q("[data-sv-convhead] [data-share]")).not.toBeNull();
-  expect(q("[data-trigger-panel]")).not.toBeNull();
   expect(q("[data-seat-label]")).not.toBeNull();
   expect(q("[data-lead]")).not.toBeNull();
+  // At rest the routine line waits behind the expander, not above the first message.
+  expect(q("[data-trigger-panel]")).toBeNull();
 
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("rest");
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("open");
-  // The label leaves the DOM, which is what makes the row's squeeze measure again.
+  expect(q("[data-trigger-panel]")).not.toBeNull();
+  // The state slot leaves the DOM, which is what makes the row's squeeze measure again.
   expect(q("[data-seat-label]")).toBeNull();
   expect(q("[data-seat-head-toggle]")?.getAttribute("aria-expanded")).toBe("true");
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("rest");
+}, 600_000);
+
+test("a stall replaces the state word at rest; the banner waits behind the expander", async () => {
+  // The stall arrives with the row, as it does from the sync.
+  await mount("", { [SEAT]: row(SEAT, { standing_role_id: ROLE, role: roleSnapshot, session_error: "the agent died" }) });
+  await go((s) => { s.navigateToSession(HAND); s.navigateToSession(SEAT); s.setShowMySessions(false); });
+  expectRolePage();
+  expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(true);
+  expect(q("[data-seat-stall]")?.textContent).toContain("Session error");
+  expect(q("[data-seat-stall-action]")?.textContent).toBe("Resume");
+  expect(q("[data-error-banner]")).toBeNull();
+
+  await click("[data-seat-head-toggle]");
+  expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(false);
+  expect(q("[data-error-banner]")).not.toBeNull();
 }, 600_000);
 
 // The fold is CSS over the real header, so no action is rebuilt and none can

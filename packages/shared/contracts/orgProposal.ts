@@ -225,7 +225,12 @@ export function orgChangeError(raw: any): string | null {
         const h = handle(); if (h) return h;
         if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
         if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
-        if (raw.seat !== undefined) { const s = orgRoleSeatError(raw.seat); if (s) return s; }
+        if (raw.seat !== undefined) {
+          const s = orgRoleSeatError(raw.seat); if (s) return s;
+          // The card promises naming changes nothing about how the session
+          // works, and who it answers to is part of that: a move is its own change.
+          if (typeof raw.reports_to === "string" && raw.reports_to.trim().startsWith("@")) return "a role that names its session keeps the session's reporting line (the person who runs it); to put it under a role, add a separate move change";
+        }
       }
       if (raw.kind === "projects") {
         const bad = raw.changes.find((c: any) => c.op === "create" && c.horizon !== undefined && !(ORG_PROJECT_HORIZONS as readonly string[]).includes(c.horizon));
@@ -552,6 +557,7 @@ function askWords(names?: OrgAskNames) {
       case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
       case "trust": return c.trust === "understand" ? " It reads and reports, and does not act on its own." : c.trust === "decide" ? " It may decide on its own." : " It may direct work on its own.";
       case "adopt": return ` The session ${c.conversation} becomes it.`;
+      case "move": return c.reports_to ? ` A separate change puts it under ${parent(c.reports_to)}; skip that and it keeps reporting to whoever runs it today.` : "";
       default: return "";
     }
   };
@@ -605,8 +611,11 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const words = askWords(names);
   const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
   const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
-  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "move" || c.change.kind === "scope");
-  const created = new Map<string, AskRow>(own.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  const created = new Map<string, AskRow>(live.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  // A move of a role this proposal creates rides in that role's ask (a named
+  // session put under an existing role, R2), so the person can accept the
+  // name and skip the move from one card; any other move is its own ask.
+  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "scope" || (c.change.kind === "move" && !created.has(askHandle(c.change) ?? "")));
   const riders = new Map<AskRow, AskRow[]>();
   const rest: AskRow[] = [];
   for (const c of live) {

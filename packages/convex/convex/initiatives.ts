@@ -15,7 +15,6 @@ import { PRIORITIES, resolveOwnerRole } from "./lib/orgCharter";
 import { performCoverProjects, type CoverProjectsResult } from "./orgRoles";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import {
-  canAccessTask,
   requireAccessibleProject,
   requireSameWorkspace,
   resolveSessionConversation,
@@ -23,6 +22,7 @@ import {
   workspaceGrantsAccess,
 } from "./lib/access";
 import { findInitiative, requireInitiative } from "./lib/initiativeRef";
+import { projectProgress } from "./lib/projectWork";
 
 // Initiatives (docs/architecture/initiatives-projects-role-page.md I1): a goal
 // the company is trying to reach, carried by an intentional set of projects,
@@ -432,16 +432,8 @@ async function projectSummaries(ctx: Ctx, userId: Id<"users">, initiative: any) 
   for (const id of initiative.project_ids) {
     const project = await ctx.db.get(id);
     if (!project) continue;
-    const tasks = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", id)).collect();
-    let total = 0;
-    let done = 0;
-    for (const task of tasks) {
-      if (!(await canAccessTask(ctx, userId, task))) continue;
-      total++;
-      if (task.status === "done") done++;
-    }
     const lead = project.owner_role_id ? await ctx.db.get(project.owner_role_id) : null;
-    out.push({ _id: project._id, title: project.title, status: project.status, lead: lead ? `@${lead.handle}` : undefined, task_counts: { total, done } });
+    out.push({ _id: project._id, title: project.title, status: project.status, lead: lead ? `@${lead.handle}` : undefined, task_counts: await projectProgress(ctx, userId, id) });
   }
   return out;
 }
@@ -452,7 +444,12 @@ async function forTerminal(ctx: Ctx, userId: Id<"users">, initiative: any) {
     ...initiative,
     owner_label: await ownerLabel(ctx, initiative.owner),
     projects,
-    task_counts: projects.reduce((sum, p) => ({ total: sum.total + p.task_counts.total, done: sum.done + p.task_counts.done }), { total: 0, done: 0 }),
+    task_counts: projects.reduce((sum, p) => ({
+      total: sum.total + p.task_counts.total,
+      done: sum.done + p.task_counts.done,
+      in_progress: sum.in_progress + p.task_counts.in_progress,
+      open: sum.open + p.task_counts.open,
+    }), { total: 0, done: 0, in_progress: 0, open: 0 }),
   };
 }
 

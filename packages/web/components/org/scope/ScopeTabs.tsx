@@ -31,6 +31,7 @@ import { ORG_STATE_META } from "../orgMeta";
 import { ORG_TOP_N, sortOrgSessions, type OrgRole, type OrgSession, type OrgTree } from "../orgTypes";
 import { boundTaskOf, groupHands, subtaskCounts } from "../../../lib/scopePage";
 import type { BriefFacts, BriefHand } from "./scopeTypes";
+import { PersonGoals } from "./PersonGoals";
 import { inScope, useScopeIds, type ScopeIds } from "../../../hooks/useScopeIds";
 import { decisionHref } from "../../../lib/decisionLinks";
 
@@ -397,7 +398,7 @@ function Fact({ label, value, sub, tone }: { label: string; value: React.ReactNo
 
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
-export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
+export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; roleHandle: string }) {
   const u = facts.usage;
   const now = useCoarseNow(30_000);
   const openLinked = useOpenLinkedSession();
@@ -429,6 +430,14 @@ export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
           </ul>
         </section>
       )}
+      {/* The people who report to the role (R6): each one's goals from the
+          narrative below, read against the live rows. */}
+      {(facts.people ?? []).map((person) => (
+        <section key={person.user_id} data-brief-person={person.user_id}>
+          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Goals: {person.name}</h3>
+          <PersonGoals person={person} roleHandle={roleHandle} now={now} own={false} />
+        </section>
+      ))}
       {facts.changed.length > 0 && (
         <section>
           <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Moved lately</h3>
@@ -450,7 +459,7 @@ export function BriefFactsBlock({ facts }: { facts: BriefFacts }) {
 export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, backHref }: { role: OrgRole; facts: BriefFacts | null; factsProblem: string | null; narrative: string; canEdit: boolean; backHref: string }) {
   return (
     <div className="space-y-5">
-      {facts ? <BriefFactsBlock facts={facts} /> : (
+      {facts ? <BriefFactsBlock facts={facts} roleHandle={role.handle} /> : (
         <p className="px-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>{factsProblem ?? "Facts load when the connection returns."}</p>
       )}
       <section>

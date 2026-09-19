@@ -5,13 +5,13 @@
 import { Flag } from "lucide-react";
 import { INITIATIVE_STATUS_LABEL, type InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useTasksByProject } from "../../hooks/useInitiatives";
+import { useBoardTasks } from "../../hooks/useInitiatives";
 import { initiativeProgress } from "../../lib/initiatives";
 import { HealthChip, INITIATIVE_ACCENT, OwnerChip, ProgressBar, TargetDate } from "./InitiativeAtoms";
 
 export function InitiativeHoverContent({ initiative }: { initiative: InitiativeRow }) {
   const now = useCoarseNow(60_000);
-  const progress = initiativeProgress(initiative, useTasksByProject());
+  const progress = initiativeProgress(initiative, useBoardTasks());
   const projects = initiative.project_ids.length;
   return (
     <div className="space-y-2" data-initiative-hover={initiative.short_id}>

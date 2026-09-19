@@ -36,18 +36,12 @@ import { useSeedOwnership } from "../../components/anchor/AnchorConversation";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { sessionViewAsked, settleSessionViewAsk } from "../../lib/sessionViewVisit";
-import { SeatHeadControls, SeatHeadLabel, RolePageControl } from "../../components/org/scope/SeatHead";
+import { SeatHeadControls, SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
 // the two modules out of a static cycle: the role page mounts InboxConversation.
 const ScopePageInner = lazy(() => import("../../components/org/scope/ScopePage").then((m) => ({ default: m.ScopePageInner })));
-
-// One element, so the memoized conversation view keeps its props. It mounts
-// and unmounts with the fold: that is a DOM change inside the header's row,
-// which is what makes the row's squeeze (useSqueezeToFit) measure again. A
-// fold done in CSS alone would leave the level measured for the other state.
-const SEAT_HEAD_LABEL = <SeatHeadLabel />;
 
 /** What the role page asks of the pane when the session is a role's standing
  *  session (initiatives-projects-role-page.md I3). The pane stays the session
@@ -159,8 +153,24 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     () => (seat && !targetMessageId ? windowConversationSince(conversation as WindowedConversation | null, bootstrapCut(conversation as WindowedConversation | null)) : null),
     [seat, targetMessageId, conversation],
   );
-  // The seat's session header rests on one row and opens on demand (I3).
+  // The seat's session header rests on one row and opens on demand (I3):
+  // at rest the one state word that is true, Session view and the expander.
+  // A stall replaces the state word instead of stacking a banner above it,
+  // and the context panels (a routine, a plan) wait behind the expander.
   const [headOpen, setHeadOpen] = useState(false);
+  const stallWord = !seat || !isOwnSession ? null
+    : resumeState === "resuming" || resumeState === "sent" ? "Resuming…"
+    : resumeState === "failed" ? "Resume timed out"
+    : sessionError ? "Session error"
+    : looksAbandoned ? "Unresponsive"
+    : null;
+  const stallAction = stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" || stallWord === "Unresponsive" ? "Resume" : null;
+  const seatHeadState = useMemo(() => {
+    if (!seat || headOpen) return undefined;
+    const stall: SeatStall = stallWord ? { word: stallWord, ...(stallAction ? { action: { label: stallAction, onClick: handleManualResume } } : {}) } : null;
+    return <SeatHeadState stall={stall} />;
+  }, [seat, headOpen, stallWord, stallAction, handleManualResume]);
+  const chromeShown = !seat || headOpen;
   const onSessionView = seat?.onSessionView;
   const seatHeaderEnd = useMemo(
     () => (onSessionView ? <SeatHeadControls open={headOpen} onToggle={() => setHeadOpen((v) => !v)} onSessionView={onSessionView} /> : null),
@@ -212,15 +222,15 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   }
 
   return (
-    <div className="relative h-full flex flex-col" data-seat-head={seat ? (headOpen ? "open" : "rest") : undefined}>
-      {isOwnSession && (
+    <div className="relative h-full flex flex-col" data-seat-head={seat ? (headOpen ? "open" : "rest") : undefined} data-seat-stall={seat && !headOpen && stallWord ? "" : undefined}>
+      {isOwnSession && chromeShown && (
         <SessionResumeBanner
           resumeState={resumeState}
           looksAbandoned={looksAbandoned && !sessionError}
           onResume={handleManualResume}
         />
       )}
-      {isOwnSession && sessionError && resumeState === "idle" && (
+      {isOwnSession && chromeShown && sessionError && resumeState === "idle" && (
         <SessionErrorBanner
           // Remount per session: the dismiss state is keyed by error TEXT, and
           // two sessions can fail with the identical message.
@@ -236,7 +246,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           conversation={(shown?.conversation ?? conversation) as ConversationData}
           embedded
           {...seat?.layout}
-          headerLeft={seat && !headOpen ? SEAT_HEAD_LABEL : undefined}
+          headerLeft={seatHeadState}
           headerEnd={seat ? seatHeaderEnd : headerEnd}
           headerExtra={shareControls}
           hasMoreAbove={hasMoreAbove && !shown?.reachedStart}
@@ -260,7 +270,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
           fallbackStickyContent={isOwnSession ? lastUserMessage : undefined}
-          subHeaderContent={subHeaderContent}
+          subHeaderContent={chromeShown ? subHeaderContent : undefined}
         />
       </div>
     </div>
