@@ -188,7 +188,10 @@ describe("walkie key: ring under the key", () => {
 
 describe("chat header: one voice control per room", () => {
   const page = readFileSync(new URL("../../app/chat/page.tsx", import.meta.url), "utf8");
-  const header = page.slice(page.indexOf('className="ch-head"'), page.indexOf("</header>"));
+  // The chat header, not the first </header> in the file: the page grew an
+  // earlier header, and an unanchored end made this slice empty.
+  const headStart = page.indexOf('className="ch-head"');
+  const header = page.slice(headStart, page.indexOf("</header>", headStart));
 
   test("the DM key carries the ring, and the huddle button is a channel's alone", () => {
     expect(header).toMatch(/<WalkiePttButton[\s\S]*?ring=\{\{ toUserIds: activeChannel\.dmMemberIds/);
