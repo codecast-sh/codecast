@@ -37,6 +37,16 @@ function deferred<T>(): Deferred<T> {
 }
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 const flush = async (ms = 20) => { await act(async () => { await tick(ms); }); };
+/**
+ * Flush until a condition holds, rather than for a fixed span. The rekey and
+ * the upload settle on their own promises, so a runner slower than this laptop
+ * made a fixed wait read the store before the work landed.
+ */
+const flushUntil = async (ready: () => boolean, budgetMs = 3_000) => {
+  const deadline = Date.now() + budgetMs;
+  while (!ready() && Date.now() < deadline) await flush(20);
+  return ready();
+};
 
 // A Convex client whose network is the test's: mutations answer at once,
 // queries never (the composer's live queries stay loading), the storage POST
@@ -178,7 +188,7 @@ async function runScenario(order: "create-first" | "upload-first", opts: { failU
 
   if (order === "create-first") {
     createGate.resolve();
-    await flush(50);
+    await flushUntil(() => !!useInboxStore.getState().pendingMessages[REAL_ID]?.[0]);
     // Rekeyed to the real id, still unsent (image still uploading).
     expect(useInboxStore.getState().pendingMessages[REAL_ID]?.[0]?.images?.[0]).toMatchObject({ uploading: true });
     expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(0);
@@ -186,7 +196,7 @@ async function runScenario(order: "create-first" | "upload-first", opts: { failU
     await flush(opts.failUploadsFirst ? 1500 * opts.failUploadsFirst + 200 : 100);
   } else {
     uploadGate.resolve();
-    await flush(50);
+    await flushUntil(() => !!(useInboxStore.getState().pendingMessages[stubId]?.[0]?.images?.[0] as { storage_id?: string } | undefined)?.storage_id);
     // Upload landed on the row, but the create is still in flight: no send yet.
     expect(useInboxStore.getState().pendingMessages[stubId]?.[0]?.images).toEqual([{ media_type: "image/png", storage_id: STORAGE_ID }]);
     expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(0);
