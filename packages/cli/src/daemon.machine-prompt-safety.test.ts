@@ -8,7 +8,7 @@ import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
-import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
+import { clientAcceptsBracketedPaste, composerCollapsesPasteToChip, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 
@@ -149,6 +149,13 @@ function fixture(transport = "tmux", cached = true) {
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
     CLAUDE_TURN_STATUS_LINE: /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\((?:\d+m\s*)?\d+s\b/m,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
+    // Free variables of the lifted delivery path. The real helper where it is
+    // importable; for the two that live in daemon.ts, the answer this fixture's
+    // world gives: no transcript is on disk, and these panes are not Grok.
+    deliveryStep: async <T>(_messageId: string, _step: string, run: () => Promise<T>): Promise<T> => run(),
+    composerCollapsesPasteToChip,
+    awaitRecentSessionFile: async () => null,
+    isGrokTrustDialog: () => false,
     tmuxTargetLocks: new Map(), TMUX_LOCK_WAIT_MS: 60000, hibernationInFlight: new Map(),
     Date: class extends Date {
       static now() { step(); return clock.now; }
