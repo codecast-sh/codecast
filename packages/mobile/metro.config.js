@@ -42,28 +42,34 @@ const singletonPackages = ['react', 'react-native', 'react-dom'];
 // it. The rule is computed, not listed: a new dependency is covered the day it
 // is installed. Transitive packages follow, because only the app's copy of
 // their parent is ever on the graph.
-const appSingletonCache = new Map();
+// The origin a package must resolve from, or null to leave it alone: the app
+// root for what package.json names, the app's own `expo` install for what expo
+// provides (expo-asset, expo-modules-core, expo-file-system arrive through
+// several parents, each with its own copy).
+const appOrigin = path.join(projectRoot, 'index.ts');
+const expoRoot = fs.realpathSync(path.join(mobileModules, 'expo'));
+const expoOrigin = path.join(expoRoot, 'package.json');
+const expoSiblings = path.dirname(expoRoot);
+const singletonOriginCache = new Map();
 function packageNameOf(moduleName) {
   if (moduleName.startsWith('.') || path.isAbsolute(moduleName)) return null;
   const parts = moduleName.split('/');
   return moduleName.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
 }
-function isAppSingleton(moduleName) {
+function singletonOrigin(moduleName) {
   const name = packageNameOf(moduleName);
-  if (!name || singletonPackages.includes(name)) return false;
-  if (!appSingletonCache.has(name)) {
-    appSingletonCache.set(name, fs.existsSync(path.join(mobileModules, name, 'package.json')));
+  if (!name || singletonPackages.includes(name)) return null;
+  if (!singletonOriginCache.has(name)) {
+    const has = dir => fs.existsSync(path.join(dir, name, 'package.json'));
+    singletonOriginCache.set(name, has(mobileModules) ? appOrigin : has(expoSiblings) ? expoOrigin : null);
   }
-  return appSingletonCache.get(name);
+  return singletonOriginCache.get(name);
 }
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (isAppSingleton(moduleName)) {
-    return context.resolveRequest(
-      { ...context, originModulePath: path.join(projectRoot, 'index.ts') },
-      moduleName,
-      platform,
-    );
+  const origin = singletonOrigin(moduleName);
+  if (origin) {
+    return context.resolveRequest({ ...context, originModulePath: origin }, moduleName, platform);
   }
   const isSingleton = singletonPackages.some(
     pkg => moduleName === pkg || moduleName.startsWith(pkg + '/')
