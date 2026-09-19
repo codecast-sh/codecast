@@ -14,6 +14,8 @@
  * environment injects what differs per platform: the team roster + current
  * user (web reads the inbox store; mobile queries convex per screen) and a
  * notify callback (web: sonner toast; mobile: the session screen's toast).
+ * useStoreOwnersEnv adds the rest, the same for both: the implicit owner and
+ * the one reparent write path.
  */
 
 import { useMemo, useState, useSyncExternalStore } from "react";
@@ -115,12 +117,11 @@ export type OwnersEnv = {
   currentUser: any;
   notify?: (msg: string, kind: "success" | "error") => void;
   // The store binding (org-staffing.md S11, built by useStoreOwnersEnv for web
-  // and mobile alike): route every owner change through the org store's
-  // reparentOrgSession so the chart node moves in the same tick and one
-  // dispatch reaches the core. It owns its own toast (the "now reports to"
+  // and mobile alike): every owner change and role move goes through the org
+  // store's reparentOrgSession, so the chart node moves in the same tick and
+  // one dispatch reaches the core. It owns its own toast (the "now reports to"
   // line from the told counts, or the fallback for a plain remove/clear).
-  // A caller that only reads (the mobile handoff banner) leaves it absent.
-  reparent?: (target: OwnerReparentTarget, opts: { note?: string; parentName?: string; toastFallback?: string }) => Promise<void>;
+  reparent: (target: OwnerReparentTarget, opts: { note?: string; parentName?: string; toastFallback?: string }) => Promise<void>;
   // Human who started the session (author, else runner). When the owner set
   // is empty the chip and menu treat them as the owner — a person who started
   // a thread already owns it, even before a session_owners row exists.
@@ -181,9 +182,6 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
   );
-  const addOwner = useMutation(api.sessionOwnership.addSessionOwner);
-  const removeOwner = useMutation(api.sessionOwnership.removeSessionOwner);
-  const setOwners = useMutation(api.sessionOwnership.setSessionOwners);
   const ackAssignment = useMutation(api.sessionOwnership.ackSessionAssignment);
 
   // In-flight optimistic overrides: user_id -> desired membership. Each entry is
@@ -274,19 +272,12 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     const disp = displayFor(id);
     setOverrides((o) => ({ ...o, [id]: !wasOwner })); // optimistic
     try {
-      if (env.reparent) {
-        // One path (S11): add re-homes under this person (and clears the role);
-        // remove leaves the line to whoever remains. The binding toasts.
-        await env.reparent(
-          { kind: "user", owners: [id], mode: wasOwner ? "remove" : "add" },
-          wasOwner ? { toastFallback: `Removed ${disp.name}` } : { note, parentName: disp.name },
-        );
-      } else if (wasOwner) {
-        await removeOwner({ session_id: conversationId, owner: id });
-      } else {
-        await addOwner({ session_id: conversationId, owner: id, note: note?.trim() || undefined });
-        notify?.(`Assigned to ${disp.name}`, "success");
-      }
+      // One path (S11): add re-homes under this person (and clears the role);
+      // remove leaves the line to whoever remains. The binding toasts.
+      await env.reparent(
+        { kind: "user", owners: [id], mode: wasOwner ? "remove" : "add" },
+        wasOwner ? { toastFallback: `Removed ${disp.name}` } : { note, parentName: disp.name },
+      );
       // Leave the override; the reconcile effect clears it when the query catches up.
     } catch (e: any) {
       setOverrides((o) => { const n = { ...o }; delete n[id]; return n; }); // revert
@@ -297,7 +288,6 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   /** File the session under a role (S11): the chart's role move, from the menu.
    *  Clears the person-owner line the way the chart drop onto a role does. */
   const moveToRole = async (roleId: string, roleName: string) => {
-    if (!env.reparent) return;
     try {
       await env.reparent({ kind: "role", role_id: roleId }, { parentName: roleName, toastFallback: `Filed under ${roleName}` });
     } catch (e: any) {
@@ -326,14 +316,9 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
       }));
     }
     try {
-      if (env.reparent) {
-        // One path (S11): set the owner line to `desired`, last listed becomes
-        // the reporting parent. The binding toasts the "now reports to" line.
-        await env.reparent({ kind: "user", owners: desired, mode: "set" }, { note: trimmed, parentName: disp.name, toastFallback: `Handed off to ${disp.name}` });
-      } else {
-        await setOwners({ session_id: conversationId, owners: desired, note: trimmed || undefined });
-        notify?.(`Handed off to ${disp.name}`, "success");
-      }
+      // One path (S11): set the owner line to `desired`, last listed becomes
+      // the reporting parent. The binding toasts the "now reports to" line.
+      await env.reparent({ kind: "user", owners: desired, mode: "set" }, { note: trimmed, parentName: disp.name, toastFallback: `Handed off to ${disp.name}` });
       return true;
     } catch (e: any) {
       setOverrides((o) => { const n = { ...o }; delete n[id]; if (meId) delete n[meId]; return n; });
@@ -347,12 +332,8 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     const ids = Array.from(ownerIds);
     setOverrides((o) => { const n = { ...o }; for (const id of ids) n[id] = false; return n; });
     try {
-      if (env.reparent) {
-        // One path (S11): an empty set disowns everyone in one call.
-        await env.reparent({ kind: "user", owners: [], mode: "set" }, { toastFallback: "Cleared owners" });
-      } else {
-        for (const id of ids) await removeOwner({ session_id: conversationId, owner: id });
-      }
+      // One path (S11): an empty set disowns everyone in one call.
+      await env.reparent({ kind: "user", owners: [], mode: "set" }, { toastFallback: "Cleared owners" });
     } catch (e: any) {
       notify?.(humanizeConvexError(e, "Failed to clear owners"), "error");
     }
