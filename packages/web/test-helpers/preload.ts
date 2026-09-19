@@ -13,3 +13,25 @@ import { mock } from "bun:test";
 mock.module("@convex-dev/prosemirror-sync/tiptap", () => ({
   useTiptapSync: () => ({ isLoading: false, initialContent: null, extension: null, create: async () => {} }),
 }));
+
+// react-dom decides ONCE, at load, whether a DOM exists (`canUseDOM`). The
+// first test file to load it settles that for the whole process: loaded with no
+// window it takes the no-DOM path, native `input` events never reach onChange,
+// and a later mount test types into a textarea that React never hears. 56 test
+// files import react-dom before any DOM exists, so which one runs first — and
+// therefore whether typing works at all — is an accident of suite order. That
+// is why these tests pass alone and fail in a full run.
+//
+// Install a baseline DOM here, before any test file loads. A mount test that
+// wants its own jsdom still replaces these globals; it just no longer decides
+// what react-dom believes.
+import { JSDOM } from "jsdom";
+
+if (typeof (globalThis as Record<string, unknown>).window === "undefined") {
+  const baseline = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
+  const w = baseline.window as unknown as Record<string, unknown>;
+  for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLTextAreaElement", "HTMLInputElement", "HTMLButtonElement", "HTMLAnchorElement", "Element", "Node", "Event", "KeyboardEvent", "MouseEvent", "CustomEvent", "getComputedStyle", "MutationObserver"]) {
+    const value = key === "window" ? w : w[key];
+    if (value !== undefined) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  }
+}

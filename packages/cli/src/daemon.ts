@@ -13688,6 +13688,61 @@ export function pasteChipContradicts(chip: string, expectedLines: number | null 
   return Number(shown[1]) !== expectedLines;
 }
 
+const PASTE_CHIP = /\[[^\]\n]*pasted[^\]\n]*\]/gi;
+
+// The line breaks a collapsed chip reports. A chip that prints no count is one
+// line, the case Claude Code prints bare — see pasteChipLines for the measured
+// rule this is the read side of.
+function pasteChipBreaks(chip: string): number {
+  const shown = /\+\s*(\d+)\s+lines?/i.exec(chip);
+  return shown ? Number(shown[1]) : 0;
+}
+
+// Does the composer hold this payload once, in order, as SEVERAL pieces?
+//
+// A bracketed paste reaches the TUI through the pty in 1022-byte reads, and
+// Claude Code closes a paste whose end it has not seen after about a second of
+// silence (measured 2026-09-19: a 1.5s gap splits, a 1.0s gap does not). A
+// pane in the middle of a turn stalls its reads for longer than that, and a
+// message is pasted into a working agent rather than deferred, so any payload
+// over a kilobyte can arrive as two or more pastes: several collapsed chips,
+// or chips followed by the rest as literal text.
+//
+// That composer still holds the whole message in order, and submitting it
+// delivers every piece, so refusing it stranded the message — and, while its
+// receipt held the pane, every later message for that session — for hours.
+// It is accepted only when the pieces account for the payload EXACTLY ONCE:
+// nothing sits before the first chip, every visible run of text appears in the
+// payload at a later position than the run before it, and the breaks the chips
+// report plus the breaks the visible runs occupy equal the payload's own. A
+// second round of pastes landing on top of the first overshoots that sum,
+// which is the doubling the count has always existed to catch.
+export function composerHoldsSplitPaste(composer: string, payload: string): boolean {
+  const chips = composer.match(PASTE_CHIP);
+  if (!chips || chips.length === 0) return false;
+  const runs = composer.split(PASTE_CHIP);
+  if (stripComposerChrome(runs[0])) return false; // text before the first chip is not ours
+
+  const breaksIn = (run: string) => {
+    const body = run.replace(/\s+$/, "");
+    return body.trim() ? (body.match(/\n/g) ?? []).length : 0;
+  };
+  const shownBreaks = chips.reduce((n, chip) => n + pasteChipBreaks(chip), 0)
+    + runs.slice(1).reduce((n, run) => n + breaksIn(run), 0);
+  if (shownBreaks !== (payload.match(/\n/g) ?? []).length) return false;
+
+  const haystack = stripComposerChrome(payload);
+  let at = 0;
+  for (const run of runs.slice(1)) {
+    const needle = stripComposerChrome(run);
+    if (!needle) continue;
+    const found = haystack.indexOf(needle, at);
+    if (found === -1) return false;
+    at = found + needle.length;
+  }
+  return true;
+}
+
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
 // very bottom of the pane, bracketed by box-drawing separator runs. Everything above
 // those separators is transcript — immutable history rendered as text — and must not
@@ -16388,9 +16443,12 @@ export async function awaitTmuxComposerPayload(
     const composer = tmuxComposerRegion(pane) ?? "";
     const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
     const matched = chips?.length
-      ? chips.length === 1
-        && stripComposerChrome(composer) === stripComposerChrome(chips[0])
-        && !pasteChipContradicts(chips[0], pasteChipLines(payload))
+      ? (chips.length === 1
+          && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+          && !pasteChipContradicts(chips[0], pasteChipLines(payload)))
+        // The same payload, delivered as several pastes because the pane
+        // stalled mid-read — see composerHoldsSplitPaste.
+        || composerHoldsSplitPaste(composer, payload)
       : holdsPayload(pane);
     if (matched) return "matched";
 
