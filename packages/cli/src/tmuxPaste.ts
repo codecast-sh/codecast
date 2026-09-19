@@ -66,19 +66,40 @@ export function composerNewlineKey(agentType?: AgentClientId): string | null {
   return AGENT_CLIENTS[agentType ?? "claude"].typedComposerInput?.newlineKey ?? null;
 }
 
-// One `send-keys -l` per chunk of a line. A whole message would otherwise ride
-// in a single argv, and a long one (a pasted diff, a quoted transcript) is the
-// case that would hit the argv limit rather than the common short message.
-const TYPED_CHUNK_CHARS = 1024;
+/**
+ * Whether this client's composer can collapse a delivery into a paste chip
+ * ("[Pasted text #1 +13 lines]"). Only a pasted payload can, so a typed client
+ * never shows one and every reader that looks for a chip must ask here rather
+ * than asking whether the TUI supports bracketed paste: Claude's does, and is
+ * typed anyway. A reader looking for a chip on a typed client would find only
+ * the human's own draft chip and read it as our payload.
+ */
+export function composerCollapsesPasteToChip(agentType?: AgentClientId): boolean {
+  return clientAcceptsBracketedPaste(agentType) && composerNewlineKey(agentType) === null;
+}
+
+// One `send-keys -l` per chunk. A whole message would otherwise ride in a
+// single argv, and a long one (a pasted diff, a quoted transcript) is the case
+// that would hit the argv limit rather than the common short message.
+const TYPED_CHUNK_CHARS = 8192;
+
+// Ctrl+J IS the newline byte, so a composer that takes it as a literal newline
+// takes the same byte inside a literal chunk. Such a client gets the whole
+// message in a few writes instead of two tmux calls per line: 5.9 KB over 60
+// lines took 1.4s that way against 13.7s line by line, and 2.2s for the paste
+// it replaces (measured on a loaded machine, 2026-09-19).
+const LITERAL_NEWLINE_KEY = "C-j";
 
 /**
  * Type text into a pane key by key, with `newlineKey` between lines.
  *
- * Why: a bracketed paste is a paste GESTURE, and grok answers it by reading the
- * machine's clipboard and attaching any image on it — so a delivery carried a
- * screenshot the human had copied to xAI, under a message that never mentioned
- * it (ct-49607). Typed input never triggers that read; the newline key is what
- * keeps a multi-line message one message instead of one per line.
+ * Why: a bracketed paste is a paste GESTURE, and a client may answer the
+ * gesture rather than the text. Grok reads the machine's clipboard and attaches
+ * any image on it, so a delivery carried a screenshot the human had copied to
+ * xAI under a message that never mentioned it (ct-49607). Claude Code wraps the
+ * payload in a `<pasted_content>` block that strips the human's authority from
+ * their own words (ct-52703). Typed input triggers neither; the newline key is
+ * what keeps a multi-line message one message instead of one per line.
  */
 export async function typeTextIntoPane(
   exec: TmuxExec,
@@ -86,7 +107,14 @@ export async function typeTextIntoPane(
   text: string,
   newlineKey: string,
 ): Promise<void> {
-  const lines = prepareInjectedContent(text, { bracketed: true }).split("\n");
+  const payload = prepareInjectedContent(text, { bracketed: true });
+  if (newlineKey === LITERAL_NEWLINE_KEY) {
+    for (let at = 0; at < payload.length; at += TYPED_CHUNK_CHARS) {
+      await exec(["send-keys", "-t", target, "-l", payload.slice(at, at + TYPED_CHUNK_CHARS)]);
+    }
+    return;
+  }
+  const lines = payload.split("\n");
   for (const [index, line] of lines.entries()) {
     if (index > 0) await exec(["send-keys", "-t", target, newlineKey]);
     for (let at = 0; at < line.length; at += TYPED_CHUNK_CHARS) {

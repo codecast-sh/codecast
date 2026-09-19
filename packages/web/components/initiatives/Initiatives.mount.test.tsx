@@ -21,7 +21,7 @@ async function verifyInitiatives() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
   }
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const { mock } = await import("bun:test");
@@ -58,7 +58,10 @@ async function verifyInitiatives() {
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
 
   mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
-  mock.module("../../hooks/useSyncOrgTree", () => ({ useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }), useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
+  // Spread the real module: a substitution is process-global, so a stub that
+  // drops its other exports breaks every file that loads it afterwards.
+  const realOrgTree = { ...(await import("../../hooks/useSyncOrgTree")) };
+  mock.module("../../hooks/useSyncOrgTree", () => ({ ...realOrgTree, useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }), useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
   for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) mock.module(`../../hooks/${h}`, () => ({ [h]: () => {} }));
   mock.module("../../hooks/useSyncCollection", () => ({ useSyncCollection: () => ({ ready: true, refused: false, retry: () => {} }) }));
   mock.module("../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => collections[key] ?? [] }));
@@ -81,7 +84,10 @@ async function verifyInitiatives() {
   mock.module("../../lib/sessionViewVisit", () => ({ askSessionView: (id: string) => calls.push(`sessionView:${id}`) }));
   mock.module("../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
   mock.module("../EntityIdPill", () => ({ EntityIdPill: ({ id, type }: any) => React.createElement("span", { "data-pill": `${type}:${id}` }, id) }));
-  mock.module("../charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }) }));
+  // Spread the real module: dropping ProjectLeadMark / HireLeadDialog /
+  // useProjectLead here broke every later file that imports them.
+  const realLeadChip = { ...(await import("../charter/ProjectLeadChip")) };
+  mock.module("../charter/ProjectLeadChip", () => ({ ...realLeadChip, ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }) }));
   mock.module("../org/RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
   mock.module("../identity/AssigneeFace", () => ({ AssigneeFace: ({ info }: any) => React.createElement("span", { "data-face": info.kind === "role" ? `role:${info.handle}` : `person:${info.name}` }) }));
   mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: any) => React.createElement("div", { "data-markdown": true }, content) }));

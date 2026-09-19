@@ -57,7 +57,9 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("daemon_overloaded"),
   // A role tells a person who reports to it that a high priority goal has
   // stalled (org-roles-run-work.md R6): one line, once a day at most.
-  v.literal("goal_stall")
+  v.literal("goal_stall"),
+  // The hourly fold-up of "sessions are waiting for you" (notifications.ts).
+  v.literal("sessions_need_input")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -93,6 +95,9 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // already means to a reader. Riding that key keeps the alert under a mute
   // switch that exists rather than inventing one with no settings row.
   daemon_overloaded: "session_error",
+  // The digest says the same thing its members say, so it rides the same
+  // switch: muting "session idle" mutes the fold-up too.
+  sessions_need_input: "session_idle",
   // The role is addressing the person by name about their own goals: the
   // same class as a mention, under the switch a person already has.
   goal_stall: "mention",

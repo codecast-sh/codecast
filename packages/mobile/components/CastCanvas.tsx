@@ -15,6 +15,7 @@ import { Theme, CHROME_FONT_CAP, themedStyles, useTheme, useActiveScheme } from 
 import { DOMPURIFY_SOURCE } from '@/lib/vendor/dompurifySource';
 import { CONVEX_ORIGIN } from '@/lib/convex';
 import { solTokens } from '@/lib/solColor';
+import { optionalNative } from '@/lib/optionalNative';
 
 // Inline visual canvas — the mobile twin of web's HtmlSnippet. The agent emits a
 // ```cast-canvas fenced block of static HTML/CSS/SVG; we render it in a WebView
@@ -30,20 +31,8 @@ import { solTokens } from '@/lib/solColor';
 // means a silent rollback loop (see the gesture-handler saga in _layout.tsx).
 // Probe the native module without throwing and fall back to a plain code block
 // when it's absent; canvases light up automatically on the next native build.
-let WebViewComp: any = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { TurboModuleRegistry, NativeModules } = require('react-native');
-  const available = !!(
-    TurboModuleRegistry?.get?.('RNCWebViewModule') || NativeModules?.RNCWebViewModule
-  );
-  if (available) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    WebViewComp = require('react-native-webview').WebView;
-  }
-} catch {
-  WebViewComp = null;
-}
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const WebViewComp: any = optionalNative('RNCWebViewModule', () => require('react-native-webview').WebView);
 
 // Callers (MarkdownRenderer) check this to fall back to a plain code block on
 // binaries without the WebView native module — keeping the fallback at the

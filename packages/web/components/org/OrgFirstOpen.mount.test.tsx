@@ -9,7 +9,7 @@ async function verifyFirstOpen() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><button data-org-guide='staffing'>Staffing</button><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
   }
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const React = await import("react");

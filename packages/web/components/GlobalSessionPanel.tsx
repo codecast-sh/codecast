@@ -53,6 +53,7 @@ import { ViewerFaces } from "./presence/ViewerFaces";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
+import { useOpenWatchMessage } from "../hooks/useOpenWatchMessage";
 import { partitionTriggerInbox, groupSessionsByTrigger, groupTriggerRowsByHome, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { DeviceIcon, rosterDeviceOf, deviceWakesOnUse, deviceDisplayName } from "./DeviceBadge";
@@ -1842,14 +1843,14 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
   );
 }
 
-function MonitorBars({ session, isActive, onOpen }: {
+export function MonitorBars({ session, isActive }: {
   session: InboxSession;
   isActive: boolean;
-  onOpen: (session: InboxSession) => void;
 }) {
   const now = useCoarseNow(30_000);
   const [expanded, setExpanded] = useState(false);
   const watching = useLiveWatchRows(session, now);
+  const { openWatchMessage, openingToolId } = useOpenWatchMessage(session._id);
   if (watching.length === 0) return null;
   const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
   const hiddenCount = watching.length - shown.length;
@@ -1865,25 +1866,10 @@ function MonitorBars({ session, isActive, onOpen }: {
         <div key={row.toolUseId} className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
           <button
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
-            onClick={() => {
-              // Land on the tool call that armed this watch, not the tail —
-              // the click means "show me this watch in context". Rows always
-              // derive from the loaded window, so the id is normally present;
-              // fall back to a plain open if it somehow isn't.
-              // requestNavigate's pending pointer is consumed ONLY by the
-              // inbox surface: fired from any other page it no-ops now and
-              // yanks the view on the user's next inbox visit. Off-inbox,
-              // onOpen carries the page's own correct open behavior.
-              const onInboxSurface = window.location.pathname.startsWith("/inbox");
-              if (row.startMessageId && onInboxSurface) {
-                useInboxStore.getState().requestNavigate(session._id, {
-                  scrollToMessageId: row.startMessageId,
-                  scrollToMessageTimestamp: row.startedAt,
-                });
-              } else {
-                onOpen(session);
-              }
-            }}
+            disabled={openingToolId !== null}
+            aria-busy={openingToolId === row.toolUseId}
+            title="Jump to this task in the conversation"
+            onClick={() => { void openWatchMessage(row); }}
           >
             <div className="flex gap-1.5 min-w-0">
               {/* Same corner arrow the schedule/subagent child rows carry, in
@@ -2134,7 +2120,7 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
         <TriggerRowItem key={r.task._id} row={r} activeSessionId={activeSessionId} onOpen={onOpenSchedule} attached />
       ))}
       <WorkflowBar session={session} isActive={isActive} />
-      <MonitorBars session={session} isActive={isActive} onOpen={onOpen} />
+      <MonitorBars session={session} isActive={isActive} />
       {dormantRow}
     </>
   );
@@ -2311,7 +2297,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
   const attention = rows.some((r) => r.task.last_run_failed || r.task.last_run_needs_attention);
   const toggle = () => (open ? close() : setOpen(true));
   return (
-    <div className="relative shrink-0 border-t border-sol-border/40">
+    <div data-sv-triggers-foot className="relative shrink-0 border-t border-sol-border/40">
       {open && (
         <>
           {/* Click-away backdrop: anywhere outside the roster closes it. */}
@@ -3289,7 +3275,7 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
         {session.user_rest && !isDismissed && (
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-blue/70">
+          <div data-sv-rest className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-blue/70">
             <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />
             <span>{USER_REST_CARD_LINE[session.user_rest]}</span>
           </div>
@@ -4491,7 +4477,7 @@ function SessionListPanelImpl({
       // ignore — local clear persists; the server drain is best-effort.
     } finally {
       setDismissingStale(false);
-      toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"} — still searchable anytime`);
+      toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"}`, { description: "Still searchable anytime." });
     }
   }, [staleSessions, dismissStaleMutation, snoozeStalePrompt]);
 

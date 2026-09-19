@@ -14,7 +14,7 @@ describe("useSyncOrgHealth", () => {
     const { JSDOM } = await import("jsdom");
     const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
     for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "getComputedStyle"]) {
-      Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+      Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
     }
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     const React = await import("react");
@@ -28,7 +28,10 @@ describe("useSyncOrgHealth", () => {
     mock.module("../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, isConvexId: (s: string) => /^[a-z0-9]{32}$/.test(s) }));
     const feederErrors: string[] = [];
     mock.module("./useSyncCollection", () => ({ useFeederError: (feeder: string, error?: Error) => { if (error) feederErrors.push(`${feeder}: ${error.message}`); }, useSyncCollection: () => ({ ready: false }) }));
-    mock.module("./useSyncOrgTree", () => ({ isMissingFunctionError: (error?: Error) => !!error && /Could not find public function/i.test(error.message ?? "") }));
+    // Spread the real module: a substitution is process-global, so a stub that
+    // drops its other exports breaks every file that loads it afterwards.
+    const realOrgTree = { ...(await import("./useSyncOrgTree")) };
+    mock.module("./useSyncOrgTree", () => ({ ...realOrgTree, isMissingFunctionError: (error?: Error) => !!error && /Could not find public function/i.test(error.message ?? "") }));
     const calls: any[] = [];
     let answer: (args: any) => Promise<any> = async (args) => { calls.push(args); return { workspace: args.team_id ? { kind: "team", id: args.team_id } : { kind: "user", id: "me" }, roles: [{ role_id: "r1", short_id: "or-1", handle: "growth", load: { items_per_day: 2, decisions_per_day: 0, live_hands: 0, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 }, ledger: { open_tasks: 3, in_flight: 1, active_plans: 1 }, flags: [{ code: "wide_ledger", severity: "info", detail: "x" }] }], people: [], company: { unowned_projects: [], unfiled_tasks: 0, plans_without_goal: [], projects_without_charter: [], flags: [] }, generated_at: 1 }; };
     let actionRef: any = null;
