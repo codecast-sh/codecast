@@ -1,4 +1,5 @@
 import { captureError } from '@/lib/analytics';
+import { optionalNative } from '@/lib/optionalNative';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
@@ -7,8 +8,10 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
-let ImagePicker: typeof import('expo-image-picker') | null = null;
-try { ImagePicker = require('expo-image-picker'); } catch {}
+const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
+  'ExponentImagePicker',
+  () => require('expo-image-picker'),
+);
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { AgentLogoSvg } from '@/components/AgentLogo';
@@ -38,7 +41,7 @@ import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice } from '@codecast/shared/contracts';
+import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
@@ -241,7 +244,7 @@ function cleanCommandContent(content: string): string {
 }
 
 function stripSystemTags(content: string): string {
-  return content
+  return stripPastedContent(content)
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
@@ -5069,6 +5072,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             </>
           }
           renderItem={({ item, index }) => {
+            if (item.content) item = { ...item, content: stripPastedContent(item.content) };
             // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
             const originalIndex = invertedMessages.length - 1 - index;
             let prevNonToolResult: Message | null = null;
