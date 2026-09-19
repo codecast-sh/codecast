@@ -18,14 +18,15 @@ const REAL_MODULES: Array<[string, unknown]> = [
   ["../lib/remarkEntityIds", await import("../lib/remarkEntityIds")],
   ["next/link", await import("next/link")],
 ];
-afterAll(() => {
+function restoreRealModules(): void {
   for (const [spec, real] of REAL_MODULES) {
     if (spec === "react-markdown") bunMock.module("react-markdown", () => real as object);
     else if (spec === "./messageMarkdown") bunMock.module("./messageMarkdown", () => real as object);
     else if (spec === "../lib/remarkEntityIds") bunMock.module("../lib/remarkEntityIds", () => real as object);
     else bunMock.module("next/link", () => real as object);
   }
-});
+}
+afterAll(restoreRealModules);
 
 async function mountCard() {
   const { JSDOM } = await import("jsdom");
@@ -182,4 +183,10 @@ async function verifyRoleWakeCard() {
     console.log("role wake card mount: passed");
 }
 
-test("the wake card mounts and shows what the reader sees", verifyRoleWakeCard, 120_000);
+test("the wake card mounts and shows what the reader sees", async () => {
+  try {
+    await verifyRoleWakeCard();
+  } finally {
+    restoreRealModules();
+  }
+}, 120_000);
