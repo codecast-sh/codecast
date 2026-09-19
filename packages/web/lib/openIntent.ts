@@ -161,7 +161,7 @@ export function openIn(target: OpenTarget, path: string): void {
     // `reuse`: one stable target pane per tab, re-pointed by each Option-click,
     // opened unfocused so the page clicked in does not move (lib/stage).
     queueMicrotask(() => {
-      if (!(splitOpener?.(path) ?? false)) navigateHere(path);
+      if (!(splitOpener?.(path) ?? false)) goHere(path);
     });
     return;
   }
@@ -196,6 +196,18 @@ export function openIn(target: OpenTarget, path: string): void {
  *  real page load. */
 export function navigateHere(path: string): void {
   if (divertNavigation(path)) return;
+  goHere(path);
+}
+
+/**
+ * Navigate in this window, past the intent checks.
+ *
+ * The split fallback cannot go through `navigateHere`: by the time its
+ * microtask runs, the click has been marked consumed, so `divertNavigation`
+ * answers "already handled" and the navigation is dropped. An Option-click on
+ * a stage too narrow to split then did nothing at all.
+ */
+function goHere(path: string): void {
   if (interceptSettingsNav(path)) return;
   if (shouldUseTabRouting(path)) tabNavigate(path, "push");
   else window.location.assign(path);
