@@ -15,7 +15,7 @@ describe("ConnectionBanner", () => {
     const { JSDOM } = await import("jsdom");
     const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
     for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "getComputedStyle"]) {
-      Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+      Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
     }
     Object.defineProperty(dom.window.navigator, "onLine", { configurable: true, get: () => online });
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;

@@ -360,6 +360,8 @@ describe("desktop window role", () => {
       voiceWindow: false,
       facesOverlay: false,
       peopleWall: false,
+      apps: {},
+      app: null,
     });
   });
 
@@ -669,7 +671,7 @@ describe("isDesktopShell", () => {
   const setUserAgent = (ua: string) =>
     Object.defineProperty(globalThis, "navigator", { value: { userAgent: ua }, configurable: true });
   const restore = () =>
-    Object.defineProperty(globalThis, "navigator", { value: realNav, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: realNav, configurable: true, writable: true });
 
   test("sees the shell through a dead preload", () => {
     setUserAgent("Mozilla/5.0 (Macintosh) Codecast/1.1.100 Chrome/140 Electron/38.0.0 Safari/537.36");

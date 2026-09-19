@@ -14,7 +14,7 @@ async function verifyProposalThread() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "Element", "Node", "NodeFilter", "MutationObserver", "CustomEvent", "Event", "getComputedStyle"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
   }
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const { mock } = await import("bun:test");
@@ -27,7 +27,8 @@ async function verifyProposalThread() {
     },
   }));
   const toasts: string[] = [];
-  mock.module("sonner", () => ({ toast: { error: (m: string) => toasts.push(`error:${m}`), warning: (m: string) => toasts.push(`warning:${m}`), success: (m: string) => toasts.push(`success:${m}`) } }));
+  const record = (kind: string) => (m: string, o?: { description?: string }) => toasts.push(`${kind}:${m}${o?.description ? ` / ${o.description}` : ""}`);
+  mock.module("sonner", () => ({ toast: { error: record("error"), warning: record("warning"), success: record("success") } }));
   mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => React.createElement("div", { "data-md": true }, content) }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   const { act } = React;
@@ -118,10 +119,10 @@ async function verifyProposalThread() {
   // A picture alone is refused out loud; words with a picture send the words and say so.
   await embed.onSendOverride!("", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
   assert.equal(said.length, 0, "a picture alone sends nothing");
-  assert.deepEqual(toasts.splice(0), ["error:This conversation takes text for now; the picture was not sent."]);
+  assert.deepEqual(toasts.splice(0), ["error:The picture was not sent / This conversation takes text for now."]);
   await embed.onSendOverride!("see this", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
   assert.equal(said.pop(), "fixture-chief-conv|op-9|3|null|see this");
-  assert.deepEqual(toasts.splice(0), ["warning:Sent your words; the picture was not, this conversation takes text for now."]);
+  assert.deepEqual(toasts.splice(0), ["warning:Sent your words, not the picture / This conversation takes text for now."]);
 
   // ── a session author is not a name ──
   await renderThread({ thread: { ...thread, name: "the agent that wrote this", named: false, role: null } });

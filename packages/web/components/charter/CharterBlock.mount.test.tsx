@@ -16,7 +16,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https
 const DOM_GLOBALS = ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "HTMLAnchorElement", "Element", "Node", "NodeFilter", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle"];
 const priorGlobals = new Map(DOM_GLOBALS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 for (const key of DOM_GLOBALS) {
-  Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+  Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
 }
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 // Bun runs the suite's files in one process: put the globals back so a later

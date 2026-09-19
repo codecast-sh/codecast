@@ -11,7 +11,7 @@ const { JSDOM } = await import("jsdom");
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
 const DOM_GLOBALS = ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"];
 const priorGlobals = new Map(DOM_GLOBALS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-for (const key of DOM_GLOBALS) Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
+for (const key of DOM_GLOBALS) Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 afterAll(() => {
   for (const [key, desc] of priorGlobals) {

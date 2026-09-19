@@ -39,7 +39,7 @@ beforeAll(async () => {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div><div id='toast'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLTextAreaElement", "HTMLInputElement", "Element", "Node", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
     const v = (dom.window as any)[key];
-    if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true });
+    if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
   }
   if (!(globalThis as any).ResizeObserver) (globalThis as any).ResizeObserver = class { observe() {} disconnect() {} };
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;

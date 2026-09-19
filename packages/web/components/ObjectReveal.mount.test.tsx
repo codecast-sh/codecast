@@ -15,7 +15,7 @@ beforeAll(async () => {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "Element", "Node", "Event", "PointerEvent", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "ResizeObserver"]) {
     const v = (dom.window as any)[key];
-    if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true });
+    if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
   }
   if (!(globalThis as any).ResizeObserver) (globalThis as any).ResizeObserver = class { observe() {} disconnect() {} };
   if (!(globalThis as any).PointerEvent) (globalThis as any).PointerEvent = (globalThis as any).MouseEvent;
