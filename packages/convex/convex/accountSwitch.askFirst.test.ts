@@ -59,6 +59,8 @@ function fixture(deviceOverrides: Record<string, unknown> = {}) {
     updated_at: now - 30_000,
   };
   const tables: Record<string, any[]> = {
+    users: [{ _id: "users_owner", name: "Owner" }],
+    notifications: [],
     devices: [device],
     conversations: [parked],
     daemon_commands: [],
@@ -133,5 +135,29 @@ describe("ask-first recovery", () => {
 
     expect(res).toMatchObject({ acted: "exhausted" });
     expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+});
+
+describe("the ask reaches the person, once, and does not outlive its incident", () => {
+  test("a new proposal writes a notification; an unchanged re-check does not", async () => {
+    const f = fixture();
+    await f.run();
+    const notes = () => f.tables.notifications;
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].message).toStartWith("Switch to fresh? ");
+    expect(notes()[0].message).toContain("Fable (7d) hit its limit");
+    await f.run();
+    expect(notes()).toHaveLength(1);
+  });
+
+  test("once nothing is parked, the stale proposal is cleared", async () => {
+    const f = fixture();
+    await f.run();
+    expect(f.device.cc_auto_switch_state.last_decision.kind).toBe("propose");
+    f.tables.conversations[0].pending_api_error = false;
+    f.tables.conversations[0].pending_api_error_kind = undefined;
+    const res = await f.run();
+    expect(res).toMatchObject({ acted: "nothing_blocked" });
+    expect(f.device.cc_auto_switch_state.last_decision).toBeUndefined();
   });
 });

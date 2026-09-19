@@ -73,3 +73,65 @@ for (const platform of ['ios', 'android']) {
     }
   }
 }
+
+// Session faces (components/identity) reach across the workspace for their art
+// and carry the agent brand as a badge, which draws through react-native-svg.
+// Every module on that path must land on the app's one pinned copy.
+const faceOrigins = [
+  path.join(__dirname, 'components/identity/MobileSessionFace.tsx'),
+  path.join(__dirname, 'components/AgentLogo.tsx'),
+  path.join(__dirname, '../web/components/org/avatars/index.tsx'),
+  path.join(__dirname, '../web/lib/sessionIdentity.ts'),
+];
+for (const platform of ['ios', 'android']) {
+  for (const pkg of packages) {
+    test(`${platform}: the session face path resolves the pinned ${pkg.name}`, () => {
+      const expected = resolve(context(path.join(__dirname, 'index.ts')), pkg.name, platform);
+      for (const origin of faceOrigins) {
+        expect(fs.existsSync(origin)).toBe(true);
+        expect(config.resolver.resolveRequest(context(origin), pkg.name, platform)).toEqual(expected);
+      }
+    });
+  }
+}
+
+test('the face art is an asset Metro bundles: all 24 WebP files, from the web package', () => {
+  expect(config.resolver.assetExts).toContain('webp');
+  const art = path.join(__dirname, '../web/components/org/avatars');
+  expect(config.watchFolders.some(dir => art.startsWith(dir + path.sep))).toBe(true);
+  expect(fs.readdirSync(art).filter(f => f.endsWith('.webp')).length).toBe(24);
+});
+
+// The rule is computed from package.json, so it must cover every dependency the
+// app names, not the two that crashed first. For each one, a nested SDK with
+// its own copy must still get the app's copy.
+const appDeps = Object.keys(require('./package.json').dependencies).filter(
+  name => !['react', 'react-native', 'react-dom'].includes(name),
+);
+
+test('package.json names the packages that were doubled in a real bundle', () => {
+  for (const name of ['react-native-screens', '@sentry/react-native', 'posthog-react-native', '@react-navigation/native', 'expo']) {
+    expect(appDeps).toContain(name);
+  }
+});
+
+for (const name of appDeps) {
+  const app = context(path.join(__dirname, 'index.ts'));
+  let expected;
+  try {
+    expected = resolve(app, name, 'ios');
+  } catch {
+    continue; // config plugins and build tools have no JS entry to bundle
+  }
+  test(`a nested copy of ${name} resolves to the app's copy`, () => {
+    const peer = path.join(fixture, 'node_modules', name);
+    if (!fs.existsSync(path.join(peer, 'package.json'))) {
+      fs.mkdirSync(peer, { recursive: true });
+      fs.writeFileSync(path.join(peer, 'package.json'), JSON.stringify({ name, main: 'index.js' }));
+      fs.writeFileSync(path.join(peer, 'index.js'), 'module.exports = {};');
+    }
+    const sdk = context(path.join(fixture, 'index.js'));
+    expect(resolve(sdk, name, 'ios').filePath).toContain(fixture);
+    expect(config.resolver.resolveRequest(sdk, name, 'ios')).toEqual(expected);
+  });
+}

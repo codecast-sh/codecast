@@ -679,17 +679,57 @@ export async function performSetProjectLead(
   await ctx.db.patch(project._id, { ...patch, updated_at: Date.now() });
   if (!patch.owner_role_id) return { owner_role_id: null, scope: "cleared" };
   const role = await ctx.db.get(patch.owner_role_id as Id<"org_roles">);
-  const change = leadScopeChange(project._id, role, await rolesInBoundary(ctx, role));
   // The role hears it in its own words whatever happens to its scope.
   await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `you now lead the project ${project.title}: a person named you its lead`, ref: { table: "projects", id: String(project._id) } });
-  if (change.kind !== "add") return { owner_role_id: String(role._id), scope: change.kind };
-  if (!(await userCanAdminRole(ctx, userId, role))) return { owner_role_id: String(role._id), scope: "not_admin" };
-  await performUpdateRole(ctx, userId, { role_id: String(role._id), scope: { project_ids: [...role.scope.project_ids, project._id], plan_ids: role.scope.plan_ids } });
+  const cover = await performCoverProjects(ctx, userId, role._id, [project._id]);
+  return { owner_role_id: String(role._id), scope: cover.added.length ? "added" : cover.listed.length ? "listed" : cover.skipped[0].reason, took_over: cover.took_over };
+}
+
+// A role comes to answer for projects: a project's lead is named (R4), or an
+// initiative's owner becomes a role and gains every project of the initiative
+// (initiatives-projects-role-page.md I1 "The org"). ONE scope write for both:
+// what happens to each project is `leadScopeChange`, the projects the scope
+// does not list are added in one role update (containment, the history row,
+// the role's wake), and the role takes over the sessions in them once. Safe to
+// call with projects the scope already lists, and a person who may not reshape
+// the role is told so instead of refused, so the caller's own write stands.
+export type CoverProjectsResult = {
+  added: string[];
+  listed: string[];
+  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" }>;
+  /** The sentence a person reads when the role took over sessions in the added projects. */
+  took_over?: string;
+};
+
+export async function performCoverProjects(
+  ctx: Ctx,
+  userId: Id<"users">,
+  roleId: Id<"org_roles">,
+  projectIds: Id<"projects">[],
+): Promise<CoverProjectsResult> {
+  const role = await ctx.db.get(roleId);
+  if (!role || role.status === "retired") throw new Error("Role not found");
+  const out: CoverProjectsResult = { added: [], listed: [], skipped: [] };
+  const roles = await rolesInBoundary(ctx, role);
+  const toAdd: Id<"projects">[] = [];
+  for (const id of new Set(projectIds)) {
+    const change = leadScopeChange(id, role, roles);
+    if (change.kind === "add") toAdd.push(id);
+    else if (change.kind === "listed") out.listed.push(String(id));
+    else out.skipped.push({ project_id: String(id), reason: change.kind });
+  }
+  if (!toAdd.length) return out;
+  if (!(await userCanAdminRole(ctx, userId, role))) {
+    out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "not_admin" as const })));
+    return out;
+  }
+  await performUpdateRole(ctx, userId, { role_id: String(role._id), scope: { project_ids: [...role.scope.project_ids, ...toAdd], plan_ids: role.scope.plan_ids } });
+  out.added = toAdd.map(String);
   // A role that gains scope takes over the sessions in it that report to its
   // host and to no role (R1), through the one core every scope gain uses. The
   // sentence is the person's to read once the write lands.
-  const took = await takeOverSessions(ctx, userId, role._id);
-  return { owner_role_id: String(role._id), scope: "added", took_over: takeoverPhrase(role.handle, took, true) || undefined };
+  out.took_over = takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id), true) || undefined;
+  return out;
 }
 
 export const setProjectLead = mutation({
@@ -872,6 +912,7 @@ export const ROLE_RULES = [
   "4. Caps on wakes, hands and tokens per day are real; a held cap is reported in the brief, not worked around.",
   "5. A person's message is answered here or handed on to a hand, and the reply says which; a request to remember or forget is a brief write in the same turn.",
   "6. Your sessions stay out of a person's inbox, so at every wake you read which of them wait on a person, answer what you may, and escalate the rest with one line saying what the person will decide.",
+  "7. The people who report to you keep their goals in your brief, one section each; at every wake you read their sessions against those goals, update the matches, and name what stalled.",
 ];
 
 export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
@@ -1525,6 +1566,56 @@ export const wakes = query({
   args: { api_token: v.optional(v.string()), role_id: v.string(), limit: v.optional(v.number()) },
   handler: async (ctx, { api_token, ...args }) => listWakes(ctx, await requireCaller(ctx, api_token), args),
 });
+// Who reports to a role (org-roles-run-work.md R6). A person may add or
+// remove themself; an admin of the role may name anyone in its boundary. A
+// new report wakes the role at once so it asks for their goals.
+export async function performSetReports(
+  ctx: Ctx,
+  userId: Id<"users">,
+  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; from_session?: string },
+): Promise<any> {
+  const role = await requireRole(ctx, userId, args.role_id, "access");
+  if (role.status === "retired") throw new Error("That role is retired");
+  const admin = await userCanAdminRole(ctx, userId, role);
+  const add = args.add ?? [];
+  const remove = args.remove ?? [];
+  if (add.length + remove.length === 0) return role;
+  const names = new Map<string, string>();
+  for (const uid of [...add, ...remove]) {
+    if (String(uid) !== String(userId) && !admin) throw new Error("Only an admin of the role may change who reports to it; you may add or remove yourself");
+    const u = await ctx.db.get(uid);
+    if (!u || u.is_bot) throw new Error("Only a person can report to a role");
+    if (role.team_id ? !(await isTeamMember(ctx as any, uid, role.team_id)) : String(uid) !== String(role.scope_user_id)) {
+      throw new Error(`${u.name ?? u.email ?? "That person"} is not in this workspace`);
+    }
+    names.set(String(uid), u.name || u.email?.split("@")[0] || "someone");
+  }
+  const current = new Set<string>((role.reports_user_ids ?? []).map(String));
+  for (const uid of remove) current.delete(String(uid));
+  const added = add.filter((uid) => !current.has(String(uid)));
+  for (const uid of added) current.add(String(uid));
+  const now = Date.now();
+  await ctx.db.patch(role._id, { reports_user_ids: Array.from(current) as Id<"users">[], updated_at: now });
+  await ctx.db.insert("org_role_history", {
+    role_id: role._id, user_id: userId, actor_type: "user", action: "reports", field: "reports_user_ids",
+    old_value: JSON.stringify((role.reports_user_ids ?? []).map(String)), new_value: JSON.stringify(Array.from(current)), created_at: now,
+  });
+  for (const uid of added) {
+    const name = names.get(String(uid))!;
+    await enqueueRoleEvent(ctx, role._id, {
+      kind: "immediate",
+      cause: `${name} now reports to you: ask them for their three to five goals and keep them in your brief under "## Goals: ${name}"`,
+      ref: { table: "users", id: String(uid) },
+    });
+  }
+  return await ctx.db.get(role._id);
+}
+
+export const setReports = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performSetReports(ctx, await requireCaller(ctx, api_token), args),
+});
+
 export const briefEdit = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), content: v.string(), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performBriefEdit(ctx, await requireCaller(ctx, api_token), args),

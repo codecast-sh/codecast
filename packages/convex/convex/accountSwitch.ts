@@ -62,7 +62,7 @@ import {
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
-import { withSafetyBlock } from "@codecast/shared/contracts";
+import { withSafetyBlock, describeDecision } from "@codecast/shared/contracts";
 
 // The freshest online NON-remote device: it holds the keychain profiles and is
 // the canonical credential source remotes are pushed from.
@@ -1538,9 +1538,17 @@ export const autoSwitchCheck = internalMutation({
         }
         return { acted: "wait", next_check_at: retryAt };
       }
-      if (state.exhausted_at) {
+      // Nothing is parked, so there is nothing left to ask about: a proposal
+      // outliving its incident would greet the next, unrelated park with an
+      // ask about an account nobody chose for it.
+      const staleAsk = state.last_decision?.kind === "propose";
+      if (state.exhausted_at || staleAsk) {
         await ctx.db.patch(primary._id, {
-          cc_auto_switch_state: { ...state, exhausted_at: undefined },
+          cc_auto_switch_state: {
+            ...state,
+            exhausted_at: undefined,
+            last_decision: staleAsk ? undefined : state.last_decision,
+          },
         });
       }
       return { acted: "nothing_blocked", dismissed };
@@ -1860,6 +1868,25 @@ export const autoSwitchCheck = internalMutation({
           await ctx.db.patch(primary._id, {
             cc_auto_switch_state: { ...state, last_decision: proposal },
           });
+        }
+        // A NEW ask reaches the person's phone and desktop, not only the
+        // banner: sessions are parked until someone answers, so an ask nobody
+        // sees is the same as no ask. Only when the recommended account
+        // changes — a growing park count does not re-notify.
+        const newAsk =
+          state.last_decision?.kind !== "propose" || state.last_decision.target_email !== best.email;
+        const anchor = [...claudeLimit].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+        if (newAsk && anchor) {
+          // The question leads the body too: the in-app list stores only the
+          // body, the title reaches the phone push alone.
+          const ask = `Switch to ${best.name}?`;
+          await deliverSessionNotificationToParties(
+            ctx,
+            anchor,
+            "session_error",
+            ask,
+            `${ask} ${describeDecision(proposal) ?? "Sessions are parked on a usage limit."}`,
+          );
         }
         const retryAt = withCodexRetry(decision.retry_at);
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {

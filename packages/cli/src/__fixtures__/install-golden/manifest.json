@@ -38,7 +38,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "10"
+      "work_version": "11"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -88,8 +88,8 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "dd54097bea0ced4d",
-      ".claude/settings.json": "db62c7a6cc130605"
+      ".claude/hooks/thread-state.sh": "5d32f0212c030ca5",
+      ".claude/settings.json": "1ab02a7497a2934b"
     }
   },
   "chat": {
@@ -190,7 +190,7 @@
       ".claude/skills/cast-lessons/SKILL.md": "0a7b06647136ecc4",
       ".claude/skills/cast-loop/SKILL.md": "45281d9e9adc4bd3",
       ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
-      ".claude/skills/cast-org/SKILL.md": "0f105b434ba5be45",
+      ".claude/skills/cast-org/SKILL.md": "d9836a22b9d0d15c",
       ".claude/skills/cast-pass/SKILL.md": "a2f0deecd382bf8d",
       ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
       ".claude/skills/cast-plan/SKILL.md": "a830b8850214b8aa",

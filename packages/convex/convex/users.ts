@@ -3963,6 +3963,7 @@ export const updateAgentPermissionModes = mutation({
     claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
     codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
     gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+    muse: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -3972,6 +3973,7 @@ export const updateAgentPermissionModes = mutation({
         claude: args.claude,
         codex: args.codex,
         gemini: args.gemini,
+        muse: args.muse,
       },
     });
     return userId;
@@ -3991,7 +3993,7 @@ export const getAgentDefaultParams = query({
 export const updateAgentDefaultParams = mutation({
   args: {
     api_token: v.optional(v.string()),
-    agent: v.union(v.literal("claude"), v.literal("codex"), v.literal("gemini"), v.literal("cursor")),
+    agent: v.union(v.literal("claude"), v.literal("codex"), v.literal("gemini"), v.literal("cursor"), v.literal("muse")),
     params: v.record(v.string(), v.string()),
   },
   handler: async (ctx, args) => {
@@ -4018,7 +4020,7 @@ export const updateAgentDefaultParams = mutation({
 
 export const deleteAgentDefaultParam = mutation({
   args: {
-    agent: v.union(v.literal("claude"), v.literal("codex"), v.literal("gemini"), v.literal("cursor")),
+    agent: v.union(v.literal("claude"), v.literal("codex"), v.literal("gemini"), v.literal("cursor"), v.literal("muse")),
     param: v.string(),
   },
   handler: async (ctx, args) => {

@@ -70,6 +70,9 @@ export function isHumanOrigin(task: { source?: string | null }): boolean {
  * an agent deliberately promoted it (`cast task create --human`, a triage
  * accept), or when it is assigned to someone — an agent handing a task to a
  * person is the clearest signal it is theirs to see, whatever its source.
+ * "Someone" includes a role (org-roles-run-work.md R5): a task a role holds is
+ * the company's work, not one session's bookkeeping, so it shows under the
+ * role on the board's Assignee and Chain groupings with no change of Source.
  * Web and mobile both filter with this, so the two boards cannot disagree.
  */
 export function isOnHumanBoard(task: {

@@ -121,6 +121,16 @@ export async function canAccessProject(
   return authorizedForCtx(ctx, await accessStampFor(ctx, "projects", project), userId);
 }
 
+// An initiative's update has no rule of its own: callers pass the PARENT
+// initiative, so an update can never be readable where its initiative is not.
+export async function canAccessInitiative(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  initiative: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
+): Promise<boolean> {
+  return authorizedForCtx(ctx, await accessStampFor(ctx, "initiatives", initiative), userId);
+}
+
 /**
  * List-channel visibility for a row read off a TEAM routing index (webList and
  * webListPaginated team branches): the same stamp rule, with a sync fast path
@@ -525,6 +535,16 @@ export async function requireAccessibleProject(
   const project = await ctx.db.get(projectId);
   if (!project || !(await canAccessProject(ctx, userId, project))) notFound("Project not found");
   return project;
+}
+
+export async function requireAccessibleInitiative(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  initiativeId: Id<"initiatives">,
+): Promise<any> {
+  const initiative = await ctx.db.get(initiativeId);
+  if (!initiative || !(await canAccessInitiative(ctx, userId, initiative))) notFound("Initiative not found");
+  return initiative;
 }
 
 export async function requireAccessibleDoc(

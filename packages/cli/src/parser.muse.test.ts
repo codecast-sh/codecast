@@ -10,7 +10,7 @@ import {
   extractMuseCwd,
 } from "./parser.js";
 import { classifyMuseTranscriptTail } from "./workers/ingestMetadata.js";
-import { classifyTranscriptTailFor } from "./daemon.js";
+import { classifyTranscriptTailFor, computePiSyncDelta } from "./daemon.js";
 
 const RUN = "0a5a259f-41ac-43a0-88a8-aaca8a4b4f79";
 const MODEL = "muse-spark-1.3-contributor";
@@ -51,9 +51,10 @@ const FIXTURE = [
       { id: "fc_2", call_id: "call_2", name: "bash", args: "not-json{{{ " },
     ],
   }),
+  // muse stamps the batch with the CALL message's own id (live shape)
   env("run", {
     kind: "tool_result_batch_committed",
-    batch_id: "batch-1",
+    batch_id: "msg-calls",
     results: [{ tool_call_index: 0, tool_call_id: "call_1", text: "total 8\ndrwxr-xr-x 3 staff 96 .\n" }],
   }),
   env("run", { kind: "assistant_message_committed", message_id: "msg-1", text: "The root holds three entries." }),
@@ -84,11 +85,33 @@ describe("parseMuseSessionFile", () => {
     expect(withCalls!.toolCalls![1].input).toEqual({});
   });
 
-  test("maps tool results onto an assistant message keyed by batch", () => {
-    const withResults = messages.find((m) => m.toolResults?.length === 1);
-    expect(withResults).toMatchObject({ role: "assistant", uuid: "batch-1" });
-    expect(withResults!.toolResults![0]).toMatchObject({ toolUseId: "call_1" });
-    expect(withResults!.toolResults![0].content).toContain("total 8");
+  test("merges the result batch onto the call message it answers", () => {
+    const withResults = messages.filter((m) => m.toolResults?.length);
+    expect(withResults).toHaveLength(1);
+    // One message, one uuid: muse reuses the call message's id as the batch
+    // id, so a second message under that uuid would collide in the sync delta.
+    expect(withResults[0]).toMatchObject({ role: "assistant", uuid: "msg-calls" });
+    expect(withResults[0].toolCalls).toHaveLength(2);
+    expect(withResults[0].toolResults![0]).toMatchObject({ toolUseId: "call_1" });
+    expect(withResults[0].toolResults![0].content).toContain("total 8");
+  });
+
+  test("every uuid is unique, so the sync delta can key on it", () => {
+    const uuids = messages.map((m) => m.uuid);
+    expect(uuids.every((u) => typeof u === "string" && u)).toBe(true);
+    expect(new Set(uuids).size).toBe(uuids.length);
+  });
+
+  test("a batch with no matching call message stands on its own", () => {
+    const orphan = parseMuseSessionFile([
+      env("run", {
+        kind: "tool_result_batch_committed",
+        batch_id: "batch-only",
+        results: [{ tool_call_id: "call_9", text: "output" }],
+      }),
+    ].join("\n"));
+    expect(orphan).toHaveLength(1);
+    expect(orphan[0]).toMatchObject({ uuid: "batch-only", role: "assistant" });
   });
 
   test("stamps the run_model model id on assistant messages", () => {
@@ -104,7 +127,7 @@ describe("parseMuseSessionFile", () => {
 
   test("never surfaces raw chain-of-thought or the torn tail", () => {
     expect(JSON.stringify(messages)).not.toContain("verbatim internal reasoning");
-    expect(messages.length).toBe(4);
+    expect(messages.length).toBe(3);
   });
 
   test("extractMuseCwd reads the route_facts record", () => {
@@ -114,6 +137,76 @@ describe("parseMuseSessionFile", () => {
 
   test("timestamps convert microseconds to millis", () => {
     expect(messages[0].timestamp).toBe(1789742968906);
+  });
+
+  test("a retracted run leaves no trace, so the re-submitted prompt is one turn", () => {
+    // Interrupting before the first token makes muse retract the run and put
+    // the prompt back in the composer; submitting again opens a NEW run with
+    // the same text. Keeping both showed the prompt twice in the transcript.
+    const retracted = "aaaaaaaa-0000-4000-8000-000000000001";
+    const kept = "bbbbbbbb-0000-4000-8000-000000000002";
+    const run = (id: string, event: unknown) =>
+      JSON.stringify({ recorded_at: 1789742968906636, payload: { kind: "run", run_id: id, event } });
+
+    const messages = parseMuseSessionFile([
+      run(retracted, { kind: "started", prompt: "fix the header" }),
+      run(retracted, { kind: "assistant_tool_calls_committed", message_id: "dead-calls", tool_calls: [{ call_id: "c1", name: "bash", args: "{}" }] }),
+      run(retracted, { kind: "run_retracted", reason: "no_output_interrupt_restore", retracted_prompt_sequence: 1 }),
+      run(kept, { kind: "started", prompt: "fix the header" }),
+      run(kept, { kind: "assistant_message_committed", message_id: "msg-live", text: "Fixed." }),
+    ].join("\n"));
+
+    expect(messages.map((m) => m.uuid)).toEqual([kept, "msg-live"]);
+    expect(messages.filter((m) => m.role === "user")).toHaveLength(1);
+  });
+});
+
+describe("a run that fails outright", () => {
+  const RUN2 = "cccccccc-0000-4000-8000-000000000003";
+  const run = (id: string, event: unknown) =>
+    JSON.stringify({ recorded_at: 1789742968906636, payload: { kind: "run", run_id: id, event } });
+
+  test("carries muse's reason, so the re-submitted prompt has an explanation before it", () => {
+    const messages = parseMuseSessionFile([
+      run(RUN2, { kind: "started", prompt: "ship it" }),
+      run(RUN2, { kind: "terminal", terminal: "failed", reason: "missing meta credentials: run `muse login`" }),
+    ].join("\n"));
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({
+      uuid: `${RUN2}:failed`,
+      role: "assistant",
+      content: "missing meta credentials: run `muse login`",
+    });
+  });
+
+  test("a completed or reasonless terminal adds nothing", () => {
+    const quiet = [
+      run(RUN2, { kind: "started", prompt: "ship it" }),
+      run(RUN2, { kind: "terminal", terminal: "completed", reason: null }),
+      run(RUN2, { kind: "terminal", terminal: "cancelled", reason: "cancelled during model step" }),
+      run(RUN2, { kind: "terminal", terminal: "failed", reason: "  " }),
+    ].join("\n");
+    expect(parseMuseSessionFile(quiet)).toHaveLength(1);
+  });
+});
+
+describe("a retracted run already synced", () => {
+  const retracted = "aaaaaaaa-0000-4000-8000-000000000001";
+  const run = (id: string, event: unknown) =>
+    JSON.stringify({ recorded_at: 1789742968906636, payload: { kind: "run", run_id: id, event } });
+  const prompt = run(retracted, { kind: "started", prompt: "fix the header" });
+
+  test("the delta sweep orphans it, so the daemon deletes the row it wrote", () => {
+    // The prompt syncs within a second; the retraction lands seconds later.
+    // The pass that sees the retraction must ask for the earlier row back.
+    const { nextSynced } = computePiSyncDelta(parseMuseSessionFile(prompt), new Map());
+    expect(nextSynced.has(retracted)).toBe(true);
+
+    const after = parseMuseSessionFile([
+      prompt,
+      run(retracted, { kind: "run_retracted", reason: "no_output_interrupt_restore" }),
+    ].join("\n"));
+    expect(computePiSyncDelta(after, nextSynced).orphanUuids).toEqual([retracted]);
   });
 });
 

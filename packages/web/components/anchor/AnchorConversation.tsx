@@ -17,6 +17,17 @@ import { AnchorGlyph } from "./AnchorIdentity";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 export { windowConversationSince } from "../../lib/anchorWindow";
+
+/** A standing session's row belongs to the agent's bot user, so the person
+ *  who may talk to it is told to the store before the row lands and the owner
+ *  UI paints at once. The role page's pane seeds the same way. */
+export function useSeedOwnership(conversationId: string, seed: boolean) {
+  useWatchEffect(() => {
+    if (!seed) return;
+    useInboxStore.getState().syncRecord("conversations", conversationId, { _id: conversationId, is_own: true });
+  }, [conversationId, seed]);
+}
+
 export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
   conversationId: string;
   hideHeader?: boolean;
@@ -50,10 +61,7 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
    *  it) passes false and takes ownership from the row itself. */
   seedOwnership?: boolean;
 }) {
-  useWatchEffect(() => {
-    if (!seedOwnership) return;
-    useInboxStore.getState().syncRecord("conversations", conversationId, { _id: conversationId, is_own: true });
-  }, [conversationId, seedOwnership]);
+  useSeedOwnership(conversationId, seedOwnership);
 
   const {
     conversation,

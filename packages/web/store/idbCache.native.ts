@@ -25,9 +25,8 @@ import {
   collectionRowHydrator,
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
-import { diffCollection } from "./idbCollectionDiff";
+import { diffCollection, durableDeletes } from "./idbCollectionDiff";
 import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
-import { isConvexId } from "../lib/entityLinks";
 
 let Storage: any = null;
 // Send writes the pending-input journal with setItemSync. That used to hit the
@@ -277,12 +276,7 @@ function persistKeyedRows(
 ) {
   const prevShadow = lastPersisted.get(storeKey);
   const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
-  const deletes: string[] = [];
-  for (const id of rawDeletes) {
-    if (pending[`${storeKey}:${id}`]?.type === "exclude") deletes.push(id);
-    else if (!isConvexId(String(id))) deletes.push(id);
-    else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
-  }
+  const deletes = durableDeletes(storeKey, rawDeletes, pending, prevShadow, next);
   lastPersisted.set(storeKey, next);
   if (puts.length || deletes.length) {
     for (const row of puts) {

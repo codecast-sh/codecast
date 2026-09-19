@@ -377,3 +377,26 @@ export function restartShareOfRemaining(
   if (remaining === 0) return Infinity;
   return reloadCostTokens(contextTokens) / remaining;
 }
+
+/** The account switch a machine has recommended and is waiting on, if any.
+ * Only an online primary machine can carry one out, so only those count; with
+ * several, the newest ask wins. The one reading shared by the blocked sessions
+ * banner and the per-session park card, so both surface the same question. */
+export function pendingProposal(
+  devices:
+    | ReadonlyArray<{
+        online?: boolean;
+        is_remote?: boolean;
+        auto_switch_state?: { last_decision?: RecoveryDecision | null } | null;
+      }>
+    | undefined
+    | null,
+): RecoveryDecision | null {
+  let newest: RecoveryDecision | null = null;
+  for (const d of devices ?? []) {
+    if (d.online === false || d.is_remote) continue;
+    const decision = d.auto_switch_state?.last_decision;
+    if (decision?.kind === "propose" && (!newest || decision.at > newest.at)) newest = decision;
+  }
+  return newest;
+}

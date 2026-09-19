@@ -669,8 +669,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.caps !== undefined) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
     }
+    // Who reports to the role (org-roles-run-work.md R6): the list the tab
+    // wrote becomes an add and a remove against the row the server holds.
+    if (fields.reports_user_ids !== undefined) {
+      const row = await ctx.runQuery!((api as any).orgRoles.get, { role_id: roleId }).catch(() => null);
+      const before = new Set<string>((row?.reports_user_ids ?? []).map(String));
+      const after = new Set<string>(fields.reports_user_ids.map(String));
+      const add = [...after].filter((id) => !before.has(id));
+      const remove = [...before].filter((id) => !after.has(id));
+      if (add.length || remove.length) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, add, remove });
+    }
     const rest: Record<string, any> = { ...fields };
-    delete rest.trust; delete rest.caps;
+    delete rest.trust; delete rest.caps; delete rest.reports_user_ids;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
     // tenure (S10) and avatar (S13) go through the plain update.
     if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;
@@ -1419,6 +1429,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setProjectLead: async (ctx, userId, [projectId, roleId]: [string, string | null]) => {
     if (!isServerId(projectId) || (roleId !== null && !isServerId(roleId))) return null;
     return await (ctx as any).runMutation((api as any).orgRoles.setProjectLead, { project_id: projectId, role_id: roleId });
+  },
+
+  // Initiatives (initiatives-projects-role-page.md I1). The store paints
+  // initiatives[] and initiativeUpdates[] optimistically; each side effect is
+  // the one public mutation the CLI also calls, so the rules live in one place.
+  // A stub id (a create that has not echoed yet) is not a server id: the write
+  // waits for the row, as a project lead does.
+  createInitiative: async (ctx, userId, [opts]: [Record<string, any>]) => {
+    return await (ctx as any).runMutation(api.initiatives.create, opts);
+  },
+  updateInitiative: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    if (!isServerId(id)) return null;
+    return await (ctx as any).runMutation(api.initiatives.update, { id, ...fields });
+  },
+  addInitiativeProject: async (ctx, userId, [id, projectId]: [string, string]) => {
+    if (!isServerId(id) || !isServerId(projectId)) return null;
+    return await (ctx as any).runMutation(api.initiatives.addProject, { id, project_id: projectId });
+  },
+  removeInitiativeProject: async (ctx, userId, [id, projectId]: [string, string]) => {
+    if (!isServerId(id) || !isServerId(projectId)) return null;
+    return await (ctx as any).runMutation(api.initiatives.removeProject, { id, project_id: projectId });
+  },
+  setInitiativeProjects: async (ctx, userId, [id, projectIds]: [string, string[]]) => {
+    if (!isServerId(id)) return null;
+    return await (ctx as any).runMutation(api.initiatives.setProjects, { id, project_ids: projectIds.filter(isServerId) });
+  },
+  postInitiativeUpdate: async (ctx, userId, [id, update]: [string, { client_key?: string; body: string; health?: string }]) => {
+    if (!isServerId(id)) return null;
+    return await (ctx as any).runMutation(api.initiatives.postUpdate, { id, ...update });
   },
 
   // Issue sync sources (docs/architecture/issue-sync.md S1.3, S9). Like plans

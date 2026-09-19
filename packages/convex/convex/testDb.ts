@@ -91,11 +91,13 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       // one keep insertion order (the sort is stable). `last_activity_at`
       // comes first: the tables that have it (thread_reads) index on it, and
       // their `updated_at` moves on every mark-read — ordering by that would
-      // shuffle the Threads inbox whenever a row was touched.
+      // shuffle the Threads inbox whenever a row was touched. `at` comes last:
+      // it is the whole clock of a row that carries no other stamp
+      // (initiative_updates), so it can reorder nothing that sorted before.
       let rangeKey: string | null = null;
       const timeKey = (row: any) =>
         rangeKey ? (row[rangeKey] ?? null)
-          : row.last_activity_at ?? row.created_at ?? row.timestamp ?? row.updated_at ?? null;
+          : row.last_activity_at ?? row.created_at ?? row.timestamp ?? row.updated_at ?? row.at ?? null;
       const apply = () => {
         const rows = (tables[table] ?? [])
           .filter((r) => filters.every(([f, v]) => fieldValue(r, f) === v))

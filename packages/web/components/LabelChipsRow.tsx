@@ -489,6 +489,7 @@ export function LabelChipsRow({
       <button
         key={bucket._id}
         ref={chipRef(key)}
+        aria-pressed={active}
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData("codecast/label-id", bucket._id);
@@ -567,7 +568,7 @@ export function LabelChipsRow({
     // parent). The row then grows to the whole chip list, nothing ever clips,
     // and the panel header runs off the window. The +N pill keeps its room
     // through flex-shrink-0 alone: the shell collapses first, the pill last.
-    <div ref={anchorRef} className="relative flex-1 min-w-0 flex items-center gap-1">
+    <div ref={anchorRef} data-sv-label-chips className="relative flex-1 min-w-0 flex items-center gap-1">
       {/* Clip shell: the chip row and the pinned active chips are hard-clipped
           at the component's edge so nothing can bleed under the panel's icon
           cluster at narrow widths. The +N pill and the popover sit OUTSIDE it:
@@ -630,6 +631,7 @@ export function LabelChipsRow({
             <button
               key={name}
               ref={chipRef(key)}
+              aria-pressed={active}
               onClick={(e) => toggleProject(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
               onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}

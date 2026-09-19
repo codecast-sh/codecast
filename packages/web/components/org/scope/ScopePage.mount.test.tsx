@@ -9,6 +9,10 @@
 // Sessions tab groups hands by who acts next with the inbox's order, a state
 // line, an age and live subtask counts.
 // Run: bun components/org/scope/ScopePage.mount.test.tsx
+import { test } from "bun:test";
+import { realInboxStore, restoreInboxStoreAfterAll } from "../../__tests__/mockInboxStore";
+
+restoreInboxStoreAfterAll();
 import assert from "node:assert/strict";
 import type { OrgSession, OrgTree } from "../orgTypes";
 
@@ -36,13 +40,15 @@ async function verifyScopePage() {
     sessions: {} as Record<string, any>,
     conversations: {},
     docs: {}, docDetails: {}, sessionDecisions: {},
+    // The page reads whether the diff is open (it closes the board for it).
+    clientState: { ui: {}, layouts: {} },
     updateOrgRole: (id: string, fields: any) => calls.push(`update:${id}:${JSON.stringify(fields)}`),
     reparentOrgRole: () => {}, retireOrgRole: () => {},
   };
   const collections: Record<string, any[]> = { projects: [], plans: [], tasks: [], docs: [] };
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
 
-  mock.module("../../../store/inboxStore", () => ({ useInboxStore, useTrackedStore: () => state }));
+  mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
   mock.module("../../../hooks/useSyncOrgTree", () => ({ useSyncOrgTree: () => ({ tree: env.tree, ready: true, missing: false, refused: false, retry: () => {} }) }));
   for (const h of ["useSyncProjects", "useSyncTasks", "useSyncPlans"]) mock.module(`../../../hooks/${h}`, () => ({ [h]: () => {} }));
   mock.module("../../../hooks/useSyncDocs", () => ({ useSyncDocs: () => {}, useSyncDocDetail: () => {} }));
@@ -72,6 +78,10 @@ async function verifyScopePage() {
     AnchorConversation: (props: any) => React.createElement("div", { "data-thread": props.conversationId, "data-thread-autofocus": props.autoFocusInput ? "1" : "0", "data-thread-owner": props.seedOwnership ? "1" : "0", "data-thread-fold": props.foldBootstrap ? "1" : "0", "data-thread-fold-working": props.foldWorkingTurns ? "1" : "0", "data-thread-density": props.initialDensity ?? "" }, props.leadNode, React.createElement("textarea", { "data-composer": true })),
     AnchorOnboarding: (props: any) => React.createElement("div", { "data-anchor-onboarding": props.scope }, "Meet the Anchor"),
   }));
+  // The conversation is the inbox's session pane with the seat's options (I3).
+  mock.module("../../../app/inbox/QueuePageClient", () => ({
+    InboxConversation: ({ sessionId, seat, autoFocusInput }: any) => React.createElement("div", { "data-thread": sessionId, "data-thread-autofocus": autoFocusInput ? "1" : "0", "data-thread-owner": seat.seedOwnership ? "1" : "0", "data-thread-fold": "1", "data-thread-fold-working": seat.layout.foldWorkingTurns ? "1" : "0", "data-thread-density": seat.layout.initialDensity ?? "" }, seat.layout.leadNode, React.createElement("textarea", { "data-composer": true })),
+  }));
   mock.module("./ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope) }, "feed") }));
   mock.module("../../../app/tasks/page", () => ({ TaskListContent: () => React.createElement("div", { "data-task-list": true }, "tasks") }));
   mock.module("./ScopeSettings", () => ({ ScopeSettings: (props: any) => React.createElement("div", { "data-scope-settings": props.armRetire ? "armed" : "idle" }, "settings") }));
@@ -80,6 +90,7 @@ async function verifyScopePage() {
   mock.module("../../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
   mock.module("../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }) }));
   mock.module("../RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
+  mock.module("../../initiatives/ProjectInitiatives", () => ({ ProjectInitiatives: ({ projectId }: any) => React.createElement("span", { "data-project-initiatives": projectId }) }));
   mock.module("../../charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }), ProjectLeadMark: () => null, HireLeadDialog: () => null, useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
   mock.module("../RetireRoleConfirm", () => ({ retireToastText: () => "retired" }));
   mock.module("../OrgScopePanel", () => ({ DocRow: () => null, InlineEdit: () => null }));
@@ -135,9 +146,10 @@ async function verifyScopePage() {
   assert.equal(qa("[data-scope-tab]")[0].getAttribute("data-scope-tab"), "scope", "and Scope is the first tab");
   assert.ok(q('[data-role-scope="page"]'), "the Scope tab is the scope view at full size");
   assert.equal(q("[data-scope-feed]"), null, "the feed waits behind its tab");
-  assert.deepEqual(qa('[data-role-scope="page"] [data-scope-label]').map((el) => el.textContent), ["Looks after", "Sessions", "Its job", "Reports to"], "the sections a person reads, in order");
-  assert.match(q('[data-role-scope="page"] [data-scope-section="looks-after"]')!.textContent!, /Growth/, "the projects it looks after, by name");
+  assert.deepEqual(qa('[data-role-scope="page"] [data-scope-label]').map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to"], "the sections a person reads, in order, projects first");
+  assert.match(q('[data-role-scope="page"] [data-scope-section="projects"] [data-scope-project]')!.textContent!, /Growth/, "each project it looks after is a card, by name");
   assert.ok(q('[data-role-scope="page"] [data-scope-project] [data-project-lead-chip="fixture-project-growth"]'), "each project row carries its lead, drawn by the one chip that knows the rule");
+  assert.ok(q('[data-role-scope="page"] [data-scope-project-initiative] [data-project-initiatives="fixture-project-growth"]'), "and the initiatives it belongs to");
   assert.match(q('[data-role-scope="page"] [data-scope-sessions-line]')!.textContent!, /2 waiting on a person/, "the sessions by who acts next");
   assert.ok(q('[data-role-scope="page"] [data-hand-groups]'), "and the same grouped rows the Sessions tab shows");
   assert.match(q('[data-role-scope="page"] [data-scope-section="reports-to"]')!.textContent!, /Ashot Petrosian/);
@@ -316,4 +328,4 @@ async function verifyScopePage() {
   console.log("scope page as a conversation: ok");
 }
 
-verifyScopePage().catch((e) => { console.error(e); process.exit(1); });
+test("the scope page mounts as a conversation in its three widths", verifyScopePage, 120_000);

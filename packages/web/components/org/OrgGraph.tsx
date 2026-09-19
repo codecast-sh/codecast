@@ -400,6 +400,9 @@ function OrgGraphInner(props: OrgGraphProps) {
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_e, node) => {
     const n = byId.get(node.id);
     if (n?.kind === "session") onOpenSession?.(n.session._id);
+    // A seat opens the way a session does, and lands on the role page (I3);
+    // collapse keeps its own toggle on the card and its row in the menu.
+    else if (n?.kind === "role" && !n.ghost && n.role.standing?.conversation_id) onOpenSession?.(n.role.standing.conversation_id);
     else if (n && (n.kind === "person" || n.kind === "role")) onToggleCollapse(n.id);
   }, [byId, onOpenSession, onToggleCollapse]);
   const onContext: NodeMouseHandler = useCallback((e, node) => {

@@ -24,7 +24,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, headroomScore } from "@codecast/shared/contracts";
+import { formatAgo, headroomScore, describeDecision } from "@codecast/shared/contracts";
 import { resolveAccountChip } from "../lib/accountUsageChip";
 import { machineSwitchBlock, machineSwitchPendingCopy } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
@@ -384,6 +384,16 @@ export function AccountUsageChip() {
                 : `Codex "${codexLabel}" — worst limit window at ${codexWorst != null ? Math.round(codexWorst) : "?"}%`
             }
           />
+        )}
+        {/* An open ask says so in words, wherever the chip is: a coloured bolt
+            is a state, and this is a question waiting on the person. */}
+        {awaitingApproval && !sw.switching && (
+          <span
+            className="shrink-0 rounded bg-sol-yellow/15 px-1 text-[10px] font-semibold text-sol-yellow"
+            title={describeDecision(state?.last_decision) ?? "An account switch is waiting for your approval"}
+          >
+            switch?
+          </span>
         )}
         {sw.switching ? (
           <span

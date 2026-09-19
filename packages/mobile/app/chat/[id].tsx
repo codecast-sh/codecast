@@ -20,6 +20,7 @@ import { chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
 import { MessageRow, DayDivider, NewDivider, ChatAvatar, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
+import { useSessionIdentityLookup } from '@/components/identity';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
 import { MessageActionsSheet, type MessageAction } from '@/components/chat/MessageActionsSheet';
 import { ImageViewer } from '@/components/chat/ImageViewer';
@@ -276,6 +277,7 @@ export default function ChatChannelScreen() {
     return map;
   }, [head?.threads]);
 
+  const identityFor = useSessionIdentityLookup();
   const toView = useCallback((msg: any): MobileChatMessage => {
     const member = memberById.get(String(msg.user_id));
     const thread = threadByRoot.get(String(msg._id));
@@ -294,7 +296,7 @@ export default function ChatChannelScreen() {
             id: String(msg.user_id),
             name: msg.origin_session_title || 'Agent session',
             isAgent: true,
-            session: { agentType: msg.origin_agent_type, via: humanName },
+            session: { agentType: msg.origin_agent_type, via: humanName, identity: identityFor(msg.origin_session_id) },
           }
         : {
             id: String(msg.user_id),
@@ -320,7 +322,7 @@ export default function ChatChannelScreen() {
           }
         : undefined,
     };
-  }, [memberById, authorById, viewerId, reactionsByMessage, threadByRoot]);
+  }, [memberById, authorById, viewerId, reactionsByMessage, threadByRoot, identityFor]);
 
   // Older pages + live head + optimistic sends, ascending, folded through the
   // SAME timeline rules the web uses.

@@ -24,19 +24,15 @@ import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { recordingState } from '@/lib/recordingStatus';
+import { optionalNative } from '@/lib/optionalNative';
 
 // Same lazy probe as lib/calls/ringtone.ts and lib/recorder.ts: a JS bundle
 // newer than the installed binary must lose the player, not the screen.
 let audio: typeof import('expo-audio') | null | undefined;
 function getAudio() {
   if (audio !== undefined) return audio;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { requireOptionalNativeModule } = require('expo');
-    audio = requireOptionalNativeModule('ExpoAudio') ? require('expo-audio') : null;
-  } catch {
-    audio = null;
-  }
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  audio = optionalNative('ExpoAudio', () => require('expo-audio'));
   return audio;
 }
 

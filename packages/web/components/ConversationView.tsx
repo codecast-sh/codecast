@@ -93,7 +93,7 @@ import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealHost } from "./ObjectReveal";
-import { RevealAncestryCtx, RevealInBandCtx, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
+import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -148,7 +148,7 @@ function extractTextFromHast(node: any): string {
   if (node.children) return node.children.map(extractTextFromHast).join('');
   return '';
 }
-import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { extractFileChanges, editStringsFromInput } from "../lib/fileChangeExtractor";
 import { parseWorkflowScriptMeta, parseWorkflowLaunch } from "../lib/workflowLaunch";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
@@ -224,7 +224,7 @@ import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, isDecideCastCommand, browserTabOf, type BrowserTabRef, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem, resolveCloudStartFrom } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, convHasPendingSend, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem, resolveCloudStartFrom, resolveSimpleView } from "../store/inboxStore";
 import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { DocDates } from "./DocDates";
@@ -272,7 +272,10 @@ import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, GitCommitHorizontal, GitPullRequest, BookOpenText, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive, ArrowUpRight, ArrowRightLeft, Cpu } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
-import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+import { ContextMenu, CursorPopover, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+import { IdentityFace } from "./identity";
+import { CharacterPicker } from "./identity/CharacterPicker";
+import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
 import { useDevices, useDeviceMoveStatus, deviceDisplayName, type Device } from "./DeviceBadge";
 import { MachineChips } from "./MachineChips";
 import { SessionModeToggles } from "./SessionModeToggles";
@@ -293,6 +296,8 @@ const SessionHuddleButton = lazy(() => import("./calls/OccupancyChip").then((m) 
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
 import { expandEntityMentions } from "../lib/mentionExpansion";
+import { identityLine } from "../lib/sessionIdentity";
+import { personifyAllNow } from "../hooks/usePersonifyAll";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 import { devRenderCount, devCountElements } from "../lib/devRenderCount";
 
@@ -334,7 +339,10 @@ const PENDING_RETRY_AFTER_MS = 20_000;
 // escalation may appear: the daemon injects deferred messages within its next
 // poll once the turn ends, so a message that's been pending behind a long turn
 // shouldn't flash "hasn't reached the agent" the instant the agent goes idle.
-const PENDING_IDLE_GRACE_MS = 8_000;
+// The window is generous on purpose — an idle pane is the ordinary state a
+// message gets delivered INTO, so a few slow daemon passes are not evidence of
+// a loss, and the calm "queued" line covers the wait.
+const PENDING_IDLE_GRACE_MS = 45_000;
 
 // A booting / resuming / freshly-connected session legitimately takes far longer
 // than a turn to begin processing the first message, so the per-message banner
@@ -606,7 +614,7 @@ const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
 // Simple view reads calmer by default: tool activity as one-line receipts.
 // An explicit per-conversation choice (the map above) still wins.
 function defaultDensity(): ConversationDensity {
-  return useInboxStore.getState().clientState.ui?.simple_view ? "condensed" : "full";
+  return resolveSimpleView(useInboxStore.getState().clientState.ui) ? "condensed" : "full";
 }
 const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
   { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
@@ -1104,7 +1112,7 @@ function EdgeMessagesIndicator({
 }) {
   const isUp = dir === "up";
   return (
-    <div className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
+    <div data-cc-edge={dir} className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
       <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-[10px] sm:text-xs shadow-sm pointer-events-auto">
         {loading ? (
           <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -4244,6 +4252,9 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase),
   // grok read_file uses target_file and list_dir uses target_directory.
   const filePath = toolPathFromInput(parsedInput);
+  // Whichever names this client gives the two halves of a replacement — muse
+  // writes {find, replace}, Claude {old_string, new_string}.
+  const editStrings = editStringsFromInput(parsedInput);
   const relativePath = getRelativePath(filePath);
   // Enables inline line comments on the agent's edits (see DiffView). Scoped to a
   // live conversation; comments land in the shared review batch keyed by the
@@ -4726,10 +4737,10 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 <div className="p-2 text-xs text-sol-text-dim">No output</div>
               )}
             </div>
-          ) : isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
+          ) : isEdit && editStrings ? (
             <DiffView
-              oldStr={String(parsedInput.old_string)}
-              newStr={String(parsedInput.new_string)}
+              oldStr={editStrings.oldStr}
+              newStr={editStrings.newStr}
               startLine={startLine}
               language={language}
               commentContext={lineCommentCtx(filePath)}
@@ -8734,9 +8745,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {bannerState === "stuck" && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
           {!retryStage && (
-            <span className="text-xs text-sol-orange/90">
+            <span className="text-xs text-sol-text-muted">
               {retryState === "idle"
-                ? "Message hasn't reached the agent"
+                ? "No confirmation from the agent yet"
                 : agentStatus ? "Waiting for message delivery…" : "Restart requested…"}
             </span>
           )}
@@ -8749,7 +8760,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           <button
             onClick={(e) => { e.stopPropagation(); handleRetryRestart(); }}
             disabled={retryState !== "idle"}
-            className="flex items-center gap-1 px-2 py-0.5 rounded border border-sol-orange/40 text-xs text-sol-orange hover:bg-sol-orange/10 transition-colors disabled:opacity-60"
+            className="flex items-center gap-1 px-2 py-0.5 rounded border border-sol-border text-xs text-sol-text-muted hover:text-sol-text hover:border-sol-text-dim transition-colors disabled:opacity-60"
           >
             <svg className={`w-3 h-3 ${retryState !== "idle" ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -9514,7 +9525,7 @@ function AssistantBlockImpl({
       )}
 
       {shouldShowHeader && (
-        <div className="flex items-center gap-2 mb-2 mt-4">
+        <div data-cc-message-who className="flex items-center gap-2 mb-2 mt-4">
           <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
             <AssistantIcon agentType={agentType} />
             <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
@@ -9587,7 +9598,7 @@ function AssistantBlockImpl({
               )}
             </div>
             {!parsedApiError && (isOverflowing || !contentExpanded) && (
-              <div className="flex items-center gap-1 mt-2">
+              <div data-cc-message-overflow className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setFullscreen(true)}
                   className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
@@ -10722,7 +10733,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         if (chatMentionMode && m.type === "session" && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
         return mentionItemMatches(m, acQuery);
       });
-      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 8 : 6, acQuery)
+      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 8 : 6, acQuery, personifyAllNow())
         .map((m) => ({ ...m, description: m.sublabel }));
 
       const fileMatches = (filePathsRef.current || [])
@@ -10785,7 +10796,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       } else if (item.type === "file" || item.type === "skill") {
         inserted = `@${item.label} `;
       } else {
-        const truncTitle = item.label.length > 30 ? item.label.slice(0, 30) + "..." : item.label;
+        // A session that wears a character or a role is named as that person:
+        // the reference reads "@[Ember jx7abcd]" and renders as its face and
+        // name (session-characters.md S3). A plain session keeps its title.
+        const persona = item.type === "session" && item.identity
+          ? identityLine(item.identity, item.label, personifyAllNow()).name
+          : null;
+        const refTitle = persona ?? item.label;
+        const truncTitle = refTitle.length > 30 ? refTitle.slice(0, 30) + "..." : refTitle;
         const id = item.shortId || (item.type === "doc" ? `doc:${item.id}` : "");
         const ref = id ? `@[${truncTitle} ${id}]` : `@[${truncTitle}]`;
         inserted = `${ref} `;
@@ -13151,7 +13169,7 @@ const ConversationViewInner = (
   }, [conversation?._id]);
   // Toggling Simple view retunes the open conversation immediately — but only
   // when the user hasn't explicitly picked a density for it (that choice wins).
-  const simpleViewPref = useInboxStore((st) => st.clientState.ui?.simple_view === true);
+  const simpleViewPref = useInboxStore((st) => resolveSimpleView(st.clientState.ui));
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
     setDensityState(resolveDefaultDensity());
@@ -13503,6 +13521,15 @@ const ConversationViewInner = (
       team_id: sess.team_id,
     };
   }));
+  // Who this session is (docs/architecture/session-characters.md S3): the
+  // header wears the same face as its inbox card, at 22 px, and clicking it
+  // opens the character picker. Narrow like managedSession above — the
+  // identity fields alone, so the heartbeat's churn re-renders nothing.
+  const identityRow = useInboxStore(useShallow((s) => {
+    const sess = effectiveConversationId ? (s.sessions[effectiveConversationId] as any) : null;
+    return sess ? identityRowOf(sess) : null;
+  }));
+  const headerCharacterPicker = useContextMenu<IdentityRow[]>();
   const isSessionLive = !!managedSession?.is_connected;
   // The command palette's "Copy tmux attach command" — the same gesture as the
   // header pill's copy button, so it copies the same command for the same machine.
@@ -15511,14 +15538,22 @@ const ConversationViewInner = (
     setShowThinking((s) => !s);
   }, [hasAnyThinking]));
 
-  useMountEffect(() => {
-    const el = headerRef.current;
+  // The header's height anchors everything that floats under it (the pinned
+  // prompt bubble, the files pill, the jump toast). Bound through a callback
+  // ref, not a mount effect: an effect observes whichever node the ref held at
+  // mount, and once that node is replaced the observer reports the detached
+  // node's height, zero, forever. The pinned bubble then sat under the header
+  // with its first line cut. The ref callback follows the element instead and
+  // disconnects when it leaves.
+  const bindHeader = useCallback((el: HTMLElement | null) => {
+    headerRef.current = el;
     if (!el) return;
-    const ro = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
-    setHeaderHeight(el.offsetHeight);
+    const measure = () => setHeaderHeight(el.offsetHeight);
+    const ro = new ResizeObserver(measure);
+    measure();
     ro.observe(el);
     return () => ro.disconnect();
-  });
+  }, []);
 
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
   const [deskClass, setDeskClass] = useState("");
@@ -16594,13 +16629,11 @@ const ConversationViewInner = (
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");
-  const openReveal = useOpenReveal();
   const inRevealBand = useContext(RevealInBandCtx);
-  const [hostingReveal, setHostingReveal] = useState(false);
-  useLayoutEffect(() => {
-    const root = headerRef.current?.closest("[data-cc-conversation]");
-    setHostingReveal(!!(openReveal && root && root.contains(openReveal.slot)));
-  }, [openReveal]);
+  // Keyed on the conversation as well as the band: one instance of this view
+  // serves every session the inbox selects, and a fold left over from the
+  // session that hosted a band used to follow the reader to the next one.
+  const hostingReveal = useHostsReveal(headerRef, "[data-cc-conversation]", effectiveConversationId);
   const compactChrome = inRevealBand || hostingReveal;
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
@@ -17278,7 +17311,7 @@ const ConversationViewInner = (
           </div>
         </div>
       )}
-      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={bindHeader} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
           <div ref={titlebarHeadRef} className="cc-panel__head gap-2 min-w-0">
             <div ref={squeezeRowRef} className="cq-squeeze-row flex items-center gap-2 min-w-0 overflow-hidden flex-1">
@@ -17293,6 +17326,16 @@ const ConversationViewInner = (
               </ShortcutTooltip>
             )}
             {headerLeft}
+            {identityRow && (
+              <IdentityFace
+                row={identityRow}
+                size={22}
+                className="flex-shrink-0"
+                onPick={(e) => headerCharacterPicker.open(e, [identityRow], { force: true })}
+                side="bottom"
+                align="start"
+              />
+            )}
             {isRenaming ? (
               <input
                 ref={renameInputRef}
@@ -17493,9 +17536,11 @@ const ConversationViewInner = (
                     quiet start affordance otherwise (hidden when calling is
                     unconfigured — SessionHuddleButton gates itself). */}
                 {conversation._id && !guest && callsAvailable && (
-                  <Suspense fallback={null}>
-                    <SessionHuddleButton conversationId={String(conversation._id)} />
-                  </Suspense>
+                  <span data-cc-keep="live" className="contents">
+                    <Suspense fallback={null}>
+                      <SessionHuddleButton conversationId={String(conversation._id)} />
+                    </Suspense>
+                  </span>
                 )}
 
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
@@ -17508,7 +17553,7 @@ const ConversationViewInner = (
                 {/* Runs on a remote host whose daemon is struggling: say so
                     here, on the session it actually affects — the header
                     fleet chip deliberately ignores remote machines. */}
-                {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
+                {conversation?._id && !guest && <span data-cc-keep className="contents"><SessionDaemonChip conversationId={String(conversation._id)} /></span>}
 
                 {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
 
@@ -17522,7 +17567,7 @@ const ConversationViewInner = (
                 <span aria-hidden className="w-px h-3.5 bg-sol-border/60 mx-0.5 flex-shrink-0" />
 
                 {(highlightQuery || isLocalSearchOpen) && (
-                  <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
+                  <div data-cc-keep className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
                     <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
@@ -17645,7 +17690,10 @@ const ConversationViewInner = (
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                    {/* data-cc-keep: the Minimal style rests the header on the
+                        title, the live status and this menu; the rest of the
+                        cluster fades in on hover or keyboard focus. */}
+                    <button data-cc-keep aria-label="Session menu" className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                       </svg>
@@ -17946,7 +17994,7 @@ const ConversationViewInner = (
         >
           <div className="conv-col mx-auto">
             <div data-sv-sticky className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
-              <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
+              <div data-sv-sticky-tools className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
                 {(stickyClamped || stickyExpanded) && (
                   <button
                     className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
@@ -17976,7 +18024,7 @@ const ConversationViewInner = (
                   </svg>
                 </button>
               </div>
-              <div className="flex items-center gap-2 mb-1">
+              <div data-sv-sticky-who className="flex items-center gap-2 mb-1">
                 {(() => {
                   const kind = userMsgKindMap.get(activeStickyMsg.id);
                   if (kind?.kind === "session_message") {
@@ -17997,7 +18045,7 @@ const ConversationViewInner = (
                   );
                 })()}
               </div>
-              <div className="pl-8 pr-4">
+              <div data-sv-sticky-body className="pl-8 pr-4">
                 <MessagePromptPreview
                   content={cleanStickyContent(activeStickyMsg.content)}
                   images={stickyImages}
@@ -18485,6 +18533,10 @@ const ConversationViewInner = (
           </button>
         </div>
       )}
+      {/* The header face's picker (session-characters.md S2), one instance. */}
+      <CursorPopover state={headerCharacterPicker}>
+        {(rows) => <CharacterPicker rows={rows as any} onDone={headerCharacterPicker.close} />}
+      </CursorPopover>
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
       {conversation && (
         <Suspense fallback={null}>

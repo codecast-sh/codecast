@@ -17,7 +17,10 @@
  */
 import { ReactNode } from "react";
 import Link from "next/link";
-import { User, MessageSquare, FolderKanban, Tag, ListChecks } from "lucide-react";
+import { User, MessageSquare, FolderKanban, Tag, ListChecks, Flag } from "lucide-react";
+import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { byListOrder, initiativeHref } from "./initiatives";
+import { HealthChip, INITIATIVE_ACCENT, OwnerChip } from "../components/initiatives/InitiativeAtoms";
 import { isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import type { TaskItem, ProjectItem } from "../store/inboxStore";
 import type { ListGroup } from "../components/GenericListView";
@@ -28,7 +31,7 @@ import { DEFAULT_TASK_STATUSES, type TeamTaskStatus } from "@codecast/shared/tas
 import { resolveAssigneeInfo } from "./liveEntities";
 import { arrangeChain, type ChainNode } from "./taskChain";
 import { AssigneeFace } from "../components/identity/AssigneeFace";
-import { OwnerRoleChip } from "../components/charter/CharterChips";
+import { ProjectLeadChip } from "../components/charter/ProjectLeadChip";
 
 /** What an axis needs from the page to draw a header (projects aren't on the
  *  task row, and the label header offers a one-click filter). */
@@ -38,13 +41,17 @@ export type TaskGroupContext = {
   /** The active workspace's status vocabulary (per-team custom statuses),
    *  already board-ordered. Defaults keep callers that predate the field working. */
   taskStatuses?: TeamTaskStatus[];
-  /** The org tree slice's roles (useOrgRoles). The Chain axis reads who
-   *  reports to whom from them, and a project header its lead. */
+  /** The org tree slice's roles (useOrgRoles): the Chain axis reads who
+   *  reports to whom from them. */
   roles?: OrgRole[] | null;
   /** The live roster and the viewer: what names a person who heads a chain
    *  but holds no task on screen, and which chain sorts first. */
   teamMembers?: any[] | null;
   currentUser?: { _id: string } | null;
+  /** The initiative each project reads as (lib/initiatives
+   *  projectInitiativeIndex): the Initiative axis reaches a task's initiative
+   *  through its project, never from a field on the task. */
+  initiativeOfProject?: Map<string, InitiativeRow> | null;
 };
 
 const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
@@ -97,6 +104,9 @@ function assigneeOfKey(key: string, sample: TaskItem | undefined, ctx: TaskGroup
 }
 
 const HEADER_LINK = "text-[10px] text-sol-cyan hover:underline flex-shrink-0";
+
+const initiativeOfTask = (t: TaskItem | undefined, ctx: TaskGroupContext): InitiativeRow | undefined =>
+  ctx.initiativeOfProject?.get((t as any)?.project_id ?? "");
 
 // Roles and people are peers here: one bucket each, sorted together by name,
 // each headed by its face. A role's face opens the role hover card.
@@ -174,7 +184,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
         // outside the header's toggle button: the chip is itself a link.
         extra: project ? (
           <span className="flex items-center gap-2 flex-shrink-0">
-            <OwnerRoleChip roles={ctx.roles} ownerRoleId={project.owner_role_id} size="xs" />
+            <ProjectLeadChip projectId={project._id} size="xs" />
             <Link
               href={`/projects/${project._id}`}
               onClick={(e) => e.stopPropagation()}
@@ -239,6 +249,38 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       }),
   },
 
+  // The goal a task serves, read through its project
+  // (initiatives-projects-role-page.md I1). A project may sit in several
+  // initiatives and a task takes one bucket, so it reads as the first by the
+  // list's order. A drop cannot move a task between initiatives: membership is
+  // the project's, so the groups refuse drops.
+  initiative: {
+    label: "Initiative",
+    keyOf: (t, ctx) => initiativeOfTask(t, ctx)?._id ?? "",
+    compare: (a, b, ctx) => {
+      const ra = initiativeOfTask(a.sample, ctx);
+      const rb = initiativeOfTask(b.sample, ctx);
+      return ra && rb ? byListOrder(ra, rb) : 0;
+    },
+    header: (b, ctx) => {
+      const row = initiativeOfTask(b.sample, ctx);
+      return {
+        label: row?.title || b.key,
+        icon: <Flag className="w-3.5 h-3.5" style={{ color: INITIATIVE_ACCENT }} />,
+        badge: row ? <HealthChip health={row.health} at={row.health_at} now={Date.now()} /> : undefined,
+        extra: row ? (
+          <span className="flex items-center gap-2 flex-shrink-0">
+            <OwnerChip owner={row.owner} size={14} />
+            <Link href={initiativeHref(row)} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
+              View initiative
+            </Link>
+          </span>
+        ) : undefined,
+      };
+    },
+    noneLabel: "No initiative",
+  },
+
   label: {
     // Tasks here carry three or four phrase-shaped labels, so the first one is a
     // representative, not a category — but one bucket per task is what keeps a
@@ -295,7 +337,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
 };
 
 /** Axis order for the group menus. */
-export const TASK_AXIS_KEYS = ["status", "project", "plan", "assignee", "chain", "label", "session"] as const;
+export const TASK_AXIS_KEYS = ["status", "initiative", "project", "plan", "assignee", "chain", "label", "session"] as const;
 
 /** Split a group value into its axes, dropping anything unknown. "none" (or an
  *  unrecognised value) yields an empty list, meaning a flat list. */

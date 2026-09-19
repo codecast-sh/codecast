@@ -7,7 +7,7 @@
 // from the orgTree store singleton (the same feeder the org page mounts) plus
 // two per view queries: the board counts and the brief. Every edit is a store
 // action that moves the page in the same tick and rides dispatch to orgRoles.*.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
@@ -21,60 +21,50 @@ import { useSyncTasks } from "../../../hooks/useSyncTasks";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
-import { useIsPhone, useMinWidth } from "../../../hooks/useIsPhone";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
-import { canEditRole, handsWaiting, queryProblem, roleStanding, scopeQueryRef } from "../../../lib/scopePage";
-import { AnchorConversation, AnchorOnboarding } from "../../anchor/AnchorConversation";
+import { canEditRole, handsWaiting, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf } from "../../../lib/scopePage";
+import { AnchorOnboarding } from "../../anchor/AnchorConversation";
+import { InboxConversation, type SeatSession } from "../../../app/inbox/QueuePageClient";
+import { useSeat } from "./useSeat";
+import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { RoleFace } from "../RoleFace";
 import { RolePausedNote } from "../RolePausedNote";
 import { parentName } from "../orgMeta";
-import type { OrgAnchor, OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
+import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useScopeIds } from "../../../hooks/useScopeIds";
-import { SCOPE_PANEL_W, ScopePanel, scopeDefaultTab, scopeTabFromParam, type ScopePanelLayout, type ScopeTabKey } from "./ScopePanel";
+import { ScopePanel, scopeDefaultTab, scopeTabFromParam, type ScopeTabKey } from "./ScopePanel";
+import { ConversationWithPanel, usePanelLayout } from "./ConversationWithPanel";
 import { briefFirstLine } from "./scopeTypes";
 import { retireToastText } from "../RetireRoleConfirm";
-import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
 
 const api = _api as any;
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 
-/** The conversation needs this much beside the panel's column before the
- *  panel gets one; narrower windows get the panel as an overlay. */
-const WIDE_MIN_W = SCOPE_PANEL_W + 620;
-
-export function ScopePageInner({ id }: { id: string }) {
+/** `session` is set when the inbox pane renders this page in place of a
+ *  standing session (initiatives-projects-role-page.md I3): the pane's own
+ *  props ride through to the conversation, the address stays the session's,
+ *  and the board's tab is this visit's state rather than the URL's. */
+export function ScopePageInner({ id, session }: { id: string; session?: SeatSession }) {
   const { tree, ready } = useSyncOrgTree();
   // The panel's tabs paint from the store: keep the workspace's collections
   // fed here the way the project page does.
   useSyncProjects(); useSyncTasks(); useSyncPlans(); useSyncDocs();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const phone = useIsPhone();
-  const wide = useMinWidth(WIDE_MIN_W);
+  const { layout: panelLayout, phone } = usePanelLayout();
   const now = useCoarseNow(30_000);
   const s = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
 
   const isRoot = id === "workspace";
-  const role: OrgRole | null = useMemo(() => (!tree || isRoot ? null : tree.roles.find((r) => r.short_id === id || r._id === id) ?? null), [tree, id, isRoot]);
-  const roleAnchorIds = useMemo(() => new Set((tree?.roles ?? []).map((r) => r.anchor_id).filter(Boolean)), [tree]);
-  const anchor: OrgAnchor | null = useMemo(() => {
-    if (!tree) return null;
-    if (role) return role.anchor_id ? tree.anchors.find((a) => a.anchor_id === role.anchor_id) ?? null : null;
-    // The root's standing agent: the workspace anchor no role holds, else the
-    // Chief of Staff's seat (org-staffing.md S16: the workspace's one root
-    // agent is the chief once seated), so the root never offers to create a
-    // second anchor beside the one it has.
-    const chief = tree.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired" && r.anchor_id);
-    return tree.anchors.find((a) => !roleAnchorIds.has(a.anchor_id)) ?? (chief ? tree.anchors.find((a) => a.anchor_id === chief.anchor_id) ?? null : null);
-  }, [tree, role, roleAnchorIds]);
+  const { role, anchor } = useMemo(() => scopeSeatOf(tree, id), [tree, id]);
 
   const projects = useWorkspaceCollection<ProjectItem>("projects");
   const plans = useWorkspaceCollection<PlanItem>("plans");
@@ -92,22 +82,24 @@ export function ScopePageInner({ id }: { id: string }) {
   const briefProblem = queryProblem(briefError, briefMissing, "The brief");
 
   // -------- the panel's tab in the URL, like the project page
-  const tabParam = searchParams.get("tab");
+  const [paneTab, setPaneTab] = useState<ScopeTabKey | null>(null);
+  const inPane = !!session;
+  const tabParam = inPane ? paneTab : searchParams.get("tab");
   const tab: ScopeTabKey = scopeTabFromParam(tabParam, !!role);
   const setTab = useCallback((next: ScopeTabKey) => {
+    if (inPane) { setPaneTab(next === scopeDefaultTab(!!role) ? null : next); return; }
     const params = new URLSearchParams(searchParams.toString());
     // The tab a scope opens on is its bare URL: a role's Scope, the root's feed.
     if (next === scopeDefaultTab(!!role)) params.delete("tab"); else params.set("tab", next);
     const qs = params.toString();
     router.replace(qs ? `/org/${id}?${qs}` : `/org/${id}`);
-  }, [searchParams, router, id, role]);
+  }, [searchParams, router, id, role, inPane]);
   // The panel: open by default beside the conversation; on the phone the
   // conversation leads and the panel is a sheet one tap away. A link straight
   // to a tab opens the panel on it, whatever the width.
   const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone || !!tabParam);
   useWatchEffect(() => { if (tabParam) setPanelOpen(true); }, [tabParam]);
   const openTab = useCallback((next: ScopeTabKey) => { setTab(next); setPanelOpen(true); }, [setTab]);
-  const panelLayout: ScopePanelLayout = phone ? "sheet" : wide ? "side" : "overlay";
 
   // -------- permissions: admins and the host reshape; the parent also edits the brief
   const me = tree?.people.find((p) => p.is_me) ?? (meId ? tree?.people.find((p) => p.user_id === meId) : undefined);
@@ -151,7 +143,8 @@ export function ScopePageInner({ id }: { id: string }) {
   // The pointer is on the role (org.tree stamps `standing` from the
   // conversation carrying standing_role_id); the anchors row stands in for a
   // tree that predates it, and is the root's only source.
-  const standingId = role ? (role.standing?.conversation_id ?? anchor?.conversation_id) : anchor?.conversation_id;
+  // In the pane the session on screen is the one the person opened.
+  const standingId = session?.sessionId ?? (role ? (role.standing?.conversation_id ?? anchor?.conversation_id) : anchor?.conversation_id);
   const standingState = role ? (role.standing?.state ?? anchor?.state) : anchor?.state;
 
   // -------- header facts
@@ -162,6 +155,10 @@ export function ScopePageInner({ id }: { id: string }) {
   const st = useTrackedStore([
     (x) => (standingId ? (x.sessions[standingId] as any)?.model : undefined),
     (x) => (standingId ? (x.sessions[standingId] as any)?.thread_state : undefined),
+    // What the session pane's banners read; the inbox hands them in itself.
+    (x) => (standingId && !inPane ? (x.sessions[standingId] as any)?.is_idle : undefined),
+    (x) => (standingId && !inPane ? (x.sessions[standingId] as any)?.session_error : undefined),
+    (x) => (standingId && !inPane ? (x.sessions[standingId] as any)?.last_user_message : undefined),
   ]);
   const standing = standingId ? st.sessions[standingId] : undefined;
   const model = (standing as any)?.model ?? null;
@@ -186,6 +183,23 @@ export function ScopePageInner({ id }: { id: string }) {
       ? <ScopeLead role={role} anchorName={anchor?.name ?? null} tree={tree} waiting={waiting} standingState={standingState} />
       : null
   ), [tree, role, anchor?.name, waiting, standingState]);
+
+  // -------- the conversation is the session page (I3)
+  // The same pane the inbox mounts, so its banners, share control, context
+  // panels and header actions are here by construction. The right side holds
+  // one thing: the diff stays hidden while the board is open, and opening the
+  // diff from the header closes the board.
+  const diffOpen = useDiffViewerStore((x) => x.diffPanelOpen);
+  const diffWasOpen = useRef(diffOpen);
+  useWatchEffect(() => {
+    if (diffOpen && !diffWasOpen.current) setPanelOpen(false);
+    diffWasOpen.current = diffOpen;
+  }, [diffOpen]);
+  const { onSessionView, ...paneProps } = session ?? ({} as Partial<SeatSession>);
+  const speaker = role ? role.name : anchor?.name ?? "the workspace agent";
+  // The composer is Talk (F4.1): the host, the person the role reports to
+  // and an admin send; anyone else reads and asks to send.
+  const seat = useSeat({ conversationId: standingId, speaker, lead, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView });
 
   // -------- not found / loading
   if (!tree) {
@@ -255,9 +269,15 @@ export function ScopePageInner({ id }: { id: string }) {
       {/* header: the face, the name, who it reports to, the state; the composer below is Talk */}
       <header className={cn("shrink-0 border-b", phone ? "px-3 pt-2 pb-2" : "px-5 pt-3 pb-2.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-start gap-3">
-          <Link href="/org" className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the org">
-            <ArrowLeft className="w-4 h-4" />
-          </Link>
+          {session?.onBack ? (
+            <button type="button" onClick={session.onBack} className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          ) : (
+            <Link href="/org" className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the org" data-scope-back="org">
+              <ArrowLeft className="w-4 h-4" />
+            </Link>
+          )}
           {/* The role's face (S13); the root workspace has none. */}
           {role && <RoleFace role={role} size={phone ? 34 : 40} className="shrink-0 mt-[2px]" />}
           <div className="min-w-0 flex-1">
@@ -303,27 +323,18 @@ export function ScopePageInner({ id }: { id: string }) {
       </header>
 
       {/* body: the conversation, the panel beside it */}
-      <div className="flex-1 min-h-0 relative flex">
+      <ConversationWithPanel open={panelOpen} layout={panelLayout} panel={panelNode} conversation={
         <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-scope-conversation={standingId ?? "none"}>
           {paused && role && <RolePausedNote name={role.name} className={cn("mx-3 mt-2")} onResume={canEdit ? () => update({ status: "active" }) : undefined} />}
           {standingId ? (
             <div className="flex-1 min-h-0">
-              <AnchorConversation
-                conversationId={standingId}
-                hideHeader
-                hideDiff
-                // The composer is Talk (F4.1): the host, the person the role reports
-                // to and an admin send; anyone else reads and asks to send. The
-                // row itself belongs to the agent's bot user, so ownership is
-                // seeded the way the anchor page seeds it.
-                seedOwnership={canEditBrief}
-                foldBootstrap
-                foldWorkingTurns
-                initialDensity="condensed"
-                composerPlaceholder={`Ask ${role ? role.name : anchor?.name ?? "the workspace agent"} for anything…`}
-                leadNode={lead}
-                leadPinned
-                stickyPrompt={false}
+              <InboxConversation
+                isIdle={!!(standing as any)?.is_idle}
+                sessionError={(standing as any)?.session_error}
+                lastUserMessage={(standing as any)?.last_user_message}
+                {...paneProps}
+                sessionId={standingId}
+                seat={seat}
                 autoFocusInput={!phone}
               />
             </div>
@@ -333,28 +344,7 @@ export function ScopePageInner({ id }: { id: string }) {
             <AnchorOnboarding scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : undefined} teamName={tree.workspace.name} compact />
           )}
         </div>
-
-        {panelOpen && panelLayout === "side" && (
-          <aside className="shrink-0 border-l min-h-0" style={{ width: SCOPE_PANEL_W, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }} data-scope-aside="side">
-            {panelNode}
-          </aside>
-        )}
-        {panelOpen && panelLayout === "overlay" && (
-          <aside className="absolute right-0 top-0 bottom-0 z-20 border-l min-h-0 org-panel-in shadow-[-16px_0_40px_-24px_rgba(0,0,0,0.45)]" style={{ width: `min(${SCOPE_PANEL_W}px, 92vw)`, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-bg)" }} data-scope-aside="overlay">
-            {panelNode}
-          </aside>
-        )}
-        {panelOpen && panelLayout === "sheet" && (
-          <div
-            className="absolute inset-x-0 bottom-0 z-20 rounded-t-2xl border-t shadow-[0_-12px_40px_-12px_rgba(0,0,0,0.45)] org-sheet-in"
-            style={{ height: "90%", background: "var(--sol-bg)", borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }}
-            data-scope-aside="sheet"
-          >
-            <div className="flex justify-center pt-2"><span className="w-10 h-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-border) 60%, transparent)" }} /></div>
-            <div className="h-[calc(100%-12px)]">{panelNode}</div>
-          </div>
-        )}
-      </div>
+      } />
     </div>
   );
 }

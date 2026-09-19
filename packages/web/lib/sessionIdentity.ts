@@ -53,6 +53,21 @@ export function characterFor(row: IdentityRow): Character {
   return c.chosen ? c : defaultCharacterFor(row._id);
 }
 
+/** The face a row draws when a surface asks for one regardless of opt-in: its
+ *  role's, its character's, or the default it WOULD wear. SessionFace on web
+ *  and on mobile both draw from this, so the picker's preview, a hover card
+ *  and a phone row agree on the animal. */
+export function faceIdentity(row: IdentityRow): { kind: "role" | "character"; avatar: AvatarKey; name?: string } {
+  const id = sessionIdentity(row, true);
+  return id.kind === "plain" ? { kind: "character", avatar: characterFor(row).avatar } : id;
+}
+
+/** The corner badge's box on a face of `size` px: 0 under 16 px, where the
+ *  badge would be a smudge. */
+export function faceBadgeSize(size: number): number {
+  return size >= 16 ? Math.round(size * 0.46) : 0;
+}
+
 /** The card line's parts. `name` is null for a plain session, which renders
  *  exactly as it always did: the title alone. A role drops a title that only
  *  repeats its name (a standing session's title IS the role's name, S16). */
@@ -89,4 +104,31 @@ export function escalationOf(row: IdentityRow): { role: SessionRoleSnapshot | nu
   const e = row.escalated_by_role;
   if (!e) return null;
   return { role: row.role && row.role._id === e.role_id ? row.role : null, line: e.line, at: e.at };
+}
+
+/** The identity fields alone, lifted off a bigger row. Surfaces that carry a
+ *  session into another shape — a mention item, a dropdown's live snapshot —
+ *  pass this instead of the whole row, so they neither copy a session's churn
+ *  nor read the character fields themselves. */
+export function identityRowOf(row: IdentityRow & Record<string, unknown>): IdentityRow {
+  return {
+    _id: row._id,
+    title: row.title ?? null,
+    character_avatar: row.character_avatar ?? null,
+    character_name: row.character_name ?? null,
+    standing_role_id: row.standing_role_id ?? null,
+    org_role_id: row.org_role_id ?? null,
+    role: row.role ?? null,
+  };
+}
+
+/** A wake signature of the identity fields alone. A surface that draws a face
+ *  subscribes to this rather than to the row, whose ref flips on every
+ *  heartbeat; built on identityRowOf so the two can never disagree on which
+ *  fields make an identity. */
+export function identitySig(row: (IdentityRow & Record<string, unknown>) | null | undefined): string {
+  if (!row) return "";
+  const r = identityRowOf(row);
+  const role = r.role ? `${r.role._id}:${r.role.avatar}:${r.role.name}:${r.role.handle}` : "";
+  return [r._id, r.character_avatar ?? "", r.character_name ?? "", r.standing_role_id ?? "", r.org_role_id ?? "", role].join("|");
 }

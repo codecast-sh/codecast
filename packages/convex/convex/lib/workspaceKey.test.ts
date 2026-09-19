@@ -171,7 +171,7 @@ describe("INVARIANT 1 — access reads workspace, never team_id", () => {
     // team_id. computeWorkspaceKey / workspaceForResource are the WRITER side
     // and are excluded by name — they are the only place the axis is bridged.
     const readers = [
-      "canAccessTask", "canAccessProject", "canAccessDoc", "canAccessPlan",
+      "canAccessTask", "canAccessProject", "canAccessInitiative", "canAccessDoc", "canAccessPlan",
       "workspaceGrantsAccess", "resolveWorkspaceKey", "effectiveTeamForResource",
     ];
     for (const name of readers) {

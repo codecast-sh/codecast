@@ -53,6 +53,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   session: "Session",
   doc: "Doc",
   project: "Project",
+  initiative: "Initiative",
   trigger: "Trigger",
   pr: "Pull request",
   commit: "Commit",
@@ -196,13 +197,17 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // docs/projects are only ever addressed by a full Convex id.
   const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
   const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
+  // An initiative is named by `in-N` or a Convex id; the store's snapshot
+  // usually seeds it below, and this keeps the label live. No-throw for the
+  // same client and deploy skew reason as triggers.
+  const { data: initiative } = useQueryNoThrow(api.initiatives.webGet, type === "initiative" ? { ref: rawId } : "skip");
   // A pull request or commit reference resolves by repository and number/sha,
   // or by Convex id. No-throw for the same client/deploy-skew reason as
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
   const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
   const { data: pullRequest } = useQueryNoThrow(api.pull_requests.webGet, type === "pr" && repoObjectArgs ? repoObjectArgs : "skip");
   const { data: commit } = useQueryNoThrow(api.commits.webGet, type === "commit" && repoObjectArgs ? repoObjectArgs : "skip");
-  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "pr" ? pullRequest : type === "commit" ? commit : undefined;
+  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "pr" ? pullRequest : type === "commit" ? commit : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -239,7 +244,8 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // Convex id (no such page), so the resolved row supplies the reference when
   // the raw id was a Convex id. The commit page matches the sha exactly, so
   // the route carries the full one.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : entity?._id ?? rawId;
+  // An initiative's page is addressed by its `in-N`, the form a person reads.
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : (type === "initiative" && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: served !== undefined, status: entity?.status, label, shortLabel, href };

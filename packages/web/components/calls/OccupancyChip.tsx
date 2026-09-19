@@ -161,6 +161,7 @@ export function HuddleButton({
       : void joinCall(roomKey, { intent: "deliberate" });
   return (
     <button
+      data-huddle-idle
       onClick={(e) => {
         e.stopPropagation();
         start();

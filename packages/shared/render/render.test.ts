@@ -4,6 +4,7 @@ import {
   mcpToolNames,
   codexToolNames,
   grokToolNames,
+  museToolNames,
   isShellTool,
   isReadTool,
   isEditTool,
@@ -66,6 +67,11 @@ describe("formatToolName", () => {
     ["get_command_or_subagent_output", "Wait"],
     ["spawn_subagent", "Agent"],
     ["Web search:", "Search"],
+    // muse snake_case ids land in the same family labels
+    ["edit_file", "Edit"],
+    ["write_file", "Write"],
+    ["write_todos", "Todos"],
+    ["search", "Search"],
     // already-friendly names pass through unchanged
     ["Bash", "Bash"],
     ["Read", "Read"],
@@ -84,10 +90,22 @@ describe("formatToolName", () => {
     for (const [id, label] of Object.entries(grokToolNames)) {
       expect(formatToolName(id)).toBe(label);
     }
+    for (const [id, label] of Object.entries(museToolNames)) {
+      expect(formatToolName(id)).toBe(label);
+    }
   });
 });
 
 describe("tool family classifiers", () => {
+  it("puts muse ids in the same families as the other clients'", () => {
+    expect(isEditTool("edit_file")).toBe(true);
+    expect(isWriteTool("write_file")).toBe(true);
+    expect(isGrepTool("search")).toBe(true);
+    expect(isTodoTool("write_todos")).toBe(true);
+    expect(isReadTool("read_file")).toBe(true);
+    expect(isShellTool("bash")).toBe(true);
+  });
+
   it("puts grok ids in the same families as claude/codex synonyms", () => {
     expect(isShellTool("run_terminal_command")).toBe(true);
     expect(isShellTool("Bash")).toBe(true);
@@ -350,6 +368,10 @@ describe("toolVisual / toolIcon", () => {
     ["run_terminal_command", { icon: "terminal", color: "green" }],
     ["read_file", { icon: "file-code-o", color: "blue" }],
     ["search_replace", { icon: "pencil", color: "orange" }],
+    ["edit_file", { icon: "pencil", color: "orange" }],
+    ["write_file", { icon: "pencil", color: "orange" }],
+    ["search", { icon: "search", color: "violet" }],
+    ["write_todos", { icon: "check-square-o", color: "magenta" }],
     ["list_dir", { icon: "file-code-o", color: "blue" }],
     ["todo_write", { icon: "check-square-o", color: "magenta" }],
     ["read", { icon: "file-code-o", color: "blue" }],
@@ -386,6 +408,8 @@ describe("describeToolGroup", () => {
     expect(describeToolGroup("read_file", 2)).toBe("read 2 files");
     expect(describeToolGroup("Grep", 2)).toBe("2 searches");
     expect(describeToolGroup("search_replace", 1)).toBe("1 edit");
+    expect(describeToolGroup("edit_file", 2)).toBe("2 edits");
+    expect(describeToolGroup("write_file", 1)).toBe("wrote 1 file");
   });
 
   it("falls back to the formatted tool name", () => {

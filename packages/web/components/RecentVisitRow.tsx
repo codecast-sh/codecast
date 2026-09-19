@@ -1,9 +1,11 @@
 import { useMemo, type ReactNode } from "react";
-import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban } from "lucide-react";
+import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag } from "lucide-react";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { VISIT_OBJECT_LABEL, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { sessionLivenessState, type LivenessState } from "../lib/liveness";
+import { SessionGlyph } from "./identity";
+import { identityRowOf } from "../lib/sessionIdentity";
 import { agentDisplayName } from "../lib/commentThread";
 import { statusesForTeam, statusVisual, taskStatusOf } from "../lib/taskStatuses";
 import { computePlanProgress } from "../lib/liveEntities";
@@ -25,6 +27,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (path.startsWith("/files") || path.startsWith("/vault")) return <Folder className={className} />;
   if (path.startsWith("/pages") || path.startsWith("/artifacts")) return <Globe className={className} />;
   if (isBrowserRoutePath(path)) return <Globe className={className} />;
+  if (path.startsWith("/initiatives")) return <Flag className={className} />;
   if (path.startsWith("/projects")) return <FolderKanban className={className} />;
   if (path.startsWith("/workflows") || path.startsWith("/routines")) return <Workflow className={className} />;
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;
@@ -39,6 +42,7 @@ export function pageAccent(path: string): string {
   if (path.startsWith("/plans")) return "var(--sol-cyan)";
   if (path.startsWith("/docs")) return "var(--sol-green)";
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return "var(--sol-orange)";
+  if (path.startsWith("/initiatives")) return "var(--sol-magenta)";
   if (path.startsWith("/projects")) return "var(--sol-text-muted)";
   return "var(--sol-cyan)";
 }
@@ -78,7 +82,14 @@ export function RecentVisitGlyph({ item, className }: { item: ResolvedVisit; cla
   const dim = `${className} text-sol-text-dim`;
   switch (item.objectType) {
     case "session":
-      return <MessageSquare className={dim} />;
+      // Who the session is (session-characters.md S3), else the old glyph.
+      return (
+        <SessionGlyph
+          row={item.entity ? identityRowOf(item.entity as any) : null}
+          size={16}
+          fallback={<MessageSquare className={dim} />}
+        />
+      );
     case "task":
       return item.entity ? <TaskGlyph task={item.entity} className={className} /> : <ListTodo className={dim} />;
     case "plan": {

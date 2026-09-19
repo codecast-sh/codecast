@@ -98,6 +98,13 @@ export function mobileRouteForUrl(url: string): string | null {
       ? `/share/${share.token}`
       : `/share/${share.kind}/${share.token}`;
   }
+  // The org (web's /org route family): the chart, a role's page by its short
+  // id, and "workspace" for the root. A ?tab= on a role's link names a board tab.
+  const org = /^\/org(?:\/([^/]+))?\/?$/.exec(path);
+  if (org) {
+    if (!org[1]) return '/org';
+    return /[?&]tab=/.test(url) ? `/org/${org[1]}/board` : `/org/${org[1]}`;
+  }
   // Team invites are completed on the web; the Chat tab (where the team
   // lives on the phone) is the nearest screen. The web's chat and calls
   // pages land there too.

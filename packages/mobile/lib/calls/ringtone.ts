@@ -13,6 +13,7 @@
 // - Start/stop are generation-guarded: an interruption (phone call, Siri) can
 //   resurrect a paused player, and a stop that lands mid-start must win.
 import { getCallSnapshot } from "./callManager";
+import { optionalNative } from "../optionalNative";
 
 // expo-audio is a NATIVE dependency loaded lazily and guarded: a JS bundle
 // (OTA or dev-server) newer than the installed binary must degrade to a
@@ -21,17 +22,7 @@ import { getCallSnapshot } from "./callManager";
 let audio: typeof import("expo-audio") | null | undefined;
 function getAudio() {
   if (audio !== undefined) return audio;
-  try {
-    // Probe first — the package's inner requireNativeModule("ExpoAudio")
-    // fires lazily on first property access, outside this try, and crashes
-    // a binary without the pod.
-    const { requireOptionalNativeModule } = require("expo");
-    audio = requireOptionalNativeModule("ExpoAudio")
-      ? require("expo-audio")
-      : null;
-  } catch {
-    audio = null;
-  }
+  audio = optionalNative("ExpoAudio", () => require("expo-audio"));
   return audio;
 }
 

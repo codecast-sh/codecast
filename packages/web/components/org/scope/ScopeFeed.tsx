@@ -1,23 +1,21 @@
 "use client";
 // The scope feed (docs/architecture/scopes-and-feed.md F2, F3): everything in
 // a scope as one stream, newest first. Kind chips narrow it; the cursor pages
-// it as the reader scrolls; image and page rows carry a thumbnail. Each page is
-// one mounted loader over org.scopeFeed, the way the org page pages
-// sessionsUnder: a loader reports its rows once and unmounts.
-import { useCallback, useMemo, useRef, useState } from "react";
+// it as the reader scrolls; image and page rows carry a thumbnail. The paging
+// lives in useScopeFeedStream, which the phone's feed shares.
+import { useRef } from "react";
 import Link from "next/link";
 import { CheckSquare, FileText, GitCommitHorizontal, Image as ImageGlyph, Layers, Megaphone, MessageCircleQuestionMark, Terminal, Workflow } from "lucide-react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
-import { useScopeFeedPage, type ScopeRef } from "../../../hooks/useScopeQueries";
+import type { ScopeRef } from "../../../hooks/useScopeQueries";
+import { useScopeFeedStream } from "../../../hooks/useScopeFeedStream";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from "./scopeTypes";
-import { FEED_NEUTRAL_TONE, feedLinkIsServerOwned, feedStateTone, queryProblem } from "../../../lib/scopePage";
-
-const PAGE = 40;
+import { FEED_NEUTRAL_TONE, feedLinkIsServerOwned, feedStateTone } from "../../../lib/scopePage";
 
 const KIND_ICON: Record<FeedKind, any> = {
   session: Terminal,
@@ -31,17 +29,6 @@ const KIND_ICON: Record<FeedKind, any> = {
   run: Workflow,
 };
 
-/** One page of the feed: fires the query for its cursor, reports once, stays mounted so the row stays live. */
-function FeedPageLoader({ scope, cursor, kinds, onPage, onProblem }: { scope: ScopeRef; cursor?: string; kinds: FeedKind[]; onPage: (cursor: string | undefined, rows: FeedRow[], next?: string) => void; onProblem: (message: string) => void }) {
-  const { data, error, missing } = useScopeFeedPage({ ...scope, ...(cursor ? { cursor } : {}), limit: PAGE, ...(kinds.length ? { kinds } : {}) });
-  useWatchEffect(() => {
-    if (data) { onPage(cursor, data.rows ?? [], data.next_cursor ?? undefined); return; }
-    const problem = queryProblem(error, missing, "The feed");
-    if (problem) onProblem(problem);
-  }, [data, error, missing, cursor, onPage, onProblem]);
-  return null;
-}
-
 export type ScopeFeedProps = {
   scope: ScopeRef;
   className?: string;
@@ -52,83 +39,29 @@ export type ScopeFeedProps = {
 };
 
 export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps) {
-  const [pickedKinds, setKinds] = useState<FeedKind[]>([]);
-  const kinds = lockKinds ?? pickedKinds;
-  const scopeKey = JSON.stringify(scope);
-  // One stream per scope and kind set. Pages are keyed by the cursor that
-  // produced them (the first page's key is ""). The stream carries its own
-  // key, so a scope or kind change starts over in the same render: the old
-  // cursors are never fired against the new filter, not even for one commit.
-  const streamKey = `${scopeKey}|${kinds.join(",")}`;
-  type Stream = { key: string; pages: Record<string, { rows: FeedRow[]; next?: string }>; requested: string[]; problem: string | null };
-  const fresh = (key: string): Stream => ({ key, pages: {}, requested: [""], problem: null });
-  const [streamState, setStream] = useState<Stream>(() => fresh(streamKey));
-  const stream = streamState.key === streamKey ? streamState : fresh(streamKey);
-  const { pages, requested, problem } = stream;
-  // Every setter starts from the current key's stream, never a stale one.
-  const patchStream = useCallback((key: string, fn: (s: Stream) => Stream) => {
-    setStream((prev) => fn(prev.key === key ? prev : fresh(key)));
-  }, []);
+  const { kinds, toggleKind, clearKinds, rows, loaded, pending, hasMore, problem, loadMore, loaders } = useScopeFeedStream(scope, lockKinds);
   const now = useCoarseNow(30_000);
   const openLinked = useOpenLinkedSession();
   const sentinel = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
 
-  const onPage = useCallback((cursor: string | undefined, rows: FeedRow[], next?: string) => {
-    patchStream(streamKey, (prev) => {
-      const key = cursor ?? "";
-      const cur = prev.pages[key];
-      if (cur && cur.next === next && cur.rows.length === rows.length && cur.rows.every((r, i) => r.id === rows[i].id && r.updated_at === rows[i].updated_at)) return prev;
-      return { ...prev, pages: { ...prev.pages, [key]: { rows, next } }, problem: null };
-    });
-  }, [patchStream, streamKey]);
-  const onProblem = useCallback((message: string) => {
-    patchStream(streamKey, (prev) => (prev.problem === message ? prev : { ...prev, problem: message }));
-  }, [patchStream, streamKey]);
-
-  const ordered = useMemo(() => {
-    // Walk the chain from the first page so a page that re-fired stays in place.
-    const out: FeedRow[] = [];
-    const seen = new Set<string>();
-    let key = "";
-    let last: { rows: FeedRow[]; next?: string } | undefined;
-    for (let guard = 0; guard < 200; guard++) {
-      const page = pages[key];
-      if (!page) break;
-      for (const r of page.rows) if (!seen.has(`${r.kind}:${r.id}`)) { seen.add(`${r.kind}:${r.id}`); out.push(r); }
-      last = page;
-      if (!page.next) break;
-      key = page.next;
-    }
-    return { rows: out, next: last?.next, loaded: !!pages[""] };
-  }, [pages]);
-
-  const pending = requested.some((c) => !pages[c]) && !problem;
-  const loadMore = useCallback(() => {
-    const next = ordered.next;
-    if (!next || pending) return;
-    patchStream(streamKey, (prev) => (prev.requested.includes(next) ? prev : { ...prev, requested: [...prev.requested, next] }));
-  }, [ordered.next, pending, patchStream, streamKey]);
-
   // Infinite scroll: the sentinel under the last row asks for the next page.
   useWatchEffect(() => {
     const target = sentinel.current;
-    if (!target || !ordered.next) return;
+    if (!target || !hasMore) return;
     const root = fill ? scroller.current : (target.closest("[data-scope-scroll]") as HTMLElement | null);
     const io = new IntersectionObserver(([e]) => { if (e?.isIntersecting) loadMore(); }, { root, rootMargin: "320px 0px", threshold: 0 });
     io.observe(target);
     return () => io.disconnect();
-  }, [ordered.next, loadMore, fill]);
-
-  const toggleKind = (k: FeedKind) => setKinds((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
+  }, [hasMore, loadMore, fill]);
 
   const body = (
     <>
-      {requested.map((c) => <FeedPageLoader key={`${streamKey}|${c}`} scope={scope} cursor={c || undefined} kinds={kinds} onPage={onPage} onProblem={onProblem} />)}
+      {loaders}
       {!lockKinds && <div className="flex items-center gap-1.5 flex-wrap px-1 pb-3">
         <button
           type="button"
-          onClick={() => setKinds([])}
+          onClick={clearKinds}
           className={cn("h-[24px] px-2.5 rounded-full text-[11px] font-medium border transition-colors", kinds.length === 0 ? "border-transparent" : "hover:bg-sol-bg-highlight/70")}
           style={kinds.length === 0 ? { background: "var(--sol-text)", color: "var(--sol-bg)", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}
         >
@@ -156,16 +89,16 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
         })}
       </div>}
 
-      {ordered.rows.length === 0 && !ordered.loaded && problem && (
+      {rows.length === 0 && !loaded && problem && (
         <p className="py-10 text-center text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>{problem}</p>
       )}
-      {ordered.rows.length === 0 && ordered.loaded && (
+      {rows.length === 0 && loaded && (
         <div className="py-14 text-center">
           <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>Nothing in this scope yet{kinds.length ? " for those kinds" : ""}.</p>
           <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Sessions, tasks, plans, pages, artifacts, decisions, updates and commits appear here as they move.</p>
         </div>
       )}
-      {ordered.rows.length === 0 && !ordered.loaded && !problem && (
+      {rows.length === 0 && !loaded && !problem && (
         <div className="space-y-2 px-1" aria-busy>
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-[52px] rounded-xl animate-pulse" style={{ background: "color-mix(in srgb, var(--sol-border) 14%, transparent)", animationDelay: `${i * 80}ms` }} />
@@ -173,10 +106,10 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
         </div>
       )}
       <ol className="space-y-1">
-        {ordered.rows.map((r, i) => <FeedRowView key={`${r.kind}:${r.id}`} row={r} now={now} index={i} onOpenSession={(row) => openLinked({ _id: row.id, short_id: row.short_id, title: row.title })} />)}
+        {rows.map((r, i) => <FeedRowView key={`${r.kind}:${r.id}`} row={r} now={now} index={i} onOpenSession={(row) => openLinked({ _id: row.id, short_id: row.short_id, title: row.title })} />)}
       </ol>
       <div ref={sentinel} className="h-8 flex items-center justify-center text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
-        {problem && ordered.rows.length > 0 ? problem : ordered.next ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : ordered.rows.length > 0 ? "That is everything in scope." : null}
+        {problem && rows.length > 0 ? problem : hasMore ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : rows.length > 0 ? "That is everything in scope." : null}
       </div>
     </>
   );

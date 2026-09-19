@@ -15,7 +15,8 @@ import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } f
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { buildTaskStartBody, groupTasksByAssignee, startedForRoleLine } from "./taskClaim.js";
+import { buildTaskStartBody, groupTasksByAssignee, startedLines } from "./taskClaim.js";
+import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import open from "open";
 import * as fs from "fs";
@@ -13382,6 +13383,36 @@ roleGroup
     console.log(`${c.green}✓${c.reset} @${result.handle} caps: ${result.caps.hands_per_day} hands · ${result.caps.wakes_per_day} wakes · ${result.caps.tokens_per_day} tokens per day`);
   });
 
+// Who reports to a role (org-roles-run-work.md R6): a person who wants the
+// role to keep their goals. `me` or a person's name; an admin may name anyone.
+roleGroup
+  .command("reports")
+  .description("Who reports to a role: add or remove people (the role keeps their goals in its brief)")
+  .argument("<handle>", "@handle, or-N, or id")
+  .option("--add <person...>", "People to add: me, or a name or email in the workspace")
+  .option("--remove <person...>", "People to remove")
+  .option("--team <name|id>", "Team workspace")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, options: any) => {
+    const ws = await readWorkspace(options.team);
+    const role_id = await resolveRoleId(handle, options.team);
+    const people = async (refs: string[] | undefined): Promise<string[]> => {
+      const out: string[] = [];
+      for (const ref of refs ?? []) {
+        const target = await resolveOrgTarget(ref, ws);
+        if (target.kind !== "user") { console.error(`"${ref}" is a role, not a person.`); process.exit(1); }
+        out.push(target.user_id);
+      }
+      return out;
+    };
+    const add = await people(options.add);
+    const remove = await people(options.remove);
+    const result = await cliPost("/cli/role/reports", { role_id, add, remove, from_session: callingSession() });
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    const n = result.reports_user_ids?.length ?? 0;
+    console.log(`${c.green}✓${c.reset} ${n} ${n === 1 ? "person reports" : "people report"} to @${result.handle}${add.length ? `; it will ask ${add.length === 1 ? "the new person" : "each new person"} for their goals` : ""}`);
+  });
+
 roleGroup
   .command("update")
   .description("Edit a role's name, handle, charter text, review backend, tenure or avatar")
@@ -13454,6 +13485,11 @@ const briefCmd = program
       console.log(`  hands:`);
       const { briefHandLine } = await import("./briefLines.js");
       for (const h of f.hands) console.log(briefHandLine(h));
+    }
+    if (f.people?.length) {
+      console.log(`  people who report to it:`);
+      const { briefPeopleLines } = await import("./briefLines.js");
+      for (const line of briefPeopleLines(f.people, Date.now())) console.log(line);
     }
     const { briefCharterLines } = await import("./briefLines.js");
     for (const line of briefCharterLines(String(brief.charter ?? ""))) console.log(line);
@@ -16088,8 +16124,7 @@ work
     const sessionId = detectCurrentSessionId();
     const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
-    const roleLine = startedForRoleLine(result);
-    if (roleLine) console.log(`${c.dim}${roleLine}${c.reset}`);
+    for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
 
     if (sessionId) writeTaskPulse(sessionId, shortId, result.plan_id);
 
@@ -16359,7 +16394,7 @@ work
     const t = result.task;
     console.log(`\n# ${t.title}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
-    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}`);
+    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}. ${ASSIGNEE_MEANS}`);
     if (t.labels?.length) console.log(`Labels: ${t.labels.join(", ")}`);
     if (result.parent) {
       console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);

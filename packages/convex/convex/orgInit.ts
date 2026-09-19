@@ -11,6 +11,7 @@ import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInSco
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
 import { computeOrgActivity } from "./lib/orgActivity";
+import { computeCoverage } from "./lib/orgCoverage";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { capacity } from "@codecast/shared/contracts/orgCapacity";
 import {
@@ -70,6 +71,7 @@ export const IDLE_ROLE_DAYS = capacity("idle_days");
 export const WAKE_HISTORY_DAYS = 7;
 export const ANALYSIS_CAPS = {
   projects: 100,
+  initiatives: 100,
   plans: 200,
   tasks: 2000,
   docs: 300,
@@ -387,11 +389,12 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
 // repos, then hands them to the one pure reading of activity (lib/orgActivity).
 export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
   const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
-  const [projects, plans, work, scan] = await Promise.all([
+  const [projects, plans, work, scan, initiatives] = await Promise.all([
     scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
     scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans }).then((r) => r.records),
     readWorkTasks(ctx, userId, teamId, { perStatus: ANALYSIS_CAPS.tasks, updatedSince: now - ANALYSIS_WINDOW_MS, recentCap: ANALYSIS_CAPS.tasks }),
     collectOrgSessions(ctx, userId, teamId, now),
+    scopedFetch(ctx, "initiatives", { ...fetchOpts, limit: ANALYSIS_CAPS.initiatives }).then((r) => r.records),
   ]);
   const tasks = work.tasks;
   const members = [];
@@ -410,7 +413,13 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
     members,
     maxAreas: 40,
   });
-  return { activity };
+  // Who answers for the work, from the initiatives down (initiatives-projects-
+  // role-page.md I1, I2). This slice already holds every row the reading needs:
+  // the raw projects and plans, the open tasks, the roles and the areas.
+  const userNames: Record<string, string> = {};
+  for (const i of initiatives) if (i.owner?.kind === "user") userNames[String(i.owner.user_id)] ??= (await ctx.db.get(i.owner.user_id))?.name ?? "";
+  const coverage = computeCoverage({ projects, plans, tasks, roles: scan.roles, areas: activity.areas, initiatives, userNames });
+  return { activity, coverage };
 }
 
 // ── Insights, chat channels, open decisions ───────────────────────────────
@@ -467,6 +476,7 @@ export function mergeAnalysisInputs(
   signals: AnalysisSignals,
   now: number,
   activity?: ReturnType<typeof computeOrgActivity>,
+  coverage?: ReturnType<typeof computeCoverage>,
 ) {
   const { handoff: _handoff, truncated, ...rest } = work;
   return {
@@ -484,6 +494,9 @@ export function mergeAnalysisInputs(
     // Ground in what is happening (S9): where code lands, who is in it, and
     // which records the evidence says are done.
     ...(activity ? { activity } : {}),
+    // Who answers for it (I1, I2): the initiatives, every project with work
+    // and its lead, and the work outside any project.
+    ...(coverage ? { coverage } : {}),
     generated_at: now,
   };
 }
@@ -501,7 +514,7 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
     workspaceLabelOf(ctx, userId, teamId),
     computeAnalysisActivity(ctx, userId, teamId, now),
   ]);
-  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, activity.activity);
+  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, activity.activity, activity.coverage);
 }
 
 // One slice per call, so each read stays inside the execution limit on a
@@ -540,7 +553,7 @@ export const analysisInputs = action({
     const org = await ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff });
     if (!org) return null;
     const { label, user_id, ...rest } = signals;
-    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity?.activity);
+    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity?.activity, activity?.coverage);
   },
 });
 

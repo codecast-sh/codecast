@@ -1475,6 +1475,10 @@ export const webGet = query({
       git_ahead: conv.git_ahead ?? null,
       git_behind: conv.git_behind ?? null,
       git_dirty: conv.git_dirty ?? null,
+      // Who the session IS (session-characters.md S1): the same identity the
+      // inbox card wears, so a reference pill in prose draws the character's
+      // face and name instead of a generic session glyph.
+      ...(await identityFieldsOf(conv, (id: any) => ctx.db.get(id))),
     };
   },
 });
@@ -3341,6 +3345,9 @@ export const searchConversations = query({
       titleMatch: boolean;
       projectPath: string | null;
       agentType: string | null;
+      // Who the row is (docs/architecture/session-characters.md S1), so a
+      // search result wears the same face as its inbox card.
+      identity: Awaited<ReturnType<typeof identityFieldsOf>>;
     }> = [];
 
     // Hydrate conversation docs for message matches in parallel (was a serial
@@ -3431,6 +3438,7 @@ export const searchConversations = query({
         titleMatch: messages.length === 0,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
+        identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
       });
     }
 
@@ -3487,7 +3495,7 @@ export const searchConversationTitles = query({
     const top = scoped.slice(0, args.limit ?? 20);
     const firstMsgByConv = await resolveFirstMessageTitles(ctx, top);
 
-    const results = top.map((conv) => {
+    const results = await Promise.all(top.map(async (conv) => {
       const conversationUser = scope.userById.get(conv.user_id.toString());
       const title = conv.title
         || firstMsgByConv.get(conv._id.toString())
@@ -3512,8 +3520,9 @@ export const searchConversationTitles = query({
         titleMatch: true,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
+        identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
       };
-    });
+    }));
 
     return { results, totalMatches: 0, totalSessions: results.length };
   },
@@ -8626,7 +8635,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
  * snapshot of the role so the web can draw the role's face and name without
  * loading the org tree. Only rows with a pointer pay the extra read.
  */
-async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<any>) {
+export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<any>) {
   const roleId = conv.standing_role_id ?? conv.org_role_id ?? null;
   const role = roleId ? await getDoc(roleId).catch(() => null) : null;
   return {

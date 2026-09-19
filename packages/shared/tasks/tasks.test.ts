@@ -59,6 +59,14 @@ describe("taskOrigin", () => {
     expect(isOnHumanBoard({ source: "agent", assignee: "user_1" })).toBe(true);
     expect(isOnHumanBoard({ source: "plan_mode", assignee: null })).toBe(false);
   });
+
+  // org-roles-run-work.md R5: a task a role holds is the company's work. The
+  // assignee is then an org_roles id, and the rule must not care which kind.
+  test("isOnHumanBoard: a task an agent filed shows once a role holds it", () => {
+    expect(isOnHumanBoard({ source: "agent", assignee: "ms71rq_role_id" })).toBe(true);
+    expect(isOnHumanBoard({ source: "todo_sync", assignee: "ms71rq_role_id" })).toBe(true);
+    expect(isOnHumanBoard({ source: "agent", assignee: "" })).toBe(false);
+  });
 });
 
 describe("buildTaskTree", () => {

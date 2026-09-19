@@ -358,6 +358,22 @@ html, body {
   --cc-panel-head-bg: var(--sol-bg);
   --cc-panel-motion: 180ms cubic-bezier(0.23, 1, 0.32, 1);
   --radius: 0.75rem;
+  /* Your own messages. ThemeProvider writes the hue (lib/bubbleColor.ts). */
+  --cc-user-bubble-hue: #2f7df6;
+}
+
+/* The fill is mixed from the hue against the page, so one choice serves light
+   and dark. A custom property resolves where it is declared, so the recipe is
+   declared again on .cc-bubble-scope: an element that sets its own hue (the
+   color well's live preview in settings) gets its own fill, and nothing
+   outside that element changes. */
+.minimal-style,
+.minimal-style .cc-bubble-scope {
+  --cc-user-bubble: color-mix(in srgb, var(--cc-user-bubble-hue) 25%, var(--sol-bg));
+}
+.dark.minimal-style,
+.dark.minimal-style .cc-bubble-scope {
+  --cc-user-bubble: color-mix(in srgb, var(--cc-user-bubble-hue) 40%, var(--sol-bg));
 }
 
 .dark.minimal-style {
@@ -1604,6 +1620,116 @@ pre[class*="language-"] {
 }
 .simple-view [data-sv-rail] > div:first-child:hover {
   opacity: 1;
+}
+
+/* Nested rows under an expanded nav section (channels under Chat, projects,
+   tasks, docs). The sub-area spans the full rail and reads as a shallow
+   recess: a whisper of crosshatch over a faint wash, framed by an inset
+   shadow along the top edge and a soft lift along the bottom. No side edges,
+   so it reads as a band cut into the rail rather than a box sitting on it.
+   Hatch lines follow the text colour so they stay visible on every theme;
+   the wash and shadow are black because a recess is darker than its surround
+   on every theme. Row hover/active fills paint over it, so a chosen row reads
+   as solid. */
+.nav-subsection {
+  --hatch: color-mix(in srgb, var(--sol-text) 3%, transparent);
+  background-color: rgb(0 0 0 / 0.02);
+  background-image:
+    repeating-linear-gradient(45deg, transparent 0 7px, var(--hatch) 7px 8px),
+    repeating-linear-gradient(-45deg, transparent 0 7px, var(--hatch) 7px 8px);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.08),
+    inset 0 6px 8px -6px rgb(0 0 0 / 0.06),
+    inset 0 -1px 0 rgb(255 255 255 / 0.30);
+}
+.dark .nav-subsection {
+  background-color: rgb(0 0 0 / 0.08);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.28),
+    inset 0 6px 8px -6px rgb(0 0 0 / 0.22),
+    inset 0 -1px 0 rgb(255 255 255 / 0.05);
+}
+
+/* ---- Compact session list (clientState.ui.inbox_compact) ------------------
+   One line per session, in every style: face or agent icon, title, the state
+   chip when the agent declared one, the live signals, and when it last moved.
+   The card body becomes a grid and everything that is not on that line drops
+   out. A handoff or an escalation still gets its own row beneath, because
+   those carry a button the person has to press. Nothing is removed from the
+   DOM, so the hover toolbar, the context menu and drag all behave the same. */
+.inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
+  padding-block: 5px;
+}
+.inbox-compact [data-sv-rail] [data-sv-body] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
+  align-items: center;
+  column-gap: 8px;
+}
+.inbox-compact [data-sv-rail] [data-sv-body] > * {
+  display: none;
+}
+.inbox-compact [data-sv-rail] [data-sv-body] > [data-sv-titlerow] {
+  display: flex;
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+/* These wrappers dissolve so that one child of each can sit on the line: the
+   declared state's chip, the Draft chip, a new session's Starting or Ready,
+   and the live signals with the time. Each takes the next free column. */
+.inbox-compact [data-sv-rail] [data-sv-body] > :is([data-sv-state], [data-sv-meta], [data-sv-draft], [data-sv-startup]) {
+  display: contents;
+}
+.inbox-compact [data-sv-rail] :is([data-sv-state], [data-sv-meta], [data-sv-draft]) > * {
+  display: none;
+}
+.inbox-compact [data-sv-rail] [data-sv-state] > [data-sv-status-chip],
+.inbox-compact [data-sv-rail] [data-sv-draft] > span:first-child {
+  display: inline-block;
+  grid-row: 1;
+  margin: 0;
+}
+.inbox-compact [data-sv-rail] [data-sv-startup] > * {
+  grid-row: 1;
+  margin: 0;
+  white-space: nowrap;
+}
+.inbox-compact [data-sv-rail] [data-sv-meta] > [data-sv-status] {
+  display: flex;
+  grid-row: 1;
+  margin: 0;
+}
+/* The branch chip is the one wide thing in the status cluster. */
+.inbox-compact [data-sv-rail] [data-sv-status] > .font-mono {
+  display: none;
+}
+.inbox-compact [data-sv-rail] [data-sv-body] > [data-escalation],
+.inbox-compact [data-sv-rail] [data-sv-body] > [data-sv-ping] {
+  display: flex;
+  grid-column: 1 / span 6;
+  margin-top: 4px;
+}
+/* A pinned row's pin badge sits top right, which on one line is where the
+   time is. The line makes room for it, and the badge centers on the line. */
+.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]) [data-sv-body] {
+  padding-right: 22px;
+}
+.inbox-compact [data-sv-rail] [data-session-id] > [data-sv-pin] {
+  top: 50%;
+  transform: translateY(-50%);
+  background: none !important;
+}
+/* The thumbnail is taller than the line. */
+.inbox-compact [data-sv-rail] [data-session-id] button.cursor-zoom-in {
+  display: none;
+}
+/* Nested rows (subagents, trigger runs) are already one line plus a state
+   and a prompt line: drop those two. */
+.inbox-compact [data-sv-rail] [data-session-id] [data-sv-state]:not([data-sv-body] > *),
+.inbox-compact [data-sv-rail] [data-session-id] [data-sv-prompt]:not([data-sv-body] > *) {
+  display: none;
 }
 
 /* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
@@ -3655,11 +3781,11 @@ pre[class*="language-"] {
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] {
   width: fit-content;
   max-width: min(85%, 38rem);
-  margin: 10px 0 22px auto;
-  padding: 10px 14px;
+  margin: 10px 0 26px auto;
+  padding: 11px 16px;
   border: 0 !important;
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)) !important;
+  border-radius: 20px;
+  background: var(--cc-user-bubble) !important;
   box-shadow: none;
 }
 
@@ -3686,21 +3812,17 @@ pre[class*="language-"] {
   width: fit-content;
   max-width: min(85%, 38rem);
   margin-left: auto;
-  padding: 10px 14px;
+  padding: 11px 16px;
   border: 0 !important;
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)) !important;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--sol-text) 6%, transparent);
-  backdrop-filter: blur(18px);
+  border-radius: 20px;
+  background: var(--cc-user-bubble) !important;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-text) 11%, transparent);
+  backdrop-filter: none;
 }
 
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"][class*="border-2"] {
   outline: 2px solid color-mix(in srgb, var(--sol-text) 42%, transparent);
   outline-offset: 2px;
-}
-
-.minimal-style [data-cc-conversation] [data-sv-sticky] > .flex.items-center {
-  display: none;
 }
 
 .minimal-style [data-cc-conversation] [data-sv-composer] > div:last-child {
@@ -4003,6 +4125,205 @@ pre[class*="language-"] {
   background-image: linear-gradient(to right, transparent, var(--sol-bg) 58%);
 }
 
+/* ==== Minimal: rest on the conversation ====================================
+   At rest a Minimal conversation is a title, a transcript and a composer.
+   Everything else is still there and still in the DOM: it fades in when the
+   pointer reaches its region or the keyboard focuses into it, and the session
+   menu, the context menus and the command palette carry every action too.
+   Pointer devices only: a touch screen has no hover, and there the header's
+   own squeeze already folds these controls into the session menu. */
+@media (hover: hover) and (pointer: fine) {
+  .minimal-style [data-sv-convhead] [data-cc-conv-meta],
+  .minimal-style [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
+  .minimal-style [data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle],
+  .minimal-style [data-cc-topbar] .people-bar:not([data-holding], :has([data-rx], [data-tx], [data-joined], [data-hold])),
+  .minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
+  .minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div {
+    opacity: 0;
+    transition: opacity 220ms ease 320ms;
+  }
+  .minimal-style [data-sv-convhead]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-conv-meta] {
+    opacity: 0.78;
+    transition: opacity 140ms ease;
+  }
+  .minimal-style [data-sv-convhead]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-conv-actions] > :not([data-cc-keep]),
+  .minimal-style [data-sv-convhead]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-conv-actions] [data-huddle-idle],
+  .minimal-style [data-cc-topbar]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) .people-bar,
+  .minimal-style [data-cc-topbar]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
+  .minimal-style [data-cc-topbar]:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div {
+    opacity: 1;
+    transition: opacity 140ms ease;
+  }
+}
+
+/* The session menu is the one header control that never hides. */
+.minimal-style [data-sv-convhead] [data-cc-conv-actions] > button[data-cc-keep] {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sol-text-muted);
+}
+
+.minimal-style [data-sv-convhead] .cc-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sol-text);
+}
+
+/* What this session belongs to: the trigger that runs it, its plan, its
+   workflow. One quiet line each, in the page's own ink instead of an accent
+   per kind. The trigger's run history rail opens with the strip, not before. */
+.minimal-style [data-cc-context-panel] {
+  border-bottom: 1px solid var(--cc-panel-rule);
+  background: transparent;
+  font-family: var(--font-ui);
+}
+.minimal-style [data-cc-context-panel] > button {
+  padding: 6px 16px;
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-context-panel] > button:hover {
+  background: var(--sol-bg-alt);
+}
+.minimal-style [data-cc-context-panel] > button :is(.text-sol-cyan, .text-sol-orange, .text-sol-violet, .text-sol-green):not([class*="border"]) {
+  color: var(--sol-text-secondary);
+}
+.minimal-style [data-cc-context-panel] > button > svg:first-child {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-cc-context-panel]:not(:has(> button ~ div:not([data-cc-context-rail]))) > [data-cc-context-rail] {
+  display: none;
+}
+
+/* One column: the prose, your bubbles, the pinned bubble, the thread state and
+   the composer box all share the same two edges. */
+.minimal-style [data-cc-conversation] [data-sv-composer] .conv-col {
+  padding-inline: var(--cc-feed-inset, 24px);
+}
+
+/* Assistant turns carry no name row: the side of the page says who spoke, and
+   the time is on the turn's tooltip and in the divider between sittings. */
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-who] {
+  display: none;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message-overflow] .text-xs {
+  display: none;
+}
+
+/* Your bubble's actions sit under it, flush right, instead of over its text. */
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-user-message-toolbar] {
+  top: 100%;
+  right: 2px;
+  padding-top: 3px;
+  gap: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-user-message-toolbar] button {
+  padding: 4px;
+  border-radius: 7px;
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-user-message-toolbar] button:hover {
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text);
+}
+.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-user-message-toolbar] svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* The pinned copy of your last message is the same bubble, on the same right
+   edge as the ones in the feed, at the same type size. Its name row goes; its
+   body loses the indent that row's avatar needed; its two controls move out
+   of the text to the bubble's left side. */
+.minimal-style [data-cc-conversation] [data-sv-sticky] {
+  margin-top: 6px;
+  margin-right: var(--cc-feed-inset, 24px);
+  border-radius: 20px;
+  font-size: 14px;
+  overflow: visible;
+}
+.minimal-style [data-cc-conversation] [data-sv-sticky] .text-sm,
+.minimal-style [data-cc-conversation] [data-sv-sticky] .prose {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.minimal-style [data-cc-conversation] [data-sv-sticky-who] {
+  display: none;
+}
+.minimal-style [data-cc-conversation] [data-sv-sticky-body] {
+  padding: 0;
+}
+.minimal-style [data-cc-conversation] [data-sv-sticky-tools] {
+  top: 50%;
+  right: 100%;
+  padding-right: 6px;
+  transform: translateY(-50%);
+}
+.minimal-style [data-cc-conversation] [data-sv-sticky-tools] button {
+  padding: 4px;
+  border-radius: 7px;
+  color: var(--sol-text-dim);
+}
+/* The pinned bubble is narrower than the column, so the transcript would show
+   beside it, cut mid word. It floats on a band of page color that fades out
+   below it, and the transcript slides under the band instead. */
+.minimal-style [data-cc-conversation] > div:has(> .conv-col > [data-sv-sticky]) {
+  padding-bottom: 20px;
+  background: linear-gradient(to bottom, var(--sol-bg) calc(100% - 20px), color-mix(in srgb, var(--sol-bg) 0%, transparent));
+}
+/* The "earlier messages" pill pins to the same spot the bubble floats in. */
+.minimal-style [data-cc-conversation]:has([data-sv-sticky]) [data-cc-edge="up"] {
+  visibility: hidden;
+}
+
+/* Session rows: the title is the content, so it reads at text strength. */
+.minimal-style [data-sv-rail] [data-sv-title] > span.truncate {
+  color: var(--sol-text-secondary);
+  font-weight: 450;
+}
+.minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
+  font-weight: 600;
+}
+
+/* The session list rests on its rows. The label chips and the view tools come
+   forward when the pointer reaches the head; a chip that is filtering the list
+   never hides, because a filtered list with no visible filter reads as lost
+   sessions, and neither does the blocked sessions alert. */
+@media (hover: hover) and (pointer: fine) {
+  .minimal-style [data-sv-rail] [data-sv-label-chips]:not(:has([aria-pressed="true"])),
+  .minimal-style [data-sv-rail] [data-sv-head-tools] > :not([data-cc-keep]) {
+    opacity: 0;
+    transition: opacity 220ms ease 320ms;
+  }
+  .minimal-style [data-sv-rail] .cc-panel__head:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-sv-label-chips],
+  .minimal-style [data-sv-rail] .cc-panel__head:is(:hover, :focus-within, :has([data-state="open"], [aria-expanded="true"])) [data-sv-head-tools] > * {
+    opacity: 1;
+    transition: opacity 140ms ease;
+  }
+}
+
+/* A row says what the session is and where it stands. The last prompt, the
+   branch and the lineage are one click away inside the session. */
+.minimal-style [data-sv-rail] [data-sv-prompt],
+.minimal-style [data-sv-rail] [data-sv-spawned],
+.minimal-style [data-sv-rail] [data-sv-status] > .font-mono {
+  display: none;
+}
+.minimal-style [data-sv-rail] [data-session-id] > [role="button"] {
+  padding-block: 10px;
+}
+.minimal-style.inbox-compact [data-sv-rail] [data-session-id] > [role="button"],
+.minimal-style .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
+  padding-block: 7px;
+}
+
 .minimal-style [role="dialog"] {
   font-family: var(--font-ui);
 }
@@ -4047,6 +4368,45 @@ pre[class*="language-"] {
 
 .visual-style-options > button {
   min-width: 0;
+}
+
+/* Your message color (settings): swatches and the sample bubble. The sample
+   reads --cc-user-bubble, the same variable the conversation paints with. */
+.cc-bubble-swatch {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--swatch) 62%, var(--sol-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-text) 12%, transparent);
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 140ms;
+}
+.cc-bubble-swatch:hover { transform: scale(1.1); }
+.cc-bubble-swatch:active { transform: scale(0.94); }
+.cc-bubble-swatch[aria-checked="true"],
+.cc-bubble-swatch[data-checked] {
+  box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 4px color-mix(in srgb, var(--swatch) 80%, var(--sol-text));
+}
+.cc-bubble-swatch:focus-visible,
+.cc-bubble-swatch:has(input:focus-visible) {
+  outline: 2px solid var(--sol-text);
+  outline-offset: 3px;
+}
+.cc-bubble-swatch--custom:not([data-checked]) {
+  background: conic-gradient(from 210deg, #e5477f, #e58a00, #5fa617, #0f9f92, #2f7df6, #7a5af0, #e5477f);
+}
+.cc-bubble-sample {
+  padding: 7px 13px;
+  border-radius: 16px;
+  background: var(--cc-user-bubble);
+  color: var(--sol-text);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.4;
+  transition: background 180ms;
 }
 
 .cc-style-preview {
@@ -4183,6 +4543,31 @@ pre[class*="language-"] {
 /* The first open guide's highlight ring (org-staffing.md S14): a slow breath, so the eye finds it. */
 @keyframes org-guide-ring { 0%, 100% { box-shadow: 0 0 0 2px var(--sol-violet), 0 0 0 8px color-mix(in srgb, var(--sol-violet) 22%, transparent); } 50% { box-shadow: 0 0 0 2px var(--sol-violet), 0 0 0 14px color-mix(in srgb, var(--sol-violet) 10%, transparent); } }
 .org-guide-ring { animation: org-guide-ring 1.8s ease-in-out infinite; }
+/* The first visit (org-staffing.md S20): one orchestrated entrance. Every piece
+   carries its own delay in --d; the faces also carry --dn, the moment their
+   line lands, when they nod. Reduced motion collapses all of it through the
+   global rule above. */
+@keyframes org-intro-pop { from { opacity: 0; transform: translateY(10px) scale(0.6); } to { opacity: 1; transform: none; } }
+@keyframes org-intro-nod { 0%, 100% { transform: none; } 45% { transform: translateY(-7px); } }
+@keyframes org-intro-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes org-intro-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.org-intro-face { border-radius: 9999px; box-shadow: 0 0 0 3px var(--sol-bg), 0 10px 24px -12px rgba(0, 0, 0, 0.45); animation: org-intro-pop 520ms cubic-bezier(0.34, 1.45, 0.64, 1) var(--d, 0ms) both, org-intro-nod 600ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--dn, 0ms) 1; }
+.org-intro-in { animation: org-intro-in 460ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms) both; }
+.org-intro-draw { stroke-dasharray: 1; animation: org-intro-draw 420ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms) both; }
+/* The screen leaving into the tour: the guide's easing, so the two read as one motion. */
+@keyframes org-intro-leave { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-10px); } }
+.org-intro-leave { animation: org-intro-leave 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both !important; }
+.org-intro-leave * { animation-play-state: paused; }
+/* The introduction anywhere (S20): the card that rises bottom right on the
+   app's toast, one face, one title, two lines, two actions. */
+.org-meet { display: flex; gap: 12px; width: 352px; padding: 13px 14px 12px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--sol-violet) 34%, transparent); background: color-mix(in srgb, var(--sol-card) 97%, transparent); box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px); }
+.org-meet-face { flex-shrink: 0; border-radius: 9999px; box-shadow: 0 0 0 2px var(--sol-card), 0 0 0 3px color-mix(in srgb, var(--sol-violet) 30%, transparent); }
+.org-meet-body { min-width: 0; flex: 1; }
+.org-meet-title { font-family: var(--font-serif); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; color: var(--sol-text); }
+.org-meet-copy { margin: 5px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--sol-text-muted); }
+.org-meet-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.org-meet-later { padding: 5px 9px; border-radius: 8px; font-size: 12px; color: var(--sol-text-muted); transition: color 120ms, background 120ms; }
+.org-meet-later:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-bg-highlight) 70%, transparent); }
 .org-flow .react-flow__node { transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .org-flow .react-flow__node.dragging { transition: none; }
 .org-flow .react-flow__edge-path { transition: d 260ms; }
@@ -4489,6 +4874,26 @@ pre[class*="language-"] {
 [data-cc-conversation][data-reveal-chrome]:not(:has([data-sv-composer]:focus-within)) [data-sv-composer] > .h-16 {
   display: none;
 }
+
+/* A role's standing session on the role page (initiatives-projects-role-page.md
+   I3). The role's header above already carries the face, the name and the
+   state, so the session's own header rests on one row: a label, the live
+   status, whatever is marked data-cc-keep (a live huddle, a struggling daemon,
+   an open search, the session menu) and the seat's two controls. It is the
+   same header with the same actions, all still in the DOM; "open" shows the
+   whole row again, less the face and the title the role's header already
+   says. A rename in progress is never hidden. */
+[data-seat-head="rest"] [data-sv-convhead] .cq-squeeze-row > :not([data-seat-label], [data-cc-conv-status], [data-cc-conv-actions], input),
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]) {
+  display: none;
+}
+[data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > h1,
+[data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > :has(+ h1) {
+  display: none;
+}
+[data-seat-head] [data-sv-convhead] .cc-panel__head {
+  min-height: 32px;
+}
 /* Inside the framed page the object's own header is already on the strip,
    so drop it. A session's composer collapses to a thin bar until focused. */
 .object-reveal__body [data-sv-convhead],
@@ -4558,4 +4963,17 @@ mark.search-hit[data-search-active] {
 }
 @media (prefers-reduced-motion: reduce) {
   mark.search-hit[data-search-active] { animation: none; }
+}
+
+/* Search: the content tier is still running. One sweep across the header's
+   bottom edge — it occupies no layout, so rows never move when it appears. */
+@keyframes searchScan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.search-scan-bar {
+  animation: searchScan 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-scan-bar { animation: none; opacity: 0.5; }
 }
