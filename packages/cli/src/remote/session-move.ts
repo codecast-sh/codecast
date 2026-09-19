@@ -171,6 +171,10 @@ export function sshBase(host: RemoteHost): string[] {
 export function ssh(host: RemoteHost, command: string, timeoutMs?: number): string {
   return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command], {
     encoding: "utf-8",
+    // Hand the child the environment we hold now. bun otherwise resolves the
+    // binary against the PATH it snapshotted at startup, so a PATH set after
+    // launch (a test's stand-in ssh, a tool added to the path) is not seen.
+    env: process.env,
     maxBuffer: 64 * 1024 * 1024,
     ...(timeoutMs ? { timeout: timeoutMs } : {}),
   });
