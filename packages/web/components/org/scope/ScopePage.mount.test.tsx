@@ -154,7 +154,7 @@ async function verifyScopePage() {
   assert.equal(qa("[data-scope-tab]")[0].getAttribute("data-scope-tab"), "scope", "and Scope is the first tab");
   assert.ok(q('[data-role-scope="page"]'), "the Scope tab is the scope view at full size");
   assert.equal(q("[data-scope-feed]"), null, "the feed waits behind its tab");
-  assert.deepEqual(qa('[data-role-scope="page"] [data-scope-label]').map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to"], "the sections a person reads, in order, projects first");
+  assert.deepEqual(qa('[data-role-scope="page"] [data-scope-label]').map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to", "History"], "the sections a person reads, in order, projects first");
   assert.match(q('[data-role-scope="page"] [data-scope-section="projects"] [data-scope-project]')!.textContent!, /Growth/, "each project it looks after is a card, by name");
   assert.ok(q('[data-role-scope="page"] [data-scope-project] [data-project-lead-chip="fixture-project-growth"]'), "each project row carries its lead, drawn by the one chip that knows the rule");
   assert.ok(q('[data-role-scope="page"] [data-scope-project-initiative] [data-project-initiatives="fixture-project-growth"]'), "and the initiatives it belongs to");
