@@ -3198,11 +3198,13 @@ program
       ...(opts.clear ? { clear: true } : { line }),
       from_session: callingSession(),
     });
-    const role = `${c.cyan}@${result.role.handle}${c.reset}`;
+    const role = result.role ? `${c.cyan}@${result.role.handle}${c.reset}` : "";
     if (opts.clear) {
-      console.log(result.changed
+      console.log(!result.role
+        ? `${c.green}ok${c.reset} ${c.cyan}${result.short_id}${c.reset} ${c.dim}— the role it was under is gone; the escalation is cleared${c.reset}`
+        : result.changed
         ? `${c.green}ok${c.reset} ${c.cyan}${result.short_id}${c.reset} is back under ${role} ${c.dim}— out of the person's needs input${c.reset}`
-        : `${c.dim}${result.short_id} was not escalated; it is already under @${result.role.handle}${c.reset}`);
+        : `${c.dim}${result.short_id} was not escalated; it is already under ${role}${c.reset}`);
       return;
     }
     console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${c.dim}— in the person's needs input as${c.reset} ${role}${c.dim}: ${result.escalated_by_role.line} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
