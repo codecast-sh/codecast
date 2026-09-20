@@ -46,7 +46,7 @@ export type ScopeSummary = {
   }>;
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   sessions: StateCounts & { total: number };
-  decisions: { open: number; answered: number };
+  decisions: { open: number };
   overlaps: ScopeOverlap[];
   generated_at: number;
 };

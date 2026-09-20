@@ -3,6 +3,7 @@
 // `show` print, and the one sentence that says what happened to the owner
 // role's scope. The network calls and the exits live in index.ts.
 
+import { targetDayOf } from "@codecast/shared/time";
 import {
   INITIATIVE_HEALTH_LABEL,
   INITIATIVE_STATUSES,
@@ -36,12 +37,19 @@ export const parseInitiativeStatus = (text: string): InitiativeStatus | null => 
 const healthColor = (c: Palette, health: InitiativeHealth) =>
   health === "on_track" ? c.green : health === "at_risk" ? c.yellow : health === "off_track" ? c.red : c.dim;
 
-export function healthText(c: Palette, health: InitiativeHealth, at?: number): string {
-  const when = at ? ` ${c.dim}(${new Date(at).toISOString().slice(0, 10)})${c.reset}` : "";
-  return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
+// A moment (an update's `at`) prints as the person's own day. A target day
+// prints through the shared pair that stored it (shared/time targetDayOf).
+export function dayText(ms?: number): string | undefined {
+  if (!ms) return undefined;
+  const d = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
-export const dayText = (ms?: number) => (ms ? new Date(ms).toISOString().slice(0, 10) : undefined);
+export function healthText(c: Palette, health: InitiativeHealth, at?: number): string {
+  const when = at ? ` ${c.dim}(${dayText(at)})${c.reset}` : "";
+  return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
+}
 
 export function progressText(counts?: { total: number; done: number }): string {
   if (!counts?.total) return "no tasks";
@@ -55,7 +63,7 @@ export function initiativeLine(c: Palette, row: any): string {
     row.owner_label ?? `${c.yellow}no owner${c.reset}${c.dim}`,
     `${row.projects?.length ?? row.project_ids?.length ?? 0} projects`,
     progressText(row.task_counts),
-    row.target_date ? `target ${dayText(row.target_date)}` : null,
+    row.target_date ? `target ${targetDayOf(row.target_date)}` : null,
   ].filter(Boolean);
   const icon = INITIATIVE_STATUS_ICONS[row.status as InitiativeStatus] ?? "?";
   return `  ${icon} ${c.cyan}${row.short_id}${c.reset} ${c.bold}${row.title}${c.reset} ${healthText(c, row.health, row.health_at)} ${c.dim}${facts.join(" | ")}${c.reset}`;
@@ -73,6 +81,7 @@ export function scopeSentence(owner: string | undefined, scope: any, titleOf: (p
   if (scope.added?.length) parts.push(`${who} now has ${names(scope.added)} in its scope.`);
   const reasons: Record<string, string> = {
     not_admin: "only an admin of the role may change its scope",
+    human_only: "a scope changes from the role page in the browser, never from a token call",
     outside_parent: "it is outside the scope of the role it reports to",
     whole_workspace: "the role already looks after the whole workspace",
   };

@@ -2,17 +2,25 @@
 import { useState, useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { Bot, User, ChevronDown, Search, Check, X } from "lucide-react";
-import { AvatarImg } from "../lib/avatarCache";
-
-export type AssigneeInfo = { name: string; image?: string };
+import type { AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
+import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
+import { AssigneeFace } from "./identity/AssigneeFace";
 
 type AssigneeOption = {
   id: string;
   name: string;
-  image?: string;
   type: "user" | "agent";
+  /** Who the row names (a person, a role); an agent option has none. */
+  info?: AssigneeInfo;
+  section?: string;
 };
 
+const NO_MEMBERS: any[] = [];
+
+// The assignee picker of the create task modal. People and roles come from
+// the one list every picker shares (hooks/useRolesAndPeopleOptions), so a
+// role's bot user never shows as a person and roles are offered under their
+// own heading.
 export function AssigneeSelect({
   value,
   valueInfo,
@@ -47,14 +55,14 @@ export function AssigneeSelect({
     { id: "agent:gemini", name: "Gemini", type: "agent" },
   ];
 
-  const memberOptions: AssigneeOption[] = (teamMembers || [])
-    .filter(Boolean)
-    .map((m: any) => ({
-      id: m._id,
-      name: currentUser && m._id === currentUser._id ? `${m.name} (you)` : m.name,
-      image: m.image || m.github_avatar_url,
-      type: "user" as const,
-    }));
+  const { people, roles } = useRolesAndPeopleOptions(teamMembers ?? NO_MEMBERS);
+  const memberOptions: AssigneeOption[] = [...people, ...roles].map((o) => ({
+    id: o.key,
+    name: currentUser && o.key === currentUser._id ? `${o.label} (you)` : o.hint ? `${o.label} ${o.hint}` : o.label,
+    type: "user" as const,
+    info: o.info,
+    section: o.section,
+  }));
 
   const allOptions: AssigneeOption[] = [...agentOptions, ...memberOptions];
 
@@ -63,7 +71,7 @@ export function AssigneeSelect({
     : allOptions;
 
   const select = (opt: AssigneeOption | null) => {
-    onChange(opt?.id ?? null, opt ? { name: opt.name.replace(" (you)", ""), image: opt.image } : null);
+    onChange(opt?.id ?? null, opt ? (opt.info ?? { name: opt.name }) : null);
     setOpen(false);
     setSearch("");
   };
@@ -71,25 +79,13 @@ export function AssigneeSelect({
   const agentColor = (id: string) =>
     id === "agent:codex" ? "text-blue-400" : id === "agent:gemini" ? "text-amber-400" : "text-sol-violet";
 
-  const renderAvatar = (opt: { id?: string; name: string; image?: string; type?: string }, size = "w-4 h-4") => {
-    if (opt.type === "agent") return <Bot className={`${size} ${agentColor(opt.id || "")}`} />;
-    const initials = opt.name.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
-    return (
-      <AvatarImg
-        src={opt.image}
-        alt={opt.name}
-        className={`${size} rounded-full`}
-        fallback={
-          <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted`}>
-            {initials}
-          </div>
-        }
-      />
-    );
+  const renderAvatar = (opt: { id?: string; name: string; info?: AssigneeInfo; type?: string }) => {
+    if (opt.type === "agent") return <Bot className={`w-4 h-4 ${agentColor(opt.id || "")}`} />;
+    return <AssigneeFace info={opt.info ?? { name: opt.name.replace(" (you)", "") }} size={16} hover={false} />;
   };
 
   const currentOpt = value
-    ? allOptions.find((o) => o.id === value) || (valueInfo ? { id: value, name: valueInfo.name, image: valueInfo.image, type: "user" as const } : null)
+    ? allOptions.find((o) => o.id === value) || (valueInfo ? { id: value, name: valueInfo.name, info: valueInfo, type: "user" as const } : null)
     : null;
 
   return (
@@ -133,18 +129,22 @@ export function AssigneeSelect({
                 Clear assignee
               </button>
             )}
-            {filtered.map((opt) => (
-              <button
-                key={opt.id}
-                onClick={() => select(opt)}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                  opt.id === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                {renderAvatar(opt)}
-                <span className="flex-1 text-left truncate">{opt.name}</span>
-                {opt.id === value && <Check className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />}
-              </button>
+            {filtered.map((opt, i) => (
+              <div key={opt.id}>
+                {opt.section && filtered[i - 1]?.section !== opt.section && (
+                  <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-sol-text-dim">{opt.section}</div>
+                )}
+                <button
+                  onClick={() => select(opt)}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                    opt.id === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                  }`}
+                >
+                  {renderAvatar(opt)}
+                  <span className="flex-1 text-left truncate">{opt.name}</span>
+                  {opt.id === value && <Check className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />}
+                </button>
+              </div>
             ))}
             {filtered.length === 0 && (
               <div className="px-3 py-2 text-xs text-sol-text-dim">No results</div>

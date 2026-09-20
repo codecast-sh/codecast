@@ -18,8 +18,8 @@ describe("cast initiative: reading what a person types", () => {
 describe("cast initiative ls", () => {
   test("one line carries status, owner, projects, progress, health with its date and the target", () => {
     const line = initiativeLine(c, {
-      short_id: "in-3", title: "Win enterprise", status: "active", health: "at_risk", health_at: Date.UTC(2026, 8, 18),
-      owner_label: "@growth", projects: [{}, {}], task_counts: { total: 8, done: 2 }, target_date: Date.UTC(2026, 11, 1),
+      short_id: "in-3", title: "Win enterprise", status: "active", health: "at_risk", health_at: new Date(2026, 8, 18, 23, 59).getTime(),
+      owner_label: "@growth", projects: [{}, {}], task_counts: { total: 8, done: 2 }, target_date: new Date(2026, 11, 1, 23, 59, 59).getTime(),
     });
     expect(line).toBe("  ◉ in-3 Win enterprise At risk (2026-09-18) Active | @growth | 2 projects | 2/8 done (25%) | target 2026-12-01");
   });
@@ -37,6 +37,10 @@ describe("the owner role's scope, in one sentence", () => {
     expect(scopeSentence("@growth", null, titleOf)).toBeNull();
     expect(scopeSentence("@growth", { added: [], listed: ["p"], skipped: [] }, titleOf)).toBeNull();
     expect(scopeSentence("@growth", { added: [], listed: [], skipped: [{ project_id: "p", reason: "whole_workspace" }] }, titleOf)).toBeNull();
+  });
+  test("a token call is told the scope is a person's to widen", () => {
+    const s = scopeSentence("@growth", { added: [], listed: [], skipped: [{ project_id: "q", reason: "human_only" }] }, titleOf);
+    expect(s).toBe("Billing was not added to its scope: a scope changes from the role page in the browser, never from a token call.");
   });
   test("what was added, what was not and why, and who was taken over", () => {
     const s = scopeSentence("@growth", {

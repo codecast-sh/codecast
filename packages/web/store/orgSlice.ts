@@ -29,9 +29,10 @@ import {
   type OrgTree,
 } from "../components/org/orgTypes";
 import { CHIEF_OF_STAFF_HANDLE, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
-import { describeOrgChange, isOrgChangeDecidable, resolveOrgAsks, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { describeOrgChange, isOrgChangeDecidable, ORG_VERDICT_REVISED, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { isConvexId } from "../lib/entityLinks";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
+import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
 
 /** An optimistic edit awaiting the server's echo (see the header). The tree
  *  kinds reshape the tree (a move, a follow, a role's fields, a retire). The
@@ -59,7 +60,12 @@ export type OrgIntent =
    *  org.tree push — which any conversation write in the workspace triggers —
    *  and a refusal would be silent. */
   | { kind: "createRole"; id: string; stub: OrgCreateRoleInput; at: number }
-  | { kind: "staff"; id: string; stub: OrgStaffInput; at: number };
+  | { kind: "staff"; id: string; stub: OrgStaffInput; at: number }
+  /** Take an entry of the record back, or apply it again (org-staffing.md
+   *  S21): the entry, and every later entry the person agreed goes with it,
+   *  is marked at once. The server's own `undone_by` stamp (or its absence,
+   *  for a redo) is the echo. `line` is the entry's sentence, for the notice. */
+  | { kind: "undoChange"; id: string; batch: string; with: string[]; redo: boolean; by: { user_id: string; name: string }; /** What each entry's `undone_by` was before, for a refusal to restore. */ from: Record<string, OrgLogEntry["undone_by"] | null>; line: string; at: number };
 
 /** What a revert tells the person: `at` keys the toast so it fires once. */
 export type OrgIntentNotice = { text: string; at: number };
@@ -126,6 +132,10 @@ export type OrgSliceData = {
    *  fed by hooks/useSyncOrgProposals; joined by joinProposals at render. */
   orgProposals: Record<string, OrgProposalListRow>;
   orgProposalChanges: Record<string, OrgProposalChange>;
+  /** The org record (S21): one entry per gesture, and the rows of the entries
+   *  a person has unfolded, fed by hooks/useSyncOrgLog. */
+  orgLog: Record<string, OrgLogEntry>;
+  orgLogRows: Record<string, OrgLogRow>;
   /** The change the chart is focused on: a ghost click or a change row click
    *  sets it, the pane and the ghosts read it. Ephemeral, never replicated. */
   orgFocusChangeId: string | null;
@@ -194,6 +204,9 @@ export type OrgCreateRoleInput = {
    *  session, so no new session starts and `project_path` is not read. */
   adopt_conversation_id?: string;
   caps?: OrgRole["caps"];
+  /** The person's one edit on a hire with projects or plans (R1): the role
+   *  starts and the sessions in its scope stay with their owner. */
+  leave_sessions?: boolean;
   /** The caller, for the optimistic row (host and default reports_to). */
   host_user_id: string;
   /** Stub id: the row is re-keyed when org.tree echoes the real one. */
@@ -232,7 +245,9 @@ export type OrgSliceActions = {
   /** Change a role's reports_to. Resolves to the reparent result (told counts). */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => Promise<ReparentResult | undefined>;
   createOrgRole: (input: OrgCreateRoleInput) => void;
-  updateOrgRole: (roleId: string, fields: OrgUpdateRoleInput) => void;
+  /** `opts.leave_sessions`: with a scope that gains refs, the sessions in it
+   *  stay with their owner (R1). The dispatch's; it paints nothing. */
+  updateOrgRole: (roleId: string, fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
   /** Set the workflow a scope's tasks run on (the-line.md L2). Human only;
    *  dispatch runs orgRoles.setLine, which logs it and wakes the role. */
   setRoleLine: (roleId: string, slug: string) => void;
@@ -258,22 +273,36 @@ export type OrgSliceActions = {
    *  to accepted on the draft; dispatch runs orgProposals.acceptAll, which
    *  applies them in order and echoes applied or failed per change. With
    *  `kinds`, only changes of those kinds ("Accept group" on the records
-   *  card, S9); the server takes the same filter. */
-  acceptAllOrgProposal: (proposalId: string, opts?: { kinds?: string[] }) => void;
-  /** Accept or skip one ask (S19): every row in it that still waits flips
-   *  on the draft, and one dispatch runs orgProposals.decideAsk, which
-   *  applies them in order through the accept all core (or skips them) and
-   *  echoes per change. `askIndex` is the index into the asks both sides
-   *  resolve with the same function (resolveOrgAsks). */
-  decideOrgProposalAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip") => void;
+   *  card, S9); the server takes the same filter. `seen` is what the page
+   *  showed (see decideOrgProposalAsk). */
+  acceptAllOrgProposal: (proposalId: string, opts?: { kinds?: string[]; seen?: OrgVerdictSeen }) => void;
+  /** Accept or skip one ask (S19): every row the card held (`seen.seqs`)
+   *  that still waits flips on the draft, and one dispatch runs
+   *  orgProposals.decideAsk, which applies them in order through the accept
+   *  all core (or skips them) and echoes per change. `askIndex` is the
+   *  position the card had; `seen` says what the page had painted when it
+   *  was pressed (the latest revise and the card's seqs), and the server
+   *  refuses a verdict the author revised under the reader (S18). That
+   *  refusal is permanent, so dropRejectedOrgIntent puts every row back. */
+  decideOrgProposalAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, opts?: { leave_sessions?: boolean }) => void;
   /** Accept or skip one change (S5). Accept is optimistic: the row flips to
    *  accepted and dispatch runs orgProposals.decide, which applies it and
-   *  echoes applied or failed. Edits ride along as the patch decide takes. */
-  decideOrgProposalChange: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
+   *  echoes applied or failed. Edits ride along as the patch decide takes;
+   *  `seen` as for an ask (an amend keeps the row's id, so the id alone does
+   *  not say what the person read). */
+  decideOrgProposalChange: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>, seen?: OrgVerdictSeen) => void;
   /** Withdraw an open proposal (the replaced one, S4): optimistic on the
    *  list row; dispatch runs orgProposals.withdraw, whose author or admin
    *  gate is what allows a person to take it down. */
   withdrawOrgProposal: (proposalId: string) => void;
+  /** Take an entry of the record back (S21). The entry and the later entries
+   *  in `opts.with` (the ones the preview said must go with it) are struck on
+   *  the draft at once; dispatch runs orgChanges.undo, which applies the
+   *  inverse as a new batch. `opts.line` is the sentence the page showed. */
+  undoOrgChange: (batch: string, opts?: { with?: string[]; line?: string }) => void;
+  /** Apply an undone entry again: the strike comes off at once; dispatch runs
+   *  orgChanges.redo. */
+  redoOrgChange: (batch: string, opts?: { with?: string[]; line?: string }) => void;
   setOrgFocusChangeId: (changeId: string | null) => void;
 };
 
@@ -412,8 +441,14 @@ function chiefStub(tree: OrgTree, input: OrgStaffInput, now: number): OrgRole {
  * flip never sets, so that stamp is the acknowledgement. Without the rows the
  * verdict cannot be judged and stays open.
  */
-export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: Record<string, OrgProposalChange>, proposals?: Record<string, OrgProposalListRow>): boolean {
+export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: Record<string, OrgProposalChange>, proposals?: Record<string, OrgProposalListRow>, log?: Record<string, OrgLogEntry>): boolean {
   switch (intent.kind) {
+    case "undoChange": {
+      // The server names the batch that did the undo; the draft's mark does
+      // not (applyOrgUndoIntent), so a named batch is the acknowledgement.
+      if (!log) return false;
+      return undoIntentBatches(intent).every((b) => { const e = log[b]; return !e || (intent.redo ? !e.undone_by : !!e.undone_by?.batch); });
+    }
     case "withdraw": {
       if (!proposals) return false;
       const row = proposals[intent.proposal_id];
@@ -475,8 +510,9 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
   switch (intent.kind) {
     case "decideChange":
     case "withdraw":
+    case "undoChange":
       // Act on the proposal rows, not the tree: applyOrgChangeIntent,
-      // applyOrgWithdrawIntent.
+      // applyOrgWithdrawIntent. An undo acts on the record: applyOrgUndoIntent.
       return;
     case "staff": {
       if (liveChief(tree)) return;
@@ -642,6 +678,24 @@ export function applyOrgWithdrawIntent(proposals: Record<string, OrgProposalList
   p.status = "withdrawn";
 }
 
+/** The entries one undo or redo marks: the one pressed, and the later ones
+ *  the person agreed go with it. */
+const undoIntentBatches = (intent: Extract<OrgIntent, { kind: "undoChange" }>) => [intent.batch, ...intent.with];
+
+/** The mark an undo or a redo puts on the record: the action's draft and the
+ *  replay onto a list push that started before the mutation landed. An undo
+ *  strikes each entry under the person's name with no batch named yet (the
+ *  server's stamp names it, which is how the echo is told from the mark); a
+ *  redo takes the strike off. */
+export function applyOrgUndoIntent(log: Record<string, OrgLogEntry>, intent: Extract<OrgIntent, { kind: "undoChange" }>): void {
+  for (const b of undoIntentBatches(intent)) {
+    const e = log[b];
+    if (!e) continue;
+    if (intent.redo) delete e.undone_by;
+    else if (!e.undone_by) e.undone_by = { batch: "", user_id: intent.by.user_id, name: intent.by.name, at: intent.at };
+  }
+}
+
 /**
  * Put an intent's draft effect back. A verdict the server never took flips
  * its row to `from` and keeps the edits, so the person can retry them; a hire
@@ -649,8 +703,19 @@ export function applyOrgWithdrawIntent(proposals: Record<string, OrgProposalList
  * what they were. A move, a follow and a retire have nothing to undo here:
  * the next org.tree push is authoritative for them.
  */
-export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow> }, intent: OrgIntent): void {
+export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgLog?: Record<string, OrgLogEntry> }, intent: OrgIntent): void {
   switch (intent.kind) {
+    case "undoChange": {
+      for (const b of undoIntentBatches(intent)) {
+        const e = draft.orgLog?.[b];
+        // A named batch is the server's own stamp: it is not ours to take off.
+        if (!e || e.undone_by?.batch) continue;
+        const was = intent.from[b];
+        if (was) e.undone_by = was;
+        else delete e.undone_by;
+      }
+      return;
+    }
     case "withdraw": {
       const p = draft.orgProposals?.[intent.proposal_id];
       if (!p || p.resolved_at !== undefined) return;
@@ -733,6 +798,7 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
     case "moveSession": return `Moving the session ${tail}; it is back where it was.`;
     case "moveRole": return `Moving the role ${tail}; it is back where it was.`;
     case "follow": return `${intent.follow ? "Following" : "Unfollowing"} the channel ${tail}.`;
+    case "undoChange": return `${intent.redo ? "Applying" : "Taking back"} "${intent.line}"${intent.redo ? " again" : ""} ${tail}; the record is as it was.`;
   }
 }
 
@@ -743,7 +809,7 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
  * reads as a bug. Runs on every org.tree push and every change push, so a
  * quiet workspace still settles its journal.
  */
-export function pruneOrgIntents(draft: Pick<OrgDraft, "orgTree" | "orgIntents" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgIntentNotice?: OrgIntentNotice | null }, now = Date.now()): void {
+export function pruneOrgIntents(draft: Pick<OrgDraft, "orgTree" | "orgIntents" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgLog?: Record<string, OrgLogEntry>; orgIntentNotice?: OrgIntentNotice | null }, now = Date.now()): void {
   if (draft.orgIntents.length === 0) return;
   const keep: OrgIntent[] = [];
   for (const i of draft.orgIntents) {
@@ -754,7 +820,9 @@ export function pruneOrgIntents(draft: Pick<OrgDraft, "orgTree" | "orgIntents" |
       if (text) draft.orgIntentNotice = { text, at: now };
       continue;
     }
-    if (draft.orgTree && orgIntentSatisfied(draft.orgTree, i, draft.orgProposalChanges, draft.orgProposals)) continue;
+    // An undo is judged on the record alone, so it settles on a page that
+    // holds no tree (a role's Scope view opened cold).
+    if ((draft.orgTree || i.kind === "undoChange") && orgIntentSatisfied(draft.orgTree as OrgTree, i, draft.orgProposalChanges, draft.orgProposals, draft.orgLog)) continue;
     keep.push(i);
   }
   if (keep.length !== draft.orgIntents.length) draft.orgIntents = keep;
@@ -816,9 +884,13 @@ export function projectLeadScopeOutcome(tree: OrgTree, projectId: string, role: 
  * and a retire are only dropped (the next push replaces the tree); a verdict,
  * a hire and a role's fields are reverted, because nothing else will put
  * their rows back at once. Accept all refused reverts every row it flipped.
- * Returns one notice per intent for the caller to toast.
+ * Returns one notice per intent for the caller to toast; a verdict refused
+ * because the author revised the proposal under the reader (S18,
+ * ORG_VERDICT_REVISED in `error`) returns that one line instead, since the
+ * page shows the revised list marked, and a line per row would say nothing
+ * the marks do not.
  */
-export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgIntent: (id: string) => void; revertOrgIntent: (id: string) => void }, action: string, args: unknown): string[] {
+export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgIntent: (id: string) => void; revertOrgIntent: (id: string) => void }, action: string, args: unknown, error?: unknown): string[] {
   if (!Array.isArray(args)) return [];
   const notices: string[] = [];
   const drops = state.orgIntents.filter((i) =>
@@ -836,9 +908,22 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "createOrgRole" && i.kind === "createRole" && i.stub.client_id === (args[0] as OrgCreateRoleInput | undefined)?.client_id) ||
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
     (action === "setProjectLead" && i.kind === "roleFields" && i.role_id === args[1] && sameValue(roleFieldKeys(i.fields), ["scope"])) ||
-    (action === "setRoleLine" && i.kind === "line" && i.role_id === args[0] && i.slug === args[1]));
+    (action === "setRoleLine" && i.kind === "line" && i.role_id === args[0] && i.slug === args[1]) ||
+    ((action === "undoOrgChange" || action === "redoOrgChange") && i.kind === "undoChange" && i.batch === args[0] && i.redo === (action === "redoOrgChange")));
   for (const i of reverts) { state.revertOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
-  return notices;
+  const revised = orgVerdictRevisedNotice(error);
+  return revised && reverts.length > 0 ? [revised] : notices;
+}
+
+/** The server's own line for a verdict it refused as revised, or null: from
+ *  the proposal's short id to the end of the sentence, without the
+ *  transport's "Uncaught Error:" and stack around it. */
+export function orgVerdictRevisedNotice(error: unknown): string | null {
+  const msg = String((error as { message?: unknown })?.message ?? error ?? "");
+  const at = msg.indexOf(ORG_VERDICT_REVISED);
+  if (at < 0) return null;
+  const head = msg.slice(0, at).trim().split(/\s+/).pop() ?? "";
+  return `${head} ${ORG_VERDICT_REVISED}. Nothing was applied; the revised list is on the page.`;
 }
 
 /** The line intents on a role that the server's own read (orgRoles.line)
@@ -846,6 +931,21 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
 export function lineIntentEchoed(intents: OrgIntent[], roleId: string, serverSlug: string | undefined): OrgIntent[] {
   if (!serverSlug) return [];
   return intents.filter((i) => i.kind === "line" && i.role_id === roleId && i.slug === serverSlug);
+}
+
+/** One body for undo and redo: record the intent, mark the entries. The
+ *  person's name comes from the tree (the viewer's own row), which is what
+ *  the struck entry shows until the server's stamp replaces it. */
+function markOrgUndo(draft: OrgDraft, batch: string, redo: boolean, opts?: { with?: string[]; line?: string }): void {
+  const entry = draft.orgLog[batch];
+  if (!entry || !!entry.undone_by === !redo) return;
+  const me = draft.orgTree?.people.find((p) => p.is_me);
+  const also = (opts?.with ?? []).filter((b) => b !== batch && !!draft.orgLog[b]);
+  const from: Record<string, OrgLogEntry["undone_by"] | null> = {};
+  for (const b of [batch, ...also]) from[b] = draft.orgLog[b]?.undone_by ? { ...draft.orgLog[b].undone_by! } : null;
+  const intent: OrgIntent = { kind: "undoChange", id: intentId(), batch, with: also, redo, by: { user_id: me?.user_id ?? "", name: me?.name ?? "You" }, from, line: opts?.line ?? "this change", at: Date.now() };
+  applyOrgUndoIntent(draft.orgLog, intent);
+  pushIntent(draft, intent);
 }
 
 let intentSeq = 0;
@@ -870,6 +970,7 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
     // One subject per stub, so hiring two roles in a row keeps both on the
     // chart rather than the second replacing the first.
     : i.kind === "createRole" ? `n:${i.stub.client_id}`
+    : i.kind === "undoChange" ? `u:${i.batch}`
     : "staff";
   const key = subjectOf(intent);
   draft.orgIntents = [...draft.orgIntents.filter((i) => subjectOf(i) !== key), intent];
@@ -944,6 +1045,20 @@ export const ORG_SYNC_REGISTRY = {
       }
     },
   },
+  // An undo's pending protection (S21): a list push that started before the
+  // undo landed still shows the entry standing; replay the open mark onto it,
+  // and settle the journal (the server's named batch is the echo).
+  orgLog: {
+    kind: "collection" as const,
+    isDelta: true,
+    transform: (draft: any) => {
+      if (!draft?.orgIntents?.length) return;
+      pruneOrgIntents(draft);
+      for (const i of draft.orgIntents as OrgIntent[]) {
+        if (i.kind === "undoChange") applyOrgUndoIntent(draft.orgLog, i);
+      }
+    },
+  },
   // Same stamp, same reason: a no-op health push must not wake the pane.
   orgHealth: {
     kind: "singleton" as const,
@@ -968,6 +1083,10 @@ export function createOrgSlice(): OrgSliceImpl {
     orgProposals: {},
 
     orgProposalChanges: {},
+
+    orgLog: {},
+
+    orgLogRows: {},
 
     orgFocusChangeId: null,
 
@@ -1021,7 +1140,7 @@ export function createOrgSlice(): OrgSliceImpl {
     // An intent like every other edit: org.tree recomputes on any conversation
     // write (a heartbeat is enough), so without one a Resume or a caps change
     // flickered back for a round trip; `from` lets a refusal restore at once.
-    updateOrgRole: action(function (this: OrgDraft, roleId: string, fields: OrgUpdateRoleInput) {
+    updateOrgRole: action(function (this: OrgDraft, roleId: string, fields: OrgUpdateRoleInput, _opts?: { leave_sessions?: boolean }) {
       pushRoleFieldsIntent(this, roleId, fields);
     }),
 
@@ -1087,20 +1206,25 @@ export function createOrgSlice(): OrgSliceImpl {
     // Every change the server would take (proposed or failed, S4) flips to
     // accepted, one intent each, so a refusal of the whole call puts every
     // row back and a partial echo settles row by row.
-    acceptAllOrgProposal: action(function (this: OrgDraft, proposalId: string, opts?: { kinds?: string[] }) {
+    acceptAllOrgProposal: action(function (this: OrgDraft, proposalId: string, opts?: { kinds?: string[]; seen?: OrgVerdictSeen }) {
       const kinds = opts?.kinds?.length ? new Set(opts.kinds) : null;
       decideWaitingChanges(this, proposalId, "accepted", (c) => !kinds || kinds.has(c.change.kind));
     }),
 
-    decideOrgProposalAsk: action(function (this: OrgDraft, proposalId: string, askIndex: number, verdict: "accept" | "skip") {
-      const rows = Object.values(this.orgProposalChanges).filter((c) => c.proposal_id === proposalId);
-      const ask = resolveOrgAsks(this.orgProposals[proposalId]?.asks, rows)[askIndex];
-      if (!ask) return;
-      const seqs = new Set(ask.seqs);
+    // The rows the card held, not the ask at that position today: a revise
+    // that landed between the paint and the press moves positions, and the
+    // server refuses the verdict, so the flip must mark what the person
+    // pressed and nothing else (the refusal puts exactly those back).
+    // `_opts` is the dispatch's, like `_seen` below: `leave_sessions` is the
+    // person's one edit on the accept (R1) and paints nothing here.
+    decideOrgProposalAsk: action(function (this: OrgDraft, proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, _opts?: { leave_sessions?: boolean }) {
+      const seqs = new Set(seen.seqs ?? []);
       decideWaitingChanges(this, proposalId, verdict === "accept" ? "accepted" : "skipped", (c) => seqs.has(c.seq), askIndex);
     }),
 
-    decideOrgProposalChange: action(function (this: OrgDraft, changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) {
+    // `_seen` is the dispatch's, not the draft's: the middleware sends every
+    // argument to the side effect, which hands it to orgProposals.decide.
+    decideOrgProposalChange: action(function (this: OrgDraft, changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>, _seen?: OrgVerdictSeen) {
       const c = this.orgProposalChanges[changeId];
       if (!c || !isOrgChangeDecidable(c.status)) return;
       const intent: OrgIntent = {
@@ -1117,6 +1241,16 @@ export function createOrgSlice(): OrgSliceImpl {
       const intent: OrgIntent = { kind: "withdraw", id: intentId(), proposal_id: proposalId, short_id: p.short_id, at: Date.now() };
       applyOrgWithdrawIntent(this.orgProposals, intent);
       pushIntent(this, intent);
+    }),
+
+    // `_opts.with` rides to the dispatch too: the server undoes those entries
+    // in the same batch or refuses the whole gesture (S21).
+    undoOrgChange: action(function (this: OrgDraft, batch: string, opts?: { with?: string[]; line?: string }) {
+      markOrgUndo(this, batch, false, opts);
+    }),
+
+    redoOrgChange: action(function (this: OrgDraft, batch: string, opts?: { with?: string[]; line?: string }) {
+      markOrgUndo(this, batch, true, opts);
     }),
 
     setOrgFocusChangeId: sync(function (this: OrgDraft, changeId: string | null) {

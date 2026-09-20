@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildTaskStartBody } from "./taskClaim.js";
 
 describe("buildTaskStartBody", () => {
@@ -106,17 +108,39 @@ describe("a role as assignee in the CLI (org-roles-run-work.md R5)", () => {
     expect(snippetSection("tasks").body).toContain(ASSIGNEE_MEANS);
   });
 
-  test("--chain groups by assignee: the person first, then each role by handle", () => {
+  test("--chain groups by assignee: the person first, then each role by handle, told apart by the contract's kind", () => {
+    const role = (handle: string) => ({ kind: "role" as const, name: handle, handle, avatar: "fox" as any, role_id: handle, role_short_id: `or-${handle}` });
     const rows = [
-      { short_id: "ct-3", assignee: "r2", assignee_name: "@seo" },
-      { short_id: "ct-1", assignee: "u1", assignee_name: "Ashot" },
-      { short_id: "ct-2", assignee: "r1", assignee_name: "@ads" },
-      { short_id: "ct-4", assignee: "u1", assignee_name: "Ashot" },
+      { short_id: "ct-3", assignee: "r2", assignee_name: "@seo", assignee_info: role("seo") },
+      { short_id: "ct-1", assignee: "u1", assignee_name: "Ashot", assignee_info: { name: "Ashot" } },
+      { short_id: "ct-2", assignee: "r1", assignee_name: "@ads", assignee_info: role("ads") },
+      { short_id: "ct-4", assignee: "u1", assignee_name: "Ashot", assignee_info: { name: "Ashot" } },
+      // A person whose display name starts with "@" is still a person.
+      { short_id: "ct-5", assignee: "u2", assignee_name: "@dawn", assignee_info: { name: "@dawn" } },
     ];
-    expect(groupTasksByAssignee(rows).map((g) => [g.label, g.tasks.map((t) => t.short_id)])).toEqual([
-      ["Ashot", ["ct-1", "ct-4"]],
-      ["@ads", ["ct-2"]],
-      ["@seo", ["ct-3"]],
+    expect(groupTasksByAssignee(rows).map((g) => [g.label, g.role, g.tasks.map((t) => t.short_id)])).toEqual([
+      ["@dawn", false, ["ct-5"]],
+      ["Ashot", false, ["ct-1", "ct-4"]],
+      ["@ads", true, ["ct-2"]],
+      ["@seo", true, ["ct-3"]],
     ]);
+  });
+});
+
+describe("the task verbs never guess the session", () => {
+  // detectCurrentSessionId falls back to "the one transcript active in the
+  // last five minutes". The server reads a session's role off the id it is
+  // handed, so a person at a plain terminal would hand a task to a hand's role
+  // (start) or be refused as a hand (verdict, done). These verbs read the
+  // caller's own id or nothing.
+  test("start, done, handoff, verdict and drop read ownSessionId, not detectCurrentSessionId", () => {
+    const src = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
+    for (const verb of ["start", "done", "handoff", "verdict", "drop"]) {
+      const at = src.indexOf(`work\n  .command("${verb}")`);
+      expect(at, `work.command("${verb}") is defined`).toBeGreaterThan(-1);
+      const action = src.slice(at, src.indexOf("\nwork\n", at + 1));
+      expect(action.includes("detectCurrentSessionId("), `${verb} must not guess the session`).toBe(false);
+      expect(action.includes("ownSessionId(getRealCwd())"), `${verb} reads the caller's own session`).toBe(true);
+    }
   });
 });

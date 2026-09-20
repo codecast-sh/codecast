@@ -92,14 +92,6 @@ export function revisedSince(changes: OrgProposalChange[], since: number): OrgPr
   return changes.filter((c) => c.revision && c.revision.at > since).sort((a, b) => b.revision!.at - a.revision!.at);
 }
 
-/** The latest revise on the proposal, or 0. A watermark reads this once on
- *  open so a reload does not announce old revises as new. */
-export function latestRevisionAt(changes: OrgProposalChange[]): number {
-  let at = 0;
-  for (const c of changes) if (c.revision && c.revision.at > at) at = c.revision.at;
-  return at;
-}
-
 /** "Chief of Staff removed 1, changed 2 and added 1 since you last looked."
  *  `who` may be the agent phrase, so the line capitalises its first letter. */
 export function revisedLine(rows: OrgProposalChange[], who: string): string {

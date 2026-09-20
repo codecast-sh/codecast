@@ -613,7 +613,7 @@ export function orgParentRefAsProposal(tree: OrgTree, ref: OrgParentRef | null |
  * the change as they are. Sending the dialog's shape raw left the role with
  * no scope and a reports_to the apply core could not read.
  */
-export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle" | "charter" | "caps" | "scope" | "reports_to"> & { tenure?: OrgTenureSpec; avatar?: string; touched?: HireRoleTouched }, tree: OrgTree, meId: string): Record<string, unknown> {
+export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle" | "charter" | "caps" | "scope" | "reports_to" | "leave_sessions"> & { tenure?: OrgTenureSpec; avatar?: string; touched?: HireRoleTouched }, tree: OrgTree, meId: string): Record<string, unknown> {
   // Scope and parent ride along only when the person changed them: an
   // untouched form must not overwrite a ref it could not resolve, or a
   // parent the same proposal creates, with what it happened to display.
@@ -629,6 +629,8 @@ export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle
     ...(input.avatar ? { avatar: input.avatar } : {}),
     ...(touched.scope ? { scope: { projects: [...(input.scope?.project_ids ?? [])], plans: [...(input.scope?.plan_ids ?? [])] } } : {}),
     ...(reports_to ? { reports_to } : {}),
+    // The person's one edit on the takeover (R1), from the form's checkbox.
+    ...(input.leave_sessions ? { leave_sessions: true } : {}),
   };
 }
 

@@ -19,6 +19,8 @@ import { projectLeadScopeOutcome } from "../../store/orgSlice";
 import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { cn } from "../../lib/utils";
 import { HireRoleDialog } from "../org/HireRoleDialog";
+import { TakeoverGate } from "../org/TakeoverEdit";
+import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import type { OrgRole } from "../org/orgTypes";
 import { RoleHoverCard } from "../identity";
 import { ChipFace, OwnerRoleChip } from "./CharterChips";
@@ -74,6 +76,9 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, clas
   const setProjectLead = useInboxStore((s) => s.setProjectLead);
   const createOrgRole = useInboxStore((s) => s.createOrgRole);
   const [hireOpen, setHireOpen] = useState(false);
+  // A lead whose scope gains this project takes over the sessions in it (R1):
+  // that gesture waits at the gate for the count and the person's one edit.
+  const [pending, setPending] = useState<{ role: OrgRole; text: string } | null>(null);
   // Nothing honest to say before the project and its workspace's roles are
   // here: "No lead" on a project whose lead has not loaded would be a lie.
   if (!project || (!roles && !otherWorkspace)) return null;
@@ -84,16 +89,39 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, clas
     const role = roleId ? tree?.roles.find((r) => r._id === roleId) : undefined;
     // Read the outcome BEFORE the write: after it the scope already lists the
     // project and the sentence would lose its second half.
-    const text = role && tree ? leadToast(role, project.title, projectLeadScopeOutcome(tree, projectId, role)) : `${project.title} has no named lead now`;
-    // Painted already; the promise carries only what the server alone knows:
-    // the sessions in the project that now report to the role (R1).
-    void setProjectLead(projectId, roleId).then((r) => { if (r?.took_over) toast.message(r.took_over); }).catch(() => {});
+    const outcome = role && tree ? projectLeadScopeOutcome(tree, projectId, role) : null;
+    const text = role && outcome ? leadToast(role, project.title, outcome) : `${project.title} has no named lead now`;
+    // Only a lead whose scope GAINS the project can take sessions over; every
+    // other outcome writes at once, as it always did.
+    if (role && outcome?.kind === "add") { setPending({ role, text }); return; }
+    name(roleId, text);
+  };
+  // Painted by the store action; the promise carries only what the server
+  // alone knows: the sessions in the project that now report to the role (R1).
+  const name = (roleId: string | null, text: string, opts?: { leave_sessions?: boolean }) => {
+    void setProjectLead(projectId, roleId, opts).then((r) => { if (r?.took_over) toast.message(r.took_over); }).catch(() => {});
     toast.success(text);
   };
 
   return (
     // A chip inside a clickable row or group header keeps its clicks to itself.
     <span className={cn("inline-flex items-center gap-1.5 min-w-0", className)} onClick={(e) => e.stopPropagation()} data-project-lead={lead.kind}>
+      {pending && (
+        <Popover open onOpenChange={(open) => { if (!open) setPending(null); }}>
+          <PopoverAnchor className="self-stretch" />
+          <PopoverContent align="start" sideOffset={6} className="w-[300px] p-0 border-0 bg-transparent shadow-none" data-lead-gate>
+            <TakeoverGate
+              key={pending.role._id}
+              workspace={useInboxStore.getState().orgTree?.workspace}
+              ask={{ handle: pending.role.handle, add: [`project:${projectId}`] }}
+              what={`${pending.role.name} will lead ${project.title}, and ${project.title} joins what it looks after.`}
+              confirmLabel="Name the lead"
+              onConfirm={(opts) => { name(pending.role._id, pending.text, opts.leave_sessions ? opts : undefined); setPending(null); }}
+              onCancel={() => setPending(null)}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
       <OwnerRoleChip
         roles={roles}
         ownerRoleId={project.owner_role_id}

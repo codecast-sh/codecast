@@ -9,6 +9,7 @@ import { userCanAdminRole } from "./lib/orgAccess";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
 import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInScope } from "./org";
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
 import { computeOrgActivity } from "./lib/orgActivity";
 import { computeCoverage } from "./lib/orgCoverage";
@@ -34,6 +35,7 @@ import {
   extractOrgProposal,
   orgEveryToMs,
   orgProposalVerdict,
+  takeoverPhrase,
   type OrgAdoptChange,
   type OrgBudgetChange,
   type OrgChange,
@@ -618,9 +620,9 @@ const toRef = (s: string) => (/^(project|plan):/.test(s) ? s : /^pl-\d+$/.test(s
 // role: the live role's scope plus what the change adds, or the proposed
 // scope alone with the person applying as the host (performCreateRole's
 // default). Always dry.
-export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle?: string; add?: string[] }): Promise<RehomeResult | null> {
+export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle?: string; add?: string[]; seat?: string }, shared: { scan?: OrgScanResult; roles?: any[] } = {}): Promise<RehomeResult | null> {
   const handle = (p.handle ?? "").replace(/^@/, "").toLowerCase();
-  const live = handle ? (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle) : undefined;
+  const live = handle ? (shared.roles ?? await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle) : undefined;
   const scope = { project_ids: [...(live?.scope?.project_ids ?? [])], plan_ids: [...(live?.scope?.plan_ids ?? [])] };
   for (const raw of p.add ?? []) {
     const ref = await resolveScopeRef(ctx, boundary, toRef(raw)).catch(() => null);
@@ -630,42 +632,52 @@ export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: B
   if (isWholeWorkspace(scope)) return null;
   const resolved = await resolveScope(ctx, userId, { scope, team_id: boundary.team_id });
   if (!resolved) return null;
-  const candidates = await sessionsInScope(ctx, resolved, Date.now());
+  // The session the role will be seated on (R2) is its standing session by
+  // the time the takeover runs, so it is not one of the sessions that move.
+  const seat = p.seat?.trim();
+  const candidates = (await sessionsInScope(ctx, resolved, Date.now(), shared.scan)).filter(({ raw }) => !seat || ![raw.short_id, String(raw._id), raw.session_id].includes(seat));
   const subject = live ?? { host_user_id: userId, team_id: boundary.team_id };
   // A live role's own sessions are already its; the filter drops them (they
   // carry a role), so only sessions that would newly move are counted.
   return performRehomeSessions(ctx, userId, subject, candidates, { dry: true });
 }
 
+// One page asks for every row it shows in ONE call (a proposal's role, scope
+// and adopt rows; the one pending edit of Settings or the lead chip), and the
+// answers come back in the order asked. The org scan and the boundary's roles
+// are read once for all of them: a query per row would each scan the
+// workspace's sessions again, live, on every session heartbeat.
+export const TAKEOVER_PREVIEW_CAP = 40;
+export type TakeoverPreview = { sessions: string[]; kept_in_front: string[]; over_cap: number; phrase: string };
+
+export async function previewTakeovers(ctx: Ctx, userId: Id<"users">, boundary: Boundary, items: Array<{ handle?: string; add?: string[]; seat?: string }>): Promise<Array<TakeoverPreview | null>> {
+  const asked = items.slice(0, TAKEOVER_PREVIEW_CAP);
+  if (!asked.length) return [];
+  const shared = { scan: await collectOrgSessions(ctx, userId, boundary.team_id, Date.now()), roles: await rolesInBoundary(ctx, boundary) };
+  const out: Array<TakeoverPreview | null> = [];
+  for (const item of asked) {
+    const r = await previewTakeover(ctx, userId, boundary, item, shared);
+    out.push(r ? { sessions: r.sessions, kept_in_front: r.kept_in_front, over_cap: r.over_cap, phrase: takeoverPhrase((item.handle ?? "").replace(/^@/, "").toLowerCase(), r, false) } : null);
+  }
+  return out;
+}
+
 export const takeoverPreview = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    handle: v.optional(v.string()),
-    add: v.optional(v.array(v.string())),
+    items: v.array(v.object({ handle: v.optional(v.string()), add: v.optional(v.array(v.string())), seat: v.optional(v.string()) })),
   },
-  handler: async (ctx, args): Promise<{ sessions: string[]; kept_in_front: string[]; over_cap: number; phrase: string } | null> => {
+  handler: async (ctx, args): Promise<Array<TakeoverPreview | null>> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
-    if (!userId) return null;
-    const r = await previewTakeover(ctx, userId, { team_id: args.team_id, scope_user_id: args.team_id ? undefined : userId }, { handle: args.handle, add: args.add });
-    if (!r) return null;
-    return { sessions: r.sessions, kept_in_front: r.kept_in_front, over_cap: r.over_cap, phrase: takeoverPhrase((args.handle ?? "").replace(/^@/, "").toLowerCase(), r, false) };
+    if (!userId) return [];
+    return previewTakeovers(ctx, userId, { team_id: args.team_id, scope_user_id: args.team_id ? undefined : userId }, args.items);
   },
 });
 
-// One writer for the sentence, so the note before accept and the note after
-// apply say the same thing. After apply it adds the told counts.
-export function takeoverPhrase(handle: string, r: RehomeResult | null, applied: boolean): string {
-  const n = r?.sessions.length ?? 0;
-  if (!r || n === 0) return "";
-  const one = n === 1;
-  const parts = [`${n} session${one ? "" : "s"} now report${one ? "s" : ""} to @${handle} and leave${one ? "s" : ""} your needs input`];
-  const kept = r.kept_in_front.length;
-  if (kept) parts.push(`${kept} of them stay${kept === 1 ? "s" : ""} in front of you with a question still open`);
-  if (applied) parts.push(`${r.told.sessions} told now${r.told.deferred ? `, ${r.told.deferred} will read it on their next turn` : ""}`);
-  if (r.over_cap) parts.push(`${r.over_cap} more stay where they are until the next change`);
-  return parts.join("; ");
-}
+// One writer for the sentence (contracts/orgProposal.takeoverPhrase), so the
+// note before accept, the note after apply and every page say the same thing.
+export { takeoverPhrase };
 
 export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleProposal, note: string | undefined, opts: { provision: boolean; human_decision: string; awaiting_adopt?: string }): Promise<ApplyResult> {
   const handle = p.handle.trim().toLowerCase();
@@ -678,7 +690,11 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   const taken = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle);
   if (taken) return { status: "error", error: `@${handle} is already ${taken.short_id} (${taken.name}); answer with changes to pick another handle, or skip` };
   const scope = await resolveProposalScope(ctx, boundary, p.scope);
-  const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
+  // A role that names its session keeps the session's reporting line: with no
+  // reports_to, the parent is the person who runs the session, not whoever
+  // accepts the proposal (org-roles-run-work.md R2; the card promises naming
+  // changes nothing about how it works).
+  const reports_to = p.seat && !p.reports_to?.trim() ? await seatOwnerOf(ctx, p.seat.existing) : await resolveReportsTo(ctx, userId, boundary, p.reports_to);
   const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
   // A role that names its session (org-roles-run-work.md R2) is seated on it
@@ -753,12 +769,11 @@ export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   if (!role) throw new Error(`No live role @${handle} in this workspace`);
   const did: string[] = [];
   if (p.scope_add?.length || p.scope_remove?.length) {
-    await performSetRoleScope(ctx, userId, { role_id: String(role._id), add: (p.scope_add ?? []).map(toRef), remove: (p.scope_remove ?? []).map(toRef), human_decision: humanDecision });
+    // Gained scope takes over the sessions in it (R1), inside the role update
+    // every scope gain goes through; a role that only lost scope takes nothing.
+    const updated = await performSetRoleScope(ctx, userId, { role_id: String(role._id), add: (p.scope_add ?? []).map(toRef), remove: (p.scope_remove ?? []).map(toRef), human_decision: humanDecision, leave_sessions: p.leave_sessions });
     did.push(`scope ${[...(p.scope_add ?? []).map((s) => `+${s}`), ...(p.scope_remove ?? []).map((s) => `-${s}`)].join(" ")}`);
-    // Gained scope takes over the sessions in it (R1); a role that only lost
-    // scope has nothing new to take.
-    const tookOver = p.scope_add?.length ? takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true) : "";
-    if (tookOver) did.push(tookOver);
+    if (updated.took_over?.phrase) did.push(updated.took_over.phrase);
   }
   if (p.reports_to) {
     await performReparentRole(ctx, userId, { role_id: String(role._id), reports_to: await resolveReportsTo(ctx, userId, boundary, p.reports_to) });
@@ -871,6 +886,14 @@ export async function applyAdopt(ctx: Ctx, userId: Id<"users">, boundary: Bounda
 }
 
 class SeatTakenError extends Error {}
+/** The person who runs a session named as a seat: its owner, else the user
+ *  who started it. Throws when nothing answers to the ref, so a role is never
+ *  created for a session nobody can find. */
+async function seatOwnerOf(ctx: Ctx, ref: string): Promise<{ kind: "user"; user_id: Id<"users"> }> {
+  const conv = await findConversationByAnyRefWhere(ctx, ref.trim(), async () => true);
+  if (!conv) throw new Error(`Session not found: ${ref.trim()}`);
+  return { kind: "user", user_id: (conv.owner_user_id ?? conv.user_id) as Id<"users"> };
+}
 /** The one seating of an existing session on a role, for an adopt change and
  *  for a role change that names its session. Answers the seated session's
  *  short id. Provision is idempotent per role: a role that already has a

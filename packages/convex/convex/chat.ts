@@ -52,7 +52,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { deliverToAnchor, userCanAccessAnchor } from "./anchors";
 import { actorIsExcluded, enqueueRoleEvent } from "./orgEvents";
 import { resolveActor } from "./lib/actor";
-import { queueSlackOutbound, slackLinkForChannel } from "./lib/slackOutbound";
+import { queueSlackOutbound, slackLinkForChannel, slackLinksWithSendAuth } from "./lib/slackOutbound";
 import { isDesktopActivePresence } from "./pushRouter";
 import {
   HERE_PRESENCE_MS,
@@ -576,7 +576,7 @@ export const listChannels = query({
         .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
         .collect()
     ).filter((l) => visibleIds.has(l.chat_channel_id.toString()));
-    return { team_id: teamId, channels, reads, rail, slack_links };
+    return { team_id: teamId, channels, reads, rail, slack_links: await slackLinksWithSendAuth(ctx, slack_links, userId) };
   },
 });
 

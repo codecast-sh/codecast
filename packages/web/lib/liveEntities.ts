@@ -68,7 +68,21 @@ export function resolveAssigneeInfo(
   if (currentUser && (assignee === currentUser._id || assignee === "me")) {
     return { name: memberDisplayName(currentUser), image: memberAvatarUrl(currentUser), github_username: currentUser.github_username };
   }
-  return fallback ?? { name: String(assignee) };
+  if (fallback) return fallback;
+  // A bare name typed by hand ("Priya") names a person; an id nobody here can
+  // resolve (a teammate who left, a role since removed) names nobody rather
+  // than a 32 character string.
+  return isEntityId(assignee) ? null : { name: String(assignee) };
+}
+
+const isEntityId = (value: string): boolean => /^[a-z0-9]{32}$/.test(value);
+
+/** What a surface prints for an assignee key: the resolved name, the bare
+ *  name a person typed, or, for an id nobody here can resolve, a phrase that
+ *  says so instead of the id. */
+export function assigneeLabelOf(key: string, info: { name: string } | null | undefined): string {
+  if (info?.name) return info.name;
+  return isEntityId(key) ? "Outside the team" : key;
 }
 
 type SessionAuthor = { name: string; avatar?: string | null } | null;

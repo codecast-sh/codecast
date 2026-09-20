@@ -14,6 +14,8 @@ async function verifyHireFlow() {
   const project = { _id: "project-1", title: "Product", workspace: "team:fixture-team", status: "active", task_counts: { total: 0, done: 0, in_progress: 0 }, plan_count: 0, doc_count: 0, active_plan_count: 0, created_at: 1, updated_at: 1 };
   mock.module("../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => key === "projects" ? [project] : [] }));
   mock.module("../../hooks/useScopeQueries", () => ({ useScopeSummary: () => ({ data: undefined }) }));
+  // The form's other server read: what the new role would take over (R1).
+  mock.module("../../hooks/useTakeoverPreviews", () => ({ useTakeoverPreviews: () => ({ byKey: {}, ready: true }) }));
   const React = await import("react");
   const { act } = React;
   const { createRoot } = await import("react-dom/client");

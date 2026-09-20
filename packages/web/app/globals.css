@@ -1702,7 +1702,55 @@ pre[class*="language-"] {
    those carry a button the person has to press. Nothing is removed from the
    DOM, so the hover toolbar, the context menu and drag all behave the same. */
 .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
-  padding-block: 5px;
+  padding-block: 6px;
+}
+/* A one line row is a line of text, not a card. A box around every line makes
+   the list read as a stack of rectangles, so the row takes the rail's own
+   ground and shows no edge. A soft rounded fill marks the row under the
+   pointer and the open one, and nothing else does. Both styles paint a row
+   from --sv-card-bg and aim the pin and toolbar fades at it, so the row sets
+   that one variable and the fill and the fades move together. :root lifts
+   these over the Classic and Minimal card rules wherever they sit in this
+   file; both of those put !important on the background. */
+:root .inbox-compact [data-sv-rail] {
+  --sv-card-bg: var(--sol-bg-alt);
+  --sv-row-hover-bg: color-mix(in srgb, var(--sol-text) 5%, var(--sol-bg-alt));
+  --sv-card-active-bg: color-mix(in srgb, var(--sol-cyan) 16%, var(--sol-bg-alt));
+}
+.minimal-style .inbox-compact [data-sv-rail],
+.minimal-style.inbox-compact [data-sv-rail] {
+  --sv-card-active-bg: color-mix(in srgb, var(--sol-text) 9%, var(--sol-bg-alt));
+}
+:root .inbox-compact [data-sv-rail] [data-session-id] {
+  margin: 1px 6px;
+  border-color: transparent !important;
+  border-radius: 8px;
+  background: var(--sv-card-bg) !important;
+}
+:root .inbox-compact [data-sv-rail] [data-session-id]:hover {
+  --sv-card-bg: var(--sv-row-hover-bg);
+}
+:root .inbox-compact [data-sv-rail] [data-session-id][data-active="true"] {
+  --sv-card-bg: var(--sv-card-active-bg);
+  border-color: transparent !important;
+}
+/* A ring that means something stays: a handoff, a teammate viewing, a row in
+   a selection. The open row's ring and the card shadow go. */
+:root .inbox-compact [data-sv-rail] [data-session-id]:is([data-active="true"], :not([class*="ring-1"])) {
+  box-shadow: none;
+}
+:root .inbox-compact [data-sv-rail] div:has(> [data-session-id]) {
+  border-bottom-color: transparent !important;
+}
+:root .inbox-compact [data-sv-rail] [data-session-id] [data-sv-fade] {
+  background: linear-gradient(to right, transparent, var(--sv-card-bg) 60%) !important;
+}
+/* The declared state reads as a colored word. Its box was the second
+   rectangle on every line. */
+:root .inbox-compact [data-sv-rail] [data-sv-status-chip] {
+  padding: 0;
+  border-color: transparent;
+  background: none;
 }
 .inbox-compact [data-sv-rail] [data-sv-body] {
   display: grid;
@@ -4553,7 +4601,9 @@ pre[class*="language-"] {
   letter-spacing: 0;
   text-transform: none;
 }
-.minimal-style [data-sv-rail] [data-sv-prompt] {
+/* One step more specific than the safety net's weight rule, which would
+   otherwise keep the prompt bold. */
+.minimal-style [data-sv-rail] [data-session-id] [data-sv-prompt] {
   margin-top: 3px;
   font-size: var(--t-sub);
   font-weight: 400;
@@ -4627,11 +4677,24 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] button.cursor-zoom-in {
   border-color: var(--cc-panel-rule);
   border-radius: 8px;
+  background: var(--sol-bg-inset);
+}
+/* A thumbnail of a mostly white page is a white square on a white card, which
+   reads as an empty box. On the light page the image multiplies into a gray
+   ground, so the page's own ink shows as marks. */
+.light.minimal-style [data-sv-rail] button.cursor-zoom-in img {
+  mix-blend-mode: multiply;
 }
 .minimal-style [data-sv-rail] [data-sv-triggers-foot] {
   border-top-color: var(--cc-panel-rule);
   font-family: var(--font-ui);
   font-size: var(--t-sub);
+}
+/* A narrow list fades the footer's last pill out instead of cutting it mid word. */
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
 }
 .minimal-style [data-sv-rail] [data-sv-triggers-foot] .uppercase {
   text-transform: none;
@@ -5325,14 +5388,17 @@ pre[class*="language-"] {
 
 /* A role's standing session on the role page (initiatives-projects-role-page.md
    I3). The role's header above already carries the face, the name and the
-   state, so the session's own header rests on one row: a label, the live
-   status, whatever is marked data-cc-keep (a live huddle, a struggling daemon,
-   an open search, the session menu) and the seat's two controls. It is the
+   state, so the session's own header rests on one row: the one state word
+   that is true (a stall notice takes its place), the live signals marked
+   data-cc-keep (a huddle, a struggling daemon, an open search) and the seat's
+   two controls; the session menu waits behind the expander too. It is the
    same header with the same actions, all still in the DOM; "open" shows the
    whole row again, less the face and the title the role's header already
    says. A rename in progress is never hidden. */
 [data-seat-head="rest"] [data-sv-convhead] .cq-squeeze-row > :not([data-seat-label], [data-cc-conv-status], [data-cc-conv-actions], input),
-[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]) {
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > button[data-cc-keep],
+[data-seat-head="rest"][data-seat-stall] [data-sv-convhead] [data-cc-conv-status] {
   display: none;
 }
 [data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > h1,

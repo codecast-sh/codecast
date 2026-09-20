@@ -262,15 +262,19 @@ export async function reroutePendingDecisionsForConversation(
   conversationId: Id<"conversations">,
   now: number,
 ): Promise<{ moved: number }> {
+  // The open rows first: most sessions that change hands have no question
+  // open, and the ladder walk is several reads that a takeover of 100
+  // sessions would otherwise repeat for nothing.
+  const openRows: DecisionRow[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "pending"))
+    .collect();
+  if (openRows.length === 0) return { moved: 0 };
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return { moved: 0 };
   const role = await roleOfConversation(ctx, conversation);
   const ladder = await buildLadder(ctx, role, now);
   const people = await peopleFor(ctx, conversation, ladder.firstPersonId);
-  const openRows: DecisionRow[] = await ctx.db
-    .query("session_decisions")
-    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "pending"))
-    .collect();
   for (const row of openRows) {
     await ctx.db.patch(row._id, { asked_user_ids: people });
     await syncDecisionInbox(ctx, row._id, people, now);
