@@ -366,3 +366,44 @@ export function wouldCreateTaskCycle(childId: string, parentId: string, parentOf
   }
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// A project's progress, as the board shows it
+
+/** A row the project's board lists: real work, on the human's board, not
+ *  dropped (the board hides dropped by default). */
+export function isOnProjectBoard(t: {
+  status?: string | null;
+  source?: string | null;
+  promoted?: boolean | null;
+  assignee?: string | null;
+  triage_status?: string | null;
+}): boolean {
+  return isActiveTask(t) && isOnHumanBoard(t) && t.status !== "dropped";
+}
+
+export type ProjectProgress = { total: number; done: number; in_progress: number; open: number };
+
+/**
+ * Tasks done over tasks, for one or more projects, counting exactly the rows
+ * the project's board would show (initiatives-projects-role-page.md I1): a
+ * task counts under the project it names, and only when `isOnProjectBoard`.
+ * ONE rule, read by the web (an initiative's header, its list, the owner's
+ * opening line), the server (`initiatives.show`) and the CLI, so the number
+ * a person is promised is the number the board shows when they click through.
+ */
+export function projectTaskCounts(
+  tasks: Iterable<{ status?: string | null; project_id?: unknown; source?: string | null; promoted?: boolean | null; assignee?: string | null; triage_status?: string | null }>,
+  projectIds: Iterable<unknown>,
+): ProjectProgress {
+  const ids = new Set(Array.from(projectIds, String));
+  const out: ProjectProgress = { total: 0, done: 0, in_progress: 0, open: 0 };
+  for (const t of tasks) {
+    if (!t.project_id || !ids.has(String(t.project_id)) || !isOnProjectBoard(t)) continue;
+    out.total++;
+    if (t.status === "done") out.done++;
+    else if (t.status === "in_progress" || t.status === "in_review") out.in_progress++;
+    else out.open++;
+  }
+  return out;
+}

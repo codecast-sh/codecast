@@ -31,6 +31,10 @@ import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
 import { useSyncDocs } from "@/hooks/useSyncDocs";
 import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
+import { useSyncOrgTree } from "@/hooks/useSyncOrgTree";
+import { useOrgRoles } from "@codecast/web/hooks/useOrgRoles";
+import { resolveAssigneeInfo } from "@codecast/web/lib/liveEntities";
+import { sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
@@ -218,7 +222,17 @@ export default function TasksScreen() {
   // workspace (sync never prunes on team switch), so each list re-asserts the
   // active workspace — team view shows only that team's rows, personal shows
   // only teamless rows. Same rule as web (lib/workspaceScope).
-  const tasksList = useMemo(() => filterToWorkspace(Object.values(tasks), teamId), [tasks, teamId]);
+  // A role can hold a task (org-roles-run-work.md R5). The server leaves a
+  // role's `assignee_info` empty (reading a role row from the list query would
+  // re-ship the list on every message its sessions sync), so the phone derives
+  // it from the org tree the same way the web board does; without this a role
+  // held task groups and filters as "Unassigned".
+  useSyncOrgTree();
+  const { roles: orgRoles } = useOrgRoles();
+  const tasksList = useMemo(() => filterToWorkspace(Object.values(tasks), teamId).map((t) => {
+    const info = resolveAssigneeInfo(t.assignee, t.assignee_info, null, null, orgRoles);
+    return sameAssigneeInfo(info, t.assignee_info) ? t : ({ ...t, assignee_info: info } as TaskItem);
+  }), [tasks, teamId, orgRoles]);
   const plansList = useMemo(() => filterToWorkspace(Object.values(plans), teamId), [plans, teamId]);
   const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId), [docs, teamId]);
 
