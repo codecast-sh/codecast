@@ -10,9 +10,12 @@
 // discovering the wall as a failed tool call.
 
 import {
+  USAGE_WARN_PERCENT,
+  describeLimitRecovery,
   fallbackProfiles,
   formatAgo,
   formatCountdown,
+  nextPressuredReset,
   isUsageExhausted,
   isWindowRolled,
   livePercent,
@@ -76,8 +79,9 @@ export interface UsageReport {
 }
 
 // Where a meter turns orange in the web (usageTone): the point at which a
-// long autonomous stretch should plan around the reset.
-export const USAGE_WARN_PERCENT = 85;
+// long autonomous stretch should plan around the reset. Defined with the
+// shared recovery sentence, which reads it too.
+export { USAGE_WARN_PERCENT };
 
 /** This machine's saved profiles joined with the daemon's usage cache. The
  * active login need not be a saved profile — it still has a cache entry, so
@@ -135,8 +139,7 @@ export function buildUsageReport(
         }
       : undefined;
   const worst = worstUsagePercent(usage, now);
-  const pressured = windows.filter((w) => !w.rolled && w.percent >= USAGE_WARN_PERCENT && w.resets_at && w.resets_at > now);
-  const next_reset = pressured.length ? Math.min(...pressured.map((w) => w.resets_at as number)) : undefined;
+  const next_reset = nextPressuredReset(usage, now);
   return {
     now,
     active: active
@@ -154,38 +157,9 @@ export function buildUsageReport(
   };
 }
 
-/** One sentence on what a limit hit means for sessions on this machine, from
- * the recovery flags and the fallback set. Kept factual — the reader decides
- * whether to checkpoint. */
-export function describeRecovery(r: UsageReport): string {
-  const resetNote = r.next_reset ? ` (next reset in ${formatCountdown(r.next_reset - r.now)})` : "";
-  const hop = r.fallbacks[0]
-    ? `${r.fallbacks.length} saved account(s) with headroom (best: ${r.fallbacks[0].name}${
-        r.fallbacks[0].worst != null ? ` at ${Math.round(r.fallbacks[0].worst)}%` : ""
-      })`
-    : "no other saved account with headroom";
-  if (!r.recovery) {
-    return `On a limit: ${hop}; recovery flags unknown (server unreachable)${resetNote}.`;
-  }
-  // Ask-first: the machine recommends and waits, so say what it will ask for
-  // rather than implying it acts on its own.
-  if (r.recovery.mode === "ask") {
-    return r.fallbacks[0]
-      ? `On a limit: this machine RECOMMENDS a switch (best: ${r.fallbacks[0].name}${
-          r.fallbacks[0].worst != null ? ` at ${Math.round(r.fallbacks[0].worst)}%` : ""
-        }) and waits for you to approve it; sessions still resume when the window resets${resetNote}.`
-      : `On a limit: this machine asks before switching, and ${hop}${resetNote}.`;
-  }
-  if (r.recovery.auto_switch && r.fallbacks[0]) {
-    return `On a limit: auto-switch hops to the freshest of ${hop} and continues parked sessions${resetNote}.`;
-  }
-  if (r.recovery.auto_continue) {
-    return `On a limit: sessions park and resume on their own when the window resets${resetNote}; ${hop}${
-      r.recovery.auto_switch ? "" : " (auto-switch off)"
-    }.`;
-  }
-  return `On a limit: sessions park until you continue them (auto-switch and resume-at-reset are off)${resetNote}; ${hop}.`;
-}
+/** One sentence on what a limit hit means for sessions on this machine. The
+ * words live in the shared contracts so the role page prints the same ones. */
+export const describeRecovery = (r: UsageReport): string => describeLimitRecovery(r);
 
 const pad = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
 

@@ -10,6 +10,28 @@ const DAY = 86_400_000;
 /** Relative stamps become calendar dates past this age. */
 export const RELATIVE_WINDOW_MS = 7 * DAY;
 
+// A target day (an initiative's `target_date`) is a calendar day, not a
+// moment: "2026-12-31" must read back as the same day in every timezone. It
+// is stored as the last instant of that day in UTC and read back as the UTC
+// day, so the CLI and the web picker agree on the day and neither opens a day
+// late west of UTC. Every writer and reader goes through this pair.
+const TARGET_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** "YYYY-MM-DD" → the stamp to store, or null for a malformed or rolled day (Feb 30). */
+export function targetDayStamp(day: string): number | null {
+  const m = TARGET_DAY.exec(day.trim());
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const ts = Date.UTC(y, mo - 1, d, 23, 59, 59, 999);
+  const back = new Date(ts);
+  return back.getUTCFullYear() === y && back.getUTCMonth() === mo - 1 && back.getUTCDate() === d ? ts : null;
+}
+
+/** A stored target stamp → "YYYY-MM-DD"; undefined when there is none. */
+export function targetDayOf(ts?: number | null): string | undefined {
+  return ts ? new Date(ts).toISOString().slice(0, 10) : undefined;
+}
+
 // Compact relative age, e.g. "now", "3m", "2h", "5d" (no "ago" suffix — meant
 // for tight badges/chips). For full "3m ago" phrasing use formatRelative.
 // Pass `now` when the caller already holds a shared clock (useCoarseNow), so

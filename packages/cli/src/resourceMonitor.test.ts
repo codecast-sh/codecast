@@ -8,6 +8,9 @@ import {
   nextAwakeIdleMs,
   AwakeIdleClock,
   AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS,
+  AWAKE_IDLE_RESTORE_CLAIM_MS,
+  decodeAwakeIdleSnapshot,
+  restorableAwakeIdle,
   shouldReportMetrics,
   isSessionActive,
   IDLE_METRICS_REFRESH_MS,
@@ -301,14 +304,43 @@ describe("resourceMonitor", () => {
     });
   });
 
+  describe("awake idle snapshot", () => {
+    const NOW = 1_800_000_000_000;
+    const H = 3600_000;
+    const raw = (idle: Record<string, number>, at: number) => JSON.stringify({ at, idle });
+
+    it("decodes a snapshot and rejects a future stamp, one past the sanity bound, malformed text and junk values", () => {
+      const snap = decodeAwakeIdleSnapshot(raw({ a: "9" as any, b: -1, c: 0, d: 12 }, NOW), NOW + 40_000);
+      expect(snap?.at).toBe(NOW);
+      expect(snap?.idle).toEqual(new Map([["d", 12]]));
+      expect(decodeAwakeIdleSnapshot(raw({ a: 5 }, NOW + 60_000), NOW)).toBeNull();
+      expect(decodeAwakeIdleSnapshot(raw({ a: 5 }, NOW), NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1)).toBeNull();
+      expect(decodeAwakeIdleSnapshot("{not json", NOW)).toBeNull();
+    });
+
+    it("keeps a counter through a seventeen hour gap when the session's transcript did not change", () => {
+      // The regression: a fifteen minute age rule discarded the whole fleet's
+      // counters after the laptop slept overnight (2026-09-20), though nothing
+      // had happened to any session in between.
+      const snap = decodeAwakeIdleSnapshot(raw({ slept: 6.6 * H }, NOW), NOW + 17 * H)!;
+      const kept = restorableAwakeIdle(snap, new Map([["slept", NOW - 9 * H]]));
+      expect(kept.get("slept")).toBe(6.6 * H);
+    });
+
+    it("drops a counter whose session wrote its transcript after the snapshot, and one whose activity is unknown", () => {
+      const snap = decodeAwakeIdleSnapshot(raw({ worked: 5 * H, unknown: 5 * H, still: 5 * H }, NOW), NOW + 60_000)!;
+      const kept = restorableAwakeIdle(snap, new Map([["worked", NOW + 30_000], ["unknown", undefined], ["still", NOW - 60_000]]));
+      expect([...kept.keys()]).toEqual(["still"]);
+    });
+  });
+
   describe("AwakeIdleClock", () => {
     const NOW = 1_800_000_000_000;
     const TICK = 30_000;
-    const snapshotOf = (idle: Record<string, number>, at: number) => JSON.stringify({ at, idle });
 
     it("carries the counters across a daemon restart", () => {
       const clock = new AwakeIdleClock();
-      clock.restore(snapshotOf({ a: 7 * 3600_000, b: 90_000 }, NOW), NOW + 40_000);
+      clock.restore(new Map([["a", 7 * 3600_000], ["b", 90_000]]), NOW + 40_000);
       expect(clock.previous("a", NOW + 40_000)).toBe(7 * 3600_000);
       expect(clock.previous("b", NOW + 40_000)).toBe(90_000);
       expect(clock.previous("c", NOW + 40_000)).toBe(0);
@@ -319,7 +351,7 @@ describe("resourceMonitor", () => {
       // pruning on it erased the other sessions' restored counters (2026-09-19,
       // 56 of 96 sessions on the first tick).
       const clock = new AwakeIdleClock();
-      clock.restore(snapshotOf({ seen: 3600_000, late: 5 * 3600_000 }, NOW), NOW);
+      clock.restore(new Map([["seen", 3600_000], ["late", 5 * 3600_000]]), NOW);
       clock.set("seen", 3600_000 + TICK);
       clock.prune(new Set(["seen"]), NOW + TICK);
       expect(clock.get("late")).toBe(0); // not a live session yet, so nothing reads it as idle
@@ -327,31 +359,32 @@ describe("resourceMonitor", () => {
       expect(clock.previous("late", NOW + 2 * TICK)).toBe(5 * 3600_000); // and the tick that finds it continues from it
     });
 
-    it("expires unclaimed restored counters with the window and prunes live ones the tick did not collect", () => {
+    it("a session collected on the first tick continues from its restored counter, not from zero", () => {
+      // The regression (ct-52784): the restore landed after the first tick's
+      // set loop, that loop stored a live 0 for every collected session, and
+      // live outranks restored, so 102 of 102 counters went to zero at boot.
+      // The daemon must restore before the loop; this pins the clock's side of
+      // that contract: a restore that precedes the first set is honored.
       const clock = new AwakeIdleClock();
-      clock.restore(snapshotOf({ late: 5 * 3600_000 }, NOW), NOW);
+      clock.restore(new Map([["a", 5 * 3600_000]]), NOW);
+      clock.set("a", nextAwakeIdleMs({ prevIdleMs: clock.previous("a", NOW), cpu: 0, status: "idle", elapsedMs: 0, sleepSkip: true }));
+      expect(clock.get("a")).toBe(5 * 3600_000);
+      // And the failure shape, so the test names what a late restore does.
+      const late = new AwakeIdleClock();
+      late.set("a", nextAwakeIdleMs({ prevIdleMs: late.previous("a", NOW), cpu: 0, status: "idle", elapsedMs: 0, sleepSkip: true }));
+      late.restore(new Map([["a", 5 * 3600_000]]), NOW);
+      expect(late.previous("a", NOW + TICK)).toBe(0);
+    });
+
+    it("expires unclaimed restored counters with the claim window and prunes live ones the tick did not collect", () => {
+      const clock = new AwakeIdleClock();
+      clock.restore(new Map([["late", 5 * 3600_000]]), NOW);
       clock.set("gone", TICK);
-      const after = NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS;
+      const after = NOW + AWAKE_IDLE_RESTORE_CLAIM_MS;
       clock.prune(new Set(), after);
       expect(clock.get("gone")).toBe(0);
       expect(clock.previous("late", after)).toBe(0);
       expect(JSON.parse(clock.encode(after)).idle).toEqual({});
-    });
-
-    it("discards a snapshot older than the restore window, a future stamp, malformed text and junk values", () => {
-      const stale = new AwakeIdleClock();
-      stale.restore(snapshotOf({ a: 7 * 3600_000 }, NOW), NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1);
-      expect(stale.previous("a", NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1)).toBe(0);
-      const future = new AwakeIdleClock();
-      future.restore(snapshotOf({ a: 5 }, NOW + 60_000), NOW);
-      expect(future.previous("a", NOW)).toBe(0);
-      const broken = new AwakeIdleClock();
-      broken.restore("{not json", NOW);
-      expect(broken.previous("a", NOW)).toBe(0);
-      const junk = new AwakeIdleClock();
-      junk.restore(JSON.stringify({ at: NOW, idle: { a: "9", b: -1, c: 0, d: 12 } }), NOW);
-      expect(junk.previous("d", NOW)).toBe(12);
-      expect(junk.previous("a", NOW)).toBe(0);
     });
   });
 

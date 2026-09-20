@@ -61,3 +61,18 @@ describe("wasEdited / describeDates", () => {
     expect(describeDatesFull({ created_at: created })).not.toContain("\n");
   });
 });
+
+describe("a target day is a calendar day everywhere", () => {
+  test("stores and reads back the same day, whatever the local timezone", async () => {
+    const { targetDayStamp, targetDayOf } = await import("./index");
+    const ts = targetDayStamp("2026-12-31")!;
+    expect(targetDayOf(ts)).toBe("2026-12-31");
+    expect(new Date(ts).toISOString()).toBe("2026-12-31T23:59:59.999Z");
+    expect(targetDayOf(undefined)).toBeUndefined();
+  });
+  test("a malformed or rolled day is refused", async () => {
+    const { targetDayStamp } = await import("./index");
+    expect(targetDayStamp("2026-02-30")).toBeNull();
+    expect(targetDayStamp("31/12/2026")).toBeNull();
+  });
+});
