@@ -15,8 +15,8 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { defaultBranchFor, repositoryKeyFor, runGit, tryGitLine, type GitRunner, type RepoMirror } from "./repoMirror.js";
-import { WORKTREES_KIND, type WorktreeEntry, type WorktreeManager, type WorktreesPayload } from "@codecast/shared/contracts";
-import { listStates } from "./workspace/contract.js";
+import { WORKTREES_KIND, worktreeOfPath, type WorktreeEntry, type WorktreeManager, type WorktreesPayload } from "@codecast/shared/contracts";
+import { listStates, type PersistedWorkspaceState } from "./workspace/contract.js";
 import { defaultConfigDir, readAuthConfig } from "./config/readAuthConfig.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
@@ -71,6 +71,45 @@ export function parseWorktreeList(out: string): Array<Pick<WorktreeEntry, "path"
   });
 }
 
+/**
+ * What `cast ws` recorded for a repository's worktrees, each with the root its
+ * record lives under. That root is the checkout `cast ws acquire` ran in, and
+ * it is not always the main one: an agent working in its own worktree makes
+ * worktrees under that, and their records sit there (2 of this repository's 35).
+ * A folder under `.codecast/worktrees` can also have no record at all, when it
+ * was made with a plain `git worktree add` (14 of the 35); it then has no
+ * state and no ports, and the page says so.
+ */
+export function workspaceStatesFor(root: string, worktreePaths: string[]): Array<{ stateRoot: string; state: PersistedWorkspaceState }> {
+  const roots = new Set([root, ...worktreePaths.map((p) => worktreeOfPath(p)?.root).filter((r): r is string => !!r)]);
+  return [...roots].flatMap((stateRoot) => listStates(stateRoot).map((state) => ({ stateRoot, state })));
+}
+
+/**
+ * How many of a worktree's commits main still lacks, by patch rather than by
+ * hash. This repository rebases, so a commit that landed on main has a new
+ * hash there, and a hash count reads it as ahead forever (measured here: one
+ * worktree in six, 3 by hash against 1 by patch). `git cherry` compares the
+ * patches, which costs a second or two, so it runs only for a branch the hash
+ * count already says is ahead, and its answer is kept for that pair of
+ * commits: it can change only when main or the worktree's head moves.
+ */
+const aheadByPatch = new Map<string, number>();
+async function patchesMainLacks(run: GitRunner, root: string, mainSha: string, headSha: string): Promise<number | undefined> {
+  const key = `${mainSha}:${headSha}`;
+  if (!aheadByPatch.has(key)) {
+    const out = await run(root, ["cherry", mainSha, headSha]).catch(() => undefined);
+    if (out === undefined) return undefined;
+    aheadByPatch.set(key, out.split("\n").filter((line) => line.startsWith("+")).length);
+  }
+  return aheadByPatch.get(key);
+}
+
+/** Test hook: forget the kept patch counts. */
+export function resetWorktreeMirrorCache(): void {
+  aheadByPatch.clear();
+}
+
 const inside = (dir: string, cwd: string) => cwd === dir || cwd.startsWith(`${dir}/`);
 
 export async function buildWorktreeMirror(
@@ -84,7 +123,8 @@ export async function buildWorktreeMirror(
   const origin = await tryGitLine(run, root, ["remote", "get-url", "origin"]);
   const current = await tryGitLine(run, root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const defaultBranch = await defaultBranchFor(run, root, current);
-  const states = new Map(listStates(root).map((s) => [s.path, s]));
+  const states = new Map(workspaceStatesFor(root, listed.map((w) => w.path)).map(({ state }) => [state.path, state]));
+  const mainSha = await tryGitLine(run, root, ["rev-parse", defaultBranch]);
 
   const knownDirty = new Map<string, boolean>();
   const sessionsIn = new Map<string, Set<string>>();
@@ -132,8 +172,11 @@ export async function buildWorktreeMirror(
       tryGitLine(run, root, ["log", "-1", "--format=%ct%x00%s", w.head_sha]),
     ]);
     if (status !== undefined) w.dirty = !!status.trim();
-    const [behind, ahead] = (counts ?? "").split(/\s+/).map(Number);
-    if (Number.isFinite(ahead) && Number.isFinite(behind)) Object.assign(w, { ahead, behind });
+    const [behind, aheadByHash] = (counts ?? "").split(/\s+/).map(Number);
+    if (Number.isFinite(aheadByHash) && Number.isFinite(behind)) {
+      const ahead = aheadByHash > 0 && mainSha ? await patchesMainLacks(run, root, mainSha, w.head_sha) ?? aheadByHash : aheadByHash;
+      Object.assign(w, { ahead, behind });
+    }
     const [at, subject] = (last ?? "").split("\0");
     if (at) Object.assign(w, { committed_at: Number(at) * 1000, subject: subject ?? "" });
   }
