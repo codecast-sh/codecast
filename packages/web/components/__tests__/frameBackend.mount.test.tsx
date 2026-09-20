@@ -13,7 +13,7 @@ let permissionState = "prompt";
 const restoreGlobals = replaceGlobals({
   window: dom.window,
   document: dom.window.document,
-  navigator: Object.assign(Object.create(dom.window.navigator), {
+  navigator: Object.assign(dom.window.navigator, {
     permissions: {
       query: async ({ name }: { name: string }) => {
         if (name !== "loopback-network") throw new TypeError("unknown permission");
