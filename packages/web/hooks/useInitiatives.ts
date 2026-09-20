@@ -10,7 +10,7 @@ import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { InitiativeRow, InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 import { isConvexId } from "../lib/entityLinks";
-import { initiativeSig, tasksByProject } from "../lib/initiatives";
+import { initiativeSig, type BoardTask } from "../lib/initiatives";
 import { useCollectionRows } from "./useCollectionRows";
 import { useSyncCollection } from "./useSyncCollection";
 import { useWorkspaceArgs, workspaceStamp } from "./useWorkspaceArgs";
@@ -39,18 +39,14 @@ export function useInitiative(ref: string): { initiative: InitiativeRow | null; 
   return { initiative, all };
 }
 
-type RollupTask = { _id: string; status?: string; project_id?: string | null; plan_id?: string | null };
-/** A rollup reads where a task sits and whether it is done, nothing else: a
- *  retitle or a comment on any task repaints no progress bar. */
-const rollupSig = (t: RollupTask) => `${t.status ?? ""}|${t.project_id ?? ""}|${t.plan_id ?? ""}`;
+/** A progress bar reads where a task sits, whether it is done and whether
+ *  the board would show it, nothing else: a retitle or a comment on any task
+ *  repaints no bar. */
+const boardSig = (t: BoardTask) => `${t.status ?? ""}|${t.project_id ?? ""}|${t.source ?? ""}|${t.promoted ? 1 : 0}|${t.assignee ?? ""}|${t.triage_status ?? ""}`;
 
-const planHomeSig = (p: { project_id?: string | null }) => p.project_id ?? "";
-
-/** The workspace's tasks bucketed by project, for every progress bar on a page. */
-export function useTasksByProject(): Map<string, RollupTask[]> {
-  const tasks = useWorkspaceCollection<RollupTask>("tasks", rollupSig);
-  const plans = useWorkspaceCollection<{ _id: string; project_id?: string | null }>("plans", planHomeSig);
-  return useMemo(() => tasksByProject(tasks, plans), [tasks, plans]);
+/** The workspace's tasks, for every progress bar on a page (lib/initiatives initiativeProgress). */
+export function useBoardTasks(): BoardTask[] {
+  return useWorkspaceCollection<BoardTask>("tasks", boardSig);
 }
 
 /** A stub has no server row to ask about yet. */
