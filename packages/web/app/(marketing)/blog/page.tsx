@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BlogNav, BlogFooter, SOL } from "./blogChrome";
+import { BlogNav, SOL } from "./blogChrome";
 import { useRouteMeta } from "../pageMeta";
 import { POSTS } from "./posts";
 
@@ -51,8 +51,6 @@ export default function BlogIndexPage() {
           ))}
         </ul>
       </section>
-
-      <BlogFooter />
     </main>
   );
 }

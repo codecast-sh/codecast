@@ -10,6 +10,56 @@ then extend that file.
 
 ---
 
+## September 2026: The org, pull requests, and sessions in the cloud
+**v1.1.114 – v1.1.143 · Desktop v1.1.112**
+
+This month codecast got a shape for standing work. A role sits in an org tree
+and holds a responsibility after any one session ends, so a task or a mention
+goes to the role and not to whoever happens to be running. Pull requests and
+issues became objects that a session owns and answers. Sessions start on a cloud
+host with one flag, idle ones hibernate, and `cast browser` moved into your own
+Chrome.
+
+- **The org: roles that outlive sessions** (Sep 13 to 18). A role is a seat in an org tree with a scope, a standing brief and a standing session. Assign it a task or mention its handle in chat and its session wakes. `cast org init` reads the code and your sessions, then proposes seats for you to accept. Deep dive: [The org](https://codecast.sh/documentation/org-roles).
+- **Pull requests and issues join the board** (Sep 4 to 14). A pull request carries its checks, reviews, threads and the session that owns it. `cast pr shepherd on` binds a session; a review, a failing check or a merge conflict wakes it. Review from the shell as one batch. Linear and GitHub issues sync both ways as tasks. Deep dive: [Pull requests and issues](https://codecast.sh/documentation/pull-requests).
+- **Cloud sessions and a fleet that sleeps** (Sep 4 to 17). `cast spawn --cloud` starts a session on a cloud host in its own worktree. `cast hibernate` parks an idle session and `cast wake` brings it back, an optional fleet cap bounds each machine, and sessions move between laptop and cloud in bulk. Deep dive: [Remote and cloud sessions](https://codecast.sh/documentation/remote-and-cloud-sessions).
+- **`cast browser` moves into your Chrome** (Sep 2 to 18). Once the extension is paired, agents work in a background tab of your own Chrome, inside a `Cast` tab group, with your logins. An agent can offer a page as a pane beside the conversation. Deep dive: [cast browser](https://codecast.sh/documentation/browser).
+- **`cast computer`** (Sep 7). Reads one window of a macOS app as an indexed accessibility tree, acts on one element, and reports whether the change was read back. Password managers are refused. Deep dive: [cast computer](https://codecast.sh/documentation/computer).
+- **Decisions become documents** (Sep 13 to 15). Each decision has its own page. Related decisions group into a stack with an order and a deadline, and an option can carry its own page. Deep dive: [Decisions](https://codecast.sh/documentation/decisions).
+- **One window syncs, the rest replicate** (Sep 1 to 3). One elected window holds the subscriptions and writes the cache; the others apply its stream. One access rule governs both the sync log and direct queries. Deep dive: [How the client syncs](https://codecast.sh/documentation/sync-engine).
+- **Limits pause a session** (Sep 1 to 18). Run a session on any saved Claude account, recover a parked session on the account with the most headroom, and switch a session's agent or model in place. `cast handoff --to` starts a linked session from a brief. Deep dive: [Usage limits](https://codecast.sh/documentation/usage-limits).
+- **Skills, agent definitions, and the line** (Sep 13 to 14). 23 `cast-*` skills ship inside the CLI. An agent definition names a client, model, effort, tool policy and prompt. Workflow stations run as sessions, and a task that a role works needs an independent review to close. Deep dives: [Skills](https://codecast.sh/documentation/skills) · [Workflows](https://codecast.sh/documentation/workflows).
+- **`cast check`, and a steadier daemon** (Sep 4 to 18). One shared `tsc --watch` for each tree answers every session's typecheck. The daemon moved heavy work to workers and gained a watchdog. Deep dive: [cast check](https://codecast.sh/documentation/typecheck).
+- **Triggers you can edit and gate** (Sep 1 to 7). `cast trigger update` edits in place with a version history, `--precheck` skips a run that has nothing to do, and every trigger has a detail page. Deep dive: [Triggers](https://codecast.sh/documentation/triggers).
+- **Chat reaches Slack, roles and sessions** (Sep 13 to 18). Mention a role or a session and it answers in the thread. A Slack workspace mirrors into team chat. Agents can sit in a huddle. Deep dives: [Team chat](https://codecast.sh/documentation/team-chat) · [Huddles and walkie](https://codecast.sh/documentation/calls).
+- **Session characters and follow mode** (Sep 13 to 17). Every session wears one of 24 painted faces and a short name. Follow a teammate's view, and see who reads a conversation with you.
+- **Notifications and mobile** (Sep 1 to 19). Sessions that need input fold into one digest. An iOS Live Activity shows every live session on the lock screen. Mobile gets dark mode and chat as a top level tab.
+- **A calmer interface** (Sep 1 to 19). A minimal interface style, side by side as a tab split you drag into, `ctrl+tab` over recent objects, and chat and work as their own desktop windows.
+
+## August 2026: Decisions, a browser for agents, and a team that talks
+**v1.1.95 – v1.1.113 · Desktop v1.1.98**
+
+This month agents learned to ask. `cast decide` puts a question in a queue you
+clear in your own time, and a pinned state line says where each thread stands
+before you open it. Agents got a browser, a terminal you can watch from another
+machine, and images that render in the thread. Teams got chat, huddles with
+transcripts, and push to talk.
+
+- **`cast decide`: a queue for decisions** (Aug 14 to 27). One question with its options, what each costs, and the reasoning, in a queue you clear in one sitting. The answer returns as a message. Permission prompts appear in the same queue. Deep dive: [Decisions](https://codecast.sh/documentation/decisions).
+- **Pinned state, and an inbox that says who acts next** (Aug 4 to 17). `cast state` pins where a thread stands, with its staleness on show. A finished turn settles as Done or Dormant as well as Needs Input. Deep dive: [Pinned thread state](https://codecast.sh/documentation/thread-state).
+- **`cast browser`: a browser for agents** (Aug 12 to 26). One tab for each session, a snapshot then an action on a ref, `do` for several steps in one process, and a live view you can take control from. Deep dive: [cast browser](https://codecast.sh/documentation/browser).
+- **Terminals on any machine** (Aug 2 to 13). A terminal for each conversation. Watch a tmux pane on another machine and type into it over one leased stream. `cast resume --tmux` attaches to a session's pane. Deep dive: [Remote and cloud sessions](https://codecast.sh/documentation/remote-and-cloud-sessions).
+- **Team chat** (Aug 12 to 30). Channels, direct messages, threads and a threads inbox. Ids render as live references, and a reply on a session's thread is relayed into the session. Deep dive: [Team chat](https://codecast.sh/documentation/team-chat).
+- **Huddles and walkie** (Aug 14 to 28). Every huddle is transcribed with exact speaker attribution and leaves a digest. Walkie is push to talk with a teammate's face as the key. `cast calls` lets an agent read what was said. Deep dive: [Huddles and walkie](https://codecast.sh/documentation/calls).
+- **Images in the thread** (Aug 8 to 13). `cast image` turns a screenshot into a link that renders inline. A gallery for each session, thumbnails in the inbox, and images a shell command wrote.
+- **Tasks: subtasks, statuses and projects** (Aug 5 to 25). Subtasks with a close guard, task statuses for each team, `cast project`, label grouping, and a progress chart on every project. Deep dive: [Tasks and plans](https://codecast.sh/documentation/tasks-and-plans).
+- **The workbench** (Aug 2 to 27). Open a session beside a task, doc or plan; peek and pin; saved views, layouts and context menus; a command palette that covers every feature; detached windows on desktop.
+- **Files** (Aug 1 to 21). Vault is now Files: your markdown directories, served by the daemon, with live preview editing, daily notes and `cast vault` from the terminal. The files stay on your machine.
+- **Pages and canvas** (Aug 2 to 27). Artifacts are now pages, managed from the CLI, and they embed in conversations. The canvas gained tabs, sortable tables, tooltips and charts. Deep dives: [Published pages](https://codecast.sh/documentation/publish) · [The visual canvas](https://codecast.sh/documentation/visual-canvas).
+- **More agents, more machines** (Aug 3 to 26). Grok Build as a client, Windows through WSL, one command from nothing to synced, a default model for each agent client, `cast usage`, and a capabilities page that shows drift across machines. Deep dive: [Usage limits](https://codecast.sh/documentation/usage-limits).
+- **Sync you can see, and a lighter client** (Aug 2 to 28). An append only sync log for each scope, heartbeat fields moved off the session rows, and more surfaces painting from the local store. Deep dive: [How the client syncs](https://codecast.sh/documentation/sync-engine).
+- **Notifications and security** (Aug 2 to 17). Push routing that knows where you are, API tokens bound to their device, email verification, reads across tenants closed, and a kill that is final.
+
 ## July 2026: Triggers, more agents, and published pages
 **v1.1.72 – v1.1.94 · Desktop v1.1.88**
 

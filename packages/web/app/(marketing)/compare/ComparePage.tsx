@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { BlogNav, BlogFooter, SOL } from "../blog/blogChrome";
+import { BlogNav, SOL } from "../blog/blogChrome";
 import { useRouteMeta } from "../pageMeta";
 import { COMPARISONS, getComparison, compareHref } from "./comparisons";
 
@@ -78,7 +78,6 @@ export default function ComparePage() {
             All comparisons
           </Link>
         </div>
-        <BlogFooter />
       </main>
     );
   }
@@ -161,6 +160,25 @@ export default function ComparePage() {
             {section.paragraphs.map((para) => (
               <p key={para} className="leading-relaxed mb-3" style={{ color: SOL.base01 }}>{para}</p>
             ))}
+            {section.points && (
+              <ol className="mt-4 rounded-lg overflow-hidden" style={{ border: `1px solid ${SOL.base2}` }}>
+                {section.points.map((point, i) => (
+                  <li
+                    key={point.label}
+                    className="flex gap-4 p-4"
+                    style={{ borderTop: i > 0 ? `1px solid ${SOL.base2}` : undefined }}
+                  >
+                    <span className="font-mono text-sm font-bold shrink-0 w-6 text-right" style={{ color: SOL.base1 }}>
+                      {i + 1}
+                    </span>
+                    <div>
+                      <p className="font-mono font-semibold text-sm mb-1" style={{ color: SOL.base03 }}>{point.label}</p>
+                      <p className="text-sm leading-relaxed" style={{ color: SOL.base01 }}>{point.text}</p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
           </section>
         ))}
 
@@ -214,8 +232,6 @@ export default function ComparePage() {
           </ul>
         </div>
       </article>
-
-      <BlogFooter />
     </main>
   );
 }

@@ -1,9 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { SITE_LINKS } from "@/lib/siteLinks";
 import type { ReactNode } from "react";
-import { Logo } from "@/components/Logo";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 /**
@@ -39,54 +36,6 @@ export const SOL = {
  */
 export function BlogNav({ active = "/blog" }: { active?: string }) {
   return <MarketingNav active={active} containerClassName="max-w-5xl" />;
-}
-
-export function BlogFooter() {
-  return (
-    <footer style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
-      <div className="max-w-5xl mx-auto px-6 py-12">
-        <div className="grid md:grid-cols-4 gap-8">
-          <div>
-            <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
-            <p className="text-sm text-[#657b83]">
-              See, steer, and remember every coding agent session — any agent, any machine.
-            </p>
-          </div>
-          <div>
-            <h4 className="font-semibold text-[#002b36] mb-3 text-sm">Product</h4>
-            <ul className="space-y-2 text-sm text-[#657b83]">
-              <li><Link href="/documentation" className="hover:text-[#073642]">Documentation</Link></li>
-              <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
-              <li><Link href="/changelog" className="hover:text-[#073642]">Changelog</Link></li>
-              <li><Link href="/pricing" className="hover:text-[#073642]">Pricing</Link></li>
-              <li><Link href="/compare" className="hover:text-[#073642]">Compare</Link></li>
-              <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="font-semibold text-[#002b36] mb-3 text-sm">Company</h4>
-            <ul className="space-y-2 text-sm text-[#657b83]">
-              <li><Link href="/blog" className="hover:text-[#073642]">Blog</Link></li>
-              <li><Link href="/about" className="hover:text-[#073642]">About</Link></li>
-              <li><Link href="/privacy" className="hover:text-[#073642]">Privacy</Link></li>
-              <li><Link href="/support" className="hover:text-[#073642]">Support</Link></li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="font-semibold text-[#002b36] mb-3 text-sm">Connect</h4>
-            <ul className="space-y-2 text-sm text-[#657b83]">
-              <li><a href="https://github.com/codecast-sh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-              <li><a href="https://x.com/codecastsh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Twitter</a></li>
-              <li><a href={SITE_LINKS.community} className="hover:text-[#073642]">Community</a></li>
-            </ul>
-          </div>
-        </div>
-        <div className="border-t border-[#eee8d5] mt-8 pt-8 text-center text-sm text-[#839496]">
-          &copy; 2026 Codecast
-        </div>
-      </div>
-    </footer>
-  );
 }
 
 /**
