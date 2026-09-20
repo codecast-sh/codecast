@@ -39,6 +39,7 @@ export function useCallRing(): void {
       st.myCalls.outgoing.map((i: any) => `${i._id}:${i.status}`).join("|"),
   ]);
   const ringTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ringKey = useRef("");
   const seenInvites = useRef<Set<string>>(new Set());
   const seenDeclines = useRef<Set<string>>(new Set());
   // Rings we answered ourselves (a door we knocked on): they stay in `incoming`
@@ -207,9 +208,11 @@ export function useCallRing(): void {
     const shouldRing =
       !canRingInWindow() &&
       incoming.some((i: any) => !autoAccepted.current.has(String(i._id))) && !quiet && !inCall;
+    ringKey.current = String(incoming.find((i: any) => !autoAccepted.current.has(String(i._id)))?._id ?? "");
     if (shouldRing && !ringTimer.current) {
-      soundCallRing();
-      ringTimer.current = setInterval(soundCallRing, CALL_RING_PERIOD_MS);
+      const ring = () => soundCallRing(0, ringKey.current);
+      ring();
+      ringTimer.current = setInterval(ring, CALL_RING_PERIOD_MS);
     } else if (!shouldRing && ringTimer.current) {
       clearInterval(ringTimer.current);
       ringTimer.current = null;
@@ -221,7 +224,7 @@ export function useCallRing(): void {
     for (const inv of outgoing) {
       if (inv.status === "declined" && !seenDeclines.current.has(String(inv._id))) {
         seenDeclines.current.add(String(inv._id));
-        soundCallDeclined();
+        soundCallDeclined(String(inv._id));
       }
     }
   }, [outgoing]);

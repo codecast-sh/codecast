@@ -1,5 +1,7 @@
 import { useInboxStore, type ClientUI } from "../store/inboxStore";
 import { isNotificationLeader, isVoiceHost } from "./desktop";
+import { agentAlertsSuppressed, deliverAlert } from "./notificationDelivery";
+import { captureError } from "./analytics";
 import type { CueSpec } from "./cueSpec";
 import {
   WALKIE_AWAY,
@@ -30,10 +32,25 @@ const CATEGORY_KEY: Record<SoundCategory, keyof ClientUI> = {
 };
 
 function isEnabled(category?: SoundCategory): boolean {
+  if (agentAlertsSuppressed()) return false;
   const ui = useInboxStore.getState().clientState?.ui;
   if (ui?.sounds_enabled === false) return false;
   if (!category) return true;
   return ui?.[CATEGORY_KEY[category]] !== false;
+}
+
+function announce(category: SoundCategory, key: string, play: () => boolean | void, options: { ttl: number; preferDesktop?: boolean }) {
+  if (!isSupported()) return;
+  const deliver = () => { void deliverAlert(key, () => isEnabled(category) ? play() : false, options).catch(captureError); };
+  try {
+    const ac = getCtx(false);
+    if (ac.state === "running") deliver();
+    else void Promise.race([ac.resume(), new Promise((resolve) => setTimeout(resolve, 250))])
+      .then(() => { if (ac.state === "running" && isEnabled(category)) deliver(); })
+      .catch(captureError);
+  } catch (error) {
+    captureError(error as Error);
+  }
 }
 
 /** The user's output level as a multiplier over each cue's calibrated gain.
@@ -62,9 +79,9 @@ function isAnnouncer(): boolean {
   return isNotificationLeader() || isVoiceHost();
 }
 
-function getCtx(): AudioContext {
+function getCtx(resume = true): AudioContext {
   if (!ctx) ctx = new AudioContext();
-  if (ctx.state === "suspended") ctx.resume();
+  if (resume && ctx.state === "suspended") void Promise.resolve(ctx.resume()).catch(captureError);
   return ctx;
 }
 
@@ -174,9 +191,9 @@ function playIdleMotif() {
   ], 0.05);
 }
 
-export function soundIdle() {
+export function soundIdle(key?: string) {
   if (!isEnabled("sessions") || !isAnnouncer()) return;
-  playIdleMotif();
+  announce("sessions", `sound:idle:${key ?? "arrival"}`, playIdleMotif, { ttl: key ? 60_000 : 1_000 });
 }
 
 export function soundDismiss() {
@@ -269,7 +286,7 @@ export function soundKill() {
 export function soundChatMessage(messageId?: string) {
   if (!isEnabled("chat") || !isSupported() || !isAnnouncer()) return;
   if (soundedRecently(messageId)) return;
-  playKnockMotif();
+  announce("chat", `sound:chat:${messageId ?? "arrival"}`, playKnockMotif, { ttl: messageId ? 60_000 : 1_000 });
 }
 
 // Long enough to cover the two feeds answering the same push (measured 15 ms
@@ -291,9 +308,9 @@ function soundedRecently(key: string | undefined): boolean {
 // motif — it is literally a knock, and it can't be mistaken for a ring — but
 // gated as a call event rather than a chat one: muting chat must not mute the
 // door. One motif, two gates, so the two can never drift apart.
-export function soundRoomKnock() {
+export function soundRoomKnock(key?: string) {
   if (!isEnabled("calls") || !isSupported() || !isAnnouncer()) return;
-  playKnockMotif();
+  announce("calls", `sound:knock:${key ?? "arrival"}`, playKnockMotif, { ttl: key ? 60_000 : 1_000, preferDesktop: false });
 }
 
 function playKnockMotif() {
@@ -372,9 +389,12 @@ export const soundChatMention = soundChatMessage;
 // everything else, and the calls category mutes it.
 export const RING_MASTER_BY_CYCLE = [0.11, 0.15, 0.19];
 
-export function soundCallRing(cycle = 0) {
+export function soundCallRing(cycle = 0, key?: string) {
   if (!isEnabled("calls") || !isAnnouncer()) return;
-  playRingMotif(RING_MASTER_BY_CYCLE[Math.min(Math.max(0, cycle | 0), RING_MASTER_BY_CYCLE.length - 1)]);
+  announce("calls", `sound:ring:${key ?? "incoming"}`, () => {
+    if (key && !useInboxStore.getState().myCalls?.incoming.some((invite) => String(invite._id) === key)) return false;
+    playRingMotif(RING_MASTER_BY_CYCLE[Math.min(Math.max(0, cycle | 0), RING_MASTER_BY_CYCLE.length - 1)]);
+  }, { ttl: 2_500 });
 }
 
 function playRingMotif(master = RING_MASTER_BY_CYCLE[0]) {
@@ -586,6 +606,7 @@ export const WALKIE_PREVIEWS: ReadonlyArray<{ id: string; label: string; spec: C
  *  switches are decided, and auditioning a cue is the only honest basis for
  *  that decision. Volume still applies, so the slider is auditable too. */
 export function previewWalkieCue(spec: CueSpec) {
+  if (agentAlertsSuppressed()) return;
   playCue(spec);
 }
 
@@ -611,6 +632,7 @@ export const SOUND_CATEGORIES: ReadonlyArray<{
 /** Audition a category: its most representative cue, ungated like
  *  previewWalkieCue and for the same reason — the click is the intent. */
 export function previewSoundCategory(id: SoundCategory) {
+  if (agentAlertsSuppressed()) return;
   switch (id) {
     case "sessions": return playIdleMotif();
     case "chat": return playKnockMotif();
@@ -621,12 +643,12 @@ export function previewSoundCategory(id: SoundCategory) {
 }
 
 // Your ring was declined or timed out — one low, brief, apologetic note.
-export function soundCallDeclined() {
+export function soundCallDeclined(key?: string) {
   if (!isEnabled("calls") || !isAnnouncer()) return;
-  play([
+  announce("calls", `sound:declined:${key ?? "arrival"}`, () => play([
     { freq: 329.63, start: 0, dur: 0.25, gain: 0.4, type: "sine" },
     { freq: 261.63, start: 0.18, dur: 0.3, gain: 0.3, type: "sine" },
-  ], 0.045);
+  ], 0.045), { ttl: key ? 60_000 : 1_000 });
 }
 
 export function soundSend() {

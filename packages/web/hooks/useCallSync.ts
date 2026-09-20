@@ -155,11 +155,11 @@ export function useCallSync(): void {
     // adding a second, so a knocker's second attempt differs from their first
     // only in created_at. The person alone would announce them once, ever.
     const key = (k: any) => `${k.from_user}:${k.created_at}`;
-    const fresh = (d as any[]).some((k) => !heardKnocks.has(key(k)));
+    const fresh = (d as any[]).filter((k) => !heardKnocks.has(key(k)));
     heardKnocks = new Set((d as any[]).map(key));
-    if (fresh) soundRoomKnock();
+    for (const knock of fresh) soundRoomKnock(`${seatedRoomKey}:${key(knock)}`);
     useInboxStore.getState().syncTable("roomKnocks", d);
-  }, []));
+  }, [seatedRoomKey]));
 }
 
 // Stable empty list: passing a fresh [] would re-apply on every render.

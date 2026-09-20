@@ -125,8 +125,8 @@ function CallRingRoot() {
   useWatchEffect(() => {
     if (!invite || quiet) return;
     let cycle = 0;
-    soundCallRing(cycle);
-    const t = setInterval(() => soundCallRing(++cycle), CALL_RING_PERIOD_MS);
+    soundCallRing(cycle, String(invite._id));
+    const t = setInterval(() => soundCallRing(++cycle, String(invite._id)), CALL_RING_PERIOD_MS);
     return () => clearInterval(t);
   }, [invite?._id, quiet]);
 
