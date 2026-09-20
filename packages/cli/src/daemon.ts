@@ -188,6 +188,7 @@ import {
   type ApprovalRequest,
   type ThreadItem,
 } from "./codexAppServer.js";
+import { CodexRecoveryQueue } from "./codexRecoveryQueue.js";
 import {
   choosePreferredCodexCandidate,
   collectAncestorPids,
@@ -5632,8 +5633,11 @@ async function executeRemoteCommand(
         let codexThreadId: string | null = null;
         const codexPermissions = codexPermissionsFromArgs(binaryArgs);
         const codexApprovalPolicy = codexPermissions.approvalPolicy;
-        const activeCodexAppServer = codexAppServerInstance?.running
-          ? codexAppServerInstance
+        const activeCodexAppServer = agentType === "codex"
+          ? await readyCodexAppServer().catch((err) => {
+              log(`[codex-app-server] login refresh before session start failed: ${err instanceof Error ? err.message : String(err)}`);
+              return null;
+            })
           : null;
         if (agentType === "codex" && activeCodexAppServer) {
           try {
@@ -6698,7 +6702,7 @@ async function executeRemoteCommand(
           let forkTimeoutMs = 0;
           let forkFailed = false;
           try {
-            const activeCodexAppServer = codexAppServerInstance?.running ? codexAppServerInstance : null;
+            const activeCodexAppServer = await readyCodexAppServer();
             if (!activeCodexAppServer) {
               throw new Error("Codex app-server is unavailable; cannot import fork history");
             }
@@ -17947,10 +17951,26 @@ const appServerTurnProgress = new Map<string, AppServerTurnProgress>();
 const pendingAppServerForkParents = new Set<string>();
 const APP_SERVER_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const APP_SERVER_DELTA_FLUSH_MS = 500;
-let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
+let codexRecoveryQueue: CodexRecoveryQueue | null = null;
 const appServerRecoveryRetryAt = new Map<string, number>();
 const appServerRecoveringThreads = new Set<string>();
 let appServerShuttingDown = false;
+
+/** New threads and turns must use the login currently on disk. Codex keeps
+ * the account identity it started with in memory, so a browser login for a
+ * different account requires an orderly app-server restart. Wait for recovery
+ * before sending to an existing thread in the replacement process. */
+async function readyCodexAppServer(conversationId?: string): Promise<CodexAppServer | null> {
+  const server = codexAppServerInstance;
+  if (!server || appServerShuttingDown) return null;
+  await server.restartIfAuthChanged();
+  // Fresh threads can start while unrelated saved conversations recover. A
+  // message for an existing saved thread needs its binding before turn/start.
+  if (conversationId && persistedAppServerThreads.has(conversationId) && !appServerConversations.has(conversationId)) {
+    await codexRecoveryQueue?.wait();
+  }
+  return server.running && !appServerShuttingDown ? server : null;
+}
 
 export function isSupersededAppServerSession(
   sessionId: string,
@@ -23565,7 +23585,7 @@ async function recoverBlankCodexForDelivery(
   projectPath: string | null,
   config: Config,
 ): Promise<boolean> {
-  const server = codexAppServerInstance;
+  const server = await readyCodexAppServer();
   const unavailable = () => !server?.running || pendingSessionStarts.has(conversationId)
     || appServerConversations.has(conversationId) || persistedAppServerThreads.has(conversationId);
   if (unavailable()) return false;
@@ -23891,7 +23911,6 @@ async function deliverMessage(
   }
 
   const tryAppServerDelivery = async (): Promise<boolean> => {
-    if (!codexAppServerInstance?.running) return false;
     if (agentTypeHint && !conversationUsesCodexAppServer(agentTypeHint)) {
       const staleThreadId = appServerConversations.get(conversationId);
       if (staleThreadId || persistedAppServerThreads.has(conversationId)) {
@@ -23903,12 +23922,14 @@ async function deliverMessage(
       }
       return false;
     }
+    const readyServer = await readyCodexAppServer(conversationId);
+    if (!readyServer) return false;
     const appServerThreadId = appServerConversations.get(conversationId);
     if (appServerThreadId) {
       try {
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
         await deliveryStep(messageId, "admit_app_server", admit);
-        await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
+        await readyServer.turnStart({ threadId: appServerThreadId, input });
         // Delivered input = a new turn: spend any declared settle verdict from
         // before it (codex settles key turnStartedAt by thread id — see
         // resolveTurnEndStatus at the app-server turn-completed handler).
@@ -28507,18 +28528,13 @@ async function main(): Promise<void> {
     },
   });
 
-  const recoverAppServerThreads = () => {
-    if (rehydratePersistedAppServerThreadsPromise) return;
-    rehydratePersistedAppServerThreadsPromise = rehydratePersistedAppServerThreads()
-      .catch((err) => {
-        log(`[codex-app-server] rehydrate failed: ${err instanceof Error ? err.message : String(err)}`);
-      })
-      .finally(() => {
-        rehydratePersistedAppServerThreadsPromise = null;
-      });
-  };
-  codexAppServerInstance.on("ready", recoverAppServerThreads);
-  const appServerRecoveryTimer = setInterval(recoverAppServerThreads, 30_000);
+  codexRecoveryQueue = new CodexRecoveryQueue(
+    rehydratePersistedAppServerThreads,
+    () => appServerRecoveryRetryAt.clear(),
+    (err) => log(`[codex-app-server] rehydrate failed: ${err instanceof Error ? err.message : String(err)}`),
+  );
+  codexAppServerInstance.on("ready", () => codexRecoveryQueue?.request(true));
+  const appServerRecoveryTimer = setInterval(() => codexRecoveryQueue?.request(), 30_000);
   appServerRecoveryTimer.unref();
 
   codexAppServerInstance.on("exited", () => {
@@ -28545,6 +28561,9 @@ async function main(): Promise<void> {
       }
       if (status === "failed") {
         const message = turnError?.message || "Codex turn failed without an error message";
+        if (message.includes("Your access token could not be refreshed because you have since logged out or signed in to another account")) {
+          codexAppServerInstance?.noteAuthRefreshFailure();
+        }
         logError(`[codex-app-server] turn ${turnId.slice(0, 8)} failed`, new Error(message), threadId);
         await syncService.setSessionError(entry.conversationId, message, { force: true });
       }
