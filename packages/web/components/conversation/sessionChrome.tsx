@@ -27,7 +27,7 @@ import { CopyCommand } from "./blocks/shared";
 import { authRemedy, detectProviderFromError } from "./classify";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "./format";
 import { MessageMarkdown } from "./markdown";
-import type { ConversationDensity, HandoffLinkDetails, MessageFeedDensity, ParsedApiError } from "./types";
+import type { ConversationDensity, MessageFeedDensity, ParsedApiError } from "./types";
 
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
@@ -541,37 +541,6 @@ function ProviderKeyInlineEntry({
         </>
       )}
     </div>
-  );
-}
-
-/**
- * Header chip for the handoff pair: "From <id>" on the child, "Continued in
- * <id>" on the source. Same treatment as the Parent chip — plain left-click is
- * an instant store-driven switch, modified clicks fall through to the Link.
- */
-export function HandoffLinkChip({ details, direction, convLink, navigateToSession }: {
-  details: HandoffLinkDetails;
-  direction: "from" | "to";
-  convLink: (id: string) => string;
-  navigateToSession: (id: string) => void;
-}) {
-  const title = details.title ? `: ${details.title}` : "";
-  return (
-    <Link
-      href={convLink(details.conversation_id)}
-      onClick={(e) => {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-        e.preventDefault();
-        navigateToSession(details.conversation_id);
-      }}
-      data-handoff-chip={direction}
-      className="cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
-      title={direction === "from" ? `Handed off from ${details.short_id}${title}` : `Continued in ${details.short_id}${title}`}
-    >
-      <ArrowRightLeft className={`w-3 h-3 ${direction === "from" ? "-scale-x-100" : ""}`} />
-      <span className="cq-sq2">{direction === "from" ? "From" : "Continued in"}</span>
-      <span className="font-mono">{details.short_id}</span>
-    </Link>
   );
 }
 

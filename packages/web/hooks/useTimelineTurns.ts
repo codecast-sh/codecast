@@ -66,7 +66,7 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_message', 'chat_wake', 'role_wake', 'agent_switch', 'machine_move']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_handoff', 'session_message', 'chat_wake', 'role_wake', 'agent_switch', 'machine_move']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId

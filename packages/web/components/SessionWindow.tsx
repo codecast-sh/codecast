@@ -1,8 +1,14 @@
-import { memo, useCallback, useRef } from "react";
+import { lazy, memo, Suspense, useCallback, useRef } from "react";
 import { Rnd } from "react-rnd";
 import { useWindowManager, type WindowState } from "../store/windowManagerStore";
 import { useTrackedStore, isSessionEffectivelyIdle, getSessionRenderKey } from "../store/inboxStore";
-import { InboxConversation } from "./GlobalSessionPanel";
+
+// What opening a session renders anywhere (initiatives-projects-role-page.md
+// I3): a role's standing session is the role page in a window too. Loaded on
+// first use, so the inbox page's module is not on this window's import graph.
+const SessionPage = lazy(() =>
+  import("../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
+);
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SessionGlyph } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
@@ -148,14 +154,16 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
         {/* Conversation content */}
         <div className="flex-1 min-h-0 overflow-hidden">
           {session ? (
-            <InboxConversation
-              key={renderKey || win.sessionId}
-              sessionId={win.sessionId}
-              isIdle={isIdle}
-              onSendAndAdvance={() => {}}
-              lastUserMessage={session.last_user_message}
-              sessionError={session.session_error}
-            />
+            <Suspense fallback={null}>
+              <SessionPage
+                key={renderKey || win.sessionId}
+                sessionId={win.sessionId}
+                isIdle={isIdle}
+                onSendAndAdvance={() => {}}
+                lastUserMessage={session.last_user_message}
+                sessionError={session.session_error}
+              />
+            </Suspense>
           ) : (
             <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">
               Session not found
