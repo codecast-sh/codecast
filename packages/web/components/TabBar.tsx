@@ -4,6 +4,7 @@ import { activePaneDrag, dragCarriesPane, readPaneDrop, stageMoveLeafToTab, star
 import { X, Plus, XCircle, ArrowRightToLine, Copy as CopyIcon, ExternalLink, AppWindow, PanelsTopLeft } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
+import { activeWorkspaceKey } from "../lib/workspaceScope";
 import { tabTitle, tabSessionId, chatTabTitle, initiativeTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
 import { detachTab } from "../lib/openIntent";
@@ -35,7 +36,7 @@ export function TabBar() {
     // signature, so a DM tab also wakes when its counterpart's name loads.
     (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id) ?? "").join("\x1f"),
     // And for an initiative's tab: its title, once the row is in the store.
-    (s) => s.tabs.map((t) => initiativeTabTitle(t.path, (s as any).initiatives) ?? "").join("\x1f"),
+    (s) => s.tabs.map((t) => initiativeTabTitle(t.path, s.initiatives, activeWorkspaceKey(s.activeTeamId, s.currentUser?._id)) ?? "").join("\x1f"),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -201,7 +202,7 @@ export function TabBar() {
       >
         {tabs.map((tab: AppTab, i: number) => {
           const isActive = tab.id === activeTabId;
-          const title = tabTitle(tab, s.sessions, s.chatChannels, s.teamMembers, (s as any).currentUser?._id, (s as any).initiatives);
+          const title = tabTitle(tab, s.sessions, s.chatChannels, s.teamMembers, s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.activeTeamId, s.currentUser?._id));
           const sid = tabSessionId(tab);
           const sessionRow = sid ? s.sessions[sid] : null;
           const prevActive = i > 0 && tabs[i - 1].id === activeTabId;
