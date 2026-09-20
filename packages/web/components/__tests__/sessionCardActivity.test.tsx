@@ -17,6 +17,9 @@ const restoreGlobals = replaceGlobals({
   window: dom.window,
   document: dom.window.document,
   navigator: dom.window.navigator,
+  Element: dom.window.Element,
+  HTMLElement: dom.window.HTMLElement,
+  Node: dom.window.Node,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
