@@ -1,15 +1,18 @@
-import { captureError } from "./analytics";
 import { isAgentDrivenTab } from "./desktopHandoff";
 
 export const AGENT_ALERTS_OVERRIDE = "codecast-agent-alerts";
 const CLAIMS_KEY = "codecast-notification-claims";
+
+export function reportAlertError(error: Error): void {
+  void import("./analytics").then(({ captureError }) => captureError(error));
+}
 
 export function agentAlertsSuppressed(): boolean {
   if (!isAgentDrivenTab()) return false;
   try {
     return sessionStorage.getItem(AGENT_ALERTS_OVERRIDE) !== "1";
   } catch (error) {
-    captureError(error as Error);
+    reportAlertError(error as Error);
     return true;
   }
 }
@@ -32,7 +35,7 @@ export async function claimBrowserAlert(scope: string, claim: AlertClaim): Promi
     if (navigator.locks) return await navigator.locks.request(CLAIMS_KEY, { signal: AbortSignal.timeout(3_000) }, reserve);
     return reserve();
   } catch (error) {
-    captureError(error as Error);
+    reportAlertError(error as Error);
     return !(error instanceof DOMException && error.name === "TimeoutError");
   }
 }
