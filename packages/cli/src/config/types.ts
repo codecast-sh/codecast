@@ -193,8 +193,9 @@ export interface Config {
   // monitor only measures on macOS, so on other platforms only the cap above
   // does anything. Only a working agent status restarts the clock; a CPU blip
   // on a resting session pauses it for that tick (nextAwakeIdleMs). The clock
-  // lives in daemon memory, so a restart starts every session at zero and the
-  // first idle park lands this long after boot. 0 or absent = no idle bar.
+  // survives daemon restarts and machine sleep through ~/.codecast/awake-idle.json:
+  // a session keeps its banked idle when its transcript has not changed since
+  // the snapshot, and starts from zero when it has. 0 or absent = no idle bar.
   //
   // The daemon reads both knobs from the config it loaded at boot, so editing
   // them here changes nothing until the daemon restarts (`cast restart`).

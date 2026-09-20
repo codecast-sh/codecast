@@ -261,6 +261,60 @@ export function recoveryModeOf(device: {
   return device.cc_recovery_ask === false ? "resume" : "ask";
 }
 
+/** A window this full is worth naming: `cast usage` colours it and the
+ * recovery sentence says when it resets. */
+export const USAGE_WARN_PERCENT = 85;
+
+/** When the soonest window that is near its limit resets; undefined when no
+ * window is under pressure. */
+export function nextPressuredReset(usage: CcUsage | undefined | null, now: number): number | undefined {
+  if (!usage) return undefined;
+  const resets = limitWindows(usage)
+    .filter((w) => !isWindowRolled(w, now) && w.percent >= USAGE_WARN_PERCENT && w.resets_at && w.resets_at > now)
+    .map((w) => w.resets_at as number);
+  return resets.length ? Math.min(...resets) : undefined;
+}
+
+/** What one machine does when its account hits a limit, as far as the
+ * sentence below reads it. `cast usage` builds this from the local usage
+ * cache; the role page builds it from the account roster. */
+export type LimitRecoveryFacts = {
+  now: number;
+  next_reset?: number;
+  fallbacks: Array<{ name: string; worst: number | null }>;
+  recovery: { auto_switch: boolean; auto_continue: boolean; mode?: RecoveryMode } | null;
+};
+
+/** One sentence on what a limit hit means for sessions on a machine, from the
+ * recovery flags and the fallback set. Kept factual: the reader decides
+ * whether to checkpoint. One body for `cast usage` and the role page's
+ * Settings tab, so the terminal and the page never describe it differently. */
+export function describeLimitRecovery(r: LimitRecoveryFacts): string {
+  const resetNote = r.next_reset ? ` (next reset in ${formatCountdown(r.next_reset - r.now)})` : "";
+  const best = r.fallbacks[0];
+  const bestNote = best ? `best: ${best.name}${best.worst != null ? ` at ${Math.round(best.worst)}%` : ""}` : "";
+  const hop = best ? `${r.fallbacks.length} saved account(s) with headroom (${bestNote})` : "no other saved account with headroom";
+  if (!r.recovery) {
+    return `On a limit: ${hop}; recovery flags unknown (server unreachable)${resetNote}.`;
+  }
+  // Ask-first: the machine recommends and waits, so say what it will ask for
+  // rather than implying it acts on its own.
+  if (r.recovery.mode === "ask") {
+    return best
+      ? `On a limit: this machine RECOMMENDS a switch (${bestNote}) and waits for you to approve it; sessions still resume when the window resets${resetNote}.`
+      : `On a limit: this machine asks before switching, and ${hop}${resetNote}.`;
+  }
+  if (r.recovery.auto_switch && best) {
+    return `On a limit: auto-switch hops to the freshest of ${hop} and continues parked sessions${resetNote}.`;
+  }
+  if (r.recovery.auto_continue) {
+    return `On a limit: sessions park and resume on their own when the window resets${resetNote}; ${hop}${
+      r.recovery.auto_switch ? "" : " (auto-switch off)"
+    }.`;
+  }
+  return `On a limit: sessions park until you continue them (auto-switch and resume-at-reset are off)${resetNote}; ${hop}.`;
+}
+
 // ---------------------------------------------------------------------------
 // Resume pacing
 // ---------------------------------------------------------------------------
