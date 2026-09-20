@@ -13,12 +13,16 @@ import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ConversationPlaceholder } from "../ConversationPlaceholder";
 import { ErrorBoundary } from "../ErrorBoundary";
+import { PaneControls } from "./PaneControls";
 
-// Loaded on first use: the conversation renderer lives in the session-panel
-// module, and pulling it in at import time would hang the whole panel (and
-// its analytics) off TabContent's import graph for every tab, split or not.
-const InboxConversation = lazy(() =>
-  import("../GlobalSessionPanel").then((m) => ({ default: m.InboxConversation })),
+// Loaded on first use: the conversation renderer lives in the inbox page's
+// module, and pulling it in at import time would hang the whole inbox off
+// TabContent's import graph for every tab, split or not. SessionPage is what
+// opening a session renders anywhere (initiatives-projects-role-page.md I3):
+// a role's standing session is the role page here too, with the pane's own
+// expand and close controls kept in its header.
+const SessionPage = lazy(() =>
+  import("../../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
 );
 
 const noop = () => {};
@@ -63,7 +67,7 @@ export const SessionPane = memo(function SessionPane({
   return (
     <ErrorBoundary name="StageSessionPane" level="panel">
       <Suspense fallback={null}>
-        <InboxConversation
+        <SessionPage
           key={getSessionRenderKey(session) || sessionId}
           sessionId={sessionId}
           isIdle={session.is_idle}
@@ -72,8 +76,7 @@ export const SessionPane = memo(function SessionPane({
           lastUserMessage={session.last_user_message}
           sessionError={session.session_error}
           targetMessageId={targetMessageId}
-          onExpandToMain={onExpand}
-          onClose={onClose}
+          headerEnd={onClose || onExpand ? <PaneControls onExpand={onExpand} onClose={onClose} /> : undefined}
         />
       </Suspense>
     </ErrorBoundary>

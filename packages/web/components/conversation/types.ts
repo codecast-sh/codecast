@@ -4,6 +4,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "../tools/SentFileBlock";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
 import type { ExternalEventRecord } from "../../lib/externalEvents";
+import type { SessionHandoffPrompt } from "../../lib/sessionHandoff";
 
 // View density for the conversation. The first three render the message feed
 // with progressively less chrome; "story" and "summary" replace the feed with
@@ -356,6 +357,7 @@ export type ParsedApiError = {
 
 export type UserMessageKind =
   | { kind: 'normal' }
+  | { kind: 'session_handoff'; handoff: SessionHandoffPrompt }
   | { kind: 'command' }
   | { kind: 'bash_input'; command: string }
   | { kind: 'bash_output'; stdout: string; stderr: string }

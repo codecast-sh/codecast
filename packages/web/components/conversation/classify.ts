@@ -8,6 +8,7 @@ import { stripPastedContent } from "@codecast/shared/contracts";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "./markdown";
+import { parseSessionHandoff } from "../../lib/sessionHandoff";
 import type { Message, ParsedApiError, ParsedContextBlock, TeammateMessagePart, ToolCall, UserMessageKind } from "./types";
 
 // Cached: this runs seven regex passes over the full message body and is called
@@ -269,7 +270,7 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // The user rows fold mode keeps: what a person said to the agent, and a chat
 // line that woke it. Everything else on the user rail was sent by a machine
 // (a wake frame, a poll answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
@@ -310,6 +311,8 @@ export function classifyUserMessage(
   const t = stripPastedContent(content).trim();
   const tNoReminders = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const tStripped = stripSystemTags(t).trim();
+  const handoff = parseSessionHandoff(tNoReminders);
+  if (handoff) return { kind: 'session_handoff', handoff };
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
   // A spawned schedule run's opening prompt (plain-text wire format from
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.

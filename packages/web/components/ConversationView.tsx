@@ -1,3 +1,4 @@
+import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
 import { HibernatedMarker } from "./HibernatedMarker";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
@@ -126,7 +127,7 @@ import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBloc
 import { AssistantBlock, COMPACT_TAIL_HEIGHT, CompactCollapsedTurn, CompactTurnCard, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "./conversation/format";
-import { ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, FEED_DENSITY_CYCLE, HandoffLinkChip, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, TimelineRule, defaultDensity, followRestoredConversation } from "./conversation/sessionChrome";
+import { ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, FEED_DENSITY_CYCLE, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, TimelineRule, defaultDensity, followRestoredConversation } from "./conversation/sessionChrome";
 import { NewSessionView, NonOwnerMessageInput, ProjectSwitcher } from "./conversation/sessionControls";
 import type { Commit, CondensedReceipt, ConversationDensity, ConversationViewHandle, ConversationViewProps, ImageData, Message, MessageFeedDensity, PullRequest, ReceiptEntry, TaskRecord, TimelineItem, ToolCallChangeSelection, ToolResult, UserMessageKind } from "./conversation/types";
 import { useConversationFileDrop } from "../hooks/useConversationFileDrop";
@@ -3268,6 +3269,8 @@ const ConversationViewInner = (
         return null;
       }
       switch (kind.kind) {
+        case 'session_handoff':
+          return <SessionHandoffCard key={msg._id} handoff={kind.handoff} source={handedOffFrom} timestamp={msg.timestamp} convLink={convLink} navigateToSession={navigateToSession} />;
         case 'tool_results_only':
         case 'compaction_prompt':
         case 'noise':
@@ -4111,18 +4114,18 @@ const ConversationViewInner = (
                     )}
                     {handedOffFrom && (
                       <DropdownMenuItem asChild>
-                        <Link href={convLink(handedOffFrom.conversation_id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return; e.preventDefault(); navigateToSession(handedOffFrom.conversation_id); }}>
-                          <ArrowRightLeft className="w-3 h-3 mr-1.5 text-sol-cyan" />
-                          Handed off from {handedOffFrom.short_id}
-                        </Link>
+                        <HandoffSessionLink details={handedOffFrom} compact convLink={convLink} navigateToSession={navigateToSession} className="flex items-center gap-1.5">
+                          <ArrowRightLeft className="w-3 h-3 shrink-0 text-sol-cyan" />
+                          <span className="shrink-0">Handed off from</span>
+                        </HandoffSessionLink>
                       </DropdownMenuItem>
                     )}
                     {handedOffTo && (
                       <DropdownMenuItem asChild>
-                        <Link href={convLink(handedOffTo.conversation_id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return; e.preventDefault(); navigateToSession(handedOffTo.conversation_id); }}>
-                          <ArrowRightLeft className="w-3 h-3 mr-1.5 text-sol-cyan" />
-                          Continued in {handedOffTo.short_id}
-                        </Link>
+                        <HandoffSessionLink details={handedOffTo} compact convLink={convLink} navigateToSession={navigateToSession} className="flex items-center gap-1.5">
+                          <ArrowRightLeft className="w-3 h-3 shrink-0 text-sol-cyan" />
+                          <span className="shrink-0">Continued in</span>
+                        </HandoffSessionLink>
                       </DropdownMenuItem>
                     )}
                     {conversation.forked_from_details && (
@@ -4517,6 +4520,11 @@ const ConversationViewInner = (
               </EdgeMessagesIndicator>
             )}
           </div>
+          )}
+          {handedOffTo && !hasMoreBelow && (
+            <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">
+              <SessionHandoffNotice details={handedOffTo} convLink={convLink} navigateToSession={navigateToSession} />
+            </div>
           )}
           {continuationChildren.length > 0 && !hasMoreBelow && (() => {
             return (
