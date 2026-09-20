@@ -2,7 +2,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { act, Profiler } from "react";
 import { createRoot } from "react-dom/client";
-import { ConvexProvider } from "convex/react";
+import { ConvexProviderWithAuth } from "convex/react";
 import { MemoryRouter } from "react-router";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import type { ConversationData } from "../../conversation/types";
@@ -45,7 +45,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => null) as any;
 const restore = replaceGlobals({ window: dom.window, Event: dom.window.Event, CustomEvent: dom.window.CustomEvent, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, DOMRect: dom.window.DOMRect, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), ResizeObserver: TestResizeObserver, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true });
 afterAll(() => { dom.window.close(); restore(); });
 const { ConversationView } = await import("../../ConversationView");
-const client = { watchQuery() { return { onUpdate() { return () => {}; }, localQueryResult() { return undefined; }, journal() { return undefined; } }; }, connectionState() { return { isWebSocketConnected: true }; }, subscribeToConnectionState() { return () => {}; }, mutation() { throw Error("Unexpected mutation"); }, query() { return Promise.resolve(undefined); } } as any;
+const client = { clearAuth() {}, setAuth() {}, watchQuery() { return { onUpdate() { return () => {}; }, localQueryResult() { return undefined; }, journal() { return undefined; } }; }, connectionState() { return { isWebSocketConnected: true }; }, subscribeToConnectionState() { return () => {}; }, mutation() { throw Error("Unexpected mutation"); }, query() { return Promise.resolve(undefined); } } as any;
 const empty: never[] = [];
 const conversation: ConversationData = { _id: "perf-fixture" as any, title: "Resize fixture", messages: Array.from({ length: 80 }, (_, i) => ({ _id: `perf-row-${i}`, role: "assistant", timestamp: 1_000_000 + i * 1000, content: `Message ${i}` })), message_count: 800, agent_type: "codex", status: "completed" };
 
@@ -55,7 +55,7 @@ for (const messageCount of [80, 800]) test(`a measured row resize keeps geometry
   const errors = spyOn(console, "error");
   let commits = 0;
   try {
-    await act(async () => { root.render(<ConvexProvider client={client}><MemoryRouter><Profiler id="transcript" onRender={() => commits++}><ConversationView conversation={{ ...conversation, _id: `fixture-${messageCount}` as any, messages: conversation.messages.map(m => ({ ...m, _id: `${messageCount}-${m._id}` })), message_count: messageCount }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></Profiler></MemoryRouter></ConvexProvider>); });
+    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={() => ({ isLoading: false, isAuthenticated: false, fetchAccessToken: async () => null })}><MemoryRouter><Profiler id="transcript" onRender={() => commits++}><ConversationView conversation={{ ...conversation, _id: `fixture-${messageCount}` as any, messages: conversation.messages.map(m => ({ ...m, _id: `${messageCount}-${m._id}` })), message_count: messageCount }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></Profiler></MemoryRouter></ConvexProviderWithAuth>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
     expect(errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes("flushSync was called")))).toEqual([]);
     const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
@@ -97,7 +97,7 @@ test("size repair reads all row heights before changing geometry", async () => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   try {
-    await act(async () => { root.render(<ConvexProvider client={client}><MemoryRouter><ConversationView conversation={{ ...conversation, _id: "repair-fixture" as any }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></MemoryRouter></ConvexProvider>); });
+    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={() => ({ isLoading: false, isAuthenticated: false, fetchAccessToken: async () => null })}><MemoryRouter><ConversationView conversation={{ ...conversation, _id: "repair-fixture" as any }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></MemoryRouter></ConvexProviderWithAuth>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
     const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
     await act(async () => {
