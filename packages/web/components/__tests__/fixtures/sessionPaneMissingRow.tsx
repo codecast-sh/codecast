@@ -14,8 +14,8 @@ let fetched: unknown = undefined;
 mock.module("../../../hooks/useMissingSessionRow", () => ({
   useMissingSessionRow: (id: string | null) => (id ? fetched : undefined),
 }));
-mock.module("../../GlobalSessionPanel", () => ({
-  InboxConversation: ({ sessionId }: { sessionId: string }) => <div data-conversation={sessionId} />,
+mock.module("../../../app/inbox/QueuePageClient", () => ({
+  SessionPage: ({ sessionId }: { sessionId: string }) => <div data-conversation={sessionId} />,
 }));
 mock.module("../../ConversationPlaceholder", () => ({
   ConversationPlaceholder: ({ id }: { id: string }) => <div data-placeholder={id} />,
