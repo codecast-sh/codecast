@@ -28,8 +28,13 @@ async function verifyStaffingPane() {
   const { ORG_FIXTURE } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_SESSION_PROPOSAL, ORG_STAFFING_FIXTURE_BIG_PROPOSAL } = await import("./orgStaffingFixture");
   const { findChiefOfStaff } = await import("./staffingModel");
+  const { revisedSince } = await import("./staffingRevise");
+  const { ORG_VERDICT_REVISED, orgVerdictSeenFault } = await import("@codecast/shared/contracts/orgProposal");
   const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
   const calls: string[] = [];
+  // What each verdict said the page had painted (S18): the latest revise
+  // among its rows and, for an ask, the seqs its card held.
+  const seens: unknown[] = [];
   const base = {
     tree: chiefTree,
     health: ORG_STAFFING_FIXTURE_HEALTH,
@@ -39,8 +44,8 @@ async function verifyStaffingPane() {
     now: Date.now(),
     hasThread: true,
     onSelectChange: (id: string | null) => calls.push(`select:${id}`),
-    onDecide: (id: string, verdict: string, edits?: Record<string, unknown>) => calls.push(`decide:${id}:${verdict}${edits ? ":" + JSON.stringify(edits) : ""}`),
-    onDecideAsk: (id: string, ask: number, verdict: string) => calls.push(`ask:${id}:${ask}:${verdict}`),
+    onDecide: (id: string, verdict: string, edits: Record<string, unknown> | undefined, seen: unknown) => { seens.push(seen); calls.push(`decide:${id}:${verdict}${edits ? ":" + JSON.stringify(edits) : ""}`); },
+    onDecideAsk: (id: string, ask: number, verdict: string, seen: unknown, opts?: { leave_sessions?: boolean }) => { seens.push(seen); calls.push(`ask:${id}:${ask}:${verdict}${opts ? ":" + JSON.stringify(opts) : ""}`); },
     onEditRole: (c: any) => calls.push(`editRole:${c._id}`),
     onSelectNode: (id: string) => calls.push(`node:${id}`),
     onOpenSession: (id: string) => calls.push(`open:${id}`),
@@ -87,11 +92,16 @@ async function verifyStaffingPane() {
   // The half decided ask says so under its title and keeps its controls.
   assert.equal(card(3).querySelector("[data-ask-verdict]")!.textContent, "2 of 4 changes decided");
   assert.ok(card(3).querySelector("[data-ask-accept]"));
-  // Accept and Skip on a card are the ask's verdict, once, by index.
+  // Accept and Skip on a card are the ask's verdict, once, by index, and each
+  // says what the card showed: this fixture was never revised, and the first
+  // card holds the two records.
   await act(async () => (card(0).querySelector("[data-ask-accept]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "ask:fixture-proposal-7:0:accept");
+  assert.deepEqual(seens.pop(), { revised_at: 0, seqs: [8, 7] }, "the two records, in the order the card applies them (the server sorts before comparing)");
   await act(async () => (card(2).querySelector("[data-ask-skip]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "ask:fixture-proposal-7:2:skip");
+  const staleSeen = seens.pop() as { revised_at: number; seqs: number[] };
+  assert.deepEqual(staleSeen, { revised_at: 0, seqs: [ORG_STAFFING_FIXTURE_PROPOSAL.changes.find((c) => c.change.kind === "role" && c.change.handle === "content")!.seq] });
   await act(async () => (card(1).querySelector("[data-ask-about]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "aboutAsk:1");
   // The cost line, in words (no role in the fixture tree has a limit yet, so
@@ -178,11 +188,26 @@ async function verifyStaffingPane() {
   await render({ proposal: revisedProposal, proposals: [revisedProposal], selectedChangeId: null, revised: { rows: [amendedRow], who: "Chief of Staff", onSeen: () => calls.push("seen") } });
   assert.equal(qa("[data-ask-revised]").length, 1);
   assert.match(card(3).querySelector("[data-ask-revised]")!.textContent!, /Chief of Staff changed 1 since you last looked/);
+  // A verdict pressed now says it read this revise; the stale skip above did
+  // not, so the server refuses it (orgVerdictSeenFault) and this list, with
+  // the strip, is what the page shows instead: no row of that card is marked.
+  await act(async () => (card(3).querySelector("[data-ask-accept]") as HTMLButtonElement).click());
+  assert.equal(calls.pop(), "ask:fixture-proposal-7:3:accept");
+  assert.equal((seens.pop() as { revised_at: number }).revised_at, amendedRow.revision.at);
+  assert.ok(staleSeen.revised_at < amendedRow.revision.at, "the stale verdict named an older read than the revise");
+  assert.deepEqual(revisedSince(revisedProposal.changes, staleSeen.revised_at), [amendedRow], "the strip shows exactly the revise that refused the stale verdict");
+  assert.equal(orgVerdictSeenFault(revisedProposal.short_id, staleSeen, revisedProposal.changes, staleSeen.seqs), `${revisedProposal.short_id} ${ORG_VERDICT_REVISED}`);
+  assert.equal(card(2).getAttribute("data-ask-state"), "open");
+  assert.equal(qa('[data-ask="2"] [data-change-status="skipped"], [data-ask="2"] [data-change-status="accepted"]').length, 0);
   await act(async () => (card(3).querySelector("[data-revised-seen]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "seen");
   await act(async () => (card(3).querySelector("[data-ask-fold]") as HTMLButtonElement).click());
   assert.equal(q('[data-change-row="fixture-change-4"]')!.getAttribute("data-revised-new"), "true");
   assert.match(q('[data-change-row="fixture-change-4"] [data-revision]')!.textContent!, /Changed.*Raised on your note/);
+  // A verdict on one row inside the fold says the same read.
+  await act(async () => qa('[data-change-row="fixture-change-4"] button[aria-label="Skip"]')[0].click());
+  assert.equal(calls.pop(), "decide:fixture-change-4:skip");
+  assert.deepEqual(seens.pop(), { revised_at: amendedRow.revision.at });
 
   // ── a records ask at scale (S9 inside S19): one card, the rows paged inside the fold ──
   await render({ proposal: ORG_STAFFING_FIXTURE_BIG_PROPOSAL, proposals: [ORG_STAFFING_FIXTURE_BIG_PROPOSAL], selectedChangeId: null });
@@ -321,6 +346,35 @@ async function verifyStaffingPane() {
   assert.equal(q("[data-no-chief]"), null, "the hire buttons of the active workspace do not answer a link elsewhere");
   await render({ proposal: null, selectedChangeId: null, proposals: [], link: { kind: "loading", shortId: "op-99" } });
   assert.match(q("[data-proposal-link]")!.textContent!, /looking it up/);
+
+  // ── what an accept takes over, said before it, with the one edit (R1) ──
+  // The page reads the counts in one query and hands them in by change id;
+  // only a change that would move a session has one.
+  const moves = { "fixture-change-1": { phrase: "12 sessions now report to @platform and leave your needs input", count: 12, kept_in_front: 0, over_cap: 0 } };
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null, takeovers: moves });
+  const holder = qa("[data-ask]").find((el) => el.querySelector("[data-takeover]"));
+  assert.ok(holder, "the ask that holds the role change says what accepting it moves");
+  assert.equal(qa("[data-ask] [data-takeover]").length, 1, "and no other ask says anything");
+  assert.match(holder!.querySelector("[data-takeover-phrase]")!.textContent!, /^12 sessions now report to @platform and leave your needs input\.$/);
+  assert.match(holder!.querySelector("[data-takeover]")!.textContent!, /Leave the sessions where they are/);
+  const at = holder!.getAttribute("data-ask");
+  // Accepted as proposed: no edit rides along.
+  await act(async () => holder!.querySelector<HTMLButtonElement>("[data-ask-accept]")!.click());
+  assert.equal(calls.pop(), `ask:fixture-proposal-7:${at}:accept`);
+  // Ticked: the accept carries the person's one edit.
+  await act(async () => holder!.querySelector<HTMLInputElement>("[data-takeover-leave-input]")!.click());
+  assert.equal(holder!.querySelector("[data-takeover]")!.getAttribute("data-takeover-leave"), "1");
+  await act(async () => holder!.querySelector<HTMLButtonElement>("[data-ask-accept]")!.click());
+  assert.equal(calls.pop(), `ask:fixture-proposal-7:${at}:accept:{"leave_sessions":true}`);
+  // Inside the fold the row says it too, and its own accept carries the edit.
+  await act(async () => holder!.querySelector<HTMLButtonElement>("[data-ask-fold]")!.click());
+  const moving = q('[data-change-row="fixture-change-1"]')!;
+  assert.match(moving.querySelector("[data-takeover-phrase]")!.textContent!, /12 sessions now report to @platform/);
+  await act(async () => moving.querySelector<HTMLInputElement>("[data-takeover-leave-input]")!.click());
+  await act(async () => moving.querySelector<HTMLButtonElement>('button[aria-label="Accept"]')!.click());
+  assert.equal(calls.pop(), 'decide:fixture-change-1:accept:{"leave_sessions":true}');
+  // A row that moves nothing says nothing.
+  for (const row of qa("[data-change-row]").filter((r) => r !== moving)) assert.equal(row.querySelector("[data-takeover]"), null);
 
   await act(async () => root.unmount());
   closeDomWindow(dom);

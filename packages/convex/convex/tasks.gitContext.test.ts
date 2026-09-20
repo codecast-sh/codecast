@@ -92,3 +92,51 @@ describe("resolveTaskGitContext git_root consistency", () => {
     expect(r.git_root).toBe("/Users/ec2-user/src/union-mobile");
   });
 });
+
+// THE WRONG-TEAM LAUNCH BUG (ct-52745): a Union task that pins no path was
+// opened while the viewer had a codecast session on screen. The client sent the
+// viewer's repo as the seed, the seed won, and three sessions ran in
+// ~/src/codecast and were routed to the Codecast team. A seed from outside the
+// task's team is only a last resort.
+describe("resolveTaskGitContext: a seed from another team never beats the task's team", () => {
+  const USER = "users_1";
+  const UNION = "teams_union";
+  const CODECAST = "teams_codecast";
+  const mappings = [
+    { team_id: CODECAST, path_prefix: "/Users/ashot/src/codecast", auto_share: true },
+    { team_id: UNION, path_prefix: "/Users/ashot/src/union-mobile", auto_share: true },
+  ];
+  const ctx = (tables: Record<string, any[]> = {}) => ({ db: makeFakeDb({ conversations: [], projects: [], ...tables }) });
+  const task = (over: any = {}) => ({ _id: "tasks_1", user_id: USER, team_id: UNION, conversation_ids: [], ...over });
+  const viewer = { project_path: "/Users/ashot/src/codecast", git_root: "/Users/ashot/src/codecast" };
+
+  test("a task that pins nothing launches in its team's mapped directory, not the viewer's repo", async () => {
+    const r = await resolveTaskGitContext(ctx(), USER as any, task(), mappings, viewer);
+    expect(r.project_path).toBe("/Users/ashot/src/union-mobile");
+    // The viewer's root describes another repo, and the daemon prefers git_root.
+    expect(r.git_root).toBeUndefined();
+  });
+
+  test("a seed inside the task's team is kept: it is the more specific choice", async () => {
+    const seed = { project_path: "/Users/ashot/src/union-mobile/outreach", git_root: "/Users/ashot/src/union-mobile" };
+    const r = await resolveTaskGitContext(ctx(), USER as any, task(), mappings, seed);
+    expect(r.project_path).toBe("/Users/ashot/src/union-mobile/outreach");
+    expect(r.git_root).toBe("/Users/ashot/src/union-mobile");
+  });
+
+  test("the task's project path beats both the seed and the team mapping", async () => {
+    const projects = [{ _id: "projects_1", project_path: "/Users/ashot/src/outreach" }];
+    const r = await resolveTaskGitContext(ctx({ projects }), USER as any, task({ project_id: "projects_1" }), mappings, viewer);
+    expect(r.project_path).toBe("/Users/ashot/src/outreach");
+  });
+
+  test("with no mapping for the task's team the seed still routes the session", async () => {
+    const r = await resolveTaskGitContext(ctx(), USER as any, task(), [mappings[0]], viewer);
+    expect(r.project_path).toBe("/Users/ashot/src/codecast");
+  });
+
+  test("a personal task keeps the seed", async () => {
+    const r = await resolveTaskGitContext(ctx(), USER as any, task({ team_id: undefined }), mappings, viewer);
+    expect(r.project_path).toBe("/Users/ashot/src/codecast");
+  });
+});

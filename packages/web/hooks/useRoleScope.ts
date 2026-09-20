@@ -20,7 +20,7 @@ import type { OrgRole, OrgSession, OrgTree } from "../components/org/orgTypes";
 
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.owner_role_id ?? ""}`;
 const planSig = (p: PlanItem) => `${p.title}|${p.status}|${(p as any).project_id ?? ""}`;
-const taskSig = (t: TaskItem) => `${t.status}|${(t as any).project_id ?? ""}|${(t as any).plan_id ?? ""}|${t.assignee ?? ""}|${(t.conversation_ids ?? []).join(",")}`;
+const taskSig = (t: TaskItem) => `${t.status}|${(t as any).project_id ?? ""}|${(t as any).plan_id ?? ""}|${t.assignee ?? ""}|${(t as any).source ?? ""}|${(t as any).promoted ?? ""}|${t.triage_status ?? ""}|${(t.conversation_ids ?? []).join(",")}`;
 
 /** The workspace rows every scope rollup reads (lib/roleScope buildRoleScope),
  *  each through a signature of the fields the rollup uses. A role's scope and

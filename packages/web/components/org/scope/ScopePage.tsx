@@ -109,7 +109,7 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
 
   // -------- actions
   const store = useInboxStore.getState;
-  const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1]) => { if (role) store().updateOrgRole(role._id, fields); }, [role, store]);
+  const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1], opts?: { leave_sessions?: boolean }) => { if (role) store().updateOrgRole(role._id, fields, opts); }, [role, store]);
   const reparent = useCallback((target: OrgParentRef) => { if (role) store().reparentOrgRole(role._id, target); }, [role, store]);
   // The header's Retire lands on Settings with the confirmation already open.
   const [retireArmed, setRetireArmed] = useState(false);
@@ -244,6 +244,7 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
       canEditBrief={canEditBrief}
       hostName={hostName}
       model={model}
+      standingId={standingId ?? null}
       counters={counters}
       armRetire={retireArmed}
       now={now}

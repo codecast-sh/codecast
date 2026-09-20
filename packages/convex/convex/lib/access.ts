@@ -94,6 +94,18 @@ export async function heldKeysFor(ctx: AccessCtx, userId: Id<"users">): Promise<
   return new Set([`user:${String(userId)}`, ...memberships.map((m: any) => `team:${String(m.team_id)}`)]);
 }
 
+/**
+ * One caller judging MANY rows (a scope's tasks, a project's plans): the keys
+ * the caller holds are read once, and each row goes through the pure
+ * evaluator. canAccessTask per row costs a membership read per row that the
+ * caller does not own, which on a project with 860 tasks filed by teammates
+ * was 860 reads for one answer. Same stamp, same rule as canAccess*.
+ */
+export async function accessJudgeFor(ctx: AccessCtx, userId: Id<"users">): Promise<(table: string, doc: any) => Promise<boolean>> {
+  const held = await heldKeysFor(ctx, userId);
+  return async (table, doc) => authorizedFor(await accessStampFor(ctx, table, doc), String(userId), held);
+}
+
 // Ctx-bound evaluator with the same rule as authorizedFor, short-circuiting on
 // owner/grant before touching memberships. A property test pins the two
 // evaluators to each other (syncLog.test.ts).

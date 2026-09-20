@@ -42,6 +42,9 @@ import { dmOtherIds } from "@codecast/shared/chat";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useOrgRoles } from "../hooks/useOrgRoles";
+import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
+
+const NO_MEMBERS: any[] = [];
 import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "./presence/memberPresence";
 import { MemberFace } from "./presence/MemberFace";
 import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
@@ -445,7 +448,11 @@ export function ActionSubmenu({
   const listRef = useRef<HTMLDivElement>(null);
   // The workspace's roles, for the assign list: read from the store through a
   // wake signature, so every caller of this menu offers them with no prop.
-  const { roles: orgRoles, roleBotUserIds } = useOrgRoles();
+  const { roles: orgRoles } = useOrgRoles();
+  // People and roles for the assign mode, from the one list every picker
+  // shares; who is a person is read off the roster row, so a cold deep link
+  // (no org tree yet) still lists no bot as a person.
+  const { people: assignPeople, roles: assignRoles } = useRolesAndPeopleOptions(teamMembers ?? NO_MEMBERS);
 
   // Two-step state for the "Start agent run" mode: pick an agent, then compose
   // the initial message before launching a run per selected task.
@@ -681,23 +688,16 @@ export function ActionSubmenu({
       return matched;
     }
     if (mode === "assign") {
-      // A role's own bot user is not a person to pick: the role is (below).
-      const members = (teamMembers || []).filter((m: any) => m && !roleBotUserIds.has(m._id)).map((m: any) => {
-        const name = memberDisplayName(m);
-        return {
-          key: m._id,
-          label: currentUser && m._id === currentUser._id ? `${name} (you)` : name,
-          type: "user" as const,
-          image: memberAvatarUrl(m),
-        };
-      });
       // A role owns tasks the way a person does (org-roles-run-work.md R5).
       // People stay first so the number keys people already know do not move.
-      const roles = orgRoles
-        .filter((r) => r.status !== "retired")
-        .map((r) => ({ key: r._id, label: r.name, hint: `@${r.handle}`, type: "user" as const, image: undefined, face: r.avatar ?? r.handle, section: "Roles" }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-      const people = members.map((m) => ({ ...m, section: roles.length ? "People" : undefined }));
+      const people = assignPeople.map((o) => ({
+        key: o.key,
+        label: currentUser && o.key === currentUser._id ? `${o.label} (you)` : o.label,
+        type: "user" as const,
+        image: o.info.image,
+        section: o.section,
+      }));
+      const roles = assignRoles.map((o) => ({ key: o.key, label: o.label, hint: o.hint, type: "user" as const, image: undefined, face: o.info.kind === "role" ? o.info.avatar : undefined, section: o.section }));
       return [{ key: "", label: "Unassign", type: "user" as const, image: undefined }, ...people, ...roles]
         .filter((o: { label: string; hint?: string }) => `${o.label} ${o.hint ?? ""}`.toLowerCase().includes(q));
     }
@@ -820,7 +820,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, roleBotUserIds]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, assignPeople, assignRoles]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 

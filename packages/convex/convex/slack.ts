@@ -53,9 +53,7 @@ export function tokenHasDmScopes(scopes: string | undefined | null): boolean {
 }
 
 /** Can this person's own token post a message as them? */
-export function tokenCanPost(scopes: string | undefined | null): boolean {
-  return (scopes ?? "").split(",").map((s) => s.trim()).includes("chat:write");
-}
+export { tokenCanPost } from "./lib/slackMirror";
 
 export function convexSiteUrl(): string {
   return process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh";

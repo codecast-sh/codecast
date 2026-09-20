@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chainAssignees, chainHeadOf, isRoleAssignee, roleAssigneeInfo, rolesInChainOf, sameAssigneeInfo } from "./orgAssignee";
+import { chainAssignees, chainHeadOf, chainIndex, chainParentOf, isRoleAssignee, roleAssigneeInfo, rolesInChainOf, sameAssigneeInfo } from "./orgAssignee";
 import { defaultAvatarFor } from "./orgAvatars";
 
 const user = (id: string) => ({ kind: "user" as const, user_id: id });
@@ -61,10 +61,27 @@ describe("the reporting chain", () => {
     expect(chainHeadOf("a", loop)).toBeNull();
   });
 
-  test("a person's chain is themselves, then their roles, parents first, retired left out", () => {
-    expect(rolesInChainOf("ashot", roles).map((r) => r._id)).toEqual(["growth", "ads", "seo"]);
-    expect(chainAssignees("ashot", roles)).toEqual(["ashot", "growth", "ads", "seo"]);
+  test("a person's chain is themselves, then their roles, parents first", () => {
+    expect(rolesInChainOf("ashot", roles).map((r) => r._id)).toEqual(["growth", "old", "ads", "seo"]);
+    expect(chainAssignees("ashot", roles)).toEqual(["ashot", "growth", "old", "ads", "seo"]);
     expect(chainAssignees("samvit", roles)).toEqual(["samvit", "platform"]);
     expect(chainAssignees("nobody", roles)).toEqual(["nobody"]);
+  });
+
+  test("a retired role stays in the chain it reported to, so what it still holds is read under that person", () => {
+    // Retire hands open tasks up the chain; closed ones, and any assigned
+    // before the hand-over, are still found here and never vanish.
+    expect(chainAssignees("ashot", roles)).toContain("old");
+    const retiredParent = [{ _id: "q", status: "retired", reports_to: user("ashot") }, { _id: "r", status: "active", reports_to: under("q") }];
+    expect(chainHeadOf("r", retiredParent)).toBe("ashot");
+    expect(chainAssignees("ashot", retiredParent)).toEqual(["ashot", "q", "r"]);
+  });
+
+  test("one parent step serves every walker", () => {
+    const byId = chainIndex(roles);
+    expect(chainParentOf(byId.get("ads")!, byId)).toMatchObject({ kind: "role", key: "growth" });
+    expect(chainParentOf(byId.get("growth")!, byId)).toEqual({ kind: "user", key: "ashot" });
+    expect(chainParentOf({ _id: "orphan", reports_to: under("gone") }, byId)).toBeNull();
+    expect(chainParentOf({ _id: "top" }, byId)).toBeNull();
   });
 });

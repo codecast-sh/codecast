@@ -1,35 +1,36 @@
 // What an initiative derives at render (initiatives-projects-role-page.md I1).
 // Run: bun test lib/__tests__/initiatives.test.ts
 import { test, expect } from "bun:test";
-import { FIXTURE_INITIATIVES as ROWS, FIXTURE_NOW, FIXTURE_PLANS, FIXTURE_PROJECTS, FIXTURE_TASKS } from "../../components/initiatives/initiativeFixture";
-import { computePlanProgress } from "../liveEntities";
-import { groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, tasksByProject, topLevelInitiatives } from "../initiatives";
+import { FIXTURE_INITIATIVES as ROWS, FIXTURE_NOW, FIXTURE_PROJECTS, FIXTURE_TASKS } from "../../components/initiatives/initiativeFixture";
+import { projectTaskCounts } from "@codecast/shared/tasks";
+import { ORG_FIXTURE } from "../../components/org/orgFixture";
+import type { OrgTree } from "../../components/org/orgTypes";
+import { groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, ownerSeat, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, topLevelInitiatives } from "../initiatives";
 
-const byProject = tasksByProject(FIXTURE_TASKS);
+
 const row = (short: string) => ROWS.find((r) => r.short_id === short)!;
 
-test("progress is tasks done over tasks in the initiative's projects, dropped left out", () => {
+test("progress counts the tasks the projects' boards would show, dropped left out", () => {
   // proj-org: 2 done of 4 (one dropped is not counted); proj-inbox: 1 done of 2.
-  const p = initiativeProgress(row("in-1"), byProject);
+  const p = initiativeProgress(row("in-1"), FIXTURE_TASKS);
   expect(p).toEqual({ total: 6, done: 3, in_progress: 1, open: 2 });
   expect(progressPercent(p)).toBe(50);
-  expect(progressPercent(initiativeProgress(row("in-4"), byProject))).toBe(0);
+  expect(progressPercent(initiativeProgress(row("in-4"), FIXTURE_TASKS))).toBe(0);
 });
 
 test("a task's status change moves the bar with no stored twin", () => {
   const moved = FIXTURE_TASKS.map((t) => (t._id === "7" ? { ...t, status: "done" } : t));
-  expect(initiativeProgress(row("in-1"), tasksByProject(moved)).done).toBe(4);
+  expect(initiativeProgress(row("in-1"), moved).done).toBe(4);
 });
 
-test("a task filed only under a plan counts under that plan's project", () => {
-  const loose = [...FIXTURE_TASKS, { _id: "9", status: "done", project_id: null, plan_id: "plan-roles" }];
-  expect(initiativeProgress(row("in-1"), tasksByProject(loose, FIXTURE_PLANS)).done).toBe(4);
-  expect(initiativeProgress(row("in-1"), tasksByProject(loose)).done).toBe(3);
+test("what the board hides is not counted: a plan's task naming no project, agent bookkeeping", () => {
+  const more = [...FIXTURE_TASKS, { _id: "9", status: "done", project_id: null, plan_id: "plan-roles", source: "human" }, { _id: "10", status: "done", project_id: "proj-org", source: "agent" }];
+  expect(initiativeProgress(row("in-1"), more)).toEqual({ total: 6, done: 3, in_progress: 1, open: 2 });
 });
 
 test("a project says its own trouble: past its target, or risks in its charter", () => {
-  const counts = (id: string) => computePlanProgress(byProject.get(id));
-  const trouble = (id: string) => projectTrouble(FIXTURE_PROJECTS.find((p) => p._id === id)!, { open: counts(id).total - counts(id).done, done: counts(id).done }, FIXTURE_NOW);
+  const counts = (id: string) => projectTaskCounts(FIXTURE_TASKS, [id]);
+  const trouble = (id: string) => projectTrouble(FIXTURE_PROJECTS.find((p) => p._id === id)!, counts(id), FIXTURE_NOW);
   expect(trouble("proj-inbox")).toBe("past its target");
   expect(trouble("proj-billing")).toBe("1 risk in its charter");
   expect(trouble("proj-org")).toBeNull();
@@ -65,4 +66,15 @@ test("the wake signature ignores a bare updated_at and sees a health change", ()
   const r = row("in-1");
   expect(initiativeSig({ ...r, updated_at: r.updated_at + 1 })).toBe(initiativeSig(r));
   expect(initiativeSig({ ...r, health: "off_track" })).not.toBe(initiativeSig(r));
+});
+
+test("the conversation an initiative opens beside: a role's seat, a person's own anchor, the root seat they host", () => {
+  const tree = ORG_FIXTURE as unknown as OrgTree;
+  expect(ownerSeat(tree, { kind: "role", role_id: "fixture-role-growth" })).toMatchObject({ conversationId: "fixture-growth-conv", speaker: ORG_FIXTURE.roles[0].name });
+  expect(ownerSeat(tree, { kind: "user", user_id: "fixture-user-me" })).toMatchObject({ role: null, conversationId: "fixture-anchor-conv" });
+  // On a workspace whose only anchor is the chief of staff's seat, the person who hosts it opens on that seat.
+  const chiefSeat: OrgTree = { ...tree, roles: [{ ...tree.roles[0], handle: "chief-of-staff", anchor_id: "fixture-anchor" }], anchors: [{ ...tree.anchors[0], org_role_id: "fixture-role-growth" }] };
+  expect(ownerSeat(chiefSeat, { kind: "user", user_id: "fixture-user-me" }).conversationId).toBe("fixture-anchor-conv");
+  expect(ownerSeat(chiefSeat, { kind: "user", user_id: "fixture-user-sam" }).conversationId).toBeNull();
+  expect(ownerSeat(tree, undefined).conversationId).toBeNull();
 });

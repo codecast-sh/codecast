@@ -65,16 +65,42 @@ escalate`). A hand cannot escalate itself: it is told to tell its role. A
 person's own gesture needs no line and is stored as theirs. A reparent to a
 person, or to another role, drops the escalation with the pointer. The
 takeover is `sessionOwnership.performRehomeSessions`, called by
-`orgInit.takeOverSessions` as the last step of `applyRole`, `applyMove` (so
-`applyScope`) and `applyAdopt`, and by the `orgRoles.setScope` mutation (the
-edit in Settings); only a change that ADDS scope takes over, a role that looks
-after the whole workspace takes over nothing, and one apply moves at most 100
-sessions and counts the rest in its note. "An open escalation to the person"
+`orgInit.takeOverSessions`. A live role gains scope in exactly one place, the
+role update (`orgRoles.performUpdateRole`), so the takeover and the person's
+one edit live there and every door inherits them: the scope editor in Settings
+and on the chart's panel (`orgRoles.update`), `cast role scope`
+(`orgRoles.setScope`), a project's lead and an initiative's owner
+(`performCoverProjects`), and a move or scope change (`applyMove`). A new role
+takes over after its seat exists: `applyRole` and `applyAdopt` for a proposal,
+`performHireRole` for a hire from the form or `cast role create`. Only a change
+that ADDS scope takes over, a role that looks after the whole workspace takes
+over nothing, and one apply moves at most 100 sessions and counts the rest in
+its note. "An open escalation to the person"
 is a decision pending on the session at the takeover: that session moves and
 stays in front of the person with a line that says why. The person's one edit
-is `leave_sessions` on a role, scope or adopt change. `orgInit.takeoverPreview`
-is the dry count for the note before accept, and `takeoverPhrase` writes the
-sentence before and after. The stall is `session_wait_hours` in
+is `leave_sessions`: on a role, scope, move or adopt change (an edit on the
+row, or on an ask accepted whole through `orgProposals.decideAsk`), and as an
+argument of `orgRoles.update`, `setScope`, `setProjectLead` and `create`
+(`--leave-sessions` on `cast role scope` and `cast role create`).
+`orgInit.takeoverPreview` is the dry count before accept. It takes every row a
+page shows in one call and scans the workspace's sessions once for all of
+them; `contracts/orgProposal.orgChangeTakeover` says which changes take over
+and what to ask, and `takeoverPhrase` there writes the sentence before and
+after. On the web the count and the edit are one component
+(`components/org/TakeoverEdit`): on the proposal's asks and rows, in the hire
+form, and at the gate (`TakeoverGate`) that a scope gain made by hand waits
+at, which confirms itself when nothing would move.
+
+The read budget, measured 2026-09-20 on a scope of 860 tasks filed by others
+and 440 sessions: the dry count is 114 reads and the apply 817, from 973 and
+2,573. `org.resolveScope` reads the caller's keys once for all rows
+(`lib/access.accessJudgeFor`), a takeover resolves its role, its admin check,
+its acting person and its sender once for the batch
+(`sessionOwnership.prepareReparentBatch`), and a reparent with no open
+question skips the ladder walk. Accept all cuts its chunks by cost
+(`orgProposals.acceptAllChunk`): a change that takes over is the last of its
+transaction, so one transaction holds at most one. The scope summary reads
+open decisions once per member, never once per task. The stall is `session_wait_hours` in
 `orgCapacity.ts`, counted into `open_stalls` by `orgHealth`. The principle is
 the "Your sessions are yours to triage" bullet of `anchors.bootstrapMessage`
 and rule 6 of `ROLE_RULES`; its dry run (4 of 4 samples escalate the brand
@@ -206,6 +232,31 @@ stay off the board whoever holds them; that exclusion is W8's to write, in
 the same predicate. `cast task ls` applies no board filter, so `--chain me`
 already lists the same tasks the Chain axis shows.
 
+**As built (review fixes, 2026-09-20).** One resolver,
+`tasks.resolveAssigneeStr`, serves every assignee write and every list
+filter. A handle is matched the way chat matches it (`lib/mentionResolve`
+`matchHandle`): a teammate's login or email, never a display name; a bot on
+the roster is never a person, so a role outranks the bot user its seat renders
+as, and that bot user's own id names the role too. Who may take a task is its
+ACCESS key (`tasks.boundaryOfTask`, read from `workspace`, never `team_id`):
+a task readable by its owner only is refused to a team role in words that say
+why, the task list judges each row with the access layer's own evaluators,
+and a guard test pins both. A read (`--assignee`, `--chain`) names what a
+task holds, so a retired role's tasks can still be listed by its id or
+handle. Retiring a role hands its open tasks to whoever it reported to
+(`tasks.handOpenTasksUpChain`, told as any assignment is); a retired role
+stays in the chain it reported to (`contracts/orgAssignee` `chainParentOf`,
+the one parent step the server, the board's Chain axis and its filter walk),
+so whatever it still holds is read under the same person. A hand's second
+`task start` reaches the role whether or not the session is still bound to
+its first task. A fork of the session that filed a task starts it as that
+session's own bookkeeping. The CLI's task verbs (start, done, handoff,
+verdict, drop) send the caller's own session id or none, never a guess at
+the one transcript recently active, because the server reads the session's
+role off that id. Pickers list people and roles from one source
+(`lib/assigneeOptions`), and who is a person is `is_bot` on the roster row,
+so a cold deep link needs no org tree to get it right.
+
 ## The test
 
 A person who has never seen the feature opens their inbox and sees fewer
@@ -251,6 +302,24 @@ names a person, the Chain axis that shows a role's tasks under the person it
 reports to, and the goal section above, where a task matched to a goal is
 reported on whether the role or the person holds it.
 
+**As built.** Who reports is `org_roles.reports_user_ids`, set from the
+role's Settings tab or `cast role reports @handle --add me`; a person adds or
+removes themself, an admin of the role anyone in the workspace, and a new
+report wakes the role at once so it asks for goals. Goals are text under
+`## Goals: <name>` in the brief (parser: `contracts/roleGoals.ts`); the short
+ids on a goal's line are its matches. `convex/orgGoals.ts` reads those rows
+with the viewer's grants and gives the frame, `org.brief`, the Scope tab, the
+Brief tab and the health query one answer. A goal stalls after
+`goal_stall_days` with nothing matched to it moving, and is a finding after
+`goal_unmatched_days` with nothing matched at all. The age of a goal with no
+match counts from when the hourly sweep first saw it
+(`org_roles.goal_first_seen`), never from the brief's edit time, because a
+role rewrites its brief at every wake. The notice is the `goal_stall`
+notification, once per person per UTC day (`org_roles.goal_notices`). The
+prompt is one principle in `anchors.bootstrapMessage` and rule 7 of the
+charter; the dry run and its ablation are recorded on ct-52526 (four of four
+samples wrote the matches back with the principle, none of four without).
+
 ## R7. What an assignee means
 
 From the same call: a session refused to ship a task because the task was
@@ -261,3 +330,13 @@ task, and the assignee is who answers for it being done. The task context
 the CLI prints (`cast task context`, `cast task start`, the bound task line
 in the system text) says so in one sentence, so no model guesses the
 stricter reading. This matters more once roles hold tasks (R5).
+
+**As built.** `ASSIGNEE_MEANS` (`contracts/orgAssignee.ts`) is the sentence,
+printed by `cast task start`, by `cast task context` beside the assignee, and
+in the tasks snippet. The role page's Settings tab says where the seat runs:
+the host, the machine of the standing session (`devices.getConversationMachine`)
+and the model. When the standing session is parked on a usage limit, the same
+section says what codecast does on that machine, in the sentence `cast usage`
+prints (`describeLimitRecovery` in `contracts/usageLimits.ts`, one body for
+both), and what a person can do: move the session to another machine from its
+header chip, or add an account with `cast accounts save <name>`.

@@ -3,9 +3,12 @@ import type { Id } from "../_generated/dataModel";
 import { canAccessInitiative } from "./access";
 import { notFound } from "./auth";
 
-// Naming an initiative: `in-N` (any case, or the bare number) or its id. Kept
-// apart from convex/initiatives.ts so a module that only filters by an
-// initiative (tasks.list) reads it without importing the org's write paths.
+// Naming an initiative: `in-N` (any case, or the bare number), its id, or the
+// `client_key` of a create the caller made that the server has not echoed
+// yet (the web's stub id, so an edit made before the echo lands on the real
+// row instead of being dropped). Kept apart from convex/initiatives.ts so a
+// module that only filters by an initiative (tasks.list) reads it without
+// importing the org's write paths.
 
 type Ctx = { db: any };
 
@@ -15,7 +18,11 @@ export async function findInitiative(ctx: Ctx, userId: Id<"users">, ref: string)
   const id = /^in-\d+$/.test(key) ? null : ctx.db.normalizeId("initiatives", key);
   const row = id
     ? await ctx.db.get(id)
-    : await ctx.db.query("initiatives").withIndex("by_short_id", (q: any) => q.eq("short_id", key)).first();
+    : /^in-\d+$/.test(key)
+      ? await ctx.db.query("initiatives").withIndex("by_short_id", (q: any) => q.eq("short_id", key)).first()
+      // A client key is the caller's own: only their rows are searched.
+      : (await ctx.db.query("initiatives").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect())
+          .find((r: any) => r.client_key === key) ?? null;
   return row && (await canAccessInitiative(ctx, userId, row)) ? row : null;
 }
 

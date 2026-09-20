@@ -15,6 +15,7 @@
     "./contracts": "./contracts/index.ts",
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
+    "./contracts/orgChange": "./contracts/orgChange.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
     "./contracts/orgAvatars": "./contracts/orgAvatars.ts",
     "./contracts/orgTemplateReadiness": "./contracts/orgTemplateReadiness.ts",

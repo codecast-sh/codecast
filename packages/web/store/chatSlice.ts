@@ -41,7 +41,7 @@ import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxR
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { dmKeyFor, dmOtherIds, isLiveVoiceRow, mentionUserIds, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
-import { mirrorState, mergeLinkOptions, type SlackDirection, type SlackLinkOptions } from "@codecast/convex/convex/lib/slackMirror";
+import { mirrorState, mergeLinkOptions, type SlackDirection, type SlackLinkOptions, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
@@ -121,6 +121,8 @@ export type ChatSlackLinkRow = {
   /** A channel mirror, or one person's direct message (read and written as them). */
   kind?: "channel" | "dm";
   owner_user_id?: string;
+  viewer_user_id?: string;
+  viewer_slack_auth?: SlackSendAuth;
   direction: SlackDirection;
   options: SlackLinkOptions;
   paused?: boolean;

@@ -11,11 +11,11 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { createDataContext, scopedFetch } from "./data";
 import { nextShortId } from "./counters";
 import { resolveActor } from "./lib/actor";
+import { isTeamAdmin } from "./privacy";
 import { PRIORITIES, resolveOwnerRole } from "./lib/orgCharter";
 import { performCoverProjects, type CoverProjectsResult } from "./orgRoles";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import {
-  canAccessTask,
   requireAccessibleProject,
   requireSameWorkspace,
   resolveSessionConversation,
@@ -23,6 +23,7 @@ import {
   workspaceGrantsAccess,
 } from "./lib/access";
 import { findInitiative, requireInitiative } from "./lib/initiativeRef";
+import { projectProgress } from "./lib/projectWork";
 
 // Initiatives (docs/architecture/initiatives-projects-role-page.md I1): a goal
 // the company is trying to reach, carried by an intentional set of projects,
@@ -301,6 +302,28 @@ export const setProjects = mutation({
   },
 });
 
+// A role's boundary is a team or one person (org_roles.team_id or
+// scope_user_id); an initiative's is its team or its creator.
+function roleInBoundary(role: any, initiative: any): boolean {
+  return initiative.team_id
+    ? String(role.team_id ?? "") === String(initiative.team_id)
+    : !role.team_id && String(role.scope_user_id ?? "") === String(initiative.user_id);
+}
+
+// Health is what the owner said (I1): an update is posted by the owner, a
+// person or the owning role's standing session, or by a workspace admin (a
+// team admin; the creator, in a personal workspace). Everyone else reads.
+async function requireMayPostUpdate(ctx: Ctx, userId: Id<"users">, initiative: any, role: any | null): Promise<void> {
+  const owner = initiative.owner;
+  if (owner?.kind === "user" && String(owner.user_id) === String(userId)) return;
+  if (owner?.kind === "role" && role && String(role._id) === String(owner.role_id)) return;
+  const admin = initiative.team_id
+    ? await isTeamAdmin(ctx as any, userId, initiative.team_id)
+    : String(initiative.user_id) === String(userId);
+  if (admin) return;
+  throw new Error("Only the owner or a workspace admin posts an update; everyone else reads");
+}
+
 // Health lives on the update; the initiative carries a copy of the latest one
 // so a list reads it with no join. This is the only writer of that copy, and
 // it reads the latest update back instead of trusting the one just written,
@@ -349,6 +372,10 @@ export const postUpdate = mutation({
 
     const conversation = args.session_id ? await resolveSessionConversation(ctx, userId, args.session_id) : null;
     const actor = await resolveActor(ctx, userId, conversation);
+    // A role signs only inside its own boundary: a standing session of a role
+    // from another workspace posts as the person whose token made the call.
+    const role = actor.kind === "role" && actor.role && roleInBoundary(actor.role, initiative) ? actor.role : null;
+    await requireMayPostUpdate(ctx, userId, initiative, role);
     const at = Date.now();
     const id = await ctx.db.insert("initiative_updates", {
       initiative_id: initiative._id,
@@ -358,9 +385,7 @@ export const postUpdate = mutation({
       client_key: args.client_key,
       body,
       health,
-      by: actor.kind === "role" && actor.role
-        ? { kind: "role", role_id: actor.role._id, conversation_id: conversation?._id }
-        : { kind: "user", user_id: userId },
+      by: role ? { kind: "role", role_id: role._id, conversation_id: conversation?._id } : { kind: "user", user_id: userId },
       at,
     });
     await denormalizeHealth(ctx, initiative._id);
@@ -432,16 +457,8 @@ async function projectSummaries(ctx: Ctx, userId: Id<"users">, initiative: any) 
   for (const id of initiative.project_ids) {
     const project = await ctx.db.get(id);
     if (!project) continue;
-    const tasks = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", id)).collect();
-    let total = 0;
-    let done = 0;
-    for (const task of tasks) {
-      if (!(await canAccessTask(ctx, userId, task))) continue;
-      total++;
-      if (task.status === "done") done++;
-    }
     const lead = project.owner_role_id ? await ctx.db.get(project.owner_role_id) : null;
-    out.push({ _id: project._id, title: project.title, status: project.status, lead: lead ? `@${lead.handle}` : undefined, task_counts: { total, done } });
+    out.push({ _id: project._id, title: project.title, status: project.status, lead: lead ? `@${lead.handle}` : undefined, task_counts: await projectProgress(ctx, userId, id) });
   }
   return out;
 }
@@ -452,7 +469,12 @@ async function forTerminal(ctx: Ctx, userId: Id<"users">, initiative: any) {
     ...initiative,
     owner_label: await ownerLabel(ctx, initiative.owner),
     projects,
-    task_counts: projects.reduce((sum, p) => ({ total: sum.total + p.task_counts.total, done: sum.done + p.task_counts.done }), { total: 0, done: 0 }),
+    task_counts: projects.reduce((sum, p) => ({
+      total: sum.total + p.task_counts.total,
+      done: sum.done + p.task_counts.done,
+      in_progress: sum.in_progress + p.task_counts.in_progress,
+      open: sum.open + p.task_counts.open,
+    }), { total: 0, done: 0, in_progress: 0, open: 0 }),
   };
 }
 

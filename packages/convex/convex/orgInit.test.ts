@@ -51,9 +51,9 @@ function fixtures(extra: Record<string, any[]> = {}) {
       { _id: PLAN, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "pl-1", title: "Launch", status: "active", goal: "Ship it", created_at: 1, updated_at: NOW - 3 * H },
     ],
     tasks: [
-      { _id: "tasks_t1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-1", title: "Landing page", task_type: "task", status: "in_progress", priority: "high", created_at: 1, updated_at: NOW - H },
-      { _id: "tasks_t2", user_id: ME, team_id: TEAM, workspace: WS, plan_id: PLAN, short_id: "ct-2", title: "Wire analytics", task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: NOW - 5 * H },
-      { _id: "tasks_t3", user_id: ME, team_id: TEAM, workspace: WS, short_id: "ct-3", title: "Unfiled", task_type: "task", status: "open", priority: "low", created_at: 1, updated_at: NOW - 2 * H },
+      { _id: "tasks_t1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-1", source: "human", title: "Landing page", task_type: "task", status: "in_progress", priority: "high", created_at: 1, updated_at: NOW - H },
+      { _id: "tasks_t2", user_id: ME, team_id: TEAM, workspace: WS, plan_id: PLAN, short_id: "ct-2", source: "human", title: "Wire analytics", task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: NOW - 5 * H },
+      { _id: "tasks_t3", user_id: ME, team_id: TEAM, workspace: WS, short_id: "ct-3", source: "human", title: "Unfiled", task_type: "task", status: "open", priority: "low", created_at: 1, updated_at: NOW - 2 * H },
     ],
     docs: [
       { _id: "docs_d1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, title: "Launch notes", content: "# Launch notes", doc_type: "note", created_at: 1, updated_at: NOW - 4 * H },

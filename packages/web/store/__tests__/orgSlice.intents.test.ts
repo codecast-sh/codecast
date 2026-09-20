@@ -178,6 +178,39 @@ describe("org intents", () => {
     expect(st.orgIntents).toEqual([]);
   });
 
+  it("an ask flips the rows its card held (S19); refused as revised under the reader (S18), every row goes back and the person hears one line", async () => {
+    const { orgVerdictRevisedNotice } = await import("../orgSlice");
+    let st = staffing();
+    // The card showed seqs 1 and 2; seq 3 is applied already and stays.
+    st = run(st, "decideOrgProposalAsk", "p-1", 1, "accept", { revised_at: 0, seqs: [1, 2, 3] });
+    expect(st.orgProposalChanges["ch-1"].status).toBe("accepted");
+    expect(st.orgProposalChanges["ch-2"].status).toBe("accepted");
+    expect(st.orgProposalChanges["ch-3"].status).toBe("applied");
+    expect(st.orgProposalChanges["ch-9"].status).toBe("proposed");
+    expect(st.orgIntents.map((i) => i.kind === "decideChange" && [i.change_id, i.ask])).toEqual([["ch-1", 1], ["ch-2", 1]]);
+    // A card that held only seq 2 flips only that row, whatever sits at the position today.
+    const one = run(staffing(), "decideOrgProposalAsk", "p-1", 0, "skip", { revised_at: 0, seqs: [2] });
+    expect(one.orgProposalChanges["ch-1"].status).toBe("proposed");
+    expect(one.orgProposalChanges["ch-2"].status).toBe("skipped");
+    // The server refused it as revised: the transport wraps the line in "Uncaught Error:" and a stack.
+    const error = new Error("[Request ID: abc] Server Error\nUncaught Error: op-1 was revised after this page read it; a verdict never lands on a change the person has not seen\n    at refuseIfRevised (../convex/orgProposals.ts:430:24)");
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "decideOrgProposalAsk", ["p-1", 1, "accept", { revised_at: 0, seqs: [1, 2, 3] }], error);
+    expect(reverted).toHaveLength(2);
+    expect(notices).toEqual(["op-1 was revised after this page read it; a verdict never lands on a change the person has not seen. Nothing was applied; the revised list is on the page."]);
+    for (const id of reverted) st = run(st, "revertOrgIntent", id);
+    expect(st.orgProposalChanges["ch-1"].status).toBe("proposed");
+    expect(st.orgProposalChanges["ch-2"].status).toBe("failed");
+    expect(st.orgIntents).toEqual([]);
+    // Any other refusal keeps its line per row; a refusal of another ask reverts nothing.
+    st = run(staffing(), "decideOrgProposalAsk", "p-1", 1, "accept", { revised_at: 0, seqs: [1, 2] });
+    expect(dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "decideOrgProposalAsk", ["p-1", 0, "accept", { revised_at: 0, seqs: [1] }], error)).toEqual([]);
+    const plain = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "decideOrgProposalAsk", ["p-1", 1, "accept", { revised_at: 0, seqs: [1, 2] }], new Error("Uncaught Error: op-1 is resolved"));
+    expect(plain).toHaveLength(2);
+    expect(plain[0]).toMatch(/^Accepting "retire @ops" was refused; the change is back to proposed\.$/);
+    expect(orgVerdictRevisedNotice(new Error("Uncaught Error: op-1 is resolved"))).toBeNull();
+  });
+
   it("accept all flips every decidable row of that proposal, and a refusal reverts them all", () => {
     let st = staffing();
     st = run(st, "acceptAllOrgProposal", "p-1");
@@ -241,7 +274,7 @@ describe("org intents", () => {
     const { join } = await import("node:path");
     const src = readFileSync(join(import.meta.dir, "..", "..", "hooks", "useEnsureDispatch.ts"), "utf8");
     const permanent = src.indexOf("if (isPermanentDispatchError(error)) {");
-    const drop = src.indexOf("dropRejectedOrgIntent(useInboxStore.getState(), action, args)");
+    const drop = src.indexOf("dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)");
     expect(permanent).toBeGreaterThan(0);
     expect(drop).toBeGreaterThan(permanent);
     expect(src.slice(permanent, drop)).not.toMatch(/\n\s{6}}\n/); // no block closes between them

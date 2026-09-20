@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import type { MentionItem } from "../components/editor/MentionList";
+import type { MentionItem } from "../lib/mentionItem";
 import { memberHandle } from "@codecast/shared/chat";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";

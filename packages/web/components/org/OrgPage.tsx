@@ -34,7 +34,9 @@ import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
 import { OrgScopePanel, STAFFING_LEAD_W, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
 import { AsksSheet, ProposalThread, type ProposalAbout, type ProposalThreadLayout } from "./ProposalThread";
 import { askNames, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
-import { latestRevisionAt, proposalThread, revisedSince } from "./staffingRevise";
+import { proposalThread, revisedSince } from "./staffingRevise";
+import { latestOrgRevisionAt, orgChangeTakeover, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
@@ -47,6 +49,7 @@ import { retireToastText, type UnseatChoice } from "./RetireRoleConfirm";
 import { reviewRunState, type OrgReviewRun } from "./staffingModel";
 import { changeNodeId, composeParam, findChiefOfStaff, hasAcceptedBefore, isDecidable, orgPreviewEnabled, pickProposal, proposalParam, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
+import { readOrgPreviewSpec } from "./orgPreviewSpec";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
 import { StateTally } from "./OrgNodeCards";
 import { OrgButton } from "./OrgButton";
@@ -162,7 +165,8 @@ export function OrgPageInner() {
   // slice bodies the store uses. Never a fallback for missing data.
   const preview = orgPreviewEnabled(searchParams.toString(), ORG_PREVIEW_DEV);
   const [previewTree, setPreviewTree] = useState<OrgTree>(ORG_FIXTURE);
-  const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>([ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL]);
+  // A dry run's spec in this tab's session storage paints ahead of the fixtures (org-eval.md).
+  const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>(() => { const spec = readOrgPreviewSpec(); return [...(spec ? [spec] : []), ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL]; });
   // The slot holds one tree. After a workspace switch it still holds the
   // previous workspace's until the new answer lands; a tree that names another
   // workspace is not this page's data, so paint the skeleton for that round
@@ -230,6 +234,13 @@ export function OrgPageInner() {
     return wanted ? proposals.filter((p) => wanted.kind === "team" ? p.team_id === wanted.id : !p.team_id) : proposals;
   }, [proposals, tree]);
   const proposal = useMemo(() => pickProposal(workspaceProposals, proposalShortId), [workspaceProposals, proposalShortId]);
+  // What each waiting change of the open proposal would take over (R1), asked
+  // in one query for all of them; the pane says it before the accept.
+  const takeoverAsks = useMemo(() => preview ? [] : (proposal?.changes ?? []).flatMap((c) => {
+    const t = isDecidable(c.status) ? orgChangeTakeover(c.change) : null;
+    return t ? [{ key: c._id, ...t }] : [];
+  }), [preview, proposal?.changes]);
+  const takeovers = useTakeoverPreviews(tree?.workspace, takeoverAsks).byKey;
   // The linked proposal, whatever workspace it lives in: the get feeder fills
   // its row and changes, and the resolver names a foreign or unreadable link.
   const linkedRef = proposalShortId ?? proposal?.short_id ?? null;
@@ -488,7 +499,7 @@ export function OrgPageInner() {
     commitMove({ subject, target, targetTitle, at: { x: window.innerWidth / 2, y: window.innerHeight / 2 } } as OrgReparentRequest);
   }, [currentParentOf, tree, commitMove]);
 
-  const updateRole = useCallback((roleId: string, fields: OrgUpdateRoleInput) => run("updateOrgRole", roleId, fields), [run]);
+  const updateRole = useCallback((roleId: string, fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => run("updateOrgRole", roleId, fields, opts), [run]);
   /** The panel's retire (its confirm asks keep or retire for the chief of
    *  staff, S16); the choice rides the store action to orgRoles.retire. */
   const retireRole = useCallback((roleId: string, standingSession?: UnseatChoice) => {
@@ -507,13 +518,13 @@ export function OrgPageInner() {
   const markIntroSeen = useCallback(() => {
     if (!preview && !useInboxStore.getState().clientState.ui?.org_intro_seen) useInboxStore.getState().updateClientUI({ org_intro_seen: true });
   }, [preview]);
-  const decideChange = useCallback((changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => {
+  const decideChange = useCallback((changeId: string, verdict: "accept" | "skip", edits: Record<string, unknown> | undefined, seen: OrgVerdictSeen) => {
     if (verdict === "accept") markIntroSeen();
     if (preview) {
       setPreviewProposals((rows) => rows.map((p) => ({ ...p, changes: p.changes.map((c) => c._id === changeId ? { ...c, status: verdict === "accept" ? "applied" : "skipped", decided_at: Date.now(), ...(edits ? { edits } : {}) } : c) })));
       return;
     }
-    useInboxStore.getState().decideOrgProposalChange(changeId, verdict, edits);
+    useInboxStore.getState().decideOrgProposalChange(changeId, verdict, edits, seen);
   }, [preview, markIntroSeen]);
   /** Withdraw the replaced proposal from its own line (S4): the preview
    *  flips its local copy; live, the store action rides dispatch to
@@ -527,18 +538,20 @@ export function OrgPageInner() {
     toast.success("Withdrawn; the newer proposal stays open");
   }, [preview]);
   /** One ask, accepted or skipped whole (S19): one store action flips every
-   *  row in it that still waits and rides one dispatch to orgProposals.decideAsk. */
-  const decideAsk = useCallback((proposalId: string, askIndex: number, verdict: "accept" | "skip") => {
+   *  row the card showed (`seen.seqs`) that still waits and rides one dispatch
+   *  to orgProposals.decideAsk, which reads the verdict against `seen` and
+   *  refuses one the author revised under the reader (S18). */
+  const decideAsk = useCallback((proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, opts?: { leave_sessions?: boolean }) => {
     if (verdict === "accept") markIntroSeen();
     if (preview) {
       setPreviewProposals((rows) => rows.map((p) => {
         if (p._id !== proposalId) return p;
-        const seqs = new Set(proposalAsks(p)[askIndex]?.changes.map((c) => c.seq) ?? []);
+        const seqs = new Set(seen.seqs ?? []);
         return { ...p, changes: p.changes.map((c) => seqs.has(c.seq) && isDecidable(c.status) ? { ...c, status: verdict === "accept" ? "applied" as const : "skipped" as const, decided_at: Date.now() } : c) };
       }));
       return;
     }
-    useInboxStore.getState().decideOrgProposalAsk(proposalId, askIndex, verdict);
+    useInboxStore.getState().decideOrgProposalAsk(proposalId, askIndex, verdict, seen, opts);
   }, [preview, markIntroSeen]);
   /** Click on a change: focus its ghost (the scalar) and, when its subject
    *  already exists on the chart, highlight that node. */
@@ -705,14 +718,17 @@ export function OrgPageInner() {
   const asks = useMemo(() => proposal ? proposalAsks(proposal, askNames(tree)) : [], [proposal, tree]);
   const asksLeft = asksProgress(asks);
   // What the author revised since the reader last looked: a watermark set
-  // when the proposal opens (so a reload announces nothing old), moved to now
-  // by "Got it".
+  // when the proposal opens (so a reload announces nothing old), moved by
+  // "Got it" to the latest revise the page has painted. Server stamps on
+  // both sides, never the client's clock: a verdict the server refuses as
+  // revised (S18) then always shows the revise that refused it, because that
+  // revise is newer than anything the page had painted when it was pressed.
   const [revisedSeen, setRevisedSeen] = useState<{ proposalId: string; at: number } | null>(null);
   useWatchEffect(() => {
-    if (proposal && revisedSeen?.proposalId !== proposal._id) setRevisedSeen({ proposalId: proposal._id, at: latestRevisionAt(proposal.changes) });
+    if (proposal && revisedSeen?.proposalId !== proposal._id) setRevisedSeen({ proposalId: proposal._id, at: latestOrgRevisionAt(proposal.changes) });
   }, [proposal?._id]);
   const revisedRows = useMemo(() => proposal && revisedSeen?.proposalId === proposal._id ? revisedSince(proposal.changes, revisedSeen.at) : [], [proposal, revisedSeen]);
-  const seenRevisions = useCallback(() => { if (proposal) setRevisedSeen({ proposalId: proposal._id, at: Date.now() }); }, [proposal]);
+  const seenRevisions = useCallback(() => { if (proposal) setRevisedSeen({ proposalId: proposal._id, at: latestOrgRevisionAt(proposal.changes) }); }, [proposal]);
   // What the next message is about: the change the person is looking at, or
   // the ask whose card said "Ask about this". A focused change wins, because
   // it is the narrower subject.
@@ -786,6 +802,7 @@ export function OrgPageInner() {
       onSelectChange={selectChange}
       onDecide={decideChange}
       onDecideAsk={decideAsk}
+      takeovers={takeovers}
       onEditRole={setEditRoleChange}
       onSelectNode={focusNode}
       onOpenSession={openSession}
@@ -964,7 +981,7 @@ export function OrgPageInner() {
               focusChangeId={focusChangeId}
               focusTarget={graphFocus}
               onFocusChange={selectChange}
-              onDecideChange={decideChange}
+              onDecideChange={(id, verdict, edits) => decideChange(id, verdict, edits, { revised_at: latestOrgRevisionAt(proposal?.changes ?? []) })}
               onEditRoleChange={setEditRoleChange}
             />
           ) : (
@@ -1097,7 +1114,7 @@ export function OrgPageInner() {
           onCreate={(input) => {
             // The dialog speaks in ids and parent refs; the change contract in
             // refs and a string (staffingModel.roleChangeEdits).
-            decideChange(editRoleChange._id, "accept", roleChangeEdits(input, tree, me?.user_id ?? meId ?? ""));
+            decideChange(editRoleChange._id, "accept", roleChangeEdits(input, tree, me?.user_id ?? meId ?? ""), { revised_at: latestOrgRevisionAt(proposal?.changes ?? []) });
             setEditRoleChange(null);
           }}
         />

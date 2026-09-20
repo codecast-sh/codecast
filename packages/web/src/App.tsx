@@ -78,6 +78,7 @@ const RepoBlob = lazy(() => import("@/app/repo/[owner]/[name]/blob/[ref]/page"))
 const RepoCommits = lazy(() => import("@/app/repo/[owner]/[name]/commits/[ref]/page"));
 const RepoCompare = lazy(() => import("@/app/repo/[owner]/[name]/compare/[range]/page"));
 const RepoBranches = lazy(() => import("@/app/repo/[owner]/[name]/branches/page"));
+const RepoWorktrees = lazy(() => import("@/app/repo/[owner]/[name]/worktrees/page"));
 const RepoTags = lazy(() => import("@/app/repo/[owner]/[name]/tags/page"));
 const RepoPulls = lazy(() => import("@/app/repo/[owner]/[name]/pulls/page"));
 const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
@@ -296,6 +297,7 @@ export function App() {
             <Route path="repo/:owner/:name/commits/:ref" element={<E name="RepoCommits"><RepoCommits /></E>} />
             <Route path="repo/:owner/:name/compare/:range" element={<E name="RepoCompare"><RepoCompare /></E>} />
             <Route path="repo/:owner/:name/branches" element={<E name="RepoBranches"><RepoBranches /></E>} />
+            <Route path="repo/:owner/:name/worktrees" element={<E name="RepoWorktrees"><RepoWorktrees /></E>} />
             <Route path="repo/:owner/:name/tags" element={<E name="RepoTags"><RepoTags /></E>} />
             <Route path="repo/:owner/:name/pulls" element={<E name="RepoPulls"><RepoPulls /></E>} />
             <Route path="repo/:owner/:name/search" element={<E name="RepoSearch"><RepoSearch /></E>} />

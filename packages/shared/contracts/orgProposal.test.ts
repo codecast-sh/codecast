@@ -26,7 +26,7 @@ describe("org proposal block", () => {
 
 // Staffing changes (org-staffing.md S4): one validator per kind, the spec
 // envelope, the accept order and the one-line describer.
-import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, describeOrgChange, describeTenure, isOrgChange, orderOrgChanges, orgChangeError, orgTenureError, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
+import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_VERDICT_REVISED, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeError, orgTenureError, orgVerdictSeenFault, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
 
 const GOOD: Record<OrgChange["kind"], OrgChange> = {
   role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
@@ -366,6 +366,9 @@ describe("a role that names an existing session (seat)", () => {
     expect(orgChangeError(role)).toBeNull();
     expect(orgChangeError({ ...role, seat: {} })).toContain("seat is { existing");
     expect(orgChangeError({ ...role, seat: { existing: "jx7b88a", helpers: -1 } })).toContain("helpers is a count");
+    // Naming keeps the session's reporting line; a role as parent is a separate move.
+    expect(orgChangeError({ ...role, reports_to: "@matching" })).toContain("keeps the session's reporting line");
+    expect(orgChangeError({ ...role, reports_to: undefined })).toBeNull();
     expect(describeOrgChange(role)).toBe("name session jx7b88a as role Market growth mandate @market-growth reporting to me over Growth");
   });
 
@@ -375,6 +378,10 @@ describe("a role that names an existing session (seat)", () => {
     expect(ask.title).toBe("Name Market growth mandate as a role");
     expect(ask.effect).toContain("Naming it changes nothing about how it works");
     expect(ask.effect).toContain("It becomes a role, reporting to you and looking after the Growth project.");
+    // A move on the named role rides in its ask as its own sentence, so the person can skip it.
+    const [withMove] = deriveAsks([{ seq: 1, change: role }, { seq: 2, change: { kind: "move", handle: "market-growth", reports_to: "@matching", reason: "same area" } as OrgChange }]);
+    expect(withMove.seqs).toEqual([1, 2]);
+    expect(withMove.effect).toContain("A separate change puts it under matching; skip that and it keeps reporting to whoever runs it today.");
     expect(orgChangeDependencies([{ seq: 1, change: role }, { seq: 2, change: { kind: "routine", handle: "market-growth", title: "Daily run", prompt: "p", every: "1d" } as OrgChange }])).toEqual({ 2: "runs on the session #1 seats" });
   });
 
@@ -385,5 +392,63 @@ describe("a role that names an existing session (seat)", () => {
     expect((spec([role]).spec!.changes[0].change as any).seat).toEqual(seat);
     expect(spec([role, { ...role, handle: "growth-two" } as OrgChange]).errors[0]).toContain("one session is one role");
     expect(spec([role, { kind: "adopt", handle: "@market-growth", conversation: "jx7b88a" }]).errors[0]).toContain("needs no adopt");
+  });
+});
+
+describe("a verdict is read against what the page showed (S18)", () => {
+  const rows = (...ats: Array<number | null>) => ats.map((at) => (at === null ? {} : { revision: { at } }));
+
+  test("the latest revise is read off the rows; no revise is 0", () => {
+    expect(latestOrgRevisionAt(rows(null, null))).toBe(0);
+    expect(latestOrgRevisionAt(rows(null, 7, 3))).toBe(7);
+  });
+
+  test("a verdict that names the revise it read and the seqs its card held stands; one that names another revise or other seqs does not", () => {
+    expect(orgVerdictSeenFault("op-1", { revised_at: 7, seqs: [3, 2] }, rows(7, 3), [2, 3])).toBeNull();
+    expect(orgVerdictSeenFault("op-1", { revised_at: 7 }, rows(7, 3))).toBeNull();
+    expect(orgVerdictSeenFault("op-1", { revised_at: 3, seqs: [2] }, rows(7, 3), [2])).toBe(`op-1 ${ORG_VERDICT_REVISED}`);
+    expect(orgVerdictSeenFault("op-1", { revised_at: 7, seqs: [2] }, rows(7, 3), [3])).toBe(`op-1 ${ORG_VERDICT_REVISED}`);
+    expect(orgVerdictSeenFault("op-1", { revised_at: 7 }, rows(7, 3), [3])).toBe(`op-1 ${ORG_VERDICT_REVISED}`);
+  });
+
+  test("a caller that says nothing is taken only on a proposal nobody revised", () => {
+    expect(orgVerdictSeenFault("op-1", undefined, rows(null, null))).toBeNull();
+    expect(orgVerdictSeenFault("op-1", undefined, rows(null, 5))).toBe(`op-1 ${ORG_VERDICT_REVISED}`);
+    expect(orgVerdictSeenFault("op-1", { revised_at: 0 }, rows(null, null))).toBeNull();
+  });
+});
+
+// org-roles-run-work.md R1: which changes take sessions over, in the words
+// the preview query takes, and the one sentence that says what moves.
+describe("orgChangeTakeover and takeoverPhrase", () => {
+  const { orgChangeTakeover, orgChangeTakesOver, takeoverPhrase } = require("./orgProposal");
+
+  test("a change takes over only when a scope gains something, and says what in typed refs", () => {
+    expect(orgChangeTakeover({ kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1", "project:Billing"], plans: ["pl-7"] } })).toEqual({ handle: "growth", add: ["project:pr-1", "project:Billing", "plan:pl-7"] });
+    expect(orgChangeTakeover({ kind: "scope", handle: "@growth", add: ["pr-2"] })).toEqual({ handle: "@growth", add: ["pr-2"] });
+    expect(orgChangeTakeover({ kind: "move", handle: "growth", scope_add: ["pl-3"] })).toEqual({ handle: "growth", add: ["pl-3"] });
+    // An adopt gains nothing itself: the seated role takes what its scope already holds.
+    expect(orgChangeTakeover({ kind: "adopt", handle: "growth", conversation: "jx70001" })).toEqual({ handle: "growth", add: [] });
+    // The session a role names is its seat by then, so it is named as one that never moves.
+    expect(orgChangeTakeover({ kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1"] }, seat: { existing: "jx70009" } } as any)?.seat).toBe("jx70009");
+  });
+
+  test("no scope gained, or the change already leaves the sessions: nothing moves", () => {
+    for (const c of [
+      { kind: "role", name: "Ops", handle: "ops" },
+      { kind: "scope", handle: "growth", remove: ["pr-1"] },
+      { kind: "move", handle: "growth", reports_to: "me" },
+      { kind: "scope", handle: "growth", add: ["pr-2"], leave_sessions: true },
+      { kind: "budget", handle: "growth", caps: { wakes_per_day: 3 } },
+      { kind: "retire", handle: "growth" },
+    ] as any[]) expect(orgChangeTakesOver(c)).toBe(false);
+  });
+
+  test("the sentence reads from a result or from counts, and says what was told only after the apply", () => {
+    expect(takeoverPhrase("growth", { sessions: ["a"], kept_in_front: [], over_cap: 0 }, false)).toBe("1 session now reports to @growth and leaves your needs input");
+    expect(takeoverPhrase("@growth", { sessions: 12, kept_in_front: 2, over_cap: 5 }, false)).toBe("12 sessions now report to @growth and leave your needs input; 2 of them stay in front of you with a question still open; 5 more stay where they are until the next change");
+    expect(takeoverPhrase("growth", { sessions: ["a", "b"], kept_in_front: [], over_cap: 0, told: { sessions: 1, deferred: 1 } }, true)).toBe("2 sessions now report to @growth and leave your needs input; 1 told now, 1 will read it on their next turn");
+    expect(takeoverPhrase("growth", { sessions: [], kept_in_front: [], over_cap: 0 }, false)).toBe("");
+    expect(takeoverPhrase("growth", null, true)).toBe("");
   });
 });

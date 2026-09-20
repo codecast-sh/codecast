@@ -9,17 +9,23 @@
 // names its lead by the one rule every surface reads (contracts/orgLead). Work
 // outside any project is what the rows already say: an open plan with no
 // project, open tasks with neither, and an area of commits and sessions that
-// resolved to no project. Whether to wrap, share or split a lead is the
-// analyzer's reading (ORG_COVERAGE_RULE).
+// resolved to no project. A task is open work only when the project's board
+// would list it and it is not done (`isOnProjectBoard`, contracts the page,
+// the list, the scope cards and the server all read): an agent's suggestion
+// or an unpromoted insight is not work to cover, so the counts here are the
+// counts a person sees when they click through. Whether to wrap, share or
+// split a lead is the analyzer's reading (ORG_COVERAGE_RULE).
 
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
-import { isClosedPlan, isClosedTask, type ActivityArea } from "./orgActivity";
+import { isOnProjectBoard } from "@codecast/shared/tasks";
+import { isClosedPlan, type ActivityArea } from "./orgActivity";
 
 export type CoverageRole = LeadRole & { handle: string };
 export type CoverageProject = { _id: unknown; short_id?: string | null; title: string; status?: string; owner_role_id?: unknown };
 export type CoveragePlan = { _id: unknown; short_id: string; title: string; status: string; project_id?: unknown };
-export type CoverageTask = { status: string; project_id?: unknown; plan_id?: unknown };
+/** The fields the board rule reads, beside the two links; a raw task row satisfies it. */
+export type CoverageTask = Parameters<typeof isOnProjectBoard>[0] & { status?: string | null; project_id?: unknown; plan_id?: unknown };
 export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id">;
 
 export type CoverageInputs = {
@@ -77,7 +83,7 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const openByPlan = new Map<string, number>();
   let looseTasks = 0;
   for (const t of input.tasks) {
-    if (isClosedTask(t.status)) continue;
+    if (!isOnProjectBoard(t) || t.status === "done") continue;
     if (t.project_id) bump(openByProject, String(t.project_id));
     if (t.plan_id) bump(openByPlan, String(t.plan_id));
     if (!t.project_id && !t.plan_id) looseTasks++;

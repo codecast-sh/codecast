@@ -249,7 +249,7 @@ describe("org.scopeSummary", () => {
     });
     expect(s.plans).toEqual([{ id: PLAN, short_id: "pl-1", title: "Launch", status: "active", updated_at: NOW - 3 * H, progress: { total: 1, done: 0, in_progress: 0, open: 1 } }]);
     expect(s.sessions.total).toBe(1);
-    expect(s.decisions).toEqual({ open: 1, answered: 0 });
+    expect(s.decisions).toEqual({ open: 1 });
     expect(s.overlaps.map((o) => o.handle)).toEqual(["twin"]);
     expect(s.projects).toEqual([{ id: P, title: "Growth", short_id: "pr-1", project_path: "/repo/growth" }]);
   });

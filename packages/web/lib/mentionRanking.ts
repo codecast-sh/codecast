@@ -1,4 +1,4 @@
-import type { MentionItem } from "../components/editor/MentionList";
+import type { MentionItem } from "./mentionItem";
 import type { RecentVisit } from "../store/inboxStore";
 import { identityLine } from "./sessionIdentity";
 

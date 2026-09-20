@@ -15,8 +15,7 @@ import type { Id } from "./_generated/dataModel";
 import { goalSectionMatchesPerson, parseGoalSections, type GoalPriority } from "@codecast/shared/contracts/roleGoals";
 import { capacity } from "@codecast/shared/contracts/orgCapacity";
 import { threadStateHeadline } from "@codecast/shared/contracts";
-import { canAccessPlan, canAccessTask } from "./lib/access";
-import { checkConversationAccess } from "./privacy";
+import { canAccessConversation, canAccessPlan, canAccessTask } from "./lib/access";
 import { findPlanByRef, findTaskByRef } from "./taskEvidence";
 import type { WorkState } from "./inboxFilters";
 
@@ -63,10 +62,19 @@ export type PeopleScan = {
   sessions: Map<string, { raw: any }>;
 } | null;
 
+/** A goal's key in org_roles.goal_first_seen: the person and a hash of the
+ *  goal's words (record keys are plain ASCII; a goal is any text). Rewording
+ *  a goal makes it a new goal, which is what the person would say too. */
+export function goalKey(userId: string, text: string): string {
+  let h = 5381;
+  for (const ch of text.trim().toLowerCase()) h = ((h * 33) ^ ch.codePointAt(0)!) >>> 0;
+  return `${userId}:${h.toString(16)}`;
+}
+
 async function resolveRef(ctx: Ctx, viewerId: Id<"users">, kind: GoalRef["kind"], shortId: string): Promise<GoalRef | null> {
   if (kind === "session") {
     const conv = await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (!conv || !(await checkConversationAccess(ctx as any, viewerId, conv))) return null;
+    if (!conv || !(await canAccessConversation(ctx as any, viewerId, conv))) return null;
     return { kind, short_id: shortId, title: conv.title ?? "", status: conv.thread_state_status ?? conv.status ?? "", updated_at: conv.updated_at ?? 0 };
   }
   const row = kind === "task" ? await findTaskByRef(ctx as any, shortId) : await findPlanByRef(ctx as any, shortId);
@@ -85,7 +93,7 @@ export async function computeReportingPeople(
   ctx: Ctx,
   viewerId: Id<"users">,
   role: any,
-  brief: { content: string; updated_at: number } | null,
+  brief: { content: string; updated_at?: number } | null,
   scan: PeopleScan,
   since: number,
   now: number,
@@ -95,7 +103,9 @@ export async function computeReportingPeople(
   const sections = parseGoalSections(brief?.content ?? "");
   const stallMs = capacity("goal_stall_days") * DAY_MS;
   const unmatchedMs = capacity("goal_unmatched_days") * DAY_MS;
-  const briefAge = brief ? now - brief.updated_at : Infinity;
+  // How long a goal has been in the brief: since the sweep first saw it. A
+  // goal the sweep has not reached yet is new.
+  const seen: Record<string, number> = role.goal_first_seen ?? {};
   const out: BriefPerson[] = [];
   for (const uid of ids) {
     const user = await ctx.db.get(uid);
@@ -116,10 +126,11 @@ export async function computeReportingPeople(
         if (ref) refs.push(ref); else unresolved.push(shortId);
       }
       const moved_at = refs.length ? Math.max(...refs.map((r) => r.updated_at)) : null;
+      const heldFor = now - (seen[goalKey(String(uid), g.text)] ?? now);
       goals.push({
         text: g.text, priority: g.priority, raw: g.raw, refs, unresolved, moved_at,
-        stalled: moved_at !== null ? now - moved_at > stallMs : briefAge > stallMs,
-        unmatched: refs.length === 0 && briefAge > unmatchedMs,
+        stalled: moved_at !== null ? now - moved_at > stallMs : heldFor > stallMs,
+        unmatched: refs.length === 0 && heldFor > unmatchedMs,
       });
     }
     const mine = scan?.byParent.get(`user:${String(uid)}`) ?? [];
@@ -179,17 +190,37 @@ export async function noticeGoalStalls(ctx: Ctx, role: any, anchor: any | null, 
   return sent;
 }
 
+/** Stamp when each goal in the brief was first seen, and forget goals that
+ *  left it. Returns the role as it now stands. */
+export async function stampGoalsSeen(ctx: Ctx, role: any, briefContent: string, now: number): Promise<any> {
+  const before: Record<string, number> = role.goal_first_seen ?? {};
+  const after: Record<string, number> = {};
+  const sections = parseGoalSections(briefContent);
+  for (const uid of role.reports_user_ids ?? []) {
+    const user = await ctx.db.get(uid);
+    if (!user) continue;
+    for (const g of sections.find((s) => goalSectionMatchesPerson(s.person, user))?.goals ?? []) {
+      const key = goalKey(String(uid), g.text);
+      after[key] = before[key] ?? now;
+    }
+  }
+  if (JSON.stringify(Object.entries(before).sort()) === JSON.stringify(Object.entries(after).sort())) return role;
+  await ctx.db.patch(role._id, { goal_first_seen: after });
+  return { ...role, goal_first_seen: after };
+}
+
 /** Every active role with people reporting to it, read as its host. */
 export async function sweepGoalStalls(ctx: Ctx, now: number): Promise<{ roles: number; notices: number }> {
   const roles: any[] = await ctx.db.query("org_roles").filter((q: any) => q.eq(q.field("status"), "active")).take(SWEEP_ROLES_CAP);
   let checked = 0;
   let notices = 0;
-  for (const role of roles) {
-    if (!role.reports_user_ids?.length || !role.anchor_id) continue;
+  for (const row of roles) {
+    if (!row.reports_user_ids?.length || !row.anchor_id) continue;
     checked++;
-    const brief = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
+    const brief = row.brief_doc_id ? await ctx.db.get(row.brief_doc_id) : null;
+    const role = await stampGoalsSeen(ctx, row, brief?.content ?? "", now);
     const anchor = await ctx.db.get(role.anchor_id);
-    const people = await computeReportingPeople(ctx, role.host_user_id, role, brief ? { content: brief.content, updated_at: brief.updated_at } : null, null, now, now);
+    const people = await computeReportingPeople(ctx, role.host_user_id, role, brief ? { content: brief.content ?? "" } : null, null, now, now);
     notices += await noticeGoalStalls(ctx, role, anchor, people, now);
   }
   return { roles: checked, notices };

@@ -557,6 +557,25 @@ undecided change; the queue card is rewritten to the changes that remain.
 The CLI verb is `cast org revise op-N --remove <seq> | --amend <seq> --edits
 <json> --rationale <text> | --add <file> [--note <text>]`, session only.
 
+**A verdict is read against what the page showed.** A revise moves what a
+position and an id name: emptying an earlier ask moves every later ask up a
+place, and an amend keeps a row's id while replacing what it says. So
+`decide`, `decideAsk` and `acceptAll` take `seen: { revised_at, seqs? }`,
+what the page had painted when the verdict was pressed: the latest
+`revision.at` among its rows (`latestOrgRevisionAt`) and, for an ask, the
+seqs its card held. The server compares both with the rows it holds
+(`orgVerdictSeenFault`, shared, so the two sides cannot disagree) and refuses
+the whole call when either differs, in one line ("op-N was revised after this
+page read it; a verdict never lands on a change the person has not seen");
+a caller that sends nothing is taken only on a proposal nobody revised. The
+revise clock rises strictly, so two revises in one millisecond never share a
+stamp. The page sends `seen` from the rows it rendered, flips exactly the rows
+the card held, and on that refusal puts them back through the intent journal
+and shows the revised list with the "since you last looked" marks (the
+watermark reads server stamps on both sides, never the client's clock, so
+the revise that refused the verdict is always among them), with one toast in
+the server's words. Nothing is applied.
+
 ## S19. A proposal is a conversation with three asks, not a letter with 157 rows
 
 Written 2026-09-17 after the founder read the pane with S17 and S18 in and
@@ -701,3 +720,98 @@ visit and can say, in their own words, what a role is, who proposes them, who
 decides, and what reaches their inbox. If they cannot, the lines failed. If
 they took longer than thirty seconds, the screen failed. If the screen reads
 as any AI product's onboarding, the design failed.
+
+## S21. The record, and the way back
+
+Written 2026-09-20. The founder asked for an audit log of org changes a
+person can read, with undo and redo, "so that user can have more confidence
+in making changes", and for our own testing. A person accepts a proposal more
+easily when they know they can take it back, and we can apply a real proposal
+to a real workspace, look at the result, and return it to where it was.
+
+What exists is not this: `org_role_history` records a role's field changes as
+strings, no page shows it, it does not know what else a change did (the
+sessions a takeover moved, the tasks a retire handed up), and it covers roles
+only, not records, leads, initiatives or sessions.
+
+**One log.** `org_changes`, append only, one row per thing that changed the
+organization, written inside the transaction that changed it, at the few
+cores every door already goes through (the proposal apply core, 
+`performUpdateRole`, `performRetireRole`, the reparent core and its batch
+form, `performSetProjectLead`, `performCoverProjects`, the seat, escalation
+is not an org change and is not logged here). A row carries: the workspace
+access key and routing team; `seq` rising per workspace; `batch` (what the
+person did in one gesture: an accepted ask, an accept all, one Settings
+save, one drag on the chart), so a gesture is one entry with its rows
+inside; `door` (proposal, settings, chart, project page, initiative, cli);
+`actor` (the person, and the proposal and ask when there is one); `kind` and
+`subject` (the role, project, plan, task, session or initiative); `before`
+and `after`, the fields that moved, typed, enough to write the inverse; and
+`effects`, what the change did beyond its subject: the sessions a takeover
+moved with where each was before, the tasks a retire handed up with who
+held each, the scope a lead or an initiative owner gained, the routines a
+seat started. A row never stores a sentence; the sentence is rendered from
+the row by the same functions the proposal page uses (`changeLine`,
+`takeoverPhrase`), so the log, the proposal and the undo preview say one
+thing in one way.
+
+**The page.** History is a tab of the org page's panel and a section of a
+role's Scope view filtered to that role. Newest first, grouped by day, one
+entry per gesture: who, when, through which door, one sentence, and the
+count of rows inside behind a fold ("Accepted "Close the plans and tasks the
+work has already passed": 100 records"). An entry that was undone stays in
+place, struck, with who undid it and when. `cast org log [--role @h]
+[--since 7d]` prints the same entries.
+
+**Undo is a new change, never an erasure.** Undoing an entry applies the
+inverse of each of its rows through the same cores, in the reverse of the
+apply order, as a new batch whose rows point at the rows they undo
+(`undoes`), and stamps the original `undone_by`. Redo is undo of the undo.
+The log only ever grows, so it stays an audit trail.
+
+**Before it happens, the person sees what it will do.** Undo opens a
+preview built by a dry run of the inverse, the same pattern as the takeover
+count: the sentence for each thing that will change back, and, stated
+plainly, what will not:
+- A row whose subject changed again since is left alone and named ("3 of
+  100 records were changed after this and stay as they are"): undo never
+  overwrites a later decision by a person or another change.
+- A later entry that depends on this one is offered with it, never undone
+  silently and never orphaned: undoing the hire of a role that later gained
+  a project, took tasks and was made an initiative's owner lists those
+  entries, and the person undoes them together or not at all. The
+  dependency rule is the one the proposal page already has
+  (`orgChangeDependencies`), read backwards.
+- What cannot be taken back is said once, in the preview: a message a role
+  already sent, a wake that already ran, work a session already did. The
+  sessions are told again when they move back, the way they were told the
+  first time.
+
+**Each kind's inverse.** A hire retires the role and returns its sessions
+and tasks to where the effects say they were; a role seated on an existing
+session is unnamed and the session keeps running under its person. A retire
+restores the role with its scope, trust, limits, routines and face, reseats
+its session when it still exists, and takes back the tasks it handed up
+that nobody has touched since. A scope, move, budget, trust or routine
+change restores the fields in `before`. A lead restores the previous lead
+and removes the scope it added. A record change restores the status it had,
+and a plan reopened this way reopens the tasks it closed with it. A
+takeover returns each session to the parent in `effects` unless it has
+moved since. An initiative's owner change restores the owner and the scope.
+
+**Who.** Undo and redo are a person's, in the browser, by someone who could
+have made the original change (`refuseUnlessHuman`, admin where the change
+needed one). A role or a session never undoes; `cast org undo` from a
+session says so and gives the page.
+
+**For us.** The analyzer's evaluation (docs/architecture/org-eval.md) applies
+a proposal to a workspace, reads the result on the real pages, and undoes
+the batch. The undo's own correctness is tested by the round trip: apply,
+undo, and the workspace's org state compares equal to the snapshot taken
+before, field by field, with the log two entries longer.
+
+**The test.** A person accepts an ask they are unsure about, opens History,
+reads in one sentence what happened and to how many things, presses Undo,
+reads what will and will not change back, confirms, and the chart, the
+inbox and the board are where they were. They then press Redo and it is
+applied again.

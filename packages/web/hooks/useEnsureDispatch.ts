@@ -73,7 +73,7 @@ export function useEnsureDispatch() {
         // transient exhaustion (a backend timeout) leaves the parked outbox
         // row to re-drive, so its intent stays open and the echo settles it;
         // reverting it would put a ghost back while the accept still lands.
-        for (const text of dropRejectedOrgIntent(useInboxStore.getState(), action, args)) toast.error(text);
+        for (const text of dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)) toast.error(text);
         if (action === "hibernateSession" && Array.isArray(args) && typeof args[0] === "string") {
           recordHibernationDispatchError(args[0], error);
         }

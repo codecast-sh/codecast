@@ -611,6 +611,16 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
     expect(standing.map((c: any) => c.short_id)).toEqual(["jxanaly"]);
   });
 
+  test("a role that names its session and no parent reports to the person who runs the session, not to whoever accepts", async () => {
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    await db.patch(S1 as any, { owner_user_id: MATE });
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Market growth mandate", handle: "market-growth", seat: { existing: "jxanaly" } })]) });
+    const res = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: false });
+    expect(res.status).toBe("applied");
+    const role = (db as any)._tables.org_roles.find((x: any) => x.handle === "market-growth");
+    expect(role.reports_to).toEqual({ kind: "user", user_id: MATE });
+  });
+
   test("a role that names a session nobody can find fails with the reason, and no fresh session is started for it", async () => {
     const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Ghost", handle: "ghost-role", seat: { existing: "jxnosuch" }, reports_to: "me" })]) });
@@ -709,6 +719,8 @@ describe("orgProposals.revise", () => {
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session, spec: three() });
     return { db, r };
   };
+  // What a page that read the proposal after its revises sends with a verdict (S18).
+  const seenNow = async (db: any) => ({ revised_at: Math.max(0, ...(await db.query("org_proposal_changes").collect()).map((c: any) => c.revision?.at ?? 0)) });
 
   test("the posting session removes, amends and adds; rows keep their ids, the journal and the stamps say what happened, counts shrink", async () => {
     const { db, r } = await seeded();
@@ -813,13 +825,13 @@ describe("orgProposals.revise", () => {
     // trust @growth); the person skips that too, and the decision resolves.
     await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: change({ kind: "trust", handle: "growth", trust: "direct" }) }] });
     const added = (await db.query("org_proposal_changes").collect()).find((c: any) => c.seq === 4);
-    expect(await performDecideChange(ctx, ME as any, { change_id: String(added._id), verdict: "skip" })).toMatchObject({ resolved: true });
+    expect(await performDecideChange(ctx, ME as any, { change_id: String(added._id), verdict: "skip", seen: await seenNow(db) })).toMatchObject({ resolved: true });
     expect((await db.get(r.id)).status).toBe("resolved");
     // Accept all over a proposal with nothing left to decide is a person's act, and it resolves; a revise never does.
     const { db: db2, r: r2 } = await seeded();
     await performReviseProposal(ctxOf(db2), ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }, { op: "remove", seq: 2 }, { op: "remove", seq: 3 }] });
     expect((await db2.get(r2.id)).status).toBe("open");
-    expect(await performAcceptAll(ctxOf(db2), ME as any, { proposal: "op-1", provision: false })).toMatchObject({ resolved: true });
+    expect(await performAcceptAll(ctxOf(db2), ME as any, { proposal: "op-1", provision: false, seen: await seenNow(db2) })).toMatchObject({ resolved: true });
   });
 });
 
@@ -949,5 +961,177 @@ describe("orgProposals asks (S19)", () => {
     ]);
     expect(parseProposalMessage(content)).toEqual({ proposal: "op-1", change: null, ask: 1, from: "Me", about: 'About op-1 ask 2 ("Add an agent for billing"):', body: "billing is handled by the accountant, drop this" });
     await expect(performSayInThread(ctxOf(db), ME as any, { proposal: r.short_id, ask: 9, body: "x" })).rejects.toThrow("op-1 has no ask 9");
+  });
+});
+
+// A verdict is read against the proposal as the page showed it (S18): the
+// call carries `seen` (the latest revise the page had painted and, for an ask,
+// the seqs its card held), and a proposal the author revised since is
+// refused whole. Found by the adversarial review of pl-707 (jx75v5d): an ask
+// was named by position only, and a revise that empties an earlier ask moves
+// every later one up a place, so a stale Accept on "Trust growth" retired
+// growth. The review's own test asserted that retirement; this is it, inverted.
+describe("a verdict the author revised under the reader is refused (S18)", () => {
+  const { latestOrgRevisionAt } = require("@codecast/shared/contracts/orgProposal");
+  const threeAsks = () => spec(
+    [
+      change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }),
+      change({ kind: "trust", handle: "growth", trust: "decide" }),
+      change({ kind: "retire", handle: "growth" }),
+    ],
+    { asks: [
+      { title: "Raise growth's budget", why: "It hit its cap.", effect: "12 starts a day.", seqs: [1] },
+      { title: "Trust growth to decide", why: "It has earned it.", effect: "Fewer confirmations.", seqs: [2] },
+      { title: "Retire growth", why: "The area is folding.", effect: "The role and its session end.", seqs: [3] },
+    ] },
+  );
+  /** What a page that painted `p` sends with a verdict on its ask `i`. */
+  const seenOf = (p: any, i?: number) => ({ revised_at: latestOrgRevisionAt(p.changes), ...(i !== undefined ? { seqs: p.asks[i].seqs } : {}) });
+  const growth = async (db: any) => (await db.query("org_roles").collect()).find((x: any) => x.handle === "growth");
+
+  test("a stale accept on an ask whose position moved is refused; nothing is applied; a fresh read accepts what the person meant", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: threeAsks() });
+    // The person opens the page: index 1 is "Trust growth to decide".
+    const page = await readProposal(ctxOf(db), ME as any, r.short_id);
+    expect(page.asks.map((a: any) => a.title)).toEqual(["Raise growth's budget", "Trust growth to decide", "Retire growth"]);
+    const stale = seenOf(page, 1);
+    expect(stale).toEqual({ revised_at: 0, seqs: [2] });
+    // The author removes the budget change: ask 0 empties, every later ask moves up a place.
+    await performReviseProposal(ctxOf(db), ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "remove", seq: 1 }] });
+    expect((await readProposal(ctxOf(db), ME as any, r.short_id)).asks.map((a: any) => a.title)).toEqual(["Trust growth to decide", "Retire growth"]);
+    // The person, still on the old page, presses Accept on "Trust growth to decide" at index 1.
+    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 1, verdict: "accept", provision: false, seen: stale }))
+      .rejects.toThrow("op-1 was revised after this page read it; a verdict never lands on a change the person has not seen");
+    // Nothing landed: growth is not retired, and neither change was decided.
+    expect((await growth(db)).status).toBe("active");
+    const after = await readProposal(ctxOf(db), ME as any, r.short_id);
+    expect(after.changes.map((c: any) => [c.seq, c.status])).toEqual([[1, "removed"], [2, "proposed"], [3, "proposed"]]);
+    // A skip is read the same way, and a caller that says nothing is refused once anything was revised.
+    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "skip", seen: stale })).rejects.toThrow("was revised after this page read it");
+    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "skip" })).rejects.toThrow("was revised after this page read it");
+    // The page reads the revised list and presses Accept on "Trust growth to decide", now index 0.
+    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false, seen: seenOf(after, 0) });
+    expect(out).toMatchObject({ ask: 0, title: "Trust growth to decide", applied: 1 });
+    expect((await growth(db)).trust).toBe("decide");
+    expect((await growth(db)).status).toBe("active");
+    // A position past the revised list, read against the revised list, is a bad index, not a moved list.
+    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 5, verdict: "accept", seen: { revised_at: after.asks && latestOrgRevisionAt(after.changes), seqs: [] } })).rejects.toThrow("there is no ask 5");
+  });
+
+  test("one change: an amend keeps the row's id, so a verdict read before it is refused; a caller that says nothing is taken on an unrevised proposal", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: threeAsks() });
+    const page = await readProposal(ctxOf(db), ME as any, r.short_id);
+    const budget = page.changes.find((c: any) => c.seq === 1);
+    // Nothing revised yet: a verdict with no `seen` still stands.
+    const skipped = await performDecideChange(ctxOf(db), ME as any, { change_id: page.changes.find((c: any) => c.seq === 3)._id, verdict: "skip" });
+    expect(skipped.status).toBe("skipped");
+    await performReviseProposal(ctxOf(db), ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "amend", seq: 1, edits: { caps: { wakes_per_day: 40 } } }] });
+    await expect(performDecideChange(ctxOf(db), ME as any, { change_id: budget._id, verdict: "accept", provision: false, seen: seenOf(page) })).rejects.toThrow("op-1 was revised after this page read it");
+    await expect(performDecideChange(ctxOf(db), ME as any, { change_id: budget._id, verdict: "accept", provision: false })).rejects.toThrow("was revised after this page read it");
+    expect((await db.get(budget._id)).status).toBe("proposed");
+    const fresh = await readProposal(ctxOf(db), ME as any, r.short_id);
+    const out = await performDecideChange(ctxOf(db), ME as any, { change_id: budget._id, verdict: "accept", provision: false, seen: seenOf(fresh) });
+    expect(out.status).toBe("applied");
+    expect((await growth(db)).caps).toMatchObject({ wakes_per_day: 40 });
+  });
+
+  test("accept all: the person's call is read against what it saw; the server's own continuation is not re-read", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: threeAsks() });
+    const page = await readProposal(ctxOf(db), ME as any, r.short_id);
+    await performReviseProposal(ctxOf(db), ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "remove", seq: 3, note: "not yet" }] });
+    await expect(performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: false, seen: seenOf(page) })).rejects.toThrow("op-1 was revised after this page read it");
+    expect((await readProposal(ctxOf(db), ME as any, r.short_id)).changes.map((c: any) => c.status)).toEqual(["proposed", "proposed", "removed"]);
+    const fresh = await readProposal(ctxOf(db), ME as any, r.short_id);
+    const out = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: false, seen: seenOf(fresh) });
+    expect(out).toMatchObject({ applied: 2, failed: 0, resolved: true });
+  });
+
+  test("two revises in one millisecond carry different stamps, so a verdict can name the one it read", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: threeAsks() });
+    const realNow = Date.now;
+    Date.now = () => 1_800_000_000_000;
+    try {
+      await performReviseProposal(ctxOf(db), ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "amend", seq: 1, edits: { caps: { wakes_per_day: 6 } } }] });
+      const first = latestOrgRevisionAt((await readProposal(ctxOf(db), ME as any, r.short_id)).changes);
+      await performReviseProposal(ctxOf(db), ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "amend", seq: 2, edits: { trust: "direct" } }] });
+      const second = latestOrgRevisionAt((await readProposal(ctxOf(db), ME as any, r.short_id)).changes);
+      expect(first).toBe(1_800_000_000_000);
+      expect(second).toBe(first + 1);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+});
+
+// W7 review, finding 7: every change of an accept all runs through
+// ctx.runMutation, and a nested mutation spends its parent's read budget, so
+// what has to fit 4,096 reads is the chunk. A change that takes sessions over
+// costs hundreds of reads; a chunk holds at most one, and it is the last.
+describe("accept all chunks by cost: one takeover change a transaction", () => {
+  const own = (n: number, path: string) => ({ _id: `conversations_w${n}`, short_id: `jx7w00${n}`, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: `Work ${n}`, project_path: path, message_count: 3, last_message_role: "assistant", updated_at: Date.now() - 60_000, created_at: 1 });
+  const extra = () => ({
+    role_wakes: [], role_wake_outbox: [], managed_sessions: [], messages: [], user_presence: [], pending_messages: [], devices: [],
+    projects: [
+      { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: 1 },
+      { _id: Q, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-2", title: "Billing", status: "active", project_path: "/repo/billing", created_at: 1, updated_at: 1 },
+    ],
+  });
+  // The host's two sessions on billing's path, beside the fixture's own rows.
+  const seeded = () => { const db: any = fixtures(extra()); db._tables.conversations.push(own(1, "/repo/billing"), own(2, "/repo/billing")); return db; };
+  const roleOfSession = (db: any, n: number) => db._tables.conversations.find((c: any) => c._id === `conversations_w${n}`).org_role_id;
+
+  test("the chunk ends with the first change that takes sessions over", async () => {
+    const { acceptAllChunk, ACCEPT_ALL_CHUNK } = await import("./orgProposals");
+    const light = { change: { kind: "budget", handle: "growth", caps: { wakes_per_day: 3 } } } as any;
+    const scope = { change: { kind: "scope", handle: "growth", add: ["pr-2"] } } as any;
+    const role = { change: { kind: "role", name: "Ops", handle: "ops", scope: { projects: ["pr-2"] } } } as any;
+    expect(acceptAllChunk([light, scope, role, light])).toEqual([light, scope]);
+    expect(acceptAllChunk([role, scope])).toEqual([role]);
+    // A scope change that only removes, a role over the whole workspace and a
+    // change that already leaves the sessions cost what a record change costs.
+    const cheap = [{ change: { kind: "scope", handle: "growth", remove: ["pr-1"] } }, { change: { kind: "role", name: "Ops", handle: "ops" } }, { change: { kind: "scope", handle: "growth", add: ["pr-2"], leave_sessions: true } }] as any[];
+    expect(acceptAllChunk(cheap)).toEqual(cheap);
+    expect(acceptAllChunk(Array.from({ length: ACCEPT_ALL_CHUNK + 5 }, () => light))).toHaveLength(ACCEPT_ALL_CHUNK);
+  });
+
+  test("two scoped changes in one accept all land in two transactions, and both apply", async () => {
+    const db = seeded();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "scope", handle: "growth", add: ["pr-2"] }), change({ kind: "role", name: "Ops", handle: "ops", scope: { projects: ["pr-1"] } })]) });
+    const scheduled: any[] = [];
+    const ctx = { ...ctxOf(db), scheduler: { runAfter: async (_d: number, _f: unknown, args: any) => { scheduled.push(args); } } };
+    const first = await performAcceptAll(ctx, ME as any, { proposal: r.short_id, provision: false });
+    expect(first.results).toHaveLength(1);
+    expect(first.remaining).toBe(1);
+    expect(scheduled).toHaveLength(1);
+    const second = await performAcceptAll(ctx, ME as any, { proposal: r.short_id, provision: false, tried: scheduled[0].tried, continuation: true });
+    expect(second.results).toHaveLength(1);
+    expect(second.remaining).toBe(0);
+    expect([...first.results, ...second.results].map((x: any) => x.status)).toEqual(["applied", "applied"]);
+  });
+
+  test("an ask accepted whole with leave the sessions: the scope lands, the sessions stay, and the row records the edit", async () => {
+    const db = seeded();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "scope", handle: "growth", add: ["pr-2"] }), change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } })]) });
+    const asks = (await readProposal(ctxOf(db), ME as any, r.short_id)).asks;
+    const at = asks.findIndex((a: any) => a.seqs.includes(1));
+    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: at, verdict: "accept", provision: false, leave_sessions: true });
+    expect(out.failed).toBe(0);
+    expect((await db.get(GROWTH as any)).scope.project_ids.map(String)).toEqual([P, Q]);
+    expect(roleOfSession(db, 1)).toBeUndefined();
+    const rows = (await readProposal(ctxOf(db), ME as any, r.short_id)).changes;
+    expect(rows.find((c: any) => c.seq === 1).edits).toEqual({ leave_sessions: true });
+    // The edit rides only the change it means something on.
+    expect(rows.find((c: any) => c.seq === 2)?.edits).toBeUndefined();
+  });
+
+  test("the same ask accepted as proposed moves them", async () => {
+    const db = seeded();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "scope", handle: "growth", add: ["pr-2"] })]) });
+    await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
+    expect(String(roleOfSession(db, 1))).toBe(GROWTH);
   });
 });

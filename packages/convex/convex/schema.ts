@@ -1268,6 +1268,10 @@ export default defineSchema({
     // The UTC day a stalled goal notice last went to each reporting person
     // (keyed by user id), so a person hears about a stall once a day at most.
     goal_notices: v.optional(v.record(v.string(), v.string())),
+    // When the hourly sweep first saw each goal in the brief (orgGoals.goalKey
+    // to a time). A role rewrites its brief at every wake, so the brief's own
+    // age says nothing about how long a goal has sat with nothing matched.
+    goal_first_seen: v.optional(v.record(v.string(), v.number())),
     // Standing or program (org-staffing.md S10). A program ends with a plan,
     // a project or a date; when the end comes org.health raises program_ended
     // and the next review proposes what `then` says. Absent = undeclared.
@@ -1306,6 +1310,72 @@ export default defineSchema({
     new_value: v.optional(v.string()),
     created_at: v.number(),
   }).index("by_role", ["role_id", "created_at"]),
+
+  // The org log (docs/architecture/org-staffing.md S21): what changed the
+  // organization, append only, written inside the transaction that changed
+  // it (lib/orgChangeLog). A batch is what a person did in one gesture (an
+  // accepted ask, one Settings save, one drag on the chart) and is the entry
+  // History shows; an accept all runs over several transactions, so the batch
+  // is a row of its own that outlives a mutation. The shapes are
+  // @codecast/shared/contracts/orgChange.
+  // `workspace` is the ACCESS key (lib/access): the boundary of the roles the
+  // change touched, `team:<id>` or `user:<id>`, written once. `team_id` is
+  // ROUTING only. `user_id` is the person who made the change.
+  org_change_batches: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.string(),
+    door: v.union(v.literal("proposal"), v.literal("settings"), v.literal("chart"), v.literal("project_page"), v.literal("initiative"), v.literal("cli"), v.literal("history")),
+    gesture: v.union(v.literal("accept_ask"), v.literal("accept_all"), v.literal("accept_change"), v.literal("save"), v.literal("drag"), v.literal("command"), v.literal("undo"), v.literal("redo")),
+    // The proposal and the ask the gesture accepted, when there was one.
+    proposal: v.optional(v.object({ id: v.id("org_proposals"), short_id: v.string(), title: v.optional(v.string()) })),
+    ask: v.optional(v.object({ index: v.number(), title: v.string() })),
+    // What a caller names a gesture by when it spans transactions (accept all).
+    key: v.optional(v.string()),
+    // The highest row seq, the row count and the kinds inside, kept as rows
+    // land so the list never reads the rows.
+    seq: v.number(),
+    row_count: v.number(),
+    kinds: v.record(v.string(), v.number()),
+    role_ids: v.array(v.string()),
+    lead_row_id: v.optional(v.id("org_changes")),
+    // Undo is a new batch, never an erasure: the undo names what it undoes,
+    // and the original is stamped with who undid it.
+    undoes: v.optional(v.id("org_change_batches")),
+    undone_by: v.optional(v.object({ batch: v.id("org_change_batches"), user_id: v.id("users"), at: v.number() })),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace", ["workspace", "created_at"])
+    .index("by_key", ["workspace", "key"]),
+
+  org_changes: defineTable({
+    batch: v.id("org_change_batches"),
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.string(),
+    seq: v.number(), // rising per workspace
+    kind: v.string(), // OrgLogKind
+    subject: v.object({
+      type: v.union(v.literal("role"), v.literal("project"), v.literal("plan"), v.literal("task"), v.literal("session"), v.literal("initiative")),
+      id: v.string(),
+      short_id: v.optional(v.string()),
+      label: v.string(),
+    }),
+    // OrgLogFields, OrgLogEffects: typed in the contract, the fields that
+    // moved and what the change did beyond its subject. Never a sentence.
+    before: v.any(),
+    after: v.any(),
+    effects: v.any(),
+    labels: v.record(v.string(), v.string()),
+    role_ids: v.array(v.string()),
+    undoes: v.optional(v.id("org_changes")),
+    undone_by: v.optional(v.id("org_changes")),
+    created_at: v.number(),
+  })
+    .index("by_batch", ["batch", "seq"])
+    .index("by_workspace_seq", ["workspace", "seq"])
+    .index("by_subject", ["subject.id", "seq"]),
 
   // Staffing proposals (docs/architecture/org-staffing.md S4): a structured
   // set of changes to the chart, authored by an agent (the chief of staff, an

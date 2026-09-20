@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mergeLiveTasks, resolveAssigneeInfo } from "../liveEntities";
+import { assigneeLabelOf, mergeLiveTasks, resolveAssigneeInfo } from "../liveEntities";
 
 // org-roles-run-work.md R5: a role is an assignee the way a person is.
 const members = [{ _id: "u1", name: "Jason", image: "jpg", github_username: "jbenn" }];
@@ -23,6 +23,25 @@ describe("resolveAssigneeInfo with roles", () => {
   it("falls to the server's answer when the slice has not loaded", () => {
     expect(resolveAssigneeInfo("r1", growth, members, null, undefined)).toEqual(growth as any);
     expect(resolveAssigneeInfo("r1", growth, members, null, [])).toEqual(growth as any);
+  });
+});
+
+describe("an assignee nobody here can resolve", () => {
+  const gone = "u".repeat(32);
+  it("an id outside the roster and the roles names nobody, not a 32 character string", () => {
+    expect(resolveAssigneeInfo(gone, undefined, members, null, roles)).toBeNull();
+    // The server's own answer still wins when it has one.
+    expect(resolveAssigneeInfo(gone, { name: "Priya" }, members, null, roles)).toEqual({ name: "Priya" });
+  });
+
+  it("a bare name typed by hand still names a person", () => {
+    expect(resolveAssigneeInfo("Priya", undefined, members, null, roles)).toEqual({ name: "Priya" });
+  });
+
+  it("a chain head outside the team is labelled as such on the board", () => {
+    expect(assigneeLabelOf(gone, null)).toBe("Outside the team");
+    expect(assigneeLabelOf("Priya", null)).toBe("Priya");
+    expect(assigneeLabelOf(gone, { name: "Jason" })).toBe("Jason");
   });
 });
 

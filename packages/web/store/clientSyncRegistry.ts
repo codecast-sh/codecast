@@ -652,6 +652,24 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, proposal_id",
     feeds: ["orgProposals.get"],
   },
+  // The org record (org-staffing.md S21): one entry per gesture for the
+  // active workspace, newest first, and the rows of every entry a person has
+  // unfolded (orgChanges.get). Both are windows, so delta, like the proposals
+  // above: a role's filtered read or one entry's rows never prunes the rest.
+  orgLog: {
+    persistence: { kind: "collection", key: "orgLog" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    workspaceScoped: true,
+    feeds: ["orgChanges.list"],
+  },
+  orgLogRows: {
+    persistence: { kind: "collection", key: "orgLogRows" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, batch",
+    feeds: ["orgChanges.get"],
+  },
   // Timeline lanes. Both queries are windows (commits: 2×limit newest,
   // PRs: 50 by updated_at), so delta overlays accumulate history.
   commits: {
@@ -1144,6 +1162,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   orgHealth: "shared",
   orgProposals: "shared",
   orgProposalChanges: "shared",
+  orgLog: "shared",
+  orgLogRows: "shared",
   commits: "shared",
   pullRequests: "shared",
   codeComments: "shared",

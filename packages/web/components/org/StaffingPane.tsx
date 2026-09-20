@@ -16,6 +16,9 @@ import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
 import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
+import { latestOrgRevisionAt, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import type { TakeoverPreview } from "../../hooks/useTakeoverPreviews";
+import { TakeoverEdit } from "./TakeoverEdit";
 import { askNames, askOfChange, asksProgress, costLine, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
@@ -69,9 +72,19 @@ export type StaffingPaneProps = {
   reviewSessionId?: string | null;
   now: number;
   onSelectChange: (changeId: string | null) => void;
-  onDecide: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
-  /** Accept or skip one ask whole (S19): every change in it that still waits. */
-  onDecideAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip") => void;
+  /** A verdict carries what the page showed when it was pressed (`seen`,
+   *  S18): the latest revise among the rows it painted and, for an ask, the
+   *  seqs the card held. The server reads the verdict against that and
+   *  refuses one the author revised under the reader; the page then shows
+   *  the revised list, marked, instead of applying anything. */
+  onDecide: (changeId: string, verdict: "accept" | "skip", edits: Record<string, unknown> | undefined, seen: OrgVerdictSeen) => void;
+  /** Accept or skip one ask whole (S19): every change in it that still waits.
+   *  `opts.leave_sessions` is the person's one edit on the accept (R1). */
+  onDecideAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, opts?: { leave_sessions?: boolean }) => void;
+  /** What accepting each change would take over, by change id (R1): only the
+   *  rows that would move a session have an entry. The page reads them in one
+   *  query (useTakeoverPreviews) and the pane says them before the accept. */
+  takeovers?: Record<string, TakeoverPreview>;
   /** Edit on a role change opens the hire dialog prefilled (the page owns it). */
   onEditRole: (change: OrgProposalChange) => void;
   onSelectNode: (nodeId: string) => void;
@@ -181,6 +194,8 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
   };
   const [costOpen, setCostOpen] = useState(false);
   const revisedIds = useMemo(() => new Set(props.revised?.rows.map((r) => r._id) ?? []), [props.revised?.rows]);
+  // What this render read: the verdicts it sends say so (onDecide, onDecideAsk).
+  const revisedAt = latestOrgRevisionAt(proposal.changes);
   return (
     <>
       <div className="flex items-baseline gap-3" data-asks-header>
@@ -227,11 +242,12 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
             selectedChangeId={selectedChangeId}
             revisedIds={revisedIds}
             revised={props.revised}
-            onDecideAsk={(verdict) => props.onDecideAsk(proposal._id, ask.index, verdict)}
+            takeovers={props.takeovers}
+            onDecideAsk={(verdict, opts) => props.onDecideAsk(proposal._id, ask.index, verdict, { revised_at: revisedAt, seqs: ask.changes.map((c) => c.seq) }, opts)}
             onAskAboutAsk={props.onAskAboutAsk ? () => props.onAskAboutAsk!(ask) : undefined}
             onAskAboutChange={props.onAskAbout}
             onSelectChange={props.onSelectChange}
-            onDecide={props.onDecide}
+            onDecide={(changeId, verdict, edits) => props.onDecide(changeId, verdict, edits, { revised_at: revisedAt })}
             onEditRole={props.onEditRole}
           />
         ))}
@@ -271,20 +287,25 @@ const FOLD_PAGE = 25;
  * row inside an accepted ask is the exception the fold is for. A decided ask
  * keeps its title and says its verdict; Accept and Skip go, the question stays.
  */
-function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedIds, revised, onDecideAsk, onAskAboutAsk, onAskAboutChange, onSelectChange, onDecide, onEditRole }: {
+function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedIds, revised, takeovers, onDecideAsk, onAskAboutAsk, onAskAboutChange, onSelectChange, onDecide, onEditRole }: {
   ask: AskView; number: number; tree: OrgTree | null; open: boolean; onToggle: () => void;
   selectedChangeId: string | null;
   revisedIds: Set<string>;
   revised?: StaffingPaneProps["revised"];
-  onDecideAsk: (verdict: "accept" | "skip") => void;
+  takeovers?: Record<string, TakeoverPreview>;
+  onDecideAsk: (verdict: "accept" | "skip", opts?: { leave_sessions?: boolean }) => void;
   onAskAboutAsk?: () => void;
   onAskAboutChange?: (c: OrgProposalChange) => void;
   onSelectChange: (id: string | null) => void;
-  onDecide: StaffingPaneProps["onDecide"];
+  onDecide: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
   onEditRole: (c: OrgProposalChange) => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [all, setAll] = useState(false);
+  // What accepting this ask whole would take over (R1): the sentence of each
+  // change in it that still waits and would move a session, and the one edit.
+  const [leave, setLeave] = useState(false);
+  const moving = ask.changes.filter((c) => isDecidable(c.status) && takeovers?.[c._id]);
   const decided = ask.state !== "open";
   const tone = ask.state === "accepted" ? "var(--sol-green)" : ask.state === "skipped" ? "var(--sol-text-dim)" : "var(--sol-violet)";
   // A plan change that closes its tasks carries them under its own row (S9).
@@ -321,8 +342,11 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
               <p className="mt-1.5 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text)" }} data-ask-effect>
                 <span style={{ color: "var(--sol-text-dim)" }}>If you accept: </span>{ask.effect}
               </p>
+              {moving.length > 0 && (
+                <TakeoverEdit className="mt-2" phrase={moving.map((c) => takeovers![c._id].phrase).join(". ")} leave={leave} onLeave={setLeave} />
+              )}
               <div className="mt-2.5 flex items-center gap-1.5 flex-wrap" data-ask-controls>
-                <OrgButton primary size="sm" onClick={() => onDecideAsk("accept")} data-ask-accept>Accept</OrgButton>
+                <OrgButton primary size="sm" onClick={() => onDecideAsk("accept", leave && moving.length > 0 ? { leave_sessions: true } : undefined)} data-ask-accept>Accept</OrgButton>
                 <OrgButton size="sm" onClick={() => onDecideAsk("skip")} data-ask-skip>Skip</OrgButton>
                 {onAskAboutAsk && (
                   <button type="button" onClick={onAskAboutAsk} className="ml-auto inline-flex items-center gap-1 h-7 px-1.5 rounded-md text-[12px] font-medium hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-violet)" }} data-ask-about>
@@ -354,6 +378,7 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
               nested={sync?.nested[c._id]}
               selected={c._id === selectedChangeId}
               revisedNew={revisedIds.has(c._id)}
+              takeover={takeovers?.[c._id]}
               onAsk={onAskAboutChange ? () => onAskAboutChange(c) : undefined}
               editing={editing === c._id}
               onPick={() => onSelectChange(c._id === selectedChangeId ? null : c._id)}
@@ -434,8 +459,10 @@ export function StatusPill({ status }: { status: OrgChangeStatus }) {
  * decided without leaving its row (the phone sheet shows the list several
  * screens tall).
  */
-function ChangeRow({ change, tree, nested, selected, editing, revisedNew, onAsk, onPick, onAccept, onSkip, onEdit, onCancelEdit, onAcceptWithEdits }: {
+function ChangeRow({ change, tree, nested, selected, editing, revisedNew, takeover, onAsk, onPick, onAccept: acceptAsProposed, onSkip, onEdit, onCancelEdit, onAcceptWithEdits: acceptWithEdits }: {
   change: OrgProposalChange; tree: OrgTree | null; selected: boolean; editing: boolean;
+  /** What accepting this row would take over (R1); absent when nothing moves. */
+  takeover?: TakeoverPreview;
   /** Task changes this plan change closes along with the plan (S9): shown
    *  under the row, applied by the plan's own accept. */
   nested?: OrgProposalChange[];
@@ -448,6 +475,11 @@ function ChangeRow({ change, tree, nested, selected, editing, revisedNew, onAsk,
   const open = isDecidable(change.status);
   const failed = change.status === "failed";
   const removed = change.status === "removed";
+  // The person's one edit on this row (R1) rides whichever accept they press.
+  const [leave, setLeave] = useState(false);
+  const left = leave && !!takeover ? { leave_sessions: true } : null;
+  const onAccept = () => (left ? acceptWithEdits(left) : acceptAsProposed());
+  const onAcceptWithEdits = (edits: Record<string, unknown>) => acceptWithEdits({ ...edits, ...left });
   // S10: a role change says whether the seat is standing or a program with
   // its end. S9: a record change says what the evidence is, on the row itself.
   const tenure = tenureLine(changeTenure(change), tree);
@@ -496,6 +528,7 @@ function ChangeRow({ change, tree, nested, selected, editing, revisedNew, onAsk,
           </span>
         )}
       </div>
+      {open && takeover && <TakeoverEdit className="mx-2 mb-1.5" phrase={takeover.phrase} leave={leave} onLeave={setLeave} />}
       {selected && (
         <div className="mx-2 mb-2 rounded-lg border p-2.5 org-pop-in" data-rationale style={{ borderColor: BORDER, background: "var(--sol-card)" }}>
           <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>{change.rationale}</p>

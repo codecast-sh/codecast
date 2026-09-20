@@ -43,6 +43,8 @@ async function verifyInitiatives() {
     currentUser: { _id: "fixture-user-me", name: "Ashot" },
     get orgTree() { return env.tree; },
     sessions: {} as Record<string, any>,
+    // The task crawl has finished for the fixture's workspace (hooks/useSyncTasks writes this key).
+    syncMeta: { 'tasks:v2:{"workspace":"team","team_id":"fixture-team"}': { backfilledAt: 1 } } as Record<string, any>,
     // The mount's stand-ins do what the slice's actions do to the draft
     // (store/initiativeSlice.ts, proven on the real store in its own test).
     createInitiative: (input: any) => { calls.push(`create:${input.title}:${input.workspace}:${input.owner?.kind}`); collections.initiatives = [...collections.initiatives, { _id: input.client_key, short_id: "", client_key: input.client_key, title: input.title, status: "proposed", owner: input.owner, project_ids: [], health: "none", workspace: "team:fixture-team", user_id: "fixture-user-me", created_at: fx.FIXTURE_NOW, updated_at: fx.FIXTURE_NOW }]; },
@@ -132,6 +134,12 @@ async function verifyInitiatives() {
   assert.ok(q("[data-initiative-row='in-3'] [data-face='person:Ashot']"), "a person owner shows their face");
   assert.equal(q("[data-initiative-row='in-4'] [data-initiative-owner]")!.getAttribute("data-initiative-owner"), "none", "nobody drives it, said in words");
   assert.match(q("[data-initiative-row='in-4']")!.textContent!, /No owner/);
+
+  // On a cold cache the count is partial and says so, in the same component.
+  state.syncMeta = {};
+  await mount(React.createElement(InitiativesList));
+  assert.equal(q("[data-initiative-row='in-1'] [data-initiative-progress]")!.getAttribute("data-initiative-progress"), "counting");
+  state.syncMeta = { 'tasks:v2:{"workspace":"team","team_id":"fixture-team"}': { backfilledAt: 1 } };
 
   // A task done moves the bar with no write to the initiative.
   collections.tasks = fx.FIXTURE_TASKS.map((t) => (t._id === "7" ? { ...t, status: "done" } : t));

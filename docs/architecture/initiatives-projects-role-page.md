@@ -49,8 +49,13 @@ counts, plans with progress, and the sessions active in them, then the
 updates newest first with their health, then sub initiatives. Update is one
 control: it opens a short form (body, health) and writes an update; a role
 writes one from its routine with `cast initiative update in-N --health
-on_track - <<'EOF'`. The header carries title, status, owner (with the hover
-card), health and target.
+on_track - <<'EOF'`. Health is what the owner said, so only the owner posts
+an update (a person, or the owning role's standing session), and a workspace
+admin may post one for them; everyone else reads. The target is a calendar
+day, stored and read through one shared pair (`shared/time` `targetDayStamp`
+and `targetDayOf`) so the CLI and the picker name the same day in every
+timezone. The header carries title, status, owner (with the hover card),
+health and target.
 
 **Everywhere else.** `in-N` renders as a live pill wherever short ids do. A
 project page shows the initiatives it belongs to under its lead. A role's

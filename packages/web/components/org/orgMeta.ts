@@ -1,7 +1,7 @@
 // Presentation facts the org surfaces share: how each work state reads, and
 // how a parent reference is named. Data only; the cards render it.
 import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contracts";
-import { andList, capsWords, describeOrgChange, describeTenure, everyWords, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { changeLine, describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import type { OrgParentRef, OrgStandingState, OrgTree } from "./orgTypes";
@@ -97,61 +97,13 @@ export function kindDescription(kind: string | undefined): string {
   return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update, or ask the agent what it does.`;
 }
 
-/**
- * The one line a change reads as in the pane's list and in a chip's title
- * (org-staffing.md S17): a sentence addressed to the reader, in the pane's
- * own words (standing agent, area of work, daily limit), never the CLI
- * walk's command syntax (describeOrgChange keeps that for the terminal).
- * The row is where a person decides, so the row must read as a sentence.
- * Total: a kind this build does not know (a newer server) still reads as a
- * sentence, so the pane and the chart degrade to a readable row instead of
- * throwing or printing a build error.
- */
-export function changeLine(change: OrgChange): string {
-  const line = webChangeLine(change);
-  return line.charAt(0).toUpperCase() + line.slice(1);
-}
-
-/** "you" for the reader, else the parent as the proposal names it. */
-const who = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref;
+/** The one line a change reads as to a person (org-staffing.md S17). The
+ *  writer is the shared contract's, so the pane, the chart's chips, the org
+ *  log and `cast org log` say a change the same way (S21). */
+export { changeLine } from "@codecast/shared/contracts/orgProposal";
 /** The words for limits and cadences are the shared contract's, so a derived
  *  ask (server or page) and a row line say them the same way. */
 export { capsWords, everyWords } from "@codecast/shared/contracts/orgProposal";
-const TRUST_WORDS: Record<string, string> = {
-  understand: "may read and report, not act on its own",
-  decide: "may decide on its own",
-  direct: "may direct work on its own",
-};
-
-function webChangeLine(c: OrgChange): string {
-  switch (c.kind) {
-    case "role": {
-      const scope = [...(c.scope?.projects ?? []), ...(c.scope?.plans ?? [])];
-      // A role that names a session adds nothing: the session is already there (R2).
-      return `${c.seat ? `name the session ${c.seat.title?.trim() || c.seat.existing} as a role` : "add a standing agent"}, ${c.name} (${at(c.handle)}), reporting to ${who(c.reports_to)}${scope.length ? `, looking after ${andList(scope)}` : ""}`;
-    }
-    case "projects": return c.changes.map((x) => x.op === "create" ? `create the project ${x.title}${x.horizon ? ` (${x.horizon})` : ""}` : `fold the project ${x.from} into ${x.into}`).join("; ");
-    case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${who(c.reports_to)}` : ""}${c.scope_add?.length ? `; now also looks after ${andList(c.scope_add)}` : ""}${c.scope_remove?.length ? `; no longer looks after ${andList(c.scope_remove)}` : ""}`;
-    case "retire": return `retire ${at(c.handle)}; its sessions go back to their owners`;
-    case "scope": {
-      const parts: string[] = [];
-      if (c.add?.length) parts.push(`also looks after ${andList(c.add)}`);
-      if (c.remove?.length) parts.push(`stops looking after ${andList(c.remove)}`);
-      return `${at(c.handle)} ${parts.join(" and ") || "keeps its area of work"}`;
-    }
-    case "budget": return `${at(c.handle)} may use up to ${capsWords(c.caps)} a day`;
-    case "trust": return `${at(c.handle)} ${TRUST_WORDS[c.trust] ?? `may ${c.trust} on its own`}`;
-    case "routine": return `${at(c.handle)} runs "${c.title}" ${everyWords(c.every)}`;
-    case "project_meta": return `write the charter of ${c.project}${c.owner ? `, owned by ${at(c.owner)}` : ""}${c.priority ? `, priority ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
-    case "adopt": return `make session ${c.conversation} the standing session of ${at(c.handle)}`;
-    case "file": return `put plan ${c.plan} under the project ${c.project}`;
-    case "plan_status": case "task_status": case "project_status": return describeOrgChange(c);
-    default: {
-      const kind = (c as { kind?: unknown }).kind;
-      return `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;
-    }
-  }
-}
 
 const at = (h: string) => `@${h.replace(/^@/, "")}`;
 const compact = (n: number) => n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);

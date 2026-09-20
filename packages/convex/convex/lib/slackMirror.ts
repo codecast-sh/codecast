@@ -5,6 +5,16 @@
 
 export type SlackDirection = "both" | "slack_to_codecast" | "codecast_to_slack";
 
+export type SlackSendAuth = "ready" | "connect" | "reconnect";
+
+export function tokenCanPost(scopes: string | undefined | null): boolean {
+  return (scopes ?? "").split(",").some((scope) => scope.trim() === "chat:write");
+}
+
+export function slackSendAuth(token: { scopes?: string } | null): SlackSendAuth {
+  return !token ? "connect" : tokenCanPost(token.scopes) ? "ready" : "reconnect";
+}
+
 export type SlackLinkOptions = {
   threads: boolean;
   reactions: boolean;

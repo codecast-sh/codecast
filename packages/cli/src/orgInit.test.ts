@@ -329,7 +329,8 @@ describe("buildOrgAnalyzerPrompt", () => {
     }
     expect(ORG_UNNAMED_ROLES_RULE).toContain("A session older than a week with a standing purpose is a role that has not been named");
     expect(ORG_UNNAMED_ROLES_RULE).toContain("name the long running sessions you considered and did not propose");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("An area that a role already watches is not a reason to leave such a session unnamed");
+    expect(ORG_UNNAMED_ROLES_RULE).toContain("Naming keeps the reporting line the session has today");
+    expect(ORG_UNNAMED_ROLES_RULE).toContain("a separate move change in the same ask");
   });
   // The two role shapes people asked for on the 2026-09-18 huddle (R6).
   test("an agent quality role runs cast-lessons weekly over one agent; a role a person reports to is a goal tracker, not a gatekeeper", () => {

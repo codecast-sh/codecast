@@ -16,7 +16,7 @@ import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
 import { performProvisionRole, rolesInBoundary } from "./orgRoles";
 import { askCore, setInboxStatus } from "./sessionDecisions";
 import {
-  describeOrgChange, orgChangeDependencies,
+  describeOrgChange, orgChangeDependencies, orgChangeTakesOver,
   editedOrgChange,
   isOrgChangeDecidable,
   orderOrgChanges,
@@ -25,6 +25,8 @@ import {
   orgReviseOpError,
   normalizeOrgSpecChange,
   parseOrgProposalSpec,
+  latestOrgRevisionAt,
+  orgVerdictSeenFault,
   resolveOrgAsks,
   withAboutAsk,
   withAboutChange,
@@ -33,6 +35,7 @@ import {
   type OrgProposalSpec,
   type OrgReviseOp,
   type OrgRevision,
+  type OrgVerdictSeen,
 } from "@codecast/shared/contracts/orgProposal";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
@@ -419,10 +422,18 @@ async function skipOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, cha
   return { change_id: change._id, seq: change.seq, status: "skipped", note, line: describeOrgChange(change.change) };
 }
 
+/** A verdict is read against the proposal as the page showed it (`seen`);
+ *  one the author revised since is refused whole, and the page shows the
+ *  revised list instead (S18). */
+function refuseIfRevised(proposal: ProposalRow, rows: ChangeRow[], seen: OrgVerdictSeen | undefined, askSeqs?: number[]): void {
+  const fault = orgVerdictSeenFault(proposal.short_id, seen, rows, askSeqs);
+  if (fault) throw new Error(fault);
+}
+
 export async function performDecideChange(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { change_id: string; verdict: "accept" | "skip"; edits?: unknown; from_session?: string; api_token?: string; provision?: boolean },
+  args: { change_id: string; verdict: "accept" | "skip"; edits?: unknown; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean },
 ): Promise<any> {
   await refuseUnlessHumanDecider(ctx, args);
   const found = await findChange(ctx, args.change_id);
@@ -431,6 +442,9 @@ export async function performDecideChange(
   await requireAdmin(ctx, userId, proposal);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   if (!decidable(change)) throw new Error(`${proposal.short_id}#${change.seq} is already ${change.status}`);
+  // An amend keeps the row's id and replaces what it says (S18), so the id
+  // alone does not say which content the person read.
+  refuseIfRevised(proposal, await changesOf(ctx, proposal._id), args.seen);
   const now = Date.now();
   const out = args.verdict === "skip"
     ? await skipOne(ctx, userId, proposal, change, now, args.provision ?? true)
@@ -472,7 +486,7 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * runMutation's writes back); the test harness has no runMutation and runs
  * the change inline, which covers the throws that happen before any write.
  */
-export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; tried?: string[]; continuation?: boolean }): Promise<any> {
+export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean; leave_sessions?: boolean }): Promise<any> {
   // The person's gate runs on the call they made; a continuation is the same
   // act carried on by the server, scheduled only from inside that call.
   if (!args.continuation) await refuseUnlessHumanDecider(ctx, args);
@@ -488,21 +502,28 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // the person accepted, still in apply order.
   const seqs = args.seqs ? new Set(args.seqs) : null;
   const triedSet = new Set(args.tried ?? []);
-  const all = orderForApply((await changesOf(ctx, proposal._id)).filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
+  const rows = await changesOf(ctx, proposal._id);
+  // The person's own call says what it read; a continuation and an ask's
+  // accept were checked by the call that started them.
+  if (!args.continuation) refuseIfRevised(proposal, rows, args.seen);
+  const all = orderForApply(rows.filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
   // One call applies one chunk and hands the rest to its own transaction
   // (acceptAllContinue): a hundred records, each plan close cascading over its
   // tasks, do not fit one read and write budget, and a late failure must not
   // cost the earlier applies.
   // Chunk only where a continuation can run; without a scheduler this call is the whole act.
-  const pending = (ctx as any).scheduler ? all.slice(0, ACCEPT_ALL_CHUNK) : all;
+  const pending = (ctx as any).scheduler ? acceptAllChunk(all) : all;
   const remaining = all.length - pending.length;
   const provision = args.provision ?? true;
   const results = [];
   for (const change of pending) {
+    // The person's one edit on the ask they accepted whole (R1): every change
+    // in it that would take sessions over leaves them where they are.
+    const edits = args.leave_sessions && orgChangeTakesOver(change.change) ? { leave_sessions: true } : undefined;
     try {
       results.push(ctx.runMutation
-        ? await ctx.runMutation(internal.orgProposals.acceptOneInTransaction, { user_id: userId, proposal_id: proposal._id, change_id: change._id, now, provision })
-        : await acceptOne(ctx, userId, proposal, change, undefined, now, provision));
+        ? await ctx.runMutation(internal.orgProposals.acceptOneInTransaction, { user_id: userId, proposal_id: proposal._id, change_id: change._id, now, provision, ...(edits ? { leave_sessions: true } : {}) })
+        : await acceptOne(ctx, userId, proposal, change, edits, now, provision));
     } catch (err) {
       const note = (err instanceof Error ? err.message : String(err)).slice(0, 500);
       await ctx.db.patch(change._id, { status: "failed", applied_note: note, applied_at: now, decided_by: userId, decided_at: now });
@@ -514,7 +535,7 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // tried: a refusal is reported once, never retried in a loop.
   const tried = [...(args.tried ?? []), ...pending.map((c) => String(c._id))];
   if (remaining > 0 && (ctx as any).scheduler) {
-    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried });
+    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried, ...(args.leave_sessions ? { leave_sessions: true } : {}) });
   }
   const resolved = await resolveIfDone(ctx, proposal, now);
   return { proposal: proposal.short_id, results, resolved, remaining: (ctx as any).scheduler ? remaining : 0, applied: results.filter((r) => r.status === "applied").length, failed: results.filter((r) => r.status === "failed").length };
@@ -526,10 +547,12 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
  * and this call cannot disagree about what an ask holds. Accept is the accept
  * all core narrowed to the ask's seqs: apply order, a sub-transaction per
  * change, the same chunks and continuation. Skip marks each skipped through
- * the skip one change takes. A change the person already decided inside the
+ * the skip one change takes. The position is only good against the list the
+ * page read, so the call carries what that was (`seen`), and a list the
+ * author revised since is refused, never resolved to what sits there now. A change the person already decided inside the
  * fold is left as they decided it.
  */
-export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; from_session?: string; api_token?: string; provision?: boolean }): Promise<any> {
+export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean; leave_sessions?: boolean }): Promise<any> {
   await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
@@ -538,8 +561,12 @@ export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, arg
   const rows = await changesOf(ctx, proposal._id);
   const asks = resolveOrgAsks(proposal.asks, rows);
   const ask = asks[args.ask];
+  // A revise that empties an earlier ask moves every later one up a place,
+  // so a position that no longer exists is a moved list before it is a bad
+  // index, and the seqs the card held say which ask the person read.
+  refuseIfRevised(proposal, rows, args.seen, ask?.seqs ?? []);
   if (!ask) throw new Error(`${proposal.short_id} has ${asks.length} ask${asks.length === 1 ? "" : "s"}; there is no ask ${args.ask}`);
-  if (args.verdict === "accept") return { ask: args.ask, title: ask.title, ...(await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: ask.seqs, provision: args.provision, continuation: true })) };
+  if (args.verdict === "accept") return { ask: args.ask, title: ask.title, ...(await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: ask.seqs, provision: args.provision, continuation: true, leave_sessions: args.leave_sessions })) };
   const now = Date.now();
   const inAsk = new Set(ask.seqs);
   const results = [];
@@ -552,13 +579,33 @@ export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, arg
 /** Changes one accept all call applies before it hands the rest on. */
 export const ACCEPT_ALL_CHUNK = 12;
 
+/**
+ * One transaction's share of an accept all, cut by COST and not only by
+ * count. Every change runs through ctx.runMutation, and a nested mutation
+ * spends its parent's read budget (4,096 reads), so the chunk is what has to
+ * fit. A change that takes sessions over (orgChangeTakesOver) reads the scope,
+ * scans the workspace's sessions and reparents up to 100 of them: hundreds of
+ * reads where a record change is a handful. So a chunk ends with the first
+ * takeover change it meets: at most one a transaction, whatever else rode
+ * before it. Two scoped roles in one accept all were past the limit.
+ */
+export function acceptAllChunk<T extends { change: OrgChange }>(all: T[]): T[] {
+  const chunk: T[] = [];
+  for (const c of all) {
+    if (chunk.length >= ACCEPT_ALL_CHUNK) break;
+    chunk.push(c);
+    if (orgChangeTakesOver(c.change)) break;
+  }
+  return chunk;
+}
+
 /** The rest of an accept all, in its own transaction (see performAcceptAll). */
 export const acceptAllContinue = internalMutation({
-  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()) },
+  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()), leave_sessions: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<any> => {
     const proposal = await ctx.db.get(args.proposal_id);
     if (!proposal || proposal.status !== "open") return null;
-    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true });
+    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true, leave_sessions: args.leave_sessions });
   },
 });
 
@@ -567,12 +614,12 @@ export const acceptOneForTest = (ctx: Ctx, userId: Id<"users">, proposal: Propos
 
 /** One change of an accept all, as its own transaction (see performAcceptAll). */
 export const acceptOneInTransaction = internalMutation({
-  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), change_id: v.id("org_proposal_changes"), now: v.number(), provision: v.boolean() },
+  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), change_id: v.id("org_proposal_changes"), now: v.number(), provision: v.boolean(), leave_sessions: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const proposal = await ctx.db.get(args.proposal_id);
     const change = await ctx.db.get(args.change_id);
     if (!proposal || !change) throw new Error("Change not found");
-    return acceptOne(ctx as any, args.user_id, proposal, change, undefined, args.now, args.provision);
+    return acceptOne(ctx as any, args.user_id, proposal, change, args.leave_sessions ? { leave_sessions: true } : undefined, args.now, args.provision);
   },
 });
 
@@ -639,7 +686,9 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
 
   const rows = await changesOf(ctx, proposal._id);
   const bySeq = new Map<number, ChangeRow>(rows.map((c) => [c.seq, c]));
-  const now = Date.now();
+  // Strictly after the last revise: a verdict names the revise it read by
+  // this stamp, so two revises in one millisecond must not share it.
+  const now = Math.max(Date.now(), latestOrgRevisionAt(rows) + 1);
   const by = proposal.author;
   const journal: OrgRevision[] = [];
   const writes: Array<() => Promise<unknown>> = [];
@@ -902,6 +951,9 @@ export const list = query({
   },
 });
 
+/** What the page showed when the verdict was pressed (OrgVerdictSeen). */
+const verdictSeen = v.optional(v.object({ revised_at: v.number(), seqs: v.optional(v.array(v.number())) }));
+
 export const decide = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -909,17 +961,19 @@ export const decide = mutation({
     change_id: v.string(),
     verdict: v.union(v.literal("accept"), v.literal("skip")),
     edits: v.optional(v.any()),
+    seen: verdictSeen,
   },
   handler: async (ctx, { api_token, ...args }) => performDecideChange(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
 export const decideAsk = mutation({
-  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ask: v.number(), verdict: v.union(v.literal("accept"), v.literal("skip")) },
+  // `leave_sessions` is the person's one edit on an ask accepted whole (R1).
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ask: v.number(), verdict: v.union(v.literal("accept"), v.literal("skip")), seen: verdictSeen, leave_sessions: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => performDecideAsk(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
 export const acceptAll = mutation({
-  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), kinds: v.optional(v.array(v.string())) },
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), kinds: v.optional(v.array(v.string())), seen: verdictSeen },
   handler: async (ctx, { api_token, ...args }) => performAcceptAll(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 

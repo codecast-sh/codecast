@@ -67,6 +67,8 @@ export type OrgMoveProposal = {
   scope_add?: string[];
   scope_remove?: string[];
   reason?: string;
+  /** See OrgLeaveSessions: with `scope_add`, the sessions in the gained scope stay with their owner. */
+  leave_sessions?: boolean;
 };
 
 export type OrgRetireProposal = { kind: "retire"; handle: string; reason?: string };
@@ -225,7 +227,12 @@ export function orgChangeError(raw: any): string | null {
         const h = handle(); if (h) return h;
         if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
         if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
-        if (raw.seat !== undefined) { const s = orgRoleSeatError(raw.seat); if (s) return s; }
+        if (raw.seat !== undefined) {
+          const s = orgRoleSeatError(raw.seat); if (s) return s;
+          // The card promises naming changes nothing about how the session
+          // works, and who it answers to is part of that: a move is its own change.
+          if (typeof raw.reports_to === "string" && raw.reports_to.trim().startsWith("@")) return "a role that names its session keeps the session's reporting line (the person who runs it); to put it under a role, add a separate move change";
+        }
       }
       if (raw.kind === "projects") {
         const bad = raw.changes.find((c: any) => c.op === "create" && c.horizon !== undefined && !(ORG_PROJECT_HORIZONS as readonly string[]).includes(c.horizon));
@@ -552,6 +559,7 @@ function askWords(names?: OrgAskNames) {
       case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
       case "trust": return c.trust === "understand" ? " It reads and reports, and does not act on its own." : c.trust === "decide" ? " It may decide on its own." : " It may direct work on its own.";
       case "adopt": return ` The session ${c.conversation} becomes it.`;
+      case "move": return c.reports_to ? ` A separate change puts it under ${parent(c.reports_to)}; skip that and it keeps reporting to whoever runs it today.` : "";
       default: return "";
     }
   };
@@ -605,8 +613,11 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const words = askWords(names);
   const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
   const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
-  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "move" || c.change.kind === "scope");
-  const created = new Map<string, AskRow>(own.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  const created = new Map<string, AskRow>(live.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  // A move of a role this proposal creates rides in that role's ask (a named
+  // session put under an existing role, R2), so the person can accept the
+  // name and skip the move from one card; any other move is its own ask.
+  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "scope" || (c.change.kind === "move" && !created.has(askHandle(c.change) ?? "")));
   const riders = new Map<AskRow, AskRow[]>();
   const rest: AskRow[] = [];
   for (const c of live) {
@@ -649,6 +660,39 @@ export function resolveOrgAsks(stored: ReadonlyArray<OrgAsk> | undefined | null,
   const covered = new Set(asks.flatMap((a) => a.seqs));
   return [...asks, ...deriveAsks(live.filter((c) => !covered.has(c.seq)), names)];
 }
+
+/** The latest revise on a proposal's changes, or 0. Every revise stamps the
+ *  rows it touches and no row is ever deleted, so this names the proposal's
+ *  last revise from the rows alone: the page reads it off the rows it
+ *  painted, the server off the rows it holds. */
+export function latestOrgRevisionAt(changes: ReadonlyArray<{ revision?: { at: number } | null }>): number {
+  let at = 0;
+  for (const c of changes) if (c.revision && c.revision.at > at) at = c.revision.at;
+  return at;
+}
+
+/** What the page showed when the person pressed a verdict (S18, S19): the
+ *  latest revise among the rows it painted and, for an ask, the seqs the card
+ *  held. An ask is named by position, and a revise moves positions and
+ *  rewrites content, so a verdict says what it was read against. */
+export type OrgVerdictSeen = { revised_at: number; seqs?: number[] };
+
+/** Why a verdict does not stand against the proposal as it is now, or null.
+ *  `askSeqs` is what the ask at the sent position holds today. A caller that
+ *  sends nothing is taken only on a proposal nobody revised: nothing can have
+ *  moved under it. */
+export function orgVerdictSeenFault(shortId: string, seen: OrgVerdictSeen | undefined | null, changes: ReadonlyArray<{ revision?: { at: number } | null }>, askSeqs?: ReadonlyArray<number>): string | null {
+  const latest = latestOrgRevisionAt(changes);
+  const key = (seqs: ReadonlyArray<number>) => [...seqs].sort((a, b) => a - b).join(",");
+  const moved = seen
+    ? seen.revised_at !== latest || (!!askSeqs && key(seen.seqs ?? []) !== key(askSeqs))
+    : latest > 0;
+  return moved ? `${shortId} ${ORG_VERDICT_REVISED}` : null;
+}
+/** The tail of that refusal, in revise's own words for the other direction
+ *  ("a revise never touches a change a person decided"). The page reads it to
+ *  show the revised list instead of a failure. */
+export const ORG_VERDICT_REVISED = "was revised after this page read it; a verdict never lands on a change the person has not seen";
 
 /** Validate a spec. Every fault is reported, each naming the change by index
  *  and kind, so a long spec is fixed in one pass. */
@@ -839,6 +883,50 @@ export function editedOrgChange<T extends OrgChange>(change: T, edits: unknown):
   return merged as T;
 }
 
+/**
+ * What applying a change would take over (org-roles-run-work.md R1): the role
+ * it names and the refs its scope gains, in the form `orgInit.takeoverPreview`
+ * takes; null when it moves no session (no scope gained, or the change already
+ * says `leave_sessions`). An adopt gains nothing itself: the seated role takes
+ * over what its scope already holds. ONE rule for the two readers that must
+ * agree: the pages that show the count before accept, and accept all, which
+ * keeps one such change to a transaction because each costs hundreds of reads.
+ */
+export function orgChangeTakeover(c: OrgChange): { handle: string; add: string[]; seat?: string } | null {
+  if ((c as OrgLeaveSessions).leave_sessions) return null;
+  const typed = (kind: "project" | "plan") => (ref: string) => (/^(project|plan):/.test(ref) ? ref : `${kind}:${ref}`);
+  const gains = (add: string[] | undefined) => (add?.length ? { handle: (c as { handle: string }).handle, add } : null);
+  switch (c.kind) {
+    // The session a role names becomes its seat before the takeover runs, so
+    // it is never one of the sessions that move.
+    case "role": { const g = gains([...(c.scope?.projects ?? []).map(typed("project")), ...(c.scope?.plans ?? []).map(typed("plan"))]); return g && c.seat ? { ...g, seat: c.seat.existing } : g; }
+    case "scope": return gains(c.add);
+    case "move": return gains(c.scope_add);
+    case "adopt": return { handle: c.handle, add: [] };
+    default: return null;
+  }
+}
+export const orgChangeTakesOver = (c: OrgChange): boolean => orgChangeTakeover(c) !== null;
+
+/** What a takeover moves, as counts: the dry count before, the result after. */
+export type OrgTakeoverCounts = { sessions: number; kept_in_front: number; over_cap: number; told?: { sessions: number; deferred?: number } };
+
+/** One writer for the sentence, so the note before accept, the note after
+ *  apply and every page that shows the count say the same thing. `told` is
+ *  what happened, so only a result that has it (after apply) says it. */
+export function takeoverPhrase(handle: string, r: { sessions: unknown[]; kept_in_front: unknown[]; over_cap: number; told?: { sessions: number; deferred?: number } } | OrgTakeoverCounts | null | undefined, applied: boolean): string {
+  if (!r) return "";
+  const n = typeof r.sessions === "number" ? r.sessions : r.sessions.length;
+  if (n === 0) return "";
+  const one = n === 1;
+  const parts = [`${n} session${one ? "" : "s"} now report${one ? "s" : ""} to @${handle.replace(/^@/, "")} and leave${one ? "s" : ""} your needs input`];
+  const kept = typeof r.kept_in_front === "number" ? r.kept_in_front : r.kept_in_front.length;
+  if (kept) parts.push(`${kept} of them stay${kept === 1 ? "s" : ""} in front of you with a question still open`);
+  if (applied && r.told) parts.push(`${r.told.sessions} told now${r.told.deferred ? `, ${r.told.deferred} will read it on their next turn` : ""}`);
+  if (r.over_cap) parts.push(`${r.over_cap} more stay where they are until the next change`);
+  return parts.join("; ");
+}
+
 /** One line per change, the words the CLI walk and the ghost chips use. */
 export function describeOrgChange(c: OrgChange): string {
   switch (c.kind) {
@@ -856,6 +944,59 @@ export function describeOrgChange(c: OrgChange): string {
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
     case "project_status": return `mark project ${c.project} ${c.status}`;
+  }
+}
+
+/**
+ * The one line a change reads as to a person (org-staffing.md S17): a sentence
+ * addressed to the reader, in the product's own words (standing agent, area
+ * of work, daily limit), never the CLI walk's command syntax
+ * (describeOrgChange keeps that for the terminal). The proposal pane, the
+ * chart's chips, the org log and the undo preview all say a change this way
+ * (S21: the log, the proposal and the preview say one thing in one way).
+ * Total: a kind this build does not know (a newer server) still reads as a
+ * sentence, so a page degrades to a readable row instead of throwing.
+ */
+export function changeLine(change: OrgChange): string {
+  const line = changeSentence(change);
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+/** "you" for the reader, else the parent as the change names it. */
+const whoReads = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref;
+const TRUST_WORDS: Record<string, string> = {
+  understand: "may read and report, not act on its own",
+  decide: "may decide on its own",
+  direct: "may direct work on its own",
+};
+
+function changeSentence(c: OrgChange): string {
+  switch (c.kind) {
+    case "role": {
+      const scope = [...(c.scope?.projects ?? []), ...(c.scope?.plans ?? [])];
+      // A role that names a session adds nothing: the session is already there (R2).
+      return `${c.seat ? `name the session ${c.seat.title?.trim() || c.seat.existing} as a role` : "add a standing agent"}, ${c.name} (${at(c.handle)}), reporting to ${whoReads(c.reports_to)}${scope.length ? `, looking after ${andList(scope)}` : ""}`;
+    }
+    case "projects": return c.changes.map((x) => x.op === "create" ? `create the project ${x.title}${x.horizon ? ` (${x.horizon})` : ""}` : `fold the project ${x.from} into ${x.into}`).join("; ");
+    case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${whoReads(c.reports_to)}` : ""}${c.scope_add?.length ? `; now also looks after ${andList(c.scope_add)}` : ""}${c.scope_remove?.length ? `; no longer looks after ${andList(c.scope_remove)}` : ""}`;
+    case "retire": return `retire ${at(c.handle)}; its sessions go back to their owners`;
+    case "scope": {
+      const parts: string[] = [];
+      if (c.add?.length) parts.push(`also looks after ${andList(c.add)}`);
+      if (c.remove?.length) parts.push(`stops looking after ${andList(c.remove)}`);
+      return `${at(c.handle)} ${parts.join(" and ") || "keeps its area of work"}`;
+    }
+    case "budget": return `${at(c.handle)} may use up to ${capsWords(c.caps)} a day`;
+    case "trust": return `${at(c.handle)} ${TRUST_WORDS[c.trust] ?? `may ${c.trust} on its own`}`;
+    case "routine": return `${at(c.handle)} runs "${c.title}" ${everyWords(c.every)}`;
+    case "project_meta": return `write the charter of ${c.project}${c.owner ? `, owned by ${at(c.owner)}` : ""}${c.priority ? `, priority ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
+    case "adopt": return `make session ${c.conversation} the standing session of ${at(c.handle)}`;
+    case "file": return `put plan ${c.plan} under the project ${c.project}`;
+    case "plan_status": case "task_status": case "project_status": return describeOrgChange(c);
+    default: {
+      const kind = (c as { kind?: unknown }).kind;
+      return `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;
+    }
   }
 }
 

@@ -485,6 +485,7 @@ export type InboxSession = {
   _id: string;
   session_id: string;
   title?: string;
+  short_title?: string | null;
   subtitle?: string;
   updated_at: number;
   // conversations.status ("active" | "completed") — a working-set membership
@@ -5716,7 +5717,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // a scalar, an empty array is a value.
   updatePlan: (shortId: string, fields: { title?: string; project_id?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
   /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
-  setProjectLead: (projectId: string, roleId: string | null) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
+  setProjectLead: (projectId: string, roleId: string | null, opts?: { leave_sessions?: boolean }) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
   updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
@@ -11124,7 +11125,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // side effect (dispatch.setProjectLead) makes both writes in one transaction.
   // An asyncAction only so the caller can say what the server alone knows once
   // it lands (how many sessions now report to the role); nothing waits on it.
-  setProjectLead: asyncAction(function (this: Draft, projectId: string, roleId: string | null) {
+  // `_opts.leave_sessions` is the dispatch's: the person's one edit on the
+  // takeover (R1), which paints nothing here.
+  setProjectLead: asyncAction(function (this: Draft, projectId: string, roleId: string | null, _opts?: { leave_sessions?: boolean }) {
     const project = (this.projects as any)[projectId];
     if (project) writeAsServerShape(project, { owner_role_id: roleId });
     const tree = this.orgTree;

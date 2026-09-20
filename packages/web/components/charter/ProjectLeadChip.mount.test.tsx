@@ -9,7 +9,7 @@ import type { OrgRole, OrgTree } from "../org/orgTypes";
 
 const { JSDOM } = await import("jsdom");
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
-const DOM_GLOBALS = ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"];
+const DOM_GLOBALS = ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLInputElement", "Element", "Node", "NodeFilter", "MutationObserver", "CustomEvent", "Event", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"];
 const priorGlobals = new Map(DOM_GLOBALS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 for (const key of DOM_GLOBALS) Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -23,7 +23,10 @@ afterAll(() => {
 const React = await import("react");
 const { act } = React;
 // The hover card's enrichment and the hire form are not under test.
-mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined }) }));
+// The one query that matters here is the takeover count the lead gate asks
+// for (R1): `takeover` is what the server answers it, one entry per item.
+let takeover: unknown[] = [null];
+mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: (_q: unknown, args: any) => ({ data: args !== "skip" && args?.items ? takeover : undefined }) }));
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
 mock.module("sonner", () => ({ toast: { success: () => {}, message: () => {}, error: () => {} } }));
 
@@ -103,6 +106,33 @@ describe("ProjectLeadChip", () => {
     assert.equal(chip()!.dataset.owner, billing.short_id);
     assert.match(chip()!.textContent!, /Billing lead/);
     assert.equal(document.querySelector("[data-add-lead]"), null, "no Add a lead once someone leads");
+  });
+
+  it("a lead whose scope gains the project waits for the count, says it, and carries the person's one edit", async () => {
+    const PAID = "fixture-project-paid";
+    await seed({ orgTree: tree, projects: { ...useInboxStore.getState().projects, [PAID]: row({ _id: PAID, title: "Paid", short_id: "pr-7" }) } });
+    const sent: unknown[][] = [];
+    const real = useInboxStore.getState().setProjectLead;
+    await seed({ setProjectLead: (...args: unknown[]) => { sent.push(args); return (real as any)(...args); } });
+    takeover = [{ sessions: ["jx70001", "jx70002", "jx70003"], kept_in_front: [], over_cap: 0, phrase: "" }];
+    await mount(<ProjectLeadChip projectId={PAID} editable />);
+    await act(async () => chip()!.click());
+    const item = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((b) => /Billing lead/.test(b.textContent ?? ""));
+    await act(async () => item!.click());
+    // Nothing is written yet: a takeover is not something an undo puts back.
+    assert.equal((useInboxStore.getState().projects as any)[PAID].owner_role_id, undefined);
+    assert.equal(sent.length, 0);
+    const gate = document.querySelector<HTMLElement>("[data-takeover-gate]");
+    assert.ok(gate, `the gate is open. Body: ${text()}`);
+    assert.match(gate!.textContent!, /Billing lead will lead Paid/);
+    assert.match(gate!.querySelector("[data-takeover-phrase]")!.textContent!, /^3 sessions now report to @billing and leave your needs input\.$/);
+    await act(async () => gate!.querySelector<HTMLInputElement>("[data-takeover-leave-input]")!.click());
+    await act(async () => gate!.querySelector<HTMLButtonElement>("[data-takeover-confirm]")!.click());
+    assert.deepEqual(sent, [[PAID, billing._id, { leave_sessions: true }]]);
+    assert.equal((useInboxStore.getState().projects as any)[PAID].owner_role_id, billing._id);
+    assert.equal(document.querySelector("[data-takeover-gate]"), null, "the gate closes with the write");
+    takeover = [null];
+    await seed({ setProjectLead: real });
   });
 
   it("a whole workspace role picked as lead is not narrowed to the project", async () => {

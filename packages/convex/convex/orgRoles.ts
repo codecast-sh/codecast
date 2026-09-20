@@ -19,12 +19,15 @@ import { charterPatch } from "./lib/orgCharter";
 // Used inside handlers only: orgInit imports this module, and a cycle is safe
 // for hoisted functions called at run time, never for values read at load.
 import { takeOverSessions, takeoverPhrase } from "./orgInit";
+import { handOpenTasksUpChain } from "./tasks";
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor, type RoleBootstrap } from "./anchors";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
+import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
+import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, scheduleFlush, trustOf, unflushedRowsFor } from "./orgEvents";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -41,7 +44,7 @@ export const HANDLE_RE = /^[a-z0-9-]{2,32}$/;
 // Reparent walks up through role parents this far before calling it a cycle.
 export const MAX_ROLE_DEPTH = 32;
 
-type Ctx = { db: any };
+type Ctx = { db: any; auth?: any };
 type ReportsTo = { kind: "user"; user_id: Id<"users"> } | { kind: "role"; role_id: Id<"org_roles"> };
 
 const reportsToValidator = v.union(
@@ -264,7 +267,7 @@ export function normalizeAvatar(avatar: string | undefined, handle: string): str
 export async function performSetRoleScope(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; add?: string[]; remove?: string[]; from_session?: string; human_decision?: string },
+  args: { role_id: string; add?: string[]; remove?: string[]; from_session?: string; human_decision?: string; leave_sessions?: boolean },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const projects = new Set(role.scope.project_ids.map(String));
@@ -282,6 +285,7 @@ export async function performSetRoleScope(
     scope: { project_ids: Array.from(projects) as any, plan_ids: Array.from(plans) as any },
     from_session: args.from_session,
     human_decision: args.human_decision,
+    leave_sessions: args.leave_sessions,
   });
 }
 
@@ -332,13 +336,23 @@ export async function performCreateRole(
     created_at: now,
     updated_at: now,
   });
-  return await ctx.db.get(id);
+  const created = await ctx.db.get(id);
+  await noteRoleChange(ctx, userId, "role", null, created);
+  return created;
 }
 
-export async function performUpdateRole(
+type UpdateRoleArgs = { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; tenure?: TenureSpec; avatar?: string; from_session?: string; review_backend?: string; api_token?: string; human_decision?: string; leave_sessions?: boolean };
+
+// One role update is one row of the org log (org-staffing.md S21): the fields
+// that moved, with the takeover a gained scope ran folded into the same row.
+export async function performUpdateRole(ctx: Ctx, userId: Id<"users">, args: UpdateRoleArgs): Promise<any> {
+  return withOrgChange(ctx, userId, { door: args.from_session || args.api_token ? "cli" : "settings", gesture: args.from_session || args.api_token ? "command" : "save" }, () => updateRole(ctx, userId, args));
+}
+
+async function updateRole(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; tenure?: TenureSpec; avatar?: string; from_session?: string; review_backend?: string; api_token?: string; human_decision?: string },
+  args: { role_id: string; name?: string; handle?: string; scope?: Scope; charter?: string; status?: "active" | "paused" | "retired"; tenure?: TenureSpec; avatar?: string; from_session?: string; review_backend?: string; api_token?: string; human_decision?: string; leave_sessions?: boolean },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   // A retired seat is closed: its handle may already belong to a live role
@@ -403,7 +417,18 @@ export async function performUpdateRole(
     await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: "scope changed: your projects and plans were edited by a person; re-read cast brief" });
   }
   const updated = await ctx.db.get(role._id);
-  return overlaps ? { ...updated, overlaps } : updated;
+  await noteRoleChange(ctx, userId, patch.scope ? "scope" : "role_edit", role, updated);
+  // A live role that GAINS scope takes over the sessions in it that report to
+  // its host and to no role (org-roles-run-work.md R1). Here, in the one role
+  // update, so every door that widens a scope inherits the takeover and the
+  // person's one edit (`leave_sessions`): the editor in Settings, `cast role
+  // scope`, a project's lead, an initiative's owner, a move. A door that
+  // called the takeover beside this write is a door that can forget it, and
+  // Settings did: its edit never moved a session.
+  const was = scopeIds(role.scope);
+  const gained = !!patch.scope && (scopeIds(patch.scope).project_ids.some((id) => !was.project_ids.includes(id)) || scopeIds(patch.scope).plan_ids.some((id) => !was.plan_ids.includes(id)));
+  const took = gained ? await takeOverSessions(ctx, userId, role._id, { leave: args.leave_sessions }) : null;
+  return { ...updated, ...(overlaps ? { overlaps } : {}), ...(took ? { took_over: { ...took, phrase: takeoverPhrase(updated.handle, took, true) } } : {}) };
 }
 
 // Walk up from `start` through role parents; true when `needle` is an
@@ -460,7 +485,9 @@ export async function performReparentRole(
     });
     Object.assign(told, await tellRoleMoved(ctx, userId, await ctx.db.get(role._id), args.note));
   }
-  return { ...(await ctx.db.get(role._id)), told };
+  const moved = await ctx.db.get(role._id);
+  await noteRoleChange(ctx, userId, "move", role, moved, { door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" });
+  return { ...moved, told };
 }
 
 // The agents hear about a role move (org-staffing.md S11): the role gets an
@@ -517,6 +544,11 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
   // that would have carried it is dropped below.
   let cancelledTriggers = 0;
   const standing = await standingConversationOf(ctx, role);
+  // What the org log needs to put this back (org-staffing.md S21), read
+  // before the writes below change it: the routines that are live on the
+  // seat, and the open tasks the role holds.
+  const liveRoutines: any[] = standing ? (await ctx.db.query("agent_tasks").withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id)).collect()).filter((t: any) => !["cancelled", "completed", "failed"].includes(t.status)) : [];
+  const heldTasks: any[] = (await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id))).collect()).filter((t: any) => t.status !== "done" && t.status !== "dropped");
   if (standing) {
     cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now, keepStanding ? (t) => t.title === COMPANY_REVIEW_TITLE : undefined);
     const held: any[] = await ctx.db.query("pending_messages")
@@ -562,8 +594,25 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
     (r) => r.reports_to?.kind === "role" && r.reports_to.role_id.toString() === role._id.toString(),
   );
   for (const child of children) await ctx.db.patch(child._id, { reports_to: role.reports_to, updated_at: now });
+  // Its open tasks go the same way, up to whoever it reported to
+  // (org-roles-run-work.md R5): the work is the company's, not the seat's.
+  const tasksHanded = await handOpenTasksUpChain(ctx, role, userId);
   await ctx.db.patch(role._id, { status: "retired", updated_at: now });
-  return { ...(await ctx.db.get(role._id)), cleared: filed.length, rehomed: children.length, interrupted, cancelled_triggers: cancelledTriggers, standing_session: standing ? (keepStanding ? "kept" : "retired") : "none" };
+  const retired = await ctx.db.get(role._id);
+  const stopped: any[] = [];
+  for (const t of liveRoutines) if ((await ctx.db.get(t._id))?.status === "cancelled") stopped.push({ agent_task_id: String(t._id), title: t.title });
+  const handed: any[] = [];
+  for (const t of heldTasks) { const to = (await ctx.db.get(t._id))?.assignee; if (to && to !== String(role._id)) handed.push({ task_id: String(t._id), short_id: t.short_id, from: String(role._id), to: String(to) }); }
+  await noteRoleChange(ctx, userId, "retire", role, retired, {
+    effects: {
+      ...(standing ? { seat: { conversation_id: String(standing._id), short_id: standing.short_id ?? String(standing._id).slice(0, 7), kept: keepStanding, ...(standing.seat_previous?.title ? { previous_title: standing.seat_previous.title } : {}) } } : {}),
+      ...(stopped.length ? { routines_stopped: stopped } : {}),
+      ...(handed.length ? { tasks_handed: handed } : {}),
+      ...(children.length ? { children_moved: children.map((c: any) => ({ role_id: String(c._id), handle: c.handle, before: { kind: "role" as const, role_id: String(role._id) } })) } : {}),
+      ...(filed.length ? { sessions_released: filed.map((c: any) => ({ conversation_id: String(c._id), short_id: c.short_id ?? String(c._id).slice(0, 7), before: { owner_user_ids: [String(c.owner_user_id ?? c.user_id)], org_role_id: String(role._id) } })) } : {}),
+    },
+  });
+  return { ...retired, cleared: filed.length, rehomed: children.length, tasks_handed: tasksHanded, interrupted, cancelled_triggers: cancelledTriggers, standing_session: standing ? (keepStanding ? "kept" : "retired") : "none" };
 }
 
 // Moving a session in the tree is the ownership gesture (org-staffing.md
@@ -608,16 +657,36 @@ export const create = mutation({
     // becomes the role's standing session, so no new one starts. A session
     // that cannot be seated throws, and the role is not created either.
     adopt_conversation_id: v.optional(v.string()),
+    // A role hired with projects or plans gains a scope, so it takes over the
+    // sessions in it like every other scope gain (R1); this is the person's
+    // one edit on the hire: the role starts and the sessions stay with them.
+    leave_sessions: v.optional(v.boolean()),
   },
-  handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, adopt_conversation_id, ...args }) => {
+  handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions, ...args }) => {
     await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
-    const userId = await requireCaller(ctx, api_token);
-    const role = await performCreateRole(ctx, userId, args);
-    if (!provision && !adopt_conversation_id) return role;
-    const provisioned = await performProvisionRole(ctx, userId, { role_id: String(role._id), model, project_path, agent_type, adopt_conversation_id });
-    return { ...(await ctx.db.get(role._id)), provisioned };
+    return performHireRole(ctx, await requireCaller(ctx, api_token), args, { provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions });
   },
 });
+
+// The hire as one act: the role, its standing session when asked for, and the
+// takeover of the sessions in its scope. The takeover runs after the seat
+// exists, so the seated session is never a candidate (R1, as applyRole).
+export async function performHireRole(
+  ctx: Ctx,
+  userId: Id<"users">,
+  args: Parameters<typeof performCreateRole>[2],
+  opts: { provision?: boolean; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; leave_sessions?: boolean } = {},
+): Promise<any> {
+  const role = await performCreateRole(ctx, userId, args);
+  const provisioned = opts.provision || opts.adopt_conversation_id
+    ? await performProvisionRole(ctx, userId, { role_id: String(role._id), model: opts.model, project_path: opts.project_path, agent_type: opts.agent_type, adopt_conversation_id: opts.adopt_conversation_id })
+    : undefined;
+  const took = await takeOverSessions(ctx, userId, role._id, { leave: opts.leave_sessions });
+  return {
+    ...(provisioned ? { ...(await ctx.db.get(role._id)), provisioned } : role),
+    ...(took ? { took_over: { ...took, phrase: takeoverPhrase(role.handle, took, true) } } : {}),
+  };
+}
 
 export const update = mutation({
   args: {
@@ -633,6 +702,9 @@ export const update = mutation({
     // The session the CLI runs inside, when any: marks the call as an agent's.
     from_session: v.optional(v.string()),
     review_backend: v.optional(v.string()),
+    // With a scope that gains refs (R1): the scope lands and the sessions in
+    // it stay with their owner.
+    leave_sessions: v.optional(v.boolean()),
   },
   handler: async (ctx, { api_token, ...args }) => performUpdateRole(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
@@ -650,13 +722,9 @@ export const setScope = mutation({
     leave_sessions: v.optional(v.boolean()),
   },
   // A role that gains scope takes over the sessions in it (R1), in the same
-  // write, and the answer says what moved so the caller can tell the person.
-  handler: async (ctx, { api_token, leave_sessions, ...args }) => {
-    const userId = await requireCaller(ctx, api_token);
-    const role = await performSetRoleScope(ctx, userId, args);
-    const took = args.add?.length ? await takeOverSessions(ctx, userId, role._id, { leave: leave_sessions }) : null;
-    return { ...role, took_over: took ? { ...took, phrase: takeoverPhrase(role.handle, took, true) } : null };
-  },
+  // write (performUpdateRole), and the answer's `took_over` says what moved
+  // so the caller can tell the person.
+  handler: async (ctx, { api_token, ...args }) => performSetRoleScope(ctx, await requireCaller(ctx, api_token), args),
 });
 
 // Naming a project's lead from the project page (org-roles-run-work.md R4):
@@ -671,8 +739,8 @@ export const setScope = mutation({
 export async function performSetProjectLead(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { project_id: Id<"projects">; role_id: string | null },
-): Promise<{ owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "cleared"; took_over?: string }> {
+  args: { project_id: Id<"projects">; role_id: string | null; leave_sessions?: boolean },
+): Promise<{ owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "human_only" | "cleared"; took_over?: string }> {
   const project = await ctx.db.get(args.project_id);
   if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new Error("Project not found");
   const patch = await charterPatch(ctx, project, { owner: args.role_id }, "projects");
@@ -681,7 +749,7 @@ export async function performSetProjectLead(
   const role = await ctx.db.get(patch.owner_role_id as Id<"org_roles">);
   // The role hears it in its own words whatever happens to its scope.
   await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `you now lead the project ${project.title}: a person named you its lead`, ref: { table: "projects", id: String(project._id) } });
-  const cover = await performCoverProjects(ctx, userId, role._id, [project._id]);
+  const cover = await performCoverProjects(ctx, userId, role._id, [project._id], { leave_sessions: args.leave_sessions });
   return { owner_role_id: String(role._id), scope: cover.added.length ? "added" : cover.listed.length ? "listed" : cover.skipped[0].reason, took_over: cover.took_over };
 }
 
@@ -696,7 +764,7 @@ export async function performSetProjectLead(
 export type CoverProjectsResult = {
   added: string[];
   listed: string[];
-  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" }>;
+  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" | "human_only" }>;
   /** The sentence a person reads when the role took over sessions in the added projects. */
   took_over?: string;
 };
@@ -706,6 +774,8 @@ export async function performCoverProjects(
   userId: Id<"users">,
   roleId: Id<"org_roles">,
   projectIds: Id<"projects">[],
+  // The person's one edit (R1): the scope lands, the sessions stay.
+  opts: { leave_sessions?: boolean } = {},
 ): Promise<CoverProjectsResult> {
   const role = await ctx.db.get(roleId);
   if (!role || role.status === "retired") throw new Error("Role not found");
@@ -723,17 +793,29 @@ export async function performCoverProjects(
     out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "not_admin" as const })));
     return out;
   }
-  await performUpdateRole(ctx, userId, { role_id: String(role._id), scope: { project_ids: [...role.scope.project_ids, ...toAdd], plan_ids: role.scope.plan_ids } });
+  // A scope edit is human only (F1, T2), and a token call carries no browser
+  // identity, so the role update would refuse it and take the caller's own
+  // write (naming an owner, adding a project) down with it. Reported instead:
+  // the write stands, and the person is told the scope is theirs to widen
+  // from the role page. Never claim `human_decision` here: it names a
+  // decision a person answered, and this is not one.
+  if (!(await ctx.auth?.getUserIdentity?.())) {
+    out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "human_only" as const })));
+    return out;
+  }
+  // The role update takes over the sessions in the gained scope (R1) unless
+  // the person said to leave them; its sentence is theirs to read once the
+  // write lands.
+  const updated = await performUpdateRole(ctx, userId, { role_id: String(role._id), scope: { project_ids: [...role.scope.project_ids, ...toAdd], plan_ids: role.scope.plan_ids }, leave_sessions: opts.leave_sessions });
   out.added = toAdd.map(String);
-  // A role that gains scope takes over the sessions in it that report to its
-  // host and to no role (R1), through the one core every scope gain uses. The
-  // sentence is the person's to read once the write lands.
-  out.took_over = takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id), true) || undefined;
+  out.took_over = updated.took_over?.phrase || undefined;
   return out;
 }
 
 export const setProjectLead = mutation({
-  args: { project_id: v.id("projects"), role_id: v.union(v.string(), v.null()) },
+  // `leave_sessions` is the person's one edit on the gesture (R1): the lead
+  // is named, the scope widens, and the sessions in it stay where they are.
+  args: { project_id: v.id("projects"), role_id: v.union(v.string(), v.null()), leave_sessions: v.optional(v.boolean()) },
   handler: async (ctx, args) => performSetProjectLead(ctx, await requireCaller(ctx), args),
 });
 
@@ -1371,7 +1453,9 @@ export async function performSetTrust(ctx: any, userId: Id<"users">, args: { rol
       await ctx.db.patch(charter._id, { entries, updated_at: now });
     }
   }
-  return { ...(await ctx.db.get(role._id)), previous_trust: previous };
+  const trusted = await ctx.db.get(role._id);
+  await noteRoleChange(ctx, userId, "trust", role, trusted);
+  return { ...trusted, previous_trust: previous };
 }
 
 export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
@@ -1389,7 +1473,9 @@ export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role
     tokens_per_day: pos(args.tokens, "--tokens") ?? caps.tokens_per_day,
   };
   await ctx.db.patch(role._id, { caps: next, updated_at: Date.now() });
-  return { ...(await ctx.db.get(role._id)), caps: next };
+  const capped = await ctx.db.get(role._id);
+  await noteRoleChange(ctx, userId, "budget", role, capped);
+  return { ...capped, caps: next };
 }
 
 // wake — a person (or their session) pokes the role. The message rides the
@@ -1572,13 +1658,18 @@ export const wakes = query({
 export async function performSetReports(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; from_session?: string },
+  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; set?: Id<"users">[]; from_session?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   if (role.status === "retired") throw new Error("That role is retired");
   const admin = await userCanAdminRole(ctx, userId, role);
-  const add = args.add ?? [];
-  const remove = args.remove ?? [];
+  // `set` is the whole list as a surface holds it (the Settings tab): the
+  // difference against the stored row is taken here, where the row is, so
+  // the same per person rule below covers it.
+  const held = (role.reports_user_ids ?? []) as Id<"users">[];
+  const wanted = args.set ? new Set(args.set.map(String)) : null;
+  const add = wanted ? args.set!.filter((uid) => !held.some((h) => String(h) === String(uid))) : args.add ?? [];
+  const remove = wanted ? held.filter((uid) => !wanted.has(String(uid))) : args.remove ?? [];
   if (add.length + remove.length === 0) return role;
   const names = new Map<string, string>();
   for (const uid of [...add, ...remove]) {
@@ -1612,7 +1703,7 @@ export async function performSetReports(
 }
 
 export const setReports = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), set: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetReports(ctx, await requireCaller(ctx, api_token), args),
 });
 

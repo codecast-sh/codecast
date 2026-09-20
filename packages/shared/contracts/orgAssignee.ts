@@ -79,6 +79,12 @@ export function sameAssigneeInfo(a: AssigneeInfo | null | undefined, b: unknown)
 //
 // Read from `reports_to`, never stored on a task: a reparent moves every task
 // under the role to its new chain with no write to any task.
+//
+// ONE step function walks it everywhere: the server's `--chain me`, the
+// board's Chain axis (web/lib/taskChain) and its "My reporting chain" filter.
+// A retired role stays in the chain it reported to: retire hands its open
+// tasks up that chain, and whatever it still holds (closed work, a task
+// assigned before the hand-over) is read under the same person, never lost.
 
 export type ChainRole = {
   _id: unknown;
@@ -89,34 +95,47 @@ export type ChainRole = {
 /** Deeper than any real chart; also the guard against a cycle in bad data. */
 export const MAX_CHAIN_DEPTH = 32;
 
+export type ChainParent = { kind: "user"; key: string } | { kind: "role"; key: string; role: ChainRole } | null;
+
+/** One step up the chain: the person a role answers to, the role above it
+ *  when that role is in `byId`, or null when the chain ends here (no parent
+ *  set, or a parent role the caller's tree does not hold). */
+export function chainParentOf(role: ChainRole, byId: ReadonlyMap<string, ChainRole>): ChainParent {
+  const up = role.reports_to;
+  if (!up) return null;
+  if (up.kind === "user") return { kind: "user", key: String(up.user_id) };
+  const parent = byId.get(String(up.role_id));
+  return parent ? { kind: "role", key: String(parent._id), role: parent } : null;
+}
+
+export const chainIndex = (roles: readonly ChainRole[]): Map<string, ChainRole> => new Map(roles.map((r) => [String(r._id), r]));
+
 /** The person at the top of a role's reporting chain, or null when the chain
  *  ends without one (a missing parent, a cycle). */
 export function chainHeadOf(roleId: unknown, roles: readonly ChainRole[]): string | null {
-  const byId = new Map(roles.map((r) => [String(r._id), r]));
+  const byId = chainIndex(roles);
   let cur = byId.get(String(roleId));
   for (let depth = 0; cur && depth < MAX_CHAIN_DEPTH; depth++) {
-    const up = cur.reports_to;
+    const up = chainParentOf(cur, byId);
     if (!up) return null;
-    if (up.kind === "user") return String(up.user_id);
-    cur = byId.get(String(up.role_id));
+    if (up.kind === "user") return up.key;
+    cur = up.role;
   }
   return null;
 }
 
-/** The live roles whose chain ends at `userId`, parents before children, so a
- *  caller that nests groups can render them in order. */
+/** The roles whose chain ends at `userId`, parents before children, so a
+ *  caller that nests groups can render them in order. Retired roles included
+ *  (see above). */
 export function rolesInChainOf<R extends ChainRole>(userId: unknown, roles: readonly R[]): R[] {
-  const live = roles.filter((r) => r.status !== "retired");
-  const byId = new Map(live.map((x) => [String(x._id), x]));
+  const byId = chainIndex(roles);
   const depthOf = (r: ChainRole): number => {
     let d = 0;
-    for (let cur: ChainRole | undefined = r; cur?.reports_to?.kind === "role" && d < MAX_CHAIN_DEPTH; d++) {
-      cur = byId.get(String(cur.reports_to.role_id));
-    }
+    for (let up = chainParentOf(r, byId); up?.kind === "role" && d < MAX_CHAIN_DEPTH; up = chainParentOf(up.role, byId)) d++;
     return d;
   };
-  return live
-    .filter((r) => chainHeadOf(r._id, live) === String(userId))
+  return roles
+    .filter((r) => chainHeadOf(r._id, roles) === String(userId))
     .sort((a, b) => depthOf(a) - depthOf(b));
 }
 

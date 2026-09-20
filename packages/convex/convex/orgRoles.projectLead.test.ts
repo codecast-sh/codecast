@@ -113,6 +113,52 @@ describe("performSetProjectLead", () => {
 
 // An initiative's owner role gains every project of the initiative in one act
 // (initiatives-projects-role-page.md I1): the same scope write as naming a lead.
+describe("naming a lead takes over the project's sessions, with the person's one edit", () => {
+  // The fixture the review found missing: sessions of the host on the
+  // project's path, so the gesture has something to move.
+  const conv = (n: number) => ({ _id: `conversations_s${n}`, short_id: `jx7000${n}`, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: `Growth work ${n}`, project_path: "/repo/growth", message_count: 3, last_message_role: "assistant", updated_at: Date.now() - 60_000, created_at: 1 });
+  function withSessions() {
+    const db: any = fixtures();
+    Object.assign(db._tables.projects.find((p: any) => p._id === P), { project_path: "/repo/growth" });
+    db._tables.conversations.push(conv(1), conv(2));
+    for (const t of ["anchors", "role_wakes", "session_decisions", "messages", "user_presence", "pending_messages", "devices", "docs"]) db._tables[t] ??= [];
+    return db;
+  }
+  const roleOfSession = (db: any, n: number) => db._tables.conversations.find((c: any) => c._id === `conversations_s${n}`).org_role_id;
+
+  test("one click on the project page moves the sessions, and says so", async () => {
+    const db = withSessions();
+    const billing = await role(db, "billing", [Q]);
+    const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(billing._id) });
+    expect(out.scope).toBe("added");
+    expect(out.took_over).toContain("2 sessions now report to @billing and leave your needs input");
+    expect(roleOfSession(db, 1)).toBe(billing._id);
+  });
+
+  test("naming a project's lead offers the person's one edit (leave the sessions) like every other scope gain", async () => {
+    // performCoverProjects called the takeover with no `leave` option: one
+    // click moved up to 100 sessions out of the person's needs input, and
+    // nothing could say no (W7 review, finding 6).
+    const db = withSessions();
+    // A role with some other scope, so it does not look after the whole workspace.
+    const r = await role(db, "growth", [Q]);
+    const res = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(r._id), leave_sessions: true });
+    expect(res.scope).toBe("added");
+    expect(res.took_over).toBeUndefined();
+    expect(roleOfSession(db, 1)).toBeUndefined();
+    expect(roleOfSession(db, 2)).toBeUndefined();
+  });
+
+  test("an initiative's owner covers its projects through the same door, with the same edit", async () => {
+    const db = withSessions();
+    const r = await role(db, "growth", [Q]);
+    const cover = await performCoverProjects(ctxOf(db), ME as any, r._id, [P as any], { leave_sessions: true });
+    expect(cover.added).toEqual([P]);
+    expect(cover.took_over).toBeUndefined();
+    expect(roleOfSession(db, 1)).toBeUndefined();
+  });
+});
+
 describe("performCoverProjects", () => {
   test("adds the projects the scope does not list in one update and says which it already had", async () => {
     const db = fixtures();
@@ -141,5 +187,29 @@ describe("performCoverProjects", () => {
     const out = await performCoverProjects(ctxOf(db), ME as any, ops._id, [P, Q] as any);
     expect(out.skipped.map((x) => x.reason)).toEqual(["whole_workspace", "whole_workspace"]);
     expect(await scopeOf(db, ops._id)).toEqual([]);
+  });
+});
+
+describe("performCoverProjects from a token call", () => {
+  // A scope edit is human only, and a `cast initiative` call authenticates by
+  // token, so the role update would refuse it. The contract (I1 "The org"):
+  // reported, never thrown, so the caller's own write stands and the person
+  // is told the scope is theirs to widen from the role page.
+  const cliCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => null } }) as any;
+
+  test("an admin on the CLI is told the scope was left for a person, and nothing throws", async () => {
+    const db = fixtures();
+    const growth = await role(db, "growth", [P]);
+    const out = await performCoverProjects(cliCtx(db), ME as any, growth._id, [Q as any, P as any]);
+    expect(out).toEqual({ added: [], listed: [P], skipped: [{ project_id: Q, reason: "human_only" }] });
+    expect(await scopeOf(db, growth._id)).toEqual([P]);
+  });
+
+  test("the same call from the browser widens the scope", async () => {
+    const db = fixtures();
+    const growth = await role(db, "growth", [P]);
+    const out = await performCoverProjects(ctxOf(db), ME as any, growth._id, [Q as any]);
+    expect(out.added).toEqual([Q]);
+    expect(await scopeOf(db, growth._id)).toEqual([P, Q]);
   });
 });

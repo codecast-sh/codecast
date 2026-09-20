@@ -26,7 +26,7 @@ export const FIXTURE_PLANS = [
   { _id: "plan-old", short_id: "pl-600", title: "Org chart v1", status: "done", source: "cli", project_id: "proj-org", workspace: WS, created_at: 0, updated_at: 0 },
 ];
 
-const task = (id: string, project_id: string, status: string, plan_id?: string) => ({ _id: id, short_id: `ct-${id}`, title: `Task ${id}`, status, project_id, plan_id, workspace: WS, created_at: 0, updated_at: 0 });
+const task = (id: string, project_id: string, status: string, plan_id?: string) => ({ _id: id, short_id: `ct-${id}`, title: `Task ${id}`, status, project_id, plan_id, source: "human", workspace: WS, created_at: 0, updated_at: 0 });
 export const FIXTURE_TASKS = [
   task("1", "proj-org", "done", "plan-roles"), task("2", "proj-org", "done", "plan-roles"), task("3", "proj-org", "in_progress", "plan-roles"), task("4", "proj-org", "open"),
   task("5", "proj-org", "dropped"),

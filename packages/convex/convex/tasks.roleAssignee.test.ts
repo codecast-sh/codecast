@@ -4,7 +4,7 @@
 // wakes it, and `--chain` reads the reporting line at query time.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { list, update, webUpdate } from "./tasks";
+import { batchAssign, list, update, webUpdate } from "./tasks";
 import { hashToken } from "./apiTokens";
 
 // Real Convex ids are 32 lowercase characters, and resolveAssigneeStr passes
@@ -19,6 +19,10 @@ const ADS = id("roleads");
 const PLATFORM = id("roleplatform");
 const RETIRED = id("roleretired");
 const FOREIGN = id("roleforeign");
+// What anchors.provisionStandingAgent mints for a role named "Growth": a bot
+// user carrying the role's NAME, enrolled in team_memberships, its anchor row
+// pointing at the role.
+const BOT = id("userbotgrowth");
 const PROJECT = id("projectgrowth");
 const TOKEN = "role-assignee-token";
 
@@ -42,6 +46,8 @@ const CONVERSATIONS = [
   { _id: "conversations_standing", session_id: "standing-growth", user_id: OWNER, team_id: TEAM, status: "active", standing_role_id: GROWTH },
   { _id: "conversations_hand_ads", session_id: "hand-ads", user_id: OWNER, team_id: TEAM, status: "active", org_role_id: ADS },
   { _id: "conversations_free", session_id: "free", user_id: OWNER, team_id: TEAM, status: "active" },
+  // A fork of the growth hand: the hand's history under a new id.
+  { _id: "conversations_fork", session_id: "fork-of-hand", user_id: OWNER, team_id: TEAM, status: "active", org_role_id: GROWTH, forked_from: "conversations_hand" },
 ];
 
 const task = (n: number, extra: Record<string, any> = {}) => ({
@@ -49,17 +55,20 @@ const task = (n: number, extra: Record<string, any> = {}) => ({
   status: "open", source: "human", updated_at: n, created_at: n, ...extra,
 });
 
-async function makeCtx(tasks: any[]) {
+async function makeCtx(tasks: any[], opts: { withBot?: boolean } = {}) {
   const tables: Record<string, any[]> = {
     users: [
       { _id: OWNER, name: "Ashot", github_username: "ashot", active_team_id: TEAM, team_id: TEAM },
       { _id: JASON, name: "Jason Benn", github_username: "jbenn", active_team_id: TEAM, team_id: TEAM },
+      ...(opts.withBot ? [{ _id: BOT, name: "Growth", is_bot: true, bot_kind: "role", team_id: TEAM, active_team_id: TEAM }] : []),
     ],
     teams: [{ _id: TEAM, name: "Union" }, { _id: OTHER_TEAM, name: "Other" }],
     team_memberships: [
       { _id: "tm_1", user_id: OWNER, team_id: TEAM, role: "admin" },
       { _id: "tm_2", user_id: JASON, team_id: TEAM, role: "member" },
+      ...(opts.withBot ? [{ _id: "tm_3", user_id: BOT, team_id: TEAM, role: "member" }] : []),
     ],
+    anchors: opts.withBot ? [{ _id: "anchors_growth", bot_user_id: BOT, org_role_id: GROWTH, team_id: TEAM, status: "active" }] : [],
     api_tokens: [{ _id: "token_1", user_id: OWNER, token_hash: await hashToken(TOKEN) }],
     org_roles: ROLES.map((r) => ({ ...r })),
     tasks,
@@ -120,6 +129,46 @@ describe("a role is an assignee", () => {
     await expect(cliUpdate(ctx, { short_id: "ct-1", assignee: FOREIGN })).rejects.toThrow(/another workspace/);
     await expect((webUpdate as any)._handler(ctx, { short_id: "ct-1", assignee: FOREIGN })).rejects.toThrow(/another workspace/);
     expect(tables.tasks[0].assignee).toBeUndefined();
+  });
+
+  // The role's seat is a bot user named after the role, on the team roster.
+  // A handle names the role, never that bot: the task must sit under the
+  // role so it is woken, so `--chain` finds the task, and so the board shows
+  // one Growth and not two (lib/mentionResolve: a role outranks its bot).
+  test("@handle stores the role, not the bot user named after it", async () => {
+    const { ctx, tables } = await makeCtx([task(1)], { withBot: true });
+    await cliUpdate(ctx, { short_id: "ct-1", assignee: "@growth" });
+    expect(tables.tasks[0].assignee).toBe(GROWTH);
+    expect(tables.role_wake_outbox).toHaveLength(1);
+  });
+
+  test("the bare name resolves to the role, never to its bot user", async () => {
+    const { ctx, tables } = await makeCtx([task(1)], { withBot: true });
+    await cliUpdate(ctx, { short_id: "ct-1", assignee: "growth" });
+    expect(tables.tasks[0].assignee).toBe(GROWTH);
+  });
+
+  test("the bot user's own id names the role too, wherever a picker or a stale row hands it in", async () => {
+    const { ctx, tables } = await makeCtx([task(1)], { withBot: true });
+    await cliUpdate(ctx, { short_id: "ct-1", assignee: BOT });
+    expect(tables.tasks[0].assignee).toBe(GROWTH);
+    await (webUpdate as any)._handler(ctx, { short_id: "ct-1", assignee: BOT });
+    expect(tables.tasks[0].assignee).toBe(GROWTH);
+  });
+
+  // Access is the row's workspace stamp, never team_id, which is routing
+  // (CLAUDE.md). A task routed to the team but readable by its owner only
+  // cannot go to a team role: the role's wake row and its standing session
+  // are the team's to read, and the title would leak through them.
+  test("a task readable by its owner only is refused to a team role, in words that say why", async () => {
+    const { ctx, tables } = await makeCtx([task(1, { workspace: `user:${OWNER}` })]);
+    await expect(cliUpdate(ctx, { short_id: "ct-1", assignee: "@growth" })).rejects.toThrow(/readable by its owner only/);
+    await expect((webUpdate as any)._handler(ctx, { short_id: "ct-1", assignee: GROWTH })).rejects.toThrow(/readable by its owner only/);
+    expect(tables.tasks[0].assignee).toBeUndefined();
+    expect(tables.role_wake_outbox).toEqual([]);
+    // A person can still take it.
+    await cliUpdate(ctx, { short_id: "ct-1", assignee: "@jbenn" });
+    expect(tables.tasks[0].assignee).toBe(JASON);
   });
 });
 
@@ -203,6 +252,107 @@ describe("a session that takes a task assigns it to its role", () => {
     const { ctx, tables } = await makeCtx([task(1)]);
     await start(ctx, "ct-1", "hand-growth");
     expect(tables.role_wake_outbox).toEqual([]);
+  });
+
+  // The role assignment is decided apart from the session binding. A handoff
+  // moves the first task to in_review and leaves active_task_id set (only
+  // done and dropped clear it), so the next start binds nothing; the task
+  // still goes to the role, and the CLI still says so.
+  test("start, hand off, start the next: the next task goes to the role too", async () => {
+    const { ctx, tables } = await makeCtx([task(1), task(2)]);
+    await start(ctx, "ct-1", "hand-growth");
+    await cliUpdate(ctx, { short_id: "ct-1", status: "in_review", execution_status: "done", verification_evidence: "ran it", conversation_id: "hand-growth" });
+    const second = await start(ctx, "ct-2", "hand-growth");
+    expect(tables.tasks[1].assignee).toBe(GROWTH);
+    expect(second.assigned_role).toEqual({ handle: "growth", name: "Head of Growth" });
+  });
+
+  test("a task readable by its owner only stays unassigned when a team role's hand starts it", async () => {
+    const { ctx, tables } = await makeCtx([task(1, { workspace: `user:${OWNER}` })]);
+    const result = await start(ctx, "ct-1", "hand-growth");
+    expect(tables.tasks[0]).toMatchObject({ status: "in_progress" });
+    expect(tables.tasks[0].assignee).toBeUndefined();
+    expect(result.assigned_role).toBeUndefined();
+    expect(tables.role_wake_outbox).toEqual([]);
+  });
+
+  // A fork carries the filing session's history under a new conversation id:
+  // its start of a task that session filed is the same bookkeeping, not a
+  // takeover.
+  test("a fork of the session that filed the task starts it as its own bookkeeping", async () => {
+    const { ctx, tables } = await makeCtx([task(1, { source: "agent", created_from_conversation: "conversations_hand" })]);
+    const result = await start(ctx, "ct-1", "fork-of-hand");
+    expect(tables.tasks[0]).toMatchObject({ status: "in_progress" });
+    expect(tables.tasks[0].assignee).toBeUndefined();
+    expect(result.assigned_role).toBeUndefined();
+  });
+});
+
+describe("the assignee filter and the chain read what a task holds", () => {
+  // tasks.list once filtered the global by_assignee index with
+  // `t.team_id && memberTeamIds.has(t.team_id)`. team_id is routing: a task
+  // routed to the team and readable only by its owner that a role holds was
+  // listed to every teammate who asked for the role's tasks.
+  const privateTask = () => task(9, { user_id: JASON, workspace: `user:${JASON}`, title: "Jason's private task", assignee: GROWTH });
+
+  test("--assignee @growth does not list a teammate's task that only they can read", async () => {
+    const { ctx } = await makeCtx([task(1, { assignee: GROWTH }), privateTask()]);
+    const rows = await ls(ctx, { assignee: "@growth" });
+    expect(rows.map((r: any) => r.short_id)).toEqual(["ct-1"]);
+  });
+
+  test("--chain me does not list it either", async () => {
+    const { ctx } = await makeCtx([task(1, { assignee: GROWTH }), privateTask()]);
+    const rows = await ls(ctx, { chain: "me" });
+    expect(rows.map((r: any) => r.short_id)).toEqual(["ct-1"]);
+  });
+
+  test("a row the owner assigned to the reader is still theirs to see", async () => {
+    const { ctx } = await makeCtx([task(9, { user_id: JASON, workspace: `user:${JASON}`, assignee: OWNER })]);
+    expect((await ls(ctx, { assignee: "me" })).map((r: any) => r.short_id)).toEqual(["ct-9"]);
+  });
+
+  // A read names what a task holds where a write would refuse the role, so
+  // nothing a retired role still holds can vanish from every CLI read.
+  test("the tasks a retired role still holds can be listed by its id and by its handle", async () => {
+    const { ctx } = await makeCtx([task(1, { assignee: RETIRED })]);
+    expect((await ls(ctx, { assignee: RETIRED })).map((r: any) => r.short_id)).toEqual(["ct-1"]);
+    expect((await ls(ctx, { assignee: "@old" })).map((r: any) => r.short_id)).toEqual(["ct-1"]);
+  });
+
+  test("a retired role's tasks stay in the chain of the person it reported to", async () => {
+    const { ctx } = await makeCtx([task(1, { assignee: RETIRED })]);
+    expect((await ls(ctx, { chain: "me" })).map((r: any) => r.short_id)).toEqual(["ct-1"]);
+  });
+
+  test("the list names a role in the contract's shape, so the CLI tells it from a person by kind", async () => {
+    const { ctx } = await makeCtx([task(1, { assignee: GROWTH }), task(2, { assignee: JASON })]);
+    const rows = await ls(ctx, {});
+    expect(rows.find((r: any) => r.short_id === "ct-1").assignee_info).toMatchObject({ kind: "role", handle: "growth", role_short_id: "or-growth" });
+    expect(rows.find((r: any) => r.short_id === "ct-2").assignee_info).toMatchObject({ name: "Jason Benn", github_username: "jbenn" });
+  });
+});
+
+describe("batch assign", () => {
+  // resolveAssigneeStr once ran inside the loop: one memberships collect plus
+  // one users get per member, per task. 200 tasks in a 25 person team is over
+  // 5,000 reads, past the 4,096 limit, before any wake row is written.
+  test("the roster is read once for the batch", async () => {
+    const tasks = Array.from({ length: 20 }, (_, i) => task(i + 1));
+    const { ctx, tables } = await makeCtx(tasks);
+    let rosterReads = 0;
+    const query = ctx.db.query.bind(ctx.db);
+    ctx.db.query = (table: string) => { if (table === "team_memberships") rosterReads++; return query(table); };
+    await (batchAssign as any)._handler(ctx, { api_token: TOKEN, short_ids: tasks.map((t) => t.short_id), assignee: "@growth" });
+    expect(rosterReads).toBeLessThanOrEqual(2);
+    expect(tables.tasks.every((t: any) => t.assignee === GROWTH)).toBe(true);
+  });
+
+  test("a batch past the cap is refused before any write", async () => {
+    const { ctx, tables } = await makeCtx([task(1)]);
+    const ids = Array.from({ length: 201 }, (_, i) => `ct-${i + 1}`);
+    await expect((batchAssign as any)._handler(ctx, { api_token: TOKEN, short_ids: ids, assignee: "@growth" })).rejects.toThrow(/at most 200/);
+    expect(tables.tasks[0].assignee).toBeUndefined();
   });
 });
 

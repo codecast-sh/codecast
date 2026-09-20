@@ -74,6 +74,7 @@ const RepoHome = lazyPage("@/app/repo/[owner]/[name]/page", () => import("@/app/
 const RepoCommits = lazyPage("@/app/repo/[owner]/[name]/commits/[ref]/page", () => import("@/app/repo/[owner]/[name]/commits/[ref]/page"));
 const RepoCompare = lazyPage("@/app/repo/[owner]/[name]/compare/[range]/page", () => import("@/app/repo/[owner]/[name]/compare/[range]/page"));
 const RepoBranches = lazyPage("@/app/repo/[owner]/[name]/branches/page", () => import("@/app/repo/[owner]/[name]/branches/page"));
+const RepoWorktrees = lazyPage("@/app/repo/[owner]/[name]/worktrees/page", () => import("@/app/repo/[owner]/[name]/worktrees/page"));
 const RepoTags = lazyPage("@/app/repo/[owner]/[name]/tags/page", () => import("@/app/repo/[owner]/[name]/tags/page"));
 const RepoPulls = lazyPage("@/app/repo/[owner]/[name]/pulls/page", () => import("@/app/repo/[owner]/[name]/pulls/page"));
 const RepoSearch = lazyPage("@/app/repo/[owner]/[name]/search/page", () => import("@/app/repo/[owner]/[name]/search/page"));
@@ -115,6 +116,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/commits\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoCommits },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/compare\/([^/]+)$/, paramNames: ["owner", "name", "range"], component: RepoCompare },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/branches$/, paramNames: ["owner", "name"], component: RepoBranches },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/worktrees$/, paramNames: ["owner", "name"], component: RepoWorktrees },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/tags$/, paramNames: ["owner", "name"], component: RepoTags },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/pulls$/, paramNames: ["owner", "name"], component: RepoPulls },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/search$/, paramNames: ["owner", "name"], component: RepoSearch },

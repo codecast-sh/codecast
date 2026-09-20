@@ -136,8 +136,20 @@ describe("orgRoles.reparent", () => {
     const a = await performCreateRole(ctx, ME as any, { name: "A", handle: "aa", team_id: TEAM, reports_to: { kind: "user", user_id: MATE as any } });
     const b = await performCreateRole(ctx, ME as any, { name: "B", handle: "bb", team_id: TEAM, reports_to: { kind: "role", role_id: a._id } });
     const c = await performCreateRole(ctx, ME as any, { name: "C", handle: "cc", team_id: TEAM, reports_to: { kind: "role", role_id: b._id } });
+    // Its open tasks go up the chain with it (org-roles-run-work.md R5); a
+    // closed one keeps the retired role's name, and the chain still reads it.
+    db._tables.tasks = [
+      { _id: "tasks_1", short_id: "ct-1", title: "Open work", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, status: "in_progress", assignee: String(b._id), updated_at: 2, created_at: 1 },
+      { _id: "tasks_2", short_id: "ct-2", title: "Shipped", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, status: "done", assignee: String(b._id), updated_at: 2, created_at: 1 },
+    ];
+    db._tables.task_history = [];
+    db._tables.entity_subscriptions = [];
     const retired = await performRetireRole(ctx, ME as any, { role_id: b._id });
     expect(retired.rehomed).toBe(1);
+    expect(retired.tasks_handed).toBe(1);
+    expect(db._tables.tasks[0].assignee).toBe(String(a._id));
+    expect(db._tables.tasks[1].assignee).toBe(String(b._id));
+    expect(db._tables.task_history).toHaveLength(1);
     expect((await db.get(c._id)).reports_to).toEqual({ kind: "role", role_id: a._id });
     expect((await db.get(a._id)).reports_to).toEqual({ kind: "user", user_id: MATE }); // untouched
     // A closed seat cannot be edited back to life; its handle is free again.

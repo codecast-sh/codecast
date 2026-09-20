@@ -47,7 +47,8 @@ async function verifyRoleScopeView() {
     ...ORG_FIXTURE,
     roles: [{ ...growth, scope: { ...growth.scope, plan_ids: [...growth.scope.plan_ids, "fixture-plan-loose"] }, scope_names: { ...growth.scope_names, plans: [...growth.scope_names.plans, { id: "fixture-plan-loose", title: "Pricing page rewrite", short_id: "pl-91" }] }, charter: "Owns organic search and paid search. Writes the weekly growth review.\n\nNever touches billing.", caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 }, counters: { day: today, hands: 1, wakes: 3, tokens: 0 } }, seo],
   };
-  const row = (r: any) => ({ workspace: WS, team_id: TEAM, updated_at: 1, ...r });
+  // Tasks a person filed: the rows a project's board shows (shared/tasks isOnProjectBoard).
+  const row = (r: any) => ({ workspace: WS, team_id: TEAM, updated_at: 1, source: "human", ...r });
   const seed = async (patch: Record<string, unknown>) => act(async () => { useInboxStore.setState(patch as never); });
   await seed({
     currentUser: { _id: "fixture-user-me" },
