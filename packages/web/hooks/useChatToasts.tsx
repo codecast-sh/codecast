@@ -12,7 +12,7 @@ import { chatToastTier, isHistoryLine, type ChatToastTier } from "../lib/chatTim
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
 import { isChatContextOnScreen } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
-import { knownAgentMember, memberName, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
+import { knownAgentMember, memberName, slackAuthorFor, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
 import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -192,7 +192,8 @@ export function useChatToasts(): void {
       burstRef.current.set(channelId, recent);
 
       const author = byId.get(String(last.user_id)) ?? knownAgentMember(String(last.user_id));
-      const isAgent = last.author_kind === "agent" || !!author?.is_bot;
+      const slackAuthor = slackAuthorFor(full?.external_author ? full : last);
+      const isAgent = !slackAuthor && (last.author_kind === "agent" || !!author?.is_bot);
       const data: ChatToastData = {
         messageId,
         channelId,
@@ -203,8 +204,8 @@ export function useChatToasts(): void {
             )
           : channelRow?.name ?? "channel",
         isDm,
-        authorName: memberName(author),
-        authorAvatarUrl: isAgent ? undefined : author?.image || author?.github_avatar_url,
+        authorName: slackAuthor?.name ?? memberName(author),
+        authorAvatarUrl: slackAuthor ? slackAuthor.avatarUrl : isAgent ? undefined : author?.image || author?.github_avatar_url,
         authorIsAgent: isAgent,
         preview: toastPreview(full?.content ?? last.preview ?? ""),
         tier,

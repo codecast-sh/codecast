@@ -270,6 +270,7 @@ export type ChatRailRow = {
     _id: string;
     user_id: string;
     author_kind?: "user" | "agent";
+    external_author?: ChatExternalAuthor;
     created_at: number;
     preview: string;
     thread_root_id?: string;
