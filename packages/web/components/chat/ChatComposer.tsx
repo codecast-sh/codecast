@@ -1,6 +1,7 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { Headphones, ImagePlus } from "lucide-react";
+import { Headphones, ImagePlus, MoreHorizontal } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { WalkiePttButton } from "../calls/WalkiePtt";
 import { MessageInput } from "../MessageInput";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -141,40 +142,22 @@ export const ChatComposer = memo(function ChatComposer({
           type="button"
           className="ch-composer-attach"
           title="Attach an image"
+          aria-label="Attach an image"
           onClick={() => pickerRef.current?.click()}
         >
           <ImagePlus className="w-3.5 h-3.5" />
         </button>
         {offerWalkie && (
-          <>
-            {/* The key and its first-use callout share a seat, so the callout
-                hangs over the key it is about — and a press on the key retires
-                it, because pressing IS learning it. */}
-            <span
-              className="walkie-seat"
-            >
-              <WalkiePttButton
-                roomKey={walkieRoomKey}
-                resolveChannelId={resolveChannelId}
-                size="sm"
-                icon={Headphones}
-                title="Talk to them — they see your face and hear you; click again to stop"
-                ring={walkieRing ? { toUserIds: walkieRing } : undefined}
-              />
-            </span>
-            {/* The chord for the same gesture, ON the control rather than in
-                the hint row at the far right of the composer, which is where it
-                used to be: a binding is learned beside the thing it operates.
-                A hand already on the keyboard should never have to find the
-                mouse to say one sentence. */}
-            <span className="walkie-chord">
-              <span className="walkie-chord-word">toggle</span>
-              <MenuKeyCaps
-                action="chat.pushToTalk"
-                className="inline-flex items-center gap-[2px]"
-              />
-            </span>
-          </>
+          <span className="walkie-seat">
+            <WalkiePttButton
+              roomKey={walkieRoomKey}
+              resolveChannelId={resolveChannelId}
+              size="sm"
+              icon={Headphones}
+              title="Talk to them — click again to stop"
+              ring={walkieRing ? { toUserIds: walkieRing } : undefined}
+            />
+          </span>
         )}
         <input
           ref={pickerRef}
@@ -188,50 +171,44 @@ export const ChatComposer = memo(function ChatComposer({
             e.target.value = "";
           }}
         />
-        {offerBroadcast && (
-          <label className={`ch-composer-broadcast ${broadcast ? "ch-composer-broadcast-on" : ""}`}>
-            <input
-              type="checkbox"
-              checked={broadcast}
-              onChange={(e) => setBroadcast(e.target.checked)}
-            />
-            Also send to #{channelName}
-          </label>
-        )}
-        {offerSlack && (
-          // The same control as "Also send to #channel" beside it: one grammar
-          // for "where else does this line go". Checked = it crosses to Slack.
-          <label
-            className={`ch-composer-broadcast ch-composer-slack ${localOnly ? "ch-composer-slack-off" : "ch-composer-broadcast-on"}`}
-            title={localOnly
-              ? `This line stays here. Tick to also send it to Slack #${slackChannelName}.`
-              : `This line also appears in Slack #${slackChannelName}. Untick to keep it here only.`}
-          >
-            <input
-              type="checkbox"
-              checked={!localOnly}
-              onChange={(e) => setLocalOnly(!e.target.checked)}
-            />
-            <SlackLogo className="w-3 h-3" muted={localOnly} />
-            <span>to #{slackChannelName}</span>
-          </label>
-        )}
         <TypingIndicator members={typists} />
-        {/* The optional half is shed by WIDTH, not by which panel this is. The
-            thread panel was the narrow case the flag was written for, but the
-            main composer gets just as narrow with a rail and a thread beside it
-            — and it had no guard at all. A container query asks the real
-            question: is there room? (see .ch-composer-hint-wide in chat.css) */}
-        <span className="ch-composer-hint">
-          <span className="ch-composer-hint-wide">
-            {/* Push to talk is NOT listed here any more: it is written beside
-                the key itself, and saying the same chord twice in one composer
-                made the row longer without making it clearer. */}
-            <KeyCap size="xs">@</KeyCap> to mention ·{" "}
-          </span>
-          <KeyCap size="xs">Enter</KeyCap> to send · <KeyCap size="xs">Shift</KeyCap>
-          <KeyCap size="xs">Enter</KeyCap> for a new line
-        </span>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" className="ch-composer-options" aria-label="Message options" title="Message options">
+              {offerSlack && <SlackLogo className="w-3 h-3" muted={localOnly} />}
+              {localOnly && <span>Only here</span>}
+              {broadcast && <span>Also in #{channelName}</span>}
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="end" sideOffset={8} className="ch-composer-menu" aria-label="Message options">
+            {(offerSlack || offerBroadcast) && (
+              <div className="ch-composer-delivery">
+                <span className="ch-composer-menu-heading">This message</span>
+                {offerSlack && (
+                  <label className="ch-composer-choice">
+                    <input type="checkbox" checked={!localOnly} onChange={(e) => setLocalOnly(!e.target.checked)} />
+                    <SlackLogo className="w-3.5 h-3.5" muted={localOnly} />
+                    <span>Also send to Slack #{slackChannelName}</span>
+                  </label>
+                )}
+                {offerBroadcast && (
+                  <label className="ch-composer-choice">
+                    <input type="checkbox" checked={broadcast} onChange={(e) => setBroadcast(e.target.checked)} />
+                    <span>Also send to #{channelName}</span>
+                  </label>
+                )}
+              </div>
+            )}
+            <div className="ch-composer-shortcuts">
+              <span className="ch-composer-menu-heading">Keyboard shortcuts</span>
+              <div><span>Send message</span><span><KeyCap size="xs">Enter</KeyCap></span></div>
+              <div><span>New line</span><span><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">Enter</KeyCap></span></div>
+              <div><span>Mention someone</span><span><KeyCap size="xs">@</KeyCap></span></div>
+              {offerWalkie && <div><span>Toggle voice</span><MenuKeyCaps action="chat.pushToTalk" className="inline-flex items-center gap-[2px]" /></div>}
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
     </div>
   );

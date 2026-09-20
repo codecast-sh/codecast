@@ -298,6 +298,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     paddingStart,
     paddingEnd,
     isScrollingResetDelay: 150,
+    useFlushSync: false,
     // Native chat anchoring. The virtualizer owns bottom pinning because it is
     // the only thing that knows whether IT moved the scroll or the user did.
     //   anchorTo:"end"      — within scrollEndThreshold of the bottom, any size
@@ -341,13 +342,19 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
   // virtualizer. One shot is never enough: the target offset comes from believed
   // sizes, and as rows measure in the end moves by whole screens.
   const scrollToRef = useRef<(target: number | "bottom", o?: { align?: "start" | "center" | "end"; smooth?: boolean; bailOnUserScroll?: boolean }) => void>(() => {});
+  const scrollRequestRef = useRef(0);
+  const scrollScopeRef = useRef(resetKey);
+  scrollScopeRef.current = resetKey;
+  useMountEffect(() => () => { scrollRequestRef.current++; });
   scrollToRef.current = (target, o) => {
     const sc = containerRef.current;
     if (!sc) return;
+    const request = ++scrollRequestRef.current;
     const pull = () => {
+      if (request !== scrollRequestRef.current || resetKey !== scrollScopeRef.current) return;
       if (o?.bailOnUserScroll && userScrolledRef.current) return;
       if (target === "bottom") {
-        if (count > 0) virtualizer.scrollToIndex(count - 1, { align: "end" });
+        if (virtualizer.options.count > 0) virtualizer.scrollToIndex(virtualizer.options.count - 1, { align: "end" });
         sc.scrollTop = sc.scrollHeight;
       } else {
         virtualizer.scrollToIndex(target, { align: o?.align ?? "start" });
@@ -373,7 +380,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
 
   const scrollToBottom = useCallback((o?: { smooth?: boolean }) => {
     setUserScrolled(false);
-    scrollToRef.current("bottom", { smooth: o?.smooth });
+    scrollToRef.current("bottom", { smooth: o?.smooth, bailOnUserScroll: true });
   }, [setUserScrolled]);
 
   const scrollToIndex = useCallback((index: number, o?: { align?: "start" | "center" | "end"; smooth?: boolean }) => {
@@ -541,8 +548,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
   // useLayoutEffect, not useEffect: a chat notification (and any cold open)
   // must paint already at the tail. After-paint landing is the jump the reader
   // sees — mid transcript, then a scroll down as estimates settle. The
-  // virtualizer flushSyncs on the scroll we dispatch, so the tail rows are in
-  // the DOM before the browser paints. Held for a while rather than trusted
+  // DOM measurements settle before paint. Held for a while rather than trusted
   // once: late images, fonts and the drift reconciler keep changing heights
   // for seconds. It bails permanently the moment the reader scrolls on purpose.
   const landedRef = useRef<string | null>(null);

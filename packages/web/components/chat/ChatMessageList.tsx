@@ -259,11 +259,27 @@ export const ChatMessageList = memo(function ChatMessageList({
     ownSendScrolledRef.current = ownSendKey;
   }
   const { scrollToBottom } = list;
-  useWatchEffect(() => {
+  useLayoutEffect(() => {
     if (!ownSendKey || ownSendScrolledRef.current === ownSendKey) return;
     ownSendScrolledRef.current = ownSendKey;
-    scrollToBottom({ smooth: !prefersReducedMotion() });
+    scrollToBottom();
   }, [ownSendKey, scrollToBottom]);
+
+  const previousMessagesRef = useRef({ channelId, messages });
+  useLayoutEffect(() => {
+    const previous = previousMessagesRef.current;
+    previousMessagesRef.current = { channelId, messages };
+    if (previous.channelId !== channelId || previous.messages.length === 0) return;
+    const previousTail = previous.messages[previous.messages.length - 1];
+    const previousIds = new Set(previous.messages.map((message) => message.id));
+    const arrived = messages.some((message) =>
+      message.author.id !== viewerId
+      && !message.deletedAt
+      && message.createdAt >= previousTail.createdAt
+      && !previousIds.has(message.id),
+    );
+    if (arrived) scrollToBottom();
+  }, [channelId, messages, viewerId, scrollToBottom]);
 
   // Land on a permalinked message. Two steps, because the row may be virtualized
   // out of the DOM: scroll the virtualizer to its index first, then flash the

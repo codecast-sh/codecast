@@ -1022,62 +1022,108 @@ div.ch-reaction-tip {
 .ch-composer-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px 5px;
+  gap: 6px;
+  min-height: 36px;
+  padding: 2px 8px 6px;
 }
 
-.ch-composer-hint {
-  font-size: 10px;
-  color: var(--sol-text-muted);
-  /* Pinned right even while the typing indicator is absent, so presence
-   * appearing on the left never makes the hints jump. */
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
-/* The optional half of the hint. Shed by available WIDTH — the thread panel is
- * the obvious narrow case, but the main composer gets just as narrow with a rail
- * and a thread beside it. A container query asks the real question. */
-@container ch-composer (max-width: 420px) {
-  .ch-composer-hint-wide { display: none; }
-}
-
-/* Slack's "Also send to #channel", offered only under a thread reply box. */
-.ch-composer-broadcast {
+.ch-composer-options {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  flex: 0 1 auto;
-  min-width: 0;
-  font-size: 10.5px;
+  justify-content: center;
+  gap: 7px;
+  min-height: 28px;
+  min-width: 28px;
+  max-width: calc(100% - 80px);
+  margin-left: auto;
+  padding: 4px 6px;
+  border-radius: 6px;
   color: var(--sol-text-muted);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
+  font-size: 10px;
+  transition: color 130ms ease, background 130ms ease;
+}
+
+.ch-composer-options > span {
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 120ms ease;
+  white-space: nowrap;
 }
 
-.ch-composer-broadcast input {
-  width: 12px;
-  height: 12px;
-  margin: 0;
-  flex: 0 0 auto;
-  accent-color: var(--sol-cyan);
-  cursor: pointer;
+.ch-composer-options > svg {
+  flex-shrink: 0;
 }
 
-.ch-composer-broadcast:hover,
-.ch-composer-broadcast-on {
+.ch-composer-options:hover,
+.ch-composer-options[data-state="open"] {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
+
+.ch-composer-options:focus-visible,
+.ch-composer-attach:focus-visible {
+  outline: 2px solid var(--sol-blue);
+  outline-offset: 2px;
+}
+
+.ch-composer-menu {
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 14px;
+  border-color: var(--sol-border);
+  background: var(--sol-card);
   color: var(--sol-text);
 }
 
-/* The checkbox and the keyboard hint don't both fit in a narrow thread panel,
- * and the checkbox is the one that does something. */
-@container ch-composer (max-width: 460px) {
-  .ch-composer-foot:has(.ch-composer-broadcast) .ch-composer-hint { display: none; }
+.ch-composer-menu-heading {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--sol-text-dim);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ch-composer-delivery {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+}
+
+.ch-composer-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ch-composer-choice input,
+.ch-composer-choice svg {
+  flex-shrink: 0;
+  accent-color: var(--sol-cyan);
+}
+
+.ch-composer-choice span {
+  overflow-wrap: anywhere;
+}
+
+.ch-composer-shortcuts > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  color: var(--sol-text-muted);
+  font-size: 11px;
+}
+
+.ch-composer-shortcuts > div > span:last-child {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.ch-composer [data-sv-composer] form > div {
+  background: transparent;
 }
 
 /* The composer is the app's own MessageInput (see ChatComposer). It is built to
@@ -2144,6 +2190,10 @@ div.ch-reaction-tip {
 .ch-composer-attach {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
   padding: 3px 5px;
   margin-right: 2px;
   border-radius: 6px;
@@ -2956,13 +3006,6 @@ a.ch-slack-mark:hover { color: var(--sol-text); text-decoration: underline; }
   border-radius: 6px;
   background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
   border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
-}
-
-/* Composer checkbox: the broadcast control's twin (same class, same size). */
-.ch-composer-slack svg { flex: 0 0 auto; }
-.ch-composer-slack-off span { color: var(--sol-text-dim); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--sol-text-dim) 60%, transparent); }
-@container ch-composer (max-width: 460px) {
-  .ch-composer-foot:has(.ch-composer-slack) .ch-composer-hint { display: none; }
 }
 
 /* Slack quotes and cards (attachments arrive as blockquotes). */
