@@ -8,22 +8,15 @@
 //
 // Who heads a chain and which roles sit in it is the shared contract's
 // (@codecast/shared/contracts/orgAssignee, which the server and the CLI read
-// too). This file adds only the DRAW order: parents directly above their own
+// too): the same parent step (`chainParentOf`) walks the chain here, so the
+// axis and the "My reporting chain" filter can never show two different
+// lists. This file adds only the DRAW order: parents directly above their own
 // children, each with a depth. Pure data, no React; lib/taskGrouping's chain
 // axis draws what this orders.
-import type { ChainRole } from "@codecast/shared/contracts/orgAssignee";
+import { chainIndex, chainParentOf, type ChainRole } from "@codecast/shared/contracts/orgAssignee";
 
 /** One group in chain order. `depth` 0 is the top of a chain. */
 export type ChainNode = { key: string; depth: number };
-
-/** Who a role answers to, as a group key: a person's id, a role's id, or null
- *  when the role above it is not in the tree (it then heads its own chain). */
-function parentKeyOf(role: ChainRole, roleById: Map<string, ChainRole>): string | null {
-  const up = role.reports_to;
-  if (!up) return null;
-  if (up.kind === "user") return String(up.user_id);
-  return roleById.has(String(up.role_id)) ? String(up.role_id) : null;
-}
 
 /**
  * Order assignee keys by reporting chain.
@@ -44,7 +37,7 @@ export function arrangeChain(
   roles: readonly ChainRole[],
   opts: { meId?: string | null; nameOf: (key: string) => string },
 ): ChainNode[] {
-  const roleById = new Map(roles.map((r) => [String(r._id), r]));
+  const roleById = chainIndex(roles);
 
   const parent = new Map<string, string | null>();
   for (const start of keys) {
@@ -53,7 +46,7 @@ export function arrangeChain(
     while (key && !walked.has(key)) {
       walked.add(key);
       const role = roleById.get(key);
-      const up: string | null = role ? parentKeyOf(role, roleById) : null;
+      const up: string | null = role ? (chainParentOf(role, roleById)?.key ?? null) : null;
       parent.set(key, up);
       key = up;
     }
