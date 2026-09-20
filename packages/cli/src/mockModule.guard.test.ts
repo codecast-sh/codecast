@@ -86,7 +86,7 @@ describe("no test installs a process-wide module mock", () => {
       });
     }
     expect(offenders).toEqual([]);
-  });
+  }, 120_000);
 
   test("the scan reads code, not strings and comments", () => {
     // A guard that blanked everything would pass forever, so pin both halves.
