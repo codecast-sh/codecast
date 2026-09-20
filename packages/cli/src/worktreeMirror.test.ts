@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mergeWorktreesPayload, worktreeOfPath, type WorktreesPayload } from "@codecast/shared/contracts";
-import { buildWorktreeMirror, mainRootFor, parseWorktreeList, worktreeFingerprint } from "./worktreeMirror";
+import { beforeEach } from "bun:test";
+import { buildWorktreeMirror, mainRootFor, parseWorktreeList, resetWorktreeMirrorCache, worktreeFingerprint } from "./worktreeMirror";
 import type { GitRunner } from "./repoMirror";
 
 const ROOT = "/nonexistent/repo";
@@ -25,6 +26,9 @@ function fakeGit(calls: string[] = []): GitRunner {
     if (key === "symbolic-ref --short refs/remotes/origin/HEAD") return "origin/main\n";
     if (key.startsWith("status --porcelain")) return cwd === WT ? " M app.ts\n" : "";
     if (key === "rev-list --left-right --count main...bbbb222") return "68\t3\n";
+    if (key === "rev-parse main") return "aaaa111\n";
+    // Three commits ahead by hash; two already landed on main under new hashes.
+    if (key === "cherry aaaa111 bbbb222") return "- 1111 landed\n- 2222 landed\n+ 3333 still only here\n";
     if (key.startsWith("log -1")) return "1789000000\u0000Add tip modes\n";
     if (key === "rev-parse --path-format=absolute --git-common-dir") return `${ROOT}/.git\n`;
     throw new Error(`unexpected git ${key}`);
@@ -45,6 +49,8 @@ describe("parseWorktreeList", () => {
 });
 
 describe("buildWorktreeMirror", () => {
+  beforeEach(resetWorktreeMirrorCache);
+
   test("publishes one worktrees row under the repository's key", async () => {
     const mirror = (await buildWorktreeMirror(ROOT, { now: () => 5 }, fakeGit()))!;
     expect(mirror.repository).toBe("union/union-mobile");
@@ -72,9 +78,16 @@ describe("buildWorktreeMirror", () => {
     const calls: string[] = [];
     const mirror = (await buildWorktreeMirror(ROOT, {}, fakeGit(calls)))!;
     const wt = payloadOf(mirror).worktrees.find((w) => w.name === "tips-modes")!;
-    expect(wt).toMatchObject({ dirty: true, ahead: 3, behind: 68, subject: "Add tip modes", committed_at: 1789000000000 });
+    expect(wt).toMatchObject({ dirty: true, ahead: 1, behind: 68, subject: "Add tip modes", committed_at: 1789000000000 });
     expect(payloadOf(mirror).worktrees[0].dirty).toBe(false);
     expect(calls.filter((c) => c.includes("status --porcelain")).map((c) => c.split(" :: ")[0])).toEqual([ROOT, WT]);
+  });
+
+  test("ahead counts the patches main lacks, asked once for each pair of commits", async () => {
+    const calls: string[] = [];
+    await buildWorktreeMirror(ROOT, {}, fakeGit(calls));
+    await buildWorktreeMirror(ROOT, {}, fakeGit(calls));
+    expect(calls.filter((c) => c.includes(":: cherry ")).length).toBe(1);
   });
 
   test("an occupied worktree takes the daemon's status read instead of making its own", async () => {

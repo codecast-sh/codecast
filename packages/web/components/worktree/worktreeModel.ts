@@ -54,7 +54,7 @@ export type WorktreeGroup = { key: "main" | WorktreeEntry["manager"]; label: str
 
 const GROUPS: Array<Omit<WorktreeGroup, "worktrees">> = [
   { key: "main", label: "Main checkout", hint: "The checkout every worktree hangs off" },
-  { key: "codecast", label: "Codecast worktrees", hint: "Made by cast ws: own env files, ports and setup" },
+  { key: "codecast", label: "Codecast worktrees", hint: "Under .codecast/worktrees. cast ws gives the ones it made their own env files, ports and setup" },
   { key: "claude", label: "Agent worktrees", hint: "Made by Claude Code for its own subagents" },
   { key: "git", label: "Other worktrees", hint: "Made with git worktree add" },
 ];

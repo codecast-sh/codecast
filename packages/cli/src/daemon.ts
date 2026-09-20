@@ -61,8 +61,8 @@ import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
-import { buildWorktreeMirror, mainRootFor, worktreeFingerprint } from "./worktreeMirror.js";
-import { listStates as listWorkspaceStates, recordWorkspaceSession } from "./workspace/contract.js";
+import { buildWorktreeMirror, mainRootFor, workspaceStatesFor, worktreeFingerprint } from "./worktreeMirror.js";
+import { recordWorkspaceSession } from "./workspace/contract.js";
 import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, type LocalReadRequest } from "./repoMirror.js";
 import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
@@ -19704,8 +19704,8 @@ async function publishWorktreeMirrors(targets: Array<{ sessionId: string; conver
     if (repoMirrorPrivate.has(root)) continue;
     // A session seen in a `cast ws` worktree goes into that worktree's own
     // record, so the worktree still names it once the session has ended.
-    for (const state of listWorkspaceStates(root)) {
-      for (const t of sessions) if (t.cwd === state.path || t.cwd.startsWith(`${state.path}/`)) recordWorkspaceSession(root, state.name, t.sessionId);
+    for (const { stateRoot, state } of workspaceStatesFor(root, sessions.map((t) => t.cwd))) {
+      for (const t of sessions) if (t.cwd === state.path || t.cwd.startsWith(`${state.path}/`)) recordWorkspaceSession(stateRoot, state.name, t.sessionId);
     }
     const mirror = await buildWorktreeMirror(root, { device_id: deviceId(), device_label: deviceLabel(), sessions, resolveSession: (id) => cache[id] });
     if (!mirror) {
