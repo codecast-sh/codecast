@@ -31,7 +31,7 @@ components/CommandPalette.tsx 1
 components/ConfigEditor.tsx 2
 components/ConversationDiffLayout.tsx 1
 components/ConversationTree.tsx 1
-components/ConversationView.tsx 2
+components/ConversationView.tsx 1
 components/CreateTaskModal.tsx 1
 components/DesktopProvider.tsx 1
 components/DocEmbed.tsx 1

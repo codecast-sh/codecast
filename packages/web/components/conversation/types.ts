@@ -3,6 +3,7 @@ import type { RoleWakeFrame } from "../roleWake";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "../tools/SentFileBlock";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
+import type { ExternalEventRecord } from "../../lib/externalEvents";
 
 // View density for the conversation. The first three render the message feed
 // with progressively less chrome; "story" and "summary" replace the feed with
@@ -440,3 +441,10 @@ export type StoryBeat = { heading: string; body: string; anchor_prompt: string; 
 // attributed to the message that ran them when the group opens).
 export type ReceiptEntry = { messageId: string; messageUuid?: string; timestamp: number; tools: ToolCall[] };
 export type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: () => void };
+
+// Messages, commits, pull requests and external events merged into one feed.
+export type TimelineItem =
+  | { type: 'message'; data: Message; timestamp: number }
+  | { type: 'commit'; data: Commit; timestamp: number }
+  | { type: 'pull_request'; data: PullRequest; timestamp: number }
+  | { type: 'external_event'; data: ExternalEventRecord; timestamp: number };
