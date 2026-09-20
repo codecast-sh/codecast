@@ -18,17 +18,18 @@ describe("resolveDeviceSelector — cast spawn --device", () => {
     expect(resolveDeviceSelector(devices, "Mac Mini")).toBe("dev-remote-2");
   });
 
-  test("the display name the UI shows resolves too: --device \"cloud linux\"", () => {
+  test("the display names the UI shows resolve too", () => {
     const withHost = [
       ...devices,
       { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true },
-      { device_id: "dev-mini-5", label: "macOS - mini", platform: "darwin", is_remote: true },
+      { device_id: "dev-mini-5", label: "macOS - InterGalactic", platform: "darwin", is_remote: true },
     ];
     expect(resolveDeviceSelector(withHost, "cloud linux")).toBe("dev-host-4");
     expect(resolveDeviceSelector(withHost, "Cloud Linux")).toBe("dev-host-4");
-    expect(resolveDeviceSelector(withHost, "remote mac")).toBe("dev-mini-5");
+    expect(resolveDeviceSelector(withHost, "InterGalactic")).toBe("dev-mini-5");
     // The stored label still resolves as before.
     expect(resolveDeviceSelector(withHost, "linux - ip-172-31-40-243")).toBe("dev-host-4");
+    expect(resolveDeviceSelector(withHost, "macOS - InterGalactic")).toBe("dev-mini-5");
   });
 
   test("a stored label wins over another machine's display name", () => {
