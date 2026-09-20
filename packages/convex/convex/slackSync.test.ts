@@ -28,7 +28,7 @@ import {
   teammateHandles,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
-import { sendMessage, toggleReaction, updateChannel } from "./chat";
+import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
 const ALICE = "user-alice" as any;
@@ -214,6 +214,12 @@ describe("applyInboundMessage", () => {
     const bridge = await ctx.db.get(messages(ctx)[0].user_id);
     expect(bridge.name).toMatch(/Slack/);
     expect(ctx._emitted[0].args.actor_user_id).toBe(bridge._id);
+    const viewer = { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${BOB}|session` }) } };
+    const { rail } = await call(listChannels, viewer, { team_id: TEAM });
+    const last = rail.find((r: any) => r.channel_id === CHANNEL).last_message;
+    expect(last._id).toBe(messages(ctx)[0]._id);
+    expect(last.user_id).toBe(bridge._id);
+    expect(last.external_author).toEqual(base.external_author);
   });
   test("a mapped teammate is the author and the line still wears the Slack mark", async () => {
     const ctx = context(null);

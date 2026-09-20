@@ -616,6 +616,7 @@ type ChatRailRow = {
     _id: Id<"chat_messages">;
     user_id: Id<"users">;
     author_kind: "user" | "agent";
+    external_author?: Doc<"chat_messages">["external_author"];
     created_at: number;
     preview: string;
     // Present when the newest line is a thread reply. The toast layer uses
@@ -734,6 +735,7 @@ async function railFor(
             _id: lastMessage._id,
             user_id: lastMessage.user_id,
             author_kind: lastMessage.author_kind ?? "user",
+            ...(lastMessage.external_author ? { external_author: lastMessage.external_author } : {}),
             created_at: lastMessage.created_at,
             preview: plainPreview(lastMessage.content, 120),
             ...(lastMessage.thread_root_id
