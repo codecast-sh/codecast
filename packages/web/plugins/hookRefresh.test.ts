@@ -3,6 +3,7 @@ import {
   GATE_FOOTER,
   REACT_PLUGIN_GATE,
   REFRESH_RUNTIME_ID,
+  SIGNATURE_FN,
   SIGN_HEAD,
   SIGN_TAIL,
   hookRefreshPlugin,
@@ -54,7 +55,7 @@ describe("hookRefreshPlugin gate (pre)", () => {
     expect(runGate(`${ROOT}/lib/callsite.ts`, `const v = useThing();`)).toBeNull();
   });
 
-  test("skips files plugin-react already signs or that own their HMR", () => {
+  test("skips files babel already reads or that own their HMR", () => {
     expect(runGate(`${ROOT}/components/X.tsx`, HOOK)).toBeNull();
     expect(runGate(`${ROOT}/hooks/useThing.d.ts`, HOOK)).toBeNull();
     expect(runGate(`${ROOT}/hooks/useThing.ts`, `${HOOK}// ${REACT_PLUGIN_GATE}\n`)).toBeNull();
@@ -80,15 +81,28 @@ describe("hookRefreshPlugin sign (post)", () => {
     expect(out!.split("\n").length).toBe(SIGNED.split("\n").length + SIGN_TAIL.split("\n").length - 1);
     expect(SIGN_HEAD).not.toContain("\n");
     expect(SIGN_HEAD).toContain(`from "${REFRESH_RUNTIME_ID}"`);
-    expect(SIGN_HEAD).toContain("createSignatureFunctionForTransform");
+    expect(SIGN_HEAD).toContain(SIGNATURE_FN);
     // Never an accept: the module must stay a non-boundary for vite's walk.
     expect(out).not.toContain("import.meta.hot.accept");
   });
 
+  // hooks/useCallRing.tsx: babel signs it by its file name, plugin-react wires
+  // nothing because it holds no component, and a hook added to it crashed
+  // CallSyncEffects with "reading 'getSnapshot'" instead of remounting it.
+  test("wires a hooks-only .tsx module, which plugin-react leaves on the stub", () => {
+    expect(runSign(`${ROOT}/hooks/useThing.tsx`, SIGNED)).toBe(`${SIGN_HEAD}${SIGNED}${SIGN_TAIL}`);
+  });
+
+  test("wires a module that got the runtime import without the signature function", () => {
+    const classOnly = `import * as RefreshRuntime from "${REFRESH_RUNTIME_ID}";\n${SIGNED}`;
+    expect(runSign(`${ROOT}/components/Legacy.tsx`, classOnly)).toBe(`${SIGN_HEAD}${classOnly}${SIGN_TAIL}`);
+  });
+
   test("leaves modules plugin-react wired itself, and unsigned modules, alone", () => {
-    expect(runSign(`${ROOT}/hooks/useThing.ts`, `import * as RefreshRuntime from "${REFRESH_RUNTIME_ID}";\n${SIGNED}`)).toBeNull();
+    const wired = `window.$RefreshSig$ = RefreshRuntime.${SIGNATURE_FN};\n${SIGNED}`;
+    expect(runSign(`${ROOT}/hooks/useThing.ts`, wired)).toBeNull();
+    expect(runSign(`${ROOT}/components/X.tsx`, wired)).toBeNull();
     expect(runSign(`${ROOT}/lib/util.ts`, `export const sum = 1;`)).toBeNull();
-    expect(runSign(`${ROOT}/components/X.tsx`, SIGNED)).toBeNull();
     expect(runSign(`${ROOT}/store/inboxStore.ts`, SIGNED)).toBeNull();
   });
 });
