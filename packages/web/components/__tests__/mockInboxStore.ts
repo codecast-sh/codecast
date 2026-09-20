@@ -21,6 +21,7 @@
 // render is simply not visible and every case would silently test the default.
 
 import { afterAll, beforeAll, mock } from "bun:test";
+import * as inboxStore from "../../store/inboxStore";
 
 type State = Record<string, any>;
 
@@ -29,7 +30,7 @@ type State = Record<string, any>;
 // the substitution — including its own `getState`, which recurses forever, and
 // the `extra` exports of whichever file registered first. The spread copies the
 // true exports once, on first import, before anything can be replaced.
-const real = { ...(await import("../../store/inboxStore")) };
+const real = { ...inboxStore };
 const realHook = real.useInboxStore;
 
 /**

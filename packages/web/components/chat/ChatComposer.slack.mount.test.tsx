@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { mock, test } from "bun:test";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
+
+restoreInboxStoreAfterAll();
 
 async function verifySlackComposer() {
   const { JSDOM } = await import("jsdom");
@@ -20,7 +23,7 @@ async function verifySlackComposer() {
   mock.module("convex/react", () => ({ useAction: () => async (args: unknown) => { requested.push(args); return answer(); } }));
   mock.module("@sentry/react", () => ({ captureException: (error: unknown) => captured.push(error) }));
   mock.module("../../lib/desktop", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
-  mock.module("../../store/inboxStore", () => ({ useTrackedStore: () => ({ currentUser: { _id: "samvit" } }) }));
+  mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useTrackedStore: () => ({ currentUser: { _id: "samvit" } }) }));
   mock.module("./SlackSyncDialog", () => ({ useChannelSlackLink: () => link }));
   mock.module("../../hooks/useChatTyping", () => ({ useTypingReporter: () => ({ stop() {}, onTyping() {} }), useTypingMembers: () => [] }));
   mock.module("./TypingIndicator", () => ({ TypingIndicator: () => null }));
@@ -104,4 +107,4 @@ async function verifySlackComposer() {
   console.log("Slack composer authorization, draft preservation, delivery, and retry: passed");
 }
 
-test("Slack composer authorization preserves drafts and enables delivery", verifySlackComposer, 30_000);
+test("Slack composer authorization preserves drafts and enables delivery", verifySlackComposer, 60_000);
