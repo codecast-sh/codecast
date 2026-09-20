@@ -74,6 +74,23 @@ export function pendingRetryClientId(messageId: string): string | undefined {
   return messageId.startsWith("serverpending_") ? undefined : messageId;
 }
 
+// Identity the cancel dispatch can look the row up with. A local optimistic
+// bubble is keyed by its client id; a bubble synthesized from the conversation's
+// pending_messages row uses the `serverpending_` prefix. When the conversation
+// pending row matches this bubble, pass both so the server can find it either way.
+export function pendingCancelRef(
+  messageId: string,
+  pending?: { message_id: string; client_id?: string } | null,
+): { messageId?: string; clientId?: string } {
+  if (messageId.startsWith("serverpending_")) {
+    return { messageId: messageId.slice("serverpending_".length) };
+  }
+  if (pending && (messageId === pending.client_id || messageId === pending.message_id)) {
+    return { messageId: pending.message_id, clientId: pending.client_id };
+  }
+  return { clientId: messageId };
+}
+
 export function pendingMessageReachedSession(messageId: string, pending?: { message_id: string; client_id?: string; status: string } | null): boolean {
   return !!pending && (pending.status === "injected" || pending.status === "delivered")
     && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);

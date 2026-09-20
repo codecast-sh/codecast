@@ -23,7 +23,7 @@ import { applyHideTransition } from "./cleanup";
 import { stampBrowserPaneOfferHandled } from "./conversations";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
-import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
 import { enqueueCloudSpawn } from "./cloud";
 import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
 import { findSharedCheckoutOccupant } from "./cloudPlacement";
@@ -1142,6 +1142,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}), ...(askIndex != null ? { ask: askIndex } : {}),
     });
   },
+  cancelPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
+    cancelPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
 
   sendMessage: async (
     ctx,

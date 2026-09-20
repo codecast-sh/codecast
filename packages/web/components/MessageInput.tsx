@@ -316,7 +316,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const t = setTimeout(() => setRestartWaitingLong(true), 20_000);
     return () => clearTimeout(t);
   }, [isRestarting, isResuming, restartProgress]);
-  const cancelMessageMutation = useMutation(api.pendingMessages.cancelPendingMessage);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
   const sentContentRef = useRef<string | null>(null);
@@ -812,10 +811,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // the id from either the precise tracker or the conversation-scoped pending row, since a reload
   // mid-send leaves us with only the latter.
   const handleCancelMessage = useCallback(async () => {
-    const id = pendingMessageId ?? (existingPending?.message_id as Id<"pending_messages"> | undefined);
-    if (!id) return;
+    if (!conversationId) return;
+    const ref = pendingMessageId
+      ? { messageId: pendingMessageId, clientId: existingPending?.client_id as string | undefined }
+      : existingPending?.message_id
+        ? { messageId: existingPending.message_id as string, clientId: existingPending.client_id as string | undefined }
+        : null;
+    if (!ref) return;
     try {
-      await cancelMessageMutation({ message_id: id });
+      await useInboxStore.getState().cancelPendingMessage(conversationId, ref);
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);
@@ -825,7 +829,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to cancel message");
     }
-  }, [pendingMessageId, existingPending, cancelMessageMutation]);
+  }, [conversationId, pendingMessageId, existingPending]);
 
   useWatchEffect(() => {
     // Clear the spinner/banner the moment the session shows life. isAgentActive (daemon

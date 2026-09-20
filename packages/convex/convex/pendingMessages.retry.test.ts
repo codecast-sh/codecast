@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { retryPendingMessageForUser, claimPendingMessageForDaemon, updatePendingMessageStatusForDaemon } from "./pendingMessages";
+import { retryPendingMessageForUser, cancelPendingMessageForUser, claimPendingMessageForDaemon, updatePendingMessageStatusForDaemon } from "./pendingMessages";
 import { makeFakeDb } from "./testDb";
 import { dispatch } from "./dispatch";
 
@@ -61,4 +61,57 @@ describe("explicit message retry", () => {
       expect(ctx.db._patched).toHaveLength(0);
     });
   }
+});
+
+describe("explicit message cancel", () => {
+  test("the sender can stop a queued message by client id", async () => {
+    const ctx = world("pending", {}, { has_pending_messages: true });
+    expect(await (dispatch as any)._handler({ ...ctx, auth: { getUserIdentity: async () => ({ subject: "sender|session" }) } }, {
+      action: "cancelPendingMessage", args: ["conv", { clientId: "client" }],
+    })).toBe("cancelled");
+    expect(await ctx.db.get("msg")).toMatchObject({ status: "cancelled" });
+    expect((await ctx.db.get("conv")).has_pending_messages).toBe(false);
+  });
+
+  test("the owner can cancel a server-backed message by its exact id", async () => {
+    expect(await cancelPendingMessageForUser(world("failed"), "owner" as any, "conv" as any, { messageId: "msg" })).toBe("cancelled");
+  });
+
+  test("a delivered message is left alone", async () => {
+    const ctx = world("delivered");
+    expect(await cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { messageId: "msg" })).toBe("delivered");
+    expect(ctx.db._patched).toHaveLength(0);
+  });
+
+  test("a second cancel is a no-op", async () => {
+    const ctx = world("cancelled");
+    expect(await cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { messageId: "msg" })).toBe("cancelled");
+    expect(ctx.db._patched).toHaveLength(0);
+  });
+
+  test("never cancels a different message in the conversation", async () => {
+    const ctx = world("pending");
+    expect(await cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { clientId: "other" })).toBe("not_found");
+    expect(ctx.db._patched).toHaveLength(0);
+  });
+
+  test("rejects unrelated users and mismatched conversation ids", async () => {
+    await expect(cancelPendingMessageForUser(world("pending"), "stranger" as any, "conv" as any, { messageId: "msg" })).rejects.toThrow("Unauthorized");
+    await expect(cancelPendingMessageForUser(world("pending"), "owner" as any, "other" as any, { messageId: "msg" })).rejects.toThrow("conversation");
+  });
+
+  test("cancels an unstarted fenced delivery so the bubble can disappear", async () => {
+    const ctx = world("pending", { delivery_protocol_version: 2, delivery_status: "pending" });
+    expect(await cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { messageId: "msg" })).toBe("cancelled");
+    expect(await ctx.db.get("msg")).toMatchObject({
+      status: "cancelled",
+      delivery_status: "cancelled-by-supersession",
+    });
+  });
+
+  test("refuses a fenced delivery that has already started", async () => {
+    const ctx = world("pending", { delivery_protocol_version: 2, delivery_status: "delivery-started" });
+    await expect(cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { messageId: "msg" })).rejects.toThrow("already being delivered");
+    expect(ctx.db._patched).toHaveLength(0);
+  });
 });

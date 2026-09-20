@@ -33,10 +33,10 @@ import { browserTabOf, type BrowserTabRef } from "../../castCommand";
 import { useInboxStore, isConvexId, pendingRowSendArgs, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { BranchSelector } from "../../BranchSelector";
-import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Forward } from "lucide-react";
+import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Forward, X } from "lucide-react";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
-import { pendingBannerState, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
+import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
 import { ghostRestartContextFor, deriveRestartStage, type RestartProgressRow } from "../../../hooks/useSessionRestart";
 import { CastCommandBlock } from "./castBlocks";
@@ -116,6 +116,21 @@ export function ForkSeedMark({ parentId, parentTitle, parentUsername, convLink }
   );
 }
 
+function CancelPendingButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      disabled={disabled}
+      data-testid="pending-message-cancel"
+      className="text-[11px] text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60"
+      title="Stop trying to send and discard this message"
+    >
+      {disabled ? "Cancelling…" : "Cancel"}
+    </button>
+  );
+}
+
 function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -158,6 +173,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   const [retryVisible, setRetryVisible] = useState(false);
   const [retryState, setRetryState] = useState<"idle" | "inflight" | "sent">("idle");
+  const [cancelState, setCancelState] = useState<"idle" | "inflight">("idle");
   // Set on click; drives the live progress subscription below. Never cleared
   // while the bar is mounted — delivery removes the optimistic row and the
   // whole bar (and its subscription) with it.
@@ -325,6 +341,25 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     }
   };
 
+  const handleCancelPending = async () => {
+    if (!conversationId || cancelState !== "idle") return;
+    setCancelState("inflight");
+    try {
+      const status = await useInboxStore.getState().cancelPendingMessage(
+        conversationId,
+        pendingCancelRef(messageId, conversationPending),
+      );
+      if (status === "delivered" || status === "injected") {
+        toast.info("This message has already reached the session");
+      }
+    } catch (err) {
+      captureException(err);
+      toast.error(err instanceof Error ? err.message : "Failed to cancel message");
+    } finally {
+      setCancelState("idle");
+    }
+  };
+
   const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   const handleCopy = () => {
@@ -360,6 +395,14 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             )}
             {onStartShareSelection && (
               <CtxItem icon={Share2} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+            )}
+            {isPending && (
+              <>
+                <CtxSeparator />
+                <CtxItem icon={X} danger onSelect={handleCancelPending} disabled={cancelState !== "idle"}>
+                  Cancel pending message
+                </CtxItem>
+              </>
             )}
             <CtxSeparator />
             <CtxItem icon={Maximize2} onSelect={() => setFullscreen(true)}>Fullscreen</CtxItem>
@@ -554,15 +597,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           While the agent is actively processing we show nothing — the message is already
           sitting in its native input queue (see pendingBannerState). */}
       {isPending && bannerState !== "none" && (
-      <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId}>
+      <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId} onCancel={handleCancelPending} cancelling={cancelState !== "idle"}>
       {bannerState === "queued" && (
-        <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
+        <div className="flex items-center flex-wrap gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
           {/* Cold launch/resume genuinely "starts up"; an alive-but-parked session
               (or one the daemon has claimed: "connected") is just being delivered to. */}
           <span>{agentStatus === "starting" || agentStatus === "resuming"
             ? "Starting up — your message will send once the session is ready"
             : "Queued — delivering your message to the agent"}</span>
+          <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>
       )}
       {bannerState === "stuck" && (
@@ -592,6 +636,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               ? (agentStatus ? "Resending…" : "Restarting…")
               : retryClickedAt ? "Retry again" : (agentStatus ? "Resend message" : "Retry (kill & restart)")}
           </button>
+          <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>
       )}
       </PendingDeliveryNote>

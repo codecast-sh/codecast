@@ -1021,6 +1021,50 @@ export async function retryPendingMessageForUser(
   return "pending";
 }
 
+// User-initiated stop of one queued message, looked up the same way as retry
+// (server id or the send's client id). Terminal: the healer never revives
+// cancelled. A fenced row that has not started delivery is cancelled the same
+// way a kill would; one already in the pane is left alone so we do not strand
+// the delivery slot.
+export async function cancelPendingMessageForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  ref: { messageId?: string; clientId?: string },
+): Promise<string> {
+  if (!ref.messageId && !ref.clientId) throw new Error("Message identity required");
+  const message = ref.messageId
+    ? await ctx.db.get(ref.messageId)
+    : await ctx.db.query("pending_messages")
+      .withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conversationId).eq("client_id", ref.clientId))
+      .first();
+  if (!message) return "not_found";
+  if (message.conversation_id !== conversationId) throw new Error("Message belongs to another conversation");
+  if (!(await senderOrOwnerCanAct(ctx, message, userId))) {
+    throw new Error("Unauthorized: can only cancel messages you sent or own");
+  }
+  if (message.status === "delivered") return "delivered";
+  if (message.status === "cancelled") return "cancelled";
+  if (isFencedPendingMessage(message)) {
+    if (
+      message.delivery_status === "delivery-started" ||
+      message.delivery_status === "ambiguous" ||
+      message.delivery_status === "claimed"
+    ) {
+      throw new Error("This message is already being delivered to the session");
+    }
+    await ctx.db.patch(message._id, {
+      delivery_status: "cancelled-by-supersession" as const,
+      active_delivery_attempt_id: undefined,
+      status: "cancelled" as const,
+    });
+    await clearHasPendingIfQuiet(ctx, message.conversation_id);
+    return "cancelled";
+  }
+  const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
+  return updated ? "cancelled" : message.status;
+}
+
 export const retryMessage = mutation({
   args: {
     message_id: v.id("pending_messages"),
