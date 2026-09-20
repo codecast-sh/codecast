@@ -11,8 +11,9 @@ import { SessionHoverCard } from "./SessionHoverCard";
 type Side = "top" | "bottom" | "left" | "right";
 type Align = "start" | "center" | "end";
 
-export function IdentityFace({ row, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge }: {
+export function IdentityFace({ row, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, personifyAll }: {
   row: IdentityRow & Record<string, unknown>;
+  personifyAll?: boolean;
   size?: number;
   className?: string;
   hover?: boolean;
@@ -23,7 +24,7 @@ export function IdentityFace({ row, size = 18, className, hover = true, onPick, 
   /** Corner glyph riding the face (the agent brand); forwarded to SessionFace. */
   badge?: ReactNode;
 }) {
-  const id = sessionIdentity(row, usePersonifyAll());
+  const id = sessionIdentity(row, usePersonifyAll(personifyAll));
   // Not personified: the caller draws whatever it drew before (the agent icon),
   // so opting out costs the row nothing.
   if (id.kind === "plain") return null;
