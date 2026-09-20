@@ -14,7 +14,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
-const { readFileSync, writeFileSync } = require("node:fs");
+const { readFileSync, writeFileSync, mkdtempSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const os = require("node:os");
 
@@ -55,11 +55,13 @@ app.whenReady().then(async () => {
 `;
 
 function runProbe(prefs) {
-  const file = join(os.tmpdir(), `codecast-preload-probe-${process.pid}.js`);
+  const dir = mkdtempSync(join(os.tmpdir(), "codecast-preload-probe-"));
+  const file = join(dir, "probe.js");
   writeFileSync(file, PROBE);
   const electron = require("electron");
   return new Promise((resolve, reject) => {
-    execFile(electron, [file, JSON.stringify(prefs)], { timeout: 60_000 }, (err, stdout, stderr) => {
+    execFile(electron, [file, `--user-data-dir=${join(dir, "profile")}`, JSON.stringify(prefs)], { timeout: 60_000, killSignal: "SIGKILL" }, (err, stdout, stderr) => {
+      rmSync(dir, { recursive: true, force: true });
       const line = String(stdout).split("\n").find((l) => l.startsWith("PROBE "));
       if (!line) return reject(new Error(`no probe report\n${stderr}\n${err ?? ""}`));
       resolve(JSON.parse(line.slice("PROBE ".length)));
