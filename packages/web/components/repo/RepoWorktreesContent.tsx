@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Copy, FolderGit2, Laptop, Play } from "lucide-react";
@@ -8,6 +8,7 @@ import { AuthorAvatar } from "../entityDisplay";
 import { WorktreeConditionLine, WorktreeSessions } from "../worktree/WorktreePill";
 import { groupWorktrees, type WorktreeGroup } from "../worktree/worktreeModel";
 import { useRepoWorktrees, type RepoCheckout } from "../../hooks/useRepoBrowse";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRepoLocation } from "./useRepoFamily";
 import { useInboxStore } from "../../store/inboxStore";
 import { commitPageHref, repoCompareHref, repoTreeHref } from "../../lib/repoView";
@@ -116,7 +117,7 @@ export function RepoWorktreesContent({ repository }: { repository: string }) {
   const [filter, setFilter] = useState("");
   const focus = decodeURIComponent(useRepoLocation().hash.replace(/^#/, ""));
   const ready = read.ready;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (ready && focus) document.getElementById(encodeURIComponent(focus))?.scrollIntoView({ block: "center" });
   }, [ready, focus]);
 
