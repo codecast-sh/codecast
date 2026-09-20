@@ -16,7 +16,6 @@ import {
   reattributeSlackPerson,
   listSlackPeople,
   linkSignedInPerson,
-  pushContext,
   patchBackfill,
   backfillSinceTs,
   ingestEvent,
@@ -497,6 +496,23 @@ describe("direct messages", () => {
   const DM_SCOPES = "channels:read,groups:read,groups:write,users:read,im:read,im:history,mpim:read,mpim:history,chat:write";
   const withToken = (scopes = DM_SCOPES, dm_sync?: any) => ({
     slack_user_tokens: [{ _id: TOKEN, installation_id: INSTALL, workspace_id: WS, user_id: ALICE, slack_user_id: "UALICE", token: "xoxp-test", scopes, dm_sync, created_at: 1, updated_at: 1 }],
+  });
+  test("the channel feed reports each sender's own Slack permission and refreshes after connection", async () => {
+    const ctx = context(ALICE, withToken());
+    await ctx.db.patch(LINK, { kind: "dm", owner_user_id: ALICE });
+    const alice = await call(listChannels, ctx, { team_id: TEAM });
+    expect(alice.slack_links[0]).toMatchObject({ viewer_user_id: ALICE, viewer_slack_auth: "ready" });
+    ctx.auth.getUserIdentity = async () => ({ subject: `${BOB}|session` });
+    const bob = await call(listChannels, ctx, { team_id: TEAM });
+    expect(bob.slack_links[0]).toMatchObject({ viewer_user_id: BOB, viewer_slack_auth: "connect" });
+    expect(JSON.stringify(bob)).not.toContain("xoxp-test");
+    expect(JSON.stringify(bob)).not.toContain("chat:write");
+    const token = await ctx.db.insert("slack_user_tokens", { installation_id: INSTALL, workspace_id: WS, user_id: BOB, slack_user_id: "UBOB", token: "private-token", scopes: "im:history", created_at: 1, updated_at: 1 });
+    expect((await call(listChannels, ctx, { team_id: TEAM })).slack_links[0].viewer_slack_auth).toBe("reconnect");
+    await ctx.db.patch(token, { scopes: "im:history, chat:write" });
+    expect((await call(listChannels, ctx, { team_id: TEAM })).slack_links[0].viewer_slack_auth).toBe("ready");
+    await ctx.db.patch(LINK, { kind: "channel" });
+    expect((await call(listChannels, ctx, { team_id: TEAM })).slack_links[0].viewer_slack_auth).toBeUndefined();
   });
   test("the switch needs a connected account with the DM scopes, then schedules the scan", async () => {
     const bare = context(ALICE);

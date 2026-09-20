@@ -1027,6 +1027,98 @@ div.ch-reaction-tip {
   padding: 2px 8px 6px;
 }
 
+.ch-slack-connect {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--sol-cyan) 4%, transparent);
+  font-size: 11px;
+}
+
+.ch-slack-connect-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.ch-slack-connect-copy {
+  flex: 1 1 180px;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.ch-slack-connect-title {
+  color: var(--sol-text);
+  font-weight: 600;
+}
+
+.ch-slack-connect-copy p {
+  margin: 2px 0 0;
+  color: var(--sol-text-muted);
+  text-wrap: pretty;
+}
+
+.ch-slack-connect-copy .ch-slack-connect-error {
+  color: var(--sol-red);
+}
+
+.ch-slack-connect-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 10px;
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 75%, transparent);
+  border-radius: 5px;
+  background: var(--sol-card);
+  color: var(--sol-text);
+  font-size: 11px;
+  font-weight: 500;
+  transition: background 130ms ease, transform 130ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ch-slack-connect-button:hover:not(:disabled) {
+    background: var(--sol-bg-highlight);
+  }
+}
+
+.ch-slack-connect-button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.ch-slack-connect-button:focus-visible {
+  outline: 2px solid var(--sol-blue);
+  outline-offset: 2px;
+}
+
+.ch-slack-connect-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.ch-slack-connect-checking {
+  color: var(--sol-text-dim);
+  background: transparent;
+}
+
+.ch-composer-choice:has(input:disabled) {
+  color: var(--sol-text-dim);
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-slack-connect-button { transition: background 130ms ease; }
+  .ch-slack-connect-button:active:not(:disabled) { transform: none; }
+}
+
 .ch-composer-options {
   display: inline-flex;
   align-items: center;

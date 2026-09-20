@@ -7,20 +7,20 @@
 // history window, and what the scan found). Everything it shows comes from
 // getTeamSlack, so the settings card and the browser cannot disagree.
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useState } from "react";
 import { AlertTriangle, Loader2, MessageSquareLock } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { BACKFILL_WINDOWS, type BackfillWindow } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackLogo } from "../SlackLogo";
-import { openExternalUrl } from "../../lib/desktop";
+import { useSlackConnect } from "../../hooks/useSlackConnect";
 import { Switch } from "../ui/switch";
 import "./chat.css";
 
 export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: boolean }) {
   const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId } as any).data;
   const setDmSync = useMutation(api.slackSync.setDmSync);
-  const getInstallUrl = useAction(api.slack.getInstallUrl);
+  const slackConnect = useSlackConnect(teamId, "/settings/integrations?slack=connected");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [window_, setWindow] = useState<BackfillWindow | null>(null);
@@ -29,27 +29,6 @@ export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: b
   const sync = team.dm_sync as { enabled: boolean; window: string; status?: string; conversations?: number; error?: string } | null;
   const enabled = !!sync?.enabled;
   const window = (window_ ?? (sync?.window as BackfillWindow | undefined) ?? "30d") as BackfillWindow;
-
-  // The same consent screen as connecting; Slack adds the DM scopes to the
-  // token and the person lands back here.
-  const connect = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const res: any = await getInstallUrl({
-        scope_type: "self",
-        team_id: teamId,
-        return_to: "/settings/integrations?slack=connected",
-        origin: location.origin,
-      } as any);
-      if (res?.ok && res.url) openExternalUrl(res.url);
-      else setErr(res?.error ?? "Couldn't start the Slack connection");
-    } catch (e: any) {
-      setErr(e?.message ?? "Couldn't start the Slack connection");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const toggle = async (on: boolean) => {
     setBusy(true);
@@ -85,8 +64,8 @@ export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: b
           </div>
         </div>
         {needsConnect || needsScopes ? (
-          <button type="button" className="ch-slack-secondary" onClick={connect} disabled={busy}>
-            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <SlackLogo className="w-3 h-3" />}
+          <button type="button" className="ch-slack-secondary" onClick={slackConnect.connect} disabled={slackConnect.busy}>
+            {slackConnect.busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <SlackLogo className="w-3 h-3" />}
             {needsConnect ? "Connect your Slack account" : "Allow direct messages"}
           </button>
         ) : (
@@ -114,7 +93,7 @@ export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: b
           </div>
         </div>
       )}
-      {err && <div className="ch-slack-err"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{err}</div>}
+      {(err || slackConnect.error) && <div className="ch-slack-err"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{err || slackConnect.error}</div>}
     </div>
   );
 }
