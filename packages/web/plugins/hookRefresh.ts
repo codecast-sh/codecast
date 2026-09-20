@@ -3,15 +3,18 @@ import type { Plugin } from "vite";
 import { STORE_FILE } from "./storeHmr";
 
 /**
- * Makes React Fast Refresh see custom hooks that live in plain `.ts` files.
+ * Makes React Fast Refresh see custom hooks that live in modules with no
+ * component: every hooks-only `.ts` file, and every hooks-only `.tsx` file.
  *
- * @vitejs/plugin-react wires a module to the Refresh runtime in two steps, and
- * a hooks-only `.ts` module fails both. It runs the react-refresh babel
- * transform only when the file name ends in `x` or the source mentions the JSX
- * runtime module (`isJSX || code.includes("react/jsx-runtime")`). Then it adds
- * the runtime wrapper (the head that points `$RefreshSig$` at the real runtime,
- * the footer that accepts the update) only when babel's output registered a
- * component. A module that exports only hooks passes neither gate, so its
+ * @vitejs/plugin-react wires a module to the Refresh runtime in two steps. It
+ * runs the react-refresh babel transform only when the file name ends in `x`
+ * or the source mentions the JSX runtime module
+ * (`isJSX || code.includes("react/jsx-runtime")`). Then it adds the runtime
+ * wrapper (the head that points `$RefreshSig$` at the real runtime, the footer
+ * that accepts the update) only when babel's output registered a component. A
+ * hooks-only `.ts` module fails both gates. A hooks-only `.tsx` module passes
+ * the first on its file name and fails the second: babel writes its signature
+ * calls, and they land on the preamble's stub, which drops them. Either way
  * `useFoo` never gets a signature and a change to the hooks it calls is
  * invisible to Refresh: the importing `.tsx` component is treated as an
  * in-place update with its hook state preserved, then renders with a different
@@ -27,7 +30,8 @@ import { STORE_FILE } from "./storeHmr";
  *   the JSX runtime module to every `.ts` module under the web root that
  *   defines a `use*` function, so babel emits the `_s = $RefreshSig$()`
  *   signature calls.
- * - `sign` (post, after babel) prefixes the module with the head plugin-react
+ * - `sign` (post, after babel) takes every `.ts` and `.tsx` module whose
+ *   signature calls nobody wired, and prefixes it with the head plugin-react
  *   would have added: point `window.$RefreshSig$` at the runtime for the
  *   duration of the module body, restore it after. Only the head, on purpose.
  *   plugin-react's footer would make the module self-accepting, and a module
@@ -37,8 +41,8 @@ import { STORE_FILE } from "./storeHmr";
  *   edits took before, now with the signature registered.
  *
  * Both edits keep every original line in place (an appended footer and a
- * one-line prefix), so the existing source map stays accurate. Skipped: `.tsx`
- * (already signed), `.d.ts`, node_modules, anything outside the web root,
+ * one-line prefix), so the existing source map stays accurate. Skipped: `.d.ts`,
+ * node_modules, anything outside the web root,
  * modules that already own their HMR via `import.meta.hot`, and the inbox
  * store, whose hot swap plugins/storeHmr.ts manages.
  */
@@ -48,10 +52,12 @@ export const REACT_PLUGIN_GATE = "react/jsx-runtime";
 export const GATE_FOOTER = `// ${REACT_PLUGIN_GATE}: opts this hook module into Fast Refresh (plugins/hookRefresh.ts)\n`;
 /** plugin-react serves the Refresh runtime at this id. */
 export const REFRESH_RUNTIME_ID = "/@react-refresh";
+/** The runtime function a wired module points `$RefreshSig$` at. */
+export const SIGNATURE_FN = "createSignatureFunctionForTransform";
 export const SIGN_HEAD =
   `import * as __hookRefreshRuntime from "${REFRESH_RUNTIME_ID}"; ` +
   `const __hookRefreshPrevSig = typeof window !== "undefined" ? window.$RefreshSig$ : undefined; ` +
-  `if (import.meta.hot && typeof window !== "undefined") window.$RefreshSig$ = __hookRefreshRuntime.createSignatureFunctionForTransform; `;
+  `if (import.meta.hot && typeof window !== "undefined") window.$RefreshSig$ = __hookRefreshRuntime.${SIGNATURE_FN}; `;
 export const SIGN_TAIL = `\nif (import.meta.hot && typeof window !== "undefined") window.$RefreshSig$ = __hookRefreshPrevSig;\n`;
 
 // A hook definition with a body: `function useX(` / `function useX<T>(`,
@@ -63,9 +69,10 @@ const HOOK_DEF_RE =
 
 export function hookRefreshPlugin(): Plugin[] {
   let root = "";
-  const isCandidateFile = (id: string): boolean => {
+  const isCandidateFile = (id: string, extensions: string[]): boolean => {
     const file = id.split("?")[0];
-    if (!file.endsWith(".ts") || file.endsWith(".d.ts") || file.includes("/node_modules/")) return false;
+    if (!extensions.some((ext) => file.endsWith(ext))) return false;
+    if (file.endsWith(".d.ts") || file.includes("/node_modules/")) return false;
     if (root && !file.startsWith(root + path.sep)) return false;
     if (file.endsWith(path.sep + path.normalize(STORE_FILE))) return false;
     return true;
@@ -79,7 +86,8 @@ export function hookRefreshPlugin(): Plugin[] {
         root = config.root;
       },
       transform(code, id) {
-        if (!isCandidateFile(id)) return null;
+        // `.tsx` needs no gate: plugin-react runs babel on it by its name.
+        if (!isCandidateFile(id, [".ts"])) return null;
         if (code.includes("import.meta.hot") || code.includes(REACT_PLUGIN_GATE)) return null;
         if (!HOOK_DEF_RE.test(code)) return null;
         return { code: `${code}\n${GATE_FOOTER}`, map: null };
@@ -90,9 +98,11 @@ export function hookRefreshPlugin(): Plugin[] {
       apply: "serve",
       enforce: "post",
       transform(code, id) {
-        if (!isCandidateFile(id)) return null;
+        if (!isCandidateFile(id, [".ts", ".tsx"])) return null;
         // Babel emitted signatures, and plugin-react did not wire them itself.
-        if (!code.includes("$RefreshSig$()") || code.includes(REFRESH_RUNTIME_ID)) return null;
+        // Tested on the signature function, not the runtime import: a module
+        // with only a class component gets the import and still no wiring.
+        if (!code.includes("$RefreshSig$()") || code.includes(SIGNATURE_FN)) return null;
         return { code: `${SIGN_HEAD}${code}${SIGN_TAIL}`, map: null };
       },
     },
