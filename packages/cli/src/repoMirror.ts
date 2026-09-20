@@ -135,13 +135,13 @@ async function tryGit(run: GitRunner, cwd: string, args: string[]): Promise<stri
 }
 
 /** One value on one line: a sha, a ref name, a URL, a count. */
-async function tryGitLine(run: GitRunner, cwd: string, args: string[]): Promise<string | undefined> {
+export async function tryGitLine(run: GitRunner, cwd: string, args: string[]): Promise<string | undefined> {
   const out = await tryGit(run, cwd, args);
   return out === undefined ? undefined : out.trim();
 }
 
 /** origin/HEAD when the remote told us, else main, else master, else whatever is checked out. */
-async function defaultBranchFor(run: GitRunner, root: string, current: string | undefined): Promise<string> {
+export async function defaultBranchFor(run: GitRunner, root: string, current: string | undefined): Promise<string> {
   const originHead = await tryGitLine(run, root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
   if (originHead) return originHead.replace(/^origin\//, "");
   for (const candidate of ["main", "master"]) {

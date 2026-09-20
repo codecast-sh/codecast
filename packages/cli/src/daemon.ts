@@ -61,6 +61,8 @@ import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
+import { buildWorktreeMirror, mainRootFor, worktreeFingerprint } from "./worktreeMirror.js";
+import { listStates as listWorkspaceStates, recordWorkspaceSession } from "./workspace/contract.js";
 import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, type LocalReadRequest } from "./repoMirror.js";
 import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
@@ -283,6 +285,7 @@ import {
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
+import { handleNotificationHttp } from "./notificationDelivery.js";
 import { handleFsBrowseHttp } from "./fs/browseHttp.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
@@ -290,7 +293,7 @@ import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { atomicWriteFile } from "./atomicWrite.js";
-import { AwakeIdleClock, collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { AwakeIdleClock, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -2157,6 +2160,7 @@ function startHookServer(): http.Server {
     if (handleTerminalHttp(req, res, terminalServerOptions())) return;
     if (handleVaultHttp(req, res, vaultServerOptions())) return;
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
+    if (handleNotificationHttp(req, res, terminalServerOptions())) return;
     if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
 
     res.writeHead(404);
@@ -19422,9 +19426,13 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
     log(`[GITPLANE] ${states.length} repos, ${bad.length} unhealthy: ${bad.map((s) => `${path.basename(s.root)}(${!s.origin_ok ? "origin" : s.needs_access ? "needs-access" : "fetch"})`).join(", ")}`);
   }
 
-  await reportGitStates(targets, states).catch((e) => log(`[GITPLANE] state report error: ${(e as Error)?.message ?? e}`));
+  const dirtyByCwd = await reportGitStates(targets, states).catch((e) => {
+    log(`[GITPLANE] state report error: ${(e as Error)?.message ?? e}`);
+    return new Map<string, boolean>();
+  });
   await syncGitActivityTailers(byRoot).catch((e) => log(`[GITACTIVITY] tailer sync error: ${(e as Error)?.message ?? e}`));
   await publishLocalRepos([...byRoot.keys()], byRoot).catch((e) => log(`[REPOMIRROR] pass error: ${(e as Error)?.message ?? e}`));
+  await publishWorktreeMirrors(targets.map((t) => ({ ...t, dirty: dirtyByCwd.get(t.cwd) }))).catch((e) => log(`[WORKTREES] pass error: ${(e as Error)?.message ?? e}`));
 }
 
 // ─── Local git activity ───────────────────────────────────────────────────────
@@ -19552,11 +19560,13 @@ async function pollGitActivity(onlyRoot?: string): Promise<void> {
 /** conversation id -> last reported state, to send only changes. */
 const lastGitStateSent = new Map<string, string>();
 
+/** Returns each cwd's dirtiness as read, so the worktree pass below does not read an occupied checkout again. */
 async function reportGitStates(
   targets: Array<{ conversationId: string; cwd: string }>,
   states: RepoPlaneState[],
-): Promise<void> {
-  if (!syncServiceRef) return;
+): Promise<Map<string, boolean>> {
+  const dirtyByCwd = new Map<string, boolean>();
+  if (!syncServiceRef) return dirtyByCwd;
   const byRootState = new Map(states.map((s) => [s.root, s]));
   const perCwd = new Map<string, Promise<{ head?: string; branch?: string; remote?: string; dirty: boolean } | null>>();
   const readCwd = (cwd: string) => {
@@ -19579,6 +19589,7 @@ async function reportGitStates(
   for (const target of targets) {
     const read = await readCwd(target.cwd).catch(() => null);
     if (!read) continue;
+    dirtyByCwd.set(target.cwd, read.dirty);
     const root = await repoRootFor(target.cwd);
     const plane = root ? byRootState.get(root) : undefined;
     const state = {
@@ -19594,6 +19605,7 @@ async function reportGitStates(
     const result = await syncServiceRef.updateGitState({ conversation_id: target.conversationId, ...state });
     if (result) lastGitStateSent.set(target.conversationId, key);
   }
+  return dirtyByCwd;
 }
 
 /** One git value from a cwd, or undefined; never throws. */
@@ -19667,6 +19679,48 @@ async function publishLocalRepos(
     } else {
       repoMirrorPushed.set(root, { fingerprint, at: now });
     }
+  }
+}
+
+// ─── Publishing worktrees ────────────────────────────────────────────────────
+// The fifth git-plane duty: each repository's worktrees, with the live sessions
+// in each (worktreeMirror.ts). The sweep above groups by checkout toplevel,
+// which inside a worktree is the worktree itself, so this pass regroups by the
+// main checkout they all hang off and publishes one row per repository. It
+// rides the same ingest and the same private-path memory as the mirror above.
+
+/** main root -> fingerprint and time of the last published worktree row. */
+const worktreesPushed = new Map<string, { fingerprint: string; at: number }>();
+
+async function publishWorktreeMirrors(targets: Array<{ sessionId: string; conversationId: string; cwd: string; dirty?: boolean }>): Promise<void> {
+  if (!syncServiceRef) return;
+  const byMain = new Map<string, typeof targets>();
+  for (const target of targets) {
+    const main = await mainRootFor(target.cwd);
+    if (main) byMain.set(main, [...(byMain.get(main) ?? []), target]);
+  }
+  const cache = readConversationCache();
+  for (const [root, sessions] of byMain) {
+    if (repoMirrorPrivate.has(root)) continue;
+    // A session seen in a `cast ws` worktree goes into that worktree's own
+    // record, so the worktree still names it once the session has ended.
+    for (const state of listWorkspaceStates(root)) {
+      for (const t of sessions) if (t.cwd === state.path || t.cwd.startsWith(`${state.path}/`)) recordWorkspaceSession(root, state.name, t.sessionId);
+    }
+    const mirror = await buildWorktreeMirror(root, { device_id: deviceId(), device_label: deviceLabel(), sessions, resolveSession: (id) => cache[id] });
+    if (!mirror) {
+      // Not "no worktrees": the main checkout is always listed. git refused or timed out, and the next sweep asks again.
+      log(`[WORKTREES] ${path.basename(root)}: git did not list the worktrees; nothing published`);
+      continue;
+    }
+    const fingerprint = worktreeFingerprint(mirror);
+    // Unchanged rows still go again at the mirror's max age: the server prunes a row nobody refreshed in a week.
+    const last = worktreesPushed.get(root);
+    if (last?.fingerprint === fingerprint && Date.now() - last.at < REPO_MIRROR_MAX_AGE_MS) continue;
+    const result = await syncServiceRef.ingestLocalRepo({ root, device_label: deviceLabel(), ...mirror });
+    if (!result) continue;
+    if (result.reason === "private") repoMirrorPrivate.add(root);
+    else worktreesPushed.set(root, { fingerprint, at: Date.now() });
   }
 }
 
@@ -21839,6 +21893,25 @@ export function getLatestSessionResources(): ReadonlyMap<string, SessionResource
   return latestSessionResources;
 }
 
+// When each session last wrote its transcript, for restorableAwakeIdle. A
+// session without a transcript of its own (none indexed, or opencode's shared
+// database) reports undefined, which the restore reads as "unknown, start from
+// zero". Stats run in parallel and off the tick; one missing file is one
+// undefined, not a failed restore.
+async function transcriptActivityAt(sessionIds: string[]): Promise<Map<string, number | undefined>> {
+  const out = new Map<string, number | undefined>();
+  await Promise.all(sessionIds.map(async (sessionId) => {
+    const file = findSessionFile(sessionId, { staleOk: true });
+    if (!file || file.agentType === "opencode") { out.set(sessionId, undefined); return; }
+    try {
+      out.set(sessionId, (await fs.promises.stat(file.path)).mtimeMs);
+    } catch {
+      out.set(sessionId, undefined);
+    }
+  }));
+  return out;
+}
+
 export function getSessionAwakeIdleMs(sessionId: string): number {
   return sessionAwakeIdleMs.get(sessionId);
 }
@@ -21870,12 +21943,16 @@ async function collectResourceSnapshot(): Promise<void> {
     const elapsed = lastResourceTickAt > 0 ? now - lastResourceTickAt : 0;
     const sleepSkip = lastResourceTickAt === 0 || isInWakeGrace() || elapsed > RESOURCE_TICK_SLEEP_GAP_MS;
     if (lastResourceTickAt === 0) {
-      // Read it off the tick: a sync read on this path is what the loop budget
-      // guard forbids, and the counters only need the snapshot from the next
-      // tick on — this one is skipped as the first.
-      void fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8")
-        .then((raw) => { sessionAwakeIdleMs.restore(raw, Date.now()); })
-        .catch(() => { /* no snapshot yet, or unreadable: start from zero */ });
+      // Restore BEFORE the loop below stores anything: the first tick writes a
+      // live counter for every session it collects, and a live value outranks
+      // a restored one, so a restore that lands after this loop is discarded
+      // for the whole collected fleet (102 of 102 on 2026-09-19 20:09Z; ct-52784).
+      // The read is awaited, not synchronous, so the loop budget guard is
+      // satisfied and the event loop stays free while it runs.
+      try {
+        const snapshot = decodeAwakeIdleSnapshot(await fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8"), now);
+        if (snapshot) sessionAwakeIdleMs.restore(restorableAwakeIdle(snapshot, await transcriptActivityAt([...snapshot.idle.keys()])), now);
+      } catch { /* no snapshot yet, or unreadable: start from zero */ }
     }
     lastResourceTickAt = now;
 
