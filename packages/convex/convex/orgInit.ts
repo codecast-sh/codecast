@@ -695,7 +695,7 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   // accepts the proposal (org-roles-run-work.md R2; the card promises naming
   // changes nothing about how it works).
   const reports_to = p.seat && !p.reports_to?.trim() ? await seatOwnerOf(ctx, p.seat.existing) : await resolveReportsTo(ctx, userId, boundary, p.reports_to);
-  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar });
+  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar, host_user_id: p.seat ? await seatRunnerOf(ctx, p.seat.existing) : undefined });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
   // A role that names its session (org-roles-run-work.md R2) is seated on it
   // in this same apply, whatever `provision` says: the session IS the role, so
@@ -893,6 +893,14 @@ async function seatOwnerOf(ctx: Ctx, ref: string): Promise<{ kind: "user"; user_
   const conv = await findConversationByAnyRefWhere(ctx, ref.trim(), async () => true);
   if (!conv) throw new Error(`Session not found: ${ref.trim()}`);
   return { kind: "user", user_id: (conv.owner_user_id ?? conv.user_id) as Id<"users"> };
+}
+/** Who runs the session a role is named on: the role's host (R2). The
+ *  runner, not an added owner: the standing session acts under the runner's
+ *  token, and the host is who the role's own writes are checked against. */
+async function seatRunnerOf(ctx: Ctx, ref: string): Promise<Id<"users">> {
+  const conv = await findConversationByAnyRefWhere(ctx, ref.trim(), async () => true);
+  if (!conv) throw new Error(`Session not found: ${ref.trim()}`);
+  return conv.user_id as Id<"users">;
 }
 /** The one seating of an existing session on a role, for an adopt change and
  *  for a role change that names its session. Answers the seated session's

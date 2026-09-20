@@ -121,7 +121,7 @@ describe("review: R2, a teammate's long running session named as a role", () => 
     // person who runs the session") keeps user_id: ME on the session and only
     // flips owner_user_id, so the accepting person is still its runner.
     const { applyRole } = await import("./orgInit");
-    const db: any = fixtures([conv(1, { user_id: MATE, title: "Market growth mandate" })]);
+    const db: any = fixtures([conv(1, { user_id: MATE, title: "Market growth mandate", is_private: false })]);
     for (const t of ["bot_users", "daemon_commands"]) db._tables[t] ??= [];
     const res: any = await applyRole({ db } as any, ME as any, { team_id: TEAM }, { kind: "role", name: "Market growth", handle: "market-growth", seat: { existing: "jx70001" } } as any, undefined, { provision: false, human_decision: "sd-1" })
       .catch((e: any) => ({ status: "threw", error: e.message }));

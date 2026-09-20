@@ -10,7 +10,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { CHIEF_OF_STAFF_HANDLE, chiefOfStaffIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { performReparentSession, personName, reportsToLine } from "./sessionOwnership";
+import { performReparentSession, personName, reportsToLine, roleMayHoldSession } from "./sessionOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
@@ -292,7 +292,7 @@ export async function performSetRoleScope(
 export async function performCreateRole(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { name: string; handle: string; team_id?: Id<"teams">; scope?: Scope; reports_to?: ReportsTo; charter?: string; review_backend?: string; tenure?: TenureSpec; avatar?: string },
+  args: { name: string; handle: string; team_id?: Id<"teams">; scope?: Scope; reports_to?: ReportsTo; charter?: string; review_backend?: string; tenure?: TenureSpec; avatar?: string; host_user_id?: Id<"users"> },
 ): Promise<any> {
   const name = args.name.trim();
   if (!name) throw new Error("A role needs a name");
@@ -316,11 +316,20 @@ export async function performCreateRole(
   const scope = args.scope && !isWholeWorkspace(args.scope)
     ? (await checkScope(ctx, userId, { _id: "new", ...boundary, reports_to, scope: EMPTY_SCOPE }, args.scope)).scope
     : EMPTY_SCOPE;
+  // The host is whoever runs the role's session. A role named on a session a
+  // teammate runs (R2) is hosted by that teammate, not by the admin who
+  // accepted it: the standing session runs under its runner's token, and a
+  // host who is someone else makes the role's own writes read as that
+  // person's and its takeover move the wrong person's sessions.
+  const host = args.host_user_id ?? userId;
+  if (String(host) !== String(userId) && !(args.team_id && await isTeamMember(ctx as any, host, args.team_id))) {
+    throw new Error("A role's host must be a member of its team");
+  }
   const short_id = await nextShortId(ctx.db, "or");
   const id = await ctx.db.insert("org_roles", {
     short_id,
     ...boundary,
-    host_user_id: userId,
+    host_user_id: host,
     name,
     handle,
     scope,
@@ -585,7 +594,9 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
     .query("conversations")
     .withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
     .collect();
-  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined });
+  // The escalation goes with the pointer, as a reparent to a person drops it:
+  // a retired role's line must never pin a card in a person's needs input.
+  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined, escalated_by_role: undefined });
   // Child roles re-home to the retired role's own parent, the way its sessions
   // fall back to their owners: the tree hides retired roles, so a child left
   // pointing here would draw with no parent. No cycle is possible: the parent
@@ -604,6 +615,7 @@ export async function performRetireRole(ctx: any, userId: Id<"users">, args: { r
   const handed: any[] = [];
   for (const t of heldTasks) { const to = (await ctx.db.get(t._id))?.assignee; if (to && to !== String(role._id)) handed.push({ task_id: String(t._id), short_id: t.short_id, from: String(role._id), to: String(to) }); }
   await noteRoleChange(ctx, userId, "retire", role, retired, {
+    label_ids: handed.map((t) => t.to),
     effects: {
       ...(standing ? { seat: { conversation_id: String(standing._id), short_id: standing.short_id ?? String(standing._id).slice(0, 7), kept: keepStanding, ...(standing.seat_previous?.title ? { previous_title: standing.seat_previous.title } : {}) } } : {}),
       ...(stopped.length ? { routines_stopped: stopped } : {}),
@@ -736,7 +748,16 @@ export const setScope = mutation({
 // answer the web gave the person when they clicked, and a person who may set
 // the owner but not reshape the role still names the lead: the scope is left
 // for an admin, and the answer says so.
-export async function performSetProjectLead(
+type SetProjectLeadResult = { owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "human_only" | "cleared"; took_over?: string };
+
+// One lead is one row of the org log (org-staffing.md S21): the owner that
+// moved, with the scope the role gained and the sessions it took over folded
+// into the same row.
+export async function performSetProjectLead(ctx: Ctx, userId: Id<"users">, args: { project_id: Id<"projects">; role_id: string | null; leave_sessions?: boolean }): Promise<SetProjectLeadResult> {
+  return withOrgChange(ctx, userId, { kind: "lead", door: "project_page", gesture: "save" }, () => applyProjectLead(ctx, userId, args));
+}
+
+async function applyProjectLead(
   ctx: Ctx,
   userId: Id<"users">,
   args: { project_id: Id<"projects">; role_id: string | null; leave_sessions?: boolean },
@@ -745,6 +766,15 @@ export async function performSetProjectLead(
   if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new Error("Project not found");
   const patch = await charterPatch(ctx, project, { owner: args.role_id }, "projects");
   await ctx.db.patch(project._id, { ...patch, updated_at: Date.now() });
+  if ("owner_role_id" in patch) {
+    const owner = (id: any) => (id ? String(id) : null);
+    await noteOrgChange(ctx, userId, whereOfRecord(project), {
+      kind: "lead",
+      subject: recordSubject("project", project),
+      ...movedFields({ owner_role_id: owner(project.owner_role_id) }, { owner_role_id: owner(patch.owner_role_id) }),
+      labels: await labelsOf(ctx, [owner(project.owner_role_id), owner(patch.owner_role_id)]),
+    });
+  }
   if (!patch.owner_role_id) return { owner_role_id: null, scope: "cleared" };
   const role = await ctx.db.get(patch.owner_role_id as Id<"org_roles">);
   // The role hears it in its own words whatever happens to its scope.
@@ -1040,7 +1070,12 @@ async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: s
   // The workspace anchor's session (org-staffing.md S12) is the company's,
   // not only its host's: whoever may reshape the anchor may seat it.
   const conv = await findConversationByAnyRefWhere(ctx, ref, async (c: any) => {
-    if ((await checkConversationAccess(ctx, userId, c)) === "owner") return true;
+    const access = await checkConversationAccess(ctx, userId, c);
+    if (access === "owner") return true;
+    // A teammate's session the team can see, seated by someone who may
+    // reshape the role, on a role its own runner hosts (R2: the analyzer names
+    // a session somebody else has run for weeks and an admin accepts it).
+    if (access === "team" && String(c.user_id) === String(role.host_user_id) && roleMayHoldSession(role, c) && await userCanAdminRole(ctx, userId, role)) return true;
     const anchor = c.anchor_id && !c.standing_role_id ? await ctx.db.get(c.anchor_id) : null;
     return !!anchor && anchor.status !== "decommissioned" && (await userCanAdminAnchor(ctx, userId, anchor));
   });

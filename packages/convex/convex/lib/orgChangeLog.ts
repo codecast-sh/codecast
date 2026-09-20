@@ -270,13 +270,14 @@ export function roleFieldIds(f: OrgLogFields): string[] {
 }
 
 /** A role core reports its write: the role as it was (null for a hire) and as it is. */
-export async function noteRoleChange(ctx: any, userId: Id<"users">, kind: OrgLogKind, was: any | null, now: any, extra: Pick<OrgChangeFact, "effects"> & { door?: OrgLogDoor; gesture?: OrgLogGesture } = {}): Promise<void> {
+export async function noteRoleChange(ctx: any, userId: Id<"users">, kind: OrgLogKind, was: any | null, now: any, extra: Pick<OrgChangeFact, "effects"> & { door?: OrgLogDoor; gesture?: OrgLogGesture; label_ids?: string[] } = {}): Promise<void> {
+  const { label_ids = [], ...rest } = extra;
   const moved = movedFields(was ? roleLogFields(was) : { status: null }, roleLogFields(now));
   await noteOrgChange(ctx, userId, whereOfRole(now), {
     kind,
     subject: roleSubject(now),
     ...moved,
-    labels: await labelsOf(ctx, [String(now._id), ...roleFieldIds(moved.before), ...roleFieldIds(moved.after)]),
-    ...extra,
+    labels: await labelsOf(ctx, [String(now._id), ...roleFieldIds(moved.before), ...roleFieldIds(moved.after), ...label_ids]),
+    ...rest,
   });
 }
