@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, BlogFooter, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
+import { BlogNav, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
@@ -221,8 +221,6 @@ export default function AnInboxForYourAgentsPost() {
           the app&apos;s content area.
         </p>
       </article>
-
-      <BlogFooter />
     </main>
   );
 }

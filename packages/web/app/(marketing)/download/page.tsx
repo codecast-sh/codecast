@@ -293,16 +293,6 @@ export default function DownloadPage() {
           .
         </p>
       </section>
-
-      {/* Footer */}
-      <footer style={{ borderTop: "1px solid #eee8d5" }}>
-        <div className="mx-auto max-w-6xl px-6 py-8 text-center text-sm text-[#839496]">
-          &copy; 2026 Codecast &middot;{" "}
-          <Link href="/privacy" className="hover:text-[#073642]">Privacy</Link> &middot;{" "}
-          <Link href="/terms" className="hover:text-[#073642]">Terms</Link> &middot;{" "}
-          <Link href="/support" className="hover:text-[#073642]">Support</Link>
-        </div>
-      </footer>
     </main>
   );
 }

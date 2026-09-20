@@ -29,6 +29,8 @@ export interface DeepDive {
   heading: string;
   /** Plain paragraphs; one idea each. */
   paragraphs: string[];
+  /** Labelled items rendered as a list under the paragraphs, for sections that enumerate. */
+  points?: { label: string; text: string }[];
 }
 
 export interface Comparison {
@@ -96,19 +98,21 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Delta",
     competitorUrl: "https://delta.dev",
     title: "Codecast vs Delta",
-    dek: "Delta, from the makers of the Zed editor, is a new app where a thread owns its own checkout and records every edit between commits. Codecast records and steers the agent sessions your team already runs, in the terminals and on the machines you already use.",
+    dek: "Delta, from the makers of the Zed editor, and codecast share a premise: the conversation with the agent is the unit of work, and the team should see it live. Delta builds that on its own agent and its own file history. Codecast builds it on the agents you already run and on git.",
     codecastIs:
-      "Codecast is a team record and control layer for coding agents: a daemon on each machine watches the history files Claude Code, Codex, Cursor and Gemini already write and syncs every session into one searchable, steerable place, with tasks, plans, docs, triggers and line attribution built on that record.",
+      "Codecast is a team record and control layer for coding agents: a daemon on each machine watches the history files Claude Code, Codex, Cursor and Gemini already write and syncs every session live into one searchable, steerable place your team shares, with tasks, plans, docs, triggers and line attribution built on that record.",
     competitorIs:
-      "Delta is a desktop app from Zed Industries, in public beta since September 2026, built around the thread: a conversation with Delta's own agent, paired with an isolated checkout of your repository. Its sync layer, DeltaDB, records each edit and message in order between git commits and replicates the conversation and the working tree to everyone in the thread in real time.",
+      "Delta is a desktop app from Zed Industries, in public beta since September 2026, built around the thread: a conversation with Delta's own agent, paired with a checkout of your repository. Its sync layer, DeltaDB, records each edit and message in order between git commits and replicates the conversation and the working tree to everyone in the thread in real time.",
     bottomLine:
-      "The two products make opposite bets. Delta asks you to move the work into one new app so it can own the checkout, run the agent and replay every keystroke of the change to your teammates. Codecast asks you to change nothing about how you run agents and gives your team the record, the memory and the controls around what those agents did. Pick Delta when the live, edit by edit, multiplayer thread is the thing you want. Pick codecast when your team already runs several agents on several machines and needs to see, search, steer and attribute all of it.",
+      "Both products start from the same idea, so the useful question is what each has that the other lacks. Delta has a short list codecast does not: a file history that records every edit from any source, a working tree that stays synced on every participant's machine and in the browser, comments that follow a passage as the code moves, and drafts that collaborators see as they type. Codecast has the rest: any agent on any machine, memory across every session, line attribution, remote and cloud runtimes, permission prompts, tasks and triggers, and a backend you can host. Much of Delta's roadmap already ships in codecast. Delta's file history does not, and it is the hard part to build.",
     verifiedOn: "2026-09-20",
     rows: [
       {
-        ...SHARED_ROWS.model,
+        dimension: "Core model",
+        codecast:
+          "The session is the unit of work, synced live to the team; codecast records the agents you already run and adds the team layer on top",
         competitor:
-          "A new app with its own agent; each thread owns an isolated checkout and DeltaDB records every edit between commits",
+          "The thread is the unit of work, synced live to the team; Delta runs its own agent and records every file edit in DeltaDB",
       },
       {
         ...SHARED_ROWS.agents,
@@ -116,48 +120,56 @@ export const COMPARISONS: Comparison[] = [
           "Delta's built in agent on Anthropic, OpenAI, GitHub Copilot, Grok, OpenRouter and other providers; a plugin that syncs Claude Code terminal sessions into threads is on the roadmap as in progress",
       },
       {
-        dimension: "Where the agent runs",
-        codecast: "In your own terminal, on whichever machine you started it; codecast never runs the model itself",
-        competitor:
-          "On the sender's machine from the desktop app; a turn sent from the browser uses a Delta hosted model and has no shell or local tools",
-      },
-      {
-        dimension: "Unit of work",
-        codecast: "The session; tasks, plans, docs and projects link to the sessions that did the work",
-        competitor: "The thread: one conversation, one Delta worktree per project, one checkout per participant",
-      },
-      {
-        dimension: "What gets recorded",
+        dimension: "File history",
         codecast:
-          "The agent's own transcript: every message, tool call, permission prompt and file edit, plus the commits that followed",
+          "Git, plus a diff for every edit the agent made through its tools, plus snapshots of the whole working tree on a hidden git ref",
         competitor:
-          "Every edit and message in sequence in DeltaDB; the repository's git objects and file contents are uploaded so the thread can be replayed anywhere",
+          "DeltaDB records every edit to every file in order, whoever made it: the agent, a shell command or a person's editor",
+      },
+      {
+        dimension: "Rewind",
+        codecast: "Fork the conversation from any message; the fork's files start from the current checkout",
+        competitor: "Revert the conversation and the files together to any earlier point",
+      },
+      {
+        dimension: "The working tree for teammates",
+        codecast:
+          "Teammates see the transcript and the diffs live; the tree itself travels as a snapshot when a session moves to another machine or a cloud host",
+        competitor:
+          "Every participant gets a checkout that stays synced with the thread; browser participants open any file with no clone",
       },
       {
         dimension: "Isolation",
         codecast:
-          "Your checkout by default; cast ws creates a git worktree with its own env files, ports and setup when you want isolation",
+          "Your choice for each session: the shared checkout, or a git worktree from cast ws with its own env files, ports and setup",
         competitor:
-          "Isolated Workspace by default: a managed checkout per thread under .delta; you can point a thread at your existing folder, and then threads that share it are not isolated",
+          "Your choice for each thread: an isolated checkout under .delta by default, or your existing folder, where threads are not isolated",
       },
       {
         dimension: "Review",
         codecast:
-          "Quote and comment on any reply, leave notes on diff lines, and send them as one batched review; review a teammate's session from its transcript and diff; batch reviews on pull requests",
+          "Quote and comment on any reply, leave notes on diff lines, send them as one batched review; diff any range of messages; review a teammate's session; batch reviews on pull requests",
         competitor:
-          "Inline comments anchored to code passages in the Changes tab; review subthreads with an agent written change guide and an Approve or Request Changes verdict; Land Changes runs a landing skill in a subthread",
+          "Comments anchored to passages that follow the code as it moves; review subthreads with an agent written change guide and an Approve or Request Changes verdict; a landing skill ships the change",
       },
       {
-        ...SHARED_ROWS.team,
-        competitor:
-          "Threads are private until shared: invited by email (ten per thread), organization wide, or any signed in user with the link",
-      },
-      {
-        dimension: "Working in one thread together",
+        dimension: "Working in one conversation together",
         codecast:
-          "Anyone with access reads the live transcript and can message the session; replies carry the sender's name; a session can have several owners and sit in several inboxes",
+          "Anyone with access reads the live transcript and can message the session; replies carry the sender's name; a session can have several owners",
         competitor:
-          "Everyone sees each other's drafts as they type; all pending drafts go to the agent as one turn; the sender's account pays for the turn and it runs on the sender's machine",
+          "The same, plus drafts visible as people type, all pending drafts sent as one turn, and people editing files inside the thread",
+      },
+      {
+        dimension: "Away from your machine",
+        codecast:
+          "Move a live session to another machine with its working tree, or fork branches onto a cloud host; steer from web, desktop and an iOS app",
+        competitor:
+          "A browser viewer for reading, commenting and reviews; a remote runtime is on the roadmap as in progress",
+      },
+      {
+        dimension: "Conversation branching",
+        codecast: "Fork from any message, several directions at once, locally or on a cloud host",
+        competitor: "Subthreads one level deep; branching is on the roadmap as up next",
       },
       {
         ...SHARED_ROWS.memory,
@@ -167,11 +179,6 @@ export const COMPARISONS: Comparison[] = [
       {
         ...SHARED_ROWS.blame,
         competitor: "Not documented as a feature; Delta's references anchor to changes rather than line numbers",
-      },
-      {
-        ...SHARED_ROWS.remote,
-        competitor:
-          "delta.dev/threads in any browser, phones included, for reading, commenting and reviews; creating threads and running terminals need the desktop app",
       },
       {
         dimension: "Automation",
@@ -192,12 +199,12 @@ export const COMPARISONS: Comparison[] = [
         codecast:
           "A backend you can host yourself; project paths are hashed, each conversation has its own privacy level, and an optional mode encrypts bodies so the server cannot read them",
         competitor:
-          "Zed's servers on Cloudflare (R2, Durable Objects, KV, D1), encrypted at rest with Cloudflare managed keys; no self hosting; deleting a thread locally leaves the server copy until you delete the account",
+          "Zed's servers on Cloudflare (R2, Durable Objects, KV, D1), encrypted at rest with Cloudflare managed keys; the repository's file contents are uploaded; no self hosting",
       },
       {
         dimension: "Platforms",
-        codecast: "Daemon on macOS, Linux and Windows; web, a macOS desktop app, an iOS app, and blame in VS Code, Cursor and vim",
-        competitor: "macOS 13 or later on Apple Silicon, Linux and Windows; one app instance at a time; a browser viewer",
+        codecast: "Daemon on macOS, Linux and Windows; web everywhere, a macOS desktop app, an iOS app, and blame in VS Code, Cursor and vim",
+        competitor: "Native desktop apps on macOS 13 or later with Apple Silicon, Linux and Windows; one app instance at a time; a browser viewer",
       },
       {
         dimension: "Sign in",
@@ -214,103 +221,174 @@ export const COMPARISONS: Comparison[] = [
     strengths: {
       codecast: {
         pros: [
-          "Records every session with no change to how anyone works: four agents, any machine, nothing to switch on.",
+          "Records every session live with no change to how anyone works: four agents, any machine, nothing to switch on.",
           "The record outlives the session. Full text and semantic search, questions across the whole corpus, and cast blame from any line back to the conversation that wrote it.",
           "Agents read the record themselves, so memory carries across sessions, people and months.",
-          "Steer from anywhere: answer permission prompts, send instructions, fork, restart and reassign sessions from web, desktop or phone.",
+          "Already runs away from your desk: move a live session to another machine with its working tree, fork onto a cloud host, and answer permission prompts from a phone.",
           "Work tracking grows out of the record: tasks, plans, docs, projects, a decisions queue, triggers, workflows and org roles all link back to sessions.",
           "MIT licensed with a backend you can host yourself; per conversation privacy and optional encryption the server cannot read.",
         ],
         cons: [
-          "It depends on each agent's own transcript format, so what a client does not expose stays absent: Cursor sessions cannot be launched or messaged, and Cursor and Gemini have no live state classifier.",
-          "The checkout is shared unless you ask for a worktree, so two sessions in one folder can collide.",
-          "Teammates read the transcript and the diffs; they do not get a live synced copy of the working tree to edit in the browser.",
-          "Comments attach to messages and file lines, not to a passage that follows the code as it moves.",
-          "It is not an editor. You still write code yourself in your terminal or IDE.",
-          "A large surface. The inbox, tasks, plans, docs, chat, roles and triggers take time to learn.",
+          "The history of each edit is rebuilt from the agent's tool calls, so an edit made by a shell command, a formatter or a person's editor appears only at the next snapshot or commit.",
+          "A fork branches the conversation but not the files: there is no rewind of the working tree to the state it had at an earlier message.",
+          "Teammates do not get a continuously synced copy of the working tree, and the web app shows diffs, not the whole tree.",
+          "Comments anchor to a file and line at a commit, so they do not follow a passage when the code moves.",
+          "Drafts are private to the person typing; presence is coarse; nobody edits files inside the conversation.",
+          "It depends on each agent's own transcript format: Cursor sessions cannot be launched or messaged, and the desktop app is macOS only.",
         ],
       },
       competitor: {
         pros: [
-          "DeltaDB records every edit between commits and replays the conversation and the working tree together to every participant in real time.",
-          "Each thread starts in its own checkout, so parallel threads cannot trample each other or your working folder.",
-          "Review happens where the work happened: comments anchored to passages, review subthreads with a change guide, an approve or request changes verdict, and a landing skill that ships the change.",
-          "Multiplayer composing: drafts are visible as people type and go to the agent as one turn.",
-          "One agent, many providers. Switch models mid thread, sign in with ChatGPT, Copilot or Grok subscriptions, or bring API keys.",
-          "A browser viewer for reading, commenting and reviewing with nothing installed, phones included.",
+          "DeltaDB records every edit between commits from any source, so the file history is the ground truth and not a reconstruction.",
+          "The conversation and the files rewind together to any earlier point.",
+          "Every participant's checkout stays synced with the thread, and a browser participant opens any file with no clone.",
+          "Comments follow the passage they were written on, even on uncommitted work while the agent is mid turn.",
+          "Drafts are visible as people type and go to the agent as one turn; people can edit files inside the thread.",
+          "Review opens with an agent written change guide and ends with a verdict; one agent works across many providers, with native apps on three platforms.",
         ],
         cons: [
-          "Public beta. The Claude Code plugin, MCP support, a remote runtime, sandboxing, permission prompts and conversation branching are roadmap items, not shipped.",
+          "Public beta. A remote runtime, the Claude Code plugin, MCP support, sandboxing, permission prompts, mentions and conversation branching are roadmap items, not shipped.",
           "The agent acts without asking. Prepare scripts, direnv and AGENTS.md run before you review them.",
           "Your repository's file contents and git objects are uploaded to Zed's servers; there is no self hosting, and deleting a thread locally leaves the server copy.",
           "Sessions you run in your own terminal are not recorded today. The work happens inside Delta's app and Delta's agent.",
-          "Real work needs the desktop app: macOS requires Apple Silicon, only one app instance runs at a time, and browser turns have no shell.",
-          "Subthreads go one level deep, keybindings cannot be rebound, and there is no documented search across threads or memory for the agent.",
+          "No documented search across threads, no memory the agent consults, and no way to trace a line of code back to its conversation.",
+          "No tasks, plans, scheduled runs or webhooks; no native phone app; one app instance at a time; keybindings cannot be rebound.",
         ],
       },
     },
     deepDives: [
       {
-        heading: "Two bets on where the work lives",
+        heading: "The same premise, built two ways",
         paragraphs: [
-          "Delta's founding claim is that the thread is where software happens now, so the thread should be the workspace. You add a project, Delta imports its files into DeltaDB, and every thread you open gets its own checkout under .delta with the conversation and the edits recorded together. Zed says it has turned pull requests off on Delta's own repository and lands changes from threads instead.",
-          "Codecast starts from the opposite observation: your team already runs agents in terminals, IDEs and tmux panes on many machines, and the problem is that all of that evaporates when the pane closes. So the daemon records what is already happening and the product grows around the record: an inbox of every session by who acts next, search and memory over the corpus, and a control channel back into any live session.",
-          "The practical difference is what you give up. Delta asks for a new app, a new agent and an upload of your repository. Codecast asks for a daemon and leaves the agent, the terminal and the git workflow exactly as they were.",
+          "Delta says the thread is where software happens now, so the thread should be the workspace. Codecast is built on the same belief. In both, the conversation with the agent is the unit of work, it syncs to teammates as it happens, anyone with access can read it live and steer it, and you choose whether it runs in an isolated checkout or in your own folder.",
+          "The difference is what each product chose to own. Delta owns the agent and the file history: it ships its own harness and its own database of edits, and asks you to work inside its app. Codecast owns neither: it records the agents you already run in your own terminals, keeps files in git, and spends its effort on the layer above, which is the inbox, the memory, the control channel and the work tracking.",
+          "Owning the file history gives Delta a few abilities that are hard to get any other way. Owning nothing gives codecast reach: every agent, every machine, every session, including the ones nobody planned to keep.",
         ],
       },
       {
-        heading: "What each one records",
+        heading: "What Delta has that codecast does not",
         paragraphs: [
-          "Delta records operations. Each edit gets a stable identity and a place in sequence, so you can scrub a thread back to any point, revert the conversation to the cursor, comment on a passage while the agent is mid turn, and hand a teammate the exact state of the working tree without a commit. That is a stronger primitive than a diff, and it is the reason Delta had to be a new application rather than a feature of git or of Zed.",
-          "Codecast records the agent's own transcript: every message, tool call, permission prompt, thinking block and file edit, with diffs materialized per edit and commits tied back to the session. It does not replay keystrokes, but it keeps things Delta does not: which commands the agent ran, what it read, which prompt it was answering, and what the person said back. cast blame then joins git blame to that record so any line resolves to the conversation and the message that wrote it.",
-          "The upload differs too. Delta stores your repository's git objects and file contents on Zed's Cloudflare infrastructure so that browser participants can see the worktree. Codecast stores transcripts and diffs, hashes project paths, redacts secrets before sync, and can run on your own backend.",
+          "This list was checked against codecast's source, not its marketing. Each item is something Delta documents as shipped and codecast cannot do today.",
+        ],
+        points: [
+          {
+            label: "A file history that is the ground truth",
+            text: "DeltaDB records every change to every file in the thread, in order, whoever made it. Codecast's history of each edit is rebuilt from the agent's tool calls, so a change made by a shell command, a formatter or a person's editor is missing until the next snapshot of the tree or the next commit.",
+          },
+          {
+            label: "Rewind of the conversation and the files together",
+            text: "Delta reverts a thread to any earlier point and the working tree goes with it. Codecast forks a conversation from any message, but the fork's files start from the current checkout, not from the state the files had at that message.",
+          },
+          {
+            label: "A working tree that stays synced for everyone",
+            text: "Each Delta participant gets a checkout that follows the thread, and a browser participant can open any file with no clone. Codecast syncs the transcript and the diffs live, and carries the real tree between machines as a snapshot on a hidden git ref, but that is a transfer at one moment and the web app shows diffs, not the tree.",
+          },
+          {
+            label: "People editing files inside the thread",
+            text: "Delta has file tabs with an edit mode, and a person's edits are recorded beside the agent's. Codecast is not an editor, and an edit a person makes in their own editor is not attributed in the record.",
+          },
+          {
+            label: "Comments that follow the code",
+            text: "Delta anchors a comment to the change, so it stays on its passage as code moves, and it works on uncommitted work while the agent is mid turn. Codecast anchors a comment to a file and line at a commit or in a worktree diff.",
+          },
+          {
+            label: "Drafts your collaborators can see",
+            text: "In a shared Delta thread each person's draft is visible as they type, and every pending draft goes to the agent as one turn. Codecast drafts are private to the window they are typed in, presence is coarse on purpose, and typing indicators exist only in team chat.",
+          },
+          {
+            label: "A change guide",
+            text: "A Delta review thread opens with a walkthrough the agent writes: the change in the order that explains it, with focused diffs. Codecast reviews from the transcript and the diff and has no generated walkthrough.",
+          },
+          {
+            label: "Its own agent across providers",
+            text: "One harness runs on Anthropic, OpenAI, Copilot, Grok and OpenRouter models, signs in with ChatGPT, Copilot or Grok subscriptions, and a browser turn needs no machine at all. Codecast can switch a session between Claude Code and Codex, but it has no harness of its own, so a provider with no supported agent CLI is out of reach.",
+          },
+          {
+            label: "Native desktop apps on Windows and Linux",
+            text: "Codecast's desktop app is macOS only. On Windows and Linux the daemon and the web app cover the same ground without the global shortcuts and native notifications.",
+          },
+        ],
+      },
+      {
+        heading: "What codecast has that Delta does not",
+        paragraphs: [
+          "Several of these are on Delta's public roadmap, marked here where that is so.",
+        ],
+        points: [
+          {
+            label: "Any agent, any machine, nothing to switch on",
+            text: "The daemon records Claude Code, Codex, Cursor and Gemini sessions wherever they run, including the ones nobody planned to keep. Delta records only work done through Delta's agent; its Claude Code plugin is on the roadmap as in progress.",
+          },
+          {
+            label: "Memory across every session",
+            text: "Full text and semantic search over the whole team's history, questions answered across the corpus, and agents that run those queries themselves before they start work. Delta documents search within a thread.",
+          },
+          {
+            label: "Line attribution",
+            text: "cast blame resolves any line of code to the conversation and the message that wrote it, in the terminal, VS Code, Cursor and vim.",
+          },
+          {
+            label: "Remote and cloud runtimes",
+            text: "Move a live session to another machine with its uncommitted work, or fork branches into worktrees on a cloud host. Delta lists a remote runtime as in progress.",
+          },
+          {
+            label: "Conversation branching",
+            text: "Fork from any message, in several directions at once, with the tree shown inline. Delta has subthreads one level deep and lists branching as up next.",
+          },
+          {
+            label: "Permission prompts, answered from anywhere",
+            text: "The agent's own permission model stays in force and a prompt can be approved from web, desktop or phone. Delta's agent does not ask before calling tools; permissions and sandboxing are on its roadmap.",
+          },
+          {
+            label: "MCP servers and mentions",
+            text: "The agents codecast records already use their own MCP servers, and people, sessions, tasks and docs can be mentioned in docs and team chat. Delta lists both as roadmap items.",
+          },
+          {
+            label: "Work tracking and automation on the same record",
+            text: "Tasks, plans, docs, projects, a decisions queue, triggers on a schedule or a webhook, workflows with human gates, pull requests bound to the session that owns them, and org roles with standing sessions.",
+          },
+          {
+            label: "A phone app",
+            text: "A native iOS app with push notifications, beside the web and desktop clients. Delta offers its browser viewer on phones.",
+          },
+          {
+            label: "Open source and your own backend",
+            text: "MIT licensed, documented for self hosting, with hashed project paths, a privacy level for each conversation and optional encryption the server cannot read. Delta is closed source and stores repository contents on Zed's Cloudflare infrastructure.",
+          },
         ],
       },
       {
         heading: "Isolation and git",
         paragraphs: [
-          "Delta isolates by default. Every thread gets a managed checkout, every participant gets their own checkout of that worktree on their own machine, and a prepare script runs when a checkout is created. The agent can push to a second remote named local, which points at your own repository, so a teammate can pick up a branch without going through origin. The cost is that two threads on the same branch name are two separate checkouts, and uncommitted work in one does not appear in the other.",
-          "Codecast works in your checkout by default and treats isolation as something you ask for. cast ws acquire creates a git worktree with copied env files, its own port allocations and the project's setup commands, and cast ws destroy tears it down; a warm pool can keep worktrees ready. Because sessions run real git on real branches, landing work is ordinary: commit, push, open a pull request, and codecast binds the session to that pull request so reviews and failing checks wake it.",
+          "Both products let you choose. Delta defaults to an isolated checkout for each thread under .delta, runs a prepare script when it creates one, and lets you point a thread at your existing folder instead, where threads are no longer isolated from each other. Codecast defaults to your checkout and gives you a git worktree on request: cast ws acquire copies env files, allocates ports and runs the project's setup commands, and a warm pool can keep worktrees ready.",
+          "Delta moves commits between machines itself, through a second remote named local that points at your own repository, so a teammate can pick up a branch without origin. Codecast uses git for the same job: a snapshot of the real working tree, uncommitted and untracked files included, goes to a hidden ref on your remote and is restored on the other machine. Codecast's route needs a shared remote; Delta's does not.",
         ],
       },
       {
         heading: "Review",
         paragraphs: [
-          "Delta's review is the strongest part of the product. The Changes tab shows diffs against the branch base, the last commit or the last turn. You select a passage and type to comment; comments queue until your next message and reach the agent as targeted feedback on that exact passage. A review subthread asks the agent for a change guide, a walkthrough of the change in the order that explains it, and ends with Approve or Request Changes posted back to the parent. A skill marked as a landing action turns the merge into a subthread that runs checks and publishes.",
-          "Codecast reviews at three levels. In a conversation you quote any reply, leave notes on diff lines and send them as one batched review to the session. Across sessions, a reviewer reads a teammate's transcript and diff and reports back to that session or its owner. On GitHub, cast pr holds notes and submits them as one review with a verdict, and the session that owns the pull request is woken with the whole review as one message.",
-        ],
-      },
-      {
-        heading: "Working together",
-        paragraphs: [
-          "In a shared Delta thread everyone can message, steer, edit files and comment, and drafts are visible as people type. All pending drafts go to the agent as one turn. The turn runs on the sender's machine with the sender's tools and credentials and is billed to the sender, so what the agent can reach depends on who pressed send. Browser participants get replicated files and a hosted model, not a shell.",
-          "Codecast's collaboration is built around the inbox rather than the thread. Each session has one or more owners and appears in their inboxes sorted by who acts next; passing a session moves it to a teammate; cast send messages any session and the reply carries your name. Around the sessions sit team chat, transcribed calls with action items, a decisions queue that lets an agent ask a question without stopping, and an org model where roles hold standing sessions and a line of stations carries a task from analysis to review.",
+          "Delta's review is the strongest part of the product. The Changes tab shows diffs against the branch base, the last commit or the last turn. You select a passage and type to comment; comments queue until your next message and reach the agent as feedback on that exact passage. A review subthread opens with the change guide and ends with Approve or Request Changes posted back to the parent. A skill marked as a landing action turns the merge into a subthread that runs checks and publishes.",
+          "Codecast reviews at three levels. In a conversation you quote any reply, leave notes on diff lines, pick any range of messages to diff, and send the notes as one batched review to the session. Across sessions, a reviewer reads a teammate's transcript and diff and reports back to that session or its owner. On GitHub, cast pr holds notes and submits them as one review with a verdict, and the session that owns the pull request is woken with the whole review as one message.",
         ],
       },
       {
         heading: "Safety and where the data goes",
         paragraphs: [
           "Delta's own docs are direct about this: the agent acts autonomously and does not ask before calling tools, there is no sandbox, and Delta runs a repository's prepare script, direnv file and AGENTS.md without asking you to review them first. Permissions, sandboxing and worktree trust are on the roadmap. Data is encrypted in transit and at rest on Cloudflare with Cloudflare managed keys, secrets are redacted on the device before upload, and account deletion is by email.",
-          "Codecast leaves the agent's own permission model in place and lets you answer prompts from any device. It redacts secrets before sync, hashes project paths, supports a private, summary only or full visibility level per conversation, and can encrypt conversation bodies so the server never reads them. The backend is MIT licensed and documented for self hosting.",
-        ],
-      },
-      {
-        heading: "What is not there yet",
-        paragraphs: [
-          "Delta's roadmap, as of this reading, lists the Claude Code plugin, MCP support, a remote runtime, repository based access and web parity as in progress, and mentions, repository level context, sandboxing, WSL, conversation branching and a graph view as up next. Until the plugin ships, Delta only records work done through Delta's agent.",
-          "Codecast has its own gaps, stated in its own docs. OpenCode and pi support is in the tree but pre release. A Codex fork inherits its parent's history but cannot yet take a follow up turn. Cursor sessions are ingested and resumable but cannot be launched or messaged from codecast. The team tier is early access with no self serve billing yet.",
+          "Codecast leaves the agent's own permission model in place and lets you answer prompts from any device. It redacts secrets before sync, hashes project paths, supports a private, summary only or full visibility level for each conversation, and can encrypt conversation bodies so the server never reads them. The backend is MIT licensed and documented for self hosting.",
         ],
       },
     ],
     whenCompetitor: [
-      "You want the thread to be the workspace: an isolated checkout per conversation, every edit replayed live to teammates, and review anchored to passages of the change.",
-      "You are happy to run one new app with its own agent, and to upload the repository so that anyone with a browser can follow along.",
-      "You want to land changes from a thread instead of a pull request, and your team is small enough to invite by email.",
+      "You want every edit recorded from any source, and the conversation and the files to rewind together.",
+      "Your team works in one thread at the same time: shared drafts, people editing files beside the agent, a synced checkout on every machine and in the browser.",
+      "You want review comments that stay attached to a passage as the code moves, and a walkthrough of the change written for the reviewer.",
+      "You are happy to run one new app with its own agent, and to upload the repository to Zed's servers.",
     ],
     whenCodecast: [
       "Your team already runs Claude Code, Codex, Cursor or Gemini on several machines and you want all of it recorded, searchable and steerable without changing how anyone works.",
       "You need the record afterward: search months later, agents that consult team history, and a line of code traced to the conversation that wrote it.",
-      "You want the agent's permission prompts to stay in force and to answer them from your phone.",
+      "You need sessions that run away from your desk today: on another machine, on a cloud host, steered from a phone, with permission prompts still in force.",
       "You need the data to stay on infrastructure you control, or you need tasks, plans, triggers and roles built on the same record as the sessions.",
     ],
     together:

@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import { copyToClipboard } from "@/lib/utils";
 import { useRouteMeta } from "../pageMeta";
 import { SITE_LINKS } from "@/lib/siteLinks";
-import { SOL, BlogNav, BlogFooter, Terminal, Cmd, Code } from "../blog/blogChrome";
+import { SOL, BlogNav, Terminal, Cmd, Code } from "../blog/blogChrome";
 
 const { supportEmail: SUPPORT_EMAIL, community: COMMUNITY_URL, githubIssues: ISSUES_URL } = SITE_LINKS;
 
@@ -421,8 +421,6 @@ export default function SupportPage() {
           </div>
         </div>
       </section>
-
-      <BlogFooter />
     </main>
   );
 }

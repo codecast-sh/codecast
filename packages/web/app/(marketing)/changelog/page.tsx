@@ -1,15 +1,15 @@
 "use client";
 import Link from "next/link";
-import { SITE_LINKS } from "@/lib/siteLinks";
 import { useState, type CSSProperties } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
-import { Logo } from "@/components/Logo";
 import {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock, Scale, Chrome, MousePointerClick,
+  MessagesSquare, Phone, Terminal, Image, Network, GitPullRequest, Cloud, Bell, ShieldCheck,
+  Sparkles, FolderOpen, Hourglass, Pin,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { RELEASES, type Accent, type SectionIcon } from "./changelogData";
@@ -50,7 +50,9 @@ const ICONS: Record<SectionIcon, LucideIcon> = {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock, Scale, Chrome, MousePointerClick,
+  MessagesSquare, Phone, Terminal, Image, Network, GitPullRequest, Cloud, Bell, ShieldCheck,
+  Sparkles, FolderOpen, Hourglass, Pin,
 };
 
 // Marker colors cycle down the timeline so the spine has rhythm. Order is
@@ -312,7 +314,7 @@ export default function ChangelogPage() {
                     {r.headline}
                   </h2>
                   <p className="text-[15px] leading-relaxed mb-7 max-w-2xl" style={{ color: SOL.base00 }}>
-                    {r.summary}
+                    <Inline text={r.summary} />
                   </p>
 
                   {/* topical cards */}
@@ -331,6 +333,11 @@ export default function ChangelogPage() {
                             <h3 className="font-mono text-sm font-semibold leading-tight mb-3" style={{ color: SOL.base03 }}>
                               {s.title}
                             </h3>
+                            {s.when && (
+                              <p className="-mt-2 mb-3 font-mono text-[11px] tabular-nums" style={{ color: SOL.base1 }}>
+                                {s.when}
+                              </p>
+                            )}
                             <ul className="space-y-2">
                               {s.items.map((item, i) => (
                                 <li key={i} className="flex gap-2.5 text-sm leading-relaxed" style={{ color: SOL.base00 }}>
@@ -415,55 +422,6 @@ export default function ChangelogPage() {
           </div>
         </div>
       </div>
-
-      {/* Footer — matches the landing page */}
-      <footer style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
-        <div className="max-w-6xl mx-auto px-6 py-12">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div>
-              <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
-              <p className="text-sm" style={{ color: SOL.base00 }}>
-                See, steer, and remember every coding agent session — any agent, any machine.
-              </p>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-3 text-sm" style={{ color: SOL.base03 }}>
-                Product
-              </h4>
-              <ul className="space-y-2 text-sm" style={{ color: SOL.base00 }}>
-                <li><Link href="/documentation" className="hover:text-[#073642]">Documentation</Link></li>
-                <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
-                <li><Link href="/changelog" className="hover:text-[#073642]">Changelog</Link></li>
-                <li><Link href="/pricing" className="hover:text-[#073642]">Pricing</Link></li>
-                <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-3 text-sm" style={{ color: SOL.base03 }}>
-                Company
-              </h4>
-              <ul className="space-y-2 text-sm" style={{ color: SOL.base00 }}>
-                <li><Link href="/about" className="hover:text-[#073642]">About</Link></li>
-                <li><Link href="/blog" className="hover:text-[#073642]">Blog</Link></li>
-                <li><Link href="/privacy" className="hover:text-[#073642]">Privacy</Link></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-3 text-sm" style={{ color: SOL.base03 }}>
-                Connect
-              </h4>
-              <ul className="space-y-2 text-sm" style={{ color: SOL.base00 }}>
-                <li><a href="https://github.com/codecast-sh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-                <li><a href="https://x.com/codecastsh" className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Twitter</a></li>
-                <li><a href={SITE_LINKS.community} className="hover:text-[#073642]">Community</a></li>
-              </ul>
-            </div>
-          </div>
-          <div className="border-t mt-8 pt-8 text-center text-sm" style={{ borderColor: SOL.base2, color: SOL.base0 }}>
-            &copy; 2026 Codecast
-          </div>
-        </div>
-      </footer>
     </main>
   );
 }
