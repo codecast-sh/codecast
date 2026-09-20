@@ -8,6 +8,16 @@ const expoRequire = createRequire(require.resolve('expo/metro-config'));
 const metroRequire = createRequire(expoRequire.resolve('@expo/metro-config'));
 const { resolve } = metroRequire('metro-resolver');
 
+test('Metro excludes nested worktrees, not the checkout it is building', () => {
+  const blocked = file => config.resolver.blockList.some(pattern => pattern.test(file));
+  const root = path.resolve(__dirname, '../..');
+  expect(blocked(path.join(__dirname, 'index.ts'))).toBe(false);
+  for (const dir of ['.claude/worktrees', '.codecast/worktrees', '.conductor', 'dist-perf']) {
+    expect(blocked(path.join(root, dir, 'nested/packages/mobile/index.ts'))).toBe(true);
+  }
+  expect(blocked(path.join(os.tmpdir(), '.codecast/worktrees/release/packages/mobile/index.ts'))).toBe(false);
+});
+
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-native-peer-'));
 const packages = [
   { name: 'react-native-svg', entry: 'src/index.ts', component: 'src/fabric/CircleNativeComponent' },
