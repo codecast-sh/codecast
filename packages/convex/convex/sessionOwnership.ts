@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { checkConversationAccess } from "./privacy";
+import { checkConversationAccess, isVisibilityShareable, teamVisibleConvTeam } from "./privacy";
 import {
   addSessionOwnerRow,
   removeSessionOwnerRow,
@@ -19,7 +19,7 @@ import { resolveActor } from "./lib/actor";
 import { wakeCost, wakeFieldsOf } from "./wakeCost";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
-import { labelsOf, noteOrgChange, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
+import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
 // Session OWNERS — the humans whose inboxes a session appears in and who may
 // reply into it from the web composer. This is ONE of a session's three
@@ -296,6 +296,26 @@ async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">
   return user ? { kind: "user", user_id: user._id, name: personName(user) } : null;
 }
 
+// A team role's standing session is team visible, and its wake frame prints
+// each of its sessions' title, state and task (R1). So a session the team
+// cannot see never reports to a team role: filing it there would publish it.
+// A personal role (no team) has only its owner as a reader and takes any.
+const sessionVisibility = new WeakMap<object, Map<string, Promise<boolean>>>();
+
+export async function roleMayHoldSession(ctx: { db: any }, role: { team_id?: any }, c: any): Promise<boolean> {
+  if (!role.team_id) return true;
+  if (String(teamVisibleConvTeam(c) ?? "") !== String(role.team_id)) return false;
+  let cache = sessionVisibility.get(ctx);
+  if (!cache) { cache = new Map(); sessionVisibility.set(ctx, cache); }
+  const key = `${role.team_id}:${c.user_id}`;
+  let visible = cache.get(key);
+  if (!visible) {
+    visible = ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", c.user_id).eq("team_id", role.team_id)).first().then((m: any) => !!m && isVisibilityShareable(m.visibility ?? "summary"));
+    cache.set(key, visible!);
+  }
+  return visible!;
+}
+
 const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
 
 // Take the previous holder's triage off a row that is being put in front of
@@ -357,6 +377,15 @@ export async function performReparentSession(
   // same one; only the lookups that would answer the same thing are skipped.
   known?: { batch: ReparentBatch; row: any },
 ): Promise<ReparentSessionResult> {
+  return withOrgChange(ctx, authUserId, { kind: "session", door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" }, () => reparentSessionCore(ctx, authUserId, args, known));
+}
+
+async function reparentSessionCore(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; target: ReparentSessionTarget; note?: string; from_session?: string },
+  known?: { batch: ReparentBatch; row: any },
+): Promise<ReparentSessionResult> {
   const note = args.note?.trim() || undefined;
   const targetRole = args.target.kind === "role" ? known?.batch.role ?? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
   const canReshapeTarget = known ? known.batch.canReshape : targetRole ? await userCanAdminRole(ctx, authUserId, targetRole) : false;
@@ -379,6 +408,12 @@ export async function performReparentSession(
   if (args.target.kind === "role" && (conversation.standing_role_id || conversation.anchor_id)) {
     throw new Error("That session is a standing agent's own thread; it cannot be filed under a role");
   }
+  // A session of another team keeps the older refusal below; this one is for a
+  // session routed to the role's team that the team cannot see.
+  if (targetRole?.team_id && String(conversation.team_id ?? "") === String(targetRole.team_id) && !(await roleMayHoldSession(ctx, targetRole, conversation))) {
+    throw new Error(`That session is private to you, and @${targetRole.handle} is a role your team can read; share the session with the team first, or keep it under you`);
+  }
+  rememberOrgRecord(ctx, conversation);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
   const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id, { read: known?.batch.read, row: conversation });
   const parentBefore = await sessionParent(ctx, conversation);
@@ -539,7 +574,9 @@ export type EscalateSessionResult = {
   conversation_id: Id<"conversations">;
   changed: boolean;
   escalated_by_role: { role_id: Id<"org_roles">; line: string; at: number } | null;
-  role: { short_id: string; handle: string; name: string };
+  // Null only for a clear on a session whose role is gone (retired, or the
+  // pointer dropped): the stamp is removed and there is no role to name.
+  role: { short_id: string; handle: string; name: string } | null;
 };
 
 export async function performEscalateSession(
@@ -567,6 +604,12 @@ export async function performEscalateSession(
   });
   if (!conversation) throw new Error(actor.kind === "role" ? "Session not found among the sessions that report to you" : "Session not found, or you are not one of its owners");
   const role = conversation.org_role_id ? await ctx.db.get(conversation.org_role_id) : null;
+  // A stamp can outlive its role (an old row, a pointer dropped by hand): a
+  // clear always succeeds, or the card would sit in needs input for good.
+  if (!role && args.clear) {
+    if (conversation.escalated_by_role) await ctx.db.patch(conversation._id, { escalated_by_role: undefined });
+    return { ok: true as const, short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7), conversation_id: conversation._id, role: null, changed: !!conversation.escalated_by_role, escalated_by_role: null };
+  }
   if (!role) throw new Error("That session reports to no role, so it is already in its owner's inbox");
 
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
@@ -638,10 +681,12 @@ async function rehomeSessions(
   opts: { note?: string; dry?: boolean; from_session?: string } = {},
 ): Promise<RehomeResult> {
   const result: RehomeResult = { sessions: [], kept_in_front: [], over_cap: 0, told: { sessions: 0, roles: 0, deferred: 0 } };
-  const eligible = candidates.map((c) => c.raw).filter((c: any) =>
-    !c.org_role_id && !c.standing_role_id && !c.anchor_id
-    && String(c.owner_user_id ?? c.user_id) === String(role.host_user_id)
-    && (!role.team_id || String(c.team_id ?? "") === String(role.team_id)));
+  const eligible: any[] = [];
+  for (const { raw: c } of candidates) {
+    if (!c.org_role_id && !c.standing_role_id && !c.anchor_id
+      && String(c.owner_user_id ?? c.user_id) === String(role.host_user_id)
+      && await roleMayHoldSession(ctx, role, c)) eligible.push(c);
+  }
   result.over_cap = Math.max(0, eligible.length - REHOME_CAP);
   // The role, the admin check, the acting person and the sender are the same
   // for every session of one takeover: resolved once, never per session.

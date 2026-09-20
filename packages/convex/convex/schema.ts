@@ -1347,6 +1347,7 @@ export default defineSchema({
     updated_at: v.number(),
   })
     .index("by_workspace", ["workspace", "created_at"])
+    .index("by_workspace_seq", ["workspace", "seq"])
     .index("by_key", ["workspace", "key"]),
 
   org_changes: defineTable({
@@ -1367,6 +1368,7 @@ export default defineSchema({
     before: v.any(),
     after: v.any(),
     effects: v.any(),
+    writes: v.optional(v.array(v.object({ table: v.string(), id: v.string(), before: v.any(), after: v.any() }))),
     labels: v.record(v.string(), v.string()),
     role_ids: v.array(v.string()),
     undoes: v.optional(v.id("org_changes")),

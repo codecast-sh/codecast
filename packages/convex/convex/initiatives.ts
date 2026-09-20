@@ -1,3 +1,5 @@
+import { labelsOf, noteOrgChange, partyRef, recordSubject, whereOfRecord, withOrgChange } from "./lib/orgChangeLog";
+import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { v, type Validator } from "convex/values";
 import {
   INITIATIVE_STATUSES,
@@ -258,8 +260,15 @@ export const update = mutation({
     const userId = await requireCaller(ctx, api_token);
     const initiative = await requireInitiative(ctx, userId, id);
     const patch = await fieldsPatch(ctx, userId, initiative, fields);
-    await ctx.db.patch(initiative._id, { ...patch, updated_at: Date.now() });
-    return written(ctx, userId, initiative._id, "owner" in patch || "project_ids" in patch);
+    return withOrgChange(ctx, userId, { kind: "initiative_owner", subject: recordSubject("initiative", initiative), door: "initiative" }, async () => {
+      await ctx.db.patch(initiative._id, { ...patch, updated_at: Date.now() });
+      if ("owner" in patch) await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
+        kind: "initiative_owner", subject: recordSubject("initiative", initiative),
+        ...movedFields({ owner: partyRef(initiative.owner) ?? null }, { owner: partyRef(patch.owner) ?? null }),
+        labels: await labelsOf(ctx, [initiative.owner?.role_id, initiative.owner?.user_id, patch.owner?.role_id, patch.owner?.user_id]),
+      });
+      return written(ctx, userId, initiative._id, "owner" in patch || "project_ids" in patch);
+    });
   },
 });
 

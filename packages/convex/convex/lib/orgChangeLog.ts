@@ -12,6 +12,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import {
+  canonical,
   mergeFact,
   movedFields,
   rowChangedSomething,
@@ -53,7 +54,66 @@ type State = {
   batchId?: Id<"org_change_batches">;
   open?: OrgOpenRow & { undoes?: Id<"org_changes">; where?: OrgLogWhere };
   seq: Map<string, number>;
+  writes?: Map<string, OrgWrite>;
+  records?: Map<string, any>;
 };
+
+export type OrgWrite = { table: string; id: string; before: Record<string, any>; after: Record<string, any> };
+
+const FIELDS: Record<string, string[]> = {
+  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id"],
+  conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at"],
+  anchors: ["org_role_id", "status"],
+  users: ["bot_kind"],
+  agent_tasks: ["status"],
+  tasks: ["status", "status_id", "assignee", "project_id", "closed_at", "review_verdict", "execution_status"],
+  plans: ["status", "project_id", "owner_role_id"],
+  projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
+  docs: ["project_id"],
+  initiatives: ["owner"],
+};
+
+function recordWrite(s: State, table: string, id: string, before: any, after: any) {
+  if (!s.writes || !FIELDS[table]) return;
+  const prior = s.writes.get(id) ?? { table, id, before: {}, after: {} };
+  const keys = before ? FIELDS[table] : table === "anchors" ? ["status", "org_role_id"] : table === "conversations" ? ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id"] : table === "org_roles" || table === "projects" || table === "agent_tasks" ? ["status"] : [];
+  for (const key of keys) {
+    const was = before ? before[key] ?? null : table === "org_roles" ? "retired" : table === "projects" ? "done" : table === "anchors" ? key === "status" ? "decommissioned" : null : table === "conversations" ? null : "cancelled";
+    const now = after?.[key] ?? null;
+    if (canonical(was) === canonical(now)) continue;
+    if (!(key in prior.before)) prior.before[key] = was;
+    prior.after[key] = now;
+  }
+  if (Object.keys(prior.after).length) s.writes.set(id, prior);
+}
+
+function recordingDb(db: any, s: State): any {
+  const cache = s.records = new Map<string, any>();
+  const tableOf = (id: string) => Object.keys(FIELDS).find((table) => db.normalizeId(table, id));
+  return new Proxy(db, { get(target, prop) {
+    if (prop === "get") return async (id: string) => {
+      const doc = await target.get(id);
+      cache.set(id, doc);
+      return doc;
+    };
+    if (prop === "insert") return async (table: string, doc: any) => {
+      const id = await target.insert(table, doc);
+      cache.set(id, { ...doc, _id: id });
+      recordWrite(s, table, id, null, doc);
+      return id;
+    };
+    if (prop === "patch" || prop === "replace") return async (id: string, value: any) => {
+      const table = tableOf(id);
+      const tracked = table && (prop === "replace" || FIELDS[table].some((key) => key in value));
+      const before = tracked ? cache.get(id) ?? await target.get(id) : null;
+      await target[prop](id, value);
+      const after = prop === "patch" ? { ...(before ?? cache.get(id)), ...value } : value;
+      if (before || cache.has(id)) cache.set(id, after);
+      if (table && tracked) recordWrite(s, table, id, before, after);
+    };
+    return typeof target[prop] === "function" ? target[prop].bind(target) : target[prop];
+  }});
+}
 
 const LOG = Symbol.for("codecast.orgChangeLog");
 const stateOf = (ctx: any): State => (ctx[LOG] ??= { seq: new Map() });
@@ -120,14 +180,22 @@ export function openOrgBatch(ctx: any, head: OrgBatchHead): void {
 }
 
 /** The batch this transaction is writing into, when a row has landed. */
+export const orgBatchHead = (ctx: any): OrgBatchHead | undefined => stateOf(ctx).head;
+
 export const openBatchId = (ctx: any): Id<"org_change_batches"> | undefined => stateOf(ctx).batchId;
 
 async function batchFor(ctx: any, userId: Id<"users">, where: OrgLogWhere, fallback: { door: OrgLogDoor; gesture: OrgLogGesture }, now: number): Promise<Id<"org_change_batches">> {
   const s = stateOf(ctx);
-  if (s.batchId) return s.batchId;
+  if (s.batchId) {
+    const batch = await ctx.db.get(s.batchId);
+    if (batch?.undone_by) throw new Error("This organization gesture has already been undone");
+    if (batch?.workspace === where.workspace) return s.batchId;
+    s.batchId = undefined;
+  }
   const head: OrgBatchHead = s.head ?? fallback;
   if (head.key) {
     const found = await ctx.db.query("org_change_batches").withIndex("by_key", (q: any) => q.eq("workspace", where.workspace).eq("key", head.key)).first();
+    if (found?.undone_by) throw new Error("This organization gesture has already been undone");
     if (found) return (s.batchId = found._id);
   }
   s.batchId = await ctx.db.insert("org_change_batches", {
@@ -181,6 +249,7 @@ async function writeRow(ctx: any, userId: Id<"users">, where: OrgLogWhere, row: 
     labels: row.labels,
     role_ids,
     undoes: row.undoes,
+    writes: [...(stateOf(ctx).writes?.values() ?? [])].filter((w) => canonical(w.before) !== canonical(w.after)),
     created_at: now,
   });
   if (row.undoes) await ctx.db.patch(row.undoes, { undone_by: id });
@@ -221,6 +290,9 @@ const fallbackOf = (h: { door?: OrgLogDoor; gesture?: OrgLogGesture }) => ({ doo
 export async function withOrgChange<T>(ctx: any, userId: Id<"users">, head: OrgChangeHead, run: () => Promise<T>): Promise<T> {
   const s = stateOf(ctx);
   if (s.open) return run();
+  const db = ctx.db;
+  s.writes = new Map();
+  ctx.db = recordingDb(db, s);
   s.open = { kind: head.kind, subject: head.subject, before: {}, after: {}, effects: {}, labels: {}, undoes: head.undoes };
   try {
     const result = await run();
@@ -228,6 +300,9 @@ export async function withOrgChange<T>(ctx: any, userId: Id<"users">, head: OrgC
     if (s.open.where) await writeRow(ctx, userId, s.open.where, s.open, fallbackOf(head));
     return result;
   } finally {
+    ctx.db = db;
+    s.writes = undefined;
+    s.records = undefined;
     s.open = undefined;
   }
 }
@@ -241,6 +316,11 @@ export async function noteOrgChange(ctx: any, userId: Id<"users">, where: OrgLog
 }
 
 /** True while a row is open, so a core can tell it runs inside another core's gesture. */
+export function rememberOrgRecord(ctx: any, row: any): void {
+  const records = stateOf(ctx).records;
+  if (row && records && !records.has(String(row._id))) records.set(String(row._id), row);
+}
+
 export const orgChangeIsOpen = (ctx: any): boolean => !!stateOf(ctx).open;
 
 // ── A role as the log reads it ───────────────────────────────────────────────
@@ -270,13 +350,14 @@ export function roleFieldIds(f: OrgLogFields): string[] {
 }
 
 /** A role core reports its write: the role as it was (null for a hire) and as it is. */
-export async function noteRoleChange(ctx: any, userId: Id<"users">, kind: OrgLogKind, was: any | null, now: any, extra: Pick<OrgChangeFact, "effects"> & { door?: OrgLogDoor; gesture?: OrgLogGesture } = {}): Promise<void> {
+export async function noteRoleChange(ctx: any, userId: Id<"users">, kind: OrgLogKind, was: any | null, now: any, extra: Pick<OrgChangeFact, "effects"> & { door?: OrgLogDoor; gesture?: OrgLogGesture; label_ids?: string[] } = {}): Promise<void> {
+  const { label_ids = [], ...rest } = extra;
   const moved = movedFields(was ? roleLogFields(was) : { status: null }, roleLogFields(now));
   await noteOrgChange(ctx, userId, whereOfRole(now), {
     kind,
     subject: roleSubject(now),
     ...moved,
-    labels: await labelsOf(ctx, [String(now._id), ...roleFieldIds(moved.before), ...roleFieldIds(moved.after)]),
-    ...extra,
+    labels: await labelsOf(ctx, [String(now._id), ...roleFieldIds(moved.before), ...roleFieldIds(moved.after), ...label_ids]),
+    ...rest,
   });
 }

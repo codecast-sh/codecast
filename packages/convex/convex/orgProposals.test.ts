@@ -665,7 +665,10 @@ describe("orgProposals review regressions", () => {
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0].tried).toHaveLength(ACCEPT_ALL_CHUNK);
     // The continuation: the same act, no human gate, the rest applied, the failed retire left alone.
-    const second = await performAcceptAll(ctx, ME as any, { proposal: r.short_id, provision: false, tried: scheduled[0].tried, continuation: true });
+    const second = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: false, tried: scheduled[0].tried, continuation: true, log_head: scheduled[0].log_head });
+    const batches = await db.query("org_change_batches").collect();
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({ gesture: "accept_all", row_count: n });
     expect(second.remaining).toBe(0);
     expect(second.results.length + first.results.length).toBe(n + 1);
     const rows = (await readProposal(ctxOf(db), ME as any, r.short_id)).changes;
@@ -936,6 +939,9 @@ describe("orgProposals asks (S19)", () => {
     // The project is created before the plan is filed under it, whatever order the ask listed them in.
     expect(out.results.map((x: any) => [x.seq, x.status])).toEqual([[2, "applied"], [3, "applied"]]);
     expect(out).toMatchObject({ ask: 0, title: "Start a Platform area and file the loose plan under it", applied: 2, failed: 0, resolved: false });
+    const batches = await db.query("org_change_batches").collect();
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({ gesture: "accept_ask", row_count: 2, ask: { index: 0, title: out.title } });
     const after = await readProposal(ctxOf(db), ME as any, r.short_id);
     expect(after.changes.map((c: any) => [c.seq, c.status])).toEqual([[1, "proposed"], [2, "applied"], [3, "applied"], [4, "proposed"]]);
     const skipped = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 1, verdict: "skip" });

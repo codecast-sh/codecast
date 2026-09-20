@@ -121,11 +121,34 @@ describe("review: R2, a teammate's long running session named as a role", () => 
     // person who runs the session") keeps user_id: ME on the session and only
     // flips owner_user_id, so the accepting person is still its runner.
     const { applyRole } = await import("./orgInit");
-    const db: any = fixtures([conv(1, { user_id: MATE, title: "Market growth mandate" })]);
+    const db: any = fixtures([conv(1, { user_id: MATE, title: "Market growth mandate", is_private: false })]);
     for (const t of ["bot_users", "daemon_commands"]) db._tables[t] ??= [];
     const res: any = await applyRole({ db } as any, ME as any, { team_id: TEAM }, { kind: "role", name: "Market growth", handle: "market-growth", seat: { existing: "jx70001" } } as any, undefined, { provision: false, human_decision: "sd-1" })
       .catch((e: any) => ({ status: "threw", error: e.message }));
     expect(res.error ?? "").toBe("");
     expect(res.status).toBe("applied");
+  });
+});
+
+
+describe("takeover privacy boundaries", () => {
+  test("a hidden membership prevents takeover even for the session runner", async () => {
+    const db = fixtures([conv(1, { is_private: false })]);
+    await db.patch("m1", { visibility: "hidden" });
+    const role = await performCreateRole(ctxOf(db), ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
+    expect((await takeOverSessions(ctxOf(db), ME as any, role._id))?.sessions ?? []).toHaveLength(0);
+    expect(row(db, 1).org_role_id).toBeUndefined();
+  });
+  test("a team admin cannot seat a teammate's private session", async () => {
+    const { applyRole } = await import("./orgInit");
+    const db = fixtures([conv(1, { user_id: MATE, is_private: true })]);
+    await expect(applyRole(ctxOf(db), ME as any, { team_id: TEAM }, { kind: "role", name: "Growth", handle: "growth", seat: { existing: "jx70001" } }, undefined, { provision: false, human_decision: "sd-1" })).rejects.toThrow();
+    expect(row(db, 1).standing_role_id).toBeUndefined();
+  });
+  test("a plain member cannot seat a teammate-owned session on another person's role", async () => {
+    const { performProvisionRole } = await import("./orgRoles");
+    const db = fixtures([conv(1, { is_private: false })]);
+    const role = await performCreateRole(ctxOf(db), ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    await expect(performProvisionRole(ctxOf(db), MATE as any, { role_id: role._id, adopt_conversation_id: "jx70001" })).rejects.toThrow("admin");
   });
 });
