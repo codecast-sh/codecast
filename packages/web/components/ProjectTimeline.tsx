@@ -14,9 +14,7 @@ import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
   ArrowRight,
-  CheckCircle2,
   Circle,
-  CircleDot,
   FilePlus2,
   GitCommit,
   History,
@@ -25,12 +23,11 @@ import {
   MessageSquare,
   Sparkles,
   Target,
-  XCircle,
 } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { relTimeShort } from "../lib/utils";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { SegmentedToggle } from "./SegmentedToggle";
+import { groupByDay, RailBare, RailDay, RailRow, StatusWord } from "./timeline/Rail";
 import { ExternalEventRow } from "./feed/ExternalEventRow";
 import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
 import { useSyncProjectExternalEvents, useExternalEvents, externalEventsNewestFirst } from "../hooks/useSyncExternalEvents";
@@ -78,23 +75,6 @@ const EVENT_STYLE: Record<TimelineEvent["type"], { icon: typeof Circle; color: s
   git: { icon: GitCommit, color: "text-sol-blue" },
 };
 
-const STATUS_COLOR: Record<string, string> = {
-  backlog: "text-sol-text-dim",
-  open: "text-sol-blue",
-  in_progress: "text-sol-yellow",
-  in_review: "text-sol-violet",
-  done: "text-sol-green",
-  dropped: "text-sol-text-dim",
-};
-
-const STATUS_ICON: Record<string, typeof Circle> = {
-  open: Circle,
-  in_progress: CircleDot,
-  in_review: CircleDot,
-  done: CheckCircle2,
-  dropped: XCircle,
-};
-
 const FILTERS = [
   { key: "all", label: "All" },
   { key: "people", label: "People" },
@@ -111,36 +91,11 @@ const FILTER_TYPES: Record<string, Set<TimelineEvent["type"]>> = {
   git: new Set(["git"]),
 };
 
-function dayLabel(ts: number, now: number): string {
-  const d = new Date(ts);
-  const today = new Date(now);
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOf(today) - startOf(d)) / 86_400_000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
-  });
-}
-
 function TaskLink({ task }: { task: NonNullable<TimelineEvent["task"]> }) {
   const inner = (
     <span className="text-sol-text hover:text-sol-cyan transition-colors truncate">{task.title}</span>
   );
   return task.short_id ? <Link href={`/tasks/${task.short_id}`}>{inner}</Link> : inner;
-}
-
-function StatusWord({ status }: { status?: string }) {
-  if (!status) return null;
-  const Icon = STATUS_ICON[status];
-  return (
-    <span className={`inline-flex items-center gap-1 ${STATUS_COLOR[status] ?? "text-sol-text-muted"}`}>
-      {Icon && <Icon className="w-3 h-3" />}
-      {status.replace("_", " ")}
-    </span>
-  );
 }
 
 function Actor({ event }: { event: TimelineEvent }) {
@@ -298,14 +253,7 @@ export function ProjectTimeline({ projectId }: { projectId: string }) {
       // The server list arrives newest first; the git rows have to land in the
       // same order before the day grouping walks it.
       .sort((a, b) => b.ts - a.ts);
-    const out: { label: string; events: TimelineEvent[] }[] = [];
-    for (const e of list) {
-      const label = dayLabel(e.ts, now);
-      const group = out[out.length - 1];
-      if (group && group.label === label) group.events.push(e);
-      else out.push({ label, events: [e] });
-    }
-    return out;
+    return groupByDay(list, now);
   }, [events, filter, externalRows]);
 
   if (error) {
@@ -349,48 +297,28 @@ export function ProjectTimeline({ projectId }: { projectId: string }) {
       )}
 
       {groups.map((group) => (
-        <div key={group.label} className="mb-5">
-          <div className="text-[11px] font-medium text-sol-text-dim uppercase tracking-wider px-1 pb-2">
-            {group.label}
-          </div>
-          {/* The rail: one line, all the day's events hung off it. */}
-          <div className="border-l border-sol-border/25 ml-2.5 space-y-0.5">
-            {group.events.map((e, i) => {
-              // A git event brings its own disc, color and time, so it gets the
-              // rail to itself. The negative margin pulls its disc onto the
-              // rail line and lines its text up with every other row.
-              if (e.type === "git" && e.git) {
-                return (
-                  <div key={e.git._id} className="relative -ml-[13px] py-0.5">
-                    <ExternalEventRow
-                      event={externalEventRowToExternalEvent(e.git)}
-                      density="compact"
-                      omitRefs={["project_id"]}
-                    />
-                  </div>
-                );
-              }
-              const style = EVENT_STYLE[e.type];
-              const Icon = style.icon;
-              const card = e.type === "update_posted";
+        <RailDay key={group.label} label={group.label}>
+          {group.events.map((e, i) => {
+            // A git event brings its own disc, color and time.
+            if (e.type === "git" && e.git) {
               return (
-                <div key={`${e.ts}-${i}`} className="relative flex items-start gap-2.5 pl-4 py-1">
-                  <span
-                    className={`absolute -left-[9px] ${card ? "top-2" : "top-1.5"} w-[17px] h-[17px] rounded-full bg-sol-bg-alt border border-sol-border/30 flex items-center justify-center`}
-                  >
-                    <Icon className={`w-2.5 h-2.5 ${style.color}`} />
-                  </span>
-                  <div className={`flex-1 min-w-0 flex items-baseline gap-2 text-xs ${card ? "" : "leading-relaxed"}`}>
-                    <EventBody event={e} />
-                  </div>
-                  <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0 pt-0.5">
-                    {relTimeShort(e.ts)}
-                  </span>
-                </div>
+                <RailBare key={e.git._id}>
+                  <ExternalEventRow
+                    event={externalEventRowToExternalEvent(e.git)}
+                    density="compact"
+                    omitRefs={["project_id"]}
+                  />
+                </RailBare>
               );
-            })}
-          </div>
-        </div>
+            }
+            const style = EVENT_STYLE[e.type];
+            return (
+              <RailRow key={`${e.ts}-${i}`} icon={style.icon} color={style.color} ts={e.ts} card={e.type === "update_posted"}>
+                <EventBody event={e} />
+              </RailRow>
+            );
+          })}
+        </RailDay>
       ))}
     </div>
   );
