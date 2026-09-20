@@ -1,3 +1,4 @@
+import { openOrgBatch, orgBatchHead, type OrgBatchHead } from "./lib/orgChangeLog";
 import { mutation, query, internalMutation } from "./functions";
 import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -378,6 +379,7 @@ export function editedChange(change: OrgChange, edits: unknown): OrgChange {
 // `provision` is a server side option (a created role gets its standing
 // session); tests pass false, the mutations never expose it.
 async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, change: ChangeRow, edits: unknown, now: number, provision = true) {
+  if (!orgBatchHead(ctx)) openOrgBatch(ctx, { door: "proposal", gesture: "accept_change", proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } });
   const merged = editedChange(change.change, edits);
   await ctx.db.patch(change._id, { status: "accepted", edits: edits ?? undefined, decided_by: userId, decided_at: now });
   // A throw escapes the mutation: Convex then discards every write of this
@@ -486,7 +488,7 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * runMutation's writes back); the test harness has no runMutation and runs
  * the change inline, which covers the throws that happen before any write.
  */
-export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean; leave_sessions?: boolean }): Promise<any> {
+export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean; leave_sessions?: boolean; log_head?: OrgBatchHead }): Promise<any> {
   // The person's gate runs on the call they made; a continuation is the same
   // act carried on by the server, scheduled only from inside that call.
   if (!args.continuation) await refuseUnlessHumanDecider(ctx, args);
@@ -515,6 +517,8 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   const pending = (ctx as any).scheduler ? acceptAllChunk(all) : all;
   const remaining = all.length - pending.length;
   const provision = args.provision ?? true;
+  const logHead: OrgBatchHead = args.log_head ?? { door: "proposal", gesture: "accept_all", key: `proposal:${proposal._id}:${now}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } };
+  openOrgBatch(ctx, logHead);
   const results = [];
   for (const change of pending) {
     // The person's one edit on the ask they accepted whole (R1): every change
@@ -522,7 +526,7 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
     const edits = args.leave_sessions && orgChangeTakesOver(change.change) ? { leave_sessions: true } : undefined;
     try {
       results.push(ctx.runMutation
-        ? await ctx.runMutation(internal.orgProposals.acceptOneInTransaction, { user_id: userId, proposal_id: proposal._id, change_id: change._id, now, provision, ...(edits ? { leave_sessions: true } : {}) })
+        ? await ctx.runMutation(internal.orgProposals.acceptOneInTransaction, { user_id: userId, proposal_id: proposal._id, change_id: change._id, now, provision, log_head: logHead, ...(edits ? { leave_sessions: true } : {}) })
         : await acceptOne(ctx, userId, proposal, change, edits, now, provision));
     } catch (err) {
       const note = (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -535,7 +539,7 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // tried: a refusal is reported once, never retried in a loop.
   const tried = [...(args.tried ?? []), ...pending.map((c) => String(c._id))];
   if (remaining > 0 && (ctx as any).scheduler) {
-    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried, ...(args.leave_sessions ? { leave_sessions: true } : {}) });
+    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried, log_head: logHead, ...(args.leave_sessions ? { leave_sessions: true } : {}) });
   }
   const resolved = await resolveIfDone(ctx, proposal, now);
   return { proposal: proposal.short_id, results, resolved, remaining: (ctx as any).scheduler ? remaining : 0, applied: results.filter((r) => r.status === "applied").length, failed: results.filter((r) => r.status === "failed").length };
@@ -566,7 +570,7 @@ export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, arg
   // index, and the seqs the card held say which ask the person read.
   refuseIfRevised(proposal, rows, args.seen, ask?.seqs ?? []);
   if (!ask) throw new Error(`${proposal.short_id} has ${asks.length} ask${asks.length === 1 ? "" : "s"}; there is no ask ${args.ask}`);
-  if (args.verdict === "accept") return { ask: args.ask, title: ask.title, ...(await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: ask.seqs, provision: args.provision, continuation: true, leave_sessions: args.leave_sessions })) };
+  if (args.verdict === "accept") return { ask: args.ask, title: ask.title, ...(await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: ask.seqs, provision: args.provision, continuation: true, leave_sessions: args.leave_sessions, log_head: { door: "proposal", gesture: "accept_ask", key: `proposal:${proposal._id}:ask:${args.ask}:${Date.now()}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) }, ask: { index: args.ask, title: ask.title } } })) };
   const now = Date.now();
   const inAsk = new Set(ask.seqs);
   const results = [];
@@ -601,11 +605,11 @@ export function acceptAllChunk<T extends { change: OrgChange }>(all: T[]): T[] {
 
 /** The rest of an accept all, in its own transaction (see performAcceptAll). */
 export const acceptAllContinue = internalMutation({
-  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()), leave_sessions: v.optional(v.boolean()) },
+  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()), leave_sessions: v.optional(v.boolean()), log_head: v.optional(v.any()) },
   handler: async (ctx, args): Promise<any> => {
     const proposal = await ctx.db.get(args.proposal_id);
     if (!proposal || proposal.status !== "open") return null;
-    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true, leave_sessions: args.leave_sessions });
+    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true, leave_sessions: args.leave_sessions, log_head: args.log_head });
   },
 });
 
@@ -614,11 +618,12 @@ export const acceptOneForTest = (ctx: Ctx, userId: Id<"users">, proposal: Propos
 
 /** One change of an accept all, as its own transaction (see performAcceptAll). */
 export const acceptOneInTransaction = internalMutation({
-  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), change_id: v.id("org_proposal_changes"), now: v.number(), provision: v.boolean(), leave_sessions: v.optional(v.boolean()) },
+  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), change_id: v.id("org_proposal_changes"), now: v.number(), provision: v.boolean(), leave_sessions: v.optional(v.boolean()), log_head: v.optional(v.any()) },
   handler: async (ctx, args) => {
     const proposal = await ctx.db.get(args.proposal_id);
     const change = await ctx.db.get(args.change_id);
     if (!proposal || !change) throw new Error("Change not found");
+    if (args.log_head) openOrgBatch(ctx, args.log_head);
     return acceptOne(ctx as any, args.user_id, proposal, change, args.leave_sessions ? { leave_sessions: true } : undefined, args.now, args.provision);
   },
 });
