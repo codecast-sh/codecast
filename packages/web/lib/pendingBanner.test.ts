@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 describe("session message queue labels", () => {
   test.each([undefined, "idle", "waiting", "dormant", "done", "connected", "starting", "resuming"])("does not call a %s recipient busy", status => {
@@ -52,6 +52,23 @@ describe("pending retry identity", () => {
 
   test("never submits an existing server message under a synthetic display id", () => {
     expect(pendingRetryClientId("serverpending_conversation-123")).toBeUndefined();
+  });
+});
+
+describe("pending cancel identity", () => {
+  test("a local optimistic bubble cancels under its client id", () => {
+    expect(pendingCancelRef("local-message-123")).toEqual({ clientId: "local-message-123" });
+  });
+
+  test("a server-backed bubble cancels under the queue id, never the display prefix", () => {
+    expect(pendingCancelRef("serverpending_msg-1")).toEqual({ messageId: "msg-1" });
+  });
+
+  test("a local bubble that matches the conversation pending row passes both identities", () => {
+    expect(pendingCancelRef("client-id", { message_id: "msg-1", client_id: "client-id" })).toEqual({
+      messageId: "msg-1",
+      clientId: "client-id",
+    });
   });
 });
 

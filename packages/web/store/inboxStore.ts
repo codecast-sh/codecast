@@ -5094,6 +5094,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
+  cancelPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   /** A message from the staffing pane into the thread bound to a proposal
    *  (org-staffing.md S18): the person's words plus the change they were
@@ -9203,6 +9204,32 @@ const inboxStoreConfig = (set: any, get: any) => ({
     notePendingMessageSendRequested(clientId);
     for (const target of [this.sessions[threadConvId], this.conversations[threadConvId]]) {
       if (target && hasThreadState(target)) Object.assign(target, clearedThreadStateFields());
+    }
+  }),
+
+  // Drop the optimistic bubble (and the conversation's pending-status row if
+  // it is this message) so Cancel is instant, then dispatch the same identity
+  // retry uses. The server marks the row cancelled; the healer never revives it.
+  cancelPendingMessage: asyncAction(function (this: Draft, convId: string, ref: { messageId?: string; clientId?: string }) {
+    const pending = this.pendingMessages[convId];
+    if (pending) {
+      const kept = pending.filter((m) => {
+        if (ref.clientId && (m._clientId === ref.clientId || m._id === ref.clientId)) return false;
+        if (ref.messageId && (m._id === ref.messageId || m._id === `serverpending_${ref.messageId}`)) return false;
+        return true;
+      });
+      if (kept.length !== pending.length) {
+        if (kept.length === 0) delete this.pendingMessages[convId];
+        else this.pendingMessages[convId] = kept;
+      }
+    }
+    const status = (this as any).pendingMessageStatus?.[convId];
+    if (
+      status &&
+      ((ref.messageId && status.message_id === ref.messageId) ||
+        (ref.clientId && status.client_id === ref.clientId))
+    ) {
+      delete (this as any).pendingMessageStatus[convId];
     }
   }),
 

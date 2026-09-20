@@ -29,3 +29,41 @@ describe("retry the existing pending message", () => {
     expect(calls[0].slice(0, 2)).toEqual(["retryPendingMessage", ["conv", { messageId: "server-id" }]]);
   });
 });
+
+describe("cancel the existing pending message", () => {
+  afterEach(() => useInboxStore.getState()._clearRuntimeBindings());
+
+  test("drops the optimistic bubble and dispatches its client identity", async () => {
+    const calls: any[] = [];
+    useInboxStore.setState({
+      pendingMessages: { conv: [{
+        _id: "client", _clientId: "client", role: "user", content: "continue", timestamp: 1,
+        _isOptimistic: true,
+      }] as any },
+      pendingMessageStatus: { conv: { message_id: "msg", client_id: "client", status: "pending" } } as any,
+      pending: {},
+    });
+    useInboxStore.getState()._setDispatch(async (...args: any[]) => { calls.push(args); return "cancelled"; });
+    expect(await useInboxStore.getState().cancelPendingMessage("conv", { clientId: "client" })).toBe("cancelled");
+    expect(useInboxStore.getState().pendingMessages.conv).toBeUndefined();
+    expect((useInboxStore.getState() as any).pendingMessageStatus.conv).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].slice(0, 2)).toEqual(["cancelPendingMessage", ["conv", { clientId: "client" }]]);
+  });
+
+  test("a server-backed cancel drops the synthesized bubble by queue id", async () => {
+    const calls: any[] = [];
+    useInboxStore.setState({
+      pendingMessages: { conv: [{
+        _id: "serverpending_msg", role: "user", content: "continue", timestamp: 1, _isOptimistic: true,
+      }] as any },
+      pendingMessageStatus: { conv: { message_id: "msg", status: "pending" } } as any,
+      pending: {},
+    });
+    useInboxStore.getState()._setDispatch(async (...args: any[]) => { calls.push(args); return "cancelled"; });
+    await useInboxStore.getState().cancelPendingMessage("conv", { messageId: "msg" });
+    expect(useInboxStore.getState().pendingMessages.conv).toBeUndefined();
+    expect((useInboxStore.getState() as any).pendingMessageStatus.conv).toBeUndefined();
+    expect(calls[0].slice(0, 2)).toEqual(["cancelPendingMessage", ["conv", { messageId: "msg" }]]);
+  });
+});

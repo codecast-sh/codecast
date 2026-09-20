@@ -15,11 +15,15 @@ export function PendingDeliveryNote({
   state,
   restartInFlight,
   conversationId,
+  onCancel,
+  cancelling,
   children,
 }: {
   state: PendingBannerState;
   restartInFlight: boolean;
   conversationId?: string | null;
+  onCancel?: () => void;
+  cancelling?: boolean;
   children: ReactNode;
 }) {
   // The machine whose daemon carries this conversation's messages
@@ -41,7 +45,7 @@ export function PendingDeliveryNote({
     setTimeout(() => setCopied(false), 2000);
   };
   return (
-    <div className="flex items-start gap-2 mt-2 pl-8 text-xs" data-testid="pending-message-daemon" style={{ color }}>
+    <div className="flex items-start flex-wrap gap-2 mt-2 pl-8 text-xs" data-testid="pending-message-daemon" style={{ color }}>
       <span className="w-1.5 h-1.5 mt-1.5 rounded-full animate-pulse flex-shrink-0" style={{ background: color }} />
       <span className="text-sol-text-muted leading-relaxed">
         <span style={{ color }} className="font-medium">Delivery delayed — </span>
@@ -55,6 +59,18 @@ export function PendingDeliveryNote({
           {copied ? "copied!" : copy.command}
         </button>
       </span>
+      {onCancel && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCancel(); }}
+          disabled={cancelling}
+          data-testid="pending-message-cancel"
+          className="text-[11px] text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60"
+          title="Stop trying to send and discard this message"
+        >
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </button>
+      )}
     </div>
   );
 }
