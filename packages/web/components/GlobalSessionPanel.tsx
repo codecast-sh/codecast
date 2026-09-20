@@ -3138,6 +3138,21 @@ export const SessionCard = memo(function SessionCard({
             className="min-w-0 flex-1"
             nameClassName={isUnread && !isActive ? "font-semibold" : ""}
             titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}
+            after={
+              <ShortcutTooltip label={isFavorite ? "Unfavorite" : "Favorite"} action="conv.favorite">
+                <button
+                  onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
+                  className={`flex-shrink-0 transition-all ${
+                    isFavorite
+                      ? "text-amber-400/85 hover:text-amber-300"
+                      : "text-sol-text-dim/30 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-amber-400"
+                  }`}
+                  aria-label={isFavorite ? "Unfavorite" : "Favorite"}
+                >
+                  <Star className="w-3 h-3" fill={isFavorite ? "currentColor" : "none"} />
+                </button>
+              </ShortcutTooltip>
+            }
           />
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* The role's one number (R1): how many of its sessions it has put
@@ -3152,23 +3167,6 @@ export const SessionCard = memo(function SessionCard({
               {escalatedCount} in your inbox
             </span>
           )}
-          {/* Favorite affordance — AFTER the title so it never shifts the name.
-              Solid (soft amber) when favorited; otherwise a very subdued star that
-              only surfaces on row-hover and lights up on direct hover. Toggle also
-              via the keyboard shortcut. */}
-          <ShortcutTooltip label={isFavorite ? "Unfavorite" : "Favorite"} action="conv.favorite">
-            <button
-              onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
-              className={`flex-shrink-0 transition-all ${
-                isFavorite
-                  ? "text-amber-400/85 hover:text-amber-300"
-                  : "text-sol-text-dim/30 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-amber-400"
-              }`}
-              aria-label={isFavorite ? "Unfavorite" : "Favorite"}
-            >
-              <Star className="w-3 h-3" fill={isFavorite ? "currentColor" : "none"} />
-            </button>
-          </ShortcutTooltip>
         </div>
         {escalation && (
           /* The role's face and its one line: why this card is in front of the
