@@ -1297,6 +1297,9 @@ async function finishWithHealthWait(startedAtMs: number, timeoutSec: number): Pr
   const result = await waitForDaemonHealthy(timeoutSec * 1000, startedAtMs);
   if (result.ok) {
     console.log(`${fmt.success("✓")} ${result.detail}`);
+    // startDaemon gives launchd 5s to report a pid and fails the command past
+    // that; a daemon this longer wait then saw healthy did start.
+    process.exitCode = 0;
   } else {
     console.log(`${fmt.error("✗")} not healthy after ${timeoutSec}s: ${result.detail}`);
     printDaemonLogTail();
@@ -1678,12 +1681,21 @@ function startDaemon(): void {
   }
 
   // If a LaunchAgent plist exists, drive it through launchd instead of spawning
-  // a parallel process. bootstrap is idempotent on the bootout side and triggers
-  // RunAtLoad, which runs the daemon as a launchd-managed job.
+  // a parallel process. bootstrap loads a job launchd has never seen and its
+  // RunAtLoad spawns the daemon. On a job that is already loaded it is a no-op,
+  // and launchd does not respawn a loaded KeepAlive job on its own once its
+  // recent runs all ended in a crash — it holds the spawn pended. Every
+  // watchdog update-kill ends in Bun's shutdown segfault, so that count only
+  // climbs (2026-09-15: daemon dead 90 min while this printed "Daemon
+  // started"). kickstart forces the spawn regardless.
   const managedPlistPath = getManagedDaemonPlistPath();
   const launchdUid = process.getuid ? `gui/${process.getuid()}` : null;
   if (managedPlistPath && launchdUid) {
-    spawnSync("launchctl", ["bootstrap", launchdUid, managedPlistPath], { stdio: "ignore" });
+    if (getMacLaunchdDaemonStatus()?.state) {
+      kickstartManagedDaemon();
+    } else {
+      spawnSync("launchctl", ["bootstrap", launchdUid, managedPlistPath], { stdio: "ignore" });
+    }
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       if (getLaunchdDaemonPid()) {
@@ -1692,7 +1704,10 @@ function startDaemon(): void {
       }
       spawnSync("sleep", ["0.1"], { stdio: "ignore" });
     }
-    console.log("Daemon started");
+    console.error(
+      `Daemon did not start within 5s. Inspect the launchd job with 'launchctl print ${launchdUid}/sh.codecast.daemon' and ~/.codecast/launchd.err.log`,
+    );
+    process.exitCode = 1;
     return;
   }
 
@@ -5092,6 +5107,7 @@ daemonCmd
     console.log(`New terminal token ${rotated.token.slice(0, 8)}... written to ${identityFile(CONFIG_DIR)}`);
     stopDaemon();
     startDaemon();
+    if (process.exitCode) return;
     console.log("Daemon restarted. Open terminal panels reconnect on their next probe.");
   });
 
@@ -19857,7 +19873,27 @@ program
   .description("Watchdog health check (internal use)")
   .action(async () => {
     const { runWatchdog } = await import("./daemon.js");
-    await runWatchdog();
+    // daemon.js arms module-level timers at import (the loop-stall monitor),
+    // so a finished pass never lets the process exit on its own, and the shell
+    // watchdog loop waits on it forever. A watchdog that never runs a second
+    // pass revives nothing: the daemon sat dead 90 min on 2026-09-15. Exit
+    // explicitly; a thrown pass still exits non-zero so the shell tries an
+    // update. The pass takes under a second and an auto-update download takes
+    // many, so wait for one in flight: exiting under it would restart the same
+    // download on every pass and never finish it. The manifest check before the
+    // install gets a short allowance only: its fetch has no timeout, and on a
+    // network that drops packets it would hold every pass to the shell deadline.
+    let code = 0;
+    try {
+      await runWatchdog();
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      code = 1;
+    }
+    const settled = autoUpdateSettled.catch(() => {});
+    await Promise.race([settled, new Promise((resolve) => setTimeout(resolve, 15_000))]);
+    if (autoUpdateInstalling) await settled;
+    process.exit(code);
   });
 
 // ─── Workflow commands ────────────────────────────────────────────────────────
@@ -20335,7 +20371,13 @@ messaging
 // starts at index.ts, which reaches runFastPath only after this line.
 // CODECAST_NO_AUTO_UPDATE is set on the `_build-id` child an update spawns:
 // without it that child could start its own update, which recurses.
-if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates().then(async (available) => {
+// Kept so a command that exits explicitly (`_watchdog`) can let an update in
+// flight finish first instead of cutting a download short on every pass.
+// `autoUpdateInstalling` separates that install from the manifest check before
+// it, which has no timeout and is not worth waiting on.
+let autoUpdateSettled: Promise<unknown> = Promise.resolve();
+let autoUpdateInstalling = false;
+if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) autoUpdateSettled = checkForUpdates().then(async (available) => {
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);
@@ -20360,6 +20402,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   const daemonWasRunning = getDaemonPid() !== null;
 
   console.log(`\nAuto-updating to v${available}...`);
+  autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
     if (config?.memory_enabled) installMemorySnippet(true);

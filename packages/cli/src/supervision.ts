@@ -91,6 +91,29 @@ const WATCHDOG_INTERVAL_SECONDS = 60;
 export const DAEMON_HEARTBEAT_STALE_MS = 180000; // 3 min = 6 missed 30s daemon heartbeats
 export const DAEMON_HEARTBEAT_BUSY_GRACE_MS = 10 * 60 * 1000;
 
+// A pass answers in under a second; its slowest honest work is a binary download
+// (curl caps that at 180s). Anything past this is a hang, not work. It must end
+// before WATCHDOG_HEARTBEAT_STALE_MS less one loop interval: the heartbeat is
+// stamped once per cycle, so a longer pass reads as a wedged loop and the daemon
+// kickstarts the watchdog out from under it.
+const WATCHDOG_PASS_TIMEOUT_SECONDS = 200;
+
+// Log rotation for both script forms. copytruncate (copy then truncate-in-place)
+// keeps launchd's open append fd valid so it resumes writing at offset 0 after we
+// shrink the file.
+const ROTATE_LOGS_SH = `MAX_LOG_BYTES=52428800
+rotate_log() {
+  [ -f "\$1" ] || return 0
+  sz=\$(wc -c < "\$1" 2>/dev/null | tr -d '[:space:]')
+  [ "\${sz:-0}" -gt "\$MAX_LOG_BYTES" ] || return 0
+  cp "\$1" "\$1.1" 2>/dev/null && : > "\$1" && log "rotated \$1 (\$sz bytes)"
+}
+rotate_logs() {
+  for f in launchd.err.log launchd.out.log daemon.log; do
+    rotate_log "\${HOME}/.codecast/\$f"
+  done
+}`;
+
 // The daemon's heartbeat tick freezes during system sleep exactly like it does
 // when the event loop is wedged — and the watchdog resumes its loop within
 // seconds of wake, usually BEFORE the daemon's 30s stamp interval has fired
@@ -342,16 +365,7 @@ log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"
 # a launchd StartInterval job). Suspends on sleep, resumes on wake, rechecks within
 # WATCHDOG_INTERVAL of the Mac being awake.
 WATCHDOG_INTERVAL=${WATCHDOG_INTERVAL_SECONDS}
-MAX_LOG_BYTES=52428800
-
-# Rotate oversized logs. copytruncate (copy then truncate-in-place) keeps launchd's
-# open append fd valid so it resumes writing at offset 0 after we shrink the file.
-rotate_log() {
-  [ -f "\$1" ] || return 0
-  sz=\$(wc -c < "\$1" 2>/dev/null | tr -d '[:space:]')
-  [ "\${sz:-0}" -gt "\$MAX_LOG_BYTES" ] || return 0
-  cp "\$1" "\$1.1" 2>/dev/null && : > "\$1" && log "rotated \$1 (\$sz bytes)"
-}
+${ROTATE_LOGS_SH}
 
 check_once() {
   # Stamp liveness first so the daemon's mutual supervision can tell the loop is
@@ -365,9 +379,7 @@ check_once() {
   [ -n "\$PREV_BEAT" ] && LOOP_GAP=\$(( NOW_MS - PREV_BEAT ))
   printf '%s' "\$NOW_MS" > "\$HEARTBEAT" 2>/dev/null
 
-  for f in launchd.err.log launchd.out.log daemon.log; do
-    rotate_log "\${HOME}/.codecast/\$f"
-  done
+  rotate_logs
 
   LAUNCHD_UID="gui/\$(id -u)"
   DAEMON_LABEL="sh.codecast.daemon"
@@ -501,13 +513,37 @@ LOGFILE="\${HOME}/.codecast/${WATCHDOG_LOG_FILENAME}"
 HEARTBEAT="\${HOME}/.codecast/${WATCHDOG_HEARTBEAT_FILENAME}"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
 WATCHDOG_INTERVAL=${WATCHDOG_INTERVAL_SECONDS}
+PASS_TIMEOUT=${WATCHDOG_PASS_TIMEOUT_SECONDS}
 DL_HOST="https://dl.codecast.sh"
+${ROTATE_LOGS_SH}
+
+# One pass under a hard deadline. This loop is the only thing that revives a dead
+# daemon, and it runs passes in the foreground, so a pass that never returns ends
+# all supervision (2026-09-15 and 2026-09-20: daemon dead until a manual kickstart).
+# A killed pass exits 137 and takes the same failed-pass path as any other.
+run_pass() {
+  "\$@" 2>>"\$LOGFILE" &
+  PASS_PID=\$!
+  WAITED=0
+  while kill -0 "\$PASS_PID" 2>/dev/null; do
+    if [ "\$WAITED" -ge "\$PASS_TIMEOUT" ]; then
+      log "Watchdog pass still running after \${PASS_TIMEOUT}s - killing it so the loop keeps supervising"
+      kill -9 "\$PASS_PID" 2>/dev/null
+      break
+    fi
+    sleep 1
+    WAITED=\$(( WAITED + 1 ))
+  done
+  wait "\$PASS_PID"
+}
 
 run_check() {
   # Stamp liveness first (see dev branch). Epoch ms matches daemon.state tick units.
   printf '%s' "\$(( \$(date +%s) * 1000 ))" > "\$HEARTBEAT" 2>/dev/null
 
-  ${watchdogCommand} 2>>"\$LOGFILE" && return 0
+  rotate_logs
+
+  run_pass ${watchdogCommand} && return 0
   log "Watchdog failed (exit \$?), checking for update"
 
   LATEST="\$(curl -fsSL --connect-timeout 10 --max-time 30 "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; return 1; }
@@ -533,7 +569,7 @@ run_check() {
   printf '%s' "\$VERSION" > "\$LAST_DL_FILE"
   log "Installed v\$VERSION, retrying watchdog"
 
-  "\$DIR/codecast" -- _watchdog 2>>"\$LOGFILE" || { log "Still failed after update"; return 1; }
+  run_pass "\$DIR/codecast" -- _watchdog || { log "Still failed after update"; return 1; }
 }
 
 while :; do
