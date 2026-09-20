@@ -49,7 +49,7 @@ import { retireToastText, type UnseatChoice } from "./RetireRoleConfirm";
 import { reviewRunState, type OrgReviewRun } from "./staffingModel";
 import { changeNodeId, composeParam, findChiefOfStaff, hasAcceptedBefore, isDecidable, orgPreviewEnabled, pickProposal, proposalParam, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
-import { readOrgPreviewSpec } from "./orgPreviewSpec";
+import { readOrgPreviewSpec, readOrgPreviewTree } from "./orgPreviewSpec";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
 import { StateTally } from "./OrgNodeCards";
 import { OrgButton } from "./OrgButton";
@@ -164,7 +164,7 @@ export function OrgPageInner() {
   // design work offline; its edits apply to a local copy through the SAME
   // slice bodies the store uses. Never a fallback for missing data.
   const preview = orgPreviewEnabled(searchParams.toString(), ORG_PREVIEW_DEV);
-  const [previewTree, setPreviewTree] = useState<OrgTree>(ORG_FIXTURE);
+  const [previewTree, setPreviewTree] = useState<OrgTree>(() => readOrgPreviewTree() ?? ORG_FIXTURE);
   // A dry run's spec in this tab's session storage paints ahead of the fixtures (org-eval.md).
   const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>(() => { const spec = readOrgPreviewSpec(); return [...(spec ? [spec] : []), ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL]; });
   // The slot holds one tree. After a workspace switch it still holds the
