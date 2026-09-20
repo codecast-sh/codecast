@@ -281,7 +281,7 @@ export function sessionAuthorFor(row: ChatMessageRow, ctx: ViewContext): ChatAut
 /** The Slack person behind a line the bridge identity carried in. Their name
  *  and face come from the row's snapshot (the bridge user has none to give);
  *  the row's `user_id` stays as the id so reactions and edits still key on it. */
-export function slackAuthorFor(row: ChatMessageRow): ChatAuthor | null {
+export function slackAuthorFor(row: Pick<ChatMessageRow, "user_id" | "external_author" | "external">): ChatAuthor | null {
   const ext = row.external_author;
   if (!ext) return null;
   return {
