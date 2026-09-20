@@ -41,10 +41,11 @@ describe("parked convCommand caller policy", () => {
   });
 
   test("fire-and-forget session controls observe their asyncAction rejection", async () => {
-    // The composer owns permission mode and rewind; the container owns Escape.
+    // The composer owns rewind, a hook owns permission mode, the container owns Escape.
     const conversationView = [
       await source("../../components/ConversationView.tsx"),
       await source("../../components/MessageInput.tsx"),
+      await source("../../hooks/usePermissionModeSwitch.ts"),
     ].join("\n");
 
     for (const command of [
