@@ -15,12 +15,12 @@ config.resolver.useWatchman = false;
 
 config.watchFolders = [workspaceRoot];
 const defaultBlockList = config.resolver.blockList;
+const excludedRoots = ['.claude/worktrees', '.codecast/worktrees', '.conductor', 'dist-perf'];
 config.resolver.blockList = [
   ...(Array.isArray(defaultBlockList) ? defaultBlockList : defaultBlockList ? [defaultBlockList] : []),
-  /[/\\]\.claude[/\\]worktrees[/\\].*/,
-  /[/\\]\.codecast[/\\]worktrees[/\\].*/,
-  /[/\\]\.conductor[/\\].*/,
-  /[/\\]dist-perf[/\\].*/,
+  ...excludedRoots.map(dir => new RegExp(
+    '^' + (path.resolve(workspaceRoot, dir) + path.sep).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  )),
 ];
 
 config.resolver.nodeModulesPaths = [
