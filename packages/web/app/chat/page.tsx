@@ -765,7 +765,6 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               teamId={community ? undefined : activeChannel?.teamId}
               walkieRoomKey={walkieRoomKey}
               walkieRing={activeChannel?.dmMemberIds}
-              slackChannelName={slackOutbound ? (slackLink?.kind === "dm" ? "Slack" : slackLink?.slack_channel_name ?? slackLink?.slack_channel_id) : undefined}
               placeholder={
                 activeChannel?.kind === "dm"
                   ? `Message ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`

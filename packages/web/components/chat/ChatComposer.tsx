@@ -8,6 +8,11 @@ import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
 import { settleComposerAttachments } from "../../lib/draftImages";
+import { slackComposerDelivery } from "../../lib/slackDelivery";
+import { useSlackConnect } from "../../hooks/useSlackConnect";
+import { useTrackedStore } from "../../store/inboxStore";
+import { useChannelSlackLink } from "./SlackSyncDialog";
+import { SlackConnectPrompt } from "./SlackConnectPrompt";
 import type { ChatAttachment } from "../../store/chatSlice";
 import "./chat.css";
 
@@ -53,7 +58,6 @@ export const ChatComposer = memo(function ChatComposer({
   dropFilesRef,
   walkieRoomKey,
   walkieRing,
-  slackChannelName,
 }: {
   channelId: string;
   threadRootId?: string;
@@ -66,9 +70,6 @@ export const ChatComposer = memo(function ChatComposer({
    *  (Slack's broadcast). Absent = no checkbox. */
   channelName?: string;
   onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean; syncLocalOnly?: boolean }) => void;
-  /** The channel mirrors to a Slack channel of this name: offer the per-line
-   *  "keep this out of Slack" switch. Absent = no switch. */
-  slackChannelName?: string;
   autoFocus?: boolean;
   /** The thread panel is narrower and sits under its own scroll region. */
   compact?: boolean;
@@ -100,13 +101,20 @@ export const ChatComposer = memo(function ChatComposer({
   // Per line, like broadcast: the mirror is the channel's rule, and this is
   // one person deciding that ONE line stays home. Resets after the send.
   const [localOnly, setLocalOnly] = useState(false);
-  const offerSlack = !!slackChannelName;
+  const slackLink = useChannelSlackLink(channelId);
+  const s = useTrackedStore([(state) => state.currentUser?._id]);
+  const slack = slackComposerDelivery(slackLink, s.currentUser?._id, !!threadRootId);
+  const offerSlack = !!slack;
+  const canSendSlack = slack?.auth === "ready";
+  const onlyHere = localOnly || (offerSlack && !canSendSlack);
+  const slackConnect = useSlackConnect(slackLink?.team_id, `/chat/${channelId}${threadRootId ? `?m=${threadRootId}` : ""}`);
   return (
     <div
       className="ch-composer"
       style={compact ? { margin: "0 12px 12px" } : undefined}
       onInput={typing.onTyping}
     >
+      {slack && <SlackConnectPrompt auth={slack.auth} busy={slackConnect.busy} started={slackConnect.started} error={slackConnect.error} onConnect={slackConnect.connect} />}
       <MessageInput
         // Remount on a channel or thread switch so the box never carries the
         // previous room's draft into the new one.
@@ -127,7 +135,7 @@ export const ChatComposer = memo(function ChatComposer({
           if (!content && attachments.length === 0) return;
           const sendOpts: { broadcast?: boolean; syncLocalOnly?: boolean } = {};
           if (offerBroadcast && broadcast) sendOpts.broadcast = true;
-          if (offerSlack && localOnly) sendOpts.syncLocalOnly = true;
+          if (offerSlack && onlyHere) sendOpts.syncLocalOnly = true;
           onSend(
             content,
             attachments.length ? attachments : undefined,
@@ -175,8 +183,8 @@ export const ChatComposer = memo(function ChatComposer({
         <Popover>
           <PopoverTrigger asChild>
             <button type="button" className="ch-composer-options" aria-label="Message options" title="Message options">
-              {offerSlack && <SlackLogo className="w-3 h-3" muted={localOnly} />}
-              {localOnly && <span>Only here</span>}
+              {offerSlack && <SlackLogo className="w-3 h-3" muted={!canSendSlack || localOnly} />}
+              {onlyHere && <span>Only in Codecast</span>}
               {broadcast && <span>Also in #{channelName}</span>}
               <MoreHorizontal className="w-4 h-4" />
             </button>
@@ -187,9 +195,9 @@ export const ChatComposer = memo(function ChatComposer({
                 <span className="ch-composer-menu-heading">This message</span>
                 {offerSlack && (
                   <label className="ch-composer-choice">
-                    <input type="checkbox" checked={!localOnly} onChange={(e) => setLocalOnly(!e.target.checked)} />
-                    <SlackLogo className="w-3.5 h-3.5" muted={localOnly} />
-                    <span>Also send to Slack #{slackChannelName}</span>
+                    <input type="checkbox" checked={canSendSlack && !localOnly} disabled={!canSendSlack} onChange={(e) => setLocalOnly(!e.target.checked)} />
+                    <SlackLogo className="w-3.5 h-3.5" muted={!canSendSlack || localOnly} />
+                    <span>Also send to {slack?.destination}</span>
                   </label>
                 )}
                 {offerBroadcast && (
