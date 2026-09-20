@@ -3,6 +3,7 @@ import { BrowserBannerGate } from "./notificationGate";
 import { PANE_EMBED } from "./browserPane";
 import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandoff";
 import { cmpVersions, parseShellVersion } from "./desktopFloor";
+import { agentAlertsSuppressed, deliverAlert } from "./notificationDelivery";
 
 declare global {
   interface Window {
@@ -1239,6 +1240,7 @@ export function hasBrowserNotificationPermission(): boolean {
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
+  if (agentAlertsSuppressed()) return false;
   if (isDesktop()) return true;
   if (typeof Notification === "undefined") return false;
   if (Notification.permission === "granted") return true;
@@ -1261,6 +1263,13 @@ export async function notifyNative(
   body: string,
   data?: NotifyNativeData,
 ): Promise<boolean> {
+  const key = data?.key ?? Array.from(new Uint8Array(await crypto.subtle.digest(
+    "SHA-256", new TextEncoder().encode(JSON.stringify([title, body, data?.route, data?.conversationId])),
+  )), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return deliverAlert(`banner:${key}`, () => deliverNative(title, body, data));
+}
+
+async function deliverNative(title: string, body: string, data?: NotifyNativeData): Promise<boolean> {
   // One click target per banner: an explicit route (chat, tasks, docs) wins,
   // else the conversation. Electron receives both and applies the same rule.
   const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
@@ -1279,7 +1288,7 @@ export async function notifyNative(
   );
   if (!verdict.shown) return false;
   if (hasBrowserNotificationPermission()) {
-    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route });
+    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route, silent: true });
     if (route) {
       n.onclick = () => {
         window.focus();

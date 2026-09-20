@@ -10,7 +10,9 @@ import { divertNavigation, divertSessionOpen, endClickIntent } from "../openInte
 const original = (globalThis as any).window;
 
 /** Stand a desktop shell up: which app THIS window is, which app windows exist. */
-function shell(opts: { appWindow?: string | null; apps?: Record<string, boolean>; verbs?: boolean } | null) {
+function shell(
+  opts: { appWindow?: string | null; apps?: Record<string, boolean>; verbs?: boolean; tab?: boolean; path?: string } | null,
+) {
   const sent: string[] = [];
   if (opts === null) {
     (globalThis as any).window = {};
@@ -18,9 +20,13 @@ function shell(opts: { appWindow?: string | null; apps?: Record<string, boolean>
   }
   const verbs = opts.verbs !== false;
   (globalThis as any).window = {
+    location: { pathname: opts.path ?? "/inbox" },
     __CODECAST_ELECTRON__: {
       appWindow: opts.appWindow ?? null,
-      ...(verbs ? { routeNavigate: (p: string) => (sent.push(p), Promise.resolve(true)) } : {}),
+      isTabWindow: opts.tab === true,
+      // An older shell has the palette verb and none of the app window ones.
+      paletteNavigate: (p: string) => sent.push(`main:${p}`),
+      ...(verbs ? { routeNavigate: (p: string) => (sent.push(p), Promise.resolve(true)), openAppWindow: () => Promise.resolve(true) } : {}),
       onWindowRole: (cb: (role: any) => void) => cb({ leader: true, apps: opts.apps ?? {} }),
     },
   };
@@ -76,13 +82,32 @@ describe("routeElsewhere", () => {
     expect(sent).toEqual(["/chat/ch1"]);
   });
 
-  it("answers no in a browser and on a shell without the verb", () => {
+  it("answers no in a browser and, from the main window, on a shell without the verb", () => {
     shell(null);
     expect(routeElsewhere("/chat/ch1")).toBe(false);
     expect(desktopAppWindow()).toBe(null);
     const sent = shell({ apps: { chat: true }, verbs: false });
     expect(routeElsewhere("/chat/ch1")).toBe(false);
     expect(sent).toEqual([]);
+  });
+
+  it("on an older shell, a breakout showing a chat route is the Chat window and hands the rest to main", () => {
+    // The shipped build: no app windows, so the popout fell down the ladder
+    // to a plain breakout of /chat. That window must still be Chat.
+    const sent = shell({ verbs: false, tab: true, path: "/chat/ch1" });
+    expect(desktopAppWindow()).toBe("chat");
+    expect(desktopAppWindow("/tasks")).toBe("work");
+    expect(routeElsewhere("/chat/ch2")).toBe(false);
+    expect(routeElsewhere("/conversation/c1")).toBe(true);
+    expect(routeElsewhere("/tasks/ct-1")).toBe(true);
+    expect(sent).toEqual(["main:/conversation/c1", "main:/tasks/ct-1"]);
+    // A breakout on a route no app owns is a plain window.
+    expect(desktopAppWindow("/feed")).toBe(null);
+  });
+
+  it("on a shell with app windows, a plain breakout never becomes one by its route alone", () => {
+    shell({ tab: true, path: "/chat/ch1", apps: {} });
+    expect(desktopAppWindow()).toBe(null);
   });
 });
 
