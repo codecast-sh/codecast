@@ -16,7 +16,7 @@ import {
   placeRoute,
   sectionForRoute,
 } from "../../electron/appWindows.mjs";
-import { bridge, getDesktopWindowRole, isElectron } from "./desktop";
+import { bridge, getDesktopWindowRole, isDetachedTabWindow, isElectron } from "./desktop";
 import { isNonTabRoute } from "./tabRoutes";
 
 export { DESKTOP_APPS, appForRoute, isDesktopApp, sectionForRoute };
@@ -26,16 +26,26 @@ export type DesktopApp = keyof typeof DESKTOP_APPS;
  * The app this document IS: the window was opened as Chat or Work. Null in the
  * main window, a plain breakout, a browser.
  *
- * Two sources, one fact. A window built cold carries it in its preload
+ * Three sources, one fact. A window built cold carries it in its preload
  * arguments, so its first frame is already right. A window made from the
  * shell's warm spare (the instant path) was built before anyone knew what it
- * would become, so it reads it off its window role — which is why anything
- * that DRAWS this goes through useDesktopAppWindow, and re-renders when the
- * spare is claimed.
+ * would become, so it reads it off its window role. And on a shell from
+ * before app windows existed, the popout falls down the ladder to a plain
+ * breakout (lib/popOut): that window has no flag and no role to say what it
+ * is, so it is the app's window exactly when it SHOWS the app's routes — the
+ * one fact such a shell can offer, and enough for the bar and the rails. The
+ * founder pressed the Chat popout on the shipped build and got the whole
+ * dashboard in a second window (2026-09-19).
+ *
+ * Anything that DRAWS this goes through useDesktopAppWindow, which re-renders
+ * when the role changes or the route moves.
  */
-export function desktopAppWindow(): DesktopApp | null {
+export function desktopAppWindow(path?: string): DesktopApp | null {
   if (typeof window === "undefined") return null;
-  const app = window.__CODECAST_ELECTRON__?.appWindow ?? getDesktopWindowRole().app;
+  let app = window.__CODECAST_ELECTRON__?.appWindow ?? getDesktopWindowRole().app;
+  if (!app && isDetachedTabWindow() && !canOpenDesktopApp()) {
+    app = appForRoute(path ?? window.location.pathname);
+  }
   return isDesktopApp(app) ? (app as DesktopApp) : null;
 }
 
@@ -85,9 +95,18 @@ export function runPlaced<T>(fn: () => T): T {
 export function routeElsewhere(path: string): boolean {
   if (placedByShell || !isElectron()) return false;
   if (isNonTabRoute(path)) return false;
+  const place = placeRoute(path, desktopAppWindow(), getDesktopWindowRole().apps);
+  if (place === "here") return false;
   const route = bridge("routeNavigate");
-  if (!route) return false;
-  if (placeRoute(path, desktopAppWindow(), getDesktopWindowRole().apps) === "here") return false;
-  void route(path);
+  if (route) {
+    void route(path);
+    return true;
+  }
+  // A shell from before app windows cannot land a path in one, but it can
+  // still hand one to the main window: the same verb the people and voice
+  // windows use for that (navigateFromHere). Chat stays chat there too.
+  const toMain = place === "main" ? bridge("paletteNavigate") : undefined;
+  if (!toMain) return false;
+  toMain(path);
   return true;
 }

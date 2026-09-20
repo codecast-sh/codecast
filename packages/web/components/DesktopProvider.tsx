@@ -42,6 +42,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
+import { useNotificationDelivery } from "../hooks/useNotificationDelivery";
+import { agentAlertsSuppressed } from "../lib/notificationDelivery";
 
 import { useMountEffect } from "../hooks/useMountEffect";
 // A native banner is for something that JUST happened. Rows older than this at
@@ -124,6 +126,7 @@ export function DesktopProvider() {
   usePresenceReporter();
 
   const notifications = useQuery(api.notifications.list);
+  useNotificationDelivery(isAuthenticated && notifications !== undefined);
   const mountedAtRef = useRef<number>(Date.now());
   const seenIdsRef = useRef<Set<string>>(new Set());
   const initializedRef = useRef(false);
@@ -208,7 +211,7 @@ export function DesktopProvider() {
         // the OS-level permission is not granted, so the notifyNative above
         // silently vanished. Feed the nudge banner — a miss overrides its
         // snooze (lib/notificationNudge.ts).
-        if (readinessRef.current !== "granted" && !document.hasFocus()) {
+        if (!agentAlertsSuppressed() && readinessRef.current !== "granted" && !document.hasFocus()) {
           recordNotificationMiss({
             actor,
             fromPerson: typeof n.type === "string" && (n.type.startsWith("chat_") || n.type === "mention"),

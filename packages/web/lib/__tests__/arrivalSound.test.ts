@@ -13,6 +13,8 @@
 // that something played.
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createNotificationDelivery, installNotificationDelivery, type ClaimResult } from "../notificationDelivery";
+import { useInboxStore } from "../../store/inboxStore";
 
 // ── a stand-in AudioContext that counts what a cue builds ──────────────────
 
@@ -79,6 +81,7 @@ mock.module("../desktop", () => ({
 }));
 
 const { soundChatMessage, resetAudioContext } = await import("../sounds");
+const { soundIdle, soundCallRing, soundSend, previewSoundCategory } = await import("../sounds");
 
 function setWindowRoleForTest(leader: boolean) {
   isLeader = leader;
@@ -97,6 +100,75 @@ describe("one arrival, one sound", () => {
 
   afterEach(() => {
     setWindowRoleForTest(true);
+  });
+
+  test("agent tabs create no audio graph until explicitly opted into alert testing", () => {
+    const previous = globalThis.sessionStorage;
+    const values = new Map([["codecast-agent-tab", "1"]]);
+    globalThis.sessionStorage = { getItem: (key: string) => values.get(key) ?? null } as Storage;
+    try {
+      soundChatMessage("agent-silent");
+      soundIdle();
+      soundCallRing();
+      soundSend();
+      previewSoundCategory("chat");
+      expect(oscStarts).toBe(0);
+      expect(bufferStarts).toBe(0);
+      values.set("codecast-agent-alerts", "1");
+      soundChatMessage("agent-opted-in");
+      expect(oscStarts).toBe(4);
+      expect(bufferStarts).toBe(2);
+    } finally {
+      globalThis.sessionStorage = previous;
+    }
+  });
+
+  test("a ring cancelled while its delivery waits stays silent", async () => {
+    const previous = useInboxStore.getState().myCalls;
+    useInboxStore.setState({ myCalls: { ...previous, incoming: [{ _id: "cancelled-invite" }] } });
+    let resolve!: (result: ClaimResult) => void;
+    const stop = installNotificationDelivery(createNotificationDelivery({
+      remote: () => new Promise((r) => { resolve = r; }),
+      fallback: async () => true,
+      suppressed: () => false,
+    }));
+    try {
+      soundCallRing(0, "cancelled-invite");
+      await Promise.resolve();
+      useInboxStore.setState({ myCalls: { ...previous, incoming: [] } });
+      resolve("claimed");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(oscStarts).toBe(0);
+    } finally {
+      stop();
+      useInboxStore.setState({ myCalls: previous });
+    }
+  });
+
+  test("a browser that cannot play audio does not reserve the alert", async () => {
+    const previous = globalThis.AudioContext;
+    globalThis.AudioContext = class extends FakeAudioContext {
+      state = "suspended";
+    } as any;
+    resetAudioContext();
+    let claims = 0;
+    const stop = installNotificationDelivery(createNotificationDelivery({
+      remote: async () => "claimed",
+      fallback: async () => { claims++; return true; },
+      suppressed: () => false,
+    }));
+    try {
+      soundChatMessage("autoplay-blocked");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(claims).toBe(0);
+      expect(oscStarts).toBe(0);
+    } finally {
+      stop();
+      globalThis.AudioContext = previous;
+      resetAudioContext();
+    }
   });
 
   test("the knock motif is four oscillators and two knocks", () => {

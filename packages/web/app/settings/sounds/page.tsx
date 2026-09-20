@@ -37,11 +37,7 @@ export default function SoundsSettingsPage() {
       <SettingsSection
         title="Sound"
         icon={enabled ? Volume2 : VolumeX}
-        description={
-          enabled
-            ? "Cues play on this machine only — each device keeps its own sound settings."
-            : "All sounds are off on this machine. Previews still play so you can decide what to turn back on."
-        }
+        description="Sound preferences sync across your devices. Agent-controlled tabs stay quiet."
         actions={<Switch checked={enabled} onCheckedChange={(v) => updateUI({ sounds_enabled: v })} aria-label="Sound effects" />}
       >
         <VolumeRow disabled={!enabled} />
@@ -49,7 +45,7 @@ export default function SoundsSettingsPage() {
 
       <SettingsSection
         title="What makes a sound"
-        description="Which moments this machine announces out loud. The play button auditions each one."
+        description="Choose which moments make a sound. The play button previews each one."
       >
         {SOUND_CATEGORIES.map((c) => (
           <CategoryRow key={c.id} id={c.id} prefKey={c.key} label={c.label} desc={c.desc} masterOn={enabled} />
@@ -180,4 +176,3 @@ function WalkieSection() {
     </SettingsSection>
   );
 }
-

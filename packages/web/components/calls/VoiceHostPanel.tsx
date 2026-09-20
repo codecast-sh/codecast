@@ -171,8 +171,8 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     let t: ReturnType<typeof setInterval> | null = null;
     if (!quiet) {
       let cycle = 0;
-      soundCallRing(cycle);
-      t = setInterval(() => soundCallRing(++cycle), CALL_RING_PERIOD_MS);
+      soundCallRing(cycle, String(inviteId));
+      t = setInterval(() => soundCallRing(++cycle, String(inviteId)), CALL_RING_PERIOD_MS);
     }
     return () => {
       if (t) clearInterval(t);
