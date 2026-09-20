@@ -88,6 +88,8 @@ import { ThreadStatePanel } from "./ThreadStatePanel";
 import { HighlightContext } from "./HighlightContext";
 import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearchPages, type MatchInstance, type PendingHit } from "../lib/conversationSearch";
 import { FilePathContext } from "../lib/filePathLinks";
+import { WorktreesProvider } from "./worktree/WorktreesContext";
+import { SessionWorktreePills } from "./worktree/WorktreePill";
 import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -4484,6 +4486,7 @@ const ConversationViewInner = (
   const el = (
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
+    <WorktreesProvider repository={codeRepository}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
     <BrowserSessionContext.Provider value={browserSession}>
     <RevealAncestryCtx.Provider value={revealAncestry}>
@@ -4713,6 +4716,8 @@ const ConversationViewInner = (
                 })()}
 
                 <BranchCodeLink session={conversation} />
+
+                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
 
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
 
@@ -5748,6 +5753,7 @@ const ConversationViewInner = (
     </RevealAncestryCtx.Provider>
     </BrowserSessionContext.Provider>
     </CastBrowserRowContext.Provider>
+    </WorktreesProvider>
     </FilePathContext.Provider>
     </HighlightContext.Provider>
   );
