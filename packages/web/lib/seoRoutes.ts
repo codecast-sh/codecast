@@ -109,7 +109,7 @@ export const SEO_ROUTES: SeoEntry[] = [
     path: "/compare",
     title: "Codecast vs the alternatives",
     description:
-      "Honest side-by-side comparisons of Codecast with other coding agent tools — Conductor, Vibe Kanban, Happy, Claudia — and when each is the better choice.",
+      "Honest side-by-side comparisons of Codecast with other coding agent tools — Delta, Conductor, Vibe Kanban, Happy, Claudia — and when each is the better choice.",
   },
   ...COMPARISONS.map((c) => ({
     path: compareHref(c.slug),
