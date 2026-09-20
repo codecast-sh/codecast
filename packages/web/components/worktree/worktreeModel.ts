@@ -25,6 +25,21 @@ export function findWorktree(checkouts: RepoCheckout[] | undefined, ref: Worktre
   return all.find(({ worktree }) => !worktree.main && ((!!name && worktree.name === name) || (!!ref.branch && worktree.branch === ref.branch))) ?? null;
 }
 
+/**
+ * The worktrees a session has to do with: the one it runs in, then any whose
+ * record names it. The second kind is a session that started in the main
+ * checkout and made a worktree halfway through, which nothing on its own row says.
+ */
+export function worktreesOfSession(
+  checkouts: RepoCheckout[] | undefined,
+  session: { _id?: string | null; worktree_name?: string | null; worktree_path?: string | null; project_path?: string | null },
+): WorktreeRef[] {
+  const own = session.worktree_name ?? worktreeOfPath(session.worktree_path ?? session.project_path)?.name;
+  const named = (checkouts ?? []).flatMap((c) => c.worktrees)
+    .filter((w) => !w.main && w.name !== own && !!session._id && w.sessions?.includes(session._id));
+  return [...(own ? [{ name: own, path: session.worktree_path }] : []), ...named.map((w) => ({ name: w.name, path: w.path }))];
+}
+
 /** What inline code names, if it names a worktree at all: a path inside one, or a branch a worktree has checked out. */
 export function worktreeRefOfCode(text: string, checkouts: RepoCheckout[] | undefined): FoundWorktree | null {
   const code = text.trim();

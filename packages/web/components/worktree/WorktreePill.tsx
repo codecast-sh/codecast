@@ -9,7 +9,7 @@ import { useRepoWorktrees } from "../../hooks/useRepoBrowse";
 import { useKnownWorktrees } from "./WorktreesContext";
 import { repoWorktreesHref } from "../../lib/repoView";
 import { relTimeShort } from "../../lib/utils";
-import { findWorktree, worktreeCondition, type FoundWorktree, type WorktreeCondition, type WorktreeRef } from "./worktreeModel";
+import { findWorktree, worktreeCondition, worktreesOfSession, type FoundWorktree, type WorktreeCondition, type WorktreeRef } from "./worktreeModel";
 
 const TONE: Record<WorktreeCondition["tone"], string> = {
   ok: "text-sol-text-dim",
@@ -105,4 +105,14 @@ export function WorktreePill({ repository, children, className = "", ...ref }: W
       </Link>
     </HoverCard>
   );
+}
+
+/** A conversation header's worktrees: the one the session runs in, and any it made along the way. Two at most. */
+export function SessionWorktreePills({ session, repository, className }: {
+  session: Parameters<typeof worktreesOfSession>[1];
+  repository?: string | null;
+  className?: string;
+}) {
+  const refs = worktreesOfSession(useKnownWorktrees()?.checkouts, session).slice(0, 2);
+  return <>{refs.map((ref) => <WorktreePill key={ref.name} repository={repository} className={className} {...ref} />)}</>;
 }

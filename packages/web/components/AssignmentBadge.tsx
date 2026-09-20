@@ -199,8 +199,9 @@ export function AssignmentBadge({
                 <>
                   <DeviceIcon d={d} />
                   {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
-                  {!compact && (worktree || shared) && (
-                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70 cq-sq1">{worktree ?? "shared"}</span>
+                  {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
+                  {!compact && shared && !worktree && (
+                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70 cq-sq1">shared</span>
                   )}
                   {!compact && base7 && (
                     <span className="font-mono text-[9px] opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>

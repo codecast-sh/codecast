@@ -58,6 +58,9 @@ import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/filePathLinks";
+import { useKnownWorktrees } from "./worktree/WorktreesContext";
+import { worktreeRefOfCode } from "./worktree/worktreeModel";
+import { WorktreePill } from "./worktree/WorktreePill";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
@@ -550,6 +553,7 @@ function takeMentionProps(props: any): { mention: MentionInfo; rest: any } {
 
 export function EntityAwareCode({ children, className, ...allProps }: any) {
   const text = String(children);
+  const worktrees = useKnownWorktrees();
   const { mention: mentionInfo, rest: props } = takeMentionProps(allProps);
   // The fallback keeps a non-entity Convex-shaped string (message id, hash)
   // rendered as the inline code it was written as.
@@ -557,6 +561,10 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
     return <EntityIdPill shortId={text} mention={mentionInfo} fallback={<code className={className} {...props}>{children}</code>} />;
   }
   const code = <code className={className} {...props}>{children}</code>;
+  // A worktree named by its folder or by the branch it has checked out. Checked
+  // before the file link, which would otherwise claim the folder as a path.
+  const worktree = className || !worktrees ? null : worktreeRefOfCode(text, worktrees.checkouts);
+  if (worktree) return <WorktreePill repository={worktrees!.repository} path={worktree.worktree.path}>{text}</WorktreePill>;
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
   // The code span keeps its look; the link wraps it.
   const mention = className ? null : filePathMention(text);
