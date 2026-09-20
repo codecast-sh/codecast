@@ -34,6 +34,10 @@ So run `packages/convex/deploy.sh` **before** pushing such a commit, then push. 
 
 Web carries a second layer of defence. A query that merely ENRICHES a surface goes through `useQueryNoThrow` (`packages/web/hooks/useQueryNoThrow.ts`), never plain `useQuery` — pills, badges, chips and name lookups all qualify. The test is what the component should show if the answer never arrives: if it can still render something honest, use the hook; if the surface is meaningless without the data, plain `useQuery` is right and the ErrorBoundary is the intended outcome.
 
+## Prompt dry runs
+
+A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers `cast org inputs` and `cast org health` from saved files). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> [--serve <dir>] [--guard <dir>]`; the run leaves `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. Never edit a harness script while a run is alive: bash reads a script as it executes it.
+
 ## CLI releases
 
 Cut CLI releases from CI. No laptop needs the signing certificate.
