@@ -26,7 +26,7 @@ describe("isCodexTurnAbortedMessage", () => {
 });
 
 test("ConversationView classifies <turn_aborted> without consulting agent_type", () => {
-  const src = readFileSync(join(import.meta.dir, "../../components/ConversationView.tsx"), "utf8");
+  const src = readFileSync(join(import.meta.dir, "../../components/conversation/classify.ts"), "utf8");
   const line = src.split("\n").find((l) => l.includes("isCodexTurnAbortedMessage(") && l.includes("interrupt"));
   expect(line).toBeDefined();
   expect(line).not.toMatch(/agentType/);

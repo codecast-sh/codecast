@@ -115,7 +115,7 @@ async function runScenario(order: "create-first" | "upload-first", opts: { failU
   const createGate = deferred<void>();
   const { client, restore } = fakeConvex(uploadGate, opts.failUploadsFirst ?? 0);
   const calls = fakeDispatch(createGate);
-  const { MessageInput } = await import("../ConversationView");
+  const { MessageInput } = await import("../MessageInput");
 
   // Exactly what ComposeView does on mount: a deferred local stub, created
   // server-side only when the first send fires materialize().
@@ -242,7 +242,7 @@ test("a refused commit keeps the popup open with the text instead of dismissing"
   const createGate = deferred<void>();
   const { client, restore } = fakeConvex(uploadGate);
   const calls = fakeDispatch(createGate);
-  const { MessageInput } = await import("../ConversationView");
+  const { MessageInput } = await import("../MessageInput");
   const store = useInboxStore.getState();
   const { stubId, materialize } = store.beginOptimisticSession({
     agentType: "claude_code",

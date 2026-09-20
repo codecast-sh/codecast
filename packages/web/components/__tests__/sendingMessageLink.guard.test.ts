@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { sendingExcerpt } from "../../hooks/useJumpToSendingMessage";
 
-const source = readFileSync(new URL("../ConversationView.tsx", import.meta.url), "utf8");
+const source = readFileSync(new URL("../conversation/blocks/systemBlocks.tsx", import.meta.url), "utf8");
 
 function block(startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);

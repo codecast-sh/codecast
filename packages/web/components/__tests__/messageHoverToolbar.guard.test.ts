@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const source = readFileSync(new URL("../ConversationView.tsx", import.meta.url), "utf8");
+const source = readFileSync(new URL("../conversation/blocks/turnBlocks.tsx", import.meta.url), "utf8");
 
 function toolbarMarkup(attribute: string) {
   const start = source.indexOf(`<div ${attribute}`);

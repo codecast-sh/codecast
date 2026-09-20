@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../bubbleColor";
 
@@ -8,7 +8,17 @@ const css = readFileSync(join(ROOT, "app", "globals.css"), "utf8");
 const panel = readFileSync(join(ROOT, "components", "GlobalSessionPanel.tsx"), "utf8");
 const diffView = readFileSync(join(ROOT, "components", "DiffView.tsx"), "utf8");
 const terminalSessions = readFileSync(join(ROOT, "lib", "terminal", "termSessions.ts"), "utf8");
-const conversationView = readFileSync(join(ROOT, "components", "ConversationView.tsx"), "utf8");
+// The conversation surface: the container plus every module it was split into.
+const conversationDir = join(ROOT, "components", "conversation");
+const conversationView = [
+  join(ROOT, "components", "ConversationView.tsx"),
+  join(ROOT, "components", "MessageInput.tsx"),
+  ...(readdirSync(conversationDir, { recursive: true }) as string[])
+    .filter((file) => /\.tsx?$/.test(file) && !file.includes(".test."))
+    .map((file) => join(conversationDir, file)),
+]
+  .map((file) => readFileSync(file, "utf8"))
+  .join("\n");
 
 describe("Minimal interface style", () => {
   test("keeps semantic monospace content in JetBrains Mono", () => {

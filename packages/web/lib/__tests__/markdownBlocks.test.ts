@@ -45,7 +45,7 @@ describe("splitMarkdownBlocks", () => {
   // Without this gate a single-block result re-enters with the same string
   // and overflows the stack, so losing the gate reintroduces the crash.
   it("ConversationView gates block recursion on the split making progress", () => {
-    const src = readFileSync(join(import.meta.dir, "..", "..", "components", "ConversationView.tsx"), "utf-8");
+    const src = readFileSync(join(import.meta.dir, "..", "..", "components", "conversation", "markdown.tsx"), "utf-8");
     const idx = src.indexOf("splitMarkdownBlocks(content)");
     expect(idx).toBeGreaterThan(-1);
     expect(src.slice(idx, idx + 500)).toContain("blocks.length > 1");

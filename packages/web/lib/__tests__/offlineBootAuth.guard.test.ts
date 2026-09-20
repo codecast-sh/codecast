@@ -51,7 +51,9 @@ describe("offline boot auth", () => {
   });
 
   test("interaction-only conversation tools stay outside the blocking route graph", () => {
-    const source = readFileSync(join(WEB_ROOT, "components/ConversationView.tsx"), "utf8");
+    const source = ["components/ConversationView.tsx", "components/MessageInput.tsx"]
+      .map((file) => readFileSync(join(WEB_ROOT, file), "utf8"))
+      .join("\n");
 
     for (const component of [
       "CommentDock",

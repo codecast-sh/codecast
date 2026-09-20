@@ -9,7 +9,7 @@ import { useConversationMessages, type Message } from "../../../hooks/useConvers
 import { parseAgentAuthoredMessage } from "../../sessionMessage";
 import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
 import { AgentIcon } from "../../ConversationList";
-import { MessageInput } from "../../ConversationView";
+import { MessageInput } from "../../MessageInput";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { EntityIdPill } from "../../EntityIdPill";
 import { useTailPin } from "../cardWindow";

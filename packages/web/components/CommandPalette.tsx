@@ -64,9 +64,9 @@ import type { ChatAttachment } from "../store/chatSlice";
 import "./chat/chat.css";
 
 // Loaded only on the confirm step so the search palette does not pull the
-// conversation module (and the HMR cycle that comes with an eager import).
+// composer module (and the HMR cycle that comes with an eager import).
 const PaletteMessageInput = lazy(() =>
-  import("./ConversationView").then((m) => ({ default: m.MessageInput })),
+  import("./MessageInput").then((m) => ({ default: m.MessageInput })),
 );
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
 import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, type PaletteTargetType } from "../lib/paletteActions";

@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
-import { MessageInput } from "../ConversationView";
+import { MessageInput } from "../MessageInput";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { PingAgentButton } from "./PingAgentButton";
 import { presenceDocId, commentAuthorName, type Comment } from "../../lib/commentThread";

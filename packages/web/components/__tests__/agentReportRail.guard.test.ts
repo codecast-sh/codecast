@@ -2,9 +2,12 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseAgentAuthoredMessage } from "../sessionMessage";
 
-const source = readFileSync(new URL("../ConversationView.tsx", import.meta.url), "utf8");
+const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
+const classifierSource = read("../conversation/classify.ts");
+const containerSource = read("../ConversationView.tsx");
+const cardSource = read("../conversation/blocks/systemBlocks.tsx");
 
-function block(startMarker: string, endMarker: string) {
+function block(source: string, startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   expect(start).toBeGreaterThan(-1);
   const end = source.indexOf(endMarker, start);
@@ -16,7 +19,7 @@ function block(startMarker: string, endMarker: string) {
 // wrapped in <agent-message from="…">. Before this rail existed the transcript
 // showed the wire tag verbatim under the human's name and avatar.
 test("the classifier routes a subagent report onto the session-message rail", () => {
-  const classifier = block("function classifyUserMessage(", "function isStickyWorthy(");
+  const classifier = block(classifierSource, "function classifyUserMessage(", "function isStickyWorthy(");
   expect(classifier).toContain("isAgentMessage(t)");
   expect(classifier).toContain("parseAgentAuthoredMessage(t)");
   expect(classifier).toMatch(/kind: 'session_message',[^\n]*variant: 'agent'/);
@@ -25,13 +28,13 @@ test("the classifier routes a subagent report onto the session-message rail", ()
 });
 
 test("the card gets the agent variant and the sender's session when it resolves", () => {
-  const renderCase = block("case 'session_message':", "case 'huddle_summary':");
+  const renderCase = block(containerSource, "case 'session_message':", "case 'huddle_summary':");
   expect(renderCase).toContain(`variant={kind.variant === 'agent' ? "agent" : "session"}`);
   expect(renderCase).toContain("agentNameToChildMap?.[kind.from]");
 });
 
 test("an agent name is a badge, never an EntityIdPill", () => {
-  const card = block("function SessionMessageBlock(", "// ── Team chat");
+  const card = block(cardSource, "function SessionMessageBlock(", "// ── Team chat");
   // A subagent name and a teammate id both fail to resolve as session short ids,
   // so both take the badge branch; only a real session id gets the pill.
   expect(card).toContain("const namedSender = isTeammate || isAgentReport;");

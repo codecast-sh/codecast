@@ -2,7 +2,7 @@ import { memo, useCallback, useRef, useState } from "react";
 import { Headphones, ImagePlus } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
 import { WalkiePttButton } from "../calls/WalkiePtt";
-import { MessageInput } from "../ConversationView";
+import { MessageInput } from "../MessageInput";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";

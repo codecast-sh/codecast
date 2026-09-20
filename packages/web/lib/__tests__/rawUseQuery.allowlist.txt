@@ -31,13 +31,14 @@ components/CommandPalette.tsx 1
 components/ConfigEditor.tsx 2
 components/ConversationDiffLayout.tsx 1
 components/ConversationTree.tsx 1
-components/ConversationView.tsx 11
+components/ConversationView.tsx 2
 components/CreateTaskModal.tsx 1
 components/DesktopProvider.tsx 1
 components/DocEmbed.tsx 1
 components/ForkTreePanel.tsx 1
 components/GlobalSessionPanel.tsx 1
 components/MessageBrowserPopover.tsx 3
+components/MessageInput.tsx 2
 components/NotificationBell.tsx 1
 components/OrchestrationDashboard.tsx 5
 components/PlanContextPanel.tsx 1
@@ -47,4 +48,7 @@ components/SetupPromptBanner.tsx 1
 components/Sidebar.tsx 1
 components/TeamAvatarBar.tsx 1
 components/WatchButton.tsx 1
+components/conversation/blocks/castBlocks.tsx 4
+components/conversation/blocks/toolBlocks.tsx 1
+components/conversation/blocks/turnBlocks.tsx 2
 components/editor/CollabDocEditor.tsx 2

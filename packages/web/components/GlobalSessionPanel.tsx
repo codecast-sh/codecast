@@ -19,7 +19,7 @@ import { copyToClipboard, formatRelative, formatDateFull, formatShortDate } from
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
-import type { ConversationData } from "./ConversationView";
+import type { ConversationData } from "./conversation/types";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../lib/threadState";

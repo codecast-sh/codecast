@@ -22,7 +22,7 @@ describe("parked convCommand caller policy", () => {
 
   test("project switch and kill callers suppress only parked:true failures", async () => {
     const [conversationView, sessionsPage, globalPanel] = await Promise.all([
-      source("../../components/ConversationView.tsx"),
+      source("../../components/conversation/sessionControls.tsx"),
       source("../../app/sessions/page.tsx"),
       source("../../components/GlobalSessionPanel.tsx"),
     ]);
@@ -41,7 +41,11 @@ describe("parked convCommand caller policy", () => {
   });
 
   test("fire-and-forget session controls observe their asyncAction rejection", async () => {
-    const conversationView = await source("../../components/ConversationView.tsx");
+    // The composer owns permission mode and rewind; the container owns Escape.
+    const conversationView = [
+      await source("../../components/ConversationView.tsx"),
+      await source("../../components/MessageInput.tsx"),
+    ].join("\n");
 
     for (const command of [
       "setPermissionMode",

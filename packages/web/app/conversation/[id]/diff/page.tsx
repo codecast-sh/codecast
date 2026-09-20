@@ -6,7 +6,7 @@ import { AuthGuard } from "../../../../components/AuthGuard";
 import { DashboardLayout } from "../../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "../../../../components/ConversationDiffLayout";
-import { ConversationData } from "../../../../components/ConversationView";
+import type { ConversationData } from "../../../../components/conversation/types";
 import { useConversationMessages } from "../../../../hooks/useConversationMessages";
 import { useDiffViewerStore } from "../../../../store/diffViewerStore";
 
