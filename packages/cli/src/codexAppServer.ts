@@ -1,4 +1,7 @@
 import { EventEmitter } from "events";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
 import { STABLE_ENV_MODE, type CodexTurnError } from "@codecast/shared/contracts";
@@ -246,6 +249,31 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const THREAD_START_TIMEOUT_MS = 60_000;
 const MAX_RESTART_DELAY_MS = 30_000;
 
+/** Codex caches the login identity when app-server starts. A later `codex
+ * login` can replace auth.json while that process still holds the old account.
+ * Only the identity matters here: ordinary token rotation for the same account
+ * is handled by Codex itself. Undefined means an unreadable or partial file,
+ * which is not evidence that the account changed. */
+export function codexAuthIdentity(home = process.env.CODEX_HOME || path.join(os.homedir(), ".codex")): string | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(home, "auth.json"), "utf-8");
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? "signed-out" : undefined;
+  }
+  try {
+    const auth = JSON.parse(raw);
+    if (!auth || typeof auth !== "object") return undefined;
+    const accountId = auth.tokens?.account_id;
+    if (auth.auth_mode === "chatgpt" || (auth.auth_mode == null && typeof accountId === "string" && accountId)) {
+      return typeof accountId === "string" && accountId ? `chatgpt:${accountId}` : undefined;
+    }
+    return typeof auth.auth_mode === "string" ? auth.auth_mode : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function threadForkTimeoutMsForBytes(bytes: number): number {
   const mib = 1024 * 1024;
   const extraMib = Math.ceil(Math.max(0, bytes - mib) / mib);
@@ -331,7 +359,11 @@ export class CodexAppServer extends EventEmitter {
   private restartDelay = 1000;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  private stopGeneration = 0;
   private initialized = false;
+  private authIdentityAtSpawn: string | undefined;
+  private authRefreshFailed = false;
+  private authRestart: Promise<void> | null = null;
   private _binaryMissing = false;
   private log: (msg: string) => void;
   private onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
@@ -353,6 +385,7 @@ export class CodexAppServer extends EventEmitter {
   }
 
   stop(): void {
+    this.stopGeneration++;
     this.stopped = true;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -367,6 +400,82 @@ export class CodexAppServer extends EventEmitter {
 
   get binaryMissing(): boolean {
     return this._binaryMissing;
+  }
+
+  /** Covers keyring-backed logins, where there is no auth.json to compare. */
+  noteAuthRefreshFailure(): void {
+    this.authRefreshFailed = true;
+  }
+
+  /** Reopen the app-server when a browser login switched Codex accounts.
+   * Wait for existing turns and for the old child to close before starting the
+   * replacement. The daemon's `ready` handler then rehydrates saved threads. */
+  async restartIfAuthChanged(): Promise<boolean> {
+    if (this.authRestart) {
+      await this.authRestart;
+      return true;
+    }
+    const current = codexAuthIdentity();
+    const identityChanged = current !== undefined && this.authIdentityAtSpawn !== undefined && current !== this.authIdentityAtSpawn;
+    if (!this.running || (!identityChanged && !this.authRefreshFailed)) {
+      return false;
+    }
+    this.authRestart = this.restartForAuthChange();
+    try {
+      await this.authRestart;
+      return true;
+    } finally {
+      this.authRestart = null;
+    }
+  }
+
+  private async restartForAuthChange(): Promise<void> {
+    this.log("[codex-app-server] Codex login changed; restarting app-server");
+    if (this.turnAccumulators.size > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const done = () => {
+          if (this.turnAccumulators.size > 0 && this.running) return;
+          clearTimeout(timer);
+          this.off("turnCompleted", done);
+          this.off("exited", done);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          this.off("turnCompleted", done);
+          this.off("exited", done);
+          reject(new Error("Codex login changed while another turn is running; retry when it finishes"));
+        }, THREAD_START_TIMEOUT_MS);
+        this.on("turnCompleted", done);
+        this.on("exited", done);
+        done();
+      });
+    }
+    // A second login may have happened while we waited for a turn. Capture the
+    // identity at the actual spawn, not at the beginning of this method.
+    const child = this.process;
+    if (!child) throw new Error("Codex app-server stopped before its login could be refreshed");
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    this.stop();
+    const expectedStopGeneration = this.stopGeneration;
+    await closed;
+    if (this.stopGeneration !== expectedStopGeneration) {
+      throw new Error("Codex app-server stopped during its login refresh");
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => finish(new Error("Codex app-server did not restart after the login changed")), THREAD_START_TIMEOUT_MS);
+      const finish = (err?: Error) => {
+        clearTimeout(timer);
+        this.off("ready", onReady);
+        this.off("error", onError);
+        if (err) reject(err);
+        else resolve();
+      };
+      const onReady = () => finish();
+      const onError = (err: Error) => finish(err);
+      this.on("ready", onReady);
+      this.on("error", onError);
+      this.start();
+    });
   }
 
   private async initialize(): Promise<void> {
@@ -581,6 +690,8 @@ export class CodexAppServer extends EventEmitter {
     const args = ["app-server"];
     this.log(`[codex-app-server] spawning: ${this.codexBinary} ${args.join(" ")}`);
     this.lastSpawnTime = Date.now();
+    this.authIdentityAtSpawn = codexAuthIdentity();
+    this.authRefreshFailed = false;
 
     let child: ChildProcess;
     try {
@@ -682,18 +793,20 @@ export class CodexAppServer extends EventEmitter {
 
   private killProcess(): void {
     if (this.process) {
-      this.process.kill("SIGTERM");
-      setTimeout(() => {
-        if (this.process && this.process.exitCode === null) {
-          this.process.kill("SIGKILL");
-        }
+      const child = this.process;
+      child.kill("SIGTERM");
+      const timer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
       }, 5000);
+      timer.unref();
+      child.once("close", () => clearTimeout(timer));
     }
     this.cleanup();
   }
 
   private cleanup(): void {
     this.initialized = false;
+    this.turnAccumulators.clear();
     if (this.rl) {
       this.rl.close();
       this.rl = null;
