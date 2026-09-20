@@ -187,7 +187,9 @@ describe("command groups stay off the boot graph", () => {
     // and the four org/idle/handoff contracts the tree reads directly.
     expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(247);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3404);
+    // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
+    // launchd kickstart in index.ts's startDaemon. No new file.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3407);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

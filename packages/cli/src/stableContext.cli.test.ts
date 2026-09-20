@@ -227,7 +227,7 @@ Use --mine for only your sessions, -g for all teams.
     // CODECAST_NO_AUTO_UPDATE is the last gate: the `_build-id` child that
     // an update spawns must not start an update of its own.
     expect(source).toContain(
-      "if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) checkForUpdates()",
+      "if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) autoUpdateSettled = checkForUpdates()",
     );
     const claimed = source.slice(source.indexOf("if (runFastPath(process.argv)) {"));
     const fallback = claimed.indexOf("} else if (process.argv[2] === \"__fugitive_blame@@\")");
