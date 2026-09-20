@@ -31,6 +31,36 @@ function ChoiceList({ heading, items }: { heading: string; items: string[] }) {
   );
 }
 
+function ProsConsCard({ name, value }: { name: string; value: { pros: string[]; cons: string[] } }) {
+  const list = (items: string[], color: string, mark: string) => (
+    <ul className="space-y-2">
+      {items.map((item) => (
+        <li key={item} className="text-sm leading-relaxed flex gap-2" style={{ color: SOL.base01 }}>
+          <span aria-hidden className="font-mono font-bold shrink-0" style={{ color }}>{mark}</span>
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${SOL.base2}` }}>
+      <div className="px-5 py-3 font-mono font-semibold text-sm" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>
+        {name}
+      </div>
+      <div className="p-5 space-y-5">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-widest mb-2" style={{ color: SOL.green }}>Strengths</p>
+          {list(value.pros, SOL.green, "+")}
+        </div>
+        <div>
+          <p className="font-mono text-xs uppercase tracking-widest mb-2" style={{ color: SOL.red }}>Weaknesses</p>
+          {list(value.cons, SOL.red, "\u2212")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ComparePage() {
   const params = useParams<{ slug: string }>();
   const comparison = getComparison(params.slug ?? "");
@@ -78,6 +108,13 @@ export default function ComparePage() {
           .
         </p>
 
+        {c.bottomLine && (
+          <div className="rounded-lg p-5 mb-12" style={{ backgroundColor: SOL.base2, borderLeft: `4px solid ${SOL.blue}` }}>
+            <p className="font-mono text-xs uppercase tracking-widest mb-2" style={{ color: SOL.base1 }}>Bottom line</p>
+            <p className="leading-relaxed" style={{ color: SOL.base02 }}>{c.bottomLine}</p>
+          </div>
+        )}
+
         <h2 className="font-mono text-xl font-bold mb-4" style={{ color: SOL.base03 }}>
           Side by side
         </h2>
@@ -104,6 +141,29 @@ export default function ComparePage() {
           </table>
         </div>
 
+        {c.strengths && (
+          <>
+            <h2 className="font-mono text-xl font-bold mb-4" style={{ color: SOL.base03 }}>
+              Strengths and weaknesses
+            </h2>
+            <div className="grid sm:grid-cols-2 gap-6 mb-12">
+              <ProsConsCard name="Codecast" value={c.strengths.codecast} />
+              <ProsConsCard name={c.competitor} value={c.strengths.competitor} />
+            </div>
+          </>
+        )}
+
+        {c.deepDives?.map((section) => (
+          <section key={section.heading} className="mb-10">
+            <h2 className="font-mono text-xl font-bold mb-3" style={{ color: SOL.base03 }}>
+              {section.heading}
+            </h2>
+            {section.paragraphs.map((para) => (
+              <p key={para} className="leading-relaxed mb-3" style={{ color: SOL.base01 }}>{para}</p>
+            ))}
+          </section>
+        ))}
+
         <div className="grid sm:grid-cols-2 gap-6 mb-12">
           <ChoiceList heading={`Choose ${c.competitor} when`} items={c.whenCompetitor} />
           <ChoiceList heading="Choose Codecast when" items={c.whenCodecast} />
@@ -112,6 +172,12 @@ export default function ComparePage() {
         {c.together && (
           <p className="leading-relaxed mb-12 rounded-lg p-5" style={{ color: SOL.base01, border: `1px solid ${SOL.base2}` }}>
             {c.together}
+          </p>
+        )}
+
+        {c.verifiedOn && (
+          <p className="font-mono text-xs mb-12" style={{ color: SOL.base1 }}>
+            {c.competitor} facts read from its public docs on {c.verifiedOn}. Tell us if something changed.
           </p>
         )}
 
