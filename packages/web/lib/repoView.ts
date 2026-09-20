@@ -478,6 +478,15 @@ export function repoBranchesHref(repository: string, family: RepoRouteFamily = "
   return `${repoBase(repository, family)}/branches`;
 }
 
+/**
+ * A repository's worktrees, optionally at one of them. The app family only:
+ * a worktree is a fact about someone's machine, and the standalone pages are
+ * the ones a signed out guest reads.
+ */
+export function repoWorktreesHref(repository: string, name?: string): string {
+  return `${repoBase(repository, "app")}/worktrees${name ? `#${encodeURIComponent(name)}` : ""}`;
+}
+
 export function repoTagsHref(repository: string, family: RepoRouteFamily = "app"): string {
   return `${repoBase(repository, family)}/tags`;
 }
