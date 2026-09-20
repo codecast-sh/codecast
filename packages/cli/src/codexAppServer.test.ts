@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CodexAppServer, CodexRequestRefused, approvalResultForMethod, threadForkTimeoutMsForBytes, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
+import { EventEmitter } from "node:events";
+import { CodexAppServer, CodexRequestRefused, approvalResultForMethod, codexAuthIdentity, threadForkTimeoutMsForBytes, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
 import { persistedPolicyFor } from "./codexTurnRecovery.js";
 
 describe("CodexAppServer sandbox restatement", () => {
@@ -390,6 +391,102 @@ describe("CodexAppServer protocol", () => {
     expect(threadForkTimeoutMsForBytes(17 * 1024 * 1024)).toBe(300_000);
     expect(threadForkTimeoutMsForBytes(20 * 1024 * 1024)).toBe(345_000);
     expect(threadForkTimeoutMsForBytes(100 * 1024 * 1024)).toBe(600_000);
+  });
+});
+
+describe("Codex app-server login changes", () => {
+  test("compares account identity, not rotating token contents", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-identity-"));
+    const authPath = path.join(home, "auth.json");
+    try {
+      expect(codexAuthIdentity(home)).toBe("signed-out");
+      fs.writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: "account-a", refresh_token: "first" } }));
+      expect(codexAuthIdentity(home)).toBe("chatgpt:account-a");
+      fs.writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: "account-a", refresh_token: "rotated" } }));
+      expect(codexAuthIdentity(home)).toBe("chatgpt:account-a");
+      fs.writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: "account-b", refresh_token: "other" } }));
+      expect(codexAuthIdentity(home)).toBe("chatgpt:account-b");
+      fs.writeFileSync(authPath, "partial login");
+      expect(codexAuthIdentity(home)).toBeUndefined();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("restarts once after an account switch and can resume a saved thread", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-restart-"));
+    const home = path.join(root, "home");
+    const authPath = path.join(home, "auth.json");
+    const previousHome = process.env.CODEX_HOME;
+    fs.mkdirSync(home);
+    const login = (account: string, token: string) => fs.writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: account, refresh_token: token } }));
+    login("account-a", "first");
+    process.env.CODEX_HOME = home;
+    const server = new CodexAppServer({ log: () => {} });
+    const lifecycle: string[] = [];
+    let generation = 0;
+    (server as any).spawnProcess = () => {
+      const current = ++generation;
+      const child = new EventEmitter() as any;
+      child.exitCode = null;
+      child.kill = () => {
+        setTimeout(() => {
+          child.exitCode = 0;
+          lifecycle.push(`close-${current}`);
+          server.emit("exited", 0, "SIGTERM");
+          (server as any).cleanup();
+          server.emit("closed");
+          child.emit("close", 0, "SIGTERM");
+        }, 10);
+        return true;
+      };
+      (server as any).process = child;
+      (server as any).authIdentityAtSpawn = codexAuthIdentity();
+      (server as any).authRefreshFailed = false;
+      (server as any).initialized = true;
+      lifecycle.push(`start-${current}`);
+      queueMicrotask(() => server.emit("ready"));
+    };
+    (server as any).sendRequest = async () => ({
+      thread: { id: "saved-thread" }, cwd: "/tmp", model: "gpt-test", sandbox: { type: "readOnly", networkAccess: false },
+    });
+    const ready = () => new Promise<void>(resolve => server.once("ready", () => resolve()));
+    try {
+      const firstReady = ready();
+      server.start();
+      await firstReady;
+      await server.threadStart({ cwd: "/tmp" });
+      login("account-a", "rotated");
+      expect(await server.restartIfAuthChanged()).toBe(false);
+      expect(lifecycle).toEqual(["start-1"]);
+
+      login("account-b", "other");
+      const results = await Promise.all([server.restartIfAuthChanged(), server.restartIfAuthChanged()]);
+      expect(results).toEqual([true, true]);
+      expect(server.running).toBe(true);
+      expect(lifecycle).toEqual(["start-1", "close-1", "start-2"]);
+      await expect(server.threadResume({ threadId: "saved-thread" })).resolves.toMatchObject({ thread: { id: "saved-thread" } });
+
+      (server as any).handleNotification({ method: "turn/started", params: { threadId: "saved-thread", turn: { id: "active-turn" } } });
+      login("account-c", "third");
+      const afterTurn = server.restartIfAuthChanged();
+      await Promise.resolve();
+      expect(lifecycle).toEqual(["start-1", "close-1", "start-2"]);
+      (server as any).handleNotification({ method: "turn/completed", params: { threadId: "saved-thread", turn: { id: "active-turn", status: "completed" } } });
+      expect(await afterTurn).toBe(true);
+      expect(lifecycle).toEqual(["start-1", "close-1", "start-2", "close-2", "start-3"]);
+
+      server.noteAuthRefreshFailure(); // keyring-backed logins need this fallback
+      expect(await server.restartIfAuthChanged()).toBe(true);
+      expect(lifecycle).toEqual(["start-1", "close-1", "start-2", "close-2", "start-3", "close-3", "start-4"]);
+    } finally {
+      const closed = new Promise<void>(resolve => server.once("closed", () => resolve()));
+      server.stop();
+      await closed;
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
