@@ -1,3 +1,5 @@
+import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
+import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { action, mutation, query } from "./functions";
 import { api } from "./_generated/api";
 import { v } from "convex/values";
@@ -695,7 +697,7 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   // accepts the proposal (org-roles-run-work.md R2; the card promises naming
   // changes nothing about how it works).
   const reports_to = p.seat && !p.reports_to?.trim() ? await seatOwnerOf(ctx, p.seat.existing) : await resolveReportsTo(ctx, userId, boundary, p.reports_to);
-  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar });
+  const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar, host_user_id: p.seat ? await seatRunnerOf(ctx, p.seat.existing) : undefined });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
   // A role that names its session (org-roles-run-work.md R2) is seated on it
   // in this same apply, whatever `provision` says: the session IS the role, so
@@ -729,36 +731,42 @@ export async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Bou
     return r.kind === "project" ? await ctx.db.get(r.id) : null;
   };
   for (const c of changes) {
-    if (c.op === "create") {
-      // Idempotent by title: a re-run after a crash must not mint a twin.
-      let existing: any = null;
-      try { existing = await findProject(c.title); } catch { existing = null; }
-      if (existing && existing.title.toLowerCase() === c.title.toLowerCase()) { done.push(`project "${c.title}" already exists`); continue; }
-      await ctx.db.insert("projects", {
-        user_id: userId,
-        team_id: boundary.team_id,
-        workspace: key,
-        title: c.title.trim(),
-        description: [c.description?.trim(), note].filter(Boolean).join("\n\n") || undefined,
-        status: "active",
-        project_path: c.project_path,
-        created_at: now,
-        updated_at: now,
-      });
-      done.push(`created project "${c.title}"`);
-    } else {
-      const from = await findProject(c.from);
-      const into = await findProject(c.into);
-      if (!from || !into) throw new Error(`merge: project "${!from ? c.from : c.into}" not found in this workspace`);
-      if (String(from._id) === String(into._id)) continue;
-      let moved = 0;
-      for (const table of ["tasks", "plans", "docs"]) {
-        const rows: any[] = await ctx.db.query(table).withIndex("by_project_id", (q: any) => q.eq("project_id", from._id)).collect();
-        for (const row of rows) { await ctx.db.patch(row._id, { project_id: into._id, updated_at: now }); moved++; }
+    await withOrgChange(ctx, userId, { kind: "projects", door: "proposal", gesture: "accept_change" }, async () => {
+      if (c.op === "create") {
+        // Idempotent by title: a re-run after a crash must not mint a twin.
+        let existing: any = null;
+        try { existing = await findProject(c.title); } catch { existing = null; }
+        if (existing && existing.title.toLowerCase() === c.title.toLowerCase()) { done.push(`project "${c.title}" already exists`); return; }
+        const id = await ctx.db.insert("projects", {
+          user_id: userId,
+          team_id: boundary.team_id,
+          workspace: key,
+          title: c.title.trim(),
+          description: [c.description?.trim(), note].filter(Boolean).join("\n\n") || undefined,
+          status: "active",
+          project_path: c.project_path,
+          created_at: now,
+          updated_at: now,
+        });
+        const project = await ctx.db.get(id);
+        await noteOrgChange(ctx, userId, whereOfRecord(project), { kind: "projects", subject: recordSubject("project", project), before: { status: null }, after: { status: "active", projects: [{ op: "create", project_id: String(id), title: project.title }] } });
+        done.push(`created project "${c.title}"`);
+      } else {
+        const from = await findProject(c.from);
+        const into = await findProject(c.into);
+        if (!from || !into) throw new Error(`merge: project "${!from ? c.from : c.into}" not found in this workspace`);
+        if (String(from._id) === String(into._id)) return;
+        let moved = 0;
+        const rows_moved: Array<{ table: "tasks" | "plans" | "docs"; id: string }> = [];
+        for (const table of ["tasks", "plans", "docs"] as const) {
+          const rows: any[] = await ctx.db.query(table).withIndex("by_project_id", (q: any) => q.eq("project_id", from._id)).collect();
+          for (const row of rows) { if (row.workspace !== key) continue; await ctx.db.patch(row._id, { project_id: into._id, updated_at: now }); rows_moved.push({ table, id: String(row._id) }); moved++; }
+        }
+        await ctx.db.patch(from._id, { status: "done", description: `${from.description ?? ""}\n\nMerged into ${into.title} by cast org apply.`.trim(), updated_at: now });
+        await noteOrgChange(ctx, userId, whereOfRecord(from), { kind: "projects", subject: recordSubject("project", from), before: { status: from.status }, after: { status: "done", projects: [{ op: "merge", from_id: String(from._id), into_id: String(into._id) }] }, effects: { rows_moved } });
+        done.push(`merged "${from.title}" into "${into.title}" (${moved} rows moved)`);
       }
-      await ctx.db.patch(from._id, { status: "done", description: `${from.description ?? ""}\n\nMerged into ${into.title} by cast org apply.`.trim(), updated_at: now });
-      done.push(`merged "${from.title}" into "${into.title}" (${moved} rows moved)`);
-    }
+    });
   }
   return { status: "applied", note: done.join("; ") || "nothing to change" };
 }
@@ -854,6 +862,7 @@ export async function applyRoutine(ctx: Ctx, userId: Id<"users">, boundary: Boun
     interval_ms: interval,
     run_at: now + interval,
   });
+  await noteOrgChange(ctx, userId, whereOfRole(role), { kind: "routine", subject: roleSubject(role), before: { routine: null }, after: { routine: { agent_task_id: String(created.id), title: p.title.trim(), every: p.every } }, effects: { routines_started: [{ agent_task_id: String(created.id), title: p.title.trim() }] } });
   return { status: "applied", note: `@${role.handle}: routine "${p.title.trim()}" every ${p.every} (${created.short_id})`, role: roleRef(role) };
 }
 
@@ -866,6 +875,7 @@ export async function applyProjectMeta(ctx: Ctx, userId: Id<"users">, boundary: 
   const { project: _ref, kind: _kind, ...fields } = p;
   const patch = await charterPatch(ctx, project, fields, "projects");
   await ctx.db.patch(project._id, { ...patch, updated_at: Date.now() });
+  await noteOrgChange(ctx, userId, whereOfRecord(project), { kind: "project_meta", subject: recordSubject("project", project), ...movedFields(Object.fromEntries(Object.keys(patch).map((k) => [k, project[k] ?? null])), patch), labels: await labelsOf(ctx, [project.owner_role_id, patch.owner_role_id]) });
   const did = Object.keys(patch).map((k) => (k === "owner_role_id" ? `owner ${p.owner}` : k === "priority" ? String(patch.priority ?? "no priority") : k.replace(/_/g, " ")));
   return { status: "applied", note: `project "${project.title}": ${did.join(", ") || "nothing to change"}` };
 }
@@ -894,6 +904,14 @@ async function seatOwnerOf(ctx: Ctx, ref: string): Promise<{ kind: "user"; user_
   if (!conv) throw new Error(`Session not found: ${ref.trim()}`);
   return { kind: "user", user_id: (conv.owner_user_id ?? conv.user_id) as Id<"users"> };
 }
+/** Who runs the session a role is named on: the role's host (R2). The
+ *  runner, not an added owner: the standing session acts under the runner's
+ *  token, and the host is who the role's own writes are checked against. */
+async function seatRunnerOf(ctx: Ctx, ref: string): Promise<Id<"users">> {
+  const conv = await findConversationByAnyRefWhere(ctx, ref.trim(), async () => true);
+  if (!conv) throw new Error(`Session not found: ${ref.trim()}`);
+  return conv.user_id as Id<"users">;
+}
 /** The one seating of an existing session on a role, for an adopt change and
  *  for a role change that names its session. Answers the seated session's
  *  short id. Provision is idempotent per role: a role that already has a
@@ -919,6 +937,7 @@ export async function applyFile(ctx: Ctx, _userId: Id<"users">, boundary: Bounda
   const now = Date.now();
   await ctx.db.patch(plan._id, { project_id: project._id, updated_at: now });
   if (plan.doc_id) { const doc = await ctx.db.get(plan.doc_id); if (doc) await ctx.db.patch(doc._id, { project_id: project._id, updated_at: now }); }
+  await noteOrgChange(ctx, _userId, whereOfRecord(plan), { kind: "file", subject: recordSubject("plan", plan), before: { project_id: plan.project_id ?? null }, after: { project_id: String(project._id) }, labels: await labelsOf(ctx, [plan.project_id, project._id]) });
   return { status: "applied", note: `filed ${plan.short_id} "${plan.title}" under "${project.title}"` };
 }
 
@@ -940,7 +959,7 @@ const OPEN_TASK = (t: any) => t.status !== "done" && t.status !== "dropped";
  *  every role), the bound sessions released and the plan's progress
  *  reconciled. Shared by the task change and by a plan close's cascade, so
  *  there is one path a proposal can move a task through. */
-async function setTaskStatus(ctx: Ctx, boundary: Boundary, task: any, status: string, now: number): Promise<void> {
+export async function setTaskStatus(ctx: Ctx, boundary: Boundary, task: any, status: string, now: number): Promise<void> {
   const write = await resolveStatusWrite(ctx, boundary.team_id ?? null, task.status, { status });
   const next = write.status ?? status;
   const closing = next === "done" || next === "dropped";
@@ -983,12 +1002,14 @@ export async function applyPlanStatus(ctx: Ctx, _userId: Id<"users">, boundary: 
   // whether the close is new or old (a plan marked done months ago and never
   // swept), so re-asserting done or abandoned sweeps the same way.
   let cascade = "";
+  const tasks_closed: Array<{ task_id: string; short_id: string; before_status: string }> = [];
   if (closing) {
     const open: any[] = (await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).collect()).filter((t: any) => OPEN_TASK(t) && isActiveTask(t));
     open.sort((a, b) => String(a.short_id).localeCompare(String(b.short_id), undefined, { numeric: true }));
-    for (const t of open) await setTaskStatus(ctx, boundary, t, "dropped", now);
+    for (const t of open) { await setTaskStatus(ctx, boundary, t, "dropped", now); tasks_closed.push({ task_id: String(t._id), short_id: t.short_id, before_status: t.status }); }
     if (open.length) cascade = `; dropped its ${open.length} open task${open.length === 1 ? "" : "s"}: ${open.map((t) => t.short_id).join(", ")}`;
   }
+  await noteOrgChange(ctx, _userId, whereOfRecord(plan), { kind: "plan_status", subject: recordSubject("plan", plan), ...movedFields({ status: plan.status }, { status: p.status }), effects: { tasks_closed } });
   if (same) return { status: "applied", note: `${plan.short_id} is already ${p.status}${cascade || "; no open tasks under it"}` };
   return { status: "applied", note: `${plan.short_id} "${plan.title}": ${plan.status} → ${p.status}${cascade}` };
 }
@@ -1000,6 +1021,7 @@ export async function applyProjectStatus(ctx: Ctx, _userId: Id<"users">, boundar
   if (!project) throw new Error(`No project "${p.project}" in this workspace`);
   if (project.status === p.status) return { status: "applied", note: `"${project.title}" is already ${p.status}` };
   await ctx.db.patch(project._id, { status: p.status, updated_at: Date.now() });
+  await noteOrgChange(ctx, _userId, whereOfRecord(project), { kind: "project_status", subject: recordSubject("project", project), before: { status: project.status }, after: { status: p.status } });
   return { status: "applied", note: `project "${project.title}": ${project.status} → ${p.status}` };
 }
 
@@ -1016,11 +1038,17 @@ export async function applyTaskStatus(ctx: Ctx, userId: Id<"users">, boundary: B
   if (!task || workspaceKey(workspaceForResource(task)) !== key) throw new Error(`No task "${p.task}" in this workspace`);
   if (task.status === p.status) return { status: "applied", note: `${task.short_id} is already ${p.status}` };
   await setTaskStatus(ctx, boundary, task, p.status, Date.now());
+  await noteOrgChange(ctx, userId, whereOfRecord(task), { kind: "task_status", subject: recordSubject("task", task), before: { status: task.status }, after: { status: p.status } });
   return { status: "applied", note: `${task.short_id} "${task.title}": ${task.status} → ${p.status}` };
 }
 
 /** One change of any kind, applied. Throws on a refusal; the caller records it. */
 export async function applyOrgChange(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {
+  if (change.kind === "projects") return applyProjects(ctx, userId, boundary, change.changes, note);
+  return withOrgChange(ctx, userId, { kind: change.kind, door: "proposal", gesture: "accept_change" }, () => applyOrgChangeCore(ctx, userId, boundary, change, opts, note));
+}
+
+async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {
   switch (change.kind) {
     case "role": return applyRole(ctx, userId, boundary, change, note, opts);
     case "projects": return applyProjects(ctx, userId, boundary, change.changes, note);
