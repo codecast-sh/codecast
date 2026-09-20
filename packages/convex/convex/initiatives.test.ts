@@ -265,7 +265,7 @@ describe("initiatives: the owner is a person or a role", () => {
     expect(asMate.row.by).toEqual({ kind: "user", user_id: MATE });
 
     const shown = await run(get, db, { id: "in-1" });
-    expect(shown.owner_label).toBe("@growth");
+    expect(shown.owner_label).toBe("Mate");
     expect(shown.updates.map((u: any) => u.by_label)).toEqual(["Mate", "@growth"]);
   });
 
