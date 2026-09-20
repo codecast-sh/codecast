@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 // transition goes through the pure helpers in lib/sessionMachines (tested
 // there), the placement decision goes through the shared predicate, and the
 // store flag is never read back as truth.
-const source = readFileSync(new URL("./ConversationView.tsx", import.meta.url), "utf8");
+const source = readFileSync(new URL("./sessionControls.tsx", import.meta.url), "utf8");
 const start = source.indexOf("function ProjectSwitcher(");
 const end = source.indexOf("\n}\n", source.indexOf("<SessionModeToggles", start)) + 3;
 const switcher = source.slice(start, end);

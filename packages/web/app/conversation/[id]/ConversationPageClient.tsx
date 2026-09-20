@@ -9,7 +9,7 @@ import { setGuestImageScope } from "../../../hooks/useStorageImageUrl";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ConversationPlaceholder } from "../../../components/ConversationPlaceholder";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
-import { ConversationData } from "../../../components/ConversationView";
+import type { ConversationData } from "../../../components/conversation/types";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore, isConvexId } from "../../../store/inboxStore";

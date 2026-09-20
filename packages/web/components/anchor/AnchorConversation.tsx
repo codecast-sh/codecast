@@ -7,7 +7,7 @@
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../ConversationDiffLayout";
-import { ConversationData } from "../ConversationView";
+import type { ConversationData } from "../conversation/types";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore } from "../../store/inboxStore";

@@ -11,7 +11,7 @@ import { AvatarImg } from "../../lib/avatarCache";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { AgentTypeIcon } from "../AgentTypeIcon";
-import { MessageInput } from "../ConversationView";
+import { MessageInput } from "../MessageInput";
 import { ChatAttachments } from "../chat/ChatMessage";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import type { ChatAttachment } from "../../store/chatSlice";

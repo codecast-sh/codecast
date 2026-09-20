@@ -5,8 +5,7 @@ import { createRoot } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
 import { MemoryRouter } from "react-router";
 import { replaceGlobals } from "../../../test-helpers/globals";
-import type { ConversationData } from "../../ConversationView";
-
+import type { ConversationData } from "../../conversation/types";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/", pretendToBeVisual: true });
 const sizes = new WeakMap<Element, number>();
 let onHeightRead: ((el: HTMLElement) => void) | undefined;

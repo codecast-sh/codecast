@@ -14,7 +14,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationPlaceholder } from "../../components/ConversationPlaceholder";
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
-import { ConversationData } from "../../components/ConversationView";
+import type { ConversationData } from "../../components/conversation/types";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";

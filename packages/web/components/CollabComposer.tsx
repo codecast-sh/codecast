@@ -16,8 +16,7 @@ import { TypingIndicator } from "./chat/TypingIndicator";
 import { rosterIdentity } from "../hooks/useTeamRoster";
 import type { ChatMember } from "../lib/chatViews";
 import { AvatarImg } from "../lib/avatarCache";
-import type { ConversationData } from "./ConversationView";
-
+import type { ConversationData } from "./conversation/types";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
