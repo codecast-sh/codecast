@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BlogNav, BlogFooter, SOL } from "../blog/blogChrome";
+import { BlogNav, SOL } from "../blog/blogChrome";
 import { useRouteMeta } from "../pageMeta";
 import { COMPARISONS, compareHref } from "./comparisons";
 
@@ -34,8 +34,6 @@ export default function CompareIndexPage() {
           ))}
         </ul>
       </div>
-
-      <BlogFooter />
     </main>
   );
 }

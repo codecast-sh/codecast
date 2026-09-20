@@ -1,9 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { SITE_LINKS } from "@/lib/siteLinks";
 import { Button } from "@/components/ui/button";
-import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
@@ -540,49 +538,6 @@ cast blame src/auth.ts
           </div>
         </div>
       </section>
-
-      {/* Footer */}
-      <footer className="border-t border-stone-200 bg-white">
-        <div className="max-w-6xl mx-auto px-6 py-12">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div>
-              <Logo size="md" className="[--logo-c:#444444] text-stone-900 mb-4" />
-              <p className="text-sm text-stone-500">
-                See, steer, and remember every coding agent session.
-              </p>
-            </div>
-            <div>
-              <h4 className="font-semibold text-stone-900 mb-3 text-sm">Product</h4>
-              <ul className="space-y-2 text-sm text-stone-500">
-                <li><Link href="/#how-it-works" className="hover:text-stone-900">How it works</Link></li>
-                <li><Link href="/features" className="hover:text-stone-900">CLI</Link></li>
-                <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
-                <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
-                <li><Link href="/documentation" className="hover:text-stone-900">Documentation</Link></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-stone-900 mb-3 text-sm">Company</h4>
-              <ul className="space-y-2 text-sm text-stone-500">
-                <li><Link href="/about" className="hover:text-stone-900">About</Link></li>
-                <li><Link href="/blog" className="hover:text-stone-900">Blog</Link></li>
-                <li><Link href="/privacy" className="hover:text-stone-900">Privacy</Link></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-stone-900 mb-3 text-sm">Connect</h4>
-              <ul className="space-y-2 text-sm text-stone-500">
-                <li><a href="https://github.com/codecast-sh" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-                <li><a href="https://x.com/codecastsh" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">Twitter</a></li>
-                <li><a href={SITE_LINKS.community} className="hover:text-stone-900">Community</a></li>
-              </ul>
-            </div>
-          </div>
-          <div className="border-t border-stone-200 mt-8 pt-8 text-center text-sm text-stone-400">
-            &copy; 2026 Codecast
-          </div>
-        </div>
-      </footer>
     </main>
   );
 }

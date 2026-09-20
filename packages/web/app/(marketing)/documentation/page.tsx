@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
-import { GUIDES, guideHref, type GuideCategory } from "./guides/guides";
+import { GUIDES, GUIDE_CATEGORIES, guideHref } from "./guides/guides";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 
@@ -347,7 +347,7 @@ Uptime: 4d 12h`}</Code>
             with <a href={guideHref("agent-snippets")} className="underline" style={{ color: SOL.blue }}>how agent snippets work</a>;
             everything else builds on it.
           </p>
-          {(["The snippet system", "Recall", "Collaboration", "Work tracking", "Output"] as GuideCategory[]).map((cat) => {
+          {GUIDE_CATEGORIES.map((cat) => {
             const inCat = GUIDES.filter((g) => g.category === cat);
             if (inCat.length === 0) return null;
             return (

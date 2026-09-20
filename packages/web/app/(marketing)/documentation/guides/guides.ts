@@ -14,12 +14,19 @@
  */
 
 
-export type GuideCategory =
-  | "The snippet system"
-  | "Recall"
-  | "Collaboration"
-  | "Work tracking"
-  | "Output";
+/** Categories in the order the docs Guides section shows them. */
+export const GUIDE_CATEGORIES = [
+  "The snippet system",
+  "Recall",
+  "Collaboration",
+  "Work tracking",
+  "Tools for agents",
+  "Machines and accounts",
+  "Output",
+  "Under the hood",
+] as const;
+
+export type GuideCategory = (typeof GUIDE_CATEGORIES)[number];
 
 export interface Guide {
   slug: string;
@@ -86,6 +93,27 @@ export const GUIDES: Guide[] = [
     installSlug: "state",
   },
   {
+    slug: "decisions",
+    title: "Decisions: asking without interrupting",
+    dek: "cast decide puts a question, its options and the reasoning into a queue you clear when you choose to. The answer returns to the agent as a message.",
+    category: "Collaboration",
+    installSlug: "decide",
+  },
+  {
+    slug: "team-chat",
+    title: "Team chat that agents take part in",
+    dek: "Channels, threads and direct messages where a mention can wake a role or a session, agent lines are capped, and a Slack workspace mirrors in.",
+    category: "Collaboration",
+    installSlug: "chat",
+  },
+  {
+    slug: "calls",
+    title: "Huddles and walkie",
+    dek: "Every huddle is transcribed with exact speaker attribution and leaves a digest, so an agent can quote what was said on the call.",
+    category: "Collaboration",
+    installSlug: "calls",
+  },
+  {
     slug: "forks-and-spawn",
     title: "Forks and spawned sessions",
     dek: "cast spawn --subagent delegates a worker that nests under the session that launched it; plain cast spawn and cast fork start independent threads in the human's inbox.",
@@ -121,6 +149,60 @@ export const GUIDES: Guide[] = [
     installSlug: "orchestration",
   },
   {
+    slug: "pull-requests",
+    title: "Pull requests and issues as codecast objects",
+    dek: "cast pr and issue sync keep a copy of GitHub and Linear objects current from webhooks, send every action back, and wake the session that owns the work.",
+    category: "Work tracking",
+    installSlug: "pr",
+  },
+  {
+    slug: "org-roles",
+    title: "The org: roles, scopes and the line",
+    dek: "Route work to a standing responsibility instead of a session: roles with scopes, wakes, proposals a person accepts, and a line with independent review.",
+    category: "Work tracking",
+  },
+  {
+    slug: "browser",
+    title: "Driving the human's own Chrome",
+    dek: "cast browser works in a background tab of the Chrome that already holds your logins, and puts the evidence in the thread.",
+    category: "Tools for agents",
+    installSlug: "browser",
+  },
+  {
+    slug: "computer",
+    title: "Driving a native macOS app",
+    dek: "cast computer reads a window as an indexed tree, refuses stale indexes, and reports whether an action was verified.",
+    category: "Tools for agents",
+    installSlug: "computer",
+  },
+  {
+    slug: "typecheck",
+    title: "One typecheck watcher for every session",
+    dek: "cast check answers every session from one tsc --watch for each tree and project, so thirty agents do not build the same program thirty times.",
+    category: "Tools for agents",
+    installSlug: "check",
+  },
+  {
+    slug: "skills",
+    title: "The cast-* skills",
+    dek: "23 packaged procedures, compiled into the CLI, each a fixed sequence of ordinary cast commands.",
+    category: "Tools for agents",
+    installSlug: "skills",
+  },
+  {
+    slug: "remote-and-cloud-sessions",
+    title: "Sessions on machines you are not sitting at",
+    dek: "How a session starts on, moves to, sleeps on and is watched from another machine, and what each lease does when the machine goes away.",
+    category: "Machines and accounts",
+  },
+  {
+    slug: "usage-limits",
+    title: "Usage limits are a pause",
+    dek: "Codecast parks a session that hits a limit, then continues it at the reset or on a saved account that still has room.",
+    category: "Machines and accounts",
+    installSlug: "limits",
+  },
+  {
     slug: "visual-canvas",
     title: "The visual canvas",
     dek: "Agents reply with sandboxed HTML that renders inline: charts, dashboards, diagrams, and small widgets instead of ASCII art.",
@@ -133,6 +215,12 @@ export const GUIDES: Guide[] = [
     dek: "cast publish turns a file into a page at a stable URL, with version history, access gates, and viewer comments that flow back to the session.",
     category: "Output",
     installSlug: "publish",
+  },
+  {
+    slug: "sync-engine",
+    title: "How the client syncs",
+    dek: "Every surface paints from a local store, an append only log for each scope delivers only what changed, and one window syncs while the others copy it.",
+    category: "Under the hood",
   },
 ];
 

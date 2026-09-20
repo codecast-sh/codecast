@@ -14,7 +14,16 @@ cast trigger add "Review open PRs and summarize" --every 4h     # recurring
 cast trigger add "Respond to new review comments" --on pr_comment  # GitHub event
 ```
 
-Event triggers need the GitHub integration and fire on `pr_comment`, `pr_opened`, `pr_merged`, or `push`.
+Event triggers need the GitHub or Linear integration. Pull request events cover the whole life of a review: `pr_opened`, `pr_review`, `pr_changes_requested`, `pr_check_failed`, `pr_checks_green`, `pr_behind`, `pr_conflict`, `pr_comment`, `pr_merged` and more, plus `push`. The `issue_*` events (`issue_opened`, `issue_assigned`, `issue_labeled`, `issue_closed`, `issue_commented`) fire for Linear and GitHub issues alike. `--repo` and `--pr` narrow an event trigger to one repository or one pull request. `cast trigger add --help` prints the full list.
+
+## A gate before each run
+
+```bash
+cast trigger add "Review what landed on main" --every 1h --spawn \
+  --precheck 'test "$(git rev-parse origin/main)" != "$(cat .last-reviewed)"'
+```
+
+Most repeating triggers ask a question whose usual answer is no: has main moved, is the queue non-empty. Without a gate, a whole agent run is spent to find that out. `--precheck <command>` runs a shell command in the project directory before each scheduled or repeating firing. Exit 0 runs the trigger. Any other exit, or 60 seconds without an answer, records a skipped run and spends no session. The skip appears in the run history, so a quiet trigger reads as quiet and not as broken. Event triggers ignore the gate, because the event is already the reason to run.
 
 ## Where a run happens
 
@@ -34,10 +43,14 @@ Fresh runs stay out of the inbox. A run that completes cleanly is read under its
 cast trigger ls              # active triggers, each with a short ID (tr-42)
 cast trigger ls --all        # include completed and failed
 cast trigger run tr-42       # fire immediately
-cast trigger pause tr-42
+cast trigger pause tr-42     # and: cast trigger resume tr-42
+cast trigger update tr-42 --every 8h   # edit in place: --prompt, --title, --in, --every, --on
+cast trigger history tr-42   # every version, who changed what, and from where
 cast trigger cancel tr-42
 cast trigger log tr-42       # last run's conversation
 ```
+
+An edit does not replace the trigger. `cast trigger update` writes a new version and keeps the old one, so the run history stays attached and `cast trigger history` can show what the prompt said when a given run fired. Every trigger also has a detail page on the web, visible to everyone who can see the session it belongs to; the verbs follow the same access, and only the owner may delete.
 
 Triggers are first-class in the inbox: they appear alongside sessions, each run links to the conversation it produced, and run history is browseable on every surface. Killing a session cancels its triggers; restoring the session re-arms them — so cleanup and resurrection stay symmetric.
 

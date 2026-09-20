@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { Outlet, useLocation } from "react-router";
 import { ForceLightMode } from "@/components/force-light-mode";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 export function MarketingLayout() {
@@ -22,6 +23,7 @@ export function MarketingLayout() {
         <ErrorBoundary name="MarketingPage">
           <Outlet />
         </ErrorBoundary>
+        <MarketingFooter />
       </div>
     </>
   );
