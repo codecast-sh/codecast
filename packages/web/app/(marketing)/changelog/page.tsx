@@ -9,7 +9,9 @@ import {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock, Scale, Chrome, MousePointerClick,
+  MessagesSquare, Phone, Terminal, Image, Network, GitPullRequest, Cloud, Bell, ShieldCheck,
+  Sparkles, FolderOpen, Hourglass, Pin,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { RELEASES, type Accent, type SectionIcon } from "./changelogData";
@@ -50,7 +52,9 @@ const ICONS: Record<SectionIcon, LucideIcon> = {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Clock, Scale, Chrome, MousePointerClick,
+  MessagesSquare, Phone, Terminal, Image, Network, GitPullRequest, Cloud, Bell, ShieldCheck,
+  Sparkles, FolderOpen, Hourglass, Pin,
 };
 
 // Marker colors cycle down the timeline so the spine has rhythm. Order is
@@ -331,6 +335,11 @@ export default function ChangelogPage() {
                             <h3 className="font-mono text-sm font-semibold leading-tight mb-3" style={{ color: SOL.base03 }}>
                               {s.title}
                             </h3>
+                            {s.when && (
+                              <p className="-mt-2 mb-3 font-mono text-[11px] tabular-nums" style={{ color: SOL.base1 }}>
+                                {s.when}
+                              </p>
+                            )}
                             <ul className="space-y-2">
                               {s.items.map((item, i) => (
                                 <li key={i} className="flex gap-2.5 text-sm leading-relaxed" style={{ color: SOL.base00 }}>

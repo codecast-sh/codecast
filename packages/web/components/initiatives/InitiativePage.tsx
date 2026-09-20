@@ -13,19 +13,21 @@
 // the side effect of its own name.
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarDays, Flag, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { INITIATIVE_STATUSES, INITIATIVE_STATUS_LABEL, type InitiativeOwner, type InitiativeRow, type InitiativeStatus } from "@codecast/shared/contracts/initiative";
 import { InboxConversation } from "../../app/inbox/QueuePageClient";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useInitiative, useSyncInitiativeUpdates, useTasksByProject } from "../../hooks/useInitiatives";
+import { useInitiative, useSyncInitiativeUpdates, useBoardTasks, useTasksBackfilled } from "../../hooks/useInitiatives";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useSyncPlans } from "../../hooks/useSyncPlans";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
-import { initiativeProgress, ownerId, ownerSeat, progressPercent } from "../../lib/initiatives";
+import { initiativeHref, initiativeProgress, ownerId, ownerSeat, progressPercent } from "../../lib/initiatives";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { canEditRole } from "../../lib/scopePage";
 import { cn } from "../../lib/utils";
 import { EntityIdPill } from "../EntityIdPill";
@@ -37,6 +39,7 @@ import { RoleFace } from "../org/RoleFace";
 import type { OrgRole } from "../org/orgTypes";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { HEALTH_COLOR, HealthChip, INITIATIVE_ACCENT, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
+import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import { InitiativePanel } from "./InitiativePanel";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 22%, transparent)";
@@ -50,7 +53,8 @@ export function InitiativePageInner({ id }: { id: string }) {
   useSyncInitiativeUpdates(initiative?._id ?? null);
   const { layout, phone } = usePanelLayout();
   const now = useCoarseNow(30_000);
-  const byProject = useTasksByProject();
+  const tasks = useBoardTasks();
+  const counted = useTasksBackfilled();
   const me = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = me.currentUser?._id ? String(me.currentUser._id) : null;
 
@@ -65,7 +69,13 @@ export function InitiativePageInner({ id }: { id: string }) {
   const session = conversationId ? (st.sessions[conversationId] as any) : undefined;
 
   const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone);
-  const progress = initiative ? initiativeProgress(initiative, byProject) : null;
+  // A page opened by a stub's key moves to the `in-N` the server minted, so
+  // the address a person copies is the one that lasts.
+  const router = useRouter();
+  useWatchEffect(() => {
+    if (initiative?.short_id && id !== initiative.short_id) router.replace(initiativeHref(initiative));
+  }, [initiative?.short_id, id]);
+  const progress = initiative ? initiativeProgress(initiative, tasks) : null;
 
   // Talk follows the seat's own rule: a role's host, its parent or an admin;
   // a person's anchor is theirs alone. Anyone else reads and asks to send.
@@ -73,8 +83,8 @@ export function InitiativePageInner({ id }: { id: string }) {
     ? canEditRole(tree, seatOf.role, meId) || (seatOf.role.reports_to.kind === "user" && seatOf.role.reports_to.user_id === meId)
     : initiative?.owner?.kind === "user" && initiative.owner.user_id === meId;
   const lead = useMemo(
-    () => (initiative && seatOf.speaker && progress ? <InitiativeLead initiative={initiative} role={seatOf.role} speaker={seatOf.speaker} done={progress.done} total={progress.total} /> : null),
-    [initiative, seatOf.role, seatOf.speaker, progress?.done, progress?.total], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (initiative && seatOf.speaker && progress ? <InitiativeLead initiative={initiative} role={seatOf.role} speaker={seatOf.speaker} done={progress.done} total={progress.total} counted={counted} /> : null),
+    [initiative, seatOf.role, seatOf.speaker, progress?.done, progress?.total, counted], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const seat = useSeat({ conversationId, speaker: seatOf.speaker ?? "the owner", lead, canTalk: !!canTalk, hideDiff: panelOpen });
 
@@ -113,7 +123,7 @@ export function InitiativePageInner({ id }: { id: string }) {
               <OwnerControl initiative={initiative} />
               <HealthChip health={initiative.health} at={initiative.health_at} now={now} />
               <TargetControl initiative={initiative} now={now} />
-              <ProgressBar progress={progress} className="w-[150px]" />
+              <ProgressBar progress={progress} partial={!counted} className="w-[150px]" />
               {initiative.parent_initiative_id && (
                 <span className="inline-flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-initiative-parent>
                   under <EntityIdPill type="initiative" id={all.find((r) => r._id === initiative.parent_initiative_id)?.short_id ?? initiative.parent_initiative_id} />
@@ -165,9 +175,10 @@ export function InitiativePageInner({ id }: { id: string }) {
 
 /** The owner's opening bubble: what this is and how it stands, said from the
  *  rows, in the frame a scope's lead uses. */
-function InitiativeLead({ initiative, role, speaker, done, total }: { initiative: InitiativeRow; role: OrgRole | null; speaker: string; done: number; total: number }) {
+function InitiativeLead({ initiative, role, speaker, done, total, counted }: { initiative: InitiativeRow; role: OrgRole | null; speaker: string; done: number; total: number; counted: boolean }) {
   const projects = initiative.project_ids.length;
-  const carried = projects === 0 ? "No project carries it yet" : `${projects} ${projects === 1 ? "project carries" : "projects carry"} it${total > 0 ? `, with ${done} of ${total} tasks done` : ""}`;
+  // The opening line says a number only once the task store holds them all.
+  const carried = projects === 0 ? "No project carries it yet" : `${projects} ${projects === 1 ? "project carries" : "projects carry"} it${counted && total > 0 ? `, with ${done} of ${total} tasks done` : ""}`;
   return (
     <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-4 pb-2" data-initiative-lead>
       <div className="flex items-center gap-2 mb-2">
@@ -272,10 +283,12 @@ function OwnerControl({ initiative }: { initiative: InitiativeRow }) {
   );
 }
 
-const dateInputValue = (ts?: number) => (ts ? new Date(ts).toISOString().slice(0, 10) : "");
+// One shared pair stores and reads a target day (shared/time), so the picker
+// and `cast initiative` name the same day in every timezone.
+const dateInputValue = (ts?: number) => targetDayOf(ts) ?? "";
 
 function TargetControl({ initiative, now }: { initiative: InitiativeRow; now: number }) {
-  const set = (value: string) => useInboxStore.getState().updateInitiative(initiative._id, { target_date: value ? Date.parse(`${value}T12:00:00Z`) : null });
+  const set = (value: string) => useInboxStore.getState().updateInitiative(initiative._id, { target_date: value ? targetDayStamp(value) : null });
   return (
     <label className="relative inline-flex items-center gap-1.5 -mx-1 px-1 h-6 rounded-md cursor-pointer transition-colors hover:bg-sol-bg-highlight/70" data-initiative-pick="target">
       <CalendarDays className="w-3.5 h-3.5" style={{ color: "var(--sol-text-dim)" }} />

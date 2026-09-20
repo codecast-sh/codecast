@@ -8,6 +8,7 @@
 // the same component reading the same store.
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { ExternalLink } from "lucide-react";
 import { AuthGuard } from "../AuthGuard";
 import { DashboardLayout } from "../DashboardLayout";
 import { LogoMark } from "../Logo";
@@ -87,7 +88,9 @@ export function RepoPageShell({ repository, children }: { repository: string; ch
  * repository is not public, so signing in is the way forward. Signed in: nobody
  * has connected it — no GitHub App installation covers it and no teammate runs
  * sessions in a checkout of it that is shared with the team — and signing in
- * again would change nothing, so the page says what would.
+ * again would change nothing, so the page says what would. Either way the
+ * repository itself is a click away on GitHub, where the reader's own access
+ * decides what they see.
  */
 function RepoUnavailable({ signedIn, repository }: { signedIn: boolean; repository: string }) {
   return <main className="min-h-full flex flex-col items-center justify-center bg-sol-bg text-sol-text gap-4 px-6 py-16 text-center">
@@ -100,13 +103,33 @@ function RepoUnavailable({ signedIn, repository }: { signedIn: boolean; reposito
           publishes a checkout of it. A session run in a checkout that is shared with your team publishes it automatically; installing the
           GitHub App adds pull requests, checks and every file on demand.
         </p>
-        <Link href="/settings/integrations" className="rounded border border-sol-border px-4 py-2 text-sm text-sol-blue">Integrations</Link>
+        <div className="flex items-center gap-2">
+          <Link href="/settings/integrations" className={actionClass}>Integrations</Link>
+          <GithubRepoLink repository={repository} />
+        </div>
       </>
     ) : (
       <>
         <p className="text-sm text-sol-text-muted">Sign in with an account that has access to continue.</p>
-        <Link href="/login" className="rounded border border-sol-border px-4 py-2 text-sm text-sol-blue">Sign in</Link>
+        <div className="flex items-center gap-2">
+          <Link href="/login" className={actionClass}>Sign in</Link>
+          <GithubRepoLink repository={repository} />
+        </div>
       </>
     )}
   </main>;
+}
+
+const actionClass = "rounded border border-sol-border px-4 py-2 text-sm text-sol-blue";
+
+function GithubRepoLink({ repository }: { repository: string }) {
+  return <a
+    href={`https://github.com/${repository}`}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="flex items-center gap-1.5 rounded border border-sol-border px-4 py-2 text-sm text-sol-text-muted hover:text-sol-text transition-colors"
+  >
+    <ExternalLink className="w-3.5 h-3.5" />
+    Open on GitHub
+  </a>;
 }

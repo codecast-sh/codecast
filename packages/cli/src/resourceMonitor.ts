@@ -165,38 +165,77 @@ export function nextAwakeIdleMs(params: {
 // on 2026-09-18), so a clock that starts at zero on every boot never reaches an
 // eight hour hibernate_idle_ms. The daemon writes the counters after each tick
 // and the next boot reads them back. The gap between the two daemons is not
-// counted, the same carry-forward a sleep gap gets, and a snapshot older than
-// this is discarded: past a quarter of an hour nobody watched these sessions,
-// and an unknown stretch must not be presented as idle.
-export const AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS = 15 * 60 * 1000;
+// counted, the same carry-forward a sleep gap gets.
+//
+// Whether a counter may be restored is decided by ACTIVITY, not by the age of
+// the snapshot: a session whose transcript changed after the snapshot was
+// written did something in the gap, and its banked idle is gone; one whose
+// transcript did not change was as idle as the snapshot says, however long the
+// gap. An age rule cannot tell those apart, and the first one (fifteen
+// minutes) threw the whole fleet's counters away every morning: the laptop
+// sleeps overnight, the daemon's last snapshot is seventeen hours old at wake,
+// and nothing had happened to any session in between (2026-09-20).
+// The age bound that remains is a sanity limit against a stray file.
+export const AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 3600_000;
+// How long a restored counter waits for its session to show up in a tick. The
+// first ticks after boot see only part of the fleet (the process cache fills
+// over the following seconds), and pruning "sessions not in this tick" on those
+// ticks would throw away most of what was restored, then write a snapshot
+// without it: on 2026-09-19 the first tick saw 56 of 96 sessions and three
+// boots in fifteen minutes erased the clock that way.
+export const AWAKE_IDLE_RESTORE_CLAIM_MS = 15 * 60 * 1000;
+
+export type AwakeIdleSnapshot = { at: number; idle: Map<string, number> };
+
+/** The snapshot's counters, or null when it is unreadable, from the future, or past the sanity bound. */
+export function decodeAwakeIdleSnapshot(raw: string, now: number): AwakeIdleSnapshot | null {
+  try {
+    const snap = JSON.parse(raw) as { at?: unknown; idle?: unknown };
+    if (typeof snap.at !== "number" || now - snap.at > AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS || now < snap.at) return null;
+    const idle = new Map<string, number>();
+    for (const [sessionId, ms] of Object.entries((snap.idle ?? {}) as Record<string, unknown>)) {
+      if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) idle.set(sessionId, ms);
+    }
+    return { at: snap.at, idle };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The counters a snapshot may hand to the next daemon, given when each session
+ * last wrote its transcript. A session that wrote after the snapshot was
+ * active in the gap and starts from zero; a session whose activity is unknown
+ * (no transcript found, or a store whose file is shared) starts from zero too,
+ * because an unknown stretch must not be presented as idle.
+ */
+export function restorableAwakeIdle(
+  snapshot: AwakeIdleSnapshot,
+  lastActivityAt: ReadonlyMap<string, number | undefined>,
+): Map<string, number> {
+  const kept = new Map<string, number>();
+  for (const [sessionId, ms] of snapshot.idle) {
+    const activeAt = lastActivityAt.get(sessionId);
+    if (activeAt !== undefined && activeAt <= snapshot.at) kept.set(sessionId, ms);
+  }
+  return kept;
+}
 
 /**
  * The per-session awake-idle counters, with the restore across a daemon boot.
- *
  * A restored counter is held apart from the live ones until its session shows
- * up in a tick. The first ticks after boot see only part of the fleet (the
- * process cache fills over the following seconds), and pruning "sessions not
- * in this tick" on those ticks would throw away most of what was restored, then
- * write a snapshot without it. On 2026-09-19 the first tick saw 56 of 96
- * sessions and three boots in fifteen minutes erased the clock that way.
- * A restored counter its session never claims expires with the restore window.
+ * up in a tick, stays in the snapshot meanwhile so a chain of quick restarts
+ * cannot lose it, and expires with the claim window if no tick ever claims it.
  */
 export class AwakeIdleClock {
   private readonly live = new Map<string, number>();
   private restored = new Map<string, number>();
   private restoredUntil = 0;
 
-  /** Load a snapshot written by the previous daemon; stale or unreadable = nothing. */
-  restore(raw: string, now: number): void {
-    this.restored = new Map<string, number>();
-    try {
-      const snap = JSON.parse(raw) as { at?: unknown; idle?: unknown };
-      if (typeof snap.at !== "number" || now - snap.at > AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS || now < snap.at) return;
-      for (const [sessionId, ms] of Object.entries((snap.idle ?? {}) as Record<string, unknown>)) {
-        if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) this.restored.set(sessionId, ms);
-      }
-      this.restoredUntil = now + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS;
-    } catch {}
+  /** Adopt the counters the previous daemon left that restorableAwakeIdle let through. */
+  restore(idle: ReadonlyMap<string, number>, now: number): void {
+    this.restored = new Map(idle);
+    this.restoredUntil = now + AWAKE_IDLE_RESTORE_CLAIM_MS;
   }
 
   /** The counter a tick continues from: live, else restored and still inside the window, else 0. */
@@ -216,7 +255,7 @@ export class AwakeIdleClock {
     return this.live.get(sessionId) ?? 0;
   }
 
-  /** Drop live counters for sessions this tick did not collect; expire the restore window. */
+  /** Drop live counters for sessions this tick did not collect; expire the claim window. */
   prune(collected: ReadonlySet<string>, now: number): void {
     for (const sessionId of this.live.keys()) {
       if (!collected.has(sessionId)) this.live.delete(sessionId);

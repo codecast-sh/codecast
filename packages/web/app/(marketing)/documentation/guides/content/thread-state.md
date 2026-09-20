@@ -22,6 +22,30 @@ The snippet ([how snippets work](/documentation/agent-snippets)) tells the agent
 
 The instruction the agent gets is not "write a state" but "keep one true". It rewrites the line whenever the answer changes — a new phase, a new blocker, a decision it needs from you — and clears it when the work is done. A state that says the agent is waiting on something that already arrived is worse than no state at all.
 
+## Declaring who acts next
+
+The text says where the work stands. `--status` says who moves it forward, and that answer decides where the session files in the inbox when the turn ends.
+
+| `--status` | Meaning | Inbox section |
+|------------|---------|---------------|
+| `working` | Still moving. This is the default | Working |
+| `blocked` | A human must act before the agent can continue | Needs Input |
+| `done` | Delivered, and nothing is stalled. Read it when you have time | Done |
+| `dormant` | A machine wakes the session: a trigger, a background task, a reply from another session | Dormant |
+
+```bash
+cast state --status dormant "Waiting on CI run 8841. tr-42 checks again at 3pm"
+cast state --status done "Shipped. All four fixes verified in the browser"
+```
+
+A finished turn that declares nothing files under Needs Input. That is the honest default, because nobody said otherwise, and it is also the cost of not declaring: you open the card to learn that it needed nothing.
+
+`done` and `dormant` cover only the turn that declares them. When the wake arrives and the agent finishes that turn, it declares again or the session returns to Needs Input. A dormant state must name its wake in the text. An agent that cannot say what resumes it is blocked, not dormant.
+
+`blocked` is the one status that claims your attention. It returns a stashed session to the inbox, so the snippet tells the agent to declare it only when it is true. A question that can wait goes to the [decision queue](/documentation/decisions) first, and then the session goes dormant.
+
+A message from you takes the declaration down, because you have answered it. A message from another session or a trigger wake leaves it standing.
+
 ## Staleness is visible, not assumed
 
 Nothing forces an agent to keep the line current, so the interface never claims it is. Every write stamps the message count of the thread at that moment, and every surface shows the gap since: "4m ago · 12 messages since".

@@ -4553,7 +4553,9 @@ pre[class*="language-"] {
   letter-spacing: 0;
   text-transform: none;
 }
-.minimal-style [data-sv-rail] [data-sv-prompt] {
+/* One step more specific than the safety net's weight rule, which would
+   otherwise keep the prompt bold. */
+.minimal-style [data-sv-rail] [data-session-id] [data-sv-prompt] {
   margin-top: 3px;
   font-size: var(--t-sub);
   font-weight: 400;
@@ -4627,11 +4629,24 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] button.cursor-zoom-in {
   border-color: var(--cc-panel-rule);
   border-radius: 8px;
+  background: var(--sol-bg-inset);
+}
+/* A thumbnail of a mostly white page is a white square on a white card, which
+   reads as an empty box. On the light page the image multiplies into a gray
+   ground, so the page's own ink shows as marks. */
+.light.minimal-style [data-sv-rail] button.cursor-zoom-in img {
+  mix-blend-mode: multiply;
 }
 .minimal-style [data-sv-rail] [data-sv-triggers-foot] {
   border-top-color: var(--cc-panel-rule);
   font-family: var(--font-ui);
   font-size: var(--t-sub);
+}
+/* A narrow list fades the footer's last pill out instead of cutting it mid word. */
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
 }
 .minimal-style [data-sv-rail] [data-sv-triggers-foot] .uppercase {
   text-transform: none;
@@ -5325,14 +5340,17 @@ pre[class*="language-"] {
 
 /* A role's standing session on the role page (initiatives-projects-role-page.md
    I3). The role's header above already carries the face, the name and the
-   state, so the session's own header rests on one row: a label, the live
-   status, whatever is marked data-cc-keep (a live huddle, a struggling daemon,
-   an open search, the session menu) and the seat's two controls. It is the
+   state, so the session's own header rests on one row: the one state word
+   that is true (a stall notice takes its place), the live signals marked
+   data-cc-keep (a huddle, a struggling daemon, an open search) and the seat's
+   two controls; the session menu waits behind the expander too. It is the
    same header with the same actions, all still in the DOM; "open" shows the
    whole row again, less the face and the title the role's header already
    says. A rename in progress is never hidden. */
 [data-seat-head="rest"] [data-sv-convhead] .cq-squeeze-row > :not([data-seat-label], [data-cc-conv-status], [data-cc-conv-actions], input),
-[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]) {
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > button[data-cc-keep],
+[data-seat-head="rest"][data-seat-stall] [data-sv-convhead] [data-cc-conv-status] {
   display: none;
 }
 [data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > h1,

@@ -115,14 +115,22 @@ describe("resolveAssigneeToUserId", () => {
 });
 
 describe("resolveAssigneeStr", () => {
+  // A name is looked up on the roster of the boundary the caller names. A
+  // write never guesses a team from the actor's active team pointer
+  // (CLAUDE.md: reads may default, writes must be explicit).
   test("persists a real user id for a friendly name (Jason Benn)", async () => {
-    const { db, jason } = makeTeam();
-    expect(await resolveAssigneeStr({ db }, "Jason Benn", jason as any)).toBe(jason);
+    const { db, jason, teamId } = makeTeam();
+    expect(await resolveAssigneeStr({ db }, "Jason Benn", jason as any, { team_id: teamId as any })).toBe(jason);
   });
 
   test("persists a real user id for a partial name (jason)", async () => {
+    const { db, jason, teamId } = makeTeam();
+    expect(await resolveAssigneeStr({ db }, "jason", jason as any, { team_id: teamId as any })).toBe(jason);
+  });
+
+  test("with no boundary a name is kept as typed, never resolved against a guessed team", async () => {
     const { db, jason } = makeTeam();
-    expect(await resolveAssigneeStr({ db }, "jason", jason as any)).toBe(jason);
+    expect(await resolveAssigneeStr({ db }, "Jason Benn", jason as any)).toBe("Jason Benn");
   });
 
   test("resolves github-handle members to their id (ashot)", async () => {

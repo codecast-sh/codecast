@@ -21,6 +21,8 @@ import { OrgTemplateHire } from "./orgTemplateHire";
 import { AVATAR_KEYS, avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_TENURE_THEN, seatSentence, type OrgRoleSeat, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { RoleFace } from "./RoleFace";
+import { TakeoverEdit } from "./TakeoverEdit";
+import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
@@ -139,6 +141,12 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       ? { scope: { project_ids: projectIds, plan_ids: planIds }, ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}) }
       : "skip",
   );
+  // What the new role would take over (R1): the host's sessions in the picked
+  // scope that report to no role, counted before the create, with the one edit.
+  const [leaveSessions, setLeaveSessions] = useState(false);
+  const takeover = useTakeoverPreviews(tree.workspace, open && mode === "manual" && !wholeWorkspace
+    ? [{ key: "hire", says: effHandle, add: [...projectIds.map((id) => `project:${id}`), ...planIds.map((id) => `plan:${id}`)], seat: seat?.existing }]
+    : []).byKey.hire;
   const picked = useMemo(() => projects.filter((p) => projectIds.includes(p._id)), [projects, projectIds]);
   const cannotRead = summary
     ? (projectIds.length - summary.projects.length) + planIds.filter((id) => !summary.plans.some((p) => p.id === id)).length
@@ -169,6 +177,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       ...(seat ? { adopt_conversation_id: seat.existing } : cwd ? { project_path: cwd } : {}),
       host_user_id: meId,
       client_id: `orgrolestub-${Math.random().toString(36).slice(2)}`,
+      ...(leaveSessions && takeover ? { leave_sessions: true } : {}),
       touched,
     });
   };
@@ -233,6 +242,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
               {projects.map((p) => <ScopeOption key={p._id} checked={projectIds.includes(p._id)} onToggle={() => toggle(projectIds, setProjectIds, p._id)} tone="blue" label={p.title} sub="project" />)}
               {plans.map((p) => <ScopeOption key={p._id} checked={planIds.includes(p._id)} onToggle={() => toggle(planIds, setPlanIds, p._id)} tone="magenta" label={p.title} sub={p.short_id} />)}
             </div>
+            {takeover && <TakeoverEdit className="mt-1.5" phrase={takeover.phrase} leave={leaveSessions} onLeave={setLeaveSessions} />}
           </Field>
 
           <div className="grid sm:grid-cols-2 gap-3">

@@ -22,6 +22,7 @@ import { RetireRoleConfirm, type UnseatChoice } from "./RetireRoleConfirm";
 import type { OrgGhostChip, OrgLayoutNode } from "./orgLayout";
 import { ghostChipOf, parentNodeId, refMatches } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
+import { TakeoverGate } from "./TakeoverEdit";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useOrgRoles } from "../../hooks/useOrgRoles";
@@ -51,7 +52,8 @@ export type OrgScopePanelProps = {
   onClose: () => void;
   onOpenSession: (conversationId: string) => void;
   onMove: (subject: { kind: "session" | "role"; id: string; title: string }) => void;
-  onUpdateRole: (roleId: string, fields: OrgUpdateRoleInput) => void;
+  /** `opts.leave_sessions` is the person's one edit on a scope that gains refs (R1). */
+  onUpdateRole: (roleId: string, fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
   onRetireRole: (roleId: string, standingSession?: UnseatChoice) => void;
   onSelectNode: (id: string) => void;
   mode: OrgPanelMode;
@@ -176,6 +178,48 @@ function LoadMore({ parentId, sessions }: { parentId: string; sessions: OrgSessi
 }
 
 // ---------------------------------------------------------------- scope editor
+
+/**
+ * The scope editor, with what a gain moves said before it is written
+ * (org-roles-run-work.md R1). A role that gains a project or a plan takes over
+ * the sessions in it that report to its host and to no role, so an edit that
+ * ADDS a ref shows in the editor at once and its write waits at the gate: it
+ * goes through by itself when nothing would move, and otherwise the person
+ * reads the count and may leave the sessions where they are. An edit that
+ * only removes is written as before. Every surface that edits a live role's
+ * scope by hand mounts this one (Settings, the chart's panel).
+ */
+export function GatedScopeEditor({ workspace, role, onChange, ...editor }: Omit<React.ComponentProps<typeof ScopeEditor>, "onChange"> & {
+  workspace: OrgTree["workspace"];
+  onChange: (scope: OrgScope, opts?: { leave_sessions?: boolean }) => void;
+}) {
+  const [pending, setPending] = useState<OrgScope | null>(null);
+  const gained = pending
+    ? [...pending.project_ids.filter((id) => !role.scope.project_ids.includes(id)).map((id) => `project:${id}`), ...pending.plan_ids.filter((id) => !role.scope.plan_ids.includes(id)).map((id) => `plan:${id}`)]
+    : [];
+  const change = (scope: OrgScope) => {
+    const adds = scope.project_ids.some((id) => !role.scope.project_ids.includes(id)) || scope.plan_ids.some((id) => !role.scope.plan_ids.includes(id));
+    if (adds) setPending(scope); else { setPending(null); onChange(scope); }
+  };
+  return (
+    <>
+      <ScopeEditor {...editor} role={pending ? { ...role, scope: pending } : role} onChange={change} />
+      {pending && gained.length > 0 && (
+        <TakeoverGate
+          // A different gain is a different question: the gate starts over.
+          key={gained.join(",")}
+          className="mt-2"
+          workspace={workspace}
+          ask={{ handle: role.handle, add: gained }}
+          what={`@${role.handle} gains ${gained.length === 1 ? "this" : "these"}, and with ${gained.length === 1 ? "it" : "them"} the sessions inside that report to its host and to no role.`}
+          confirmLabel="Change the scope"
+          onConfirm={(opts) => { onChange(pending, opts.leave_sessions ? opts : undefined); setPending(null); }}
+          onCancel={() => setPending(null)}
+        />
+      )}
+    </>
+  );
+}
 
 export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, onSelectChange }: {
   role: OrgRole; canEdit: boolean; onChange: (scope: OrgScope) => void;
@@ -382,7 +426,7 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
       <InlineEdit canEdit={canEdit} multiline value={role.charter ?? ""} placeholder="What this seat owns, in a sentence or two." onSave={(v) => onUpdateRole(role._id, { charter: v })} className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} />
 
       <SectionLabel>Scope</SectionLabel>
-      <ScopeEditor role={role} canEdit={canEdit} onChange={(scope) => onUpdateRole(role._id, { scope })} changes={changes} focusChangeId={focusChangeId} onSelectChange={onSelectChange} />
+      <GatedScopeEditor workspace={tree.workspace} role={role} canEdit={canEdit} onChange={(scope, opts) => onUpdateRole(role._id, { scope }, opts)} changes={changes} focusChangeId={focusChangeId} onSelectChange={onSelectChange} />
 
       <SectionLabel right={<StateTally counts={role.counts} />}>Sessions</SectionLabel>
       <StateBar counts={role.counts} />

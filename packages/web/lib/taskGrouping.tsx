@@ -28,7 +28,7 @@ import type { OrgRole } from "../components/org/orgTypes";
 import { getLabelColor } from "./labelColors";
 import { orderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey } from "./taskStatuses";
 import { DEFAULT_TASK_STATUSES, type TeamTaskStatus } from "@codecast/shared/tasks";
-import { resolveAssigneeInfo } from "./liveEntities";
+import { resolveAssigneeInfo, assigneeLabelOf } from "./liveEntities";
 import { arrangeChain, type ChainNode } from "./taskChain";
 import { AssigneeFace } from "../components/identity/AssigneeFace";
 import { ProjectLeadChip } from "../components/charter/ProjectLeadChip";
@@ -124,7 +124,7 @@ const assigneeAxis: TaskAxis = {
         ? { to: `/team/${info.github_username}`, label: "Profile" }
         : null;
     return {
-      label: info?.name || b.key,
+      label: assigneeLabelOf(b.key, info),
       icon: info ? <AssigneeFace info={info} size={16} /> : <User className="w-3.5 h-3.5 text-sol-text-dim" />,
       extra: href ? (
         <Link href={href.to} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
@@ -245,7 +245,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     arrange: (keys, ctx) =>
       arrangeChain(keys, ctx.roles ?? [], {
         meId: ctx.currentUser?._id,
-        nameOf: (key) => assigneeOfKey(key, undefined, ctx)?.name ?? key,
+        nameOf: (key) => assigneeLabelOf(key, assigneeOfKey(key, undefined, ctx)),
       }),
   },
 

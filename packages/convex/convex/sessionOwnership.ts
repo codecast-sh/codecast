@@ -280,13 +280,17 @@ export function reportsToLine(name: string, note?: string): string {
 // Who a session reports to: its role, else its primary owner (the
 // owner_user_id cache, which the chart files by; syncPrimaryOwnerCache is its
 // one writer).
-async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">, roleId: Id<"org_roles"> | undefined): Promise<ReportsTo | null> {
+// `read` is the doc read (a batch passes its memo, so a hundred sessions of
+// one host read that host once); `row` is the conversation when the caller
+// already holds it as it stands.
+async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">, roleId: Id<"org_roles"> | undefined, known: { read?: (id: any) => Promise<any>; row?: any } = {}): Promise<ReportsTo | null> {
+  const read = known.read ?? ((id: any) => ctx.db.get(id));
   if (roleId) {
-    const role = await ctx.db.get(roleId);
+    const role = await read(roleId);
     if (role) return { kind: "role", role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name };
   }
-  const primary = (await ctx.db.get(conversationId))?.owner_user_id;
-  const user = primary ? await ctx.db.get(primary) : null;
+  const primary = (known.row ?? await ctx.db.get(conversationId))?.owner_user_id;
+  const user = primary ? await read(primary) : null;
   return user ? { kind: "user", user_id: user._id, name: personName(user) } : null;
 }
 
@@ -307,23 +311,64 @@ async function unhide(ctx: { db: any }, conversation: any): Promise<void> {
   if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);
 }
 
+// What many reparents to ONE role resolve once (the takeover moves up to 100
+// sessions in one transaction, and each used to resolve the same role, the
+// same admin check, the same acting person and the same sender again: 16
+// reads a session). `read` memoizes user and role docs, which no reparent
+// writes; conversations are never read through it.
+export type ReparentBatch = {
+  role: any;
+  canReshape: boolean;
+  actor: any;
+  sender: any | null;
+  read: (id: any) => Promise<any>;
+};
+
+export async function prepareReparentBatch(ctx: { db: any }, authUserId: Id<"users">, roleRef: string, fromSession?: string): Promise<ReparentBatch> {
+  const role = await requireRole(ctx, authUserId, roleRef, "access");
+  const docs = new Map<string, Promise<any>>();
+  const read = (id: any): Promise<any> => {
+    const key = String(id);
+    const cached = docs.get(key);
+    if (cached) return cached;
+    const doc: Promise<any> = ctx.db.get(id);
+    docs.set(key, doc);
+    return doc;
+  };
+  docs.set(String(role._id), Promise.resolve(role));
+  const fromRef = fromSession?.trim();
+  return {
+    role,
+    canReshape: await userCanAdminRole(ctx, authUserId, role),
+    actor: await read(authUserId),
+    sender: fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null,
+    read,
+  };
+}
+
 export async function performReparentSession(
   ctx: { db: any },
   authUserId: Id<"users">,
   args: { session_id: string; target: ReparentSessionTarget; note?: string; from_session?: string },
+  // The batch form: the prepared role target, and the session's row as the
+  // caller read it in this same transaction. The access rule below is the
+  // same one; only the lookups that would answer the same thing are skipped.
+  known?: { batch: ReparentBatch; row: any },
 ): Promise<ReparentSessionResult> {
   const note = args.note?.trim() || undefined;
-  const targetRole = args.target.kind === "role" ? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
-  const canReshapeTarget = targetRole ? await userCanAdminRole(ctx, authUserId, targetRole) : false;
+  const targetRole = args.target.kind === "role" ? known?.batch.role ?? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
+  const canReshapeTarget = known ? known.batch.canReshape : targetRole ? await userCanAdminRole(ctx, authUserId, targetRole) : false;
   // Who may file: a person target is the ownership rule (the runner, or any
   // teammate who can see the session); a role target is an owner, or a team
   // viewer who may reshape the role. A session the caller cannot see, never.
+  const mayFileUnderRole = async (c: any) => {
+    const access = await checkConversationAccess(ctx, authUserId, c);
+    return access === "owner" || (access === "team" && canReshapeTarget);
+  };
   const conversation = args.target.kind === "user"
     ? await resolveOwnableConversation(ctx, authUserId, args.session_id)
-    : await findConversationByAnyRefWhere(ctx, args.session_id, async (c: any) => {
-      const access = await checkConversationAccess(ctx, authUserId, c);
-      return access === "owner" || (access === "team" && canReshapeTarget);
-    });
+    : known ? ((await mayFileUnderRole(known.row)) ? known.row : null)
+    : await findConversationByAnyRefWhere(ctx, args.session_id, mayFileUnderRole);
   if (!conversation) throw new Error("Session not found, or you are not one of its owners");
   // A standing session IS a seat; it reports to no seat (org-roles-standing.md
   // T1). Filed under a role it would count as that role's hand, be interrupted
@@ -333,7 +378,7 @@ export async function performReparentSession(
     throw new Error("That session is a standing agent's own thread; it cannot be filed under a role");
   }
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-  const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id);
+  const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id, { read: known?.batch.read, row: conversation });
 
   const added: Id<"users">[] = [];
   const removed: Id<"users">[] = [];
@@ -410,10 +455,10 @@ export async function performReparentSession(
     owners = await listOwnerInfos(ctx, conversation._id);
   }
 
-  const after = await reportsToOf(ctx, conversation._id, roleId);
+  const after = await reportsToOf(ctx, conversation._id, roleId, { read: known?.batch.read });
   const told: { sessions: number; roles: number; deferred?: number } = { sessions: 0, roles: 0 };
   if (after && reportsToKey(after) !== reportsToKey(before)) {
-    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after.name, note), args.from_session, reportsToKey(after));
+    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after.name, note), args.from_session, reportsToKey(after), known?.batch);
     if (how === "deferred") told.deferred = 1; else told.sessions = 1;
   }
   // Open questions follow the new owners. Without this, asked_user_ids and
@@ -446,10 +491,11 @@ async function tellSession(
   body: string,
   fromSession: string | undefined,
   moveKey: string,
+  batch?: Pick<ReparentBatch, "actor" | "sender">,
 ): Promise<"told" | "deferred"> {
-  const actor = await ctx.db.get(authUserId);
+  const actor = batch ? batch.actor : await ctx.db.get(authUserId);
   const fromRef = fromSession?.trim();
-  const sender = fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
+  const sender = batch ? batch.sender : fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
   const fromShortId = sender ? (sender.short_id ?? sender._id.toString().slice(0, 7)) : "unknown";
   const crossUser = conversation.user_id.toString() !== authUserId.toString();
   const cost = wakeCost({ ...conversation, ...wakeFieldsOf(conversation) }, Date.now());
@@ -564,6 +610,9 @@ export async function performRehomeSessions(
     && String(c.owner_user_id ?? c.user_id) === String(role.host_user_id)
     && (!role.team_id || String(c.team_id ?? "") === String(role.team_id)));
   result.over_cap = Math.max(0, eligible.length - REHOME_CAP);
+  // The role, the admin check, the acting person and the sender are the same
+  // for every session of one takeover: resolved once, never per session.
+  const batch = opts.dry || eligible.length === 0 ? null : await prepareReparentBatch(ctx, authUserId, role._id.toString(), opts.from_session);
   for (const c of eligible.slice(0, REHOME_CAP)) {
     const shortId = c.short_id ?? c._id.toString().slice(0, 7);
     const openAsk = await ctx.db
@@ -578,7 +627,7 @@ export async function performRehomeSessions(
       target: { kind: "role", role_id: role._id.toString() },
       note: opts.note,
       from_session: opts.from_session,
-    });
+    }, { batch: batch!, row: c });
     result.told.sessions += moved.told.sessions;
     result.told.deferred += moved.told.deferred ?? 0;
     if (openAsk) {

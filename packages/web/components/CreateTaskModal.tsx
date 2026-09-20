@@ -7,6 +7,7 @@ import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AssigneeSelect } from "./AssigneeSelect";
+import type { AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { Switch } from "./ui/switch";
 import { DocEditor } from "./editor/DocEditor";
 import type { MentionItem } from "./editor/MentionList";
@@ -210,7 +211,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
     () => statusOptions.find((o) => o.category === "open")?.key ?? statusOptions[0]?.key ?? "open",
   );
   const [assignee, setAssignee] = useState<string | null>(null);
-  const [assigneeInfo, setAssigneeInfo] = useState<{ name: string; image?: string } | null>(null);
+  const [assigneeInfo, setAssigneeInfo] = useState<AssigneeInfo | null>(null);
   const [labels, setLabels] = useState<string[]>([]);
   const [createMore, setCreateMore] = useState(false);
   const [editorKey, setEditorKey] = useState(0);

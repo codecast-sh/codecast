@@ -8,7 +8,7 @@ import { isOrphanOrSubagent, type WorkState } from "./inboxFilters";
 import { nestParentIdOf } from "./ccAccountsShared";
 import { derivePresenceState } from "./presenceState";
 import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
-import { canAccessDoc, canAccessPlan, canAccessProject, canAccessTask, workspaceKey } from "./lib/access";
+import { accessJudgeFor, canAccessDoc, workspaceKey } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
@@ -519,26 +519,30 @@ export async function resolveScope(
   }
   if (teamId && !(await isTeamMember(ctx as any, userId, teamId))) return null;
 
+  // Access checked per row, against keys read ONCE: a scope holds hundreds of
+  // tasks other people filed, and a membership read for each was the whole
+  // cost of a takeover's dry count (lib/access.accessJudgeFor).
+  const mayRead = await accessJudgeFor(ctx as any, userId);
   const projects: any[] = [];
   for (const id of scope.project_ids) {
     const p = await ctx.db.get(id);
-    if (p && (await canAccessProject(ctx as any, userId, p))) projects.push(p);
+    if (p && (await mayRead("projects", p))) projects.push(p);
   }
   // Plans: the ones listed, plus every plan of a project in scope.
   const planById = new Map<string, any>();
   for (const id of scope.plan_ids) {
     const p = await ctx.db.get(id);
-    if (p && (await canAccessPlan(ctx as any, userId, p))) planById.set(p._id.toString(), p);
+    if (p && (await mayRead("plans", p))) planById.set(p._id.toString(), p);
   }
   for (const project of projects) {
     const rows: any[] = await ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-    for (const p of rows) if (!planById.has(p._id.toString()) && (await canAccessPlan(ctx as any, userId, p))) planById.set(p._id.toString(), p);
+    for (const p of rows) if (!planById.has(p._id.toString()) && (await mayRead("plans", p))) planById.set(p._id.toString(), p);
   }
   // Tasks: by project, by plan (a plan's project may be outside the listed
   // projects, so both reads run), deduped.
   const taskById = new Map<string, any>();
   const admit = async (rows: any[]) => {
-    for (const t of rows) if (!taskById.has(t._id.toString()) && (await canAccessTask(ctx as any, userId, t))) taskById.set(t._id.toString(), t);
+    for (const t of rows) if (!taskById.has(t._id.toString()) && (await mayRead("tasks", t))) taskById.set(t._id.toString(), t);
   };
   for (const project of projects) {
     await admit(await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect());
@@ -581,9 +585,12 @@ function actorCache(ctx: Ctx) {
     const key = userId.toString();
     const cached = users.get(key);
     if (cached) return cached;
-    const p: Promise<FeedActor | undefined> = ctx.db.get(userId).then((u: any) => u
-      ? { name: u.name ?? u.email ?? "", image: u.github_avatar_url || u.image || undefined, is_bot: !!u.bot_kind || undefined }
-      : undefined).catch(() => undefined);
+    // A task's assignee may be a role (org-roles-run-work.md R5): named as the
+    // role, never read as if its id were a user's.
+    const roleId = ctx.db.normalizeId("org_roles", key);
+    const p: Promise<FeedActor | undefined> = (roleId ? ctx.db.get(roleId) : ctx.db.get(userId)).then((u: any) => !u ? undefined
+      : roleId ? { name: u.name ?? "", is_bot: true }
+      : { name: u.name ?? u.email ?? "", image: u.github_avatar_url || u.image || undefined, is_bot: !!u.bot_kind || undefined }).catch(() => undefined);
     users.set(key, p);
     return p;
   };
@@ -943,7 +950,7 @@ export type ScopeSummary = {
   plans: Array<{ id: string; short_id: string; title: string; status: string; updated_at: number; progress: { total: number; done: number; in_progress: number; open: number } }>;
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   sessions: StateCounts & { total: number };
-  decisions: { open: number; answered: number };
+  decisions: { open: number };
   overlaps: ScopeOverlap[];
   generated_at: number;
 };
@@ -976,16 +983,19 @@ export async function computeScopeSummary(ctx: Ctx, resolved: ResolvedScope, now
 
   // One definition of "open": decisions on the scope's tasks, plus (for a
   // role) the ones on its ladder (sessionDecisions.pendingOnLadder), deduped.
-  const decisions = { open: 0, answered: 0 };
+  // The tasks' half is read per PERSON who can have asked (a decision carries
+  // its session's owner), never per task: a scope of 860 tasks cost 860 reads
+  // here on every brief and wake frame, for a count of a handful of rows.
   const openIds = new Set<string>();
-  for (const t of resolved.tasks) {
-    for (const d of await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).collect()) {
-      if (d.status === "pending") openIds.add(String(d._id));
-      else if (d.status === "answered") decisions.answered++;
+  if (resolved.tasks.length) {
+    const taskIds = new Set(resolved.tasks.map((t) => String(t._id)));
+    for (const memberId of scan?.memberIds ?? await scopeMemberIds(ctx, resolved)) {
+      const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", memberId).eq("status", "pending")).collect();
+      for (const d of pending) if (d.task_id && taskIds.has(String(d.task_id))) openIds.add(String(d._id));
     }
   }
   if (resolved.role) for (const d of await pendingOnLadder(ctx, resolved.role._id, now)) openIds.add(String(d._id));
-  decisions.open = openIds.size;
+  const decisions = { open: openIds.size };
 
   let overlaps: ScopeOverlap[] = [];
   if (resolved.role) {

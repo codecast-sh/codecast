@@ -23,14 +23,25 @@ const base = (over: Partial<CoverageInputs> = {}): CoverageInputs => ({
     { _id: "pl_closed", short_id: "pl-4", title: "Closed and loose", status: "done" },
   ],
   tasks: [
-    { status: "open", project_id: "p_growth" },
-    { status: "in_progress", project_id: "p_platform" },
-    { status: "done", project_id: "p_idle" },
-    { status: "open", project_id: "p_paused" },
-    { status: "open", plan_id: "pl_loose" },
-    { status: "open", plan_id: "pl_closed" },
-    { status: "open" },
-    { status: "dropped" },
+    { status: "open", project_id: "p_growth", source: "human" },
+    { status: "in_progress", project_id: "p_platform", source: "human" },
+    { status: "done", project_id: "p_idle", source: "human" },
+    { status: "open", project_id: "p_paused", source: "human" },
+    { status: "open", plan_id: "pl_loose", source: "meeting" },
+    { status: "open", plan_id: "pl_closed", source: "human" },
+    { status: "open", source: "human" },
+    { status: "dropped", source: "human" },
+    // Off the board (isOnProjectBoard): an agent's own task, its suggestion,
+    // an unpromoted insight, a dismissed row. None is work to cover, on a
+    // project, a plan or loose, so the counts here match the page's.
+    { status: "open", project_id: "p_growth", source: "agent" },
+    { status: "open", project_id: "p_growth", source: "agent", triage_status: "suggested" },
+    { status: "open", project_id: "p_idle", source: "insight" },
+    { status: "open", plan_id: "pl_loose", source: "agent", triage_status: "dismissed" },
+    { status: "open", source: "agent" },
+    // On the board although an agent filed them: promoted, or assigned to someone.
+    { status: "open", project_id: "p_platform", source: "agent", promoted: true },
+    { status: "open", project_id: "p_platform", source: "agent", assignee: "u_ada" },
   ],
   roles: [role("r_platform", "platform"), role("r_a", "design", ["p_brand"]), role("r_b", "marketing", ["p_brand"]), role("r_root", "chief-of-staff")],
   areas: [
@@ -48,9 +59,11 @@ describe("coverage", () => {
     // An open task or an open plan is work; a project with neither, or a paused one, is not a seat to fill.
     expect(c.projects.map((p) => p.title)).toEqual(["Growth", "Platform", "Brand"]);
     expect([c.with_lead, c.with_work]).toEqual([1, 3]);
+    // The counts are the board's: Growth's agent rows do not count, and
+    // Platform's promoted and assigned ones do.
     expect(c.projects[0]).toMatchObject({ open_tasks: 1, open_plans: 0, initiatives: [] });
     expect(c.projects[0].lead).toBeUndefined();
-    expect(c.projects[1]).toMatchObject({ lead: "@platform", lead_by: "owner" });
+    expect(c.projects[1]).toMatchObject({ lead: "@platform", lead_by: "owner", open_tasks: 3 });
     // Two roles on separate lines list Brand and it names neither: watched, not led.
     expect(c.projects[2]).toMatchObject({ watchers: ["@design", "@marketing"], open_plans: 1 });
     expect(c.projects[2].lead).toBeUndefined();

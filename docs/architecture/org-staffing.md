@@ -557,6 +557,25 @@ undecided change; the queue card is rewritten to the changes that remain.
 The CLI verb is `cast org revise op-N --remove <seq> | --amend <seq> --edits
 <json> --rationale <text> | --add <file> [--note <text>]`, session only.
 
+**A verdict is read against what the page showed.** A revise moves what a
+position and an id name: emptying an earlier ask moves every later ask up a
+place, and an amend keeps a row's id while replacing what it says. So
+`decide`, `decideAsk` and `acceptAll` take `seen: { revised_at, seqs? }`,
+what the page had painted when the verdict was pressed: the latest
+`revision.at` among its rows (`latestOrgRevisionAt`) and, for an ask, the
+seqs its card held. The server compares both with the rows it holds
+(`orgVerdictSeenFault`, shared, so the two sides cannot disagree) and refuses
+the whole call when either differs, in one line ("op-N was revised after this
+page read it; a verdict never lands on a change the person has not seen");
+a caller that sends nothing is taken only on a proposal nobody revised. The
+revise clock rises strictly, so two revises in one millisecond never share a
+stamp. The page sends `seen` from the rows it rendered, flips exactly the rows
+the card held, and on that refusal puts them back through the intent journal
+and shows the revised list with the "since you last looked" marks (the
+watermark reads server stamps on both sides, never the client's clock, so
+the revise that refused the verdict is always among them), with one toast in
+the server's words. Nothing is applied.
+
 ## S19. A proposal is a conversation with three asks, not a letter with 157 rows
 
 Written 2026-09-17 after the founder read the pane with S17 and S18 in and

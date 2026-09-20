@@ -290,7 +290,7 @@ import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { atomicWriteFile } from "./atomicWrite.js";
-import { AwakeIdleClock, collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { AwakeIdleClock, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -21839,6 +21839,25 @@ export function getLatestSessionResources(): ReadonlyMap<string, SessionResource
   return latestSessionResources;
 }
 
+// When each session last wrote its transcript, for restorableAwakeIdle. A
+// session without a transcript of its own (none indexed, or opencode's shared
+// database) reports undefined, which the restore reads as "unknown, start from
+// zero". Stats run in parallel and off the tick; one missing file is one
+// undefined, not a failed restore.
+async function transcriptActivityAt(sessionIds: string[]): Promise<Map<string, number | undefined>> {
+  const out = new Map<string, number | undefined>();
+  await Promise.all(sessionIds.map(async (sessionId) => {
+    const file = findSessionFile(sessionId, { staleOk: true });
+    if (!file || file.agentType === "opencode") { out.set(sessionId, undefined); return; }
+    try {
+      out.set(sessionId, (await fs.promises.stat(file.path)).mtimeMs);
+    } catch {
+      out.set(sessionId, undefined);
+    }
+  }));
+  return out;
+}
+
 export function getSessionAwakeIdleMs(sessionId: string): number {
   return sessionAwakeIdleMs.get(sessionId);
 }
@@ -21870,12 +21889,16 @@ async function collectResourceSnapshot(): Promise<void> {
     const elapsed = lastResourceTickAt > 0 ? now - lastResourceTickAt : 0;
     const sleepSkip = lastResourceTickAt === 0 || isInWakeGrace() || elapsed > RESOURCE_TICK_SLEEP_GAP_MS;
     if (lastResourceTickAt === 0) {
-      // Read it off the tick: a sync read on this path is what the loop budget
-      // guard forbids, and the counters only need the snapshot from the next
-      // tick on — this one is skipped as the first.
-      void fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8")
-        .then((raw) => { sessionAwakeIdleMs.restore(raw, Date.now()); })
-        .catch(() => { /* no snapshot yet, or unreadable: start from zero */ });
+      // Restore BEFORE the loop below stores anything: the first tick writes a
+      // live counter for every session it collects, and a live value outranks
+      // a restored one, so a restore that lands after this loop is discarded
+      // for the whole collected fleet (102 of 102 on 2026-09-19 20:09Z; ct-52784).
+      // The read is awaited, not synchronous, so the loop budget guard is
+      // satisfied and the event loop stays free while it runs.
+      try {
+        const snapshot = decodeAwakeIdleSnapshot(await fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8"), now);
+        if (snapshot) sessionAwakeIdleMs.restore(restorableAwakeIdle(snapshot, await transcriptActivityAt([...snapshot.idle.keys()])), now);
+      } catch { /* no snapshot yet, or unreadable: start from zero */ }
     }
     lastResourceTickAt = now;
 

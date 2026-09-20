@@ -653,13 +653,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.avatar ? { avatar: input.avatar } : {}),
       ...(input.provision ? { provision: true, project_path: input.project_path } : {}),
       ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
+      // The person's one edit on a hire with projects (R1).
+      ...(input.leave_sessions ? { leave_sessions: true } : {}),
     });
     if (input.caps && role?._id) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: String(role._id), hands: input.caps.hands_per_day, wakes: input.caps.wakes_per_day, tokens: input.caps.tokens_per_day });
     }
     return role;
   },
-  updateOrgRole: async (ctx, _userId, [roleId, fields]: [string, any]) => {
+  // `opts.leave_sessions` is the person's one edit on a scope that gains refs
+  // (R1): the scope lands and the sessions in it stay with their owner.
+  updateOrgRole: async (ctx, _userId, [roleId, fields, opts]: [string, any, { leave_sessions?: boolean } | undefined]) => {
     // A pause or resume is the standing agent's (org-roles-standing.md T4):
     // hands get their interrupt and held wakes flush, which a bare status
     // patch would skip. Trust and caps have their own human-only mutations.
@@ -669,16 +673,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.caps !== undefined) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
     }
-    // Who reports to the role (org-roles-run-work.md R6): the list the tab
-    // wrote becomes an add and a remove against the row the server holds.
-    if (fields.reports_user_ids !== undefined) {
-      const row = await ctx.runQuery!((api as any).orgRoles.get, { role_id: roleId }).catch(() => null);
-      const before = new Set<string>((row?.reports_user_ids ?? []).map(String));
-      const after = new Set<string>(fields.reports_user_ids.map(String));
-      const add = [...after].filter((id) => !before.has(id));
-      const remove = [...before].filter((id) => !after.has(id));
-      if (add.length || remove.length) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, add, remove });
-    }
+    // Who reports to the role (org-roles-run-work.md R6): the tab wrote the
+    // whole list, and the mutation takes the difference against its own row.
+    if (fields.reports_user_ids !== undefined) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, set: fields.reports_user_ids });
     const rest: Record<string, any> = { ...fields };
     delete rest.trust; delete rest.caps; delete rest.reports_user_ids;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
@@ -689,7 +686,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       role_id: roleId,
       ...(fields.name !== undefined ? { name: fields.name } : {}),
       ...(fields.handle !== undefined ? { handle: fields.handle } : {}),
-      ...(fields.scope !== undefined ? { scope: fields.scope } : {}),
+      ...(fields.scope !== undefined ? { scope: fields.scope, ...(opts?.leave_sessions ? { leave_sessions: true } : {}) } : {}),
       ...(fields.charter !== undefined ? { charter: fields.charter } : {}),
       ...(fields.status !== undefined ? { status: fields.status } : {}),
       ...(fields.tenure !== undefined ? { tenure: fields.tenure } : {}),
@@ -726,11 +723,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.seat ? { seat: input.seat } : {}),
     });
   },
-  decideOrgProposalChange: async (ctx, _userId, [changeId, verdict, edits]: [string, "accept" | "skip", any]) => {
+  // `seen` (org-staffing.md S18): what the page showed when the verdict was
+  // pressed; the mutation refuses a verdict the author revised under the reader.
+  decideOrgProposalChange: async (ctx, _userId, [changeId, verdict, edits, seen]: [string, "accept" | "skip", any, { revised_at: number; seqs?: number[] } | undefined]) => {
     return await ctx.runMutation!((api as any).orgProposals.decide, {
       change_id: changeId,
       verdict,
       ...(edits && Object.keys(edits).length > 0 ? { edits } : {}),
+      ...(seen ? { seen } : {}),
     });
   },
   // Withdraw from the pane (S4 supersession: the person takes the replaced
@@ -738,15 +738,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   withdrawOrgProposal: async (ctx, _userId, [proposalRef]: [string]) => {
     return await ctx.runMutation!((api as any).orgProposals.withdraw, { proposal: proposalRef });
   },
-  acceptAllOrgProposal: async (ctx, _userId, [proposalId, opts]: [string, { kinds?: string[] } | undefined]) => {
+  acceptAllOrgProposal: async (ctx, _userId, [proposalId, opts]: [string, { kinds?: string[]; seen?: { revised_at: number; seqs?: number[] } } | undefined]) => {
     const kinds = Array.isArray(opts?.kinds) && opts!.kinds!.length > 0 ? opts!.kinds : undefined;
-    return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId, ...(kinds ? { kinds } : {}) });
+    return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId, ...(kinds ? { kinds } : {}), ...(opts?.seen ? { seen: opts.seen } : {}) });
   },
   // One ask of a proposal, accepted or skipped whole (org-staffing.md S19):
-  // `ask` is the index into the asks the server resolves, the same function
-  // the web ran to flip the rows.
-  decideOrgProposalAsk: async (ctx, _userId, [proposalId, ask, verdict]: [string, number, "accept" | "skip"]) => {
-    return await ctx.runMutation!((api as any).orgProposals.decideAsk, { proposal: proposalId, ask, verdict });
+  // `ask` is the position the card had and `seen` what the page had painted
+  // (the latest revise, the card's seqs); the mutation reads the verdict
+  // against that and refuses one the author revised under the reader.
+  decideOrgProposalAsk: async (ctx, _userId, [proposalId, ask, verdict, seen, opts]: [string, number, "accept" | "skip", { revised_at: number; seqs?: number[] } | undefined, { leave_sessions?: boolean } | undefined]) => {
+    return await ctx.runMutation!((api as any).orgProposals.decideAsk, { proposal: proposalId, ask, verdict, ...(seen ? { seen } : {}), ...(opts?.leave_sessions && verdict === "accept" ? { leave_sessions: true } : {}) });
   },
   // Capability bindings ride dispatch as NAMED side effects, never as generic
   // table patches: applyPatches drops any table missing from TABLE_CONFIG with
@@ -1426,37 +1427,37 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   // Naming a project's lead (org-roles-run-work.md R4): the owner and, when
   // the role's scope does not list the project, the scope, in one transaction.
-  setProjectLead: async (ctx, userId, [projectId, roleId]: [string, string | null]) => {
+  setProjectLead: async (ctx, userId, [projectId, roleId, opts]: [string, string | null, { leave_sessions?: boolean } | undefined]) => {
     if (!isServerId(projectId) || (roleId !== null && !isServerId(roleId))) return null;
-    return await (ctx as any).runMutation((api as any).orgRoles.setProjectLead, { project_id: projectId, role_id: roleId });
+    return await (ctx as any).runMutation((api as any).orgRoles.setProjectLead, { project_id: projectId, role_id: roleId, ...(opts?.leave_sessions ? { leave_sessions: true } : {}) });
   },
 
   // Initiatives (initiatives-projects-role-page.md I1). The store paints
   // initiatives[] and initiativeUpdates[] optimistically; each side effect is
   // the one public mutation the CLI also calls, so the rules live in one place.
-  // A stub id (a create that has not echoed yet) is not a server id: the write
-  // waits for the row, as a project lead does.
+  // The store's stub id for a new initiative is its `client_key`, and the
+  // server resolves a client key to the caller's own row (lib/initiativeRef),
+  // so an edit made before the create has echoed lands on the real row. When
+  // the row is not there yet the mutation throws, and the outbox retries the
+  // write behind the create instead of dropping it as a success.
   createInitiative: async (ctx, userId, [opts]: [Record<string, any>]) => {
     return await (ctx as any).runMutation(api.initiatives.create, opts);
   },
   updateInitiative: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
-    if (!isServerId(id)) return null;
     return await (ctx as any).runMutation(api.initiatives.update, { id, ...fields });
   },
   addInitiativeProject: async (ctx, userId, [id, projectId]: [string, string]) => {
-    if (!isServerId(id) || !isServerId(projectId)) return null;
+    if (!isServerId(projectId)) throw new Error("Project not created yet");
     return await (ctx as any).runMutation(api.initiatives.addProject, { id, project_id: projectId });
   },
   removeInitiativeProject: async (ctx, userId, [id, projectId]: [string, string]) => {
-    if (!isServerId(id) || !isServerId(projectId)) return null;
+    if (!isServerId(projectId)) return null;
     return await (ctx as any).runMutation(api.initiatives.removeProject, { id, project_id: projectId });
   },
   setInitiativeProjects: async (ctx, userId, [id, projectIds]: [string, string[]]) => {
-    if (!isServerId(id)) return null;
     return await (ctx as any).runMutation(api.initiatives.setProjects, { id, project_ids: projectIds.filter(isServerId) });
   },
   postInitiativeUpdate: async (ctx, userId, [id, update]: [string, { client_key?: string; body: string; health?: string }]) => {
-    if (!isServerId(id)) return null;
     return await (ctx as any).runMutation(api.initiatives.postUpdate, { id, ...update });
   },
 
