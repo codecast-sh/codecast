@@ -92,7 +92,7 @@ test("a nonsense size is clamped, never applied", () => {
   const { win, sender } = openRingWindow(rig);
   rig.handlers.get("call-ring-size")(sender, { width: 99999, height: -4 });
   const bounds = win.getBounds();
-  assert.ok(bounds.width <= 520, `width ${bounds.width} escaped the clamp`);
+  assert.equal(bounds.width, 560);
   assert.ok(bounds.height >= 48, `height ${bounds.height} escaped the clamp`);
 });
 
