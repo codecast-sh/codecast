@@ -2523,12 +2523,28 @@ function toggleEnvironment() {
   }
 }
 
+const { trayIconState } = require("./trayIcon");
+
+let trayNeedsInput = 0;
+let trayIconFile = null;
+
+function applyTrayState() {
+  if (!tray || tray.isDestroyed()) return;
+  const state = trayIconState(trayNeedsInput);
+  if (state.file !== trayIconFile) {
+    const icon = nativeImage.createFromPath(path.join(__dirname, "assets", state.file));
+    icon.setTemplateImage(state.template);
+    tray.setImage(icon);
+    trayIconFile = state.file;
+  }
+  tray.setToolTip(state.tooltip);
+}
+
 function createTray() {
-  // Load the base name so AppKit auto-picks the @2x file on Retina and renders
-  // the mark at its natural point size (the source PNGs are already sized for
-  // the menubar — 22×18 / 44×36 — so no squishing resize is needed).
-  const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "trayTemplate.png"));
-  icon.setTemplateImage(true);
+  const initial = trayIconState(trayNeedsInput);
+  const icon = nativeImage.createFromPath(path.join(__dirname, "assets", initial.file));
+  icon.setTemplateImage(initial.template);
+  trayIconFile = initial.file;
   tray = new Tray(icon);
   const menu = Menu.buildFromTemplate([
     { label: "Show Codecast", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
@@ -2548,7 +2564,7 @@ function createTray() {
     { label: "Quit Codecast", click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
-  tray.setToolTip("Codecast");
+  tray.setToolTip(initial.tooltip);
 }
 
 function buildAppMenu() {
@@ -2914,7 +2930,11 @@ function applyStagedUpdateOnQuit() {
 
 // IPC handlers
 ipcMain.handle("get-app-version", () => app.getVersion());
-ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
+ipcMain.handle("set-badge-count", (_e, count) => {
+  app.setBadgeCount(count);
+  trayNeedsInput = count;
+  applyTrayState();
+});
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 // OS-wide seconds since last user input — feeds the web layer's presence
 // heartbeat so the server knows a human is at this machine even while
