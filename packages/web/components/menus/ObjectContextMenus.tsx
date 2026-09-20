@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { sessionIdentity } from "../../lib/sessionIdentity";
+import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import {
   Archive,
   Bot,
@@ -128,7 +129,10 @@ export function TaskMenuItems({
   const count = tasks.length;
   const bulkLabel = single ? single.short_id : `${count} tasks`;
   // One-shot roster snapshot: the assign submenu doesn't need live presence.
+  // People and roles come from the one list every picker shares.
   const members = React.useMemo(() => useInboxStore.getState().teamMembers ?? [], []);
+  const { people, roles } = useRolesAndPeopleOptions(members);
+  const assignOptions = React.useMemo(() => [...people, ...roles], [people, roles]);
   // The team's status vocabulary (a context-menu selection is always one
   // workspace's rows, so the first task's team speaks for the set).
   const taskStatuses = useTeamTaskStatusList((tasks[0] as any)?.team_id);
@@ -192,19 +196,21 @@ export function TaskMenuItems({
       <CtxSub>
         <CtxSubTrigger icon={User}>Assign</CtxSubTrigger>
         <CtxSubContent className="min-w-[190px]">
-          {members.map((m: any) => (
-            <CtxItem
-              key={m._id}
-              trailing={single && (single as any).assignee === m._id ? <Check className="size-3.5 text-sol-cyan" /> : undefined}
-              onSelect={() => {
-                applyAll({ assignee: m._id });
-                toast.success(`Assigned to ${m.name || "user"}`);
-              }}
-            >
-              {m.name || m.github_username || "user"}
-            </CtxItem>
+          {assignOptions.map((o, i) => (
+            <React.Fragment key={o.key}>
+              {o.section && assignOptions[i - 1]?.section !== o.section && <CtxHeader title={o.section} />}
+              <CtxItem
+                trailing={single && (single as any).assignee === o.key ? <Check className="size-3.5 text-sol-cyan" /> : undefined}
+                onSelect={() => {
+                  applyAll({ assignee: o.key });
+                  toast.success(`Assigned to ${o.label}`);
+                }}
+              >
+                <span className="inline-flex items-center gap-2 min-w-0">{o.face}<span className="truncate">{o.label}</span>{o.hint && <span className="text-sol-text-dim">{o.hint}</span>}</span>
+              </CtxItem>
+            </React.Fragment>
           ))}
-          {members.length > 0 && <CtxSeparator />}
+          {assignOptions.length > 0 && <CtxSeparator />}
           <CtxItem
             onSelect={() => {
               applyAll({ assignee: null });

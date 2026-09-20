@@ -8,11 +8,25 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { linkSendsOutbound } from "./slackMirror";
+import { linkSendsOutbound, slackSendAuth, type SlackSendAuth } from "./slackMirror";
 
 export type SlackLink = Doc<"slack_channel_links">;
 // A reader, so a query context and a mutation context both fit.
 type ReadCtx = { db: QueryCtx["db"] };
+
+export async function slackLinksWithSendAuth(ctx: ReadCtx, links: SlackLink[], userId: Id<"users">) {
+  const auth = new Map<string, SlackSendAuth>();
+  for (const link of links) {
+    if (link.kind !== "dm" || auth.has(link.installation_id)) continue;
+    const token = await ctx.db.query("slack_user_tokens")
+      .withIndex("by_installation_user", (q) => q.eq("installation_id", link.installation_id).eq("user_id", userId))
+      .first();
+    auth.set(link.installation_id, slackSendAuth(token));
+  }
+  return links.map((link) => link.kind === "dm"
+    ? { ...link, viewer_user_id: userId, viewer_slack_auth: auth.get(link.installation_id)! }
+    : link);
+}
 
 export async function slackLinkForChannel(
   ctx: ReadCtx,

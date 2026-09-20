@@ -89,10 +89,16 @@ export async function requireRole(ctx: { db: any }, userId: Id<"users">, ref: st
 
 // Live roles in an access boundary: a team's, or a person's own.
 export async function rolesInBoundary(ctx: { db: any }, seat: { team_id?: any; scope_user_id?: any }): Promise<any[]> {
-  const rows: any[] = seat.team_id
+  return (await allRolesInBoundary(ctx, seat)).filter((r) => r.status !== "retired");
+}
+
+/** Every role in the boundary, retired ones included: what the reporting
+ *  chain is walked over (contracts/orgAssignee), since a retired role stays in
+ *  the chain it reported to and what it still holds is read there. */
+export async function allRolesInBoundary(ctx: { db: any }, seat: { team_id?: any; scope_user_id?: any }): Promise<any[]> {
+  return seat.team_id
     ? await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", seat.team_id)).collect()
     : await ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", seat.scope_user_id)).collect();
-  return rows.filter((r) => r.status !== "retired");
 }
 
 // Every live role answering to a handle in one boundary. A retired role keeps
@@ -101,16 +107,30 @@ export async function rolesInBoundary(ctx: { db: any }, seat: { team_id?: any; s
 // a retire and a hire again that is the retired seat. Every lookup by handle
 // goes through here so none of them can name a dead role.
 export async function liveRolesByHandle(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, handle: string): Promise<any[]> {
+  return (await rolesByHandle(ctx, boundary, handle)).filter((r) => r.status !== "retired");
+}
+
+/** Every role that ever answered to a handle in one boundary, oldest first.
+ *  Only a READ may want a retired one (see roleByHandleForRead). */
+async function rolesByHandle(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, handle: string): Promise<any[]> {
   const h = handle.replace(/^@/, "").trim().toLowerCase();
   if (!h || (!boundary.team_id && !boundary.scope_user_id)) return [];
-  const rows: any[] = boundary.team_id
+  return boundary.team_id
     ? await ctx.db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", boundary.team_id).eq("handle", h)).collect()
     : await ctx.db.query("org_roles").withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", boundary.scope_user_id).eq("handle", h)).collect();
-  return rows.filter((r) => r.status !== "retired");
 }
 
 export async function liveRoleByHandle(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, handle: string): Promise<any | null> {
   return (await liveRolesByHandle(ctx, boundary, handle))[0] ?? null;
+}
+
+/** The role a handle names to a READER: the live one, else the most recently
+ *  retired one, so what a retired role still holds (its tasks) can be asked
+ *  for by the handle a person remembers. Never for a write: a write goes
+ *  through liveRoleByHandle and refuses a dead seat. */
+export async function roleByHandleForRead(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, handle: string): Promise<any | null> {
+  const rows = await rolesByHandle(ctx, boundary, handle);
+  return rows.find((r) => r.status !== "retired") ?? rows[rows.length - 1] ?? null;
 }
 
 // The company's chief of staff, when one stands in the boundary.

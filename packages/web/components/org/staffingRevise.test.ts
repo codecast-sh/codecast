@@ -2,7 +2,8 @@
 // a proposal binds, what a revise did to a row, and what landed since the
 // reader last looked. Run: bun test components/org/staffingRevise.test.ts
 import { describe, expect, test } from "bun:test";
-import { amendedMoves, latestRevisionAt, proposalThread, revisedLine, revisedSince, revisionWord } from "./staffingRevise";
+import { latestOrgRevisionAt } from "@codecast/shared/contracts/orgProposal";
+import { amendedMoves, proposalThread, revisedLine, revisedSince, revisionWord } from "./staffingRevise";
 import { proposalProgress } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL, ORG_STAFFING_FIXTURE_SESSION_PROPOSAL } from "./orgStaffingFixture";
 import { ORG_FIXTURE } from "./orgFixture";
@@ -51,7 +52,7 @@ describe("what a revise did", () => {
     expect(p.remaining).toBe(3);
   });
   test("since the reader last looked", () => {
-    const latest = latestRevisionAt(rows);
+    const latest = latestOrgRevisionAt(rows);
     expect(revisedSince(rows, latest)).toEqual([]);
     const all = revisedSince(rows, 0);
     expect(all.map((c) => c.revision!.kind)).toEqual(["added", "amended", "removed"]);

@@ -29,7 +29,8 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
-import { INITIATIVE_STATUS_ICONS, dayText, healthText, initiativeLine, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
+import { INITIATIVE_STATUS_ICONS, healthText, initiativeLine, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
+import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
   buildEntityUrl,
@@ -190,6 +191,7 @@ import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./
 import { resolveOwnTarget } from "./ownTarget.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { readLocalConversationMap } from "./localConversationMap.js";
 import { readTaskPulseFor } from "./taskPulse.js";
 
 const program = new Command();
@@ -8305,21 +8307,6 @@ function claudeSessionPath(sessionId: string, projectPath?: string | null): stri
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
 
-// The daemon's local sessionId -> conversationId map. It answers "which
-// conversation is this session" without the server, which matters in a
-// session's first seconds: the server-side session_id binding rides the
-// daemon's retry queue, so a just-started or just-resumed session misses on
-// the server while this file already has the answer.
-function readLocalConversationMap(): Record<string, string> {
-  try {
-    const cacheFile = path.join(defaultConfigDir(), "conversations.json");
-    if (!fs.existsSync(cacheFile)) return {};
-    return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
 // Pre-register a fresh sessionId -> conversationId mapping in the daemon's
 // cache *before* the daemon discovers the JSONL. Without this, the daemon
 // treats the reconstituted JSONL as a brand-new session and creates a
@@ -13088,6 +13075,13 @@ roleGroup
     await roleFollowAction("/cli/role/unfollow", handle, channel, options);
   });
 
+// What a scope gain moved (org-roles-run-work.md R1): the server's sentence,
+// or, when the person said to leave them, that nothing moved.
+function printTookOver(role: { took_over?: { phrase?: string } | null }, left: boolean): void {
+  if (role.took_over?.phrase) console.log(`  ${role.took_over.phrase}`);
+  else if (left) console.log(`  ${c.dim}the sessions in it stay where they are${c.reset}`);
+}
+
 // Scope edits are human only (scopes-and-feed.md F1): the session this runs
 // inside, when any, rides along so the server can refuse an agent's call.
 const collectRefs = (value: string, prev: string[] = []) => [...prev, ...value.split(",").map((s) => s.trim()).filter(Boolean)];
@@ -13097,6 +13091,7 @@ roleGroup
   .argument("<handle>", "The role: @handle or its short id (or-N)")
   .option("--add <ref>", "project:<short id|id|title> or plan:<pl-N|id>; repeatable", collectRefs, [])
   .option("--remove <ref>", "project:<ref> or plan:<ref>; repeatable", collectRefs, [])
+  .option("--leave-sessions", "With --add: the scope lands and the sessions in it stay with their owner (a role that gains scope otherwise takes over the host's sessions in it)")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (handle: string, options: any) => {
@@ -13105,10 +13100,11 @@ roleGroup
     const target = await resolveOrgTarget(handle, ws);
     if (target.kind !== "role") { console.error(`"${handle}" is a person, not a role.`); process.exit(1); }
     const from_session = process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION || undefined;
-    const role = await cliPost("/cli/org/scope", { role_id: target.role_id, add: options.add, remove: options.remove, from_session });
+    const role = await cliPost("/cli/org/scope", { role_id: target.role_id, add: options.add, remove: options.remove, from_session, ...(options.leaveSessions ? { leave_sessions: true } : {}) });
     if (options.json) { console.log(JSON.stringify(role, null, 2)); return; }
     const scope = [...role.scope.project_ids.map((id: string) => `project ${id}`), ...role.scope.plan_ids.map((id: string) => `plan ${id}`)];
     console.log(`${c.green}✓${c.reset} @${role.handle} ${c.dim}(${role.short_id})${c.reset} scope: ${scope.length ? scope.join(", ") : "whole workspace"}`);
+    printTookOver(role, !!options.leaveSessions);
     for (const o of role.overlaps ?? []) {
       console.log(`  ${c.yellow}overlaps @${o.handle}${c.reset} ${c.dim}on ${[...o.project_ids.map((id: string) => `project ${id}`), ...o.plan_ids.map((id: string) => `plan ${id}`)].join(", ")}${c.reset}`);
     }
@@ -13232,6 +13228,7 @@ roleGroup
   .option("--agent <agent>", "Agent backend for the standing session (default: claude)")
   .option("-C, --dir <path>", "Project directory the standing session runs in (default: current)")
   .option("--no-session", "Create the seat only; provision later with cast role provision")
+  .option("--leave-sessions", "With --project or --plan: the sessions in the scope stay with their owner (the new role otherwise takes over the host's sessions in it)")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (name: string, options: any) => {
@@ -13254,9 +13251,11 @@ roleGroup
       model: options.model,
       agent_type: options.agent,
       project_path: dir,
+      ...(options.leaveSessions ? { leave_sessions: true } : {}),
     });
     if (options.json) { console.log(JSON.stringify(role, null, 2)); return; }
     console.log(`${c.green}✓${c.reset} created ${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} (${role.short_id}) in ${workspaceLabel(ws)}${c.reset}`);
+    printTookOver(role, !!options.leaveSessions);
     if (role.provisioned) {
       console.log(`  ${c.dim}standing session ${role.provisioned.short_id ?? String(role.provisioned.conversation_id).slice(0, 7)} coming online in ${dir.replace(process.env.HOME || "~", "~")}${role.provisioned.already_existed ? " (already existed)" : ""}${c.reset}`);
     } else {
@@ -15981,7 +15980,7 @@ work
     // out by status, or past the limit — renders as a root, never dropped.
     // --chain reads as the reporting line: one group per assignee.
     const groups = options.chain
-      ? groupTasksByAssignee(tasks as Array<{ assignee?: string; assignee_name?: string }>)
+      ? groupTasksByAssignee(tasks as Array<{ assignee?: string; assignee_name?: string; assignee_info?: any }>)
       : [{ label: "", tasks }];
     for (const group of groups) {
       if (group.label) console.log(`\n  ${c.bold}${group.label}${c.reset} ${fmt.muted(String(group.tasks.length))}`);
@@ -16083,6 +16082,7 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
   if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
+  if (t.created_at) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
   if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
   if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
   if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
@@ -16092,6 +16092,16 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
     console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
     for (const sess of t.sessions) {
       console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
+    }
+  }
+  if (t.history?.length) {
+    console.log(`\n  ${c.bold}History (${t.history.length})${c.reset}`);
+    for (const h of t.history) {
+      const what = h.action === "created"
+        ? "created this task"
+        : `${h.field}: ${h.old_value ?? "none"} to ${h.new_value ?? "none"}`;
+      const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
+      console.log(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${h.actor ?? "system"} ${what}${from}`);
     }
   }
   if (t.comments?.length) {
@@ -16130,7 +16140,10 @@ work
   .option("--agent <type>", "Agent type for --spawn: claude (default) or codex")
   .option("--message <text>", stdinText("First message for the spawned session (default: the task's own brief)"))
   .action(async (shortId: string, options: any) => {
-    const sessionId = detectCurrentSessionId();
+    // The caller's own session, never a guess (taskClaim.ts): the server hands
+    // the task to the session's role, so a wrong session hands it to the wrong
+    // party. Same for done, handoff, verdict and drop below.
+    const sessionId = ownSessionId(getRealCwd());
     const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
     for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
@@ -16167,7 +16180,7 @@ work
   .option("--cascade", "Also close this task's open subtasks")
   .option("--only-parent", "Close just this task, leaving open subtasks in place")
   .action(async (shortId: string, options: any) => {
-    const sessionId = detectCurrentSessionId();
+    const sessionId = ownSessionId(getRealCwd());
     const body: Record<string, any> = { short_id: shortId, status: "done" };
     if (options.cascade) body.subtask_resolution = "cascade";
     else if (options.onlyParent) body.subtask_resolution = "only_parent";
@@ -16214,7 +16227,7 @@ work
         return slug;
       });
       input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages };
-      body = buildTaskHandoffBody(shortId, detectCurrentSessionId(), input);
+      body = buildTaskHandoffBody(shortId, ownSessionId(getRealCwd()), input);
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
       process.exit(1);
@@ -16249,7 +16262,7 @@ work
       console.error(`Error: ${(err as Error).message}`);
       process.exit(1);
     }
-    const body = buildTaskVerdictBody(shortId, detectCurrentSessionId(), verdict, options.note);
+    const body = buildTaskVerdictBody(shortId, ownSessionId(getRealCwd()), verdict, options.note);
     await cliPost("/cli/work/update", body);
     const commentBody: Record<string, any> = { short_id: shortId, text: verdictCommentText(verdict, options.note), comment_type: "review" };
     if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
@@ -16266,7 +16279,7 @@ work
   .option("--cascade", "Also drop this task's open subtasks")
   .option("--only-parent", "Drop just this task, leaving open subtasks in place")
   .action(async (shortId: string, options: any) => {
-    const sessionId = detectCurrentSessionId();
+    const sessionId = ownSessionId(getRealCwd());
     const body: Record<string, any> = { short_id: shortId, status: "dropped" };
     if (options.cascade) body.subtask_resolution = "cascade";
     else if (options.onlyParent) body.subtask_resolution = "only_parent";
@@ -16934,6 +16947,14 @@ const initiativeCmd = program
   .description("Manage initiatives (a goal above projects, with an owner and a health)")
   .showHelpAfterError(true);
 
+// A target is a calendar day, stored through the shared pair the web reads with.
+function initiativeTargetArg(text: string): number | null {
+  if (NONE(text)) return null;
+  const stamp = targetDayStamp(text);
+  if (stamp === null) { console.error(`Invalid --target "${text}" — use YYYY-MM-DD, or "none" to clear`); process.exit(1); }
+  return stamp;
+}
+
 // A person writes a health as "on track"; the wire says on_track.
 function initiativeHealthArg(text: string): string {
   const health = parseInitiativeHealth(text);
@@ -16980,7 +17001,7 @@ initiativeCmd
       body.status = parseInitiativeStatus(options.status);
       if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
     }
-    if (options.target) body.target_date = parseDeadlineDate(options.target);
+    if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority) body.priority = options.priority;
     if (options.parent) body.parent_initiative_id = options.parent;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
@@ -17030,7 +17051,7 @@ initiativeCmd
     console.log(`\n  ${icon} ${c.bold}${row.title}${c.reset}  ${c.cyan}${row.short_id}${c.reset}`);
     const facts = [row.status, `owner ${row.owner_label ?? `${c.yellow}none${c.reset}`}`, `health ${healthText(c, row.health, row.health_at)}`];
     if (row.priority) facts.push(row.priority);
-    if (row.target_date) facts.push(`target ${dayText(row.target_date)}`);
+    if (row.target_date) facts.push(`target ${targetDayOf(row.target_date)}`);
     if (row.parent) facts.push(`under ${c.cyan}${row.parent.short_id}${c.reset} ${row.parent.title}`);
     console.log(`  ${c.dim}${facts.join(" | ")}${c.reset}`);
     if (row.labels?.length) console.log(`  ${c.dim}Labels: ${row.labels.join(", ")}${c.reset}`);
@@ -17113,7 +17134,7 @@ initiativeCmd
       if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
     }
     if (options.owner !== undefined) body.owner = NONE(options.owner) ? null : options.owner;
-    if (options.target) body.target_date = parseDeadlineDate(options.target);
+    if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority !== undefined) body.priority = NONE(options.priority) ? null : options.priority;
     if (options.parent !== undefined) body.parent_initiative_id = NONE(options.parent) ? null : options.parent;
     if (options.labels !== undefined) body.labels = NONE(options.labels) ? [] : options.labels.split(",").map((s: string) => s.trim());

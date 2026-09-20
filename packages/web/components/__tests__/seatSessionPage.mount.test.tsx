@@ -13,6 +13,11 @@
 //                 hideHeader), the share control and the context panels, rests
 //                 on one row and opens on demand
 //   unknown role  a seat whose role the tree does not hold stays a session
+//   an ask        Session view asked from another page lands while the pane
+//                 already shows the seat, and settles once
+//   a surface     the stage pane and the pop out window mount the same switch;
+//                 their own end controls stay in both views
+// Each test stands alone: every open is the card's whole gesture.
 // Run: bun test components/__tests__/seatSessionPage.mount.test.tsx
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, expect, mock, test } from "bun:test";
@@ -58,7 +63,7 @@ mock.module("../FleetBoard", () => ({ FleetBoard: () => <div data-fleet />, Inbo
 mock.module("../ActivityFeed", () => ({ ActivityFeed: () => <div data-feed /> }));
 mock.module("../EmptyState", () => ({ EmptyState: () => null }));
 mock.module("../SharePopover", () => ({ SharePopover: () => <button data-share>Share</button> }));
-mock.module("../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null }));
+mock.module("../SessionErrorBanner", () => ({ SessionErrorBanner: () => <div data-error-banner />, SessionResumeBanner: () => null }));
 mock.module("../PlanContextPanel", () => ({ PlanContextPanel: () => null }));
 mock.module("../WorkflowContextPanel", () => ({ WorkflowContextPanel: () => null }));
 mock.module("../TriggerContextPanel", () => ({ TriggerContextPanel: () => <div data-trigger-panel /> }));
@@ -112,7 +117,7 @@ const { createRoot } = await import("react-dom/client");
 
 const roleSnapshot = { _id: ROLE, name: "Chief of Staff", handle: "chief-of-staff", avatar: null };
 const row = (id: string, extra: Record<string, unknown>) => ({ _id: id, title: id, started_at: 1, updated_at: Date.now(), message_count: 3, is_idle: true, agent_type: "claude_code", ...extra });
-const seed = () => useInboxStore.setState({
+const seed = (rows: Record<string, Record<string, unknown>> = {}) => useInboxStore.setState({
   clientStateInitialized: true,
   showMySessions: false,
   orgTree: { roles: [{ _id: ROLE, short_id: "or-10", name: "Chief of Staff", handle: "chief-of-staff", status: "active" }] } as any,
@@ -120,14 +125,15 @@ const seed = () => useInboxStore.setState({
     [SEAT]: row(SEAT, { standing_role_id: ROLE, role: roleSnapshot }),
     [HAND]: row(HAND, { org_role_id: ROLE, role: roleSnapshot }),
     [STRAY]: row(STRAY, { standing_role_id: "role-elsewhere", role: { ...roleSnapshot, _id: "role-elsewhere" } }),
+    ...rows,
   } as any,
 });
 
 let root = createRoot(document.getElementById("root")!);
-const mount = async (qs = "") => {
+const mount = async (qs = "", rows: Record<string, Record<string, unknown>> = {}) => {
   await act(async () => root.unmount());
   env.qs = qs;
-  seed();
+  seed(rows);
   root = createRoot(document.getElementById("root")!);
   await act(async () => root.render(<queuePage.QueuePageClient />));
 };
@@ -141,6 +147,10 @@ const settle = async () => {
 const q = (sel: string) => document.querySelector<HTMLElement>(sel);
 const click = async (sel: string) => { const el = q(sel); expect(el).not.toBeNull(); await act(async () => el!.click()); await settle(); };
 const go = async (fn: (s: ReturnType<typeof useInboxStore.getState>) => void) => { await act(async () => fn(useInboxStore.getState())); await settle(); };
+// A card, the chart's select, a fork chip: what the inbox's own click handler
+// does. Leaving the home surface is part of the gesture, so every test stands
+// alone whatever the store held before it.
+const open = (id: string) => go((s) => { s.navigateToSession(id); s.setShowMySessions(false); });
 const expectRolePage = () => {
   expect(q("[data-scope-page]")?.getAttribute("data-scope-page")).toBe(ROLE);
   expect(q("[data-scope-aside]")).not.toBeNull();
@@ -149,8 +159,7 @@ const expectRolePage = () => {
 
 test("a seat opened by four routes renders the role layout", async () => {
   await mount();
-  // A card, the chart's select, a fork chip: what the inbox's own click handler does.
-  await go((s) => { s.navigateToSession(SEAT); s.setShowMySessions(false); });
+  await open(SEAT);
   expectRolePage();
 
   await mount();
@@ -162,19 +171,19 @@ test("a seat opened by four routes renders the role layout", async () => {
   expectRolePage();
 
   await mount();
-  await go((s) => s.setViewingDismissedId(SEAT)); // a stashed seat, peeked at
+  await go((s) => { s.setViewingDismissedId(SEAT); s.setShowMySessions(false); }); // a stashed seat, peeked at
   expectRolePage();
 }, 600_000);
 
 test("a hand keeps the session page, and so does a seat whose role the tree does not hold", async () => {
   await mount();
-  await go((s) => s.navigateToSession(HAND));
+  await open(HAND);
   expect(q("[data-scope-page]")).toBeNull();
   expect(q("[data-layout]")?.getAttribute("data-layout")).toBe(HAND);
   expect(q("[data-seat-role-page]")).toBeNull();
   expect(q("[data-seat-head]")).toBeNull();
 
-  await go((s) => s.navigateToSession(STRAY));
+  await open(STRAY);
   expect(q("[data-scope-page]")).toBeNull();
   expect(q("[data-layout]")?.getAttribute("data-layout")).toBe(STRAY);
   expect(q("[data-seat-role-page]")).toBeNull();
@@ -182,7 +191,7 @@ test("a hand keeps the session page, and so does a seat whose role the tree does
 
 test("Session view lasts one visit, and Role page returns within it", async () => {
   await mount();
-  await go((s) => s.navigateToSession(SEAT));
+  await open(SEAT);
   expectRolePage();
 
   await click("[data-seat-session-view]");
@@ -194,8 +203,8 @@ test("Session view lasts one visit, and Role page returns within it", async () =
   expectRolePage();
 
   await click("[data-seat-session-view]");
-  await go((s) => s.navigateToSession(HAND));
-  await go((s) => s.navigateToSession(SEAT));
+  await open(HAND);
+  await open(SEAT);
   expectRolePage();
 }, 600_000);
 
@@ -203,36 +212,99 @@ test("the role page asks for the plain view across the route, once", async () =>
   const { askSessionView } = await import("../../lib/sessionViewVisit");
   await mount();
   // The pane is already showing another session when the person arrives.
-  await go((s) => s.navigateToSession(HAND));
+  await open(HAND);
   askSessionView(SEAT);
-  await go((s) => s.navigateToSession(SEAT));
+  await open(SEAT);
   expect(q("[data-scope-page]")).toBeNull();
   expect(q("[data-seat-role-page]")).not.toBeNull();
 
-  await go((s) => s.navigateToSession(HAND));
-  await go((s) => s.navigateToSession(SEAT));
+  await open(HAND);
+  await open(SEAT);
   expectRolePage();
+}, 600_000);
+
+// The tab shell keeps the inbox mounted: a person goes inbox, then the chart,
+// then Session view, and the pane ALREADY shows that seat. The ask must still
+// land, and a second ask after Role page must land again.
+test("an ask lands while the pane already shows the seat", async () => {
+  const { askSessionView } = await import("../../lib/sessionViewVisit");
+  await mount();
+  await open(SEAT);
+  expectRolePage();
+
+  await act(async () => askSessionView(SEAT));
+  await settle();
+  expect(q("[data-scope-page]")).toBeNull();
+  expect(q("[data-seat-role-page]")).not.toBeNull();
+
+  await click("[data-seat-role-page]");
+  expectRolePage();
+  await act(async () => askSessionView(SEAT));
+  await settle();
+  expect(q("[data-scope-page]")).toBeNull();
+
+  // Settled: leaving and returning is the role page again.
+  await open(HAND);
+  await open(SEAT);
+  expectRolePage();
+}, 600_000);
+
+// The stage pane and the pop out window mount the same switch with their own
+// end controls, which stay in the header in both views.
+test("a surface's own end controls ride along in both views", async () => {
+  await mount();
+  await open(SEAT);
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById("root")!);
+  const props = { sessionId: SEAT, isIdle: true, onSendAndAdvance: () => {}, headerEnd: <button data-pane-close>close</button> };
+  await act(async () => root.render(<queuePage.SessionPage {...props} />));
+  await settle();
+  expectRolePage();
+  expect(q("[data-sv-convhead] [data-pane-close]")).not.toBeNull();
+  expect(q("[data-seat-session-view]")).not.toBeNull();
+  await click("[data-seat-session-view]");
+  expect(q("[data-scope-page]")).toBeNull();
+  expect(q("[data-sv-convhead] [data-pane-close]")).not.toBeNull();
+  expect(q("[data-seat-role-page]")).not.toBeNull();
 }, 600_000);
 
 test("the seat keeps the session header and every slot, resting on one row", async () => {
   await mount();
-  await go((s) => s.navigateToSession(SEAT));
+  await open(SEAT);
   const layout = q("[data-layout]")!;
   expect(layout.getAttribute("data-hide-header")).toBe("0");
   expect(layout.getAttribute("data-density")).toBe("condensed");
   expect(q("[data-sv-convhead] [data-share]")).not.toBeNull();
-  expect(q("[data-trigger-panel]")).not.toBeNull();
   expect(q("[data-seat-label]")).not.toBeNull();
   expect(q("[data-lead]")).not.toBeNull();
+  // At rest the routine line waits behind the expander, not above the first message.
+  expect(q("[data-trigger-panel]")).toBeNull();
 
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("rest");
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("open");
-  // The label leaves the DOM, which is what makes the row's squeeze measure again.
+  expect(q("[data-trigger-panel]")).not.toBeNull();
+  // The state slot leaves the DOM, which is what makes the row's squeeze measure again.
   expect(q("[data-seat-label]")).toBeNull();
   expect(q("[data-seat-head-toggle]")?.getAttribute("aria-expanded")).toBe("true");
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("rest");
+}, 600_000);
+
+test("a stall replaces the state word at rest; the banner waits behind the expander", async () => {
+  // The stall arrives with the row, as it does from the sync.
+  await mount("", { [SEAT]: row(SEAT, { standing_role_id: ROLE, role: roleSnapshot, session_error: "the agent died" }) });
+  await open(HAND);
+  await open(SEAT);
+  expectRolePage();
+  expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(true);
+  expect(q("[data-seat-stall]")?.textContent).toContain("Session error");
+  expect(q("[data-seat-stall-action]")?.textContent).toBe("Resume");
+  expect(q("[data-error-banner]")).toBeNull();
+
+  await click("[data-seat-head-toggle]");
+  expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(false);
+  expect(q("[data-error-banner]")).not.toBeNull();
 }, 600_000);
 
 // The fold is CSS over the real header, so no action is rebuilt and none can

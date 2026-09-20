@@ -12,10 +12,28 @@ import { cn } from "../../../lib/utils";
 const ICON_BUTTON = "p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors";
 const TEXT_BUTTON = "h-[22px] inline-flex items-center gap-1 px-1.5 rounded text-[11px] text-sol-text-dim hover:text-sol-text-secondary hover:bg-sol-bg-alt transition-colors whitespace-nowrap";
 
-/** What the resting row says it is, where the title would be. The role's
- *  header above already carries the face and the name. */
-export function SeatHeadLabel() {
-  return <span data-seat-label className="text-[11px] text-sol-text-dim select-none">Session</span>;
+/** What is wrong with the session, said in the row's own words: the one
+ *  thing that replaces the state word at rest. Null when nothing is. */
+export type SeatStall = { word: string; action?: { label: string; onClick: () => void } } | null;
+
+/** The resting row's first slot. It mounts at rest and leaves when the
+ *  header opens: a DOM change inside the header's row, which is what makes
+ *  the row's squeeze (useSqueezeToFit) measure again. With a stall it carries
+ *  the notice; the live status word is hidden then (globals.css), so the row
+ *  never says "Connected" beside "unresponsive". */
+export function SeatHeadState({ stall }: { stall: SeatStall }) {
+  if (!stall) return <span data-seat-label hidden />;
+  return (
+    <span data-seat-label data-seat-stall className="inline-flex items-center gap-1.5 text-[11px] whitespace-nowrap" style={{ color: stall.action ? "var(--sol-orange)" : "var(--sol-text-muted)" }}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: "currentColor" }} />
+      {stall.word}
+      {stall.action && (
+        <button type="button" onClick={stall.action.onClick} className="h-[18px] px-1.5 rounded text-[10.5px] font-medium border transition-colors hover:brightness-110" style={{ borderColor: "color-mix(in srgb, currentColor 45%, transparent)" }} data-seat-stall-action>
+          {stall.action.label}
+        </button>
+      )}
+    </span>
+  );
 }
 
 export function SeatHeadControls({ open, onToggle, onSessionView }: { open: boolean; onToggle: () => void; onSessionView: () => void }) {

@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Code2,
   ExternalLink,
+  FolderGit2,
   GitBranch,
   GitPullRequest,
   History,
@@ -25,6 +26,7 @@ import {
   repoSearchHref,
   repoTagsHref,
   repoTreeHref,
+  repoWorktreesHref,
   type RepoRouteFamily,
 } from "../../lib/repoView";
 import { RepoWindowControl } from "./RepoWindowControl";
@@ -32,7 +34,7 @@ import { cn } from "../../lib/utils";
 import { repoShortcutAllowed } from "../../lib/repoContent";
 import { RepoFileFinder } from "./RepoFileFinder";
 
-export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "search";
+export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "search" | "worktrees";
 
 export function BranchPicker({
   branches,
@@ -111,7 +113,7 @@ export function BranchPicker({
 }
 
 /**
- * The band and the six tabs. The digits `1` to `6` move between them, ignored
+ * The band and its tabs. The digits `1` to `7` move between them, ignored
  * while typing so a filter box can contain a digit.
  *
  * The header builds its own hrefs from the repository, the ref it is showing
@@ -164,6 +166,8 @@ export function RepoHeader({
     { key: "tags", label: "Tags", href: repoTagsHref(repository, family), icon: Tag, digit: "4" },
     { key: "pulls", label: "Pull requests", href: repoPullsHref(repository, family), icon: GitPullRequest, digit: "5" },
     { key: "search", label: "Search", href: repoSearchHref(repository, undefined, family), icon: Search, digit: "6" },
+    // A fact about someone's machine, so only the signed in form of these pages carries it.
+    ...(family === "app" ? [{ key: "worktrees" as const, label: "Worktrees", href: repoWorktreesHref(repository), icon: FolderGit2, digit: "7" }] : []),
   ];
 
   useEventListener("keydown", (e: KeyboardEvent) => {

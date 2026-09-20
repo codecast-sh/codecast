@@ -49,6 +49,12 @@ export type RoleScopeViewProps = {
   onFilePlan?: (planRef: string, projectId: string) => void;
   /** Page only: the role's sessions grouped by who acts next. */
   sessions?: ReactNode;
+  /** Page only: the viewer's goals, when they report to the role (R6): what
+   *  moved on each and what stalled. */
+  goals?: ReactNode;
+  /** Page only: the record of what changed this role (org-staffing.md S21),
+   *  newest first, each entry with its way back. */
+  history?: ReactNode;
   /** Page only: sessions waiting on a person anywhere in the role's area (the
    *  ones bound to its tasks and plans too), when that is more than the
    *  sessions that report to it. The page header says this number; the
@@ -59,7 +65,7 @@ export type RoleScopeViewProps = {
   className?: string;
 };
 
-export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
+export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, goals, history, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
   const moreWaiting = !(density === "card") && waitingInArea > (model.sessions?.waiting ?? 0);
   const card = density === "card";
   const projects = card ? model.projects.slice(0, CARD_PROJECTS) : model.projects;
@@ -113,6 +119,8 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, rend
         </Section>
       )}
 
+      {!card && goals && <Section density={density} label="Your goals" name="goals">{goals}</Section>}
+
       <Section density={density} label="Its job" name="charter">
         {model.charter.paragraph
           ? <p className={card ? "text-sol-text-secondary line-clamp-3" : "px-2.5 text-[13px] leading-relaxed text-sol-text-secondary"} data-scope-charter>{card ? model.charter.sentence : model.charter.paragraph}</p>
@@ -155,6 +163,8 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, rend
           <p className={card ? "text-sol-text-secondary" : "px-2.5 text-[12px] text-sol-text-muted"} data-scope-limit>{model.limit}</p>
         </Section>
       )}
+
+      {!card && history && <Section density={density} label="History" name="history"><div className="px-2.5">{history}</div></Section>}
     </div>
   );
 }

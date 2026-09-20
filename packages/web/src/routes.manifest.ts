@@ -191,6 +191,7 @@ const RepoBlob = lazy(() => import("@/app/repo/[owner]/[name]/blob/[ref]/page"))
 const RepoCommits = lazy(() => import("@/app/repo/[owner]/[name]/commits/[ref]/page"));
 const RepoCompare = lazy(() => import("@/app/repo/[owner]/[name]/compare/[range]/page"));
 const RepoBranches = lazy(() => import("@/app/repo/[owner]/[name]/branches/page"));
+const RepoWorktrees = lazy(() => import("@/app/repo/[owner]/[name]/worktrees/page"));
 const RepoTags = lazy(() => import("@/app/repo/[owner]/[name]/tags/page"));
 const RepoPulls = lazy(() => import("@/app/repo/[owner]/[name]/pulls/page"));
 const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
@@ -362,6 +363,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "repo/:owner/:name/commits/:ref", component: cast(RepoCommits), layout: "codeReview", tab: "/repo/:owner/:name/commits/:ref", fullWidth: true },
   { path: "repo/:owner/:name/compare/:range", component: cast(RepoCompare), layout: "codeReview", tab: "/repo/:owner/:name/compare/:range", fullWidth: true },
   { path: "repo/:owner/:name/branches", component: cast(RepoBranches), layout: "codeReview", tab: "/repo/:owner/:name/branches", fullWidth: true },
+  { path: "repo/:owner/:name/worktrees", component: cast(RepoWorktrees), layout: "codeReview", tab: "/repo/:owner/:name/worktrees", fullWidth: true },
   { path: "repo/:owner/:name/tags", component: cast(RepoTags), layout: "codeReview", tab: "/repo/:owner/:name/tags", fullWidth: true },
   { path: "repo/:owner/:name/pulls", component: cast(RepoPulls), layout: "codeReview", tab: "/repo/:owner/:name/pulls", fullWidth: true },
   { path: "repo/:owner/:name/search", component: cast(RepoSearch), layout: "codeReview", tab: "/repo/:owner/:name/search", fullWidth: true },

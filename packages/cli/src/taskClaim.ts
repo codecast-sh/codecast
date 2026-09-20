@@ -1,4 +1,4 @@
-import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
+import { ASSIGNEE_MEANS, isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 
 // `cast task start` claims a task. Who the claim belongs to depends on who ran
 // it. A person at a terminal is the assignee. An agent inside a session runs
@@ -7,8 +7,13 @@ import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 // owner that they assigned themselves. The agent's claim is the session
 // binding (conversation_id) alone, never an assignee.
 //
-// The session detector is the same one that stamps source:"agent" on create,
-// so the two decisions can never disagree.
+// The session id must be the caller's OWN, never a guess: the server reads
+// the session's role off it (a hand's start hands the task to its role, a
+// hand's verdict is refused as its own role's), so a person at a plain
+// terminal handed "the one transcript active in the last five minutes" would
+// give a task to a hand's role or be refused as a hand. The task verbs read
+// `ownSessionId` (the agent's own exported id, then the process walk), which
+// is the same witness that stamps source:"agent" on create.
 
 export function buildTaskStartBody(shortId: string, sessionId: string | null): Record<string, any> {
   const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
@@ -35,17 +40,18 @@ export function startedLines(result: Parameters<typeof startedForRoleLine>[0]): 
 
 // `cast task ls --chain`: one group per assignee, the person first and then
 // each role under them by handle, so a reader sees whose work each row is
-// without reading a column. Rows keep the order the server gave them.
-export function groupTasksByAssignee<T extends { assignee?: string; assignee_name?: string }>(tasks: T[]): Array<{ label: string; tasks: T[] }> {
-  const groups = new Map<string, { label: string; tasks: T[] }>();
+// without reading a column. Rows keep the order the server gave them. A role
+// is told from a person by the contract's shape on the row (`assignee_info`,
+// orgAssignee.ts), never by the look of its label.
+export function groupTasksByAssignee<T extends { assignee?: string; assignee_name?: string; assignee_info?: AssigneeInfo | null }>(tasks: T[]): Array<{ label: string; role: boolean; tasks: T[] }> {
+  const groups = new Map<string, { label: string; role: boolean; tasks: T[] }>();
   for (const t of tasks) {
     const key = t.assignee ?? "";
-    const group = groups.get(key) ?? { label: t.assignee_name || t.assignee || "Nobody", tasks: [] };
+    const group = groups.get(key) ?? { label: t.assignee_name || t.assignee || "Nobody", role: isRoleAssignee(t.assignee_info), tasks: [] };
     group.tasks.push(t);
     groups.set(key, group);
   }
-  const isRole = (g: { label: string }) => g.label.startsWith("@");
-  return [...groups.values()].sort((a, b) => Number(isRole(a)) - Number(isRole(b)) || a.label.localeCompare(b.label));
+  return [...groups.values()].sort((a, b) => Number(a.role) - Number(b.role) || a.label.localeCompare(b.label));
 }
 
 // ─── Structured handoff and review verdict (docs/architecture/the-line.md L2, L3)

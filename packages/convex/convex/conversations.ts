@@ -7723,6 +7723,38 @@ export const backfillSharedTeamlessTeamId = internalMutation({
   },
 });
 
+// Move named conversations to a team their owner belongs to. Creation derives
+// the team from the working directory, so a session launched from a task page
+// while the viewer had another team's repo open was routed to that team
+// (ct-52745: three Union sessions stamped Codecast). Goes through
+// patchConversationVisibility so linked work items' access keys follow.
+export const moveConversationsToTeam = internalMutation({
+  args: {
+    conversation_ids: v.array(v.id("conversations")),
+    team_id: v.id("teams"),
+    dry_run: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const moved: Array<{ _id: string; title?: string; from?: string }> = [];
+    const refused: Array<{ _id: string; reason: string }> = [];
+    for (const id of args.conversation_ids) {
+      const conv = await ctx.db.get(id);
+      if (!conv) { refused.push({ _id: id, reason: "not found" }); continue; }
+      const member = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q) => q.eq("user_id", conv.user_id).eq("team_id", args.team_id))
+        .first();
+      if (!member) { refused.push({ _id: id, reason: "owner is not a member of the target team" }); continue; }
+      if (conv.team_id?.toString() === args.team_id.toString()) continue;
+      // A person chose this team, so the row stops reading as shared by its
+      // directory: buildPathRestampUpdate leaves a manual share where it is.
+      if (!args.dry_run) await patchConversationVisibility(ctx, conv, { team_id: args.team_id, is_private: false, auto_shared: undefined });
+      moved.push({ _id: id, title: conv.title, from: conv.team_id?.toString() });
+    }
+    return { moved, refused, dry_run: !!args.dry_run };
+  },
+});
+
 export const revertBackfilledTeamVisibility = internalMutation({
   args: {
     cursor: v.optional(v.string()),

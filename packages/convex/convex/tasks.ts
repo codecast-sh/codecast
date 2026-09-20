@@ -3,8 +3,9 @@ import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { resolveActor } from "./lib/actor";
-import { liveRoleByHandle, rolesInBoundary } from "./lib/orgAccess";
-import { chainAssignees } from "@codecast/shared/contracts/orgAssignee";
+import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
+import { matchHandle, teamRoster } from "./lib/mentionResolve";
+import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { noteOrgAssignment } from "./orgEvents";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
@@ -32,6 +33,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { requireInitiative } from "./lib/initiativeRef";
+import { projectTasks } from "./lib/projectWork";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
@@ -45,8 +47,13 @@ import { webBaseUrl } from "./slack";
 // callers keep working unchanged.
 import {
   type AuthorizedWorkspace,
+  accessStampFromDoc,
+  authorizedFor,
   canAccessTask,
   canAccessConversation,
+  heldKeysFor,
+  parseWorkspaceKey,
+  resolveWorkspaceKey,
   canAccessDoc,
   canAccessPlan,
   canAccessProject,
@@ -104,8 +111,8 @@ export async function resolveWorkerParentConversation(
  * itself stores no remote). Shared by `dispatch.createSession` and
  * `tasks.assignToAgent` so both task-launch paths stamp the conversation and
  * route the daemon identically — without a project_path the conversation can't
- * be started by any daemon (the "start agent run did nothing" bug). `seed` lets
- * a caller-supplied path win over the task's.
+ * be started by any daemon (the "start agent run did nothing" bug). `seed` is the
+ * caller's path: it refines the choice inside the task's team and never overrides it.
  */
 export async function resolveTaskGitContext(
   ctx: any,
@@ -114,19 +121,27 @@ export async function resolveTaskGitContext(
   mappings: any[],
   seed?: { project_path?: string; git_root?: string },
 ): Promise<{ project_path?: string; git_root?: string; git_remote_url?: string }> {
-  let project_path = seed?.project_path;
   let git_root = seed?.git_root;
   let git_remote_url: string | undefined;
 
-  if (!project_path) {
-    if (task.project_path) {
-      project_path = task.project_path;
-    } else if (task.team_id) {
-      const teamMapping = mappings.find((m: any) => m.team_id?.toString() === task.team_id.toString());
-      if (teamMapping) project_path = teamMapping.path_prefix;
-    }
-    if (!git_root) git_root = project_path;
-  }
+  // What the task pins wins: its own path, then its project's. A seed is only
+  // trusted past that when it already sits inside the task's team, because the
+  // web sends the viewer's open repo as the seed when the task pins nothing —
+  // and that repo may belong to another team entirely (a Union task launched
+  // three sessions into ~/src/codecast this way). Otherwise the team's mapped
+  // directory routes, and a foreign seed is the last resort that keeps a task
+  // whose team has no mapping startable at all.
+  const project = task.project_id ? await ctx.db.get(task.project_id).catch(() => null) : null;
+  const teamKey = task.team_id?.toString();
+  const seedInTaskTeam = !!teamKey
+    && resolveTeamForPath(mappings, seed?.project_path, undefined).teamId?.toString() === teamKey;
+  const project_path: string | undefined =
+    task.project_path
+    || project?.project_path
+    || (seedInTaskTeam ? seed?.project_path : undefined)
+    || (teamKey ? mappings.find((m: any) => m.team_id?.toString() === teamKey)?.path_prefix : undefined)
+    || seed?.project_path;
+  if (!git_root && project_path !== seed?.project_path) git_root = project_path;
 
   // A git_root that isn't an ancestor of the resolved project_path describes a
   // DIFFERENT repo — typically the viewer's currently-open conversation stamped
@@ -253,7 +268,11 @@ async function findTeamMemberId(
     .query("team_memberships")
     .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
     .collect();
-  const members = (await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))).filter(Boolean);
+  // A bot on the roster is a role's seat or the workspace anchor, never a
+  // person to assign: a role named "Growth" mints a bot user named "Growth",
+  // and matching it here would hand "@growth" to a fake person and never to
+  // the role (which is looked up after the people, in resolveAssigneeStr).
+  const members = (await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))).filter((u: any) => u && !u.is_bot);
   const exact = members.find((u: any) =>
     u.github_username?.toLowerCase() === lower ||
     u.name?.toLowerCase() === lower ||
@@ -296,13 +315,33 @@ export async function resolveAssigneeToUserId(
 // inside its own boundary: a team's role takes that team's tasks, a personal
 // role its owner's. The by_assignee indexes key on the string either way.
 
-type AssigneeBoundary = { team_id?: Id<"teams">; scope_user_id?: Id<"users"> };
+type AssigneeBoundary = {
+  team_id?: Id<"teams">;
+  scope_user_id?: Id<"users">;
+  /** The team a task is ROUTED to when its access boundary is personal (a
+   *  task kept private inside a team): where a handle is looked up, on the
+   *  roster and among the roles, so "@growth" names the team's role and is
+   *  refused for the right reason. Never what a role may take. */
+  routed_team_id?: Id<"teams">;
+};
 
 const boundaryOfWorkspace = (w: { type: "team"; teamId: Id<"teams"> } | { type: "personal"; userId: Id<"users"> }): AssigneeBoundary =>
   w.type === "team" ? { team_id: w.teamId } : { scope_user_id: w.userId };
 
-const boundaryOfTask = (task: { team_id?: Id<"teams">; user_id: Id<"users"> }): AssigneeBoundary =>
-  task.team_id ? { team_id: task.team_id } : { scope_user_id: task.user_id };
+/** The boundary a task's assignee must be inside, read from the task's ACCESS
+ *  key (its workspace) and never from team_id, which is routing (CLAUDE.md):
+ *  a task routed to a team but readable by its owner only is a personal task
+ *  to a role, so a team role cannot take it and carry its title into a wake
+ *  row and a standing session the whole team reads. */
+export async function boundaryOfTask(ctx: { db: any }, task: { user_id: Id<"users">; workspace?: string }): Promise<AssigneeBoundary> {
+  const stored = parseWorkspaceKey(await resolveWorkspaceKey(ctx, task));
+  return boundaryOfWorkspace(stored ?? { type: "personal", userId: task.user_id });
+}
+
+/** boundaryOfTask plus where a handle is looked up: the task's routing team. */
+async function assigneeScopeOf(ctx: { db: any }, task: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string }): Promise<AssigneeBoundary> {
+  return { ...(await boundaryOfTask(ctx, task)), routed_team_id: task.team_id };
+}
 
 /** The role an assignee value names, or null when it names anything else. */
 export async function roleAssigneeOf(ctx: { db: any }, assignee: string | undefined | null): Promise<any | null> {
@@ -311,56 +350,99 @@ export async function roleAssigneeOf(ctx: { db: any }, assignee: string | undefi
   return id ? await ctx.db.get(id) : null;
 }
 
+/** The role whose seat a bot user is: a role's standing session renders as a
+ *  bot user named after the role (anchors.provisionStandingAgent), and a
+ *  picker or a stale row may hand that user's id in as the assignee. The task
+ *  belongs to the role, never to the bot. Null for a person or a bot with no
+ *  role. */
+async function roleOfBotUser(ctx: { db: any }, userId: string): Promise<any | null> {
+  const id = ctx.db.normalizeId("users", userId);
+  const user = id ? await ctx.db.get(id) : null;
+  if (!user?.is_bot) return null;
+  const anchor = await ctx.db.query("anchors").withIndex("by_bot_user", (q: any) => q.eq("bot_user_id", user._id)).first();
+  return anchor?.org_role_id ? await ctx.db.get(anchor.org_role_id) : null;
+}
+
 /** Why this role cannot take a task in this boundary, in words for the person
  *  who tried; null when it can. */
 function roleAssigneeRefusal(role: any, boundary: AssigneeBoundary): string | null {
   if (role.status === "retired") return `@${role.handle} is retired, so it cannot take tasks. Pick a live role or a person.`;
-  const inside = boundary.team_id
-    ? String(role.team_id ?? "") === String(boundary.team_id)
-    : !role.team_id && String(role.scope_user_id ?? "") === String(boundary.scope_user_id ?? "");
-  return inside ? null : `@${role.handle} belongs to another workspace, so it cannot take this task.`;
+  if (boundary.team_id) {
+    return String(role.team_id ?? "") === String(boundary.team_id) ? null : `@${role.handle} belongs to another workspace, so it cannot take this task.`;
+  }
+  if (role.team_id) {
+    // A team role, and a task only its owner can read (personal, or routed to
+    // the team but kept private): the role's wake row and standing session
+    // are the team's to read, so the task would leak through them.
+    return `This task is readable by its owner only, so a team role cannot take it: @${role.handle} would carry it into a session the team reads. Share the task with the team first, or hand it to a person.`;
+  }
+  return String(role.scope_user_id ?? "") === String(boundary.scope_user_id ?? "") ? null : `@${role.handle} belongs to another workspace, so it cannot take this task.`;
 }
 
+type ResolveAssigneeOpts = {
+  /** A read (a list filter) names what a task holds, so a retired role and a
+   *  role outside the boundary resolve as they are; only a write refuses. */
+  read?: boolean;
+};
+
+/**
+ * One resolver for every assignee value the CLI, the web and the sync paths
+ * write or filter on. A handle ("@growth") is a claim that someone answers
+ * to it, resolved the way chat does (lib/mentionResolve): a teammate's login
+ * or email wins, then the live role with that handle in the task's
+ * boundary. A role outranks the bot user its seat renders as, and a bot is
+ * never a person: the role's id is stored, so the role is woken, `--chain`
+ * finds the task and the board shows one Growth, not two. A handle nobody
+ * answers to is refused rather than stored as a bare string no roster could
+ * resolve. A bare word is a person by login or name, else a role by handle,
+ * else the word itself (a name typed by hand, kept as it was).
+ */
 export async function resolveAssigneeStr(
   ctx: any,
   assignee: string | undefined,
   userId: Id<"users">,
   boundary?: AssigneeBoundary,
+  opts: ResolveAssigneeOpts = {},
 ): Promise<string | undefined> {
   if (!assignee) return undefined;
   if (assignee === "me") return userId.toString();
   if (assignee.startsWith("agent:")) return assignee;
-  if (/^[a-z0-9]{32}$/.test(assignee)) {
-    const role = boundary ? await roleAssigneeOf(ctx, assignee) : null;
-    const refusal = role && roleAssigneeRefusal(role, boundary!);
+  const settle = (role: any): string => {
+    const refusal = !opts.read && boundary ? roleAssigneeRefusal(role, boundary) : null;
     if (refusal) throw new Error(refusal);
-    return assignee;
+    return role._id.toString();
+  };
+  // Where a handle is looked up: the boundary's team, or the team a private
+  // task is routed to; a personal boundary looks among the person's own roles.
+  const lookupTeam = boundary?.team_id ?? boundary?.routed_team_id;
+  const lookupSeat = lookupTeam ? { team_id: lookupTeam } : boundary;
+  const roleByHandle = (handle: string) =>
+    !lookupSeat ? null : opts.read ? roleByHandleForRead(ctx, lookupSeat, handle) : liveRoleByHandle(ctx, lookupSeat, handle);
+  if (/^[a-z0-9]{32}$/.test(assignee)) {
+    const role = (await roleAssigneeOf(ctx, assignee)) ?? (await roleOfBotUser(ctx, assignee));
+    return role ? settle(role) : assignee;
   }
-  // "@growth": a teammate with that handle wins, as in chat (mentionResolve);
-  // else the live role with that handle in the task's workspace.
   if (assignee.startsWith("@")) {
     const handle = assignee.slice(1).trim();
-    const member = await findTeamMemberId(ctx, handle, boundary?.team_id, { exactOnly: true });
-    if (member) return member.toString();
-    const role = boundary ? await liveRoleByHandle(ctx, boundary, handle) : null;
-    if (role) return role._id.toString();
-    // A handle is a claim that someone answers to it. One that matches nobody
-    // is refused: stored as a bare string it would sit on the board as an
-    // assignee no roster and no chart can ever resolve.
-    const anyone = await resolveAssigneeToUserId(ctx, handle, boundary?.team_id);
+    const match = lookupTeam ? matchHandle(await teamRoster(ctx, lookupTeam), handle) : null;
+    if (match && !match.is_bot) return match._id.toString();
+    const role = await roleByHandle(handle);
+    if (role) return settle(role);
+    const anyone = await resolveAssigneeToUserId(ctx, handle, lookupTeam);
     if (!anyone) throw new Error(`Nobody answers to @${handle} in this workspace: no teammate and no live role has that handle. Run cast role ls to see the roles here.`);
     return anyone.toString();
   }
   const lower = assignee.toLowerCase();
   const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
   if (found) return found._id.toString();
-  // Fall back to a team-member name/email match so friendly names persist a
-  // real user id (consistent with github-handle matches) rather than a bare
-  // string that the UI roster and notification routing can't resolve.
-  const actor = await ctx.db.get(userId);
-  const teamId = (actor?.active_team_id || actor?.team_id) as Id<"teams"> | undefined;
-  const memberId = await findTeamMemberId(ctx, assignee, teamId);
-  return memberId ? memberId.toString() : assignee;
+  // A team member's name or email persists a real user id (consistent with a
+  // login match) rather than a bare string the roster cannot resolve. The
+  // boundary says which team: a write never guesses one from the caller's
+  // active team pointer (CLAUDE.md, reads may default, writes must be explicit).
+  const memberId = await findTeamMemberId(ctx, assignee, lookupTeam);
+  if (memberId) return memberId.toString();
+  const role = await roleByHandle(assignee);
+  return role ? settle(role) : assignee;
 }
 
 export async function notifySubscribers(
@@ -467,6 +549,41 @@ async function announceAssignment(
     message: `assigned you to ${o.task.short_id}: ${o.task.title}`,
     direct_recipient_id: assigneeId,
   });
+}
+
+/**
+ * At retire, a role's open tasks go up the chain to whoever it reported to
+ * (org-roles-run-work.md R5): the work is still the company's, and the person
+ * or role above answers for it now, told the way any assignment is. Closed
+ * tasks keep the retired role's name; the chain still reads them under the
+ * same person (contracts/orgAssignee). Called by orgRoles.performRetireRole.
+ */
+export async function handOpenTasksUpChain(ctx: any, role: any, actorUserId: Id<"users">): Promise<number> {
+  const up = role.reports_to;
+  const to = up?.kind === "user" ? String(up.user_id) : up?.kind === "role" ? String(up.role_id) : String(role.host_user_id);
+  const held: any[] = await ctx.db
+    .query("tasks")
+    .withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id)))
+    .collect();
+  const now = Date.now();
+  let moved = 0;
+  for (const task of held) {
+    if (task.status === "done" || task.status === "dropped") continue;
+    await ctx.db.insert("task_history", {
+      task_id: task._id,
+      user_id: actorUserId,
+      actor_type: "user",
+      action: "updated",
+      field: "assignee",
+      old_value: String(role._id),
+      new_value: to,
+      created_at: now,
+    });
+    await ctx.db.patch(task._id, { assignee: to, updated_at: now });
+    await announceAssignment(ctx, { task, assignee: to, actorUserId, actorName: `${role.name} (retired)`, via: "human" });
+    moved++;
+  }
+  return moved;
 }
 
 export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
@@ -734,6 +851,19 @@ async function boundConversations(ctx: any, task: any): Promise<any[]> {
   return out;
 }
 
+/** Is `conv` the conversation `ancestorId`, or a fork of it (at any depth
+ *  that a real fork chain reaches)? A fork carries the filing session's whole
+ *  history under a new conversation id, so its start of a task that session
+ *  filed is the same session's bookkeeping, not a takeover. */
+async function isForkLineOf(ctx: any, conv: any, ancestorId: string): Promise<boolean> {
+  let cur: any = conv;
+  for (let depth = 0; cur && depth < 16; depth++) {
+    if (String(cur._id) === String(ancestorId)) return true;
+    cur = cur.forked_from ? await ctx.db.get(cur.forked_from) : null;
+  }
+  return false;
+}
+
 const roleOf = (conv: any): string | undefined =>
   conv?.org_role_id ? String(conv.org_role_id) : conv?.standing_role_id ? String(conv.standing_role_id) : undefined;
 
@@ -755,7 +885,7 @@ async function roleTakingTask(ctx: any, task: any, conv: any, boundary: Assignee
   const roleId = roleOf(conv);
   if (!roleId) return null;
   if (task.parent_id) return null;
-  if (task.created_from_conversation && String(task.created_from_conversation) === String(conv._id)) return null;
+  if (task.created_from_conversation && (await isForkLineOf(ctx, conv, task.created_from_conversation))) return null;
   const current: string | undefined = task.assignee || undefined;
   if (current && !current.startsWith("agent:") && !(await roleAssigneeOf(ctx, current))) return null;
   const role = await roleAssigneeOf(ctx, roleId);
@@ -1381,27 +1511,37 @@ export const snippet = query({
   },
 });
 
-// Display names for a set of assignee values. `agent:*` assignees are already
-// names; user ids resolve to name → github handle. Unknown values fall through
-// so callers can print the raw value rather than nothing.
-async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
-  const names: Record<string, string> = {};
+// Who a set of assignee values names, in the contract's shape
+// (@codecast/shared/contracts/orgAssignee): a role with its face and handle,
+// a person with their name and login. `agent:*` assignees are already names.
+// Unknown values are left out so callers can print the raw value rather than
+// nothing.
+async function assigneeInfoFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, AssigneeInfo>> {
+  const out: Record<string, AssigneeInfo> = {};
   for (const id of new Set(assignees.filter(Boolean) as string[])) {
     if (id.startsWith("agent:")) {
-      names[id] = id;
+      out[id] = { name: id };
       continue;
     }
-    // The CLI names a role the way a person types it: "@growth".
     const role = await roleAssigneeOf(ctx, id);
     if (role) {
-      names[id] = `@${role.handle}`;
+      out[id] = roleAssigneeInfo(role);
       continue;
     }
     const user = /^[a-z0-9]{32}$/.test(id) ? await ctx.db.get(id as any).catch(() => null) as any : null;
-    if (user?.name) names[id] = user.name;
-    else if (user?.github_username) names[id] = user.github_username;
+    if (user?.name || user?.github_username) out[id] = { name: user.name || user.github_username, github_username: user.github_username, image: user.image || user.github_avatar_url };
   }
-  return names;
+  return out;
+}
+
+/** The CLI names a role the way a person types it: "@growth". */
+const assigneeNameOf = (info: AssigneeInfo | undefined): string | undefined =>
+  !info ? undefined : info.kind === "role" ? `@${info.handle}` : info.name;
+
+// Display names for a set of assignee values; see assigneeInfoFor.
+async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
+  const info = await assigneeInfoFor(ctx, assignees);
+  return Object.fromEntries(Object.entries(info).map(([id, i]) => [id, assigneeNameOf(i)!]));
 }
 
 // The sessions linked to a task, named the way every other CLI surface names
@@ -1496,13 +1636,15 @@ export const list = query({
     // role under them for --chain.
     const boundary = boundaryOfWorkspace(db.workspace);
     let assignees: string[] = [];
+    // A read names what a task holds: a retired role's tasks can still be
+    // listed by its handle or id, where a write would refuse the role.
     if (args.assignee) {
-      const one = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary);
+      const one = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary, { read: true });
       if (one) assignees = [one];
     } else if (args.chain) {
-      const head = await resolveAssigneeToUserId(ctx, (await resolveAssigneeStr(ctx, args.chain, auth.userId)) ?? "", boundary.team_id);
+      const head = await resolveAssigneeToUserId(ctx, (await resolveAssigneeStr(ctx, args.chain, auth.userId, boundary, { read: true })) ?? "", boundary.team_id);
       if (!head) throw new Error(`No person matches "${args.chain}". --chain takes a person: me, a name or a GitHub handle.`);
-      assignees = chainAssignees(head, await rolesInBoundary(ctx, boundary));
+      assignees = chainAssignees(head, await allRolesInBoundary(ctx, boundary));
     }
 
     let tasks: any[];
@@ -1522,14 +1664,13 @@ export const list = query({
       needsAccessFilter = true;
     } else if (args.project_id || args.initiative) {
       // A task reaches an initiative through its project. With both flags the
-      // project must be one the initiative names.
+      // project must be one the initiative names. projectTasks decides access
+      // from each row's workspace stamp, the way `cast initiative show`
+      // counts, so a task routed to a team but readable by its owner only is
+      // not listed to the team.
       const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId as Id<"users">, args.initiative)).project_ids.map(String) : null;
       const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
-      tasks = (await Promise.all(projectIds.map((projectId) => ctx.db
-        .query("tasks")
-        .withIndex("by_project_id", (q) => q.eq("project_id", projectId as any))
-        .collect()))).flat();
-      needsAccessFilter = true;
+      tasks = (await Promise.all(projectIds.map((projectId) => projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
     } else if (isTaskStatusCategory(args.status) && !args.team) {
       tasks = await ctx.db
         .query("tasks")
@@ -1542,15 +1683,16 @@ export const list = query({
     }
 
     if (needsAccessFilter) {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
-        .collect();
-      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
-      tasks = tasks.filter((t: any) =>
-        String(t.user_id) === String(auth.userId) ||
-        (t.team_id && memberTeamIds.has(String(t.team_id)))
-      );
+      // Access is the row's workspace stamp, never the team it is routed to
+      // (CLAUDE.md): a teammate's task routed to the team but readable by its
+      // owner only is not listed to whoever asks for the role's tasks. The
+      // keys the caller holds are read once; a row with a stored key is judged
+      // in memory by the access layer's own evaluator, and a row minted before
+      // the key backfill takes the lazy path.
+      const held = await heldKeysFor(ctx, auth.userId);
+      const keep = await Promise.all(tasks.map((t: any) =>
+        t.workspace ? authorizedFor(accessStampFromDoc("tasks", t), String(auth.userId), held) : canAccessTask(ctx, auth.userId, t)));
+      tasks = tasks.filter((_: any, i: number) => keep[i]);
     }
 
     // Each task resolves against its own team's statuses, loaded once per team.
@@ -1647,12 +1789,15 @@ export const list = query({
     const limit = args.limit || 300;
     const result = tasks.slice(0, limit);
 
-    const assigneeNames = await assigneeNamesFor(ctx, result.map((t: any) => t.assignee));
+    const assigneeInfo = await assigneeInfoFor(ctx, result.map((t: any) => t.assignee));
     const statusNames = await Promise.all(result.map(async (t: any) => resolveTaskStatus(t, await statusesOf(t)).name));
     return result.map((t: any, i: number) => ({
       ...t,
       status_name: statusNames[i],
-      assignee_name: t.assignee ? (assigneeNames[t.assignee] || t.assignee) : undefined,
+      assignee_name: t.assignee ? (assigneeNameOf(assigneeInfo[t.assignee]) || t.assignee) : undefined,
+      // The contract's shape (orgAssignee.ts), so the CLI tells a role from a
+      // person by `kind`, never by the look of a label.
+      assignee_info: t.assignee ? (assigneeInfo[t.assignee] ?? null) : null,
       parent_short_id: t.parent_id ? readyParentShortIds?.get(String(t.parent_id)) : undefined,
     }));
   },
@@ -1702,10 +1847,30 @@ export const get = query({
     // so the count `cast task show` prints matches them all.
     const children = allChildren.filter((c: any) => isActiveTask(c));
 
-    const assigneeNames = await assigneeNamesFor(ctx, [task.assignee]);
+    // The audit trail: who made the task and every recorded change since. The
+    // web page shows the same rows in its Activity timeline.
+    const history = await ctx.db
+      .query("task_history")
+      .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
+      .collect();
+    const assigneeNames = await assigneeNamesFor(ctx, [
+      task.assignee,
+      task.user_id,
+      ...history.flatMap((h) => [h.user_id, ...(h.field === "assignee" ? [h.old_value, h.new_value] : [])]),
+    ]);
     const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
     return {
       ...task,
+      creator_name: assigneeNames[task.user_id],
+      history: history.map((h) => ({
+        created_at: h.created_at,
+        actor: h.user_id ? assigneeNames[h.user_id] : h.actor_type,
+        action: h.action,
+        field: h.field,
+        old_value: h.field === "assignee" && h.old_value ? (assigneeNames[h.old_value] ?? h.old_value) : h.old_value,
+        new_value: h.field === "assignee" && h.new_value ? (assigneeNames[h.new_value] ?? h.new_value) : h.new_value,
+        session: h.conversation_id ? h.conversation_id.toString().slice(0, 7) : undefined,
+      })),
       status_name: resolveTaskStatus(task, await loadTeamTaskStatuses(ctx, task.team_id)).name,
       assignee_name: task.assignee ? (assigneeNames[task.assignee] || task.assignee) : undefined,
       plan: plan && (await canAccessPlan(ctx, auth.userId, plan))
@@ -1801,7 +1966,10 @@ export const update = mutation({
       : task.team_id
         ? { type: "team" as const, teamId: task.team_id }
         : { type: "personal" as const, userId: task.user_id };
-    if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundaryOfWorkspace(targetWorkspace)) || args.assignee;
+    // Who may take the task is decided by its ACCESS key (boundaryOfTask),
+    // not by the team it is routed to; a move to another team names that team.
+    const assigneeBoundary = args.team_id ? boundaryOfWorkspace(targetWorkspace) : await assigneeScopeOf(ctx, task);
+    if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, assigneeBoundary) || args.assignee;
     if (args.team_id) {
       await requireTeamMembership(ctx, auth.userId, args.team_id);
       if (task.team_id && String(task.team_id) !== String(args.team_id) && String(task.user_id) !== String(auth.userId)) {
@@ -1915,19 +2083,22 @@ export const update = mutation({
           });
         }
       }
-      // Only bind conversation to task on explicit start (cast task start).
-      // A `changes` verdict also moves to in_progress but must not bind the
-      // reviewer to the work it judges.
-      if (convMatchesWorkspace && nextStatus === "in_progress" && !args.review_verdict && (!conv.active_task_id || conv.active_task_id === task._id)) {
+      // An explicit start (cast task start). A `changes` verdict also moves
+      // to in_progress but must not bind the reviewer to the work it judges.
+      const explicitStart = convMatchesWorkspace && nextStatus === "in_progress" && !args.review_verdict;
+      // A session that takes a task assigns it to the role it works for
+      // (org-roles-run-work.md R5), so the board shows who owns the work. A
+      // task that already names a person stays theirs: the session is
+      // helping them, not taking it from them. Decided apart from the binding
+      // below: a hand whose first task sits in review still holds it as
+      // active_task_id, and its next start must reach the role all the same.
+      if (explicitStart && args.assignee === undefined) {
+        const taker = await roleTakingTask(ctx, task, conv, assigneeBoundary);
+        if (taker) { updates.assignee = String(taker._id); startedForRole = taker; }
+      }
+      // Only bind conversation to task on explicit start.
+      if (explicitStart && (!conv.active_task_id || conv.active_task_id === task._id)) {
         await ctx.db.patch(conv._id, { active_task_id: task._id });
-        // A session that takes a task assigns it to the role it works for
-        // (org-roles-run-work.md R5), so the board shows who owns the work. A
-        // task that already names a person stays theirs: the session is
-        // helping them, not taking it from them.
-        if (args.assignee === undefined) {
-          const taker = await roleTakingTask(ctx, task, conv, boundaryOfWorkspace(targetWorkspace));
-          if (taker) { updates.assignee = String(taker._id); startedForRole = taker; }
-        }
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
           if (
@@ -3234,7 +3405,7 @@ export const webUpdate = mutation({
     }
     if (args.description !== undefined) updates.description = args.description;
     if (args.assignee !== undefined) {
-      updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, boundaryOfTask(task)) || args.assignee;
+      updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, await assigneeScopeOf(ctx, task)) || args.assignee;
     }
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) {
@@ -4076,6 +4247,10 @@ export const batchUpdateStatus = mutation({
   },
 });
 
+/** Enough for any board selection; past it the roster and history reads of
+ *  one call would run into the transaction's document limit. */
+const MAX_BATCH_ASSIGN = 200;
+
 export const batchAssign = mutation({
   args: {
     api_token: v.string(),
@@ -4086,8 +4261,25 @@ export const batchAssign = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
+    if (args.short_ids.length > MAX_BATCH_ASSIGN) {
+      throw new Error(`Assign at most ${MAX_BATCH_ASSIGN} tasks in one call (${args.short_ids.length} given). Split the batch.`);
+    }
     const now = Date.now();
     const results: { short_id: string; success: boolean }[] = [];
+
+    // The handle resolves once per boundary, not once per task: resolving
+    // reads the roster, and the whole batch usually sits in one workspace.
+    const resolvedIn = new Map<string, Promise<string>>();
+    const resolveFor = async (task: any): Promise<string> => {
+      const boundary = await assigneeScopeOf(ctx, task);
+      const key = `${boundary.team_id ?? ""}|${boundary.scope_user_id ?? ""}|${boundary.routed_team_id ?? ""}`;
+      let pending = resolvedIn.get(key);
+      if (!pending) {
+        pending = resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary).then((r) => r || args.assignee);
+        resolvedIn.set(key, pending);
+      }
+      return pending;
+    };
 
     for (const short_id of args.short_ids) {
       const task = await ctx.db
@@ -4098,7 +4290,7 @@ export const batchAssign = mutation({
         results.push({ short_id, success: false });
         continue;
       }
-      const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundaryOfTask(task)) || args.assignee;
+      const resolvedAssignee = await resolveFor(task);
 
       if (resolvedAssignee !== task.assignee) {
         await ctx.db.insert("task_history", {
