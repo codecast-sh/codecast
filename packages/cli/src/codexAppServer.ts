@@ -1,6 +1,8 @@
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
+import * as fs from "fs";
+import * as path from "path";
 import { STABLE_ENV_MODE, type CodexTurnError } from "@codecast/shared/contracts";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
@@ -300,6 +302,20 @@ export function approvalResultForMethod(method: string, approved: boolean, param
   }
 }
 
+/** The real file `bin` runs from on `pathEnv`, symlinks followed, or null when
+ *  it is not installed. A standalone Codex upgrade repoints ~/.local/bin/codex
+ *  at a new release directory, so this changes exactly when the version does. */
+export function resolveBinaryFile(bin: string, pathEnv: string): string | null {
+  const candidates = bin.includes("/") ? [bin] : pathEnv.split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, bin));
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {}
+  }
+  return null;
+}
+
 export class CodexAppServer extends EventEmitter {
   private process: ChildProcess | null = null;
   private rl: readline.Interface | null = null;
@@ -333,6 +349,9 @@ export class CodexAppServer extends EventEmitter {
   private stopped = false;
   private initialized = false;
   private _binaryMissing = false;
+  /** The file the running process was spawned from; see resolveBinaryFile. */
+  private spawnedBinaryFile: string | null = null;
+  private upgrade: Promise<boolean> | null = null;
   private log: (msg: string) => void;
   private onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   private codexBinary: string;
@@ -367,6 +386,36 @@ export class CodexAppServer extends EventEmitter {
 
   get binaryMissing(): boolean {
     return this._binaryMissing;
+  }
+
+  /** Restart onto the installed Codex when it changed since spawn. The server is
+   *  long-lived, so without this an upgraded Codex never reaches it and the API
+   *  refuses newer models as coming from an old client. Skipped while a turn is
+   *  running, since a restart ends it; the caller retries on its next pass. */
+  restartIfBinaryChanged(): Promise<boolean> {
+    this.upgrade ??= this.restartOntoCurrentBinary().finally(() => { this.upgrade = null; });
+    return this.upgrade;
+  }
+
+  private async restartOntoCurrentBinary(): Promise<boolean> {
+    if (!this.running || !this.spawnedBinaryFile) return false;
+    const current = resolveBinaryFile(this.codexBinary, agentSpawnPath());
+    if (!current || current === this.spawnedBinaryFile) return false;
+    if (this.turnAccumulators.size > 0) {
+      this.log(`[codex-app-server] codex changed to ${current}; restart deferred until ${this.turnAccumulators.size} turn(s) finish`);
+      return false;
+    }
+    this.log(`[codex-app-server] codex changed from ${this.spawnedBinaryFile} to ${current}; restarting`);
+    const ready = new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); this.off("ready", done); resolve(); };
+      const timer = setTimeout(done, THREAD_START_TIMEOUT_MS);
+      this.on("ready", done);
+    });
+    // The close handler respawns; no backoff, because this exit is deliberate.
+    this.restartDelay = 0;
+    this.process?.kill("SIGTERM");
+    await ready;
+    return this.running;
   }
 
   private async initialize(): Promise<void> {
@@ -581,6 +630,7 @@ export class CodexAppServer extends EventEmitter {
     const args = ["app-server"];
     this.log(`[codex-app-server] spawning: ${this.codexBinary} ${args.join(" ")}`);
     this.lastSpawnTime = Date.now();
+    this.spawnedBinaryFile = resolveBinaryFile(this.codexBinary, agentSpawnPath());
 
     let child: ChildProcess;
     try {

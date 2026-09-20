@@ -5632,6 +5632,7 @@ async function executeRemoteCommand(
         let codexThreadId: string | null = null;
         const codexPermissions = codexPermissionsFromArgs(binaryArgs);
         const codexApprovalPolicy = codexPermissions.approvalPolicy;
+        if (agentType === "codex") await codexAppServerInstance?.restartIfBinaryChanged();
         const activeCodexAppServer = codexAppServerInstance?.running
           ? codexAppServerInstance
           : null;
@@ -28518,7 +28519,10 @@ async function main(): Promise<void> {
       });
   };
   codexAppServerInstance.on("ready", recoverAppServerThreads);
-  const appServerRecoveryTimer = setInterval(recoverAppServerThreads, 30_000);
+  const appServerRecoveryTimer = setInterval(() => {
+    void codexAppServerInstance?.restartIfBinaryChanged();
+    recoverAppServerThreads();
+  }, 30_000);
   appServerRecoveryTimer.unref();
 
   codexAppServerInstance.on("exited", () => {

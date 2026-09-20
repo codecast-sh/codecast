@@ -534,3 +534,48 @@ describe("Codex per-turn model snapshots", () => {
     expect(started[1]).toEqual(["thread1", "turn2", "gpt-5.6-sol"]);
   });
 });
+
+describe("CodexAppServer binary upgrade", () => {
+  // The app-server outlives Codex upgrades. On 2026-09-23 it was still running
+  // 0.146.0 a day after 0.156.1 was installed, so every new session was refused
+  // gpt-6-astra as "requires a newer version of Codex".
+  const release = (dir: string, version: string) => {
+    const bin = path.join(dir, version, "codex");
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, `#!/bin/sh
+while read -r line; do
+  id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+  printf '{"id":%s,"result":{"userAgent":"fake/${version}"}}\\n' "$id"
+done
+`, { mode: 0o755 });
+    return bin;
+  };
+
+  test("restarts onto a repointed binary, but not mid-turn", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-upgrade-"));
+    const link = path.join(dir, "codex");
+    fs.symlinkSync(release(dir, "0.146.0"), link);
+    release(dir, "0.156.1");
+    const logs: string[] = [];
+    const server = new CodexAppServer({ log: (m) => logs.push(m), codexBinary: link });
+    const ready = () => new Promise((r) => server.once("ready", r));
+    try {
+      server.start();
+      await ready();
+      expect(await server.restartIfBinaryChanged()).toBe(false);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(path.join(dir, "0.156.1", "codex"), link);
+      (server as any).turnAccumulators.set("turn", { items: [], threadId: "t" });
+      expect(await server.restartIfBinaryChanged()).toBe(false);
+
+      (server as any).turnAccumulators.clear();
+      expect(await server.restartIfBinaryChanged()).toBe(true);
+      expect(logs.filter((l) => l.includes("initialized:")).map((l) => l.match(/fake\/[\d.]+/)?.[0]))
+        .toEqual(["fake/0.146.0", "fake/0.156.1"]);
+    } finally {
+      server.stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
