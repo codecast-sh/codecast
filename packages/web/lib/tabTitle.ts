@@ -4,6 +4,7 @@ import { isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "./entityLinks";
 import { vaultNoteTitle } from "./vault/noteTitle";
 import { channelDisplayName } from "./chatViews";
+import { filterByWorkspace, inWorkspace, type WorkspaceKey } from "./workspaceScope";
 import { dmOtherIds } from "@codecast/shared/chat";
 
 // Tab title derivation, kept out of TabBar.tsx so that module exports only
@@ -43,14 +44,14 @@ export function tabSessionId(tab: Pick<AppTab, "sessionId" | "path">): string | 
 /** An initiative's tab reads its title once the store holds the row, the way
  *  a session's does (initiatives-projects-role-page.md I1); its `in-N` stands
  *  in until then (pathLabel). */
-export function initiativeTabTitle(path: string, initiatives: Record<string, { short_id?: string; title?: string }> | undefined): string | null {
+export function initiativeTabTitle(path: string, initiatives: Record<string, { short_id?: string; title?: string; workspace?: string; team_id?: string }> | undefined, workspaceKey: WorkspaceKey | null | undefined): string | null {
   const ref = path.split("?")[0].split("/")[2];
   if (!initiatives || !path.startsWith("/initiatives/") || !ref) return null;
-  const row = initiatives[ref] ?? Object.values(initiatives).find((r) => r?.short_id === ref.toLowerCase());
-  return row?.title || null;
+  const row = initiatives[ref] ?? filterByWorkspace(Object.values(initiatives), workspaceKey).find((r) => r?.short_id === ref.toLowerCase());
+  return row && inWorkspace(row, workspaceKey) ? row.title || null : null;
 }
 
-export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string, initiatives?: Record<string, any>): string {
+export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string, initiatives?: Record<string, any>, workspaceKey?: WorkspaceKey | null): string {
   const sid = tabSessionId(tab);
   if (sid && sessions[sid]) {
     const s = sessions[sid];
@@ -60,7 +61,7 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   }
   const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;
-  const initiative = initiativeTabTitle(tab.path, initiatives);
+  const initiative = initiativeTabTitle(tab.path, initiatives, workspaceKey);
   if (initiative) return initiative;
   // A vault note is titled by its own H1 or frontmatter title when the index
   // knows one — the filename is the fallback, not the identity (Obsidian's
