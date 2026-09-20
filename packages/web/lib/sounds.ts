@@ -1,7 +1,6 @@
 import { useInboxStore, type ClientUI } from "../store/inboxStore";
 import { isNotificationLeader, isVoiceHost } from "./desktop";
-import { agentAlertsSuppressed, deliverAlert } from "./notificationDelivery";
-import { captureError } from "./analytics";
+import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
 import {
   WALKIE_AWAY,
@@ -41,15 +40,15 @@ function isEnabled(category?: SoundCategory): boolean {
 
 function announce(category: SoundCategory, key: string, play: () => boolean | void, options: { ttl: number; preferDesktop?: boolean }) {
   if (!isSupported()) return;
-  const deliver = () => { void deliverAlert(key, () => isEnabled(category) ? play() : false, options).catch(captureError); };
+  const deliver = () => { void deliverAlert(key, () => isEnabled(category) ? play() : false, options).catch(reportAlertError); };
   try {
     const ac = getCtx(false);
     if (ac.state === "running") deliver();
     else void Promise.race([ac.resume(), new Promise((resolve) => setTimeout(resolve, 250))])
       .then(() => { if (ac.state === "running" && isEnabled(category)) deliver(); })
-      .catch(captureError);
+      .catch(reportAlertError);
   } catch (error) {
-    captureError(error as Error);
+    reportAlertError(error as Error);
   }
 }
 
@@ -81,7 +80,7 @@ function isAnnouncer(): boolean {
 
 function getCtx(resume = true): AudioContext {
   if (!ctx) ctx = new AudioContext();
-  if (resume && ctx.state === "suspended") void Promise.resolve(ctx.resume()).catch(captureError);
+  if (resume && ctx.state === "suspended") void Promise.resolve(ctx.resume()).catch(reportAlertError);
   return ctx;
 }
 
