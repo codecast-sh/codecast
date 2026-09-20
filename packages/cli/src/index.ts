@@ -29,7 +29,8 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
-import { INITIATIVE_STATUS_ICONS, dayText, healthText, initiativeLine, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
+import { INITIATIVE_STATUS_ICONS, healthText, initiativeLine, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
+import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
   buildEntityUrl,
@@ -16083,6 +16084,7 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
   if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
+  if (t.created_at) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
   if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
   if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
   if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
@@ -16092,6 +16094,16 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
     console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
     for (const sess of t.sessions) {
       console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
+    }
+  }
+  if (t.history?.length) {
+    console.log(`\n  ${c.bold}History (${t.history.length})${c.reset}`);
+    for (const h of t.history) {
+      const what = h.action === "created"
+        ? "created this task"
+        : `${h.field}: ${h.old_value ?? "none"} to ${h.new_value ?? "none"}`;
+      const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
+      console.log(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${h.actor ?? "system"} ${what}${from}`);
     }
   }
   if (t.comments?.length) {
@@ -16934,6 +16946,14 @@ const initiativeCmd = program
   .description("Manage initiatives (a goal above projects, with an owner and a health)")
   .showHelpAfterError(true);
 
+// A target is a calendar day, stored through the shared pair the web reads with.
+function initiativeTargetArg(text: string): number | null {
+  if (NONE(text)) return null;
+  const stamp = targetDayStamp(text);
+  if (stamp === null) { console.error(`Invalid --target "${text}" — use YYYY-MM-DD, or "none" to clear`); process.exit(1); }
+  return stamp;
+}
+
 // A person writes a health as "on track"; the wire says on_track.
 function initiativeHealthArg(text: string): string {
   const health = parseInitiativeHealth(text);
@@ -16980,7 +17000,7 @@ initiativeCmd
       body.status = parseInitiativeStatus(options.status);
       if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
     }
-    if (options.target) body.target_date = parseDeadlineDate(options.target);
+    if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority) body.priority = options.priority;
     if (options.parent) body.parent_initiative_id = options.parent;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
@@ -17030,7 +17050,7 @@ initiativeCmd
     console.log(`\n  ${icon} ${c.bold}${row.title}${c.reset}  ${c.cyan}${row.short_id}${c.reset}`);
     const facts = [row.status, `owner ${row.owner_label ?? `${c.yellow}none${c.reset}`}`, `health ${healthText(c, row.health, row.health_at)}`];
     if (row.priority) facts.push(row.priority);
-    if (row.target_date) facts.push(`target ${dayText(row.target_date)}`);
+    if (row.target_date) facts.push(`target ${targetDayOf(row.target_date)}`);
     if (row.parent) facts.push(`under ${c.cyan}${row.parent.short_id}${c.reset} ${row.parent.title}`);
     console.log(`  ${c.dim}${facts.join(" | ")}${c.reset}`);
     if (row.labels?.length) console.log(`  ${c.dim}Labels: ${row.labels.join(", ")}${c.reset}`);
@@ -17113,7 +17133,7 @@ initiativeCmd
       if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
     }
     if (options.owner !== undefined) body.owner = NONE(options.owner) ? null : options.owner;
-    if (options.target) body.target_date = parseDeadlineDate(options.target);
+    if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority !== undefined) body.priority = NONE(options.priority) ? null : options.priority;
     if (options.parent !== undefined) body.parent_initiative_id = NONE(options.parent) ? null : options.parent;
     if (options.labels !== undefined) body.labels = NONE(options.labels) ? [] : options.labels.split(",").map((s: string) => s.trim());

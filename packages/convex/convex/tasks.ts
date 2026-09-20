@@ -32,6 +32,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { requireInitiative } from "./lib/initiativeRef";
+import { projectTasks } from "./lib/projectWork";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
@@ -104,8 +105,8 @@ export async function resolveWorkerParentConversation(
  * itself stores no remote). Shared by `dispatch.createSession` and
  * `tasks.assignToAgent` so both task-launch paths stamp the conversation and
  * route the daemon identically — without a project_path the conversation can't
- * be started by any daemon (the "start agent run did nothing" bug). `seed` lets
- * a caller-supplied path win over the task's.
+ * be started by any daemon (the "start agent run did nothing" bug). `seed` is the
+ * caller's path: it refines the choice inside the task's team and never overrides it.
  */
 export async function resolveTaskGitContext(
   ctx: any,
@@ -114,19 +115,27 @@ export async function resolveTaskGitContext(
   mappings: any[],
   seed?: { project_path?: string; git_root?: string },
 ): Promise<{ project_path?: string; git_root?: string; git_remote_url?: string }> {
-  let project_path = seed?.project_path;
   let git_root = seed?.git_root;
   let git_remote_url: string | undefined;
 
-  if (!project_path) {
-    if (task.project_path) {
-      project_path = task.project_path;
-    } else if (task.team_id) {
-      const teamMapping = mappings.find((m: any) => m.team_id?.toString() === task.team_id.toString());
-      if (teamMapping) project_path = teamMapping.path_prefix;
-    }
-    if (!git_root) git_root = project_path;
-  }
+  // What the task pins wins: its own path, then its project's. A seed is only
+  // trusted past that when it already sits inside the task's team, because the
+  // web sends the viewer's open repo as the seed when the task pins nothing —
+  // and that repo may belong to another team entirely (a Union task launched
+  // three sessions into ~/src/codecast this way). Otherwise the team's mapped
+  // directory routes, and a foreign seed is the last resort that keeps a task
+  // whose team has no mapping startable at all.
+  const project = task.project_id ? await ctx.db.get(task.project_id).catch(() => null) : null;
+  const teamKey = task.team_id?.toString();
+  const seedInTaskTeam = !!teamKey
+    && resolveTeamForPath(mappings, seed?.project_path, undefined).teamId?.toString() === teamKey;
+  const project_path: string | undefined =
+    task.project_path
+    || project?.project_path
+    || (seedInTaskTeam ? seed?.project_path : undefined)
+    || (teamKey ? mappings.find((m: any) => m.team_id?.toString() === teamKey)?.path_prefix : undefined)
+    || seed?.project_path;
+  if (!git_root && project_path !== seed?.project_path) git_root = project_path;
 
   // A git_root that isn't an ancestor of the resolved project_path describes a
   // DIFFERENT repo — typically the viewer's currently-open conversation stamped
@@ -1522,14 +1531,13 @@ export const list = query({
       needsAccessFilter = true;
     } else if (args.project_id || args.initiative) {
       // A task reaches an initiative through its project. With both flags the
-      // project must be one the initiative names.
+      // project must be one the initiative names. projectTasks decides access
+      // from each row's workspace stamp, the way `cast initiative show`
+      // counts, so a task routed to a team but readable by its owner only is
+      // not listed to the team.
       const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId as Id<"users">, args.initiative)).project_ids.map(String) : null;
       const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
-      tasks = (await Promise.all(projectIds.map((projectId) => ctx.db
-        .query("tasks")
-        .withIndex("by_project_id", (q) => q.eq("project_id", projectId as any))
-        .collect()))).flat();
-      needsAccessFilter = true;
+      tasks = (await Promise.all(projectIds.map((projectId) => projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
     } else if (isTaskStatusCategory(args.status) && !args.team) {
       tasks = await ctx.db
         .query("tasks")
@@ -1702,10 +1710,30 @@ export const get = query({
     // so the count `cast task show` prints matches them all.
     const children = allChildren.filter((c: any) => isActiveTask(c));
 
-    const assigneeNames = await assigneeNamesFor(ctx, [task.assignee]);
+    // The audit trail: who made the task and every recorded change since. The
+    // web page shows the same rows in its Activity timeline.
+    const history = await ctx.db
+      .query("task_history")
+      .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
+      .collect();
+    const assigneeNames = await assigneeNamesFor(ctx, [
+      task.assignee,
+      task.user_id,
+      ...history.flatMap((h) => [h.user_id, ...(h.field === "assignee" ? [h.old_value, h.new_value] : [])]),
+    ]);
     const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
     return {
       ...task,
+      creator_name: assigneeNames[task.user_id],
+      history: history.map((h) => ({
+        created_at: h.created_at,
+        actor: h.user_id ? assigneeNames[h.user_id] : h.actor_type,
+        action: h.action,
+        field: h.field,
+        old_value: h.field === "assignee" && h.old_value ? (assigneeNames[h.old_value] ?? h.old_value) : h.old_value,
+        new_value: h.field === "assignee" && h.new_value ? (assigneeNames[h.new_value] ?? h.new_value) : h.new_value,
+        session: h.conversation_id ? h.conversation_id.toString().slice(0, 7) : undefined,
+      })),
       status_name: resolveTaskStatus(task, await loadTeamTaskStatuses(ctx, task.team_id)).name,
       assignee_name: task.assignee ? (assigneeNames[task.assignee] || task.assignee) : undefined,
       plan: plan && (await canAccessPlan(ctx, auth.userId, plan))

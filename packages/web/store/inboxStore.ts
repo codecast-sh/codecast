@@ -485,6 +485,7 @@ export type InboxSession = {
   _id: string;
   session_id: string;
   title?: string;
+  short_title?: string | null;
   subtitle?: string;
   updated_at: number;
   // conversations.status ("active" | "completed") — a working-set membership

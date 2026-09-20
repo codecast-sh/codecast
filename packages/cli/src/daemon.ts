@@ -21870,12 +21870,15 @@ async function collectResourceSnapshot(): Promise<void> {
     const elapsed = lastResourceTickAt > 0 ? now - lastResourceTickAt : 0;
     const sleepSkip = lastResourceTickAt === 0 || isInWakeGrace() || elapsed > RESOURCE_TICK_SLEEP_GAP_MS;
     if (lastResourceTickAt === 0) {
-      // Read it off the tick: a sync read on this path is what the loop budget
-      // guard forbids, and the counters only need the snapshot from the next
-      // tick on — this one is skipped as the first.
-      void fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8")
-        .then((raw) => { sessionAwakeIdleMs.restore(raw, Date.now()); })
-        .catch(() => { /* no snapshot yet, or unreadable: start from zero */ });
+      // Restore BEFORE the loop below stores anything: the first tick writes a
+      // live counter for every session it collects, and a live value outranks
+      // a restored one, so a restore that lands after this loop is discarded
+      // for the whole collected fleet (102 of 102 on 2026-09-19 20:09Z; ct-52784).
+      // The read is awaited, not synchronous, so the loop budget guard is
+      // satisfied and the event loop stays free while it runs.
+      try {
+        sessionAwakeIdleMs.restore(await fs.promises.readFile(AWAKE_IDLE_SNAPSHOT_FILE, "utf-8"), now);
+      } catch { /* no snapshot yet, or unreadable: start from zero */ }
     }
     lastResourceTickAt = now;
 

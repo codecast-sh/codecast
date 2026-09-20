@@ -11,7 +11,7 @@ import { Flag, Plus } from "lucide-react";
 import { INITIATIVE_STATUS_LABEL, type InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useInitiatives, useTasksByProject } from "../../hooks/useInitiatives";
+import { useInitiatives, useBoardTasks, useTasksBackfilled } from "../../hooks/useInitiatives";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
@@ -26,7 +26,8 @@ export function InitiativesList() {
   // An owner may be a role: the chips read the org roles, so keep them fed.
   useSyncOrgTreeFeeder();
   const rows = useInitiatives();
-  const byProject = useTasksByProject();
+  const tasks = useBoardTasks();
+  const counted = useTasksBackfilled();
   const now = useCoarseNow(60_000);
   const phone = useIsPhone();
   const groups = useMemo(() => groupInitiativesByStatus(rows), [rows]);
@@ -65,9 +66,9 @@ export function InitiativesList() {
                 </h2>
                 <div className="rounded-xl border overflow-hidden" style={{ borderColor: HAIRLINE }}>
                   {g.rows.flatMap((r, i) => [
-                    <Row key={r._id} row={r} index={i} now={now} phone={phone} progress={initiativeProgress(r, byProject)} />,
+                    <Row key={r._id} row={r} index={i} now={now} phone={phone} progress={initiativeProgress(r, tasks)} partial={!counted} />,
                     ...subInitiatives(rows, r._id).map((sub) => (
-                      <Row key={sub._id} row={sub} index={i} now={now} phone={phone} progress={initiativeProgress(sub, byProject)} nested />
+                      <Row key={sub._id} row={sub} index={i} now={now} phone={phone} progress={initiativeProgress(sub, tasks)} partial={!counted} nested />
                     )),
                   ])}
                 </div>
@@ -80,12 +81,12 @@ export function InitiativesList() {
   );
 }
 
-function Row({ row, index, now, phone, progress, nested }: { row: InitiativeRow; index: number; now: number; phone: boolean; progress: ReturnType<typeof initiativeProgress>; nested?: boolean }) {
+function Row({ row, index, now, phone, progress, partial, nested }: { row: InitiativeRow; index: number; now: number; phone: boolean; progress: ReturnType<typeof initiativeProgress>; partial: boolean; nested?: boolean }) {
   const projects = row.project_ids.length;
   return (
     <Link
       href={initiativeHref(row)}
-      className={cn("initiative-row group block border-t first:border-t-0 transition-colors hover:bg-sol-bg-highlight/50 focus-visible:outline-none focus-visible:bg-sol-bg-highlight/60", phone ? "px-3 py-3" : "px-4 py-3")}
+      className={cn("initiative-row group block no-underline border-t first:border-t-0 transition-colors hover:bg-sol-bg-highlight/50 focus-visible:outline-none focus-visible:bg-sol-bg-highlight/60", phone ? "px-3 py-3" : "px-4 py-3")}
       style={{ borderColor: HAIRLINE, animationDelay: `${Math.min(index, 8) * 28}ms`, opacity: ended(row) ? 0.72 : 1 }}
       data-initiative-row={row.short_id || row._id}
       data-initiative-nested={nested ? "1" : undefined}
@@ -93,7 +94,7 @@ function Row({ row, index, now, phone, progress, nested }: { row: InitiativeRow;
       <div className={cn("grid items-center gap-x-4 gap-y-1.5", phone ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_150px_150px_64px_150px]")}>
         <div className={cn("min-w-0 flex items-center gap-2.5", nested && "pl-5")}>
           {nested ? <span className="w-3 h-px shrink-0" style={{ background: "var(--sol-text-dim)" }} aria-hidden /> : <Flag className="w-3.5 h-3.5 shrink-0" style={{ color: ended(row) ? "var(--sol-text-dim)" : INITIATIVE_ACCENT }} />}
-          <span className="min-w-0 truncate text-[13.5px] font-medium">{row.title}</span>
+          <span className="min-w-0 truncate text-[13.5px] font-medium" style={{ color: "var(--sol-text)" }}>{row.title}</span>
           {row.short_id && <span className="shrink-0 text-[10.5px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{row.short_id}</span>}
           {!nested && <span className="shrink-0 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{projects === 0 ? "no projects" : `${projects} ${projects === 1 ? "project" : "projects"}`}</span>}
         </div>
@@ -102,14 +103,14 @@ function Row({ row, index, now, phone, progress, nested }: { row: InitiativeRow;
             <OwnerChip owner={row.owner} size={14} />
             <HealthChip health={row.health} at={row.health_at} now={now} />
             <TargetDate ts={row.target_date} now={now} done={ended(row)} />
-            <ProgressBar progress={progress} className="basis-full" />
+            <ProgressBar progress={progress} partial={partial} className="basis-full" />
           </div>
         ) : (
           <>
             <OwnerChip owner={row.owner} />
             <HealthChip health={row.health} at={row.health_at} now={now} />
             <span className="text-right"><TargetDate ts={row.target_date} now={now} done={ended(row)} /></span>
-            <ProgressBar progress={progress} />
+            <ProgressBar progress={progress} partial={partial} />
           </>
         )}
       </div>

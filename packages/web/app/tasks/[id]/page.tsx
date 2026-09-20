@@ -11,8 +11,7 @@ import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConve
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useSyncTaskExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../../../hooks/useSyncExternalEvents";
-import { ExternalEventRow } from "../../../components/feed/ExternalEventRow";
-import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../../../lib/externalEvents";
+import { type ExternalEventRecord } from "../../../lib/externalEvents";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { IssueLink } from "../../../components/tasks/IssueLink";
@@ -34,7 +33,8 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
-import { TaskCommentComposer, TaskCommentItem, TimeAgo, UserBadge } from "../../../components/tasks/TaskCommentStream";
+import { TaskCommentComposer, UserBadge } from "../../../components/tasks/TaskCommentStream";
+import { TaskTimeline } from "../../../components/tasks/TaskTimeline";
 import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
@@ -60,7 +60,6 @@ import {
   ChevronDown,
   ListChecks,
   ShieldCheck,
-  MessageSquare,
   X,
   MoreHorizontal,
   Plus,
@@ -224,53 +223,6 @@ function OverflowMenu({ children }: { children: ReactNode }) {
           {children}
         </div>
       )}
-    </div>
-  );
-}
-
-function HistoryItem({ entry }: { entry: any }) {
-  const statusCfg = entry.field === "status" ? STATUS_MAP[entry.new_value] : null;
-  return (
-    <div className="flex items-center gap-2 text-[11px] py-1 min-w-0">
-      {entry.actor ? (
-        <UserBadge name={entry.actor.name} image={entry.actor.image} username={entry.actor.github_username} />
-      ) : (
-        <span className="inline-flex items-center gap-1.5 flex-shrink-0">
-          <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center">
-            <Bot className="w-3 h-3 text-sol-text-dim" />
-          </div>
-          <span className="text-sol-text font-medium">System</span>
-        </span>
-      )}
-      {entry.action === "created" ? (
-        <span className="text-gray-400">created this task</span>
-      ) : entry.field === "status" && statusCfg ? (
-        <>
-          <span className="text-gray-400">changed status to</span>
-          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 opacity-50 ${statusCfg.color} border-current/30`}>
-            {statusCfg.label}
-          </Badge>
-        </>
-      ) : entry.field === "assignee" ? (
-        <>
-          <span className="text-gray-400">assigned to</span>
-          {entry.new_value_resolved ? (
-            <UserBadge name={entry.new_value_resolved.name} image={entry.new_value_resolved.image} username={entry.new_value_resolved.github_username} />
-          ) : entry.new_value ? (
-            <code className="text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight text-gray-500 font-mono">{entry.new_value.slice(0, 8)}...</code>
-          ) : (
-            <span className="text-gray-400 italic">nobody</span>
-          )}
-        </>
-      ) : (
-        <>
-          <span className="text-gray-400">changed {entry.field}</span>
-          {entry.old_value && <span className="text-gray-300 line-through">{entry.old_value}</span>}
-          <span className="text-gray-300">&rarr;</span>
-          <span className="text-gray-500">{entry.new_value}</span>
-        </>
-      )}
-      <TimeAgo ts={entry.created_at} className="ml-auto flex-shrink-0 text-gray-300" />
     </div>
   );
 }
@@ -959,6 +911,12 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               <span className="flex items-center gap-1.5 text-xs text-sol-text-muted" title={formatDateFull(data.created_at)}>
                 <Clock className="w-3 h-3 text-sol-text-dim" />
                 {formatDate(data.created_at)}
+                {data.creator && (
+                  <>
+                    <span className="text-sol-text-dim">by</span>
+                    <UserBadge name={data.creator.name} image={data.creator.image} username={(data.creator as any).github_username} />
+                  </>
+                )}
               </span>
             </div>
 
@@ -1164,40 +1122,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </div>
           )}
 
-          {/* Activity */}
-          <div className="mb-6">
-            <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-3 flex items-center gap-1.5">
-              <MessageSquare className="w-3.5 h-3.5" />
-              Activity
-            </h2>
-            <div className="relative">
-              {/* Vertical timeline line */}
-              <div className="absolute left-[9px] top-2 bottom-2 w-px bg-sol-border/20" />
-              <div className="space-y-0">
-                {[
-                  ...(data.history || []).map((h: any) => ({ type: "history" as const, ts: h.created_at, data: h })),
-                  ...(data.comments || []).map((c: any) => ({ type: "comment" as const, ts: c.created_at, data: c })),
-                  ...externalEvents.map((e) => ({ type: "git" as const, ts: e.created_at ?? 0, data: e })),
-                ]
-                  .sort((a, b) => a.ts - b.ts)
-                  .map((item) =>
-                    item.type === "history" ? (
-                      <HistoryItem key={item.data._id} entry={item.data} />
-                    ) : item.type === "git" ? (
-                      <ExternalEventRow
-                        key={item.data._id}
-                        event={externalEventRowToExternalEvent(item.data)}
-                        density="compact"
-                        omitRefs={["task_id", "task_short_id"]}
-                        className="-ml-[4px]"
-                      />
-                    ) : (
-                      <TaskCommentItem key={item.data._id} comment={item.data} openLinkedSession={openLinkedSession} />
-                    )
-                  )}
-              </div>
-            </div>
-          </div>
+          <TaskTimeline task={data as any} sessions={linkedConversations} externalEvents={externalEvents} openLinkedSession={openLinkedSession} />
 
           {/* Comment input */}
           <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} />

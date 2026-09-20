@@ -47,11 +47,18 @@ function fixtures() {
     session_owners: [],
     managed_sessions: [],
     tasks: [
-      { _id: "tasks_1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "done", title: "a" },
-      { _id: "tasks_2", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "open", title: "b" },
-      { _id: "tasks_3", user_id: ME, team_id: TEAM, workspace: WS, project_id: Q, status: "done", title: "c" },
+      { _id: "tasks_1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "done", title: "a", source: "human" },
+      { _id: "tasks_2", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "open", title: "b", source: "human" },
+      { _id: "tasks_3", user_id: ME, team_id: TEAM, workspace: WS, project_id: Q, status: "done", title: "c", source: "meeting" },
+      // Under a plan of Growth with no project of its own: not on Growth's board.
+      { _id: "tasks_4", user_id: ME, team_id: TEAM, workspace: WS, plan_id: "plans_growth", status: "done", title: "d", source: "human" },
+      // Dropped, and an agent's unpromoted suggestion: not on the board.
+      { _id: "tasks_5", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "dropped", title: "e", source: "human" },
+      { _id: "tasks_7", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "open", title: "g", source: "agent" },
+      // Someone else's private task in Growth: not the caller's to read.
+      { _id: "tasks_6", user_id: STRANGER, workspace: `user:${STRANGER}`, project_id: P, status: "done", title: "f", source: "human" },
     ],
-    plans: [],
+    plans: [{ _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, title: "Growth plan", status: "active" }],
     projects: [
       project(P, "Growth"),
       project(Q, "Billing"),
@@ -115,6 +122,17 @@ describe("initiatives: access", () => {
     await expect(run(create, db, { ...inTeam, title: "Not mine" }, STRANGER)).rejects.toThrow("team membership required");
   });
 
+  test("an edit named by the client key lands on the row before the create has echoed; an unknown key fails so the outbox retries", async () => {
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Draft title", client_key: "stub-7" });
+    const renamed = await run(update, db, { id: "stub-7", title: "Win enterprise" });
+    expect(renamed.id).toBe(made.id);
+    expect((await db.get(made.id)).title).toBe("Win enterprise");
+    // A key of someone else's create is not the caller's.
+    await expect(run(update, db, { id: "stub-7", title: "Mine" }, MATE)).rejects.toThrow("Initiative not found");
+    await expect(run(update, db, { id: "never-made", title: "x" })).rejects.toThrow("Initiative not found");
+  });
+
   test("a retried create answers with the row it already made", async () => {
     const db = fixtures();
     const a = await run(create, db, { ...inTeam, title: "Once", client_key: "k1" });
@@ -136,6 +154,9 @@ describe("initiatives: health comes from the latest update", () => {
     let row = await run(webGet, db, { ref: "in-1" });
     expect(row).toMatchObject({ health: "on_track", latest_update_id: first.id, health_at: first.row.at });
 
+    // Health is the owner's word: a plain member is refused until named owner.
+    await expect(run(postUpdate, db, { id: "in-1", body: "Two deals slipped", health: "at_risk" }, MATE)).rejects.toThrow("Only the owner or a workspace admin");
+    await run(update, db, { id: "in-1", owner: "@mate" });
     const second = await run(postUpdate, db, { id: "in-1", body: "Two deals slipped", health: "at_risk" }, MATE);
     row = await run(webGet, db, { ref: "in-1" });
     expect(row).toMatchObject({ health: "at_risk", latest_update_id: second.id, health_at: second.row.at });
@@ -236,12 +257,31 @@ describe("initiatives: the owner is a person or a role", () => {
     // The record keeps the account that made the call.
     expect(asRole.row.user_id).toBe(ME);
 
+    // A teammate naming the standing session does not sign as the role, and
+    // as neither owner nor admin may not post at all.
+    await expect(run(postUpdate, db, { id: "in-1", body: "I am the role", health: "off_track", session_id: "sess-growth" }, MATE)).rejects.toThrow("Only the owner or a workspace admin");
+    await run(update, db, { id: "in-1", owner: "@mate" });
     const asMate = await run(postUpdate, db, { id: "in-1", body: "I am the role", health: "off_track", session_id: "sess-growth" }, MATE);
     expect(asMate.row.by).toEqual({ kind: "user", user_id: MATE });
 
     const shown = await run(get, db, { id: "in-1" });
     expect(shown.owner_label).toBe("@growth");
     expect(shown.updates.map((u: any) => u.by_label)).toEqual(["Mate", "@growth"]);
+  });
+
+  test("a role of another workspace never signs an update here, even when its host is an admin", async () => {
+    tickingClock();
+    const db = fixtures();
+    const foreign = await performCreateRole(ctxOf(db), ME as any, { name: "Other ops", handle: "ops", team_id: OTHER_TEAM, scope: { project_ids: [], plan_ids: [] } });
+    await db.insert("users", { name: "Ops bot", is_bot: true });
+    const bot = db._tables.users.at(-1)._id;
+    const anchor = await db.insert("anchors", { bot_user_id: bot, team_id: OTHER_TEAM });
+    await db.patch(foreign._id, { anchor_id: anchor });
+    await db.insert("conversations", { user_id: ME, team_id: OTHER_TEAM, session_id: "sess-ops", standing_role_id: foreign._id, is_private: false });
+    await run(create, db, { ...inTeam, title: "Win enterprise" });
+    // ME is Acme's admin, so the post is allowed; it is signed by the person.
+    const posted = await run(postUpdate, db, { id: "in-1", body: "From elsewhere", health: "on_track", session_id: "sess-ops" });
+    expect(posted.row.by).toEqual({ kind: "user", user_id: ME });
   });
 });
 
@@ -272,12 +312,18 @@ describe("initiatives: projects", () => {
     await expect(run(addProject, db, { id: "in-1", project_id: "projects_missing" })).rejects.toThrow("No project");
   });
 
-  test("the terminal reads join project titles and roll task counts up; the synced row stays raw", async () => {
+  test("the terminal reads join project titles and roll up the board's task counts; the synced row stays raw", async () => {
     const db = fixtures();
     await run(create, db, { ...inTeam, title: "Win enterprise", status: "active", project_ids: [P, Q] });
     const [row] = await run(list, db, { status: "active" });
-    expect(row.projects.map((p: any) => [p.title, p.task_counts])).toEqual([["Growth", { total: 2, done: 1 }], ["Billing", { total: 1, done: 1 }]]);
-    expect(row.task_counts).toEqual({ total: 3, done: 2 });
+    // Growth counts the rows its board shows (shared/tasks projectTaskCounts):
+    // one open and one done. The plan only task, the dropped one, the agent's
+    // suggestion and the stranger's private one are not counted.
+    expect(row.projects.map((p: any) => [p.title, p.task_counts])).toEqual([
+      ["Growth", { total: 2, done: 1, in_progress: 0, open: 1 }],
+      ["Billing", { total: 1, done: 1, in_progress: 0, open: 0 }],
+    ]);
+    expect(row.task_counts).toEqual({ total: 3, done: 2, in_progress: 0, open: 1 });
     expect(await run(list, db, { status: "completed" })).toEqual([]);
 
     const [raw] = await run(webList, db, inTeam);

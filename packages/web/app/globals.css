@@ -5325,14 +5325,17 @@ pre[class*="language-"] {
 
 /* A role's standing session on the role page (initiatives-projects-role-page.md
    I3). The role's header above already carries the face, the name and the
-   state, so the session's own header rests on one row: a label, the live
-   status, whatever is marked data-cc-keep (a live huddle, a struggling daemon,
-   an open search, the session menu) and the seat's two controls. It is the
+   state, so the session's own header rests on one row: the one state word
+   that is true (a stall notice takes its place), the live signals marked
+   data-cc-keep (a huddle, a struggling daemon, an open search) and the seat's
+   two controls; the session menu waits behind the expander too. It is the
    same header with the same actions, all still in the DOM; "open" shows the
    whole row again, less the face and the title the role's header already
    says. A rename in progress is never hidden. */
 [data-seat-head="rest"] [data-sv-convhead] .cq-squeeze-row > :not([data-seat-label], [data-cc-conv-status], [data-cc-conv-actions], input),
-[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]) {
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
+[data-seat-head="rest"] [data-sv-convhead] [data-cc-conv-actions] > button[data-cc-keep],
+[data-seat-head="rest"][data-seat-stall] [data-sv-convhead] [data-cc-conv-status] {
   display: none;
 }
 [data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > h1,

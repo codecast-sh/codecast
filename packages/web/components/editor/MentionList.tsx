@@ -2,40 +2,13 @@ import { forwardRef, useImperativeHandle, useState, useCallback, useRef, useMemo
 import { useMentionServerSearch, useActiveMentionScope, SERVER_MENTION_TYPES } from "../../hooks/useMentionQuery";
 import { mergeMentionSuggestions, mentionViewTimes } from "../../lib/mentionRanking";
 import { useInboxStore } from "../../store/inboxStore";
+import type { MentionItem } from "../../lib/mentionItem";
 import { MentionSuggestion } from "./MentionSuggestion";
 import { personifyAllNow } from "../../hooks/usePersonifyAll";
-import type { IdentityRow } from "../../lib/sessionIdentity";
 
-export type MentionItem = {
-  id: string;
-  type: string;
-  label: string;
-  sublabel?: string;
-  /** The @handle this person answers to in team chat — the server's mention
-   *  vocabulary (github username, email local part, or a bot's name slug). */
-  handle?: string;
-  isBot?: boolean;
-  /** A person who exists only in the team's Slack workspace: the row wears
-   *  the Slack mark, and the send pages them in the line's Slack copy. */
-  slack?: boolean;
-  image?: string;
-  shortId?: string;
-  status?: string;
-  priority?: string;
-  docType?: string;
-  messageCount?: number;
-  projectPath?: string;
-  goal?: string;
-  model?: string;
-  agentType?: string;
-  updatedAt?: number;
-  viewedAt?: number;
-  idleSummary?: string;
-  /** A session's identity row (session-characters.md S1): the character and
-   *  role fields, handed whole to `sessionIdentity` so the dropdown row wears
-   *  the face and name the inbox card wears. Nothing else reads them. */
-  identity?: IdentityRow;
-};
+// The row type lives in lib/mentionItem so a library file (mentionRanking,
+// useMentionQuery) and mobile's typecheck never pull this component in.
+export type { MentionItem } from "../../lib/mentionItem";
 
 interface MentionListProps {
   items: MentionItem[];

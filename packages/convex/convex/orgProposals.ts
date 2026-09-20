@@ -25,6 +25,8 @@ import {
   orgReviseOpError,
   normalizeOrgSpecChange,
   parseOrgProposalSpec,
+  latestOrgRevisionAt,
+  orgVerdictSeenFault,
   resolveOrgAsks,
   withAboutAsk,
   withAboutChange,
@@ -33,6 +35,7 @@ import {
   type OrgProposalSpec,
   type OrgReviseOp,
   type OrgRevision,
+  type OrgVerdictSeen,
 } from "@codecast/shared/contracts/orgProposal";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
@@ -419,10 +422,18 @@ async function skipOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, cha
   return { change_id: change._id, seq: change.seq, status: "skipped", note, line: describeOrgChange(change.change) };
 }
 
+/** A verdict is read against the proposal as the page showed it (`seen`);
+ *  one the author revised since is refused whole, and the page shows the
+ *  revised list instead (S18). */
+function refuseIfRevised(proposal: ProposalRow, rows: ChangeRow[], seen: OrgVerdictSeen | undefined, askSeqs?: number[]): void {
+  const fault = orgVerdictSeenFault(proposal.short_id, seen, rows, askSeqs);
+  if (fault) throw new Error(fault);
+}
+
 export async function performDecideChange(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { change_id: string; verdict: "accept" | "skip"; edits?: unknown; from_session?: string; api_token?: string; provision?: boolean },
+  args: { change_id: string; verdict: "accept" | "skip"; edits?: unknown; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean },
 ): Promise<any> {
   await refuseUnlessHumanDecider(ctx, args);
   const found = await findChange(ctx, args.change_id);
@@ -431,6 +442,9 @@ export async function performDecideChange(
   await requireAdmin(ctx, userId, proposal);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   if (!decidable(change)) throw new Error(`${proposal.short_id}#${change.seq} is already ${change.status}`);
+  // An amend keeps the row's id and replaces what it says (S18), so the id
+  // alone does not say which content the person read.
+  refuseIfRevised(proposal, await changesOf(ctx, proposal._id), args.seen);
   const now = Date.now();
   const out = args.verdict === "skip"
     ? await skipOne(ctx, userId, proposal, change, now, args.provision ?? true)
@@ -472,7 +486,7 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * runMutation's writes back); the test harness has no runMutation and runs
  * the change inline, which covers the throws that happen before any write.
  */
-export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; tried?: string[]; continuation?: boolean }): Promise<any> {
+export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean }): Promise<any> {
   // The person's gate runs on the call they made; a continuation is the same
   // act carried on by the server, scheduled only from inside that call.
   if (!args.continuation) await refuseUnlessHumanDecider(ctx, args);
@@ -488,7 +502,11 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // the person accepted, still in apply order.
   const seqs = args.seqs ? new Set(args.seqs) : null;
   const triedSet = new Set(args.tried ?? []);
-  const all = orderForApply((await changesOf(ctx, proposal._id)).filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
+  const rows = await changesOf(ctx, proposal._id);
+  // The person's own call says what it read; a continuation and an ask's
+  // accept were checked by the call that started them.
+  if (!args.continuation) refuseIfRevised(proposal, rows, args.seen);
+  const all = orderForApply(rows.filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
   // One call applies one chunk and hands the rest to its own transaction
   // (acceptAllContinue): a hundred records, each plan close cascading over its
   // tasks, do not fit one read and write budget, and a late failure must not
@@ -526,10 +544,12 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
  * and this call cannot disagree about what an ask holds. Accept is the accept
  * all core narrowed to the ask's seqs: apply order, a sub-transaction per
  * change, the same chunks and continuation. Skip marks each skipped through
- * the skip one change takes. A change the person already decided inside the
+ * the skip one change takes. The position is only good against the list the
+ * page read, so the call carries what that was (`seen`), and a list the
+ * author revised since is refused, never resolved to what sits there now. A change the person already decided inside the
  * fold is left as they decided it.
  */
-export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; from_session?: string; api_token?: string; provision?: boolean }): Promise<any> {
+export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean }): Promise<any> {
   await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
@@ -538,6 +558,10 @@ export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, arg
   const rows = await changesOf(ctx, proposal._id);
   const asks = resolveOrgAsks(proposal.asks, rows);
   const ask = asks[args.ask];
+  // A revise that empties an earlier ask moves every later one up a place,
+  // so a position that no longer exists is a moved list before it is a bad
+  // index, and the seqs the card held say which ask the person read.
+  refuseIfRevised(proposal, rows, args.seen, ask?.seqs ?? []);
   if (!ask) throw new Error(`${proposal.short_id} has ${asks.length} ask${asks.length === 1 ? "" : "s"}; there is no ask ${args.ask}`);
   if (args.verdict === "accept") return { ask: args.ask, title: ask.title, ...(await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: ask.seqs, provision: args.provision, continuation: true })) };
   const now = Date.now();
@@ -639,7 +663,9 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
 
   const rows = await changesOf(ctx, proposal._id);
   const bySeq = new Map<number, ChangeRow>(rows.map((c) => [c.seq, c]));
-  const now = Date.now();
+  // Strictly after the last revise: a verdict names the revise it read by
+  // this stamp, so two revises in one millisecond must not share it.
+  const now = Math.max(Date.now(), latestOrgRevisionAt(rows) + 1);
   const by = proposal.author;
   const journal: OrgRevision[] = [];
   const writes: Array<() => Promise<unknown>> = [];
@@ -902,6 +928,9 @@ export const list = query({
   },
 });
 
+/** What the page showed when the verdict was pressed (OrgVerdictSeen). */
+const verdictSeen = v.optional(v.object({ revised_at: v.number(), seqs: v.optional(v.array(v.number())) }));
+
 export const decide = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -909,17 +938,18 @@ export const decide = mutation({
     change_id: v.string(),
     verdict: v.union(v.literal("accept"), v.literal("skip")),
     edits: v.optional(v.any()),
+    seen: verdictSeen,
   },
   handler: async (ctx, { api_token, ...args }) => performDecideChange(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
 export const decideAsk = mutation({
-  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ask: v.number(), verdict: v.union(v.literal("accept"), v.literal("skip")) },
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ask: v.number(), verdict: v.union(v.literal("accept"), v.literal("skip")), seen: verdictSeen },
   handler: async (ctx, { api_token, ...args }) => performDecideAsk(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
 export const acceptAll = mutation({
-  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), kinds: v.optional(v.array(v.string())) },
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), kinds: v.optional(v.array(v.string())), seen: verdictSeen },
   handler: async (ctx, { api_token, ...args }) => performAcceptAll(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 

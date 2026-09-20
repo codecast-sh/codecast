@@ -101,10 +101,11 @@ export function ContextChatInput({
 
     // The linked object's OWN project wins over the viewer's
     // currentConversation, which may belong to an unrelated repo (~/src etc) —
-    // resolution chain in lib/contextProjectPath. The server will further
-    // resolve via team directory mappings if nothing is set, so the daemon
-    // command always gets the right cwd. activeTask is a side product for
-    // optimistic rendering (task badge in header/sidebar).
+    // resolution chain in lib/contextProjectPath. When the object pins nothing
+    // the viewer's path still rides along as a last resort, and the server
+    // (resolveTaskGitContext) overrides it with the task's team directory
+    // unless it already sits inside that team. activeTask is a side product
+    // for optimistic rendering (task badge in header/sidebar).
     let activeTask: { _id: string; short_id: string; title: string; status: string } | undefined;
     let contextDerivedPath: string | undefined;
     if (linkedObjectId) {

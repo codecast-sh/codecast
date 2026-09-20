@@ -52,17 +52,21 @@ export function HealthChip({ health, at, now, className }: { health: InitiativeH
   );
 }
 
-/** Tasks done over tasks, as one thin bar: done solid, in progress behind it. */
-export function ProgressBar({ progress, className }: { progress: Progress; className?: string }) {
+/** Tasks done over tasks, as one thin bar: done solid, in progress behind it.
+ *  `partial` says the task store is still filling (useTasksBackfilled): the
+ *  bar dims and "counting" stands where the number would, so a low count on a
+ *  cold cache never reads as the truth. */
+export function ProgressBar({ progress, partial, className }: { progress: Progress; partial?: boolean; className?: string }) {
   const pct = progressPercent(progress);
   const moving = progress.total === 0 ? 0 : Math.round(((progress.done + progress.in_progress) / progress.total) * 100);
+  const title = partial ? "Counting: the task cache is still filling" : progress.total === 0 ? "No tasks yet" : `${progress.done} of ${progress.total} tasks done, ${progress.in_progress} in progress`;
   return (
-    <span className={cn("inline-flex items-center gap-2 min-w-0", className)} data-initiative-progress={`${progress.done}/${progress.total}`} title={progress.total === 0 ? "No tasks yet" : `${progress.done} of ${progress.total} tasks done, ${progress.in_progress} in progress`}>
-      <span className="relative flex-1 min-w-[48px] h-[4px] rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }} aria-hidden>
+    <span className={cn("inline-flex items-center gap-2 min-w-0", className)} data-initiative-progress={partial ? "counting" : `${progress.done}/${progress.total}`} title={title}>
+      <span className={cn("relative flex-1 min-w-[48px] h-[4px] rounded-full overflow-hidden", partial && "opacity-40")} style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }} aria-hidden>
         <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${moving}%`, background: `color-mix(in srgb, ${INITIATIVE_ACCENT} 30%, transparent)` }} />
         <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${pct}%`, background: INITIATIVE_ACCENT }} />
       </span>
-      <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{progress.total === 0 ? "no tasks" : `${progress.done}/${progress.total}`}</span>
+      <span className={cn("shrink-0 text-[11px] tabular-nums", partial && "italic")} style={{ color: "var(--sol-text-dim)" }}>{partial ? "counting" : progress.total === 0 ? "no tasks" : `${progress.done}/${progress.total}`}</span>
     </span>
   );
 }

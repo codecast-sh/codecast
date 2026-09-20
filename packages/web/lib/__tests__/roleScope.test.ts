@@ -26,8 +26,11 @@ const rows = {
     { _id: "t2", status: "in_progress", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo", assignee: growth._id },
     { _id: "t3", status: "done", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo", assignee: "fixture-user-me" },
     { _id: "t4", status: "dropped", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo" },
-    // No project of its own: it counts under its plan's project.
+    // No project of its own: the project's board would not show it, so the
+    // project does not count it (shared/tasks isOnProjectBoard); its plan does.
     { _id: "t5", status: "open", plan_id: "fixture-plan-ads" },
+    // Agent bookkeeping is off the board too.
+    { _id: "t6", status: "open", project_id: "fixture-project-growth", source: "agent" },
   ],
   roles: tree.roles,
   sessions: [
@@ -43,13 +46,13 @@ describe("buildRoleScope", () => {
   test("a project is one card: its state, that this role leads it, its plans and its sessions inside", () => {
     expect(model.projects).toHaveLength(1);
     const p = model.projects[0];
-    expect(p).toMatchObject({ title: "Growth", ref: "pr-4", open: 3, done: 1, leads: true, partial: false });
-    expect(projectStateLine(p)).toBe("3 open tasks · 1 done");
+    expect(p).toMatchObject({ title: "Growth", ref: "pr-4", open: 2, done: 1, leads: true, partial: false });
+    expect(projectStateLine(p)).toBe("2 open tasks · 1 done");
     // Plans live inside their project, never beside it.
     expect(p.plans.map((pl) => pl.ref)).toEqual(["pl-90", "pl-88"]);
     expect(model.loosePlans).toEqual([]);
-    // A session bound to a task with no project still lands in the plan's project.
-    expect(groupsLine(p.sessions)).toBe("1 waiting on a person · 1 working");
+    // A session bound to a task the project names is at work in it.
+    expect(groupsLine(p.sessions)).toBe("1 waiting on a person");
   });
 
   test("a plan carries live progress; dropped tasks leave the total", () => {
@@ -63,16 +66,17 @@ describe("buildRoleScope", () => {
     expect(planStateLine(model.projects[0].plans.find((p) => p.ref === "pl-90")!)).toBe("0 of 1 done");
   });
 
-  test("a plan in no project goes in the last group, and filing it moves it and its work into the project", () => {
-    const loose = { ...rows, plans: rows.plans.map((p) => (p._id === "fixture-plan-seo" ? { ...p, project_id: undefined } : p)), tasks: rows.tasks.map((t) => ({ ...t, project_id: undefined })) };
+  test("a plan in no project goes in the last group, and filing it moves it into the project's card", () => {
+    const loose = { ...rows, plans: rows.plans.map((p) => (p._id === "fixture-plan-seo" ? { ...p, project_id: undefined } : p)) };
     const before = buildRoleScope(sourceFromTree(tree, tree.roles[0]), loose, TODAY);
     expect(before.loosePlans.map((p) => p.ref)).toEqual(["pl-88"]);
-    expect(before.projects[0].open).toBe(1);
-    // The one gesture: the plan row takes the project; the tasks follow at render.
+    // The one gesture: the plan row takes the project in the same tick; the
+    // server files the plan's project-less tasks with it, and the counts
+    // follow when they echo.
     const filed = { ...loose, plans: loose.plans.map((p) => (p._id === "fixture-plan-seo" ? { ...p, project_id: "fixture-project-growth" } : p)) };
     const after = buildRoleScope(sourceFromTree(tree, tree.roles[0]), filed, TODAY);
     expect(after.loosePlans).toEqual([]);
-    expect(after.projects[0]).toMatchObject({ open: 3, done: 1 });
+    expect(after.projects[0].plans.map((p) => p.ref)).toContain("pl-88");
   });
 
   test("a role whose scope names only a plan sees that plan inside its project, marked as partial", () => {
@@ -139,7 +143,7 @@ describe("the card's answer stands in for the tree", () => {
       caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 1 }, counters: null,
     });
     const model = buildRoleScope(source, rows, TODAY);
-    expect(model.projects[0]).toMatchObject({ title: "Growth", open: 3 });
+    expect(model.projects[0]).toMatchObject({ title: "Growth", open: 2 });
     expect(model.sessions).toBeNull();
     expect(model.limit).toBe("woke 0 of 40 times today · started 0 of 6 sessions");
   });

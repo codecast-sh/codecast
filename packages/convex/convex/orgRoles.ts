@@ -696,7 +696,7 @@ export async function performSetProjectLead(
 export type CoverProjectsResult = {
   added: string[];
   listed: string[];
-  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" }>;
+  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" | "human_only" }>;
   /** The sentence a person reads when the role took over sessions in the added projects. */
   took_over?: string;
 };
@@ -721,6 +721,16 @@ export async function performCoverProjects(
   if (!toAdd.length) return out;
   if (!(await userCanAdminRole(ctx, userId, role))) {
     out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "not_admin" as const })));
+    return out;
+  }
+  // A scope edit is human only (F1, T2), and a token call carries no browser
+  // identity, so the role update would refuse it and take the caller's own
+  // write (naming an owner, adding a project) down with it. Reported instead:
+  // the write stands, and the person is told the scope is theirs to widen
+  // from the role page. Never claim `human_decision` here: it names a
+  // decision a person answered, and this is not one.
+  if (!(await ctx.auth?.getUserIdentity?.())) {
+    out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "human_only" as const })));
     return out;
   }
   await performUpdateRole(ctx, userId, { role_id: String(role._id), scope: { project_ids: [...role.scope.project_ids, ...toAdd], plan_ids: role.scope.plan_ids } });
@@ -1572,13 +1582,18 @@ export const wakes = query({
 export async function performSetReports(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; from_session?: string },
+  args: { role_id: string; add?: Id<"users">[]; remove?: Id<"users">[]; set?: Id<"users">[]; from_session?: string },
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   if (role.status === "retired") throw new Error("That role is retired");
   const admin = await userCanAdminRole(ctx, userId, role);
-  const add = args.add ?? [];
-  const remove = args.remove ?? [];
+  // `set` is the whole list as a surface holds it (the Settings tab): the
+  // difference against the stored row is taken here, where the row is, so
+  // the same per person rule below covers it.
+  const held = (role.reports_user_ids ?? []) as Id<"users">[];
+  const wanted = args.set ? new Set(args.set.map(String)) : null;
+  const add = wanted ? args.set!.filter((uid) => !held.some((h) => String(h) === String(uid))) : args.add ?? [];
+  const remove = wanted ? held.filter((uid) => !wanted.has(String(uid))) : args.remove ?? [];
   if (add.length + remove.length === 0) return role;
   const names = new Map<string, string>();
   for (const uid of [...add, ...remove]) {
@@ -1612,7 +1627,7 @@ export async function performSetReports(
 }
 
 export const setReports = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), add: v.optional(v.array(v.id("users"))), remove: v.optional(v.array(v.id("users"))), set: v.optional(v.array(v.id("users"))), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetReports(ctx, await requireCaller(ctx, api_token), args),
 });
 

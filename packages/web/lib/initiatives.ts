@@ -1,18 +1,18 @@
 // What an initiative's surfaces derive at render
 // (docs/architecture/initiatives-projects-role-page.md I1). The synced row is
 // raw; everything beside it is computed here from the store's collections:
-// progress (tasks done over tasks in its projects), the projects' own trouble
+// progress (the tasks its projects' boards would show), the projects' own trouble
 // beside the owner's word, sub initiatives, whose conversation the page opens
 // beside, and the one initiative a task or a project reads as. Pure, so a task's status change
 // moves every bar in the same tick and nothing derived is ever stored.
 import type { InitiativeOwner, InitiativeRow, InitiativeStatus } from "@codecast/shared/contracts/initiative";
 import type { OrgRole, OrgTree } from "../components/org/orgTypes";
-import { computePlanProgress } from "./liveEntities";
+import { projectTaskCounts, type ProjectProgress } from "@codecast/shared/tasks";
 import { scopeSeatOf } from "./scopePage";
 
-export type Progress = ReturnType<typeof computePlanProgress>;
-type TaskLike = { _id: string; status?: string; project_id?: string | null; plan_id?: string | null };
-type PlanLike = { _id: string; short_id: string; title: string; status: string; project_id?: string | null };
+export type Progress = ProjectProgress;
+/** What the board rule reads off a task. */
+export type BoardTask = { status?: string | null; project_id?: unknown; source?: string | null; promoted?: boolean | null; assignee?: string | null; triage_status?: string | null };
 type ProjectLike = { _id: string; title: string; status: string; target_date?: number; risks?: string[] };
 
 /** The list's order: what is being driven now, then what is coming, then what ended. */
@@ -23,26 +23,13 @@ const statusRank = (s: InitiativeStatus) => INITIATIVE_STATUS_ORDER.indexOf(s);
 export const ownerId = (owner: InitiativeOwner | undefined): string | null =>
   !owner ? null : owner.kind === "role" ? owner.role_id : owner.user_id;
 
-/** Tasks bucketed by project once, so every rollup on a page is a lookup. A
- *  task with no project of its own counts under its plan's project, the rule
- *  the scope view reads by (lib/roleScope), so an initiative's bar and its
- *  project cards always agree. */
-export function tasksByProject<T extends TaskLike>(tasks: readonly T[], plans: readonly Pick<PlanLike, "_id" | "project_id">[] = []): Map<string, T[]> {
-  const planProject = new Map(plans.map((p) => [p._id, p.project_id ?? null]));
-  const out = new Map<string, T[]>();
-  for (const t of tasks) {
-    const pid = t.project_id ?? (t.plan_id ? planProject.get(t.plan_id) ?? null : null);
-    if (!pid) continue;
-    const bucket = out.get(pid);
-    if (bucket) bucket.push(t); else out.set(pid, [t]);
-  }
-  return out;
-}
-
-/** Tasks done over tasks in the initiative's projects. A task has one project
- *  and `project_ids` holds each project once, so no task counts twice. */
-export function initiativeProgress(initiative: Pick<InitiativeRow, "project_ids">, byProject: Map<string, TaskLike[]>): Progress {
-  return computePlanProgress(initiative.project_ids.flatMap((id) => byProject.get(id) ?? []));
+/** Tasks done over tasks in the initiative's projects, counting exactly the
+ *  rows those projects' boards would show (@codecast/shared/tasks
+ *  projectTaskCounts): the one rule the page, the list, the owner's opening
+ *  line, the server and the CLI all read, so the number a person is promised
+ *  is the number the board shows when they click through. */
+export function initiativeProgress(initiative: Pick<InitiativeRow, "project_ids">, tasks: Iterable<BoardTask>): Progress {
+  return projectTaskCounts(tasks, initiative.project_ids);
 }
 
 export const progressPercent = (p: Progress): number => (p.total === 0 ? 0 : Math.round((p.done / p.total) * 100));
@@ -119,6 +106,11 @@ export function ownerSeat(tree: OrgTree | null, owner: InitiativeOwner | undefin
     const { role, anchor } = scopeSeatOf(tree, owner.role_id);
     return { role, conversationId: role?.standing?.conversation_id ?? anchor?.conversation_id ?? null, speaker: role?.name ?? null };
   }
-  const anchor = tree.anchors.find((a) => !a.org_role_id && a.host_user_id === owner.user_id);
+  // A person's anchor: one they host that no role holds, else the workspace's
+  // root seat when they host it (org-staffing.md S16: the root agent is the
+  // chief of staff once seated, and it answers to its host).
+  const own = tree.anchors.find((a) => !a.org_role_id && a.host_user_id === owner.user_id);
+  const root = own ? null : scopeSeatOf(tree, "workspace").anchor;
+  const anchor = own ?? (root && root.host_user_id === owner.user_id ? root : null);
   return { role: null, conversationId: anchor?.conversation_id ?? null, speaker: anchor?.name ?? null };
 }

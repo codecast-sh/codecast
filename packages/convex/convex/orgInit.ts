@@ -9,6 +9,7 @@ import { userCanAdminRole } from "./lib/orgAccess";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
 import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInScope } from "./org";
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
 import { computeOrgActivity } from "./lib/orgActivity";
 import { computeCoverage } from "./lib/orgCoverage";
@@ -678,7 +679,11 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   const taken = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle);
   if (taken) return { status: "error", error: `@${handle} is already ${taken.short_id} (${taken.name}); answer with changes to pick another handle, or skip` };
   const scope = await resolveProposalScope(ctx, boundary, p.scope);
-  const reports_to = await resolveReportsTo(ctx, userId, boundary, p.reports_to);
+  // A role that names its session keeps the session's reporting line: with no
+  // reports_to, the parent is the person who runs the session, not whoever
+  // accepts the proposal (org-roles-run-work.md R2; the card promises naming
+  // changes nothing about how it works).
+  const reports_to = p.seat && !p.reports_to?.trim() ? await seatOwnerOf(ctx, p.seat.existing) : await resolveReportsTo(ctx, userId, boundary, p.reports_to);
   const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar });
   if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
   // A role that names its session (org-roles-run-work.md R2) is seated on it
@@ -871,6 +876,14 @@ export async function applyAdopt(ctx: Ctx, userId: Id<"users">, boundary: Bounda
 }
 
 class SeatTakenError extends Error {}
+/** The person who runs a session named as a seat: its owner, else the user
+ *  who started it. Throws when nothing answers to the ref, so a role is never
+ *  created for a session nobody can find. */
+async function seatOwnerOf(ctx: Ctx, ref: string): Promise<{ kind: "user"; user_id: Id<"users"> }> {
+  const conv = await findConversationByAnyRefWhere(ctx, ref.trim(), async () => true);
+  if (!conv) throw new Error(`Session not found: ${ref.trim()}`);
+  return { kind: "user", user_id: (conv.owner_user_id ?? conv.user_id) as Id<"users"> };
+}
 /** The one seating of an existing session on a role, for an adopt change and
  *  for a role change that names its session. Answers the seated session's
  *  short id. Provision is idempotent per role: a role that already has a

@@ -251,6 +251,24 @@ names a person, the Chain axis that shows a role's tasks under the person it
 reports to, and the goal section above, where a task matched to a goal is
 reported on whether the role or the person holds it.
 
+**As built.** Who reports is `org_roles.reports_user_ids`, set from the
+role's Settings tab or `cast role reports @handle --add me`; a person adds or
+removes themself, an admin of the role anyone in the workspace, and a new
+report wakes the role at once so it asks for goals. Goals are text under
+`## Goals: <name>` in the brief (parser: `contracts/roleGoals.ts`); the short
+ids on a goal's line are its matches. `convex/orgGoals.ts` reads those rows
+with the viewer's grants and gives the frame, `org.brief`, the Scope tab, the
+Brief tab and the health query one answer. A goal stalls after
+`goal_stall_days` with nothing matched to it moving, and is a finding after
+`goal_unmatched_days` with nothing matched at all. The age of a goal with no
+match counts from when the hourly sweep first saw it
+(`org_roles.goal_first_seen`), never from the brief's edit time, because a
+role rewrites its brief at every wake. The notice is the `goal_stall`
+notification, once per person per UTC day (`org_roles.goal_notices`). The
+prompt is one principle in `anchors.bootstrapMessage` and rule 7 of the
+charter; the dry run and its ablation are recorded on ct-52526 (four of four
+samples wrote the matches back with the principle, none of four without).
+
 ## R7. What an assignee means
 
 From the same call: a session refused to ship a task because the task was
@@ -261,3 +279,13 @@ task, and the assignee is who answers for it being done. The task context
 the CLI prints (`cast task context`, `cast task start`, the bound task line
 in the system text) says so in one sentence, so no model guesses the
 stricter reading. This matters more once roles hold tasks (R5).
+
+**As built.** `ASSIGNEE_MEANS` (`contracts/orgAssignee.ts`) is the sentence,
+printed by `cast task start`, by `cast task context` beside the assignee, and
+in the tasks snippet. The role page's Settings tab says where the seat runs:
+the host, the machine of the standing session (`devices.getConversationMachine`)
+and the model. When the standing session is parked on a usage limit, the same
+section says what codecast does on that machine, in the sentence `cast usage`
+prints (`describeLimitRecovery` in `contracts/usageLimits.ts`, one body for
+both), and what a person can do: move the session to another machine from its
+header chip, or add an account with `cast accounts save <name>`.

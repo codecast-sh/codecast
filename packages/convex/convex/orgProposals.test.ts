@@ -611,6 +611,16 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
     expect(standing.map((c: any) => c.short_id)).toEqual(["jxanaly"]);
   });
 
+  test("a role that names its session and no parent reports to the person who runs the session, not to whoever accepts", async () => {
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    await db.patch(S1 as any, { owner_user_id: MATE });
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Market growth mandate", handle: "market-growth", seat: { existing: "jxanaly" } })]) });
+    const res = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: false });
+    expect(res.status).toBe("applied");
+    const role = (db as any)._tables.org_roles.find((x: any) => x.handle === "market-growth");
+    expect(role.reports_to).toEqual({ kind: "user", user_id: MATE });
+  });
+
   test("a role that names a session nobody can find fails with the reason, and no fresh session is started for it", async () => {
     const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Ghost", handle: "ghost-role", seat: { existing: "jxnosuch" }, reports_to: "me" })]) });

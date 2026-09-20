@@ -40,7 +40,17 @@ export function tabSessionId(tab: Pick<AppTab, "sessionId" | "path">): string | 
   return tab.sessionId ?? inboxTabSessionId(tab.path);
 }
 
-export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string): string {
+/** An initiative's tab reads its title once the store holds the row, the way
+ *  a session's does (initiatives-projects-role-page.md I1); its `in-N` stands
+ *  in until then (pathLabel). */
+export function initiativeTabTitle(path: string, initiatives: Record<string, { short_id?: string; title?: string }> | undefined): string | null {
+  const ref = path.split("?")[0].split("/")[2];
+  if (!initiatives || !path.startsWith("/initiatives/") || !ref) return null;
+  const row = initiatives[ref] ?? Object.values(initiatives).find((r) => r?.short_id === ref.toLowerCase());
+  return row?.title || null;
+}
+
+export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string, initiatives?: Record<string, any>): string {
   const sid = tabSessionId(tab);
   if (sid && sessions[sid]) {
     const s = sessions[sid];
@@ -50,6 +60,8 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   }
   const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;
+  const initiative = initiativeTabTitle(tab.path, initiatives);
+  if (initiative) return initiative;
   // A vault note is titled by its own H1 or frontmatter title when the index
   // knows one — the filename is the fallback, not the identity (Obsidian's
   // rule). Read lazily so no vault code loads for anyone who never opens one.
