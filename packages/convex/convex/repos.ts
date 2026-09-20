@@ -33,6 +33,7 @@ import { resolveCreationPrivacy } from "./privacy";
 import { applyCommitFilesTo } from "./commits";
 import { matchFileLines, newResolveCaches, resolveCommitSessions } from "./blame";
 import { contentLinesToMatch } from "@codecast/shared/blame";
+import { WORKTREES_KIND, mergeWorktreesPayload, type WorktreesPayload } from "@codecast/shared/contracts";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -347,7 +348,21 @@ const localRow = v.object({
 });
 
 /** The kinds a checkout can answer; code search is the one read that needs GitHub. */
-const LOCAL_KINDS = new Set(["meta", "branches", "branchdetails", "tags", "readme", "tree", "log", "lastcommits", "blob", "blame", "compare"]);
+const LOCAL_KINDS = new Set(["meta", "branches", "branchdetails", "tags", "readme", "tree", "log", "lastcommits", "blob", "blame", "compare", WORKTREES_KIND]);
+
+/**
+ * A checkout's worktrees row (@codecast/shared/contracts worktrees.ts). Every
+ * other kind is a fact about the repository, so checkouts agree and share one
+ * row. This one is a fact about a machine, so the server keys it: `ref` is the
+ * publisher and `path` the checkout root, and two checkouts never overwrite
+ * each other. A publish that did not look for running sessions keeps the ones
+ * the row already holds.
+ */
+async function worktreesRowFor(ctx: { db: any }, userId: Id<"users">, repository: string, root: string, content: string) {
+  const existing = await cacheRowByKey(ctx, repository, WORKTREES_KIND, userId, root);
+  const previous = existing ? JSON.parse(existing.content) as WorktreesPayload : null;
+  return { kind: WORKTREES_KIND, ref: userId as string, path: root, content: JSON.stringify(mergeWorktreesPayload(JSON.parse(content), previous)) };
+}
 
 /** How long a failed answer stands before a page asking again re-opens the request. */
 const LOCAL_READ_RETRY_MS = 60 * 1000;
@@ -614,7 +629,8 @@ export const ingestLocal = mutation({
 
     for (const row of args.rows) {
       if (!LOCAL_KINDS.has(row.kind)) continue;
-      await writeCacheRow(ctx, { team_id: teamId, repository, ...row });
+      const keyed = row.kind === WORKTREES_KIND ? await worktreesRowFor(ctx, userId, repository, args.root, row.content) : row;
+      await writeCacheRow(ctx, { team_id: teamId, repository, ...keyed });
     }
 
     let created = 0;
@@ -1338,6 +1354,36 @@ export const getBlameSessions = query({
     return { by_sha: resolved, line_matches: lineMatches };
   },
 });
+/**
+ * Every checkout of a repository the viewer's teams publish, each with its
+ * worktrees and the person whose machine it is on. No ensure action stands
+ * behind this read: no GitHub call can answer it, and the daemons push the
+ * row on their own whenever a worktree changes.
+ */
+export const getWorktrees = query({
+  args: { repository: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    if (!(await browseAccessForUser(ctx, userId, args.repository))) return null;
+    const rows = await ctx.db
+      .query("repo_cache")
+      .withIndex("by_key", (q) => q.eq("repository", normalizeRepository(args.repository)).eq("kind", WORKTREES_KIND))
+      .collect();
+    const checkouts = [];
+    for (const row of rows) {
+      if (!(await isTeamMember(ctx, userId, row.team_id))) continue;
+      const ownerId = ctx.db.normalizeId("users", row.ref);
+      const owner = ownerId ? await ctx.db.get(ownerId) : null;
+      checkouts.push({
+        ...(JSON.parse(row.content) as WorktreesPayload),
+        owner: owner ? { _id: owner._id, name: owner.name, image: owner.image } : null,
+        mine: row.ref === userId,
+      });
+    }
+    return { checkouts: checkouts.sort((a, b) => Number(b.mine) - Number(a.mine) || b.at - a.at) };
+  },
+});
+
 export const getCompare = readAction("compare");
 export const getSearch = readAction("search");
 

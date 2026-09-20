@@ -9,6 +9,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { pathSegments, type BlameSessionResolution, type RepoTreeEntry } from "../lib/repoView";
 import { publicRepoUrl, usePublicRepoRead, useRepoTransport } from "../lib/repoTransport";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { WORKTREES_KIND, type WorktreesPayload } from "@codecast/shared/contracts";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; the call then fails and the surface reports it as an
@@ -35,7 +36,11 @@ export type RepoRead<T> = {
  * traffic.
  */
 type ReadDescriptor = {
-  ensureRef: unknown;
+  /**
+   * The action that fills the cache on a miss. Absent for a read nothing can
+   * be asked for: a checkout's daemon pushes it on its own (worktrees).
+   */
+  ensureRef?: unknown;
   queryRef: unknown;
   args: Record<string, unknown> | null;
   publicKind: string;
@@ -50,13 +55,14 @@ function useEnsuredRead<T>(descriptor: ReadDescriptor): RepoRead<T> {
   const access = useRepoAccess(repository, mode === "convex");
   const live = mode === "convex" && access.allowed === true ? args : null;
   const key = repoBrowseKey(access.scope, publicKind, args);
-  const ensure = useAction(ensureRef as never) as (a: unknown) => Promise<{ requested?: boolean } | undefined>;
+  // Hooks cannot be conditional, so a read with no ensure still binds one and never calls it.
+  const ensure = useAction((ensureRef ?? api.repos.ensureMeta) as never) as (a: unknown) => Promise<{ requested?: boolean } | undefined>;
   // What the ensure for this key is doing: still running, answered by GitHub
   // (nothing to note), handed to a checkout's daemon (`requested`), or failed.
   const [failure, setFailure] = useState<{ key: string | null; ensuring?: boolean; requested?: boolean; error?: Error }>({ key: null });
   const requestKey = live ? key : null;
   useWatchEffect(() => {
-    if (!live) return;
+    if (!live || !ensureRef) return;
     let cancelled = false;
     setFailure({ key, ensuring: true });
     void ensure(live)
@@ -126,6 +132,29 @@ export function useRepoBranches(repository: string | undefined): RepoRead<RepoBr
     queryRef: api.repos.getBranches,
     args: repository ? { repository } : null,
     publicKind: "branches",
+  });
+}
+
+// ── Worktrees ──
+
+export type RepoCheckout = WorktreesPayload & {
+  owner: { _id: string; name?: string; image?: string } | null;
+  /** Published from one of the viewer's own machines. */
+  mine: boolean;
+};
+export type RepoWorktrees = { checkouts: RepoCheckout[] };
+
+/**
+ * Every checkout of a repository the viewer's teams publish, with its
+ * worktrees. GitHub cannot answer this, so there is no ensure and no public
+ * form: a signed out page reads nothing.
+ */
+export function useRepoWorktrees(repository: string | undefined): RepoRead<RepoWorktrees> {
+  const mode = useRepoTransport();
+  return useEnsuredRead<RepoWorktrees>({
+    queryRef: api.repos.getWorktrees,
+    args: repository && mode === "convex" ? { repository } : null,
+    publicKind: WORKTREES_KIND,
   });
 }
 

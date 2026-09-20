@@ -23,7 +23,9 @@ import {
 import { detectProject } from "./detect.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
 import { readVerifyCommand, runVerifyCommand } from "./verify.js";
-import { readState } from "./contract.js";
+import { readState, recordWorkspaceSession } from "./contract.js";
+import { publishWorktrees } from "../worktreeMirror.js";
+import { sessionIdFromEnv } from "../sessionIdentity.js";
 import {
   clearRepoTrust,
   collectTrustTargets,
@@ -135,6 +137,8 @@ export function registerWorkspaceCommand(program: Command): void {
           });
           const ws = r.workspace;
           const tag = r.created ? "created" : "attached";
+          recordWorkspaceSession(repoRoot, ws.name, sessionIdFromEnv());
+          await publishWorktrees(repoRoot);
           if (opts.json) {
             printAcquireJson(r);
             return;
@@ -272,6 +276,7 @@ export function registerWorkspaceCommand(program: Command): void {
       const repoRoot = findRepoRoot();
       try {
         const ws = await healWorkspace(repoRoot, name);
+        await publishWorktrees(repoRoot);
         console.log(`healed: ${ws.name} → ${ws.state}`);
         if (ws.state !== "ready") process.exit(2);
       } catch (err) {
@@ -288,6 +293,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .action(async (name: string) => {
       const repoRoot = findRepoRoot();
       await releaseWorkspace(repoRoot, name);
+      await publishWorktrees(repoRoot);
       console.log(`destroyed: ${name}`);
     });
 

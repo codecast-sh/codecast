@@ -50,6 +50,8 @@ export interface PersistedWorkspaceState {
   startPoint?: string;
   /** The commit HEAD is reset to after setup (the laptop HEAD of a seeded worktree). */
   seedBase?: string;
+  /** Session uuids that acquired or attached to this workspace (recordWorkspaceSession). */
+  sessions?: string[];
 }
 
 /** Canonical projection of persisted state back into a Workspace. */
@@ -91,7 +93,10 @@ export function readState(repoRoot: string, name: string): PersistedWorkspaceSta
 export function writeState(repoRoot: string, state: PersistedWorkspaceState): void {
   const p = stateFilePath(repoRoot, state.name);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  atomicWriteFile(p, JSON.stringify(state, null, 2));
+  // Lifecycle writers rebuild the record from a Workspace, which does not carry
+  // the sessions; they are history, so a rewrite keeps them.
+  const sessions = state.sessions ?? readState(repoRoot, state.name)?.sessions;
+  atomicWriteFile(p, JSON.stringify(sessions ? { ...state, sessions } : state, null, 2));
 }
 
 export function deleteState(repoRoot: string, name: string): void {
@@ -116,6 +121,18 @@ export function listStates(repoRoot: string): PersistedWorkspaceState[] {
     }
   }
   return out;
+}
+
+/**
+ * Record that a session acquired or attached to a workspace. The record itself
+ * is the only witness: a session that runs `cast ws acquire` halfway through
+ * was started in the main checkout, so nothing on its conversation names the
+ * worktree it then works in. Published with the worktree (worktreeMirror.ts).
+ */
+export function recordWorkspaceSession(repoRoot: string, name: string, sessionId: string | null): void {
+  const current = sessionId ? readState(repoRoot, name) : null;
+  if (!current || current.sessions?.includes(sessionId!)) return;
+  writeState(repoRoot, { ...current, sessions: [...(current.sessions ?? []), sessionId!] });
 }
 
 /** Transition a workspace's persisted state. No-op if state file is missing. */

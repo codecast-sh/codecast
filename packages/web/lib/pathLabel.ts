@@ -10,6 +10,7 @@ const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
   compare: "Compare",
   branches: "Branches",
+  worktrees: "Worktrees",
   tags: "Tags",
   pulls: "Pull requests",
   search: "Search",
@@ -35,6 +36,8 @@ export function pathLabel(path: string): string {
   if (clean.startsWith("/tasks/")) return "Task";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
+  // An initiative titles by its `in-N`, the handle people quote (initiatives-projects-role-page.md I1).
+  if (clean.startsWith("/initiatives/")) return /^in-\d+$/i.test(clean.split("/")[2] ?? "") ? `Initiative ${clean.split("/")[2].toLowerCase()}` : "Initiative";
   // A decision's document page and a stack (docs/architecture/decisions-as-
   // documents.md D4, D5) title by their short id, the handle people quote.
   if (clean.startsWith("/decisions/stacks/")) return clean.split("/")[3] ? `Stack ${clean.split("/")[3]}` : "Stack";

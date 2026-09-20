@@ -61,8 +61,9 @@ export function shouldPlayWaitingSound(
   queued: Set<string>,
   prevWaiting: Map<string, boolean> | null,
   notifiedKeys: Map<string, string>,
-): { play: boolean; nextWaiting: Map<string, boolean> } {
+): { play: boolean; keys: string[]; nextWaiting: Map<string, boolean> } {
   let play = false;
+  const keys: string[] = [];
   const nextWaiting = new Map<string, boolean>();
 
   for (const session of sessions) {
@@ -94,11 +95,12 @@ export function shouldPlayWaitingSound(
 
     if (lastKey !== key) {
       play = true;
+      keys.push(key);
       notifiedKeys.set(id, key);
     }
   }
 
-  return { play, nextWaiting };
+  return { play, keys, nextWaiting };
 }
 
 export function inboxCrawlWsKey(principalId: string | null | undefined): string {
@@ -215,7 +217,7 @@ export function useSyncInboxSessions() {
       prevWaitingMapRef.current,
       notifiedWaitingKeysRef.current,
     );
-    if (soundState.play) soundIdle();
+    for (const key of soundState.keys) soundIdle(key);
     prevWaitingMapRef.current = soundState.nextWaiting;
     lastLivenessSyncRef.current = Date.now();
   }, []), { coalesceMs: 300 });
