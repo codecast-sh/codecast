@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { WorktreeEntry } from "@codecast/shared/contracts";
 import type { RepoCheckout } from "../../hooks/useRepoBrowse";
-import { findWorktree, groupWorktrees, worktreeCondition, worktreeRefOfCode } from "./worktreeModel";
+import { findWorktree, groupWorktrees, worktreeCondition, worktreeRefOfCode, worktreesOfSession } from "./worktreeModel";
 
 const ROOT = "/Users/ashot/src/union-mobile";
 const wt = (over: Partial<WorktreeEntry> & { name: string }): WorktreeEntry => ({ path: `${ROOT}/.codecast/worktrees/${over.name}`, head_sha: "abc", manager: "codecast", ...over });
@@ -44,6 +44,21 @@ describe("worktreeRefOfCode", () => {
     expect(worktreeRefOfCode("tips-modes", CHECKOUTS)).toBeNull();
     expect(worktreeRefOfCode("codecast/other", CHECKOUTS)).toBeNull();
     expect(worktreeRefOfCode("git checkout codecast/tips-modes", CHECKOUTS)).toBeNull();
+  });
+});
+
+describe("worktreesOfSession", () => {
+  const acquired = wt({ name: "acquired", sessions: ["conv1"] });
+  const list = [checkout(true, [{ ...main, sessions: ["conv1"] }, tips, acquired])];
+
+  test("a session born in a worktree names it, with or without a published list", () => {
+    expect(worktreesOfSession(undefined, { _id: "c", worktree_name: "tips-modes" }).map((r) => r.name)).toEqual(["tips-modes"]);
+    expect(worktreesOfSession(list, { _id: "c", project_path: `${tips.path}/packages/web` }).map((r) => r.name)).toEqual(["tips-modes"]);
+  });
+
+  test("a session in the main checkout names the worktrees whose record names it, never the main checkout", () => {
+    expect(worktreesOfSession(list, { _id: "conv1", project_path: ROOT }).map((r) => r.name)).toEqual(["acquired"]);
+    expect(worktreesOfSession(list, { _id: "other", project_path: ROOT })).toEqual([]);
   });
 });
 
