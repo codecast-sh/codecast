@@ -14,9 +14,10 @@ import { usePersonifyAll } from "../../hooks/usePersonifyAll";
 import { RoleHoverCard } from "./RoleHoverCard";
 
 export function SessionIdentityLine({
-  row, title, className, nameClassName, titleClassName, after,
+  row, title, className, nameClassName, titleClassName, after, personifyAll: inheritedPersonifyAll,
 }: {
   row: IdentityRow;
+  personifyAll?: boolean;
   /** The display title, already cleaned by the caller. */
   title: string | null | undefined;
   className?: string;
@@ -25,7 +26,7 @@ export function SessionIdentityLine({
   /** Chips that follow the title on the same line. */
   after?: ReactNode;
 }) {
-  const personifyAll = usePersonifyAll();
+  const personifyAll = usePersonifyAll(inheritedPersonifyAll);
   const line = identityLine(row, title, personifyAll);
   const id = sessionIdentity(row, personifyAll);
   const who = (

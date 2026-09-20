@@ -3107,6 +3107,7 @@ export const SessionCard = memo(function SessionCard({
               18 the painted faces were a smudge. */}
           {isPersonified ? (
             <IdentityFace
+              personifyAll={st.clientState?.ui?.personify_sessions === true}
               row={session}
               size={22}
               onPick={(e) => onPickCharacter?.(session, e)}
@@ -3133,6 +3134,7 @@ export const SessionCard = memo(function SessionCard({
           {/* Name, then the title: "Ember: Fixing the auth race". The name is
               the row's identity and never truncates; the title does. */}
           <SessionIdentityLine
+            personifyAll={st.clientState?.ui?.personify_sessions === true}
             row={session}
             title={displayTitle}
             className="min-w-0 flex-1"
