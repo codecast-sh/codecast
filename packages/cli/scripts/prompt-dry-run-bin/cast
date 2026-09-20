@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# `cast` for a prompt dry run (scripts/prompt-dry-run.ts puts this directory
+# first on the run's PATH). Every call is logged to $RUN_DIR/calls.log. Reads
+# pass through to the real CLI with the real state directory restored; anything
+# that writes, posts, sends, pins or could start a session is refused with a
+# line that says so, so a run can never reach a person's inbox. With
+# DRY_RUN_SERVE_DIR set, `cast org inputs` and `cast org health` answer from
+# org-inputs.json and org-health.json in it, so the run grades the prompt
+# against a saved record. A harness that needs other fixtures puts its own
+# `cast` in a directory and passes --guard.
+set -u
+printf '%s\n' "$*" >> "${RUN_DIR:-$PWD}/calls.log"
+SERVE="${DRY_RUN_SERVE_DIR:-}"
+case "${1:-} ${2:-}" in
+  "org inputs"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-inputs.json" ] && { cat "$SERVE/org-inputs.json"; exit 0; } ;;
+  "org health"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-health.json" ] && { cat "$SERVE/org-health.json"; exit 0; } ;;
+  "org proposals"*) echo "No open proposals."; exit 0 ;;
+esac
+# The real CLI: the first `cast` on PATH that is not this guard, run with the
+# state directory the launching shell had (the run's own CODECAST_DIR is an
+# empty directory on purpose).
+real() {
+  local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local dir bin=""
+  IFS=: read -ra dirs <<< "$PATH"
+  for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/cast" ] && { bin="$dir/cast"; break; }; done
+  [ -n "$bin" ] || { echo "dry run: no real cast on PATH for a read" >&2; exit 1; }
+  if [ -n "${DRY_RUN_REAL_CODECAST_DIR:-}" ]; then CODECAST_DIR="$DRY_RUN_REAL_CODECAST_DIR" exec "$bin" "$@"; fi
+  exec env -u CODECAST_DIR "$bin" "$@"
+}
+case "${1:-}" in
+  task|project|plan|doc|initiative|trigger|anchor|role|org)
+    case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|"") real "$@" ;; esac
+    echo "dry run: 'cast $*' would write, and is refused" >&2; exit 1 ;;
+  brief|read|link|search|feed|sessions|diff|summary|calls|call) real "$@" ;;
+  state) case "${2:-}" in show) real "$@" ;; esac; echo "dry run: cast state is refused" >&2; exit 1 ;;
+  *) echo "dry run: 'cast $*' is refused; write what you would post to the file the briefing names" >&2; exit 1 ;;
+esac
