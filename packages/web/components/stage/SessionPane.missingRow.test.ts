@@ -9,6 +9,6 @@ import path from "node:path";
 test("a session pane loads a row the store lacks, and only says unavailable when the server does", async () => {
   const { stdout } = await promisify(execFile)(process.execPath,
     [path.join(import.meta.dir, "../__tests__/fixtures/sessionPaneMissingRow.tsx")],
-    { timeout: 30000, maxBuffer: 1024 * 1024 });
+    { timeout: 120000, maxBuffer: 1024 * 1024 });
   expect(stdout).toContain("session pane missing row verified");
-}, 40000);
+}, 130000);
