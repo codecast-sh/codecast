@@ -14575,7 +14575,7 @@ trigger
   .option("--as <definition>", "Spawned runs launch as this agent definition (cast agent ls): model, effort, tools and prompt")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
-  .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers ignore it.")
+  .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers and manual runs ignore it.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger. A trigger that fires once runs as this session's worker: nested under it, its result posted back here, and this session woken if the run fails, dies, or asks for attention.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
@@ -15190,6 +15190,7 @@ trigger
     // so this line is the only record of it here.
     if (t.precheck) {
       console.log(`Precheck: ${c.dim}${t.precheck}${c.reset}`);
+      if (t.last_run_source === "manual") console.log(fmt.muted("The last run was manual, so the precheck did not run."));
       if (t.last_precheck_skip_at) {
         console.log(
           `${c.yellow}skipped${c.reset} ${formatMs(Date.now() - t.last_precheck_skip_at)} ago — ` +

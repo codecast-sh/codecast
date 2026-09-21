@@ -9,7 +9,7 @@ import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
-import type { OpenTaskReport, AgentStatus, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
 import { filesForWire, type SyncFile } from "./userFiles.js";
 export { filesForWire, type SyncFile } from "./userFiles.js";
@@ -2425,6 +2425,7 @@ export class SyncService {
     daemonId: string,
     result: TriggerPrecheckResult,
     reason: string,
+    source: TriggerFiringSource,
   ): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
@@ -2440,6 +2441,7 @@ export class SyncService {
           duration_ms: result.durationMs,
           output: result.output,
           reason,
+          source,
         }
       );
       return ok as boolean;
