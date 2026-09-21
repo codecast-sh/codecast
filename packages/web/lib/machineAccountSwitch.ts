@@ -44,7 +44,7 @@ export function profileIsCurrentLogin(
   return false;
 }
 
-export type MachineSwitchPhase = "idle" | "waiting" | "slow" | "succeeded" | "failed";
+export type MachineSwitchPhase = "idle" | "waiting" | "confirming" | "slow" | "succeeded" | "failed";
 
 export type MachineSwitchCommand = {
   executed_at?: number | null;
@@ -63,6 +63,9 @@ export function resolveMachineSwitch(opts: {
   const timeoutMs = opts.timeoutMs ?? MACHINE_SWITCH_TIMEOUT_MS;
   const slowMs = opts.slowMs ?? MACHINE_SWITCH_SLOW_MS;
   const age = opts.now - opts.pending.startedAt;
+  if (opts.command?.error) {
+    return { phase: "failed", error: humanizeSwitchError(opts.command.error) };
+  }
   if (
     profileIsCurrentLogin(
       { name: opts.pending.profile, email: opts.pending.email },
@@ -71,16 +74,15 @@ export function resolveMachineSwitch(opts: {
   ) {
     return { phase: "succeeded" };
   }
-  if (opts.command?.error) {
-    return { phase: "failed", error: humanizeSwitchError(opts.command.error) };
-  }
-  if (opts.command?.executed_at) return { phase: "succeeded" };
   if (age >= timeoutMs) {
     return {
       phase: "failed",
-      error: `The daemon didn't switch to "${opts.pending.profile}" in time — is that machine online?`,
+      error: opts.command?.executed_at
+        ? `The daemon finished switching to "${opts.pending.profile}", but the updated login hasn't been confirmed. Refresh the account list to check this machine.`
+        : `The daemon didn't confirm the switch to "${opts.pending.profile}" in time. It may still complete — check this machine before trying again.`,
     };
   }
+  if (opts.command?.executed_at) return { phase: "confirming" };
   if (age >= slowMs) return { phase: "slow" };
   return { phase: "waiting" };
 }
@@ -99,6 +101,7 @@ export function humanizeSwitchError(msg: string): string {
 
 export function machineSwitchPendingCopy(phase: MachineSwitchPhase, profile: string, deviceLabel?: string): string {
   const where = deviceLabel ? ` on ${deviceLabel}` : "";
+  if (phase === "confirming") return `Confirming the active account${where} is "${profile}"…`;
   if (phase === "slow") return `Still waiting${where} to switch to "${profile}"…`;
   return `Switching this machine to "${profile}"…`;
 }

@@ -357,13 +357,6 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-sol-cyan">
                     <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-sol-cyan/30 border-t-sol-cyan" aria-hidden />
                     Switching…
-                    <button
-                      type="button"
-                      onClick={sw.cancel}
-                      className="text-[11px] font-medium text-current/80 underline-offset-2 hover:underline"
-                    >
-                      cancel
-                    </button>
                   </span>
                 ) : isActive ? (
                   <span className="shrink-0 text-[11px] font-medium text-sol-green">active</span>
@@ -404,7 +397,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={!!blocked}
+                          disabled={!!blocked || sw.switching !== null}
                           onClick={() => void sw.switchTo(p.name, p.email)}
                           title={
                             blocked?.label ??

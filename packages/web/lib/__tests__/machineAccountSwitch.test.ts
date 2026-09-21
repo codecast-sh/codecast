@@ -86,13 +86,36 @@ describe("resolveMachineSwitch", () => {
     expect(res.error).toBe("This saved login no longer works. Sign in again on this account, then switch.");
   });
 
-  test("executed command without error is success", () => {
+  test("executed command waits for the active account inventory", () => {
     expect(
       resolveMachineSwitch({
         ...waiting,
         command: { executed_at: 2_000, error: null },
       }).phase,
-    ).toBe("succeeded");
+    ).toBe("confirming");
+    expect(resolveMachineSwitch({
+      ...waiting,
+      command: { executed_at: 2_000 },
+      activeEmail: pending.email,
+    }).phase).toBe("succeeded");
+  });
+
+  test("command errors take precedence over a matching account snapshot", () => {
+    expect(resolveMachineSwitch({
+      ...waiting,
+      activeEmail: pending.email,
+      command: { executed_at: 2_000, error: "Account switch failed: access denied" },
+    })).toEqual({ phase: "failed", error: "access denied" });
+  });
+
+  test("missing confirmation times out without claiming the swap failed", () => {
+    const res = resolveMachineSwitch({
+      ...waiting,
+      command: { executed_at: 2_000 },
+      now: pending.startedAt + MACHINE_SWITCH_TIMEOUT_MS,
+    });
+    expect(res.phase).toBe("failed");
+    expect(res.error).toContain("updated login hasn't been confirmed");
   });
 
   test("timeout names the daemon, not a silent no-op", () => {
@@ -101,7 +124,8 @@ describe("resolveMachineSwitch", () => {
       now: 1_000 + MACHINE_SWITCH_TIMEOUT_MS,
     });
     expect(res.phase).toBe("failed");
-    expect(res.error).toMatch(/didn't switch/);
+    expect(res.error).toMatch(/didn't confirm/);
+    expect(res.error).toContain("may still complete");
   });
 });
 
