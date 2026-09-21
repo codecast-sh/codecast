@@ -99,3 +99,17 @@ test("release verification preserves explicit module extensions", () => {
     assert.equal(actual, `/${localRequires("main.js").find(f => f === mod || f === `${mod}.js`) ?? mod}`);
   }
 });
+
+test("release updates a download pointer behind the package version", () => {
+  const { execFileSync } = require("node:child_process");
+  const script = readFileSync(join(HERE, "scripts/release.sh"), "utf8");
+  const edits = script.split("\n").filter(line => line.startsWith("sed -i") && line.includes('"$WEB_SERVER"'));
+  let text = 'const MAC_DMG_URL = "https://dl.codecast.sh/desktop/Codecast-1.1.111-arm64.dmg";\nconst MAC_DMG_VERSION = "1.1.111";\n';
+  for (const edit of edits) {
+    const command = edit.replace("sed -i ''", "sed").replace(' "$WEB_SERVER"', "");
+    text = execFileSync("bash", ["-c", command], { input: text, env: { ...process.env, OLD_VERSION: "1.1.112", NEW_VERSION: "1.1.113" }, encoding: "utf8" });
+  }
+  assert.ok(text.includes("Codecast-1.1.113-arm64.dmg"));
+  assert.ok(text.includes('MAC_DMG_VERSION = "1.1.113"'));
+  assert.ok(!text.includes("1.1.111"));
+});

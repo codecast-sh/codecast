@@ -152,8 +152,8 @@ cast desktop-force-update "$NEW_VERSION" || echo "    floor not set (non-fatal):
 echo ""
 echo "[4/4] Updating web download URL and committing..."
 WEB_SERVER="$REPO_ROOT/packages/web/server/index.ts"
-sed -i '' "s|Codecast-${OLD_VERSION}-arm64.dmg|Codecast-${NEW_VERSION}-arm64.dmg|g" "$WEB_SERVER"
-sed -i '' "s|MAC_DMG_VERSION = \"${OLD_VERSION}\"|MAC_DMG_VERSION = \"${NEW_VERSION}\"|g" "$WEB_SERVER"
+sed -i '' -E "s|Codecast-[0-9]+\\.[0-9]+\\.[0-9]+-arm64\\.dmg|Codecast-${NEW_VERSION}-arm64.dmg|g" "$WEB_SERVER"
+sed -i '' -E "s|MAC_DMG_VERSION = \"[0-9]+\\.[0-9]+\\.[0-9]+\"|MAC_DMG_VERSION = \"${NEW_VERSION}\"|g" "$WEB_SERVER"
 
 cd "$REPO_ROOT"
 if [ "$NO_GIT" = "1" ]; then
