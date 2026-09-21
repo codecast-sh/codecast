@@ -29,8 +29,8 @@ import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { ccKeychainWriteItem, type CcKeychainItem } from "./ccKeychain.js";
 
-const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
 
 export interface CcProfile {
@@ -212,15 +212,15 @@ function activeCredentialFile(): string {
 
 /** The keychain item's account attribute ("acct"). CC created the item, so
  * match whatever it used; fall back to the unix username (observed value). */
-function keychainAcct(): string {
+function keychainAcct(item: CcKeychainItem): string {
   try {
-    const meta = execFileSync("security", ["find-generic-password", "-s", ACTIVE_KEYCHAIN_SERVICE], {
+    const meta = execFileSync("security", ["find-generic-password", "-s", item.service], {
       encoding: "utf-8",
     });
     const m = meta.match(/"acct"<blob>="([^"]*)"/);
     if (m?.[1]) return m[1];
   } catch {}
-  return os.userInfo().username;
+  return item.account;
 }
 
 export function writeActiveCredential(credentialJson: string): void {
@@ -235,13 +235,14 @@ export function writeActiveCredential(credentialJson: string): void {
   }
   // -U updates in place, preserving the item (and its ACL) so claude keeps
   // reading it without a keychain prompt — never delete+recreate.
+  const item = ccKeychainWriteItem();
   execFileSync("security", [
     "add-generic-password",
     "-U",
     "-a",
-    keychainAcct(),
+    keychainAcct(item),
     "-s",
-    ACTIVE_KEYCHAIN_SERVICE,
+    item.service,
     "-w",
     credentialJson,
   ]);

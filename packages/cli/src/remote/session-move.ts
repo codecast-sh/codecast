@@ -31,6 +31,7 @@ import { deviceId as localDeviceId } from "./device.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
 import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
+import { ccKeychainReadArgs, ccKeychainReadItems } from "../ccKeychain.js";
 
 export interface RemoteHost {
   /** SSH host/IP. */
@@ -428,8 +429,6 @@ export async function gitPullWorktree(
 // Auth: copy a FRESH credential to the remote
 // --------------------------------------------------------------------------
 
-// The keychain item CC writes its login to on macOS.
-const CC_CREDENTIAL_ARGS = ["find-generic-password", "-s", "Claude Code-credentials", "-w"];
 // The file form (Linux / older CC). $HOME over os.homedir(): bun caches the
 // latter at startup, breaking $HOME-sandboxed tests; real environments always
 // have HOME set.
@@ -442,13 +441,14 @@ function credentialFile(): string {
  * "Claude Code-credentials"); falls back to the file form (Linux / older CC).
  */
 export function readLocalCredential(): string | null {
-  try {
-    return execFileSync("security", CC_CREDENTIAL_ARGS, { encoding: "utf-8" }).trim();
-  } catch {
-    const f = credentialFile();
-    if (!fs.existsSync(f)) return null;
-    return fs.readFileSync(f, "utf-8");
+  for (const item of ccKeychainReadItems()) {
+    try {
+      return execFileSync("security", ccKeychainReadArgs(item), { encoding: "utf-8" }).trim();
+    } catch {}
   }
+  const f = credentialFile();
+  if (!fs.existsSync(f)) return null;
+  return fs.readFileSync(f, "utf-8");
 }
 
 /**
@@ -458,11 +458,12 @@ export function readLocalCredential(): string | null {
  * minute.
  */
 export async function readLocalCredentialAsync(): Promise<string | null> {
-  try {
-    return await keychainReadAsync(CC_CREDENTIAL_ARGS);
-  } catch {
-    return fs.promises.readFile(credentialFile(), "utf-8").catch(() => null);
+  for (const item of ccKeychainReadItems()) {
+    try {
+      return await keychainReadAsync(ccKeychainReadArgs(item));
+    } catch {}
   }
+  return fs.promises.readFile(credentialFile(), "utf-8").catch(() => null);
 }
 
 /** ssh argv that writes stdin to the remote's credential file (0600 via umask). */
