@@ -1,30 +1,23 @@
 import * as fs from "fs";
 import * as path from "path";
-import { CachedJsonStore } from "./cachedJsonStore.js";
+import { rebindingStore } from "./cachedJsonStore.js";
 import { walkFiles } from "./fsWalk.js";
 import { defaultConfigDir } from "./config/configDir.js";
-
-const CONFIG_DIR = defaultConfigDir();
-const LEDGER_FILE = path.join(CONFIG_DIR, "sync-ledger.json");
-const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 
 // Load legacy positions.json for backward compatibility — a one-time fallback for
 // ledger entries that predate the ledger. The file is never written anymore, so read
 // it once and cache: findUnsyncedFiles runs on every sweep and getSyncRecord on every
 // synced file, and re-parsing a legacy blob from disk each call is pure event-loop tax.
-let cachedPositions: Record<string, number> | null = null;
+let cachedPositions: { filePath: string; positions: Record<string, number> } | null = null;
 function loadPositions(): Record<string, number> {
-  if (cachedPositions) return cachedPositions;
+  const filePath = path.join(defaultConfigDir(), "positions.json");
+  if (cachedPositions?.filePath === filePath) return cachedPositions.positions;
+  let positions: Record<string, number> = {};
   try {
-    if (fs.existsSync(POSITIONS_FILE)) {
-      cachedPositions = JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf-8"));
-      return cachedPositions!;
-    }
-  } catch {
-    /* ignore */
-  }
-  cachedPositions = {};
-  return cachedPositions;
+    if (fs.existsSync(filePath)) positions = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {}
+  cachedPositions = { filePath, positions };
+  return positions;
 }
 
 export interface SyncRecord {
@@ -55,8 +48,7 @@ interface SyncLedger {
 // Cached, debounced store. Replaces the old full-file read-modify-write on every
 // markSynced (which on a 1MB+ ledger blocked the daemon event loop ~15ms per sync
 // and grew without bound). Dead transcripts are pruned on load.
-const store = new CachedJsonStore<SyncRecord>({
-  filePath: LEDGER_FILE,
+const store = rebindingStore<SyncRecord>(() => path.join(defaultConfigDir(), "sync-ledger.json"), {
   keepOnLoadAsync: (filePath) => fs.promises.access(filePath).then(
     () => true,
     (error: NodeJS.ErrnoException) => error.code !== "ENOENT" && error.code !== "ENOTDIR",
@@ -64,7 +56,7 @@ const store = new CachedJsonStore<SyncRecord>({
 });
 
 export function getSyncRecord(filePath: string): SyncRecord | null {
-  const record = store.get(filePath);
+  const record = store().get(filePath);
   if (record) {
     return record;
   }
@@ -87,12 +79,12 @@ export function updateSyncRecord(
   filePath: string,
   update: Partial<SyncRecord>
 ): void {
-  const existing = store.get(filePath) || {
+  const existing = store().get(filePath) || {
     lastSyncedAt: 0,
     lastSyncedPosition: 0,
     messageCount: 0,
   };
-  store.set(filePath, { ...existing, ...update });
+  store().set(filePath, { ...existing, ...update });
 }
 
 export function markSynced(
@@ -113,13 +105,13 @@ export function markSynced(
 // finds no new messages still examined the file, so stamp lastSyncedAt or the
 // next mtime bump (session-end hooks) looks like a wedged backlog.
 export function markExamined(filePath: string, at: number = Date.now()): void {
-  const existing = store.get(filePath);
+  const existing = store().get(filePath);
   if (!existing) return;
-  store.set(filePath, { ...existing, lastSyncedAt: at });
+  store().set(filePath, { ...existing, lastSyncedAt: at });
 }
 
 export function getAllSyncRecords(): SyncLedger {
-  return store.getAll();
+  return store().getAll();
 }
 
 // First top-level `timestamp` found in a chunk of JSONL, as epoch ms. Lines
@@ -164,7 +156,7 @@ export function readOldestUnsyncedTimestamp(
 }
 
 export function getStaleFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
-  const ledger = store.getAll();
+  const ledger = store().getAll();
   const now = Date.now();
   const stale: string[] = [];
 
@@ -220,7 +212,7 @@ export function findUnsyncedFiles(
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000,
   includeFile?: (filePath: string) => boolean,
 ): string[] {
-  const ledger = store.getAll();
+  const ledger = store().getAll();
   const positions = loadPositions(); // Fallback to legacy positions.json
   const now = Date.now();
   const unsynced: string[] = [];
@@ -271,7 +263,7 @@ export async function findUnsyncedFilesAsync(
   dirFilter?: (relativeDirPath: string) => boolean,
   policy?: import("./workers/scanTypes.js").ScanPolicy,
 ): Promise<string[]> {
-  const ledger = store.getAll();
+  const ledger = store().getAll();
   const positions = loadPositions();
   const now = Date.now();
   const unsynced: string[] = [];
