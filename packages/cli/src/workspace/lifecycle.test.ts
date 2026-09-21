@@ -109,10 +109,27 @@ describe("workspace port reservations", () => {
     fs.writeFileSync(path.join(cache, "package"), "private");
     fs.writeFileSync(path.join(workspace.path, "keepme.txt"), "recoverable");
 
+    let removing!: () => void;
+    let resumeRemoval!: () => void;
+    const removalStarted = new Promise<void>((resolve) => { removing = resolve; });
+    const removalAllowed = new Promise<void>((resolve) => { resumeRemoval = resolve; });
+    const remove = fs.promises.rm.bind(fs.promises);
+    const heldRemoval = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      if (String(target).startsWith(path.join(repoRoot, ".codecast/workspaces/_released-"))) {
+        removing();
+        await removalAllowed;
+      }
+      return remove(target, options);
+    });
     const releasing = releaseWorkspace(repoRoot, workspace.name);
-    for (let i = 0; i < 100 && readState(repoRoot, workspace.name)?.state !== "destroying"; i++) await Bun.sleep(5);
-    await expect(releaseWorkspace(repoRoot, workspace.name)).rejects.toThrow("operation in progress");
-    await releasing;
+    try {
+      await Promise.race([removalStarted, releasing.then(() => { throw new Error("release finished before the removal barrier"); })]);
+      await expect(releaseWorkspace(repoRoot, workspace.name)).rejects.toThrow("operation in progress");
+    } finally {
+      resumeRemoval();
+      await releasing;
+      heldRemoval.mockRestore();
+    }
 
     expect(fs.existsSync(workspace.path)).toBe(false);
     const worktreesDir = path.join(repoRoot, ".codecast/worktrees");
