@@ -677,7 +677,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "commits" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation"],
+    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet"],
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.
@@ -685,7 +685,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber", "pull_requests.getPRsForConversation"],
+    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber", "pull_requests.getPRsForConversation", "pull_requests.webGet"],
   },
   // Code comments (review_comments): a comment on a file and line in a repo,
   // with or without a PR. Each feed is a window onto the table (one PR's set,

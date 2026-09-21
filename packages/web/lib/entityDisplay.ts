@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AlertTriangle, ArrowUp, Minus, ArrowDown } from "lucide-react";
 import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, type EntityType } from "./entityLinks";
@@ -205,9 +206,8 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // or by Convex id. No-throw for the same client/deploy-skew reason as
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
   const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
-  const { data: pullRequest } = useQueryNoThrow(api.pull_requests.webGet, type === "pr" && repoObjectArgs ? repoObjectArgs : "skip");
-  const { data: commit } = useQueryNoThrow(api.commits.webGet, type === "commit" && repoObjectArgs ? repoObjectArgs : "skip");
-  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "pr" ? pullRequest : type === "commit" ? commit : undefined;
+  const repoObject = useRepoObject(isRepoObject ? type : null, rawId, repoObjectArgs);
+  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -218,7 +218,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     () => (type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
     [type, rawId],
   );
-  const entity: any = served ?? seed;
+  const entity: any = isRepoObject ? repoObject.entity ?? seed : served ?? seed;
 
   // One label rule for every type, shared with mobile: the reference reads as
   // the object's NAME, and the id moves to the detail surfaces. A trigger
@@ -248,5 +248,5 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : (type === "initiative" && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
-  return { rawId, type, entity, served: served !== undefined, status: entity?.status, label, shortLabel, href };
+  return { rawId, type, entity, served: isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, shortLabel, href };
 }

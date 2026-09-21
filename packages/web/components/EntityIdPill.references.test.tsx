@@ -158,7 +158,7 @@ const SEEDED_TASK = {
 // `bun test` run. The pill reads via getState(), so a real seeded row behaves
 // identically.
 const { useInboxStore } = await import("../store/inboxStore");
-useInboxStore.setState({ tasks: { [SEEDED_TASK._id]: SEEDED_TASK } } as any);
+useInboxStore.setState({ tasks: { [SEEDED_TASK._id]: SEEDED_TASK }, pullRequests: { [FAKE_PR._id]: FAKE_PR } } as any);
 
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { MemoryRouter } = await import("react-router");

@@ -1,5 +1,6 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { normalizeRepository } from "@codecast/shared/contracts";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 
@@ -49,8 +50,9 @@ const prDetailSig = (p: any) =>
   ].join("|");
 
 export function usePullRequest(repository: string, number: number): any | undefined {
+  const canonicalRepository = normalizeRepository(repository);
   const rows = useCollectionRows<any>("pullRequests", {
-    where: (p) => p.repository === repository && p.number === number,
+    where: (p) => normalizeRepository(p.repository) === canonicalRepository && p.number === number,
     sig: prDetailSig,
   });
   return rows[0];
