@@ -54,7 +54,7 @@ const NON_TAB_EXACT = new Set([
 // readable, no shell. The tab shell intercepting one would rewrite that
 // window's URL and paint a blank pane. "/repo" is a different route and stays
 // tab-routable — the rule below matches "/r" and "/r/…" only.
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a", "/r"];
+const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a", "/r", "/slack/connect"];
 
 // Every single-segment top-level route that lives INSIDE the dashboard (a tab
 // page or a standalone shell page). Public profiles live at the root as a bare

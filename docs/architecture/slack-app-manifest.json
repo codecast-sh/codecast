@@ -13,8 +13,7 @@
   "oauth_config": {
     "redirect_urls": [
       "https://codecast.sh/slack/connect",
-      "https://local.codecast.sh/slack/connect",
-      "http://localhost:3200/slack/connect"
+      "https://local.codecast.sh/slack/connect"
     ],
     "scopes": {
       "bot": [

@@ -101,6 +101,7 @@ const HANDOFF_DENY = [
   /^\/login/,
   /^\/auth/,
   /^\/oauth/,
+  /^\/slack\/connect(\/|$)/,
   /^\/share\//,
   /^\/a\//,
   /^\/r(\/|$)/,

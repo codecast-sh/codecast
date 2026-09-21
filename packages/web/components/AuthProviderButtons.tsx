@@ -2,6 +2,7 @@ import { useProviderSignIn, type OAuthProviderId } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { bridge } from "../lib/desktop";
 import { markOAuthStarted } from "../lib/oauthReturn";
+import { slackProviderRedirect } from "../lib/slackReturn";
 
 // Apple + GitHub sign-in buttons, shared by /login and /signup.
 //
@@ -37,7 +38,7 @@ export function AuthProviderButtons({
   const openExternal = bridge("openExternal");
   const { buttons, start, cancel, nonce, loading, error, desktopBrowserAuth } = useProviderSignIn({
     verb,
-    redirectTo,
+    redirectTo: slackProviderRedirect(redirectTo),
     pendingDeposit: api.cliAuth.pendingDeposit,
     desktop: openExternal
       ? { openExternal, deviceName: "Codecast Desktop", origin: window.location.origin }

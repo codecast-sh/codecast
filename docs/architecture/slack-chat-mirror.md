@@ -90,7 +90,11 @@ An imported line was read where it was written, often months ago; arriving here 
 
 ## Install flow
 
-`slack.getInstallUrl` signs a state carrying the scope, `return_to` and the allowlisted web `origin`; Slack returns to `<origin>/slack/connect`, which completes the exchange in the signed-in session and bounces to `return_to?slack=connected|error`. One trap on that return: `@convex-dev/auth` reads any `?code=` in the URL at boot as one of its own sign in codes, redeems it, fails, and signs the person out. `boot.tsx` therefore runs `lib/slackReturn.stashSlackReturn()` before React mounts, which moves Slack's code into session storage and rewrites the URL; the connect page takes it from there (`takeSlackReturn`). A team install requires a team admin and no longer requires an anchor. The redirect URIs registered on the Slack app are production, `https://local.codecast.sh` and `http://localhost:3200`.
+`slack.getInstallUrl` signs a state carrying the scope, `return_to` and the allowlisted web `origin`. Slack returns to `<origin>/slack/connect`, a standalone page outside dashboard tabs and automatic desktop handoff. `boot.tsx` runs `lib/slackReturn.stashSlackReturn()` before React mounts: Slack's code moves into session storage so `@convex-dev/auth` cannot mistake it for a Codecast sign-in code. The pending response stays until completion, including across sign-in redirects and reloads.
+
+If the returning browser is signed out, the callback sends it to `/login?reason=slack&return_to=%2Fslack%2Fconnect`. GitHub and Apple return their sign-in codes to that login page, then resume the Slack callback; sending those codes directly to `/slack/connect` would overwrite the pending Slack response. Completion waits for server-confirmed authentication and the backend still requires the same account that started the install. Cancellation, missing data, rejected exchanges and unavailable storage show explicit failures instead of redirecting to the homepage. Success returns to the originating page with `slack=connected`.
+
+A team install requires a team admin and no longer requires an anchor. The publicly distributed Slack app registers `https://codecast.sh/slack/connect` and `https://local.codecast.sh/slack/connect`; HTTP localhost callbacks were removed when public distribution was enabled.
 
 ## Validated live (2026-09-15, Union workspace)
 

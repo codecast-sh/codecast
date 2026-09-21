@@ -266,6 +266,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "forgot-password", component: cast(ForgotPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "reset-password", component: cast(ResetPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "auth/cli", component: cast(AuthCli), layout: "auth", guestOk: true, guestKind: "public" },
+  { path: "slack/connect", component: cast(SlackConnect), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "pages/auth", component: cast(ArtifactAuth), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "join/:code", component: cast(JoinTeam), layout: "auth", guestOk: true, guestKind: "public" },
 
@@ -327,8 +328,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "sessions", component: cast(Sessions), layout: "dashboardShell", tab: "/sessions" },
   // Full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions), not an isOnXPage flag.
   { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
-  // Slack's OAuth return leg. Completes the install and bounces to return_to.
-  { path: "slack/connect", component: cast(SlackConnect), layout: "dashboardShell", tab: "/slack/connect" },
   { path: "team", component: cast(Team), layout: "dashboardShell", tab: "/team" },
   { path: "team/activity", component: cast(TeamActivity), layout: "dashboardShell", tab: "/team/activity" },
   { path: "team/charts", component: cast(TeamCharts), layout: "dashboardShell", tab: "/team/charts" },

@@ -45,7 +45,6 @@ const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/pa
 const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/triggers/[id]/page"));
 const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
 const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
-const SlackConnect = lazyPage("@/app/slack/connect/page", () => import("@/app/slack/connect/page"));
 const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
 const TeamActivity = lazyPage("@/app/team/activity/page", () => import("@/app/team/activity/page"));
 const TeamCharts = lazyPage("@/app/team/charts/page", () => import("@/app/team/charts/page"));
@@ -153,7 +152,6 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
-  { pattern: /^\/slack\/connect$/, paramNames: [], component: SlackConnect },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
   { pattern: /^\/search$/, paramNames: [], component: Search },
