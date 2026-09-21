@@ -23,13 +23,15 @@ export interface PortAllocation {
   ports: Record<string, number>;
   env: Record<string, string>;
   resourceIndex: number;
+  extendedRange?: { poolSize: number; from: number; to: number };
 }
 
 export interface AllocateOptions {
   /** Starting resource index. Default 0. */
   startIndex?: number;
-  /** Max indices to try before giving up. Default 10. */
+  /** Indices per search window. Default 10. */
   maxIndices?: number;
+  maxExtensions?: number;
   /**
    * Skip the TCP probe (purely arithmetic allocation). Used by tests and by
    * callers that want a stable mapping regardless of live port state.
@@ -42,6 +44,7 @@ export class PortAllocationError extends Error {
   constructor(
     message: string,
     public readonly conflicts?: Array<{ name: string; port: number }>,
+    public readonly searched?: { from: number; to: number },
   ) {
     super(message);
     this.name = "PortAllocationError";
@@ -78,7 +81,9 @@ export async function allocatePorts(
   opts: AllocateOptions = {},
 ): Promise<PortAllocation> {
   const startIndex = opts.startIndex ?? 0;
-  const maxIndices = opts.maxIndices ?? 10;
+  const poolSize = opts.maxIndices ?? 10;
+  const maxExtensions = opts.maxExtensions ?? 3;
+  const lastIndex = startIndex + poolSize * (maxExtensions + 1) - 1;
 
   // Trivial case: no ports declared.
   if (Object.keys(manifest.ports).length === 0) {
@@ -87,22 +92,29 @@ export async function allocatePorts(
 
   let lastConflicts: Array<{ name: string; port: number }> = [];
 
-  for (let i = startIndex; i < startIndex + maxIndices; i++) {
+  for (let i = startIndex; i <= lastIndex; i++) {
     const ports = computePorts(manifest, i);
     const reserved = Object.entries(ports)
       .filter(([, port]) => opts.reservedPorts?.has(port))
       .map(([name, port]) => ({ name, port }));
     const conflicts = reserved.length > 0 || opts.noProbe ? reserved : await findConflicts(ports);
     if (conflicts.length === 0) {
-      return { ports, env: portsToEnv(ports), resourceIndex: i };
+      const block = Math.floor((i - startIndex) / poolSize);
+      const from = startIndex + block * poolSize;
+      return {
+        ports, env: portsToEnv(ports), resourceIndex: i,
+        ...(block > 0 ? { extendedRange: { poolSize, from, to: from + poolSize - 1 } } : {}),
+      };
     }
     lastConflicts = conflicts;
   }
 
   throw new PortAllocationError(
-    `unable to allocate free ports after ${maxIndices} attempts starting at index ${startIndex}; ` +
+    `unable to allocate free ports: indices ${startIndex}-${lastIndex} are all taken ` +
+      `(pool of ${poolSize}, extended ${maxExtensions} times); ` +
       `last conflicts: ${lastConflicts.map((c) => `${c.name}=${c.port}`).join(", ")}`,
     lastConflicts,
+    { from: startIndex, to: lastIndex },
   );
 }
 

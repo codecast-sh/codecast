@@ -118,6 +118,15 @@ base = 3000
 range = 100
 ```
 
+Allocation starts with ten indices and can extend by ten up to three times.
+Acquire reports the extension and names reservation holders if every candidate
+is taken. Missing worktrees and deleted branches stop reserving ports, except
+while an operation owns them; the main checkout always keeps its reservation.
+
+Use `cast ws acquire <name> --no-ports` for a worker that needs no dev-server
+ports. This skips the warm pool, stores the choice, and allocates no named
+ports on later acquire or heal calls. `cast ws status <name>` shows the choice.
+
 ## `[services.<name>]`
 
 A background service the workspace needs. `mode = "shared"` points every
