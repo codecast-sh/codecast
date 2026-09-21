@@ -45,6 +45,8 @@ export interface CloudHost {
   id: string;
   provider: "aws" | "scaleway-mac";
   region: string;
+  profile?: string;
+  platform?: "linux" | "darwin";
   /** SSH user for this image. Ubuntu images use `ubuntu`, Scaleway Macs `m1`. */
   user: string;
   keyPath: string;
@@ -95,7 +97,7 @@ export function resolveCloudHost(hostArg?: string): CloudHost {
   const hosts = readHosts();
   const pick = hostArg
     ? hosts.find((h) => h.id === hostArg)
-    : hosts.find((h) => h.provider === "aws") ?? hosts[0];
+    : hosts.find((h) => h.provider === "aws" && h.platform !== "darwin") ?? hosts[0];
   if (!pick) {
     throw new Error(
       hostArg
@@ -205,9 +207,9 @@ export class AwsCliFailed extends Error {
   }
 }
 
-function aws(args: string[], region: string): any {
+function aws(args: string[], region: string, profile?: string): any {
   try {
-    const out = execFileSync("aws", [...args, "--region", region, "--output", "json"], {
+    const out = execFileSync("aws", [...args, "--region", region, ...(profile ? ["--profile", profile] : []), "--output", "json"], {
       encoding: "utf-8",
       timeout: 120_000,
       stdio: ["ignore", "pipe", "pipe"],
@@ -234,7 +236,7 @@ function aws(args: string[], region: string): any {
 }
 
 function describeInstance(host: CloudHost): any {
-  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
+  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
   return r?.Reservations?.[0]?.Instances?.[0];
 }
 
@@ -278,6 +280,7 @@ export function inspectHost(host: CloudHost): {
   state: HostState;
   address?: string;
   instanceType?: string;
+  platform?: "linux" | "darwin";
   volumeGiB?: number;
 } {
   if (host.provider !== "aws") return { state: "running", address: host.address };
@@ -287,12 +290,12 @@ export function inspectHost(host: CloudHost): {
   try {
     const vols = aws(
       ["ec2", "describe-volumes", "--filters", `Name=attachment.instance-id,Values=${host.id}`],
-      host.region,
+      host.region, host.profile,
     );
     const sizes: number[] = (vols?.Volumes ?? []).map((v: any) => Number(v.Size) || 0);
     if (sizes.length) volumeGiB = sizes.reduce((a, b) => a + b, 0);
   } catch { /* the disk size is the only field this loses */ }
-  return { ...instanceFacts(inst), instanceType: inst.InstanceType, ...(volumeGiB === undefined ? {} : { volumeGiB }) };
+  return { ...instanceFacts(inst), instanceType: inst.InstanceType, platform: /^mac\d|^mac-/.test(inst.InstanceType ?? "") ? "darwin" : "linux", ...(volumeGiB === undefined ? {} : { volumeGiB }) };
 }
 
 /**
@@ -316,13 +319,13 @@ const AUTO_RULE_TAG = "codecast-auto";
 const ANYWHERE = "0.0.0.0/0";
 
 export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => void = () => {}): void {
-  if (host.provider !== "aws") return;
+  if (host.provider !== "aws" || host.platform === "darwin") return;
   try {
-    const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
+    const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
     const groupId = r?.Reservations?.[0]?.Instances?.[0]?.SecurityGroups?.[0]?.GroupId;
     if (!groupId) return;
 
-    const sg = aws(["ec2", "describe-security-groups", "--group-ids", groupId], host.region);
+    const sg = aws(["ec2", "describe-security-groups", "--group-ids", groupId], host.region, host.profile);
     const sshRules = (sg?.SecurityGroups?.[0]?.IpPermissions ?? []).filter(
       (p: any) => p.IpProtocol === "tcp" && p.FromPort === 22 && p.ToPort === 22,
     );
@@ -333,7 +336,7 @@ export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => vo
       aws(
         ["ec2", "authorize-security-group-ingress", "--group-id", groupId, "--ip-permissions",
          JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: ANYWHERE, Description: AUTO_RULE_TAG }] }])],
-        host.region,
+        host.region, host.profile,
       );
     }
     // Retire the per-network /32s this code added before it learned better.
@@ -342,7 +345,7 @@ export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => vo
       aws(
         ["ec2", "revoke-security-group-ingress", "--group-id", groupId, "--ip-permissions",
          JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: stale.map((x) => ({ CidrIp: x.CidrIp })) }])],
-        host.region,
+        host.region, host.profile,
       );
     }
   } catch {
@@ -379,14 +382,15 @@ export async function ensureUp(
   if (state === "missing") throw new HostGone(host);
 
   if (state === "stopped") {
-    onProgress(`starting ${host.id} — it was stopped, which is why it costs nothing when idle`);
-    aws(["ec2", "start-instances", "--instance-ids", host.id], host.region);
+    onProgress(`starting ${host.id}`);
+    aws(["ec2", "start-instances", "--instance-ids", host.id], host.region, host.profile);
     state = "pending";
   }
 
-  const deadline = Date.now() + 180_000;
+  const bootMinutes = host.platform === "darwin" ? 25 : 3;
+  const deadline = Date.now() + bootMinutes * 60_000;
   while (state !== "running") {
-    if (Date.now() > deadline) throw new Error(`${host.id} did not reach "running" within 3 minutes`);
+    if (Date.now() > deadline) throw new Error(`${host.id} did not reach "running" within ${bootMinutes} minutes`);
     await new Promise((r) => setTimeout(r, 4000));
     ({ state, address } = hostState(host));
     if (state === "missing") throw new HostGone(host);
@@ -418,7 +422,7 @@ export async function ensureUp(
       timeout: 5_000, stdio: "ignore",
     });
   } catch { /* no master to evict */ }
-  const sshDeadline = Date.now() + 150_000;
+  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 150_000);
   for (;;) {
     try {
       execFileSync(
@@ -454,7 +458,7 @@ export function stopHost(host: CloudHost): void {
         `minimum lease, so the only "off" is deleting it. Use the Scaleway console.`,
     );
   }
-  aws(["ec2", "stop-instances", "--instance-ids", host.id], host.region);
+  aws(["ec2", "stop-instances", "--instance-ids", host.id], host.region, host.profile);
 }
 
 /**
@@ -483,11 +487,12 @@ export function sshReachable(host: RemoteHost, timeoutMs = 4000): Promise<boolea
 /** The RemoteHost shape the SSH helpers already speak. */
 export function toRemoteHost(host: CloudHost): RemoteHost {
   if (!host.address) throw new Error(`host ${host.id} has no address — start it first`);
+  const home = host.platform === "darwin" || host.provider === "scaleway-mac" ? `/Users/${host.user}` : `/home/${host.user}`;
   return {
     address: host.address,
     user: host.user,
     keyPath: host.keyPath,
-    remoteBaseDir: `/home/${host.user}/work`,
-    homeDir: `/home/${host.user}`,
+    remoteBaseDir: `${home}/work`,
+    homeDir: home,
   };
 }

@@ -1,6 +1,6 @@
 A session runs on one machine: the daemon there owns its tmux pane, its transcript and its working tree. That is a limit when the laptop has to close, when thirty sessions compete for the same memory, or when the agent that needs an answer runs on a box in another room.
 
-Codecast treats every machine as a device with the same daemon. A cloud Linux host is one more device that happens to sleep when idle. A session can start on it, move to it, move back, and be watched or typed into from a browser anywhere. The transcript is one thread throughout, whichever machine produced each part of it.
+Codecast treats every machine as a device with the same daemon. Cloud Linux and Mac hosts can run sessions, receive work from your laptop, and be watched or typed into from a browser anywhere. Linux sleeps when idle. AWS Macs use dedicated hosts whose charges continue while the instance is stopped. The transcript stays one thread throughout.
 
 ```bash
 cast spawn --cloud "port the v1 routes" "write the migration"   # one worktree per task on the cloud host
@@ -17,12 +17,39 @@ cast resume <session> --tmux    # attach to the pane the web session uses
 cast hosts vnc [id]             # the host's whole screen, interactive
 ```
 
+## Set up a cloud machine
+
+Settings → Machines → **Add a cloud machine** builds the setup command for Linux or Mac, using an existing EC2 instance or launching a new one. Run it from the project on your laptop, with AWS credentials and an SSH key already available.
+
+The installed CLI provisions hosts from the published release, checking its checksum and version before replacing the host's CLI. When run from the Codecast source checkout, host updates use a local build so development changes can be tested on the host.
+
+Connect an existing machine and provision it in one command:
+
+```bash
+cast hosts add i-0123456789abcdef0 --region us-west-2 --key ~/.ssh/dev.pem --provision
+cast hosts add i-0123456789abcdef1 --region us-east-2 --profile team --key ~/.ssh/mac.pem --provision
+```
+
+The operating system is detected automatically. AWS profiles are saved with the host and reused for wake and sleep. Mac setup needs Homebrew and passwordless sudo on the SSH account. Install Xcode separately for Apple app builds. On a shared Mac, add `--service-user codecast` to create a separate login with the bootstrap account's authorized SSH keys and passwordless sudo. Existing accounts and their agents keep running. Setup refuses to replace linked agent configuration directories.
+
+Create a Linux instance using your existing AWS networking and key pair:
+
+```bash
+cast hosts create linux --name dev-linux --image ami-0123456789abcdef0 \
+  --subnet subnet-0123456789abcdef0 --security-group sg-0123456789abcdef0 \
+  --key-name dev-key --key ~/.ssh/dev.pem --region us-west-2
+```
+
+Use an Ubuntu 24.04 x86_64 AMI and a public subnet whose security group permits SSH. For Mac, use `create mac`, a compatible macOS AMI, and `--dedicated-host h-0123456789abcdef0`; the default instance type is `mac2.metal`, overridable with `--type`. The dedicated host and subnet must be in the same availability zone. Allocate the dedicated host in AWS first. AWS imposes a 24-hour minimum allocation; stopping the instance does not release the dedicated host or end its charges. Mac auto-stop is disabled.
+
+`--dry-run` prints the launch plan without changing AWS. Rerunning the same name and launch settings reuses the tagged instance. If provisioning fails, run `cast hosts provision <instance-id>` to continue. The Mac service starts at boot without an interactive login; Linux uses its system service and idle watchdog. The machine is ready only after configuration syncing succeeds.
+
 ## What a cloud spawn does
 
 `cast spawn --cloud` prepares the host from the laptop, over SSH, and then starts an ordinary session on the host's device. Nothing in the preparation passes through Convex. The steps run in this order:
 
-1. The CLI wakes the host if it is stopped and waits up to 3 minutes for it to run.
-2. The repository at `/home/ubuntu/work/<repo>` is cloned when missing and fetched when present. The refresh is a fetch only: an existing checkout keeps its HEAD and its uncommitted work. If the host cannot reach the git remote, the laptop transfers fresh main over SSH.
+1. The CLI wakes the host if it is stopped and waits up to 3 minutes for Linux or 25 minutes for a Mac to run.
+2. The repository at `~/work/<repo>` on the host is cloned when missing and fetched when present. The refresh is a fetch only: an existing checkout keeps its HEAD and its uncommitted work. If the host cannot reach the git remote, the laptop transfers fresh main over SSH.
 3. The private files listed under `setup.copy` in `.codecast/workspace.toml` travel by rsync. Each worktree gets its own snapshot of them.
 4. The host runs its own `cast ws acquire` for each task. Dependency install runs on the host, and ports are probed on the machine that binds them. The session sees `PORT_WEB` and the worktree identity in its environment.
 5. The conversation row is created already pointed at the worktree and routed to the host's device.
@@ -43,6 +70,8 @@ The web composer reaches the same path. Picking Cloud Linux in the machine dropd
 | Browser logins | On the host, `cast browser sync <site>` asks your online laptop to inject that site's cookies through an SSH port forward into the host's Chrome. | Google is never carried. The request expires after 5 minutes if no laptop picks it up. The laptop never wakes a host for cookies. |
 
 `cast hosts sync --dry-run` reports what the mirror would send. `cast config cloud_mirror_enabled false` turns it off. An agent that is already running keeps the instructions it read at startup. Start a new session when a changed instruction must load.
+
+An optional hook whose local script has disappeared is omitted from the host's copy and reported as a warning. Broken unused links in `~/.local/bin` are also omitted. The laptop's configuration stays unchanged. Missing required instruction files, MCP dependencies, and status line commands still stop setup with the path that needs fixing.
 
 ## Pushing from the host
 

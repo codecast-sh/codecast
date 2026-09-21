@@ -9,14 +9,12 @@
  * whichever `node` PATH finds (apt 18 at /usr/bin today); claude is the
  * native installer at ~/.local/bin; the daemon's PATH is
  * /usr/local/bin:/usr/bin:/bin:~/.local/bin, so a /usr/local/bin/node
- * symlink shadows /usr/bin/node for every agent launch. Present-but-
- * different versions are reported, not replaced: replacing could break a
- * running session, so "when missing" is the contract. The snippets are the
+ * symlink shadows /usr/bin/node for every agent launch. The snippets are the
  * same ones cloud/hostTools.ts runs on every wake.
  */
 
 import { INSTALLABLE_CLIENTS, type InstallableClient } from "../remote/agentAuth.js";
-import { clientInstallSnippet, HOST_TOOLS_PATH, NODE_FLOOR_MAJOR, nodeInstallSnippet } from "../cloud/hostTools.js";
+import { clientInstallSnippet, HOST_TOOLS_PATH, NODE_FLOOR_MAJOR, nodeInstallSnippet, safeVersion } from "../cloud/hostTools.js";
 export { NODE_22_VERSION } from "../cloud/hostTools.js";
 
 /**
@@ -27,7 +25,24 @@ export { NODE_22_VERSION } from "../cloud/hostTools.js";
  * loop runs under `set -e`, so a CLI whose `--version` fails (gemini on an
  * old node) reports empty instead of aborting the step after the installs.
  */
-export function agentCliInstallScript(versions: Partial<Record<InstallableClient, string>>): string {
+export function codexCompatibilityScript(version: string | undefined): string {
+  const wanted = safeVersion(version);
+  if (!wanted) return "";
+  return `codex_compatible() {
+  current=$(codex --version 2>/dev/null || true)
+  python3 -c 'import re,sys; m=re.search(r"[0-9]+\\.[0-9]+\\.[0-9]+",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m[0].split("."))) >= tuple(map(int,sys.argv[2].split("."))) else 1)' "$current" '${wanted}'
+}
+if ! codex_compatible; then
+  echo 'Updating Codex to support the laptop configuration…'
+  bun install -g @openai/codex@${wanted}
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$HOME/.bun/bin/codex" "$HOME/.local/bin/codex"
+  hash -r
+  codex_compatible || { echo 'Codex is still older than the laptop; setup cannot continue' >&2; exit 1; }
+fi`;
+}
+
+export function agentCliInstallScript(versions: Partial<Record<InstallableClient, string>>, opts: { upgradeCodex?: boolean } = {}): string {
   const lines: string[] = [];
   lines.push(`set -euo pipefail
 ${HOST_TOOLS_PATH}
@@ -36,6 +51,7 @@ ${nodeInstallSnippet(NODE_FLOOR_MAJOR)}`);
   for (const client of INSTALLABLE_CLIENTS) {
     lines.push(`${clientInstallSnippet(client, versions[client])} || true`);
   }
+  if (opts.upgradeCodex) lines.push(codexCompatibilityScript(versions.codex));
   lines.push(`for b in ${INSTALLABLE_CLIENTS.join(" ")}; do
   p=$(command -v "$b" 2>/dev/null || true)
   if [ -n "$p" ] && [ "$(uname -s)" = Linux ] && sudo -n true >/dev/null 2>&1; then sudo -n ln -sf "$p" "/usr/local/bin/$b" >/dev/null 2>&1 || true; fi

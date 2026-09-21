@@ -50,8 +50,8 @@ describe("resolveCloudDevice — the caller's own wake-on-use host", () => {
 describe("cloudPlacementNeeded — the chokepoint's upgrade rule", () => {
   const base = () => ({ callerUserId: ME, runnerUserId: ME, conv: blankRow(), targetDeviceId: "host", paths: ["/Users/me/src/app"] });
 
-  test("caller=runner + own linux remote + a /Users path → the host", async () => {
-    const db = fixture();
+  test.each(["linux", "darwin"])("caller=runner + own %s remote + a laptop path → the host", async (platform) => {
+    const db = fixture({ devices: [{ ...host(), platform, local_project_roots: [platform === "darwin" ? "/Users/codecast/work/app" : "/home/ubuntu/work/app"] }, laptop()] });
     expect((await cloudPlacementNeeded({ db }, base()))?.device_id).toBe("host");
   });
 
@@ -69,13 +69,13 @@ describe("cloudPlacementNeeded — the chokepoint's upgrade rule", () => {
     expect(await cloudPlacementNeeded({ db }, { ...base(), conv: blankRow({ worktree_path: "/home/ubuntu/work/app/.codecast/worktrees/x" }) })).toBeNull();
   });
 
-  test("a host-native path, an ambiguous path, a remote Mac, a foreign id → null", async () => {
+  test("a host-native path, an ambiguous path, or a foreign id → null", async () => {
     const db = fixture();
     expect(await cloudPlacementNeeded({ db }, { ...base(), paths: ["/home/ubuntu/work/app/.codecast/worktrees/x"] })).toBeNull();
     expect(await cloudPlacementNeeded({ db }, { ...base(), paths: ["/opt/thing"] })).toBeNull();
     expect(await cloudPlacementNeeded({ db }, { ...base(), targetDeviceId: "nope" })).toBeNull();
-    const macDb = fixture({ devices: [{ ...host(), platform: "darwin" }, laptop()] });
-    expect(await cloudPlacementNeeded({ db: macDb }, base())).toBeNull();
+    const macDb = fixture({ devices: [{ ...host(), platform: "darwin", local_project_roots: ["/Users/codecast/work/app"] }, laptop()] });
+    expect(await cloudPlacementNeeded({ db: macDb }, { ...base(), paths: ["/Users/codecast/work/app/.codecast/worktrees/x"] })).toBeNull();
   });
 
   test("a runner with no local device → null (nothing could prepare)", async () => {

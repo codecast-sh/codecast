@@ -23,6 +23,15 @@ beforeEach(() => {
 
 afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
 
+test("agent-managed skills and plugin runtime markers do not travel to another host", async () => {
+  const runtime = [".codex/skills/.system/a/SKILL.md", ".claude/skills/synced/id/manifest.json", ".claude/plugins/cache/org/a/v1/.orphaned_at", ".claude/plugins/cache/org/a/v1/.in_use/123"];
+  for (const file of runtime) write(file, "runtime");
+  write(".claude/plugins/cache/org/a/v1/SKILL.md", "portable plugin");
+  const inventory = await collectMirrorFiles({ home, hostHome: "/home/u" });
+  for (const file of runtime) expect(inventory.entries.some((entry) => entry.path === file)).toBe(false);
+  expect(inventory.entries.some((entry) => entry.path === ".claude/plugins/cache/org/a/v1/SKILL.md")).toBe(true);
+});
+
 describe("portable context discovery", () => {
   test("every agent namespace keeps symlinked aliases, plugin assets and memory while runtime data stays out", async () => {
     write(".agents/skills/shared/SKILL.md", "[details](references/details.md)");
@@ -161,6 +170,38 @@ test("missing executable dependencies fail while prose and output directories re
   expect(() => collectProjectContext({ root, home })).toThrow("missing active context reference");
   write("src/repo/.mcp.json", "{ broken");
   expect(() => collectProjectContext({ root, home })).toThrow("cannot parse active context config");
+});
+
+test("stale hooks from removed integrations are omitted with warnings without changing local config", async () => {
+  const stale = `${home}/.superset/hooks/cursor-hook.sh`;
+  const working = `${home}/scripts/working.sh`;
+  write("scripts/working.sh", "#!/bin/sh\nexit 0\n");
+  const cursor = JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: `${stale} Start` }, { command: working }] } });
+  write(".cursor/hooks.json", cursor);
+  write("src/repo/.claude/settings.json", JSON.stringify({ permissions: { deny: ["Bash(rm *)"] }, hooks: {
+    PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: stale }, { type: "command", command: working }, { type: "prompt", prompt: "check input" }] }],
+  } }));
+  const inventory = await collectMirrorFiles({ home, hostHome: "/home/u" });
+  const copied = JSON.parse(inventory.entries.find((entry) => entry.path === ".cursor/hooks.json")!.bytes.toString());
+  expect(copied.hooks.sessionStart).toEqual([{ command: working }]);
+  expect(inventory.warnings.some((warning) => warning.includes("omitted sessionStart hook") && warning.includes(stale))).toBe(true);
+  expect(fs.readFileSync(path.join(home, ".cursor/hooks.json"), "utf8")).toBe(cursor);
+  const project = collectProjectContext({ root, home });
+  expect(await collectProjectContextAsync({ root, home })).toEqual(project);
+  const settings = JSON.parse(project.files.find((entry) => entry.relativePath === ".claude/settings.json")!.bytes.toString());
+  expect(settings.permissions.deny).toEqual(["Bash(rm *)"]);
+  expect(settings.hooks.PreToolUse[0].hooks).toEqual([{ type: "command", command: working }, { type: "prompt", prompt: "check input" }]);
+  expect(project.warnings.some((warning) => warning.includes("omitted PreToolUse hook"))).toBe(true);
+});
+
+test("dangling hook symlinks are reported while denied hook references still block preparation", async () => {
+  fs.mkdirSync(path.join(home, "scripts"));
+  fs.symlinkSync("gone", path.join(home, "scripts/hook"));
+  write(".cursor/hooks.json", JSON.stringify({ hooks: { stop: [{ command: `${home}/scripts/hook` }] } }));
+  const inventory = await collectMirrorFiles({ home, hostHome: "/home/u" });
+  expect(inventory.warnings.some((warning) => warning.includes("omitted stop hook"))).toBe(true);
+  write(".cursor/hooks.json", JSON.stringify({ hooks: { stop: [{ command: `cat ${home}/.ssh/private.key` }] } }));
+  await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("active context reference is denied");
 });
 
 test("account data mentioned in prose is excluded while an explicit portable include is honored", async () => {
