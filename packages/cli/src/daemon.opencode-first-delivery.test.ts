@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   classifyGlyphlessClientPaneState,
+  classifyLivePaneFor,
   classifyTmuxLiveState,
   clientOwnsSessionStore,
   extractTmuxLiveRegion,
@@ -118,4 +119,13 @@ describe("mayReconstituteResumeTranscript (missing-transcript resume guard)", ()
   test("cursor is refused because it has no native import support", () => {
     expect(mayReconstituteResumeTranscript("cursor")).toBe(false);
   });
+});
+
+test.each([
+  "⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt  tab agents  ctrl+p commands",
+  "esc interrupt  tab agents  ctrl+p commands",
+  "⬝⬝⬝⬝⬝⬝⬝⬝  tab agents  ctrl+p commands",
+])("recorded OpenCode busy footer cannot be reaped as idle: %s", (footer) => {
+  expect(classifyGlyphlessClientPaneState(footer, OC_READY)).toBe("busy");
+  expect(classifyLivePaneFor("opencode", footer)).toBe("busy");
 });
