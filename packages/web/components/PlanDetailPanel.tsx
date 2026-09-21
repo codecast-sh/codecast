@@ -49,6 +49,7 @@ import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { clipFade } from "./CollapsibleBody";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
+import { PlanOriginSession } from "./PlanOriginSession";
 import { LivePulseDot } from "./SessionActivityLine";
 
 const api = _api as any;
@@ -1132,6 +1133,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
             <DriveRoundIndicator driveState={plan.drive_state} />
           )}
         </div>
+        <PlanOriginSession plan={plan} className="mt-3" />
         <RepositoryLinks planId={plan._id} sessions={plan.sessions || []} conversationIds={plan.conversation_ids || []} />
         {plan.goal && (
           <p className="mt-3 text-sm text-sol-text-muted leading-relaxed">{plan.goal}</p>

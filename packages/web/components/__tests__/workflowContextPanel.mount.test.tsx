@@ -35,6 +35,8 @@ const restoreGlobals = replaceGlobals({
 // react-dom/client decides at load whether a DOM exists, so it is loaded
 // here — after the globals above — not as a static import.
 const {createRoot} = await import("react-dom/client");
+const { MemoryRouter } = await import("react-router");
+const { TooltipProvider } = await import("../ui/tooltip");
 
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
@@ -72,7 +74,13 @@ async function mount() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(() => root.render(<WorkflowContextPanel workflowRunId={RUN_ID as any} />));
+  // The node rows open sessions through the router, so the panel mounts
+  // inside one, the way the pages that host it do.
+  await act(() => root.render(
+    <MemoryRouter>
+      <TooltipProvider><WorkflowContextPanel workflowRunId={RUN_ID as any} /></TooltipProvider>
+    </MemoryRouter>,
+  ));
   return {
     container,
     unmount: () => act(() => root.unmount()),
@@ -88,7 +96,9 @@ describe("WorkflowContextPanel", () => {
       expect(container.textContent).toContain("2/3");
       expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
       expect(container.textContent).not.toContain("squash-rebase");
-      expect(container.textContent).not.toContain("View workflow run");
+      expect(container.textContent).not.toContain("Open the run");
+      // The aggregate header still says where the run is.
+      expect(container.textContent).toContain("polish");
     } finally {
       unmount();
     }
@@ -101,7 +111,8 @@ describe("WorkflowContextPanel", () => {
       expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
       expect(container.textContent).toContain("squash-rebase");
       expect(container.textContent).toContain("polish");
-      expect(container.textContent).toContain("View workflow run");
+      expect(container.textContent).toContain("Open the run");
+      expect(container.querySelector(`a[href="/workflows/runs/${RUN_ID}"]`)).not.toBeNull();
     } finally {
       unmount();
     }

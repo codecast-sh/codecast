@@ -25,6 +25,7 @@ import {
 } from "../../../components/PlanDetailPanel";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { PlanBoardView } from "../../../components/PlanBoardView";
+import { PlanOriginSession } from "../../../components/PlanOriginSession";
 import { EntryTimeline } from "../../../components/EntryTimeline";
 import { PlanGraphView } from "../../../components/PlanGraphView";
 import { LivenessDot } from "../../../components/LivenessDot";
@@ -252,6 +253,7 @@ export default function PlanDetailPage() {
           contextType="plan"
           leadContent={
             <>
+              <PlanOriginSession plan={plan} className="mb-3" />
               <RepositoryLinks planId={plan._id} sessions={plan.sessions || []} conversationIds={plan.conversation_ids || []} />
               <CharterBlock kind="plan" title={plan.title} charter={charter} canEdit onChange={handleCharterChange} roles={charterRoles} className="mt-2" />
             </>

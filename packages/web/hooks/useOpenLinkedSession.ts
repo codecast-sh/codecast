@@ -42,7 +42,7 @@ export function openConversationBeside(id: string) {
 
 /**
  * Open a session that's linked from another surface -- a task's or doc's
- * "Sessions" list, or a workflow run's agent rows (DynamicRunView, which also
+ * "Sessions" list, or a workflow run's node rows (WorkflowRunNodes, which also
  * renders inline in conversations). Resolves the right open gesture for the
  * mounted surface via resolveSessionSelectKind, the same decision the global
  * session list uses.

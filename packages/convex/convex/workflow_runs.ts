@@ -524,11 +524,16 @@ export const listForWorkflow = query({
     // user who guessed a workflow id could read another user's run history.
     const workflow = await ctx.db.get(args.workflow_id);
     if (!workflow || workflow.user_id !== userId) return [];
-    return await ctx.db
+    const runs = await ctx.db
       .query("workflow_runs")
       .withIndex("by_workflow_id", (q) => q.eq("workflow_id", args.workflow_id))
       .order("desc")
       .take(20);
+    // Every feed that writes a run row carries its node sessions: the web
+    // overlays all feeds on one collection, so a plain row from here would
+    // strip the sessions the detail query attached. Newest runs first.
+    const budget = { reads: 200 };
+    return await Promise.all(runs.map((r) => withAgentSessions(ctx, r, budget)));
   },
 });
 
@@ -1086,8 +1091,11 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
 
   const workflows = new Map<string, any>();
+  // Node sessions ride every feed (see listForWorkflow); the budget keeps a
+  // 200 run page bounded, newest runs claiming lookups first.
+  const budget = { reads: 300 };
   const shaped = [];
-  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, run, workflows));
+  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), workflows));
   return shaped;
 }
 

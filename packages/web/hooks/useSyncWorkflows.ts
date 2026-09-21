@@ -49,7 +49,10 @@ export function useSyncWorkflowRun(runId: string | null | undefined) {
 
 const runSig = (r: any) =>
   `${r.status}|${r.current_node_id ?? ""}|${r.updated_at ?? 0}|${r.total_tokens ?? 0}|${r.agent_count ?? 0}|${r.gate_prompt ?? ""}|` +
-  (r.node_statuses ?? []).map((n: any) => `${n.node_id}:${n.status}:${n.session?._id ?? ""}:${n.session?.is_active ? 1 : 0}`).join(",");
+  (r.node_statuses ?? []).map((n: any) =>
+    `${n.node_id}:${n.status}:${n.session?._id ?? ""}:${n.session?.is_active ? 1 : 0}:${n.session?.title ?? ""}:${n.session?.message_count ?? 0}:` +
+    `${n.completed_at ?? 0}:${n.outcome ?? ""}:${n.tokens ?? 0}:${n.activity ?? ""}:${n.result_preview ? 1 : 0}`,
+  ).join(",");
 const runNewestFirst = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
 /** Reader: runs, optionally filtered. */
