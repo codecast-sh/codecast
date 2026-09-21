@@ -131,19 +131,6 @@ cast sessions --state needs-input # narrow to one state (also --team, -m <name>;
 cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
 cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
 cast sessions <id> --messages -w  # …focused on one session
-# ORCHESTRATE a fleet: nest workers under this session, then watch their returned IDs.
-#   cast spawn --subagent --label fleet "task A" "task B"
-#   cast sessions <worker-id> <worker-id> -w --json     ← emits {"event":"transition","to":"done",…}
-# Nested workers are omitted from top-level lists, including label filters; name their IDs to watch them.
-#   worker flips to done = finished, needs_input = blocked → cast read <id>, then cast send <id> "next step"
-# The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
-# Event states use underscores ("needs_input"); the --state flag accepts either form.
-# --state: needs-input | done | working | dormant | idle | pinned | live (also works on cast feed)
-# States answer WHO ACTS NEXT, same as the web inbox: needs-input = a human must unblock it (open
-# question, permission prompt, dead with output, or a finished turn nobody classified); done = the
-# agent declared it delivered; working = producing now; dormant = a machine wakes it (a declared
-# \`cast state --status dormant\`, an open background task/Monitor, an armed trigger into it) — parked,
-# not blocked, so don't wait on needs-input for it; idle = blank sessions with nothing to act on.
 
 # Labels — personal filing. File a session under a name, then filter by it
 # (cast sessions/feed/search --label <name>). A session carries at most one label.
@@ -168,6 +155,8 @@ cast bookmark <id> <msg> --name x # save shareable link
 cast decisions list               # view architectural decisions
 cast decisions add "title" --reason "why"
 \`\`\`
+
+Session states: \`needs-input\` = human action; \`working\` = agent working; \`dormant\` = waiting for an automatic wake; \`done\` = delivered; \`idle\` = unused. Watch JSON uses \`needs_input\`.
 
 Common options: --mine (just me), -m <name> (member), --label <name> (my label), -g (all teams), -s/-e (time range), -p (page), -n (limit)
 ${MEMORY_SNIPPET_END}

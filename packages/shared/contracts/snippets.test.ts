@@ -4,7 +4,6 @@ import {
   snippetBySlug,
   allSnippetSlugs,
   FORKS_SNIPPET,
-  MEMORY_SNIPPET,
   stubSectionBody,
 } from "./snippets";
 
@@ -97,14 +96,6 @@ describe("delegated worker guidance", () => {
       expect(body).toContain("human");
       expect(body).toContain("steer separately");
     }
-  });
-
-  it("keeps the fleet recipe nested and watches workers by ID", () => {
-    const recipe = MEMORY_SNIPPET.slice(MEMORY_SNIPPET.indexOf("# ORCHESTRATE"), MEMORY_SNIPPET.indexOf("# Labels —"));
-    expect(recipe).toContain('cast spawn --subagent --label fleet "task A" "task B"');
-    expect(recipe).toContain("cast sessions <worker-id> <worker-id> -w --json");
-    expect(recipe).not.toContain("cast sessions --label fleet");
-    expect(recipe).toContain("including label filters");
   });
 
   it("keeps worker briefs and labeled launches out of the inbox", () => {
