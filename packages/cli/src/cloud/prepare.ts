@@ -155,9 +155,9 @@ type Progress = (message: string) => void;
 export { remoteRepoPath } from "../remote/session-move.js";
 
 /** The box's codecast device id, read from its own `cast remote hosts` line. */
-export function readHostDeviceId(host: RemoteHost): string | undefined {
+export function readHostDeviceId(host: RemoteHost, run = ssh): string | undefined {
   try {
-    const line = ssh(host, "cast remote hosts 2>/dev/null | head -1", 60_000);
+    const line = run(host, `${HOST_PATH}; cast remote hosts 2>/dev/null | head -1`, 60_000);
     return /\(([0-9a-f-]{8,})\)/.exec(line)?.[1];
   } catch {
     return undefined;
@@ -722,7 +722,7 @@ export interface AcquireRemoteOptions {
   previousAddress?: string;
 }
 
-const HOST_PATH = `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"`;
+const HOST_PATH = `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"`;
 
 export type AcquiredRemoteWorkspace = RemoteWorkspace & { head: string; seed: CloudSeed };
 

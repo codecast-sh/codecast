@@ -33,6 +33,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
+import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../codecastOwned.js";
 import { INSTALLABLE_CLIENTS, parseClientVersion, readInstalledClientVersions, type InstallableClient } from "../remote/agentAuth.js";
 import { remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { ghWrapperInstallSnippet, realGhFunction, REAL_GH_REL } from "./ghWrapper.js";
@@ -258,11 +259,13 @@ export function scanMirroredHelpers(opts: ScanOptions): { tools: HostToolRequire
   };
   const settingsFile = path.join(home, ".claude", "settings.json");
   for (const cmd of settingsHookCommands(readJson(settingsFile))) {
+    if (isCodecastHookCommand(cmd, home)) continue;
     if (/\buvx?\b/.test(cmd)) needsUv = true;
     for (const w of commandWords(cmd)) add(w, settingsFile);
   }
   for (const rel of [".claude/hooks", ".claude/skills"]) {
     for (const file of walkFiles(path.join(home, rel))) {
+      if (isCodecastOwnedHomePath(path.relative(home, file))) continue;
       if (isMachO(file)) {
         unsupported.push({ tool: `~${file.slice(home.length)}`, referenced_by: `~${file.slice(home.length)}`, reason: "Mach-O binary — cannot run on Linux; not copied" });
         continue;
@@ -274,7 +277,10 @@ export function scanMirroredHelpers(opts: ScanOptions): { tools: HostToolRequire
       const interp = shebangInterpreter(text);
       if (interp) add(interp, file);
       if (interp && interp !== "sh" && interp !== "bash" && interp !== "zsh" && interp !== "dash") continue;
-      for (const line of text.split("\n").slice(0, 400)) for (const w of commandWords(line)) add(w, file);
+      const functions = new Set([...text.matchAll(/^\s*(?:function\s+)?([a-zA-Z_]\w*)\s*\(\s*\)\s*\{/gm)].map((match) => match[1]));
+      const shell = text.replace(/<<-?\s*(['"]?)([A-Za-z_]\w*)\1[^\n]*\n[\s\S]*?^\t*\2(?:\n|$)/gm, "\n")
+        .replace(/"[^"]*"|'[^']*'/g, " ");
+      for (const line of shell.split("\n").slice(0, 400)) for (const w of commandWords(line)) if (!functions.has(w)) add(w, file);
     }
   }
   return { tools: [...tools.values()], unsupported, needsUv };
@@ -541,7 +547,8 @@ export function staticMcpVerdict(command: string, laptopHome: string): { status:
   if (p === "~" || p.startsWith("~/")) p = laptopHome + p.slice(1);
   if (!p.startsWith("/")) return undefined; // a bare name: the host's PATH decides
   if (/\.app\//.test(p)) return { status: "unsupported", reason: "a macOS .app bundle — nothing on Linux runs it" };
-  const macPrefix = MAC_ONLY_PREFIXES.find((pre) => p.startsWith(pre));
+  const underHome = laptopHome && laptopHome !== "/" && p.startsWith(laptopHome + "/");
+  const macPrefix = !underHome && MAC_ONLY_PREFIXES.find((pre) => p.startsWith(pre));
   if (macPrefix) return { status: "unsupported", reason: `under ${macPrefix.replace(/\/$/, "")}, a macOS-only path` };
   // Only a file under the laptop home is the laptop's own: /usr/local/bin/node
   // is Mach-O on a Mac and a working symlink on the host, so the host's
@@ -570,7 +577,7 @@ export function mcpChecks(sources: McpSources, laptopHome: string, hostHome = "~
     if (seen.has(key)) return;
     seen.add(key);
     const check: McpCheck = { harness, name, laptop_command: normalizeCommand({ command: remapForHost(head, laptopHome), args: laptopArgs }, "~"), command: hostHead, ...(args.length ? { args } : {}) };
-    const verdict = staticMcpVerdict(src.command, laptopHome);
+    const verdict = hostHome.startsWith("/Users/") ? undefined : staticMcpVerdict(src.command, laptopHome);
     if (verdict) check.verdict = verdict;
     else if (hostHead.includes("/")) check.probe = { kind: "path", path: hostHead };
     else check.probe = { kind: "which", word: hostHead };
@@ -761,8 +768,9 @@ if [ "$node_major" -lt ${minMajor} ]; then
   else
     mkdir -p "$HOME/.local/bin"
     tmp=$(mktemp -d "$HOME/.local/.node-download.XXXXXX")
-    if curl ${CURL_LIMITS} "https://nodejs.org/dist/v${ver}/node-v${ver}-linux-$a.tar.xz" 2>"$tmp/err" | tar -xJ -C "$tmp" 2>>"$tmp/err" && [ -x "$tmp/node-v${ver}-linux-$a/bin/node" ]; then
-      rm -rf "$HOME/.local/node-${ver}" && mv "$tmp/node-v${ver}-linux-$a" "$HOME/.local/node-${ver}"
+    case "$(uname -s)" in Darwin) node_os=darwin; node_archive=tar.gz; node_tar=-xz;; Linux) node_os=linux; node_archive=tar.xz; node_tar=-xJ;; *) node_os=unsupported; node_archive=tar.xz; node_tar=-xJ;; esac
+    if curl ${CURL_LIMITS} "https://nodejs.org/dist/v${ver}/node-v${ver}-$node_os-$a.$node_archive" 2>"$tmp/err" | tar "$node_tar" -C "$tmp" 2>>"$tmp/err" && [ -x "$tmp/node-v${ver}-$node_os-$a/bin/node" ]; then
+      rm -rf "$HOME/.local/node-${ver}" && mv "$tmp/node-v${ver}-$node_os-$a" "$HOME/.local/node-${ver}"
     else
       node_err=$(tail -c 200 "$tmp/err" 2>/dev/null | tr -d '\\n"\\\\'); [ -n "$node_err" ] || node_err="download failed"
     fi
@@ -957,7 +965,7 @@ export interface RunHostToolsOptions extends HostToolsScriptOptions {
 
 function runOverSsh(host: RemoteHost, script: string, timeoutMs: number) {
   const r = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, HOST_TOOLS_REMOTE_COMMAND], {
-    encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], input: script, timeout: timeoutMs, env: process.env, maxBuffer: 16 * 1024 * 1024,
+    encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], input: (remoteHome(host).startsWith("/Users/") ? 'export PATH="$PATH:/opt/homebrew/bin"\n' : "") + script, timeout: timeoutMs, env: process.env, maxBuffer: 16 * 1024 * 1024,
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", ...(r.error ? { error: r.error } : {}) };
 }

@@ -41,6 +41,8 @@ import { toast } from "sonner";
 import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
+import { useHasAppWindow } from "../hooks/useDesktopWindowRole";
+import { DESKTOP_APPS, type DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -81,6 +83,13 @@ interface SidebarProps {
  *  stand on their own and a heading would just be a stripe of unreadable text. */
 /** Stable empty bag: a fresh {} here would rewake every reader on each render. */
 const NO_SECTION_PINS: Record<string, boolean> = Object.freeze({});
+
+/** True while `app` (when given) lives in a window of its own and this is
+ *  not that window: the rail's rows for it become doors. */
+function usePoppedOut(app: DesktopApp | undefined): boolean {
+  const has = useHasAppWindow(app ?? "chat");
+  return !!app && has;
+}
 
 function RailHeading({ label, isNarrow, action }: { label: string; isNarrow: boolean; action?: React.ReactNode }) {
   if (isNarrow) return null;
@@ -227,6 +236,7 @@ function NavSection({
   unread,
   items,
   headerAction,
+  popped,
   expanded,
   onToggle,
 }: {
@@ -250,18 +260,26 @@ function NavSection({
   /** An action that belongs to the SECTION, not to any row in it — revealed on
    *  hover beside the label, the way Calls reveals "start huddle". */
   headerAction?: React.ReactNode;
+  /** The desktop app this section belongs to. While that app has a window
+   *  of its own the row dims and folds: it is a door to that window, and
+   *  the window is where the section lives (lib/desktopApps). */
+  popped?: DesktopApp;
   expanded?: boolean;
   onToggle?: () => void;
 }) {
-  // Only the wide rail nests children; the narrow rail stays icon-only.
-  const hasChildren = !isNarrow && !!items && items.length > 0;
+  const inOtherWindow = usePoppedOut(popped);
+  // Only the wide rail nests children; the narrow rail stays icon-only, and
+  // a section living in another window keeps its list there.
+  const hasChildren = !isNarrow && !!items && items.length > 0 && !inOtherWindow;
+  const away = inOtherWindow ? " opacity-55 hover:opacity-90" : "";
+  const rowTitle = inOtherWindow && popped ? `${label}: opens in the ${DESKTOP_APPS[popped].title} window` : (title ?? label);
   return (
     <div data-simple-hide={simpleHide ? "" : undefined}>
       <div className={`group/nav flex items-center border-l-2 transition-colors motion-reduce:transition-none ${
-        isActive
+        isActive && !inOtherWindow
           ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
           : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
-      }`}>
+      }${away}`}>
         <Link
           href={href}
           onClick={(e) => {
@@ -279,7 +297,7 @@ function NavSection({
           draggable
           onDragStart={(e) => startPaneDrag(e, { path: href, title: label })}
           className={`flex-1 flex items-center ${isNarrow ? "justify-center px-4" : "gap-3 pl-4"} py-2.5 min-w-0`}
-          title={title ?? label}
+          title={rowTitle}
         >
           {icon}
           {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
@@ -418,17 +436,19 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
   onMobileClose?: () => void;
 }) {
   const unread = useThreadUnread();
+  // Threads live in the Chat window while there is one: this row is a door.
+  const away = usePoppedOut("chat");
   return (
     <Link
       href="/threads"
       onClick={onMobileClose}
       {...paneDragProps("/threads", "Threads")}
       className={`relative w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
-        isActive
+        isActive && !away
           ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
           : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
-      }`}
-      title="Threads — every conversation you're in"
+      }${away ? " opacity-55 hover:opacity-90" : ""}`}
+      title={away ? "Threads: opens in the Chat window" : "Threads — every conversation you're in"}
     >
       <MessagesSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
       {isNarrow ? (
@@ -635,6 +655,7 @@ const ChatNavRow = memo(function ChatNavRow({
         }
         icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         items={[...items, ...suggestedItems]}
+        popped="chat"
         headerAction={<AppPopOutButton app="chat" className="mr-1" />}
         expanded={expanded}
         onToggle={onToggle}
@@ -672,13 +693,15 @@ const CallsNavRow = memo(function CallsNavRow({
     if (s.call?.roomKey) keys.add(s.call.roomKey);
     return keys.size;
   });
+  // Calls live in the Chat window while there is one: this row is a door.
+  const away = usePoppedOut("chat");
   return (
     <div
       className={`group/calls flex items-center border-l-2 transition-colors motion-reduce:transition-none ${
-        isActive
+        isActive && !away
           ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
           : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
-      }`}
+      }${away ? " opacity-55 hover:opacity-90" : ""}`}
     >
       <Link
         href="/calls"
@@ -686,7 +709,7 @@ const CallsNavRow = memo(function CallsNavRow({
         {...paneDragProps("/calls", "Calls")}
         data-nav-row
         className={`flex-1 flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 min-w-0`}
-        title="Calls — live huddles and transcripts"
+        title={away ? "Calls: opens in the Chat window" : "Calls — live huddles and transcripts"}
       >
         <span className="relative flex-shrink-0">
           <Phone className="w-5 h-5" strokeWidth={1.5} />
@@ -1326,6 +1349,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Initiatives"
             href="/initiatives"
             isActive={!!isInitiatives}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             title="Initiatives: what the company is trying to reach"
@@ -1335,6 +1359,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Projects"
             href="/projects"
             isActive={isProjects}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={projectItems}
@@ -1346,6 +1371,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Tasks"
             href="/tasks"
             isActive={isTasks}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={taskViewItems}
@@ -1361,6 +1387,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             label="Docs"
             href="/docs"
             isActive={isDocs || isPlans}
+            popped="work"
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             items={docViewItems}

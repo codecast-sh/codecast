@@ -11,7 +11,7 @@ import { projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
-import { computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
+import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
 import { isActiveTask } from "@codecast/shared/tasks";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
@@ -210,7 +210,7 @@ export async function readActivityCommits(ctx: Ctx, repos: string[], since: numb
   const out: ActivityCommit[] = [];
   for (const repo of repos) {
     const rows: any[] = await ctx.db.query("commits").withIndex("by_repository_timestamp", (q: any) => q.eq("repository", repo).gte("timestamp", since)).order("desc").take(perRepoCap);
-    for (const c of rows) out.push({ repository: c.repository, timestamp: c.timestamp, author_name: c.author_name, author_email: c.author_email, files: c.files ?? null, task_ids: (c.task_ids ?? []).map((id: any) => String(id)) });
+    for (const c of rows) out.push({ repository: c.repository, timestamp: c.timestamp, author_name: c.author_name, author_email: c.author_email, files: c.files ?? null, task_ids: (c.task_ids ?? []).map((id: any) => String(id)), branch: c.branch ?? null });
   }
   return out;
 }
@@ -341,7 +341,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     commits: [],
     sessions: activitySessionsFromScan(scan),
     projects: projects.map((p) => ({ id: String(p._id), title: p.title, status: p.status, project_path: p.project_path ?? null, updated_at: p.updated_at ?? p._creationTime })),
-    plans: plans.map((p) => ({ id: String(p._id), short_id: p.short_id, title: p.title, status: p.status, project_id: p.project_id ? String(p.project_id) : null, updated_at: p.updated_at ?? p._creationTime })),
+    plans: plans.map(activityPlanOf),
     tasks: tasks.map((t) => ({ id: String(t._id), short_id: t.short_id, title: t.title, status: t.status, plan_id: t.plan_id ? String(t.plan_id) : null, project_id: t.project_id ? String(t.project_id) : null, updated_at: t.updated_at ?? t._creationTime, conversation_ids: (t.conversation_ids ?? []).map((id: any) => String(id)) })),
     members: [],
   });

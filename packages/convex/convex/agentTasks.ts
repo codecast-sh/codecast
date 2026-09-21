@@ -13,10 +13,11 @@ import { isTeamMember } from "./privacy";
 import { nextShortId } from "./counters";
 import { canAccessConversation } from "./lib/access";
 import { armedTriggerKindFor } from "./dormancy";
+import { isViableInboxParent } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueRoleEvent } from "./orgEvents";
-import { normalizeThreadState, runOwnerOf, runOwnerWakeOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
+import { normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 
@@ -131,9 +132,9 @@ async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 // Resolve a spawned run's conversation (session_id IS the uuid the daemon
 // assigned via `claude --session-id`) and stamp agent_task_id on it, so the run
 // stays attributable to its schedule forever — not just while it's the latest.
-// A run with an owner (runOwnerOf: a once trigger armed from a session) nests
-// under it as a subagent row, the same shape `cast spawn --subagent` makes, so
-// it never surfaces as a loose inbox card nobody owns. The daemon stamps both
+// A spawned run nests under the session that armed it (runParentOf) as a
+// subagent row, the same shape `cast spawn --subagent` makes, so it never
+// surfaces as a loose inbox card nobody owns. The daemon stamps both
 // at birth (createConversation agent_task_id + parent_conversation_id); this
 // is the backfill for rows born without them. Idempotent; returns the
 // conversation, or null if it hasn't synced yet.
@@ -151,10 +152,20 @@ export async function stampRunConversation(
   if (!conv) return null;
   const patch: Record<string, any> = {};
   if (conv.agent_task_id !== task._id) patch.agent_task_id = task._id;
-  const owner = runOwnerOf(task);
-  if (owner && !conv.parent_conversation_id && owner.toString() !== conv._id.toString()) {
-    patch.parent_conversation_id = owner;
-    patch.is_subagent = true;
+  // Nest the run under the session that armed it (runParentOf: every spawn
+  // schedule, repeating included). A run nested under a live parent is read
+  // there instead of as a loose card, which is what keeps an hourly job from
+  // being a card an hour. isViableInboxParent is the same test orchestration
+  // workers use: a child surfaces only under a parent that is itself in the
+  // inbox, so nesting under a killed, dismissed or stashed session would make
+  // the run vanish rather than nest. When it fails the run stays top-level.
+  const parent = runParentOf(task);
+  if (parent && !conv.parent_conversation_id && parent.toString() !== conv._id.toString()) {
+    const parentConv = await ctx.db.get(parent);
+    if (isViableInboxParent(parentConv, userId.toString())) {
+      patch.parent_conversation_id = parent;
+      patch.is_subagent = true;
+    }
   }
   if (Object.keys(patch).length > 0) {
     await ctx.db.patch(conv._id, patch);
@@ -1824,6 +1835,12 @@ type TaskUpdateArgs = {
   project_path?: string;
   max_runtime_ms?: number;
   precheck?: string;
+  // Routing. Editable so a trigger bound the wrong way is repaired in place
+  // rather than cancelled and recreated, which loses its history and its id.
+  // null clears the field: originating_conversation_id null IS `--spawn`.
+  originating_conversation_id?: Id<"conversations"> | null;
+  target_conversation_id?: Id<"conversations"> | null;
+  wake_creator?: boolean;
 };
 
 // The editable surface — exactly the fields agent_task_revisions.before
@@ -1843,6 +1860,9 @@ const EDITABLE_FIELDS = [
   "project_path",
   "max_runtime_ms",
   "precheck",
+  "originating_conversation_id",
+  "target_conversation_id",
+  "wake_creator",
 ] as const;
 
 function snapshotEditable(task: Doc<"agent_tasks">) {
@@ -1860,6 +1880,9 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     project_path: task.project_path,
     max_runtime_ms: task.max_runtime_ms,
     precheck: task.precheck,
+    originating_conversation_id: task.originating_conversation_id,
+    target_conversation_id: task.target_conversation_id,
+    wake_creator: task.wake_creator,
   };
 }
 
@@ -1897,6 +1920,19 @@ export async function applyTaskUpdate(
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
   // "" removes the gate — `cast trigger update tr-42 --precheck ""`.
   if (args.precheck !== undefined) patch.precheck = args.precheck.trim() || undefined;
+
+  // Routing. Clearing the binding (null) turns an inject trigger into a spawn
+  // trigger and back; --wake rides along. The old home's armed_trigger_kind is
+  // refreshed by patchTask below, the new home by hand after it, because
+  // patchTask reads the binding off the PRE-edit row and so cannot see a
+  // home this edit is moving the trigger TO.
+  if (args.originating_conversation_id !== undefined) {
+    patch.originating_conversation_id = args.originating_conversation_id ?? undefined;
+  }
+  if (args.target_conversation_id !== undefined) {
+    patch.target_conversation_id = args.target_conversation_id ?? undefined;
+  }
+  if (args.wake_creator !== undefined) patch.wake_creator = args.wake_creator || undefined;
 
   if (args.schedule_type !== undefined) {
     patch.schedule_type = args.schedule_type;
@@ -1946,6 +1982,10 @@ export async function applyTaskUpdate(
   });
 
   await patchTask(ctx, task, patch);
+  const newHome = patch.originating_conversation_id as Id<"conversations"> | undefined;
+  if (newHome && newHome.toString() !== task.originating_conversation_id?.toString()) {
+    await refreshArmedTriggerKind(ctx, newHome);
+  }
   if (promptChanged) {
     await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: task._id });
   }
@@ -1971,6 +2011,11 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   project_path: v.optional(v.string()),
   max_runtime_ms: v.optional(v.number()),
   precheck: v.optional(v.string()),
+  // null clears; absent keeps. The CLI sends refs (--for/--thread) and the
+  // mutation resolves them to ids before calling applyTaskUpdate.
+  originating_conversation_id: v.optional(v.union(v.id("conversations"), v.null())),
+  target_conversation_id: v.optional(v.union(v.id("conversations"), v.null())),
+  wake_creator: v.optional(v.boolean()),
 };
 
 export const webUpdate = mutation({
@@ -1989,14 +2034,35 @@ export const webUpdate = mutation({
 // `cast trigger update` — same core, api_token auth. Returns the changed
 // field names so the CLI can echo what the edit actually did.
 export const updateTask = mutation({
-  args: { api_token: v.string(), task_id: v.id("agent_tasks"), ...TASK_UPDATE_ARG_VALIDATORS },
+  args: {
+    api_token: v.string(),
+    task_id: v.id("agent_tasks"),
+    ...TASK_UPDATE_ARG_VALIDATORS,
+    // The CLI names a session the way a person does (short id, conversation
+    // id, or Claude session uuid); resolution needs the database, so it
+    // happens here rather than in the CLI. Same resolver insertTask uses, so
+    // `--for` means the same thing on add and on update.
+    originating_session_ref: v.optional(v.string()),
+    target_session_ref: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     const task = await getManageableTask(ctx, args.task_id, auth.userId);
     if (!task) return { ok: false, changed: [] };
-    const { api_token: _token, task_id: _id, ...rest } = args;
-    return await applyTaskUpdate(ctx, task, rest, { userId: auth.userId, source: "cli" });
+    const { api_token: _token, task_id: _id, originating_session_ref, target_session_ref, ...rest } = args;
+    const update: TaskUpdateArgs = { ...rest };
+    if (originating_session_ref) {
+      const conv = await findConversationByAnyRef(ctx, originating_session_ref, auth.userId);
+      if (!conv) throw new Error(`No session of yours matches "${originating_session_ref}"`);
+      update.originating_conversation_id = conv._id;
+    }
+    if (target_session_ref) {
+      const conv = await findConversationByAnyRef(ctx, target_session_ref, auth.userId);
+      if (!conv) throw new Error(`No session of yours matches "${target_session_ref}"`);
+      update.target_conversation_id = conv._id;
+    }
+    return await applyTaskUpdate(ctx, task, update, { userId: auth.userId, source: "cli" });
   },
 });
 
@@ -2019,11 +2085,29 @@ async function listTaskRevisions(ctx: { db: any }, userId: Id<"users">, taskId: 
       if (user) actorNames.set(id as string, user.name || user.email || "unknown");
     })
   );
+  // Routing fields are conversation ids, and a 32-char id in a history line is
+  // an unreadable blob. Resolve every id any revision touched to its session
+  // short id, once each, so the CLI can print "jx7bcgr" where the row stores a
+  // document id. Same shape as the actor-name map above.
+  const snapshots = [snapshotEditable(task), ...revisions.map((r: any) => r.before)];
+  const conversationShortIds: Record<string, string> = {};
+  await Promise.all(
+    [...new Set(
+      snapshots.flatMap((snap: any) =>
+        [snap?.originating_conversation_id, snap?.target_conversation_id].filter(Boolean).map(String)
+      )
+    )].map(async (id) => {
+      const conv = await ctx.db.get(id);
+      if (conv?.short_id) conversationShortIds[id] = conv.short_id;
+    })
+  );
+
   return {
     task_id: taskId,
     short_id: task.short_id,
     title: task.title,
     status: task.status,
+    conversation_short_ids: conversationShortIds,
     current: snapshotEditable(task),
     revisions: revisions.map((r: any) => ({
       revision: r.revision,

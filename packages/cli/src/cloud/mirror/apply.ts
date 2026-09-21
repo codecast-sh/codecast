@@ -8,6 +8,7 @@ import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOw
 import { installAllStableHooks } from "../../stableContext.js";
 import { maskPins, readHostMcpOverrides, writeHostMcpOverrides, type HostMcpOverrides, type McpSourceServer } from "../hostMcpOverrides.js";
 import { assertMirrorFileContent, assertSafePath, sha256, type ParsedBundle, type ParsedFile } from "./bundle.js";
+import { isAgentRuntimePath } from "./discovery.js";
 import {
   dropCodecastHooks, filterHookItem, findAllOwnedSections, joinTomlTables, splitTomlTables, stripOwnedSections, tableFirstSegment,
   type HookGroup, type MirrorKind, type TomlTable,
@@ -418,10 +419,17 @@ function projectAliasDestination(home: string, rel: string, project: string, exp
   assertSafePath(rel);
   assertSafePath(project);
   if (!rel.startsWith(`${project}/`)) throw new Error("alias is outside its registered project");
-  checkDestination(home, path.dirname(rel));
   const file = path.join(home, rel);
-  if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("project alias is missing or replaced");
-  const target = path.relative(home, path.resolve(path.dirname(file), fs.readlinkSync(file)));
+  const entry = fs.lstatSync(file);
+  let target: string;
+  if (entry.isSymbolicLink()) {
+    checkDestination(home, path.dirname(rel));
+    target = path.relative(home, path.resolve(path.dirname(file), fs.readlinkSync(file)));
+  } else {
+    const resolved = fs.realpathSync(file);
+    if (resolved === file) throw new Error("project alias is missing or replaced");
+    target = path.relative(home, resolved);
+  }
   assertSafePath(target);
   if (!target.startsWith(`${project}/`)) throw new Error("alias target leaves its registered project");
   if (expectedTarget && target !== expectedTarget) throw new Error("project alias target changed");
@@ -440,7 +448,7 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
   for (const [rel, info] of Object.entries(stamp.files)) {
     try {
       assertSafePath(rel);
-      if (path.dirname(rel) !== ".") checkDestination(home, path.dirname(rel));
+      if (!info.satisfied_alias && path.dirname(rel) !== ".") checkDestination(home, path.dirname(rel));
       if (info.removed) {
         if (fs.lstatSync(path.join(home, rel), { throwIfNoEntry: false })) complete = false;
         continue;
@@ -635,6 +643,17 @@ function claudeMcpPins(text: string, overrides: HostMcpOverrides): { pinned: str
 }
 
 export function finalBytes(file: ParsedFile, current: Buffer | null, home: string, pinnedEnvKeys: readonly string[], previous?: StampFile, conflict: () => void = () => {}, overrides?: HostMcpOverrides): Buffer {
+  if (file.path === ".grok/config.toml" && current) {
+    const installer = splitTomlTables(current.toString("utf8")).find((table) => table.name === "cli")?.lines.find((line) => /^\s*installer\s*=/.test(line));
+    if (installer) {
+      const tables = splitTomlTables(file.bytes.toString("utf8"));
+      let cli = tables.find((table) => table.name === "cli");
+      if (!cli) tables.push(cli = { name: "cli", header: "[cli]", lines: [] });
+      const at = cli.lines.findIndex((line) => /^\s*installer\s*=/.test(line));
+      if (at < 0) cli.lines.unshift(installer); else cli.lines[at] = installer;
+      return Buffer.from(joinTomlTables(tables));
+    }
+  }
   if (VERBATIM_KINDS.includes(file.kind) && !(overrides && path.basename(file.path) === ".mcp.json")) return file.bytes;
   const text = file.bytes.toString("utf-8");
   const cur = current ? current.toString("utf-8") : null;
@@ -779,9 +798,9 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
     if (isCodecastOwnedHomePath(file.path)) { result.errors.push({ path: file.path, error: "codecast-owned path" }); continue; }
     try {
       assertMirrorFileContent(file);
-      const before = prev?.files[file.path]?.removed ? undefined : prev?.files[file.path];
+      let before = prev?.files[file.path]?.removed ? undefined : prev?.files[file.path];
       const project = projectRoots.find((root) => file.path.startsWith(`${root}/`));
-      if (file.kind === "verbatim" && project && (before?.satisfied_alias || fs.lstatSync(path.join(home, file.path), { throwIfNoEntry: false })?.isSymbolicLink())) {
+      if (file.kind === "verbatim" && project && (before?.satisfied_alias || (fs.existsSync(path.join(home, file.path)) && fs.realpathSync(path.join(home, file.path)) !== path.join(home, file.path)))) {
         const target = projectAliasDestination(home, file.path, project, before?.satisfied_alias?.target);
         const abs = path.join(home, target);
         if (hashIfRegular(abs) !== file.sha256 || (fs.statSync(abs).mode & 0o777) !== Number.parseInt(file.mode, 8)) throw new Error("project alias target bytes or mode differ from mirror");
@@ -792,7 +811,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       const dest = destinationRelative(home, file.path, file.kind);
       const abs = path.join(home, dest);
       const current = VERBATIM_KINDS.includes(file.kind) && hashIfRegular(abs) === file.sha256 ? file.bytes : readIfRegular(abs);
-      if (before && before.source === undefined && !VERBATIM_KINDS.includes(file.kind) && before.sha !== file.sha256) throw new Error("previous mirror lacks field ownership; restore the previous source once before changing it");
+      if (before && before.source === undefined && !VERBATIM_KINDS.includes(file.kind) && before.sha !== file.sha256) {
+        if (current && before.kind && VERBATIM_KINDS.includes(before.kind) && sha256(current) === before.written) before = { ...before, source: current.toString("utf8") };
+        else throw new Error("previous mirror lacks field ownership; restore the previous source once before changing it");
+      }
       let cleanTracked = false;
       if (project && !before && current && !current.equals(finalBytes(file, current, home, pinned, undefined, undefined, overrides))) {
         if (!gitTrees.has(project)) gitTrees.set(project, await cleanTrackedFiles(path.join(home, project)));
@@ -805,7 +827,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       }
       if (before && current && VERBATIM_KINDS.includes(file.kind)) {
         const hostSha = sha256(current);
-        if (hostSha !== before.written && !current.equals(file.bytes)) {
+        if (hostSha !== before.written && !current.equals(finalBytes(file, current, home, pinned, before, undefined, overrides))) {
           result.host_edited.push(file.path);
           stampFiles[file.path] = { sha: before.sha, written: before.written, mode: before.mode, kind: file.kind, host_edited: true };
           continue;
@@ -849,7 +871,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   if (prev) {
     const roots = [...new Set([...bundle.header.managed_roots, ...prev.managed_roots])];
     for (const [rel, info] of Object.entries(prev.files)) {
-      if (manifest.has(rel) || isCodecastOwnedHomePath(rel)) continue;
+      if (manifest.has(rel) || isCodecastOwnedHomePath(rel) || isAgentRuntimePath(rel)) continue;
       if (bundle.header.unmanaged_roots?.some((root) => rel === root || rel.startsWith(`${root}/`))) continue;
       const kind = info.kind ?? "verbatim";
       let dest = rel;
@@ -865,6 +887,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
         }
         if (info.satisfied_alias) {
           assertSafePath(rel);
+          if (fs.lstatSync(abs, { throwIfNoEntry: false })?.isFile()) {
+            projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target);
+            continue;
+          }
           checkDestination(home, path.dirname(rel));
           if (!fs.lstatSync(abs, { throwIfNoEntry: false })) { stampFiles[rel] = { ...info, removed: true }; continue; }
           const target = projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target);

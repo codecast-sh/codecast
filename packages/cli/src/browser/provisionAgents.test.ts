@@ -20,9 +20,11 @@ describe("agentCliInstallScript", () => {
 
   test("the node guard: below major 20, the nodejs.org tarball, a temp-dir extract, ~/.local/bin and /usr/local/bin symlinks", () => {
     expect(script).toContain('[ "$node_major" -lt 20 ]');
-    expect(script).toContain(`https://nodejs.org/dist/v${NODE_22_VERSION}/node-v${NODE_22_VERSION}-linux-$a.tar.xz`);
+    expect(script).toContain(`https://nodejs.org/dist/v${NODE_22_VERSION}/node-v${NODE_22_VERSION}-$node_os-$a.$node_archive`);
+    expect(script).toContain("Darwin) node_os=darwin; node_archive=tar.gz; node_tar=-xz");
+    expect(script).toContain("Linux) node_os=linux; node_archive=tar.xz; node_tar=-xJ");
     expect(script).toContain('mktemp -d "$HOME/.local/.node-download.XXXXXX"');
-    expect(script).toContain(`mv "$tmp/node-v${NODE_22_VERSION}-linux-$a" "$HOME/.local/node-${NODE_22_VERSION}"`);
+    expect(script).toContain(`mv "$tmp/node-v${NODE_22_VERSION}-$node_os-$a" "$HOME/.local/node-${NODE_22_VERSION}"`);
     expect(script).toContain('ln -sf "$HOME/.local/node-' + NODE_22_VERSION + '/bin/$b" "$HOME/.local/bin/$b"');
     expect(script).toContain('sudo -n ln -sf "$HOME/.local/node-' + NODE_22_VERSION + '/bin/$b" "/usr/local/bin/$b"');
     // apt's node is never touched.

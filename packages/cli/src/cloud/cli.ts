@@ -8,6 +8,7 @@
  */
 
 import * as fs from "node:fs";
+import { writeStdout } from "../agentContext.js";
 import type { Command } from "commander";
 import { hostForDevice } from "../browser/cloudHost.js";
 import { convexClient } from "../remote/cli.js";
@@ -175,24 +176,24 @@ export function registerCloudCommand(program: Command): void {
       const os = await import("node:os");
       if (opts.verify) {
         const stamp = await withMirrorLock(os.homedir(), async () => verifyMirrorStamp(os.homedir()));
-        console.log(JSON.stringify(stamp));
+        await writeStdout(JSON.stringify(stamp));
         return;
       }
       let bundle;
       try {
         bundle = await parseMirrorBundle(fs.createReadStream("", { fd: 0, autoClose: false }));
       } catch (err) {
-        console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        await writeStdout(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
         process.exit(1);
       }
       if (opts.into) {
         const into = opts.into;
         if (!into.startsWith("/") || /[\x00-\x1f\x7f]/.test(into)) {
-          console.log(JSON.stringify({ error: "staging directory must be an absolute path" }));
+          await writeStdout(JSON.stringify({ error: "staging directory must be an absolute path" }));
           process.exit(1);
         }
         const r = applyStagingBundle(bundle, { into });
-        console.log(JSON.stringify(r));
+        await writeStdout(JSON.stringify(r));
         process.exit(r.errors.length ? 1 : 0);
       }
       const home = os.homedir();
@@ -205,10 +206,10 @@ export function registerCloudCommand(program: Command): void {
         const result = await withMirrorLock(home, () =>
           applyMirrorBundle(bundle, { home, configUserId, previousStamp: readStamp(home) }),
         );
-        console.log(JSON.stringify(result));
+        await writeStdout(JSON.stringify(result));
         process.exit(result.refused ? 3 : result.errors.length || result.host_edited.length ? 1 : 0);
       } catch (err) {
-        console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        await writeStdout(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
         process.exit(1);
       }
     });

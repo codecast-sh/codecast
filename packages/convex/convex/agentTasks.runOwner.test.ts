@@ -121,11 +121,70 @@ describe("a once spawn run and its owner", () => {
     expect(wakes(tables)[0].content).toContain("jx74v0r");
   });
 
-  test("a repeating trigger's run has no owner to wake", async () => {
-    const { ctx, tables } = await world({ schedule_type: "recurring", interval_ms: 3_600_000, retry_count: 2 });
+});
+
+// A repeating spawn schedule has no owner, because a line per firing would
+// bury the creator's thread. It still has a PARENT: the run nests under the
+// session that armed it, so an hourly job is read under that session instead
+// of being a card an hour. Nesting hides the row from the inbox, so the
+// outcomes nobody would otherwise see — a death, an ask, a terminal failure —
+// wake the parent. A clean report stays silent, which is the point of --spawn.
+describe("a recurring spawn run and its parent", () => {
+  const recurring = (overrides: Record<string, any> = {}) =>
+    world({ schedule_type: "recurring", interval_ms: 3_600_000, ...overrides });
+
+  test("the run nests under the session that armed the trigger", async () => {
+    const { ctx, tables } = await recurring();
+    await complete(ctx, { summary: "Nothing to report.", run_session_uuid: RUN_UUID });
+    expect(run(tables)).toMatchObject({ parent_conversation_id: OWNER, is_subagent: true });
+  });
+
+  test("a clean report wakes nobody and posts nowhere", async () => {
+    const { ctx, tables } = await recurring();
+    await complete(ctx, { summary: "Nothing to report.", run_session_uuid: RUN_UUID });
+    expect(wakes(tables)).toHaveLength(0);
+  });
+
+  test("--needs-attention wakes the parent", async () => {
+    const { ctx, tables } = await recurring();
+    await complete(ctx, { summary: "The collector is returning 403.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(wakes(tables)).toHaveLength(1);
+    expect(wakes(tables)[0].content).toContain("The collector is returning 403.");
+  });
+
+  test("a run that ends without reporting wakes the parent", async () => {
+    const { ctx, tables } = await recurring();
+    await complete(ctx, { daemon_id: DAEMON, run_session_uuid: RUN_UUID });
+    expect(wakes(tables)).toHaveLength(1);
+    expect(wakes(tables)[0].content).toContain("ended without reporting");
+  });
+
+  test("the terminal failure wakes the parent; the retries before it do not", async () => {
+    const { ctx, tables } = await recurring({ retry_count: 1 });
     await fail(ctx, { error: "boom" });
     expect(wakes(tables)).toHaveLength(0);
+
+    Object.assign(tables.agent_tasks[0], { status: "running", lease_holder: DAEMON });
+    await fail(ctx, { error: "boom" });
+    expect(wakes(tables)).toHaveLength(1);
+    expect(wakes(tables)[0].content).toContain("boom");
+  });
+
+  // Nesting under a session nobody reads would hide the run outright, which is
+  // strictly worse than the loose card it replaces.
+  test("a killed parent leaves the run a visible card", async () => {
+    const { ctx, tables } = await world(
+      { schedule_type: "recurring", interval_ms: 3_600_000 },
+      {
+        conversations: [
+          { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop", inbox_killed_at: NOW - 1000 },
+          { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
+        ],
+      },
+    );
+    await complete(ctx, { summary: "Nothing to report.", run_session_uuid: RUN_UUID });
     expect(run(tables).parent_conversation_id).toBeUndefined();
+    expect(run(tables).is_subagent).toBeUndefined();
   });
 });
 
