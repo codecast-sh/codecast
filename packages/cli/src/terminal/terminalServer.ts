@@ -470,8 +470,8 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
       if (!client) return;
       if (isBinary) {
         const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-        if (mode.kind === "attach" && !client.isReadOnly) opts.onInput?.(mode.target, bytes);
         client.sendInput(bytes);
+        if (mode.kind === "attach" && !client.isReadOnly) opts.onInput?.(mode.target, bytes);
         return;
       }
       try {
