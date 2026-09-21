@@ -7,7 +7,7 @@
 // mark on every row read as four switches for one window.
 import { AppWindowMac, PictureInPicture2 } from "lucide-react";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { useDesktopAppWindow, useHasAppWindow } from "../../hooks/useHasAppWindow";
+import { useDesktopAppWindow, useHasAppWindow } from "../../hooks/useDesktopWindowRole";
 import { DESKTOP_APPS, type DesktopApp } from "../../lib/desktopApps";
 import { cn } from "../../lib/utils";
 import { popOutApp } from "../../lib/popOutApp";
