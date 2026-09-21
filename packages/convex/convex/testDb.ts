@@ -64,6 +64,10 @@ function fieldValue(row: any, field: string): any {
 }
 
 export function makeFakeDb(tables: Record<string, any[]>) {
+  const idTables = new Map<string, string>();
+  for (const [table, rows] of Object.entries(tables)) {
+    for (const row of rows) idTables.set(String(row._id), table);
+  }
   const inserted: Array<{ table: string; doc: any; _id: string }> = [];
   const patched: Array<{ _id: any; patch: any }> = [];
   const replaced: Array<{ _id: any; doc: any }> = [];
@@ -196,7 +200,7 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       return null;
     },
     normalizeId(table: string, id: string) {
-      return (tables[table] ?? []).some((row: any) => String(row._id) === String(id)) ? id : null;
+      return idTables.get(id) === table ? id : null;
     },
     async insert(table: string, doc: any) {
       // Skip ids the seed already uses: a seeded "chat_channels_1" and a minted
@@ -206,6 +210,7 @@ export function makeFakeDb(tables: Record<string, any[]>) {
         Object.values(tables).some((rows) => rows.some((r: any) => r._id === id));
       let _id = `${table}_${n}`;
       while (taken(_id)) _id = `${table}_${++n}`;
+      idTables.set(_id, table);
       (tables[table] ??= []).push({ _id, ...doc });
       inserted.push({ table, doc, _id });
       return _id;

@@ -114,19 +114,23 @@ describe("performRegisterManagedSession cross-user reclaim", () => {
     expect(conv.owner_device_id).toBe("destdev"); // not re-stamped
   });
 
-  test("stale cross-user row is still reclaimable without conversation authority (logout/login resurface)", async () => {
+  test("stale cross-user row requires explicit runner transfer (logout/login alone grants nothing)", async () => {
     const db = fixtures({
       convUserId: SOURCE, // conversation still names the old user
       ownerDeviceId: "srcdev",
       managedRow: { last_heartbeat: Date.now() - 10 * 60 * 1000 }, // provably gone
     });
-    await performRegisterManagedSession({ db }, DEST as any, {
+    const result = await performRegisterManagedSession({ db }, DEST as any, {
       session_id: "sess1",
       pid: 222,
       conversation_id: "conv1" as any,
     });
     expect(rows(db).length).toBe(1);
-    expect(rows(db)[0].user_id).toBe(DEST);
+    expect(result.notOwner).toBe(true);
+    expect(rows(db)[0].user_id).toBe(SOURCE);
+    expect(db._deleted).toEqual([]);
+    expect(db._patched).toEqual([]);
+    expect(db._inserted).toEqual([]);
   });
 
   test("same-user re-register still patches in place", async () => {

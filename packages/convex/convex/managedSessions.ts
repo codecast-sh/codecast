@@ -82,16 +82,13 @@ async function getAuthenticatedUserId(
   return null;
 }
 
-// A cross-user reclaim of a managed session is legitimate only when the
-// current owner's daemon is gone (the same session resurfacing after a local
-// logout/login). Heartbeat rows are at most ~60s stale by design
-// (HEARTBEAT_REFRESH_MS throttling); 3 minutes clears that with a full
-// outage's margin. A fresh heartbeat means a live daemon still manages the
-// session, and handing its row to another user silently reroutes message
-// delivery — the freeze that motivated this guard.
-export const CROSS_USER_RECLAIM_STALE_MS = 3 * 60 * 1000;
-export function canReclaimCrossUser(existingLastHeartbeat: number, now: number): boolean {
-  return now - existingLastHeartbeat >= CROSS_USER_RECLAIM_STALE_MS;
+async function canExecuteConversation(ctx: { db: any }, userId: Id<"users">, conversationId: Id<"conversations">): Promise<boolean> {
+  const conversation = await ctx.db.get(conversationId);
+  return conversation?.user_id?.toString() === userId.toString();
+}
+
+async function requireConversationExecution(ctx: { db: any }, userId: Id<"users">, conversationId: Id<"conversations">): Promise<void> {
+  if (!(await canExecuteConversation(ctx, userId, conversationId))) throw new Error("Unauthorized");
 }
 
 // Factored out of the mutation so tests can drive it with an explicit userId
@@ -107,38 +104,40 @@ export async function performRegisterManagedSession(
     device_id?: string;
   },
 ): Promise<any> {
-    // Single-owner guard: refuse to manage a session owned by another live
-    // device. "Live" = that device heartbeated within the online window.
-    //
-    // Exception — a REMOTE owner never blocks a local registration. A remote box
-    // only legitimately owns a session that was explicitly moved to it, and a move
-    // kills the local process. So a LOCAL device presenting a live process here has
-    // the real checkout and is the rightful owner: it reclaims (this is exactly the
-    // self-heal for a session the remote auto-claimed and can't serve, and it also
-    // implements "bring back from remote"). Only a live LOCAL peer blocks.
-    if (args.device_id && args.conversation_id) {
-      const conv = await ctx.db.get(args.conversation_id);
+    const existing = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+      .first();
+    const linkedConversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+      .first();
+    const effectiveConversationId = args.conversation_id ?? existing?.conversation_id ?? linkedConversation?._id;
+    for (const conversationId of new Set([effectiveConversationId, existing?.conversation_id, linkedConversation?._id])) {
+      if (conversationId && !(await canExecuteConversation(ctx, authUserId, conversationId))) {
+        return { notOwner: true as const };
+      }
+    }
+    if (existing && existing.user_id.toString() !== authUserId.toString() && !existing.conversation_id) {
+      return { notOwner: true as const };
+    }
+    if (args.device_id) {
+      const device = await ctx.db.query("devices")
+        .withIndex("by_user_device", (q: any) => q.eq("user_id", authUserId).eq("device_id", args.device_id))
+        .first();
+      if (!device) throw new Error("Unknown device");
+    }
+
+    if (args.device_id && effectiveConversationId) {
+      const conv = await ctx.db.get(effectiveConversationId);
       const owner = (conv as any)?.owner_device_id as string | undefined;
       if (owner && owner !== args.device_id) {
-        // The owner device may belong to the conversation's runner rather than
-        // the caller (a cross-user reparent moved the session away). Resolve it
-        // under the caller first, then under the runner — otherwise the source
-        // machine's daemon can never see the new owner as online and re-stamps
-        // the conversation back to itself.
-        let ownerDevice = await ctx.db
+        const ownerDevice = await ctx.db
           .query("devices")
           .withIndex("by_user_device", (q: any) =>
             q.eq("user_id", authUserId).eq("device_id", owner),
           )
           .first();
-        if (!ownerDevice && conv && (conv as any).user_id.toString() !== authUserId.toString()) {
-          ownerDevice = await ctx.db
-            .query("devices")
-            .withIndex("by_user_device", (q: any) =>
-              q.eq("user_id", (conv as any).user_id).eq("device_id", owner),
-            )
-            .first();
-        }
         const ownerOnline =
           ownerDevice &&
           !ownerDevice.is_remote &&
@@ -150,62 +149,24 @@ export async function performRegisterManagedSession(
       }
     }
 
-    const existing = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
-      .first();
-
     const now = Date.now();
-    // Callers without a conversation handle (e.g. the tmux backfill) must not
-    // sever an existing row's conversation link when the insert path replaces
-    // it — carry it forward like tmux_session below.
-    const effectiveConversationId = args.conversation_id ?? existing?.conversation_id;
-
     if (existing) {
-      // Reclaim ownership if the existing row belongs to a different user.
-      // session_ids are UUIDv4 (effectively unique), but the same session can
-      // resurface under a different local user (e.g. after a logout/login),
-      // and the daemon making this call has the legitimate live process.
-      // Without this, the next heartbeat throws Unauthorized in a loop.
-      // Guarded by canReclaimCrossUser: a live owner (fresh heartbeat) is
-      // never robbed — see the helper's comment for the freeze this prevents.
       if (existing.user_id.toString() !== authUserId.toString()) {
-        // Conversation authority: a cross-user reparent rewrites the
-        // conversation's user_id to the new runner, but the source machine's
-        // daemon keeps heartbeating the old row (its tmux pane is still
-        // alive), so the freshness guard alone reads the stale row as a live
-        // rightful owner and locks the destination out forever. When the
-        // conversation itself names the caller as its runner, the reclaim
-        // proceeds regardless of heartbeat. This cannot re-enable the
-        // 2026-07-06 hijack: a foreign daemon's conversations never name the
-        // hijacker, and user_id is only rewritten by authorized flows.
-        const convId = args.conversation_id ?? existing.conversation_id;
-        const conv = convId ? await ctx.db.get(convId) : null;
-        const convNamesCaller = !!conv && (conv as any).user_id.toString() === authUserId.toString();
-        if (!convNamesCaller && !canReclaimCrossUser(existing.last_heartbeat, now)) {
-          console.warn(
-            `[registerManagedSession] refusing cross-user reclaim of ${args.session_id}: owner ${existing.user_id} heartbeat is fresh`,
-          );
-          return { notOwner: true as const, owner: existing.user_id.toString() } as any;
-        }
-        console.warn(
-          `[registerManagedSession] reclaiming session ${args.session_id} from ${existing.user_id} -> ${authUserId}`,
-        );
         await ctx.db.delete(existing._id);
       } else {
         await ctx.db.patch(existing._id, {
           pid: args.pid,
           last_heartbeat: now,
           ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
-          ...(args.conversation_id !== undefined ? { conversation_id: args.conversation_id } : {}),
+          ...(effectiveConversationId ? { conversation_id: effectiveConversationId } : {}),
         });
-        if (args.device_id && args.conversation_id) {
+        if (args.device_id && effectiveConversationId) {
           // Registering a live local process for this conversation disproves any
           // "couldn't start / no local checkout - clone it first" banner stamped
           // before the session came up. Piggyback the clear on the ownership patch
           // we already write (no extra read/write). setSessionError handles the
           // reverse: refusing to WRITE such a banner while the session is live.
-          await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id, session_error: undefined });
+          await ctx.db.patch(effectiveConversationId, { owner_device_id: args.device_id, session_error: undefined });
         }
         return existing._id;
       }
@@ -243,8 +204,8 @@ export async function performRegisterManagedSession(
     // Claim ownership: stamp this device as the conversation's owner. Also clear
     // any stale "no local checkout" banner — a fresh local process disproves it
     // (see the matching patch on the re-registration path above).
-    if (args.device_id && args.conversation_id) {
-      await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id, session_error: undefined });
+    if (args.device_id && effectiveConversationId) {
+      await ctx.db.patch(effectiveConversationId, { owner_device_id: args.device_id, session_error: undefined });
     }
 
     return id;
@@ -303,6 +264,9 @@ export const updateSessionConversation = mutation({
       throw new Error("Unauthorized");
     }
 
+    await requireConversationExecution(ctx, authUserId, args.conversation_id);
+    if (session.conversation_id) await requireConversationExecution(ctx, authUserId, session.conversation_id);
+
     // Remove old sessions linked to this conversation to prevent duplicates
     const oldSessions = await ctx.db
       .query("managed_sessions")
@@ -352,6 +316,17 @@ export const updateManagedSessionId = mutation({
     if (session.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized");
     }
+
+    if (session.conversation_id) await requireConversationExecution(ctx, authUserId, session.conversation_id);
+
+    const target = await ctx.db.query("managed_sessions")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.new_session_id))
+      .first();
+    if (target && target._id !== session._id) throw new Error("Session ID already registered");
+    const conversationAtTarget = await ctx.db.query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.new_session_id))
+      .first();
+    if (conversationAtTarget && conversationAtTarget._id !== session.conversation_id) throw new Error("Session ID already registered");
 
     await ctx.db.patch(session._id, {
       session_id: args.new_session_id,
@@ -461,6 +436,8 @@ export const heartbeat = mutation({
       return { found: false };
     }
 
+    if (session.conversation_id && !(await canExecuteConversation(ctx, authUserId, session.conversation_id))) return { found: false };
+
     const now = Date.now();
     const patch = buildHeartbeatPatch(session, args.agent_status, args.client_ts, now);
     if (patch) await ctx.db.patch(session._id, patch);
@@ -520,6 +497,7 @@ export const heartbeatBatch = mutation({
       // Silently skip unknown / cross-user rows (a stale daemon can carry either);
       // throwing would abort the whole batch and pollute logs every 30s.
       if (!session || session.user_id.toString() !== authUserId.toString()) continue;
+      if (session.conversation_id && !(await canExecuteConversation(ctx, authUserId, session.conversation_id))) continue;
       const patch = buildHeartbeatPatch(session, entry.agent_status, entry.client_ts, now);
       if (!patch) continue;
       await ctx.db.patch(session._id, patch);
@@ -675,6 +653,8 @@ export const getPendingMessagesForSession = query({
       throw new Error("Unauthorized");
     }
 
+    await requireConversationExecution(ctx, authUserId, session.conversation_id);
+
     const messages = await ctx.db
       .query("pending_messages")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", session.conversation_id))
@@ -700,6 +680,8 @@ export const markMessageDelivered = mutation({
     if (!message) {
       throw new Error("Message not found");
     }
+
+    await requireConversationExecution(ctx, authUserId, message.conversation_id);
 
     await ctx.db.patch(args.message_id, {
       status: "delivered" as const,
@@ -785,6 +767,7 @@ export const updateAgentStatus = mutation({
 
     if (!session) return { applied: false, reason: "missing_session" };
     if (session.user_id.toString() !== authUserId.toString()) return { applied: false, reason: "not_owner" };
+    if (!(await canExecuteConversation(ctx, authUserId, args.conversation_id))) return { applied: false, reason: "not_owner" };
     if (statusWriteIsStale(session, args.agent_status, args.client_ts)) return { applied: false, reason: "stale_status" };
 
     const patch: Record<string, any> = {
