@@ -35,6 +35,8 @@ export function RecentSwitcher({
             <KeyCap size="xs">Shift</KeyCap>
             <KeyCap size="xs">Tab</KeyCap>
             <span>back</span>
+            <KeyCap size="xs">R</KeyCap>
+            <span>search</span>
           </span>
         </div>
         <div className="flex-1 overflow-y-auto py-1 scrollbar-auto">

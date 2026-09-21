@@ -108,6 +108,8 @@ export const TIPS: TipDef[] = [
 
   { id: 'w-mru', type: 'whisper', shortcutAction: 'session.mruSwitch', phase: 4,
     content: 'Switch to last session' },
+  { id: 'w-recents', type: 'whisper', shortcutAction: 'recents.open', phase: 4,
+    content: 'Search recently viewed' },
   { id: 'w-jump-idle', type: 'whisper', shortcutAction: 'session.jumpIdle', phase: 4,
     content: 'Jump to top needs-input session' },
   { id: 'w-cycle-density', type: 'whisper', shortcutAction: 'conv.cycleDensity', phase: 4,

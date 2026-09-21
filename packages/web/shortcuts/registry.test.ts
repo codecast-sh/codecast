@@ -227,3 +227,32 @@ describe("the people wall chord", () => {
     expect(catalog.getShortcutsByContext(undefined).map((d) => d.action)).toContain("people.wall");
   });
 });
+
+// Ctrl+R opens the recently viewed list with its search box focused. Ctrl on
+// every platform and never a mac variant: the held Ctrl+Tab walk hands off to
+// it on R with Ctrl still down, which only works when both chords share the
+// modifier.
+describe("the recents search chord", () => {
+  const defs = SHORTCUTS.filter((s) => s.action === "recents.open");
+
+  test("one global binding, reachable from a composer", () => {
+    expect(defs.length).toBe(1);
+    expect(defs[0].when).toBeUndefined();
+    expect(defs[0].description).toBeTruthy();
+    expect(defs[0].skipInputCheck).toBe(true);
+  });
+
+  test("shares Ctrl with the Ctrl+Tab walk on every platform, and collides with nothing", () => {
+    expect(defs[0].key).toBe("ctrl+r");
+    expect(defs[0].mac).toBeUndefined();
+    const walk = SHORTCUTS.find((s) => s.action === "session.mruSwitch");
+    expect(walk?.key.startsWith("ctrl+")).toBe(true);
+    expect(walk?.mac).toBeUndefined();
+    for (const isMac of [true, false]) {
+      const collides = createShortcutCatalog(SHORTCUTS, { isMac })
+        .conflicts()
+        .filter((c) => c.defs.some((d) => d.action === "recents.open"));
+      expect(collides).toEqual([]);
+    }
+  });
+});
