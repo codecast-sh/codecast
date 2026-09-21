@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterAll, describe, it, mock } from "bun:test";
 import type { OrgUndoPreview } from "@codecast/shared/contracts/orgChange";
 import { orgLogFixture } from "./orgLogFixture";
+import { mockInboxStore } from "../../__tests__/mockInboxStore";
 
 const { JSDOM } = await import("jsdom");
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -26,10 +27,10 @@ mock.module("../../../hooks/useSyncOrgLog", () => ({
   useSyncOrgLogEntry: () => ({ ready: false }),
   useOrgUndoPreview: () => ({ preview }),
 }));
-mock.module("../../../store/inboxStore", () => ({ useInboxStore: { getState: () => ({
+mockInboxStore(() => ({
   undoOrgChange: (...args: unknown[]) => writes.push(["undo", ...args]),
   redoOrgChange: (...args: unknown[]) => writes.push(["redo", ...args]),
-}) } }));
+}));
 const { createRoot } = await import("react-dom/client");
 const { OrgHistory, OrgHistoryPreview } = await import("./OrgHistory");
 let root = createRoot(document.getElementById("root")!);
