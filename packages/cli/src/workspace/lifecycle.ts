@@ -46,6 +46,7 @@ import { partitionReservations, withPortReservations, withWorkspaceOperation, ty
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { linkSharedDirectories, unlinkSharedDirectories } from "./share.js";
 import { runSetup } from "./setup.js";
+import { moveToTrash, sweepTrash } from "./trash.js";
 import { TEARDOWN_TARGET_ID, enforceWorkspaceTrust, untrustedTargetIds } from "./trust.js";
 import type {
   AcquireOptions,
@@ -97,6 +98,7 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
   if (name === ROOT_WORKSPACE_NAME) {
     throw new Error(`'${ROOT_WORKSPACE_NAME}' is reserved for the main checkout — use cast ws root`);
   }
+  await sweepTrash(path.join(repoRoot, WORKTREES_DIR));
   const previous = readState(repoRoot, name);
   const savedInputRoot = previous?.env.CODECAST_WORKSPACE_INPUT_ROOT;
   const inputRoot = savedInputRoot ?? (opts.inputRoot ? fs.realpathSync(opts.inputRoot) : undefined);
@@ -481,20 +483,9 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
   // the trash would carry the link along (ct-49541).
   unlinkSharedDirectories(state.path, state.manifest.setup.share);
 
-  // git worktree remove — NEVER for the shared-checkout record: its path is
-  // the repository root, and the filesystem fallback would delete the repo.
-  // Destroying that record only drops its ports and state.
   if (!isRootState(repoRoot, state)) {
-    try {
-      await execFileAsync("git", ["worktree", "remove", "--force", state.path], {
-        cwd: repoRoot,
-      });
-    } catch {
-      // Fall back to filesystem removal.
-      if (fs.existsSync(state.path)) {
-        await fs.promises.rm(state.path, { recursive: true, force: true });
-      }
-    }
+    if (fs.existsSync(state.path)) moveToTrash(state.path);
+    await execFileAsync("git", ["worktree", "prune"], { cwd: repoRoot });
     dropSeed(repoRoot, state);
   }
 
@@ -502,6 +493,7 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
   const retiredDir = path.join(repoRoot, WORKSPACES_STATE_DIR, `_released-${randomUUID()}`);
   await withPortReservations(repoRoot, async () => fs.renameSync(stateDir, retiredDir));
   await fs.promises.rm(retiredDir, { recursive: true, force: true });
+  void sweepTrash(path.join(repoRoot, WORKTREES_DIR));
 }
 
 /**

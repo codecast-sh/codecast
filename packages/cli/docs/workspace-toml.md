@@ -163,6 +163,12 @@ manifest cannot redefine them. A hook script gets `CODECAST_HOOK`,
 
 Commands run when the workspace is destroyed, before the worktree is removed.
 
+Destroy renames the worktree to a `_trash-<uuid>` sibling and releases its Git
+registration and port reservations. The files remain there for at least five
+minutes; later workspace operations sweep expired trash. If the rename fails,
+destroy stops and retains the worktree and reservation for retry. Destroying
+the main checkout's workspace record only releases its state and ports.
+
 ```toml
 [teardown]
 run = ["docker compose down"]
