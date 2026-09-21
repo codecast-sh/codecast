@@ -19,6 +19,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
+import { CommandPaletteList } from "./CommandPaletteList";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
 import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
@@ -2515,7 +2516,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         />
         <KeyCap>Esc</KeyCap>
       </div>
-      <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
+      <CommandPaletteList>
         {!query.trim() && (
           <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
             No results found.
@@ -3480,7 +3481,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             )}
           </CommandPrimitive.Group>
         )}
-      </CommandPrimitive.List>
+      </CommandPaletteList>
 
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
         <div className="flex items-center gap-3">
