@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { shouldStartNavigationProgress } from "./NavigationProgress";
+import { shouldStartNavigationProgress } from "../lib/navigationProgress";
 
 const HERE = "https://codecast.sh/inbox";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: HERE });

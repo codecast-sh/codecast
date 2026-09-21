@@ -1,7 +1,7 @@
 import { toast } from "sonner";
-import { copyToClipboard, shareOrigin } from "../../lib/utils";
-import { openForwardToChat } from "../../lib/forwardToChat";
-import type { ToolCall, ToolResult } from "./types";
+import { copyToClipboard, shareOrigin } from "./utils";
+import { openForwardToChat } from "./forwardToChat";
+import type { ToolCall, ToolResult } from "../components/conversation/types";
 
 function messageLink(conversationId: string | undefined, messageId: string) {
   return `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;

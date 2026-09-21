@@ -1,37 +1,13 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import type { SessionActivity } from "@codecast/shared/contracts";
-
-// How long an outgoing value stays painted for its exit animation. Matches the
-// tailwindcss-animate duration the exit classes below use.
-const EXIT_MS = 220;
+import { EXIT_MS } from "../hooks/useLinger";
 
 /** The green "running" pulse every live surface shares (inbox card chrome,
  *  section headers, the composer's working line, the activity line). One
  *  definition so the meaning stays one color and one motion. */
 export function LivePulseDot({ className = "w-1 h-1" }: { className?: string }) {
   return <span className={`shrink-0 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none ${className}`} />;
-}
-
-/**
- * Hold the last non null value for one exit animation after it goes null, so a
- * node can fade out instead of vanishing. `leaving` is true during that hold.
- * A value that comes back before the hold ends cancels the exit.
- */
-export function useLinger<T>(value: T | null): { value: T | null; leaving: boolean } {
-  const [held, setHeld] = useState<T | null>(value);
-  // eslint-disable-next-line no-restricted-syntax -- the exit timer is keyed to the value it is holding open
-  useEffect(() => {
-    if (value !== null) {
-      setHeld(value);
-      return;
-    }
-    if (held === null) return;
-    const id = setTimeout(() => setHeld(null), EXIT_MS);
-    return () => clearTimeout(id);
-  }, [value, held]);
-  return { value: value ?? held, leaving: value === null && held !== null };
 }
 
 /**

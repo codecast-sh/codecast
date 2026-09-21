@@ -10,23 +10,10 @@ import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../Con
 import type { ConversationData } from "../conversation/types";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore } from "../../store/inboxStore";
 import { useMemo, useState } from "react";
 import { AnchorGlyph } from "./AnchorIdentity";
-
-import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
-export { windowConversationSince } from "../../lib/anchorWindow";
-
-/** A standing session's row belongs to the agent's bot user, so the person
- *  who may talk to it is told to the store before the row lands and the owner
- *  UI paints at once. The role page's pane seeds the same way. */
-export function useSeedOwnership(conversationId: string, seed: boolean) {
-  useWatchEffect(() => {
-    if (!seed) return;
-    useInboxStore.getState().syncRecord("conversations", conversationId, { _id: conversationId, is_own: true });
-  }, [conversationId, seed]);
-}
+import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 
 export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
   conversationId: string;

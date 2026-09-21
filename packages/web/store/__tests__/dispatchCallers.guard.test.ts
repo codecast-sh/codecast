@@ -63,9 +63,13 @@ describe("durable dispatch call-site guards", () => {
     const actions = await Bun.file(
       new URL("../../lib/sessionAgentActions.ts", import.meta.url),
     ).text();
+    const controls = await Bun.file(
+      new URL("../../lib/sessionControl.ts", import.meta.url),
+    ).text();
 
-    expect(panel).toContain("Switch agent");
-    expect(panel).toContain("Fork as");
+    expect(controls).toContain("Switch agent");
+    expect(controls).toContain("Fork as");
+    expect(panel).toContain("MOVE_VERBS[verb]");
     expect(panel).toContain("switchSessionAgent(sessionRowFor(");
     expect(panel).toContain("forkSessionAsAgent(sessionRowFor(");
     expect(palette).toContain("switchSessionAgent(target");

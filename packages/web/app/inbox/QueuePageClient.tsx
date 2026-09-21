@@ -31,7 +31,7 @@ import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
 import { InboxShortcuts, OrgTreeFeeder } from "../../components/inbox/InboxEffects";
-import { useSeedOwnership } from "../../components/anchor/AnchorConversation";
+import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";

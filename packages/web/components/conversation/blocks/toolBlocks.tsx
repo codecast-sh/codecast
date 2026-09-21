@@ -34,10 +34,12 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../../../lib/u
 import { ChevronDown, ChevronUp, Workflow, MoveHorizontal, GitCommitHorizontal, GitPullRequest } from "lucide-react";
 import { ImageBlock } from "./interactiveBlocks";
 import { PlanBlock } from "./planBlock";
-import { FooterIconButton, FullscreenIcon, NestedStepList, toolColorClass } from "./shared";
+import { FooterIconButton, FullscreenIcon, NestedStepList } from "./shared";
+import { toolColorClass } from "../../../lib/conversationBlockStyles";
 import { findMatchingChild, getFileExtension, parseSpawnResult, summarizeBashCommand } from "../classify";
-import { renderAnsi, safeString } from "../format";
-import { MD_COMPONENTS_CODE_LINK, MD_COMPONENTS_NO_PRE, ReactMarkdown } from "../markdown";
+import { renderAnsi, safeString } from "../../../lib/conversationFormat";
+import { MD_COMPONENTS_CODE_LINK, MD_COMPONENTS_NO_PRE } from "../../../lib/conversationMarkdown";
+import { ReactMarkdown } from "../markdown";
 import type { ImageData, TaskRecordMaps, ToolCall, ToolChangeRange, ToolResult } from "../types";
 
 const api = _typedApi as any;

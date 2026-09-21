@@ -32,8 +32,9 @@ import { ORG_TOP_N, sortOrgSessions, type OrgRole, type OrgSession, type OrgTree
 import { boundTaskOf, groupHands, subtaskCounts } from "../../../lib/scopePage";
 import type { BriefFacts, BriefHand } from "./scopeTypes";
 import { PersonGoals } from "./PersonGoals";
-import { inScope, useScopeIds, type ScopeIds } from "../../../hooks/useScopeIds";
+import { inScope, type ScopeIds } from "../../../hooks/useScopeIds";
 import { decisionHref } from "../../../lib/decisionLinks";
+import { stacksInScope } from "../../../lib/stacksInScope";
 
 const api = _api as any;
 
@@ -275,11 +276,6 @@ export function ScopeSessionsTab({ tree, role, scope, hands }: { tree: OrgTree; 
 const DECISION_TONE: Record<string, string> = { pending: "var(--sol-yellow)", answered: "var(--sol-cyan)", dismissed: "var(--sol-text-dim)", withdrawn: "var(--sol-text-dim)" };
 
 const stackSig = (st: DecisionStackItem) => `${st.status}|${st.title}|${st.decision_ids.join(",")}|${(st as any).policy?.due_at ?? ""}`;
-
-/** Stacks that hold at least one decision bound to a task in scope (the-line.md L10). */
-export function stacksInScope(stacks: DecisionStackItem[], decisionIds: Set<string>): DecisionStackItem[] {
-  return stacks.filter((st) => st.status === "open" && st.decision_ids.some((id) => decisionIds.has(id)));
-}
 
 export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: string | null }) {
   const tasks = useWorkspaceCollection<TaskItem>("tasks");

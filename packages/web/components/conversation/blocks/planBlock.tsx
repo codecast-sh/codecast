@@ -11,7 +11,7 @@ import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { ChevronDown, ChevronUp, Forward } from "lucide-react";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { FooterIconButton, FullscreenIcon } from "./shared";
-import { copyMessageLink, formatRelativeTime, forwardMessageToChat } from "../format";
+import { copyMessageLink, formatRelativeTime, forwardMessageToChat } from "../../../lib/conversationFormat";
 import { ReactMarkdown } from "../markdown";
 
 const PLAN_MAX_HEIGHT = 1800;

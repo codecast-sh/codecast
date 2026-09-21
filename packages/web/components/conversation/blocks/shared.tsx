@@ -1,29 +1,12 @@
-import { useState, createContext } from "react";
+import { useState } from "react";
 import { AvatarImg } from "../../../lib/avatarCache";
-import { toolVisual, type NestedStepOutcome, type ToolColorToken } from "@codecast/shared/render";
+import { type NestedStepOutcome } from "@codecast/shared/render";
 import { toast } from "sonner";
 import { AgentTypeIcon } from "../../AgentTypeIcon";
 import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "../../BrandIcons";
 import { copyToClipboard } from "../../../lib/utils";
-import type { ChatWakePrompt } from "../../sessionMessage";
-import type { BrowserRowState } from "../../castCommand";
 import { Bot } from "lucide-react";
-import { renderAnsi } from "../format";
-
-// toolCallId → the page URL and driven tab a `cast browser` row was on,
-// carried forward from earlier rows when the row's own output doesn't restate
-// them (most action verbs don't — see buildBrowserRowMap). CastCommandBlock
-// falls back to this for its "open tab" link. Provided by the message feed
-// with a content-stable identity so an unrelated message sync doesn't
-// re-render every cast row.
-export const CastBrowserRowContext = createContext<Record<string, BrowserRowState>>({});
-
-// placeholder message id → the team-chat wake that asked for it. A `cast chat
-// reply` names only the placeholder, so the reply card reads the channel and
-// thread off the wake in the same transcript — no lookup, and it still works
-// after the chat thread is deleted. Keyed by placeholder id, so identity is
-// stable across syncs that added no wake.
-export const ChatWakeContext = createContext<Record<string, ChatWakePrompt>>({});
+import { renderAnsi } from "../../../lib/conversationFormat";
 
 // A copyable command chip — the command in a mono pill with a copy affordance, so
 // the fix for a stopped session is one click away.
@@ -161,18 +144,6 @@ export function AssistantIcon({ agentType }: { agentType?: string }) {
   return <ClaudeIcon />;
 }
 
-export function assistantLabel(agentType?: string): string {
-  if (!agentType) return "Assistant";
-  if (agentType === "codex") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "pi") return "pi";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "muse") return "Muse Spark";
-  return "Claude";
-}
-
 // Shared footer action style for expanded blocks (code/markdown/plan): muted
 // icon + small label, cyan on hover — mirrors the long-message footer.
 export function FooterIconButton({ onClick, title, label, children }: { onClick: (e: React.MouseEvent) => void; title: string; label?: string; children: React.ReactNode }) {
@@ -196,23 +167,6 @@ export function FullscreenIcon() {
   );
 }
 
-const TOOL_COLOR_CLASS: Record<ToolColorToken, string> = {
-  green: "text-sol-green/80",
-  blue: "text-sol-blue/80",
-  violet: "text-sol-violet/80",
-  orange: "text-sol-orange/80",
-  cyan: "text-sol-cyan/80",
-  magenta: "text-sol-magenta/80",
-  red: "text-sol-red/80",
-  textDim: "text-sol-text-dim",
-  emerald: "text-emerald-500/80",
-  amber: "text-amber-500/80",
-};
-
-export function toolColorClass(name: string): string {
-  return TOOL_COLOR_CLASS[toolVisual(name).color];
-}
-
 export function UserIcon({ avatarUrl, size = "w-6 h-6" }: { avatarUrl?: string | null; size?: string }) {
   return (
     <AvatarImg
@@ -230,38 +184,3 @@ export function UserIcon({ avatarUrl, size = "w-6 h-6" }: { avatarUrl?: string |
     />
   );
 }
-
-export const agentColorMap: Record<string, string> = {
-  blue: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  red: "bg-red-500/20 text-red-400 border-red-500/30",
-  green: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-  yellow: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  purple: "bg-violet-500/20 text-violet-400 border-violet-500/30",
-  cyan: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
-  orange: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-  pink: "bg-pink-500/20 text-pink-400 border-pink-500/30",
-};
-
-// Text-only companion to agentColorMap, for chrome that carries the sender's
-// color without a chip around it.
-export const agentTextMap: Record<string, string> = {
-  blue: "text-blue-400",
-  red: "text-red-400",
-  green: "text-emerald-400",
-  yellow: "text-amber-400",
-  purple: "text-violet-400",
-  cyan: "text-cyan-400",
-  orange: "text-orange-400",
-  pink: "text-pink-400",
-};
-
-export const agentBorderMap: Record<string, string> = {
-  blue: "border-blue-500/30",
-  red: "border-red-500/30",
-  green: "border-emerald-500/30",
-  yellow: "border-amber-500/30",
-  purple: "border-violet-500/30",
-  cyan: "border-cyan-500/30",
-  orange: "border-orange-500/30",
-  pink: "border-pink-500/30",
-};

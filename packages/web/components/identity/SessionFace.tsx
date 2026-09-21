@@ -3,16 +3,11 @@
 // face carries the org page's violet as a thin ring so a role reads as a role
 // at every size; a character has no ring. Sizing and the art live in
 // org/avatars; this is the one place a SESSION ROW turns into a face.
-import type { CSSProperties, ReactNode } from "react";
-import { RoleAvatar, avatarLength } from "../org/avatars";
+import type { ReactNode } from "react";
+import { RoleAvatar } from "../org/avatars";
+import { avatarLength } from "../../lib/orgAvatars";
 import { faceBadgeSize, faceIdentity, type IdentityRow } from "../../lib/sessionIdentity";
-
-export function roleRingStyle(size: number | string): CSSProperties {
-  // A 1 px ring under 20 px, a gapped 1.5 px ring above, both in the role violet.
-  return (typeof size === "number" ? size : 14) < 20
-    ? { boxShadow: "0 0 0 1px var(--sol-violet)" }
-    : { boxShadow: "0 0 0 1px var(--sol-card), 0 0 0 2.5px var(--sol-violet)" };
-}
+import { roleRingStyle } from "../../lib/roleRingStyle";
 
 export function SessionFace({ row, size = 18, className, title, badge }: {
   row: IdentityRow;

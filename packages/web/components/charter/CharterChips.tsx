@@ -11,7 +11,8 @@ import { cn } from "../../lib/utils";
 import type { OrgRole } from "../org/orgTypes";
 import { watchersLabel, type ProjectLead } from "@codecast/shared/contracts/orgLead";
 import { RoleAvatar } from "../org/avatars";
-import { RoleHoverCard, roleRingStyle } from "../identity";
+import { RoleHoverCard } from "../identity";
+import { roleRingStyle } from "../../lib/roleRingStyle";
 import { CHARTER_PRIORITIES, PRIORITY_META, ownerCandidates, ownerRoleOf, roleHref, type CharterPriority, type OrgRoles } from "./charterMeta";
 
 /** A chip with a menu under it. The trigger is the chip; the list floats

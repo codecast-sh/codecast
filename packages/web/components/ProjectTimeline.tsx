@@ -27,7 +27,8 @@ import {
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { SegmentedToggle } from "./SegmentedToggle";
-import { groupByDay, RailBare, RailDay, RailRow, StatusWord } from "./timeline/Rail";
+import { groupByDay } from "../lib/timelineRail";
+import { RailBare, RailDay, RailRow, StatusWord } from "./timeline/Rail";
 import { ExternalEventRow } from "./feed/ExternalEventRow";
 import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
 import { useSyncProjectExternalEvents, useExternalEvents, externalEventsNewestFirst } from "../hooks/useSyncExternalEvents";

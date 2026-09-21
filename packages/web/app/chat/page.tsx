@@ -46,7 +46,7 @@ import { toast } from "sonner";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
 import { linkSendsOutbound } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackMirrorPill } from "../../components/chat/SlackMirrorPill";
-import { useChannelSlackLink } from "../../components/chat/SlackSyncDialog";
+import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
 import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
@@ -93,7 +93,6 @@ import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useDesktopAppWindow } from "../../hooks/useDesktopWindowRole";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
-
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 /** The clock the whole surface shares. Relative times ("3m ago") must stay
  *  honest without a re-render per row per second — see hooks/useCoarseNow. */

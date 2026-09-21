@@ -1,6 +1,5 @@
 "use client";
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
-
 import { useState, useMemo, useCallback } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -54,7 +53,8 @@ import {
 } from "lucide-react";
 import { DocDates } from "../../../components/DocDates";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
-import { ProjectLeadChip, useProjectLead } from "../../../components/charter/ProjectLeadChip";
+import { ProjectLeadChip } from "../../../components/charter/ProjectLeadChip";
+import { useProjectLead } from "../../../hooks/useProjectLead";
 import { ProjectInitiatives } from "../../../components/initiatives/ProjectInitiatives";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";

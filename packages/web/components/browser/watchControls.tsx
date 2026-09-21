@@ -11,9 +11,7 @@
 
 import { MousePointerClick } from "lucide-react";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-
-export const WHEEL_TAKE_LABEL = "Take the wheel";
-export const WHEEL_BACK_LABEL = "Hand back";
+import { WHEEL_TAKE_LABEL, WHEEL_BACK_LABEL } from "../../lib/watchLabels";
 
 /**
  * The wheel: the daemon offers it on ready, taking it is the human's choice.

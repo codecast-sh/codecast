@@ -23,15 +23,15 @@ import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen, X } from "lu
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
-import { PageIcon, pageAccent } from "./RecentVisitRow";
+import { PageIcon } from "./RecentVisitRow";
+import { pageAccent } from "../lib/pageAccent";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal, isEditableTarget } from "../shortcuts";
-import { canOpenBeside } from "../lib/stage";
+import { canOpenBeside, paneSessionId } from "../lib/stage";
 import { openIn } from "../lib/openIntent";
 import { useRouter } from "next/navigation";
 import { useTabContext } from "../lib/tabParams";
-import { paneSessionId } from "../lib/stage";
 import { cssZoomOf } from "../lib/cssZoom";
 import { useInboxStore } from "../store/inboxStore";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
@@ -46,6 +46,7 @@ import {
   type OpenReveal,
   type RevealTarget,
 } from "../lib/revealHost";
+import { revealWheelGoesToParent } from "../lib/revealWheel";
 
 export type { RevealTarget } from "../lib/revealHost";
 
@@ -174,15 +175,6 @@ function revealBounds(el: HTMLElement): HTMLElement | null {
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
-}
-
-/** The hatch beside the framed page is the conversation-scroll lane. Wheel
- *  inside the frame reads the object; wheel on the gutter (or its lanes)
- *  moves the parent thread. */
-export function revealWheelGoesToParent(target: EventTarget | null, _band?: HTMLElement): boolean {
-  const start = target instanceof Element ? target : null;
-  if (!start) return true;
-  return !start.closest(".object-reveal__frame");
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;

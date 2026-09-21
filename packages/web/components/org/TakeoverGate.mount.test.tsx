@@ -29,7 +29,8 @@ mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: (_q: unknow
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
 mock.module("../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => key === "projects" ? [{ _id: "p-growth", title: "Growth", status: "active" }, { _id: "p-billing", title: "Billing", status: "active" }] : [] }));
 // The chip on each scope row reads the store; it is not under test here.
-mock.module("../charter/ProjectLeadChip", () => ({ ProjectLeadChip: () => null, ProjectLeadMark: () => null, HireLeadDialog: () => null, useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
+mock.module("../charter/ProjectLeadChip", () => ({ ProjectLeadChip: () => null, ProjectLeadMark: () => null, HireLeadDialog: () => null }));
+mock.module("../../hooks/useProjectLead", () => ({ useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
 
 const { createRoot } = await import("react-dom/client");
 const { TakeoverGate } = await import("./TakeoverEdit");

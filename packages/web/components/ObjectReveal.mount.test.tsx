@@ -5,6 +5,8 @@
 // Run: bun test --timeout 120000 components/ObjectReveal.mount.test.tsx
 import { test, expect, beforeAll, beforeEach, mock } from "bun:test";
 
+import { revealWheelGoesToParent } from "../lib/revealWheel";
+
 let React: typeof import("react");
 let createRoot: typeof import("react-dom/client").createRoot;
 let mod: typeof import("./ObjectReveal");
@@ -24,7 +26,8 @@ beforeAll(async () => {
   const h = React.createElement;
   mock.module("./RoutePane", () => ({ RoutePane: ({ path }: { path: string }) => h("div", { "data-path": path }, "page") }));
   mock.module("./stage/SessionPane", () => ({ SessionPane: ({ sessionId }: { sessionId: string }) => h("div", { "data-session": sessionId }, "session") }));
-  mock.module("./RecentVisitRow", () => ({ PageIcon: () => h("i"), pageAccent: () => "var(--sol-cyan)" }));
+  mock.module("./RecentVisitRow", () => ({ PageIcon: () => h("i") }));
+  mock.module("../lib/pageAccent", () => ({ pageAccent: () => "var(--sol-cyan)" }));
   mock.module("./KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => h("kbd", null, children) }));
   mock.module("./ErrorBoundary", () => ({ ErrorBoundary: ({ children }: any) => h(React.Fragment, null, children) }));
   mock.module("../shortcuts", () => ({ hasOpenModal: () => false, isEditableTarget: () => false }));
@@ -120,7 +123,6 @@ test("opening a reference in another host closes the first; a host inside the ba
 });
 
 test("wheel on the hatch lane scrolls the conversation; wheel in the frame scrolls the object", () => {
-  const { revealWheelGoesToParent } = mod;
   const band = document.createElement("div");
   band.className = "object-reveal";
   const lane = document.createElement("div");

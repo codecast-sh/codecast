@@ -22,7 +22,6 @@
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
-
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://app.test/inbox", pretendToBeVisual: true });
 const restoreGlobals = replaceGlobals({
@@ -69,7 +68,7 @@ mock.module("../WorkflowContextPanel", () => ({ WorkflowContextPanel: () => null
 mock.module("../TriggerContextPanel", () => ({ TriggerContextPanel: () => <div data-trigger-panel /> }));
 mock.module("../ConversationPlaceholder", () => ({ ConversationPlaceholder: ({ id }: any) => <div data-placeholder={id} /> }));
 mock.module("../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => <kbd>{children}</kbd> }));
-mock.module("../anchor/AnchorConversation", () => ({ useSeedOwnership: () => {} }));
+mock.module("../../hooks/useSeedOwnership", () => ({ useSeedOwnership: () => {} }));
 // Spread the real module: a substitution is process-global, so a stub that
 // drops its other exports breaks every file that loads it afterwards.
 const realOrgTree = { ...(await import("../../hooks/useSyncOrgTree")) };

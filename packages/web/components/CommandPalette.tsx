@@ -1,7 +1,8 @@
 import { FolderGit2 } from "lucide-react";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor } from "@codecast/shared/contracts/sessionCharacter";
-import { AVATAR_LABELS, RoleAvatar } from "./org/avatars";
+import { AVATAR_LABELS } from "../lib/orgAvatars";
+import { RoleAvatar } from "./org/avatars";
 import { SessionGlyph } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
@@ -161,7 +162,6 @@ import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
 import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
-
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 
 type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";

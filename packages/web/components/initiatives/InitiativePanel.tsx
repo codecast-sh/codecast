@@ -20,7 +20,8 @@ import { FilterOptionList } from "../FilterDropdown";
 import { ProjectCard } from "../identity/RoleScopeView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { HEALTH_COLOR, HealthChip, INITIATIVE_ACCENT, OwnerChip, StatusGlyph } from "./InitiativeAtoms";
+import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
+import { HealthChip, OwnerChip, StatusGlyph } from "./InitiativeAtoms";
 import { ProjectInitiatives } from "./ProjectInitiatives";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";

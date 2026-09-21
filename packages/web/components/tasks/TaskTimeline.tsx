@@ -17,7 +17,8 @@ import { AgentTypeIcon } from "../AgentTypeIcon";
 import { CollapsibleBody } from "../CollapsibleBody";
 import { ExternalEventRow } from "../feed/ExternalEventRow";
 import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../../lib/externalEvents";
-import { groupByDay, RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
+import { groupByDay } from "../../lib/timelineRail";
+import { RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
 import { TaskCommentItem, UserBadge, type TaskCommentRow } from "./TaskCommentStream";
 import type { TaskLinkedSession } from "./TaskSessionList";
 

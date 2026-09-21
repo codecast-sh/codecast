@@ -33,12 +33,14 @@ import { cn } from "../../lib/utils";
 import { EntityIdPill } from "../EntityIdPill";
 import { FilterOptionList, type FilterOption } from "../FilterDropdown";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { ConversationWithPanel, usePanelLayout } from "../org/scope/ConversationWithPanel";
+import { ConversationWithPanel } from "../org/scope/ConversationWithPanel";
+import { usePanelLayout } from "../../hooks/usePanelLayout";
 import { useSeat } from "../org/scope/useSeat";
 import { RoleFace } from "../org/RoleFace";
 import type { OrgRole } from "../org/orgTypes";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { HEALTH_COLOR, HealthChip, INITIATIVE_ACCENT, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
+import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
+import { HealthChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
 import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import { InitiativePanel } from "./InitiativePanel";
 

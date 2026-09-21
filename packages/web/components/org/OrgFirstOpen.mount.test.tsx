@@ -4,7 +4,6 @@
 // chief of staff and nothing for any other seat.
 // Run: bun components/org/OrgFirstOpen.mount.test.tsx
 import assert from "node:assert/strict";
-
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 async function verifyFirstOpen() {
   const { JSDOM } = await import("jsdom");
@@ -16,8 +15,10 @@ async function verifyFirstOpen() {
   const React = await import("react");
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
-  const { OrgGuide, OrgEmptyCanvas, orgGuideSteps } = await import("./OrgFirstOpen");
-  const { RetireRoleConfirm, retireToastText } = await import("./RetireRoleConfirm");
+  const { OrgGuide, OrgEmptyCanvas } = await import("./OrgFirstOpen");
+  const { orgGuideSteps } = await import("../../lib/orgGuideSteps");
+  const { RetireRoleConfirm } = await import("./RetireRoleConfirm");
+  const { retireToastText } = await import("../../lib/retireRole");
   const root = createRoot(document.getElementById("root")!);
   const render = (el: React.ReactElement) => act(async () => root.render(el));
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);

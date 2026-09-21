@@ -1,6 +1,6 @@
 // "Make this a role" is offered on a session that fits (org-roles-run-work.md R2).
 import { describe, expect, test } from "bun:test";
-import { MAKE_ROLE_MIN_AGE_MS, sessionFitsARole } from "./MakeRoleDialog";
+import { MAKE_ROLE_MIN_AGE_MS, sessionFitsARole } from "../../lib/makeRole";
 
 const NOW = Date.UTC(2026, 8, 18);
 const old = { _id: "c1", short_id: "jx7b88a", title: "Market growth mandate", started_at: NOW - 34 * 86_400_000 };

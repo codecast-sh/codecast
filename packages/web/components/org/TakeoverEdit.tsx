@@ -10,8 +10,7 @@ import { cn } from "../../lib/utils";
 import { useTakeoverPreviews, type TakeoverAsk } from "../../hooks/useTakeoverPreviews";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { OrgButton } from "./OrgButton";
-
-export const LEAVE_SESSIONS_LABEL = "Leave the sessions where they are";
+import { LEAVE_SESSIONS_LABEL } from "../../lib/takeoverLabels";
 
 export function TakeoverEdit({ phrase, leave, onLeave, className }: {
   /** takeoverPhrase's sentence, from useTakeoverPreviews. */

@@ -17,7 +17,8 @@ import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { groupInitiativesByStatus, initiativeHref, initiativeProgress, newInitiativeKey, subInitiatives } from "../../lib/initiatives";
 import { cn } from "../../lib/utils";
-import { HealthChip, INITIATIVE_ACCENT, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
+import { HealthChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
+import { INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
 const ended = (r: InitiativeRow) => r.status === "completed" || r.status === "cancelled";

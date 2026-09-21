@@ -15,7 +15,8 @@ test("RoleAvatar draws a known key, defaults a handle, and fills its box", async
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { act } = await import("react");
-  const { RoleAvatar, AVATAR_ART, AVATAR_URLS } = await import("./index");
+  const { RoleAvatar } = await import("./index");
+  const { AVATAR_ART, AVATAR_URLS } = await import("../../../lib/orgAvatars");
   const { AVATAR_KEYS, defaultAvatarFor } = await import("@codecast/shared/contracts/orgAvatars");
 
   const host = dom.window.document.createElement("div");

@@ -1,14 +1,14 @@
 "use client";
-
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
-import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem } from "../../store/inboxStore";
-import { resolveAssigneeInfo, memberDisplayName, memberAvatarUrl } from "../../lib/liveEntities";
+import { useTrackedStore, getProjectName, type SessionDecisionItem } from "../../store/inboxStore";
+import { resolveAssigneeInfo } from "../../lib/liveEntities";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import { SessionGlyph } from "../identity";
 import { identityRowOf } from "../../lib/sessionIdentity";
+import { categoryMeaning } from "../../lib/decisionCategory";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
@@ -111,17 +111,6 @@ export function HolderLine({
       {people.map((u) => <PersonChip key={u._id} userId={u._id} fallbackName={u.name} fallbackImage={u.avatar_url} />)}
     </span>
   );
-}
-
-// What a category is FOR, in the words that matter to the reader: who is
-// allowed to answer. The bare word plus "assigned by the server" said
-// neither. `unknown` is not a warning — it means the asker proposed nothing,
-// so it stays a person's to answer; it reads as a plain sentence, not a red
-// chip demanding attention the decision itself deserves.
-export function categoryMeaning(category: string | undefined): string {
-  if (!category || category === "unknown") return "the asker proposed none, so a person answers it";
-  if (category === "limit") return "a usage limit — always a person";
-  return isHumanOnlyCategory(category) ? "always a person, never a role" : "a role can earn the right to answer these";
 }
 
 export function CategoryNote({

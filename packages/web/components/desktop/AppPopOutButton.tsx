@@ -6,24 +6,11 @@
 // window. One mark per app, on the row or heading that owns the group: a
 // mark on every row read as four switches for one window.
 import { AppWindowMac, PictureInPicture2 } from "lucide-react";
-import { toast } from "sonner";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useDesktopAppWindow, useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
-import { DESKTOP_APPS, openDesktopApp, type DesktopApp } from "../../lib/desktopApps";
-import { bridge } from "../../lib/desktop";
-import { explainPopOut, popOutWindow } from "../../lib/popOut";
+import { DESKTOP_APPS, type DesktopApp } from "../../lib/desktopApps";
 import { cn } from "../../lib/utils";
-
-/** Open (or raise) an app's window from anywhere, with the ladder every
- *  popout climbs: the shell's app window, a plain breakout on an older
- *  shell, a named popup in a browser — and a sentence when a rung is missing. */
-export async function popOutApp(app: DesktopApp, path?: string): Promise<void> {
-  const route = path ?? DESKTOP_APPS[app].home;
-  const popup = { name: `codecast-${app}`, width: 1100, height: 760 };
-  const shellOpen = bridge("openAppWindow") ? async () => { await openDesktopApp(app, route); } : undefined;
-  const outcome = await popOutWindow(route, shellOpen, popup);
-  explainPopOut(outcome, { thing: `the ${DESKTOP_APPS[app].title} window`, route, name: popup.name }, toast);
-}
+import { popOutApp } from "../../lib/popOutApp";
 
 export function AppPopOutButton({ app, className }: { app: DesktopApp; className?: string }) {
   const popped = useDesktopWindowRole().apps[app] === true;

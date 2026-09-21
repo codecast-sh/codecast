@@ -30,7 +30,7 @@ import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
-import { OrgIntroAnywhere } from "./org/OrgIntroCard";
+import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";

@@ -13,8 +13,7 @@ import { resolveAssigneeInfo } from "../../lib/liveEntities";
 import { ownerId, progressPercent, type Progress } from "../../lib/initiatives";
 import { cn } from "../../lib/utils";
 import { AssigneeFace } from "../identity/AssigneeFace";
-
-export const INITIATIVE_ACCENT = "var(--sol-magenta)";
+import { INITIATIVE_ACCENT, HEALTH_COLOR } from "../../lib/initiativeColors";
 
 const STATUS_VISUAL: Record<InitiativeStatus, { icon: LucideIcon; color: string }> = {
   proposed: { icon: CircleDashed, color: "var(--sol-text-dim)" },
@@ -29,13 +28,6 @@ export function StatusGlyph({ status, className }: { status: InitiativeStatus; c
   const Icon = v.icon;
   return <Icon className={cn("w-3.5 h-3.5 shrink-0", className)} style={{ color: v.color }} aria-label={INITIATIVE_STATUS_LABEL[status]} />;
 }
-
-export const HEALTH_COLOR: Record<InitiativeHealth, string> = {
-  none: "var(--sol-text-dim)",
-  on_track: "var(--sol-green)",
-  at_risk: "var(--sol-yellow)",
-  off_track: "var(--sol-red)",
-};
 
 const shortDate = (ts: number, now: number) =>
   new Date(ts).toLocaleDateString("en-US", new Date(ts).getFullYear() === new Date(now).getFullYear() ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
