@@ -32,6 +32,7 @@ export const WORKSPACES_STATE_DIR = ".codecast/workspaces";
 
 /** Persisted state snapshot. A subset of Workspace minus mutable runtime fields. */
 export interface PersistedWorkspaceState {
+  noPorts?: boolean;
   name: string;
   path: string;
   branch: string;
@@ -57,6 +58,7 @@ export interface PersistedWorkspaceState {
 /** Canonical projection of persisted state back into a Workspace. */
 export function stateToWorkspace(s: PersistedWorkspaceState): Workspace {
   return {
+    ...(s.noPorts ? { noPorts: true } : {}),
     name: s.name,
     path: s.path,
     branch: s.branch,
