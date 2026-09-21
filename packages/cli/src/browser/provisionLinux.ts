@@ -28,6 +28,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { installHostRelease } from "../hosts/installRelease.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
@@ -292,8 +293,12 @@ function cliSourceRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 
+export function hasHostBuildSource(): boolean {
+  return fs.existsSync(path.join(cliSourceRoot(), "src", "index.ts"));
+}
+
 /** The version the bundle built from this source will report. */
-function cliSourceVersion(): string {
+export function cliSourceVersion(): string {
   return JSON.parse(fs.readFileSync(path.join(cliSourceRoot(), "package.json"), "utf-8")).version;
 }
 
@@ -326,6 +331,10 @@ function describeSourceTree(dir: string): string {
  * Only possible when this cast runs from a source checkout.
  */
 export function buildLinuxCast(onProgress: (m: string) => void): { distDir: string; indexJs: string; daemonJs: string } {
+  return buildHostCast(onProgress, "linux");
+}
+
+export function buildHostCast(onProgress: (m: string) => void, platform: "linux" | "darwin"): { distDir: string; indexJs: string; daemonJs: string } {
   const cliRoot = cliSourceRoot();
   const entry = path.join(cliRoot, "src", "index.ts");
   if (!fs.existsSync(entry)) {
@@ -335,16 +344,14 @@ export function buildLinuxCast(onProgress: (m: string) => void): { distDir: stri
     );
   }
   onProgress(`building cast ${cliSourceVersion()} bundles (dist) from ${describeSourceTree(cliRoot)}…`);
-  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-linux-dist-"));
+  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), `cast-${platform}-dist-`));
   let built = false;
   try {
     execFileSync("bun", ["run", "build", "--outdir", distDir], {
       cwd: cliRoot,
-      // The host is Linux whatever this machine is, so the build skips the
-      // macOS helpers it could never run (scripts/build-with-native.ts).
-      env: { ...process.env, CODECAST_BUNDLE_PLATFORM: "linux" },
+      env: { ...process.env, CODECAST_BUNDLE_PLATFORM: platform },
       stdio: ["ignore", "ignore", "pipe"],
-      timeout: 300_000,
+      timeout: platform === "darwin" ? 900_000 : 300_000,
     });
     const bundles = {
       distDir,
@@ -407,6 +414,7 @@ const REMOTE_BUNDLE_PREVIOUS = `${REMOTE_BUNDLE_DIR}.previous`;
  * them, so this leaves them as they are.
  */
 export function installLinuxCast(host: RemoteHost, onProgress: (m: string) => void = () => {}): { version: string } {
+  if (!hasHostBuildSource()) return { version: installHostRelease(host, "linux", onProgress) };
   const want = cliSourceVersion();
   const bundles = buildLinuxCast(onProgress);
   const restore = () =>
@@ -551,6 +559,7 @@ export async function provisionLinuxHost(
   opts: { idleStopMinutes: number; skipDaemon?: boolean; gitIdentity?: string },
   onProgress: (m: string) => void = () => {},
 ): Promise<ProvisionReport> {
+  if (host.user !== "ubuntu") throw new Error("Linux provisioning requires an Ubuntu image and the ubuntu SSH user");
   onProgress("base stack: packages, display, stream, idle watchdog…");
   const base = runScript(host, baseProvisionScript(opts.idleStopMinutes), 600_000);
   if (!base.includes("PROVISION-BASE-OK")) throw new Error(`base provisioning did not complete:\n${base.slice(-800)}`);
@@ -584,35 +593,19 @@ export async function provisionLinuxHost(
   const cred = copyCredentialToRemote(host);
   if (!cred.pushed) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
 
-  // The host-home steps (cloud/prepare.ts readyHostHome), forced: a freshly
-  // provisioned box has nothing, whatever the laptop's stamps say. Each step
-  // is non-fatal; the mirror needs the `cast` just installed above.
-  // The git step (cloud/hostGit.ts) mints the device key and mirrors the
-  // laptop's identity; the repo it probes is the one provisioning runs from,
-  // when it runs from one.
-  // Step 1 there pushes the agent logins (codex, grok, gemini, opencode, pi
-  // + settings.json provider keys) and checks the project-required tools.
   onProgress("agent logins + host tools + host git setup + mirroring instruction files and agent config…");
-  let mirror = "config mirror skipped";
-  let git = "no key (host git setup did not run)";
-  let tools = "not checked";
-  try {
-    const { readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
-    const localGitRoot = cwdGitRoot();
-    const report = await readyHostHome(host, {
-      onProgress: (m) => onProgress(`  ${m}`),
-      force: true,
-      localGitRoot,
-      repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined,
-      gitIdentity: opts.gitIdentity,
-    });
-    mirror = report.mirror;
-    git = report.git ? report.git.pubkey ?? "no key (ssh-keygen missing)" : "no key (host git setup did not run)";
-    if (report.tools) tools = summarizeHostTools(report.tools);
-  } catch (err) {
-    mirror = `config mirror skipped: ${err instanceof Error ? err.message : String(err)}`;
-    onProgress(`  (${mirror})`);
-  }
+  const { readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
+  const localGitRoot = cwdGitRoot();
+  const homeReport = await readyHostHome(host, {
+    onProgress: (m) => onProgress(`  ${m}`),
+    force: true,
+    localGitRoot,
+    repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined,
+    gitIdentity: opts.gitIdentity,
+  });
+  const mirror = homeReport.mirror;
+  const git = homeReport.git?.pubkey ?? "no key (host git setup did not run)";
+  const tools = homeReport.tools ? summarizeHostTools(homeReport.tools) : "not checked";
 
   // Accept claude's bypass-permissions dialog ONCE, so a moved session's
   // resume never parks on it. The acceptance is not a config flag any more

@@ -6,7 +6,7 @@ import { sshBase, type RemoteHost } from "../../remote/session-move";
 import { mirrorForPrepare } from "../prepare";
 import { MIRROR_MAGIC, buildMirrorBundle, parseMirrorBundle, type BuiltBundle } from "./bundle";
 import {
-  MIRROR_APPLY_COMMAND, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, runMirrorTick,
+  MIRROR_APPLY_COMMAND, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, buildHomeMirror, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, runMirrorTick,
   writeLocalStamps, type LocalMirrorStamps, type MirrorDeps, type MirrorPushOutcome,
 } from "./push";
 
@@ -28,6 +28,7 @@ fs.writeFileSync(process.env.PUSH_TEST_ARGV + ".pid", String(process.pid));
 fs.writeFileSync(process.env.PUSH_TEST_STDIN, input);
 if (process.env.PUSH_TEST_MODE === "decode") { const r=require("node:child_process").spawnSync("/bin/sh",["-c",command],{input:wire}); fs.writeSync(1,r.stdout); fs.writeSync(2,r.stderr); process.exit(r.status ?? 1); }
 else if (process.env.PUSH_TEST_MODE === "hang") { setTimeout(() => {}, 600000); }
+else if (process.env.PUSH_TEST_MODE === "inherited-pipes") { const child = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: ["ignore", 1, 2] }); fs.writeFileSync(process.env.PUSH_TEST_ARGV + ".child", String(child.pid)); setTimeout(() => {}, 600000); }
 else if (process.env.PUSH_TEST_MODE === "refuse") { fs.writeSync(1, '{"hash":"h","applied":[],"unchanged":0,"host_edited":[],"pruned":[],"errors":[],"refused":"other_device"}\\n'); process.exit(3); }
 else if (process.env.PUSH_TEST_MODE === "old") { fs.writeSync(2, "error: unknown command 'mirror-apply'\\n"); process.exit(1); }
 else if (process.env.PUSH_TEST_MODE === "nocast") { fs.writeSync(2, "bash: line 1: cast: command not found\\n"); process.exit(127); }
@@ -52,6 +53,19 @@ afterEach(() => {
 });
 
 const bundle = Buffer.concat([Buffer.from(MIRROR_MAGIC), Buffer.from("payload-bytes-that-must-not-leak")]);
+
+test("an unused dangling local command does not block the mirror, but a required command does", async () => {
+  const home = path.join(dir, "home");
+  fs.mkdirSync(path.join(home, ".local/bin"), { recursive: true });
+  fs.symlinkSync("/missing-fig-command", path.join(home, ".local/bin/fig"));
+  const opts = { home, hostHome: "/home/ubuntu", config: null, deviceId: "test-device", gitEnv: {} };
+  const mirror = await buildHomeMirror(opts);
+  expect(mirror.summary.warnings).toContain("omitted unavailable local command .local/bin/fig");
+  expect(mirror.summary.files.some((file) => file.path === ".local/bin/fig")).toBe(false);
+  fs.mkdirSync(path.join(home, ".claude"));
+  fs.writeFileSync(path.join(home, ".claude/settings.json"), JSON.stringify({ statusLine: { type: "command", command: "~/.local/bin/fig" } }));
+  await expect(buildHomeMirror(opts)).rejects.toThrow(/missing active context reference/);
+});
 
 describe("pushMirrorToHostAsync", () => {
   test("runs ssh with sshBase args and the exact remote command, streams the bundle, parses the last JSON line", async () => {
@@ -351,6 +365,25 @@ test("canceling a mirror push settles only after the SSH process exits", async (
   } finally {
     controller.abort();
     await outcome;
+  }
+});
+
+test("canceling a mirror push settles when a descendant still holds SSH output pipes", async () => {
+  process.env.PUSH_TEST_MODE = "inherited-pipes";
+  const controller = new AbortController();
+  const pending = pushMirrorToHostAsync(host, bundle, { signal: controller.signal }).catch((error) => error);
+  const childFile = process.env.PUSH_TEST_ARGV! + ".child";
+  try {
+    for (let n = 0; n < 200 && !fs.existsSync(childFile); n++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fs.existsSync(childFile)).toBe(true);
+    controller.abort();
+    expect((await pending).message).toBe("mirror operation aborted");
+    const pid = Number(fs.readFileSync(process.env.PUSH_TEST_ARGV! + ".pid", "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally {
+    controller.abort();
+    if (fs.existsSync(childFile)) process.kill(Number(fs.readFileSync(childFile, "utf8")), "SIGKILL");
+    await pending;
   }
 });
 
